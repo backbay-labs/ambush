@@ -1,6 +1,6 @@
 # Milestone v1.3: Operator Control And Replay Evaluation
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 **Phases:** 11-13
 **Total Plans:** 3
 **Requirements:** 8 mapped, all covered
@@ -48,7 +48,7 @@ Plans:
 **Plans:** 1
 
 Plans:
-- [ ] 13-01: Evaluation reports, expectation checks, and regression failure thresholds
+- [x] 13-01: Evaluation reports, expectation checks, and regression failure thresholds
 
 **Success criteria:**
 1. Team can generate evaluation reports comparing replay outcomes against expected detections, response decisions, investigations, and incidents.
@@ -66,8 +66,8 @@ Plans:
 | RPLY-01 | Phase 12 | Complete |
 | RPLY-02 | Phase 12 | Complete |
 | RPLY-03 | Phase 12 | Complete |
-| EVAL-01 | Phase 13 | Pending |
-| EVAL-02 | Phase 13 | Pending |
+| EVAL-01 | Phase 13 | Complete |
+| EVAL-02 | Phase 13 | Complete |
 
 **Coverage:**
 - v1.3 requirements: 8 total
@@ -76,4 +76,4 @@ Plans:
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after Phase 12*
+*Last updated: 2026-04-03 after Phase 13*

@@ -3,7 +3,9 @@ use swarm_runtime::control::{
     DefaultControlPlane, IncidentLookupSelector, InvestigationLookupSelector,
     OperatorControlOutput, ReplayLookupSelector, render_output,
 };
-use swarm_runtime::replay::{DefaultReplayHarness, render_evaluation_report, render_replay_run};
+use swarm_runtime::replay::{
+    DefaultReplayHarness, render_evaluation_report, render_replay_run, render_suite_report,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -107,7 +109,7 @@ struct ReplayResultArgs {
 #[command(group(
     ArgGroup::new("selector")
         .required(true)
-        .args(["run_id", "scenario"]),
+        .args(["run_id", "scenario", "scenarios_dir"]),
 ))]
 struct ReplayEvaluateArgs {
     #[arg(long)]
@@ -115,6 +117,9 @@ struct ReplayEvaluateArgs {
 
     #[arg(long)]
     scenario: Option<std::path::PathBuf>,
+
+    #[arg(long)]
+    scenarios_dir: Option<std::path::PathBuf>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -183,6 +188,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Command::ReplayEvaluate(args) => {
+            if let Some(scenarios_dir) = args.scenarios_dir {
+                let suite = replay_harness.evaluate_scenarios_dir(scenarios_dir).await?;
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&suite)?);
+                } else {
+                    println!("{}", render_suite_report(&suite));
+                }
+                if !suite.passed {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+
             let report = if let Some(run_id) = args.run_id.as_deref() {
                 let run = replay_harness.load_run(run_id)?.ok_or_else(|| {
                     std::io::Error::new(

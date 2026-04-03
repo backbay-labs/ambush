@@ -146,6 +146,32 @@ The durable replay run bundle captures:
 - a stable summary for repeatability checks
 - measured stage latency snapshots for later regression gates
 
+### Replay Evaluation And Gates
+
+Replay evaluation compares replay-run bundles against the expectations embedded in each scenario manifest, including hunt-level policy or response outcomes, incident grouping, and hot-path latency thresholds.
+
+Examples:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --scenario scenarios/office-dropper-correlation.yaml
+cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --run-id replay_run:office_dropper_correlation:1700000100000
+cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --scenarios-dir scenarios
+```
+
+Failure behavior:
+
+- `replay-evaluate` exits nonzero when any expectation or latency threshold fails
+- `--scenarios-dir` evaluates the full tracked corpus and is intended for local or CI gating
+
+End-to-end flow:
+
+1. Run one tracked scenario with `replay-run`.
+2. Inspect the persisted result bundle with `replay-result`.
+3. Validate one scenario with `replay-evaluate --scenario ...`.
+4. Gate the whole tracked corpus with `replay-evaluate --scenarios-dir scenarios`.
+
+The runtime test suite also includes a tracked-scenario regression test in `swarm-runtime` so the repo corpus acts as an executable baseline.
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.

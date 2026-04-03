@@ -523,6 +523,17 @@ pub struct ReplayEvaluationReport {
     pub performance: RuntimeMetricsSnapshot,
 }
 
+/// Suite-level replay evaluation report across a tracked scenario directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplaySuiteReport {
+    pub scenarios_dir: String,
+    pub total_scenarios: usize,
+    pub passed_scenarios: usize,
+    pub failed_scenarios: usize,
+    pub passed: bool,
+    pub reports: Vec<ReplayEvaluationReport>,
+}
+
 /// Offline replay harness that reuses the production Rust types without executing live actions.
 pub struct DefaultReplayHarness {
     pub config_path: PathBuf,
@@ -652,6 +663,37 @@ impl DefaultReplayHarness {
     ) -> Result<ReplayEvaluationReport, ReplayHarnessError> {
         let lookup = self.run_scenario_path(scenario_path).await?;
         Ok(self.evaluate_run(&lookup.bundle))
+    }
+
+    /// Evaluate every tracked scenario in one directory and aggregate the results.
+    pub async fn evaluate_scenarios_dir(
+        &self,
+        scenarios_dir: impl AsRef<Path>,
+    ) -> Result<ReplaySuiteReport, ReplayHarnessError> {
+        let scenarios_dir = scenarios_dir.as_ref().to_path_buf();
+        let scenario_paths = scenario_paths_in_dir(&scenarios_dir)?;
+        if scenario_paths.is_empty() {
+            return Err(ReplayHarnessError::ScenarioValidation {
+                path: scenarios_dir,
+                reason: "scenario directory did not contain any .yaml scenarios".to_string(),
+            });
+        }
+
+        let mut reports = Vec::with_capacity(scenario_paths.len());
+        for scenario_path in scenario_paths {
+            reports.push(self.evaluate_scenario_path(scenario_path).await?);
+        }
+
+        let passed_scenarios = reports.iter().filter(|report| report.passed).count();
+        let failed_scenarios = reports.len().saturating_sub(passed_scenarios);
+        Ok(ReplaySuiteReport {
+            scenarios_dir: scenarios_dir.display().to_string(),
+            total_scenarios: reports.len(),
+            passed_scenarios,
+            failed_scenarios,
+            passed: failed_scenarios == 0,
+            reports,
+        })
     }
 
     /// Evaluate one persisted or freshly-executed replay run against repo-owned expectations.
@@ -969,6 +1011,39 @@ pub fn render_evaluation_report(report: &ReplayEvaluationReport) -> String {
     lines.join("\n")
 }
 
+/// Render a whole-suite replay evaluation report.
+pub fn render_suite_report(report: &ReplaySuiteReport) -> String {
+    let mut lines = vec![
+        "Swarm Team Six Replay Suite".to_string(),
+        format!("Scenarios: {}", report.scenarios_dir),
+        format!("Status: {}", if report.passed { "pass" } else { "fail" }),
+        format!(
+            "Totals: {} total | {} passed | {} failed",
+            report.total_scenarios, report.passed_scenarios, report.failed_scenarios
+        ),
+    ];
+
+    for scenario_report in &report.reports {
+        lines.push(format!(
+            "- {} [{}]",
+            scenario_report.scenario_name,
+            if scenario_report.passed {
+                "pass"
+            } else {
+                "fail"
+            }
+        ));
+        for check in scenario_report.checks.iter().filter(|check| !check.passed) {
+            lines.push(format!(
+                "  failing check: {} | expected={} actual={} | {}",
+                check.name, check.expected, check.actual, check.details
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
 fn supported_detector(config: &SwarmConfig) -> Result<SupportedDetector, ReplayHarnessError> {
     match config.detection.strategy.as_str() {
         "suspicious_process_tree" => Ok(SupportedDetector::SuspiciousProcessTree(
@@ -1098,6 +1173,21 @@ fn resolve_relative_path(manifest_path: &Path, referenced: &str) -> PathBuf {
     }
 }
 
+fn scenario_paths_in_dir(scenarios_dir: &Path) -> Result<Vec<PathBuf>, ReplayHarnessError> {
+    let entries =
+        fs::read_dir(scenarios_dir).map_err(|source| ReplayHarnessError::ScenarioRead {
+            path: scenarios_dir.to_path_buf(),
+            source,
+        })?;
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("yaml"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
+}
+
 fn normalize_groups(groups: &[Vec<String>]) -> Vec<Vec<String>> {
     let mut normalized = groups
         .iter()
@@ -1161,6 +1251,7 @@ mod tests {
     use super::{
         DefaultReplayHarness, ReplayEvaluationReport, ReplayRunBundle, ReplayScenarioInput,
         ReplayScenarioManifest, ReplayScenarioStep, render_evaluation_report, render_replay_run,
+        render_suite_report,
     };
     use crate::config::parse_config;
     use serde_json::Value;
@@ -1517,5 +1608,25 @@ expectations:
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn tracked_repo_scenarios_pass_expectation_gates() {
+        let results_dir = unique_temp_dir("repo-scenarios");
+        let config_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../rulesets/default.yaml");
+        let scenarios_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let harness = DefaultReplayHarness::from_path(&config_path, &results_dir).unwrap();
+
+        let suite = harness
+            .evaluate_scenarios_dir(&scenarios_dir)
+            .await
+            .unwrap();
+
+        assert!(suite.passed);
+        assert!(suite.total_scenarios >= 2);
+        assert!(render_suite_report(&suite).contains("Replay Suite"));
+
+        let _ = fs::remove_dir_all(results_dir);
     }
 }

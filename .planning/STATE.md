@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: operator-control-and-replay-evaluation
 status: ready
-last_updated: "2026-04-03T15:53:22Z"
+last_updated: "2026-04-03T15:59:49Z"
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 100
 ---
 
 # State
@@ -19,7 +19,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** Phase 12 complete; Phase 13 is next
+**Current focus:** All v1.3 phases complete; milestone audit and archive are next
 
 ## Memory
 
@@ -30,9 +30,10 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.3` is scoped around a repo-owned operator CLI, deterministic offline replay, and regression evaluation over the existing durable artifact model.
 - Phase 11 is complete: `swarmctl` now exposes runtime status plus stable-ID lookup for replay bundles, investigation bundles, and incidents.
 - Phase 12 is complete: `swarmctl` can now run offline replay from tracked scenarios or replay-bundle fixtures and persist durable replay-run bundles under `data/replay-runs/`.
+- Phase 13 is complete: `swarmctl replay-evaluate` can now gate a single run or the full tracked `scenarios/` directory, and the runtime tests execute the repo scenario corpus as a regression baseline.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
 - Research was intentionally skipped for this milestone because the existing docs and archived roadmap already identified the next scope clearly.
 
 ## Next Command
 
-`$gsd-plan-phase 13`
+`$gsd-complete-milestone`

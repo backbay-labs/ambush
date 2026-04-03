@@ -59,8 +59,8 @@
 | RPLY-01 | Phase 12 | Complete |
 | RPLY-02 | Phase 12 | Complete |
 | RPLY-03 | Phase 12 | Complete |
-| EVAL-01 | Phase 13 | Pending |
-| EVAL-02 | Phase 13 | Pending |
+| EVAL-01 | Phase 13 | Complete |
+| EVAL-02 | Phase 13 | Complete |
 
 **Coverage:**
 - v1.3 requirements: 8 total
@@ -69,4 +69,4 @@
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after Phase 12*
+*Last updated: 2026-04-03 after Phase 13*
