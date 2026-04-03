@@ -1,11 +1,11 @@
-use crate::config::RuntimeConfig;
+use crate::config::RuntimeSettings;
 use crate::{RuntimeMode, SwarmRuntime};
 use swarm_policy::ApprovalGate;
 use swarm_response::ResponseExecutor;
 
 /// Thin service wrapper around the first Rust-only runtime slice.
 pub struct RuntimeService<P, E> {
-    pub config: RuntimeConfig,
+    pub config: RuntimeSettings,
     pub runtime: SwarmRuntime<P, E>,
 }
 
@@ -14,7 +14,7 @@ where
     P: ApprovalGate,
     E: ResponseExecutor,
 {
-    pub fn new(config: RuntimeConfig, runtime: SwarmRuntime<P, E>) -> Self {
+    pub fn new(config: RuntimeSettings, runtime: SwarmRuntime<P, E>) -> Self {
         Self { config, runtime }
     }
 

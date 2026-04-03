@@ -8,17 +8,9 @@ pub mod config;
 pub mod pipeline;
 pub mod service;
 
+pub use swarm_core::config::RuntimeMode;
 use swarm_policy::{ActionRequest, ApprovalContext, ApprovalError, ApprovalGate};
 use swarm_response::{ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt};
-
-/// Top-level runtime mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeMode {
-    /// Detection and investigation proposals only.
-    DetectOnly,
-    /// Detection plus live response execution.
-    LiveResponse,
-}
 
 /// Runtime errors surfaced while authorizing or executing actions.
 #[derive(Debug, thiserror::Error)]

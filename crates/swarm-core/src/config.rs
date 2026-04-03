@@ -1,47 +1,72 @@
-//! Swarm configuration types — hunt missions defined in YAML/TOML.
+//! Canonical v1 configuration types for the Rust-first runtime.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeSet;
 
-use crate::agent::AgentRole;
-use crate::verdict::AutonomyTier;
+use crate::types::Severity;
 
-/// Top-level swarm mission configuration.
+/// Top-level repository-owned configuration for the v1 Rust runtime slice.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SwarmConfig {
-    /// Mission name.
+    /// Human-readable configuration name.
     pub name: String,
-    /// Mission description.
+    /// Human-readable configuration description.
     pub description: String,
-    /// Agent population — how many of each archetype to spawn.
-    pub population: HashMap<AgentRole, PopulationConfig>,
-    /// Pheromone substrate settings.
+    /// Runtime settings for the critical lane.
+    pub runtime: RuntimeSettings,
+    /// Detector tuning for the fast path.
+    pub detection: DetectionConfig,
+    /// Pheromone substrate tuning.
     pub pheromone: PheromoneConfig,
-    /// Consensus settings.
-    pub consensus: ConsensusConfig,
-    /// Autonomy tier boundaries.
-    pub autonomy: AutonomyConfig,
-    /// NATS connection settings.
-    pub nats: NatsConfig,
+    /// Deterministic live-response policy settings.
+    pub policy: PolicyConfig,
 }
 
-/// Configuration for an agent archetype's population.
+/// Whether the runtime simulates or executes live response actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMode {
+    DetectOnly,
+    LiveResponse,
+}
+
+/// Runtime settings for the hot path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PopulationConfig {
-    /// Number of agents to spawn.
-    pub count: u32,
-    /// Maximum allowed (for auto-scaling).
-    pub max_count: u32,
-    /// Autonomy tier this archetype operates at.
-    pub tier: AutonomyTier,
+#[serde(deny_unknown_fields)]
+pub struct RuntimeSettings {
+    /// Whether responses execute or remain dry-run.
+    pub mode: RuntimeMode,
+    /// Telemetry streams or subjects to subscribe to.
+    pub telemetry_sources: Vec<TelemetrySourceConfig>,
+    /// Maximum concurrent response executions.
+    pub max_in_flight_actions: usize,
+}
+
+/// One configured telemetry source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetrySourceConfig {
+    pub name: String,
+    pub subject: String,
+}
+
+/// Detector-specific tuning for the first concrete strategy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetectionConfig {
+    pub strategy: String,
+    pub high_confidence_threshold: f64,
+    pub medium_confidence_threshold: f64,
 }
 
 /// Pheromone substrate tuning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PheromoneConfig {
     /// Default half-life for pheromone decay (seconds).
     pub default_half_life_secs: f64,
-    /// Strength below which pheromones are garbage-collected.
+    /// Strength below which pheromones are considered evaporated.
     pub evaporation_threshold: f64,
     /// Minimum distinct sources for concentration escalation.
     pub min_sources_for_escalation: usize,
@@ -51,57 +76,135 @@ pub struct PheromoneConfig {
     pub incident_threshold: f64,
 }
 
-/// BFT consensus settings.
+/// Deterministic policy settings for live response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConsensusConfig {
-    /// Maximum Byzantine faults tolerated (f in 3f+1).
-    pub max_byzantine_faults: u32,
-    /// Timeout for consensus rounds (milliseconds).
-    pub round_timeout_ms: u64,
-    /// How often to rotate committee membership.
-    pub committee_rotation_interval_secs: u64,
+#[serde(deny_unknown_fields)]
+pub struct PolicyConfig {
+    /// Severity at or above which destructive actions require human approval.
+    pub human_gate_severity: Severity,
+    /// Capability lease lifetime.
+    pub lease_ttl_ms: i64,
 }
 
-/// Autonomy tier boundaries.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AutonomyConfig {
-    /// Confidence threshold for Tier 1 (fully autonomous).
-    pub tier1_confidence: f64,
-    /// Confidence threshold for Tier 2 (autonomous + report).
-    pub tier2_confidence: f64,
-    /// Everything below tier2 requires human approval (Tier 3).
-    pub require_human_above_severity: String,
+/// Semantic validation errors that survive after deserialization.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigValidationError {
+    #[error("invalid field `{field}`: {reason}")]
+    InvalidField {
+        field: &'static str,
+        reason: String,
+    },
 }
 
-/// NATS connection configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NatsConfig {
-    /// NATS server URLs.
-    pub servers: Vec<String>,
-    /// Subject prefix for all swarm messages.
-    pub subject_prefix: String,
-    /// JetStream stream name for pheromone persistence.
-    pub pheromone_stream: String,
-}
-
-impl Default for PheromoneConfig {
-    fn default() -> Self {
-        Self {
-            default_half_life_secs: 3600.0, // 1 hour
-            evaporation_threshold: 0.01,
-            min_sources_for_escalation: 2,
-            alert_threshold: 2.0,
-            incident_threshold: 5.0,
+impl SwarmConfig {
+    /// Validate cross-field and semantic constraints after deserialization.
+    pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.name.trim().is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "name",
+                reason: "must not be empty".to_string(),
+            });
         }
-    }
-}
 
-impl Default for ConsensusConfig {
-    fn default() -> Self {
-        Self {
-            max_byzantine_faults: 1,
-            round_timeout_ms: 5000,
-            committee_rotation_interval_secs: 3600,
+        if self.runtime.telemetry_sources.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.telemetry_sources",
+                reason: "at least one telemetry source is required".to_string(),
+            });
         }
+
+        if self.runtime.max_in_flight_actions == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.max_in_flight_actions",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+
+        let mut source_names = BTreeSet::new();
+        for source in &self.runtime.telemetry_sources {
+            if source.name.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "runtime.telemetry_sources.name",
+                    reason: "must not be empty".to_string(),
+                });
+            }
+            if source.subject.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "runtime.telemetry_sources.subject",
+                    reason: "must not be empty".to_string(),
+                });
+            }
+            if !source_names.insert(source.name.clone()) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "runtime.telemetry_sources.name",
+                    reason: format!("duplicate telemetry source `{}`", source.name),
+                });
+            }
+        }
+
+        if self.detection.strategy.trim().is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "detection.strategy",
+                reason: "must not be empty".to_string(),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.detection.medium_confidence_threshold) {
+            return Err(ConfigValidationError::InvalidField {
+                field: "detection.medium_confidence_threshold",
+                reason: "must be between 0.0 and 1.0".to_string(),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.detection.high_confidence_threshold) {
+            return Err(ConfigValidationError::InvalidField {
+                field: "detection.high_confidence_threshold",
+                reason: "must be between 0.0 and 1.0".to_string(),
+            });
+        }
+        if self.detection.high_confidence_threshold < self.detection.medium_confidence_threshold {
+            return Err(ConfigValidationError::InvalidField {
+                field: "detection.high_confidence_threshold",
+                reason: "must be greater than or equal to medium_confidence_threshold".to_string(),
+            });
+        }
+
+        if self.pheromone.default_half_life_secs <= 0.0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.default_half_life_secs",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.pheromone.evaporation_threshold <= 0.0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.evaporation_threshold",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.pheromone.min_sources_for_escalation == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.min_sources_for_escalation",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.pheromone.alert_threshold <= 0.0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.alert_threshold",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.pheromone.incident_threshold < self.pheromone.alert_threshold {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.incident_threshold",
+                reason: "must be greater than or equal to alert_threshold".to_string(),
+            });
+        }
+
+        if self.policy.lease_ttl_ms <= 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "policy.lease_ttl_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+
+        Ok(())
     }
 }

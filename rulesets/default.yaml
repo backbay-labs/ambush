@@ -1,64 +1,26 @@
-# Default hunt mission configuration
-#
-# Defines the swarm composition, pheromone tuning,
-# consensus settings, and autonomy boundaries.
-
+# Default repository-owned configuration for the Rust-first runtime.
 name: default
-description: Standard threat hunting mission
+description: Default configuration for the v1 detect-and-respond slice
 
-population:
-  whisker:
-    count: 4
-    max_count: 16
-    tier: tier1
-  stalker:
-    count: 2
-    max_count: 8
-    tier: tier2
-  weaver:
-    count: 1
-    max_count: 4
-    tier: tier2
-  pouncer:
-    count: 1
-    max_count: 4
-    tier: tier3
-  tom:
-    count: 3
-    max_count: 5
-    tier: tier3
-  kitten:
-    count: 1
-    max_count: 2
-    tier: tier2
-  sphinx:
-    count: 1
-    max_count: 1
-    tier: tier1
-  calico:
-    count: 1
-    max_count: 2
-    tier: tier1
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic-process
+      subject: telemetry.synthetic.process
+  max_in_flight_actions: 4
+
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.90
+  medium_confidence_threshold: 0.70
 
 pheromone:
-  default_half_life_secs: 3600
+  default_half_life_secs: 3600.0
   evaporation_threshold: 0.01
   min_sources_for_escalation: 2
   alert_threshold: 2.0
   incident_threshold: 5.0
 
-consensus:
-  max_byzantine_faults: 1
-  round_timeout_ms: 5000
-  committee_rotation_interval_secs: 3600
-
-autonomy:
-  tier1_confidence: 0.9
-  tier2_confidence: 0.7
-  require_human_above_severity: critical
-
-nats:
-  servers:
-    - "nats://localhost:4222"
-  subject_prefix: "swarm"
-  pheromone_stream: "swarm-pheromones"
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
