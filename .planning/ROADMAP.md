@@ -1,79 +1,78 @@
-# Milestone v1.3: Operator Control And Replay Evaluation
+# Milestone v1.4: Adversarial Replay And Strategy Bench
 
-**Status:** COMPLETE
-**Phases:** 11-13
+**Status:** READY
+**Phases:** 14-16
 **Total Plans:** 3
-**Requirements:** 8 mapped, all covered
+**Requirements:** 7 mapped, all covered
 
 ## Overview
 
-`v1.3` turns the durable runtime artifacts shipped in `v1.0` through `v1.2` into practical operator workflows and offline regression tooling. The milestone adds a repo-owned operator control surface, deterministic replay over persisted or fixture artifacts, and evaluation gates that catch behavioral or latency drift before future governance or evolution work is reconsidered.
+`v1.4` turns the replay loop shipped in `v1.3` into an offline adversarial lab. The milestone adds Hellcat-inspired scenario suites with richer metadata, baseline-vs-candidate detector experiments, and persisted comparison reports plus offline safety gates. Promotion, canary deployment, and governance remain explicitly out of scope.
 
 ## Phases
 
-### Phase 11: Operator Control Surface
+### Phase 14: Adversarial Scenario Corpus
 
-**Goal:** Expose runtime review and artifact lookup through a repo-owned operator CLI without requiring raw file inspection.  
-**Depends on:** 07, 10  
+**Goal:** Expand the replay corpus into named adversarial suites with campaign and technique metadata.  
+**Depends on:** 12, 13  
 **Plans:** 1
 
 Plans:
-- [x] 11-01: CLI-backed status, investigation, incident, and replay lookup surface
+- [ ] 14-01: Suite manifests, scenario metadata, and adversarial corpus execution
 
 **Success criteria:**
-1. Operator can inspect runtime status, recent decisions, investigations, and incidents through one CLI surface.
-2. Operator can load replay bundles, investigation bundles, and incidents by stable IDs such as hunt ID, receipt ID, or incident ID.
-3. CLI output clearly distinguishes live runtime data from offline or replay-derived context.
-4. Tests cover command handlers, lookup paths, and serialization boundaries.
+1. Team can execute named adversarial suites through the offline replay harness.
+2. Scenario manifests carry campaign, technique, and benign-vs-adversarial metadata.
+3. Suite execution remains deterministic and reproducible from repo-owned manifests.
+4. Tests cover corpus discovery and suite-level replay execution.
 
-### Phase 12: Deterministic Replay Harness
+### Phase 15: Candidate Strategy Evaluation
 
-**Goal:** Add an offline replay runner that reuses persisted artifacts and fixture corpora without executing live response actions.  
-**Depends on:** 11  
+**Goal:** Evaluate baseline and candidate detectors against the same replay corpus without touching production config.  
+**Depends on:** 14  
 **Plans:** 1
 
 Plans:
-- [x] 12-01: Replay runner, scenario manifests, and durable result bundles
+- [ ] 15-01: Candidate strategy manifests, baseline-vs-candidate runner, and comparison metrics
 
 **Success criteria:**
-1. Team can run deterministic offline replay from stored bundles or fixture corpora without touching live response paths.
-2. Replay output captures findings, policy decisions, response receipts, investigation artifacts, and correlated incidents as durable result bundles.
-3. Repo-owned scenario manifests define replay inputs plus expected invariants or outcomes.
-4. Tests prove identical replay inputs produce repeatable outputs.
+1. Team can register a candidate detection strategy as a repo-owned experiment input.
+2. Baseline and candidate strategies can be evaluated side by side against the same adversarial or benign corpus.
+3. Comparison output includes detection quality, false positives, and latency deltas.
+4. Candidate evaluation stays fully offline and never hot-loads into the live runtime path.
 
-### Phase 13: Evaluation And Regression Gates
+### Phase 16: Experiment Reports And Offline Safety Gates
 
-**Goal:** Turn replay output into practical regression reports and threshold enforcement for detection quality and hot-path performance.  
-**Depends on:** 12  
+**Goal:** Persist experiment lineage and turn candidate evaluation into a practical offline safety gate.  
+**Depends on:** 15  
 **Plans:** 1
 
 Plans:
-- [x] 13-01: Evaluation reports, expectation checks, and regression failure thresholds
+- [ ] 16-01: Experiment registry, lineage reports, and known-bad regression gates
 
 **Success criteria:**
-1. Team can generate evaluation reports comparing replay outcomes against expected detections, response decisions, investigations, and incidents.
-2. Local or CI verification fails when replay expectations or configured latency thresholds regress past accepted limits.
-3. Reports make detector, policy, and incident differences legible enough for operators to debug regressions quickly.
-4. Operator docs explain how to run the replay and evaluation workflows end to end.
+1. Candidate experiments persist lineage, corpus version, and comparison summaries for later review.
+2. Offline gates fail when a candidate loses known-bad coverage or misses configured thresholds.
+3. Reports identify which scenarios, suites, or technique groups caused the regression.
+4. Operator docs explain how to run adversarial suites and candidate experiments end to end.
 
 ## Traceability Summary
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-01 | Phase 11 | Complete |
-| OPS-02 | Phase 11 | Complete |
-| OPS-03 | Phase 11 | Complete |
-| RPLY-01 | Phase 12 | Complete |
-| RPLY-02 | Phase 12 | Complete |
-| RPLY-03 | Phase 12 | Complete |
-| EVAL-01 | Phase 13 | Complete |
-| EVAL-02 | Phase 13 | Complete |
+| RED-01 | Phase 14 | Pending |
+| RED-02 | Phase 14 | Pending |
+| RED-03 | Phase 16 | Pending |
+| EVO-01 | Phase 15 | Pending |
+| EVO-02 | Phase 15 | Pending |
+| EVO-03 | Phase 16 | Pending |
+| EVO-04 | Phase 16 | Pending |
 
 **Coverage:**
-- v1.3 requirements: 8 total
-- Mapped to phases: 8
+- v1.4 requirements: 7 total
+- Mapped to phases: 7
 - Unmapped: 0
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after Phase 13*
+*Last updated: 2026-04-03 after milestone v1.4 definition*
