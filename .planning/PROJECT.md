@@ -2,69 +2,71 @@
 
 ## What This Is
 
-Swarm Team Six is a Rust-first threat detection and controlled live response runtime. It ingests telemetry, detects suspicious behavior quickly, evaluates narrow response actions through deterministic policy gates, and emits signed receipt chains for every decision.
-
-The repository started with a larger Python-heavy swarm concept, but the active direction is now a self-contained Rust system built for fast detection first and safe live response second.
+Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped slice can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, and emit replayable audit artifacts. The next milestone is about making that slice durable and operator-usable under restart and real infrastructure conditions.
 
 ## Core Value
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
+## Current Milestone: v1.1 Durability And Operators
+
+**Goal:** Make the shipped single-node Rust lane durable and operator-usable without expanding the architecture prematurely.
+
+**Target features:**
+- persistent pheromone substrate with restart recovery
+- persisted receipt and replay storage with lookup by stable identifiers
+- operator-facing status, metrics, and correlation surfaces for the live-response lane
+
 ## Requirements
 
 ### Validated
 
-- ✓ Rust workspace compiles with core domain crates plus runtime, policy, and response scaffolds — existing
-- ✓ Top-level architecture and roadmap now reflect a Rust-first live-response direction — existing
-- ✓ Focused upstream reference code from ClawdStrike, Hellcat, and Cyntra has been copied locally for porting inspiration — existing
+- ✓ Operator can run a pure-Rust detect -> authorize -> execute slice with repository-owned config and explicit runtime modes — v1.0
+- ✓ Runtime can evaluate a concrete detector, deposit to an in-memory substrate, and publish benchmarked hot-path latency — v1.0
+- ✓ Runtime can gate live response through deterministic policy, scoped leases, sandboxed execution, and normalized receipts — v1.0
+- ✓ Runtime can emit auditable replay bundles and cover the critical path with integration tests — v1.0
 
 ### Active
 
-- [ ] Build a benchmarked Rust detection lane from telemetry event to pheromone deposit
-- [ ] Build a deterministic Rust policy gate for narrow live response actions
-- [ ] Build sandboxed and enforced response execution modes with signed receipts
-- [ ] Replace Python-runtime assumptions with STS-owned Rust implementations and contracts
-- [ ] Keep the first production slice small enough to measure, test, and trust
+- [ ] Make substrate durability selectable and restart-safe without changing hot-path contracts
+- [ ] Persist receipt and replay artifacts so past decisions survive process restarts
+- [ ] Give operators one clear surface for status, metrics, and cross-artifact correlation
+- [ ] Keep the milestone single-node and Rust-only while hardening real operational paths
+- [ ] Preserve fast-detection characteristics while adding durability and observability
 
 ### Out of Scope
 
-- Python-first orchestration runtime — archived as reference while the production path moves to Rust
-- BFT / VRF governance in v1 — deferred until a single-node live-response path is trusted
-- Gossip mesh / CRDT membership — premature without proven multi-node operational need
-- Live co-evolutionary attack/defense loops — deferred until the core detector and response path are real
+- Async investigation and correlation on the hot path — useful next, but not before durability and operator usability are real
+- Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
+- Gossip membership / CRDT state sharing — not justified for the current single-node milestone
+- Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
+- Live evolution / red-team loops — offline evaluation work, not current production scope
 
 ## Context
 
-This is a brownfield repo with significant existing documentation and scaffold code, but not a finished runtime. The project direction was clarified in-session:
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory pheromone substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. The next practical gap is not new intelligence logic but operational durability: the current substrate is in-memory, replay persistence is file-local, and operator visibility is still closer to test scaffolding than day-two operations.
 
-- live response actions are intended, not merely advisory recommendations
-- the first proof point is fast detection
-- upstream sibling repos are considered stable enough to copy from, but the long-term goal is for STS to stand on its own
-- Python code should be treated as inspiration and reference material, not as the production runtime
-
-The repo now includes:
-
-- Rust crates for core types, pheromones, guards, crypto, spine, policy, response, runtime, and detection
-- legacy Python material under `kernel/` retained as reference
-- copied upstream reference trees under `vendor/reference/`
+The canonical product roadmap in `docs/ROADMAP.md` already sequences this next step as "Durability And Operators". This milestone stays narrow: make the existing slice survive restarts, expose its state clearly, and avoid mixing in slower async investigation or distributed coordination work.
 
 ## Constraints
 
-- **Tech stack**: Production runtime is Rust-first — one type system, one operational path, one benchmarkable hot lane
-- **Security**: Live response must stay behind deterministic policy and auditable receipts — destructive actions cannot depend on fuzzy orchestration
-- **Architecture**: The first milestone must avoid premature distributed complexity — no BFT, gossip, or co-evolution in the critical path
-- **Repository ownership**: Upstream ideas may be copied in temporarily, but product code must become STS-owned and self-contained
-- **Performance**: The first success metric is measurable detection latency and throughput, not architectural completeness
+- **Tech stack**: Production runtime remains pure Rust — keep one operational path and one type system
+- **Security**: Live response cannot bypass deterministic policy or auditable receipts — durability must strengthen, not weaken, safety boundaries
+- **Architecture**: This milestone stays single-node — avoid BFT, gossip, or multi-authority work
+- **Operations**: Durable mode must degrade predictably — operators need explicit readiness and failure signals
+- **Performance**: Added persistence and observability cannot erase the fast-detection proof point — measure the new costs
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Move the production runtime to pure Rust | Fast detection and live response are easier to measure, secure, and ship with a single runtime | — Pending |
-| Keep `kernel/` as reference only | The Python tree is useful design input but adds latency and seam complexity if kept on the hot path | — Pending |
-| Keep `swarm-bridge` as legacy only | Avoid making PyO3 a strategic dependency while the core system is still being defined | — Pending |
-| Start with a narrow response safety model | Human gating plus deterministic policy is a better first boundary than simulated consensus in one control plane | — Pending |
-| Copy focused upstream code into `vendor/reference/` | Makes the project locally self-sufficient while porting the useful ideas inward | — Pending |
+| Move the production runtime to pure Rust | Fast detection and live response are easier to measure, secure, and operate with one runtime | ✓ Good |
+| Keep `kernel/` as reference only | The Python tree is useful inspiration but not a viable hot path | ✓ Good |
+| Keep `swarm-bridge` as legacy only | PyO3 is unnecessary for the current product direction | ✓ Good |
+| Start with a narrow response safety model | Deterministic policy and scoped leases proved the basic live-response boundary without fake distributed consensus | ✓ Good |
+| Copy focused upstream code into `vendor/reference/` | Local references reduced upstream dependency risk while preserving freedom to refactor inward | ✓ Good |
+| Tackle durability before async investigation | The shipped lane must survive restarts and support operators before it grows new reasoning features | — Pending |
+| Use JetStream as the first durable substrate target | Matches the existing architecture docs and preserves the current substrate abstraction | — Pending |
 
 ---
-*Last updated: 2026-04-02 after initialization*
+*Last updated: 2026-04-03 after starting milestone v1.1*
