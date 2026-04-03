@@ -10,3 +10,5 @@
 //! - Enforce source diversity (one agent can't flood)
 
 pub mod substrate;
+
+pub use substrate::{InMemoryPheromoneSubstrate, PheromoneSubstrate, SubstrateError};
