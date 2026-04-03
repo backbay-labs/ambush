@@ -114,6 +114,38 @@ The CLI labels output by origin:
 - `persisted_runtime_artifact`: replay, investigation, or incident artifacts loaded from durable runtime stores
 - `offline_replay_artifact`: reserved for the offline replay workflows added in later milestones
 
+### Offline Replay Harness
+
+The repo now ships a deterministic offline replay harness. It uses the same Rust detector, policy, and receipt types as the production runtime, but forces `detect_only` execution so no live response action is executed.
+
+Repo-owned scenarios live under `scenarios/`:
+
+- `scenarios/office-dropper-correlation.yaml`
+- `scenarios/benign-baseline.yaml`
+
+Replay results are written under `data/replay-runs/` by default.
+
+Examples:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- replay-run --scenario scenarios/office-dropper-correlation.yaml
+cargo run -p swarm-runtime --bin swarmctl -- replay-result --scenario scenarios/office-dropper-correlation.yaml
+cargo run -p swarm-runtime --bin swarmctl -- --json replay-result --run-id replay_run:office_dropper_correlation:1700000100000
+```
+
+Scenario manifests currently support two input modes:
+
+- `kind: events`: inline fixture telemetry plus the response action to request for each step
+- `kind: replay_bundles`: one or more persisted replay bundle JSON files that should be re-run offline
+
+The durable replay run bundle captures:
+
+- replay bundles produced by the offline run
+- deterministic inline investigation artifacts
+- deterministic correlated incidents
+- a stable summary for repeatability checks
+- measured stage latency snapshots for later regression gates
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.

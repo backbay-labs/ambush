@@ -33,7 +33,7 @@ Plans:
 **Plans:** 1
 
 Plans:
-- [ ] 12-01: Replay runner, scenario manifests, and durable result bundles
+- [x] 12-01: Replay runner, scenario manifests, and durable result bundles
 
 **Success criteria:**
 1. Team can run deterministic offline replay from stored bundles or fixture corpora without touching live response paths.
@@ -63,9 +63,9 @@ Plans:
 | OPS-01 | Phase 11 | Complete |
 | OPS-02 | Phase 11 | Complete |
 | OPS-03 | Phase 11 | Complete |
-| RPLY-01 | Phase 12 | Pending |
-| RPLY-02 | Phase 12 | Pending |
-| RPLY-03 | Phase 12 | Pending |
+| RPLY-01 | Phase 12 | Complete |
+| RPLY-02 | Phase 12 | Complete |
+| RPLY-03 | Phase 12 | Complete |
 | EVAL-01 | Phase 13 | Pending |
 | EVAL-02 | Phase 13 | Pending |
 
@@ -76,4 +76,4 @@ Plans:
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after Phase 11*
+*Last updated: 2026-04-03 after Phase 12*

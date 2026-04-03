@@ -3,6 +3,7 @@ use swarm_runtime::control::{
     DefaultControlPlane, IncidentLookupSelector, InvestigationLookupSelector,
     OperatorControlOutput, ReplayLookupSelector, render_output,
 };
+use swarm_runtime::replay::{DefaultReplayHarness, render_evaluation_report, render_replay_run};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -12,6 +13,9 @@ use swarm_runtime::control::{
 struct Cli {
     #[arg(long, global = true, default_value = "rulesets/default.yaml")]
     config: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/replay-runs")]
+    replay_results_dir: std::path::PathBuf,
 
     #[arg(long, global = true)]
     json: bool,
@@ -26,6 +30,9 @@ enum Command {
     Replay(ReplayArgs),
     Investigation(InvestigationArgs),
     Incident(IncidentArgs),
+    ReplayRun(ReplayRunArgs),
+    ReplayResult(ReplayResultArgs),
+    ReplayEvaluate(ReplayEvaluateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -76,10 +83,45 @@ struct IncidentArgs {
     hunt_id: Option<String>,
 }
 
+#[derive(Debug, Args)]
+struct ReplayRunArgs {
+    #[arg(long)]
+    scenario: std::path::PathBuf,
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("selector")
+        .required(true)
+        .args(["run_id", "scenario"]),
+))]
+struct ReplayResultArgs {
+    #[arg(long)]
+    run_id: Option<String>,
+
+    #[arg(long)]
+    scenario: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("selector")
+        .required(true)
+        .args(["run_id", "scenario"]),
+))]
+struct ReplayEvaluateArgs {
+    #[arg(long)]
+    run_id: Option<String>,
+
+    #[arg(long)]
+    scenario: Option<std::path::PathBuf>,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let plane = DefaultControlPlane::from_path(&cli.config)?;
+    let replay_harness = DefaultReplayHarness::from_path(&cli.config, &cli.replay_results_dir)?;
 
     let output = match cli.command {
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
@@ -112,6 +154,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 IncidentLookupSelector::HuntId(args.hunt_id.as_deref().expect("hunt id"))
             })?,
         )),
+        Command::ReplayRun(args) => {
+            let run = replay_harness.run_scenario_path(args.scenario).await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&run.bundle)?);
+            } else {
+                println!("{}", render_replay_run(&run.bundle));
+            }
+            return Ok(());
+        }
+        Command::ReplayResult(args) => {
+            let maybe_run = if let Some(run_id) = args.run_id.as_deref() {
+                replay_harness.load_run(run_id)?
+            } else {
+                replay_harness.load_run_for_scenario_path(args.scenario.expect("scenario path"))?
+            };
+            let run = maybe_run.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "offline replay result was not found",
+                )
+            })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&run.bundle)?);
+            } else {
+                println!("{}", render_replay_run(&run.bundle));
+            }
+            return Ok(());
+        }
+        Command::ReplayEvaluate(args) => {
+            let report = if let Some(run_id) = args.run_id.as_deref() {
+                let run = replay_harness.load_run(run_id)?.ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "offline replay result was not found",
+                    )
+                })?;
+                replay_harness.evaluate_run(&run.bundle)
+            } else {
+                replay_harness
+                    .evaluate_scenario_path(args.scenario.expect("scenario path"))
+                    .await?
+            };
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", render_evaluation_report(&report));
+            }
+            if !report.passed {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
     };
 
     if cli.json {

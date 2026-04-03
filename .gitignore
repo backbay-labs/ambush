@@ -23,3 +23,4 @@ Thumbs.db
 # Runtime
 *.log
 .ephemeral_state.json
+data/replay-runs/

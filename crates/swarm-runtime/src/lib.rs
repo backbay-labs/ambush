@@ -9,6 +9,7 @@ pub mod control;
 pub mod correlation;
 pub mod investigation;
 pub mod pipeline;
+pub mod replay;
 pub mod service;
 
 use std::time::Instant;

@@ -56,9 +56,9 @@
 | OPS-01 | Phase 11 | Complete |
 | OPS-02 | Phase 11 | Complete |
 | OPS-03 | Phase 11 | Complete |
-| RPLY-01 | Phase 12 | Pending |
-| RPLY-02 | Phase 12 | Pending |
-| RPLY-03 | Phase 12 | Pending |
+| RPLY-01 | Phase 12 | Complete |
+| RPLY-02 | Phase 12 | Complete |
+| RPLY-03 | Phase 12 | Complete |
 | EVAL-01 | Phase 13 | Pending |
 | EVAL-02 | Phase 13 | Pending |
 
@@ -69,4 +69,4 @@
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.3 definition*
+*Last updated: 2026-04-03 after Phase 12*

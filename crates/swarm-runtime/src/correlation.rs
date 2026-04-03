@@ -49,6 +49,20 @@ impl CorrelationEngine {
         Investigations: InvestigationBundleStore,
         Incidents: IncidentStore,
     {
+        self.correlate_hunt_at(investigations, incidents, hunt_id, now_ms())
+    }
+
+    pub fn correlate_hunt_at<Investigations, Incidents>(
+        &self,
+        investigations: &Investigations,
+        incidents: &Incidents,
+        hunt_id: &str,
+        created_at_ms: i64,
+    ) -> Result<Option<CorrelationOutcome>, CorrelationError>
+    where
+        Investigations: InvestigationBundleStore,
+        Incidents: IncidentStore,
+    {
         if !self.config.enabled {
             return Ok(None);
         }
@@ -66,7 +80,7 @@ impl CorrelationEngine {
             candidates.push(lookup.bundle);
         }
 
-        let incident = self.assemble_incident(&seed_lookup.bundle, &candidates);
+        let incident = self.assemble_incident_at(&seed_lookup.bundle, &candidates, created_at_ms);
         let record = incidents.persist(&incident)?;
         Ok(Some(CorrelationOutcome { record, incident }))
     }
@@ -82,10 +96,11 @@ impl CorrelationEngine {
         Ok(incidents.load_by_hunt_id(hunt_id)?)
     }
 
-    fn assemble_incident(
+    fn assemble_incident_at(
         &self,
         seed: &InvestigationBundle,
         candidates: &[InvestigationBundle],
+        created_at_ms: i64,
     ) -> CorrelatedIncident {
         let mut included = vec![IncidentMemberDecision {
             investigation_id: seed.investigation_id.clone(),
@@ -156,7 +171,6 @@ impl CorrelationEngine {
             }
         }
 
-        let created_at_ms = now_ms();
         let summary = summarize_incident(seed, &included, &correlation_keys);
 
         CorrelatedIncident {
