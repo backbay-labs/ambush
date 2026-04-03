@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.8 Production Memory And Strategy Scoring (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- completed canary and production-promotion artifacts now produce durable strategy-memory records keyed by stable memory IDs
+- strategy-memory histories now preserve latest rollout state, rollout lineage, and source-artifact references for operator reload through `swarmctl`
+- advisory scorecards now compare the production baseline and verified candidates with deterministic context-aware scores, replay fallback, and explicit contribution breakdowns
+
+---
+
 ## v1.7 Controlled Production Promotion (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

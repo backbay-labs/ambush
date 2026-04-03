@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.8
 milestone_name: production-memory-and-strategy-scoring
-status: ready-to-plan
-last_updated: "2026-04-03T21:28:33Z"
+status: milestone-complete
+last_updated: "2026-04-03T21:50:18Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 0
+  completed_plans: 3
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.8 Production Memory And Strategy Scoring` is active. Phase 26 is next.
+**Current focus:** `v1.8 Production Memory And Strategy Scoring` is shipped and archived. The next cycle has not been started yet.
 
 ## Memory
 
@@ -31,12 +31,11 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.5` is complete: repo-owned verification corpora, invariant verdicts, shadow comparisons, and promotion review packets now ship through `swarmctl`.
 - `v1.6` is complete: bounded canary assignment, live observation metrics, automatic rollback, manual halt or rollback, and durable canary review artifacts now ship through `swarmctl`.
 - `v1.7` is complete: production promotion start, bounded production observation, automatic rollback to the retained baseline, and durable promotion records now ship through `swarmctl`.
+- `v1.8` is complete: durable strategy-memory records, advisory utility scoring, and baseline-vs-candidate scorecards now ship through `swarmctl`.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
-- The repo now has enough rollout infrastructure to support production-memory extraction from real canary and promotion evidence.
-- `v1.8` focuses on durable strategy memories, context-aware utility scoring, and advisory scorecards before governance or richer operator surfaces.
-- Phase 26 will establish stable strategy-memory records from canary and production-promotion artifacts before any scoring layer is added.
+- The repo now has a full evidence ladder from replay and verification through production promotion plus one advisory memory layer above it.
 - Consensus, automatic strategy selection, and richer operator surfaces remain future work.
 
 ## Next Command
 
-`$gsd-plan-phase 26`
+`$gsd-new-milestone`

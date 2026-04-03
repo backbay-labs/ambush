@@ -7,19 +7,19 @@
 
 ### Strategy Memory
 
-- [ ] **MEM-01**: Team can persist durable strategy-memory records from completed canary and production-promotion artifacts without rerunning telemetry
-- [ ] **MEM-02**: Operator can reload strategy-memory records by stable memory ID or strategy ID without reading raw store files
+- [x] **MEM-01**: Team can persist durable strategy-memory records from completed canary and production-promotion artifacts without rerunning telemetry
+- [x] **MEM-02**: Operator can reload strategy-memory records by stable memory ID or strategy ID without reading raw store files
 
 ### Utility Scoring
 
-- [ ] **MEM-03**: Team can compute a deterministic context-aware utility score for a verified strategy using production memories plus replay-fitness fallback when live history is sparse
-- [ ] **MEM-04**: Utility scoring preserves the contributing memories, outcome weights, recency effects, and context matches so operators can inspect why a score was produced
-- [ ] **MEM-05**: Memory-backed strategy scoring remains advisory only and cannot by itself promote, mutate, or replace a production detector
+- [x] **MEM-03**: Team can compute a deterministic context-aware utility score for a verified strategy using production memories plus replay-fitness fallback when live history is sparse
+- [x] **MEM-04**: Utility scoring preserves the contributing memories, outcome weights, recency effects, and context matches so operators can inspect why a score was produced
+- [x] **MEM-05**: Memory-backed strategy scoring remains advisory only and cannot by itself promote, mutate, or replace a production detector
 
 ### Strategy Review
 
-- [ ] **MEM-06**: Team can assemble a strategy scorecard that compares the production baseline and verified candidates using memory-backed scores, rollout lineage, and current promotion state
-- [ ] **MEM-07**: Operator can inspect strategy memory histories, score breakdowns, and advisory selection recommendations through `swarmctl`
+- [x] **MEM-06**: Team can assemble a strategy scorecard that compares the production baseline and verified candidates using memory-backed scores, rollout lineage, and current promotion state
+- [x] **MEM-07**: Operator can inspect strategy memory histories, score breakdowns, and advisory selection recommendations through `swarmctl`
 
 ## Future Requirements
 
@@ -53,13 +53,13 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MEM-01 | Phase 26 | Pending |
-| MEM-02 | Phase 26 | Pending |
-| MEM-03 | Phase 27 | Pending |
-| MEM-04 | Phase 27 | Pending |
-| MEM-05 | Phase 27 | Pending |
-| MEM-06 | Phase 28 | Pending |
-| MEM-07 | Phase 28 | Pending |
+| MEM-01 | Phase 26 | Complete |
+| MEM-02 | Phase 26 | Complete |
+| MEM-03 | Phase 27 | Complete |
+| MEM-04 | Phase 27 | Complete |
+| MEM-05 | Phase 27 | Complete |
+| MEM-06 | Phase 28 | Complete |
+| MEM-07 | Phase 28 | Complete |
 
 **Coverage:**
 - v1.8 requirements: 7 total
@@ -68,4 +68,4 @@
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.8 roadmap creation*
+*Last updated: 2026-04-03 after milestone v1.8 completion*

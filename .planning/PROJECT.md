@@ -10,27 +10,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.7 Controlled Production Promotion` shipped on 2026-04-03.
+`v1.8 Production Memory And Strategy Scoring` shipped on 2026-04-03.
 
 **What is now real:**
-- verified candidate detectors can now move from canary into a bounded production promotion without hand-editing detector config
-- production-promotion records persist embedded canary evidence, baseline rotation, observation metrics, threshold verdicts, and final recommendation under stable promotion IDs
-- operators can drive promotion start, production-window event ingestion, rollback, halt, and stable-ID reload through `swarmctl`
-- production promotions automatically block and roll back on configured divergence, latency, or budget failures, and manual rollback preserves restored-baseline history
-- promotion configuration is validated in the shared Rust config model and shipped in `rulesets/default.yaml`
-
-## Current Milestone: v1.8 Production Memory And Strategy Scoring
-
-**Goal:** Turn completed canary and production-promotion evidence into durable strategy memories and operator-readable utility scores, so detector choice can use real deployment history instead of replay fitness alone.
-
-**Target features:**
-- persist per-strategy outcome memories from canary and production-promotion artifacts without rerunning telemetry
-- compute deterministic context-aware utility scores with replay-fitness fallback and explicit score explanations
-- expose strategy memory history and advisory baseline-vs-candidate scorecards through `swarmctl`
+- completed canary and production-promotion artifacts can now be converted into durable per-strategy memory records without rerunning telemetry
+- strategy-memory histories persist stable IDs, rollout lineage, artifact references, and latest rollout state for operator reload through `swarmctl`
+- verified strategies can now be scored with deterministic context-aware utility breakdowns that combine live rollout memory and replay-fitness fallback
+- advisory scorecards compare the current production baseline and verified candidates without mutating production detector configuration
+- strategy memory and advisory scorecard directories are repo-owned, documented, and ignored by default under `data/strategy-memory/` and `data/strategy-scorecards/`
 
 ## Next Planning Step
 
-Start execution with `$gsd-plan-phase 26`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -73,7 +64,7 @@ Start execution with `$gsd-plan-phase 26`.
 - ✓ Team can assemble a canary evaluation report that links verification, shadow, and canary evidence into one ready-for-promotion or blocked recommendation — v1.6
 - ✓ Operator CLI can inspect active or completed canary runs and rollback history by stable ID — v1.6
 
-### Just Shipped
+### Previous Milestone
 
 - ✓ Team can promote a canary-approved detector to production while retaining the previous production detector as an explicit rollback target — v1.7
 - ✓ Operator can start a production promotion from a ready canary artifact and persist a stable promotion ID with baseline lineage — v1.7
@@ -83,11 +74,15 @@ Start execution with `$gsd-plan-phase 26`.
 - ✓ Promotion records persist canary evidence, promoted strategy lineage, rollback target, and final recommendation in one durable artifact — v1.7
 - ✓ Operator CLI can inspect active or completed production promotions and rollback history by stable ID — v1.7
 
-### Active
+### Just Shipped
 
-- [ ] Team can persist strategy outcome memories from completed canary and production-promotion artifacts without rerunning telemetry
-- [ ] Team can compute deterministic context-aware utility scores for verified strategies using production memories plus replay-fitness fallback
-- [ ] Operator can inspect strategy memory histories, score explanations, and advisory selection scorecards through `swarmctl`
+- ✓ Team can persist strategy outcome memories from completed canary and production-promotion artifacts without rerunning telemetry — v1.8
+- ✓ Team can reload strategy-memory records by stable memory ID or strategy ID without reading raw store files — v1.8
+- ✓ Team can compute deterministic context-aware utility scores for verified strategies using production memories plus replay-fitness fallback — v1.8
+- ✓ Utility scoring preserves contributing memories, outcome weights, recency effects, and context matches for operator inspection — v1.8
+- ✓ Memory-backed strategy scoring remains advisory only and cannot by itself promote, mutate, or replace a production detector — v1.8
+- ✓ Team can assemble a strategy scorecard that compares the production baseline and verified candidates using memory-backed scores, rollout lineage, and current promotion state — v1.8
+- ✓ Operator can inspect strategy memory histories, score explanations, and advisory selection scorecards through `swarmctl` — v1.8
 
 ### Out of Scope
 
@@ -101,9 +96,9 @@ Start execution with `$gsd-plan-phase 26`.
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed the next staged-deployment step with controlled production promotion, bounded production observation, and rollback to the retained baseline detector.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 now turns those rollout artifacts into durable strategy memories and advisory scorecards.
 
-The project now has an end-to-end rollout ladder: experiment -> verification -> shadow -> canary -> production promotion. `v1.8` uses that new production evidence as the first durable strategy-memory source so the repo can rank detectors with real rollout history before revisiting governance or richer operator surfaces.
+The project now has an end-to-end rollout ladder plus a first memory-backed review layer: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard. Governance, richer operator surfaces, and formal evolution remain future work.
 
 ## Constraints
 
@@ -139,8 +134,8 @@ The project now has an end-to-end rollout ladder: experiment -> verification -> 
 | Choose bounded canary and rollback as the next milestone | The canonical staged deployment path moves from shadow to canary, while consensus promotion remains deferred | ✓ Chosen |
 | Choose controlled production promotion as the next milestone | The canary artifact is now the documented handoff into production, and the roadmap still defers governance until after a real promotion path exists | ✓ Chosen |
 | Keep production promotion CLI-first and single-node | The runtime still lacks independent trust boundaries and multi-node rollout needs, so CLI plus durable artifacts is the smallest credible promotion surface | ✓ Good |
-| Choose production memory and strategy scoring as the next milestone | `docs/EVOLUTION.md` makes production utility memory the next missing capability once real promotion evidence exists | — Pending |
-| Keep memory-backed ranking advisory only | The runtime still lacks quorum governance and proof-backed evolution, so scores should guide operators instead of auto-promoting strategies | — Pending |
+| Choose production memory and strategy scoring as the next milestone | `docs/EVOLUTION.md` made production utility memory the next missing capability once real promotion evidence existed | ✓ Good |
+| Keep memory-backed ranking advisory only | The runtime still lacks quorum governance and proof-backed evolution, so scores guide operators instead of auto-promoting strategies | ✓ Good |
 
 ---
-*Last updated: 2026-04-03 after starting milestone v1.8*
+*Last updated: 2026-04-03 after shipping v1.8*
