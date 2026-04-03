@@ -22,13 +22,13 @@ impl Default for StaticApprovalGate {
 }
 
 impl StaticApprovalGate {
-    fn requires_human(&self, request: &ActionRequest) -> bool {
+    fn destructive_action(request: &ActionRequest) -> bool {
         matches!(
             request.action,
             ResponseAction::BlockEgress { .. }
                 | ResponseAction::IsolateHost { .. }
                 | ResponseAction::RevokeCredential { .. }
-        ) && request.severity >= self.human_gate_severity
+        )
     }
 
     fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
@@ -37,7 +37,49 @@ impl StaticApprovalGate {
                 "evidence bundle must not be null".to_string(),
             ));
         }
+
+        match &request.action {
+            ResponseAction::BlockEgress { target } if target.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "block target must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::IsolateHost { host_id } if host_id.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "host_id must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::RevokeCredential { credential_id } if credential_id.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "credential_id must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::DeployDecoy {
+                decoy_type,
+                target_zone,
+            } if decoy_type.trim().is_empty() || target_zone.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "decoy_type and target_zone must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::Escalate { summary, .. } if summary.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "summary must not be empty".to_string(),
+                ));
+            }
+            _ => {}
+        }
         Ok(())
+    }
+
+    fn action_name(&self, action: &ResponseAction) -> &'static str {
+        match action {
+            ResponseAction::BlockEgress { .. } => "block_egress",
+            ResponseAction::IsolateHost { .. } => "isolate_host",
+            ResponseAction::RevokeCredential { .. } => "revoke_credential",
+            ResponseAction::DeployDecoy { .. } => "deploy_decoy",
+            ResponseAction::Escalate { .. } => "escalate",
+        }
     }
 
     fn scope_for_action(&self, action: &ResponseAction) -> Option<String> {
@@ -58,18 +100,28 @@ impl ApprovalGate for StaticApprovalGate {
         _context: &ApprovalContext,
     ) -> Result<PolicyDecision, ApprovalError> {
         self.validate_request(request)?;
-        let requires_human = self.requires_human(request);
-        let reason = if requires_human {
-            "authorized but held for human approval".to_string()
-        } else {
-            "authorized for immediate execution".to_string()
-        };
 
-        Ok(PolicyDecision {
-            authorized: true,
-            reason,
-            requires_human,
-        })
+        if Self::destructive_action(request) && request.severity == Severity::Low {
+            return Ok(PolicyDecision::deny(
+                "destructive actions require at least medium severity",
+            ));
+        }
+
+        if matches!(request.action, ResponseAction::DeployDecoy { .. })
+            && request.severity == Severity::Low
+        {
+            return Ok(PolicyDecision::deny(
+                "deploy_decoy requires at least medium severity",
+            ));
+        }
+
+        if Self::destructive_action(request) && request.severity >= self.human_gate_severity {
+            return Ok(PolicyDecision::require_human(
+                "authorized but held for human approval",
+            ));
+        }
+
+        Ok(PolicyDecision::allow("authorized for immediate execution"))
     }
 
     fn issue_lease(
@@ -79,8 +131,14 @@ impl ApprovalGate for StaticApprovalGate {
     ) -> Result<CapabilityLease, ApprovalError> {
         self.validate_request(request)?;
         Ok(CapabilityLease {
-            capability_id: format!("lease:{}:{}", request.hunt_id.0, context.now_ms),
+            capability_id: format!(
+                "lease:{}:{}:{}",
+                request.hunt_id.0,
+                self.action_name(&request.action),
+                context.now_ms
+            ),
             expires_at_ms: context.now_ms + self.lease_ttl_ms,
+            action: self.action_name(&request.action).to_string(),
             scope: self.scope_for_action(&request.action),
         })
     }
@@ -89,7 +147,7 @@ impl ApprovalGate for StaticApprovalGate {
 #[cfg(test)]
 mod tests {
     use super::StaticApprovalGate;
-    use crate::{ActionRequest, ApprovalContext, ApprovalGate};
+    use crate::{ActionRequest, ApprovalContext, ApprovalGate, PolicyVerdict};
     use serde_json::json;
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 
@@ -122,8 +180,7 @@ mod tests {
         );
 
         let decision = gate.evaluate(&request, &sample_context()).unwrap();
-        assert!(decision.authorized);
-        assert!(decision.requires_human);
+        assert_eq!(decision.verdict, PolicyVerdict::RequireHuman);
     }
 
     #[test]
@@ -138,8 +195,37 @@ mod tests {
         );
 
         let decision = gate.evaluate(&request, &sample_context()).unwrap();
-        assert!(decision.authorized);
-        assert!(!decision.requires_human);
+        assert_eq!(decision.verdict, PolicyVerdict::Allow);
+    }
+
+    #[test]
+    fn low_severity_isolation_is_denied() {
+        let gate = StaticApprovalGate::default();
+        let request = sample_request(
+            ResponseAction::IsolateHost {
+                host_id: "host-1".to_string(),
+            },
+            Severity::Low,
+        );
+
+        let decision = gate.evaluate(&request, &sample_context()).unwrap();
+        assert_eq!(decision.verdict, PolicyVerdict::Deny);
+    }
+
+    #[test]
+    fn issued_lease_carries_scope_and_action() {
+        let gate = StaticApprovalGate::default();
+        let request = sample_request(
+            ResponseAction::DeployDecoy {
+                decoy_type: "honeypot".to_string(),
+                target_zone: "dmz".to_string(),
+            },
+            Severity::Medium,
+        );
+
+        let lease = gate.issue_lease(&request, &sample_context()).unwrap();
+        assert_eq!(lease.action, "deploy_decoy");
+        assert_eq!(lease.scope.as_deref(), Some("dmz"));
     }
 
     #[test]

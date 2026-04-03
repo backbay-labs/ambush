@@ -40,12 +40,42 @@ pub struct ApprovalContext {
 /// The outcome of evaluating a live response request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyDecision {
-    /// Whether execution is authorized.
-    pub authorized: bool,
+    /// Deterministic policy verdict.
+    pub verdict: PolicyVerdict,
     /// Human-readable explanation for audit logs and operators.
     pub reason: String,
-    /// Whether a human must confirm before execution proceeds.
-    pub requires_human: bool,
+}
+
+/// Deterministic policy verdicts for a response request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyVerdict {
+    Deny,
+    Allow,
+    RequireHuman,
+}
+
+impl PolicyDecision {
+    pub fn deny(reason: impl Into<String>) -> Self {
+        Self {
+            verdict: PolicyVerdict::Deny,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn allow(reason: impl Into<String>) -> Self {
+        Self {
+            verdict: PolicyVerdict::Allow,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn require_human(reason: impl Into<String>) -> Self {
+        Self {
+            verdict: PolicyVerdict::RequireHuman,
+            reason: reason.into(),
+        }
+    }
 }
 
 /// A short-lived authorization lease attached to a live response request.
@@ -55,6 +85,8 @@ pub struct CapabilityLease {
     pub capability_id: String,
     /// Expiration time for the lease in unix milliseconds.
     pub expires_at_ms: i64,
+    /// Response action authorized by the lease.
+    pub action: String,
     /// Optional target scope, such as a host or network segment.
     pub scope: Option<String>,
 }
