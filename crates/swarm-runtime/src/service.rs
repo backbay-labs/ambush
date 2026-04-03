@@ -1,6 +1,8 @@
 use crate::config::RuntimeConfig;
 use crate::correlation::{CorrelationEngine, CorrelationError, CorrelationOutcome};
-use crate::investigation::{InvestigationCoordinator, InvestigationError, InvestigationStrategy};
+use crate::investigation::{
+    InvestigationCoordinator, InvestigationError, InvestigationQueueSnapshot, InvestigationStrategy,
+};
 use crate::pipeline::{DetectionPipelineOutcome, PipelineError, detect_and_deposit};
 use crate::{RuntimeError, RuntimeMode, SwarmRuntime};
 use serde::{Deserialize, Serialize};
@@ -16,9 +18,10 @@ use swarm_policy::ApprovalGate;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::ResponseExecutor;
 use swarm_spine::{
-    IncidentLookup, IncidentStore, InvestigationBundleLookup, InvestigationBundleRecord,
-    InvestigationBundleStore, ReplayBundle, ReplayBundleLookup, ReplayBundleRecord,
-    ReplayBundleStore, ReplayPreview, ReplayStoreError, ReplayStoreHealth,
+    IncidentLookup, IncidentRecord, IncidentStore, IncidentStoreHealth, InvestigationBundleLookup,
+    InvestigationBundleRecord, InvestigationBundleStore, InvestigationStoreHealth, ReplayBundle,
+    ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,
+    ReplayStoreHealth,
 };
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 
@@ -114,7 +117,30 @@ pub struct OperatorStatusReport {
     pub replay_store: ComponentStatus,
     pub metrics: RuntimeMetricsSnapshot,
     pub recent_decisions: Vec<ReplayBundleRecord>,
+    pub investigation_review: Option<InvestigationReviewStatus>,
+    pub incident_review: Option<IncidentReviewStatus>,
+    pub freshness: ReviewFreshness,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvestigationReviewStatus {
+    pub queue: InvestigationQueueSnapshot,
+    pub store: ComponentStatus,
+    pub recent: Vec<InvestigationBundleRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncidentReviewStatus {
+    pub store: ComponentStatus,
+    pub recent: Vec<IncidentRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReviewFreshness {
+    pub latest_hot_path_decision_at_ms: Option<i64>,
+    pub latest_investigation_update_at_ms: Option<i64>,
+    pub latest_incident_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -445,6 +471,7 @@ where
         Ok(Some(PersistedReplayBundle { record, bundle }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_event_with_store_and_investigation<
         D,
         S,
@@ -601,6 +628,7 @@ where
         {
             warnings.push("durable replay store is not ready".to_string());
         }
+        let recent_decisions = store.recent(self.config.audit.recent_decisions_limit)?;
 
         Ok(OperatorStatusReport {
             mode: self.runtime.mode(),
@@ -622,9 +650,87 @@ where
             },
             replay_store: component_status_from_replay_store(&replay_store_health),
             metrics: self.metrics_snapshot(),
-            recent_decisions: store.recent(self.config.audit.recent_decisions_limit)?,
+            recent_decisions: recent_decisions.clone(),
+            investigation_review: None,
+            incident_review: None,
+            freshness: ReviewFreshness {
+                latest_hot_path_decision_at_ms: recent_decisions
+                    .first()
+                    .map(|record| record.created_at_ms),
+                latest_investigation_update_at_ms: None,
+                latest_incident_at_ms: None,
+            },
             warnings,
         })
+    }
+
+    pub async fn operator_review_status<
+        D,
+        S,
+        ReplayStore,
+        Strategy,
+        InvestigationStoreT,
+        IncidentStoreT,
+    >(
+        &self,
+        detector: &D,
+        substrate: &S,
+        replay_store: &ReplayStore,
+        investigation: &InvestigationCoordinator<Strategy, InvestigationStoreT>,
+        incident_store: &IncidentStoreT,
+    ) -> Result<OperatorStatusReport, ServiceError>
+    where
+        D: DetectionStrategy,
+        S: PheromoneSubstrate,
+        ReplayStore: ReplayBundleStore,
+        Strategy: InvestigationStrategy,
+        InvestigationStoreT: InvestigationBundleStore + Clone + Send + Sync + 'static,
+        IncidentStoreT: IncidentStore,
+    {
+        let mut report = self
+            .operator_status(detector, substrate, replay_store)
+            .await?;
+        let queue = investigation.snapshot();
+        let investigation_store_health = investigation.health()?;
+        let incident_store_health = incident_store.health().map_err(CorrelationError::from)?;
+        let recent_investigations =
+            investigation.recent(self.config.audit.recent_decisions_limit)?;
+        let recent_incidents = incident_store
+            .recent(self.config.audit.recent_decisions_limit)
+            .map_err(CorrelationError::from)?;
+
+        if self.config.investigation.enabled && !investigation_store_health.ready {
+            report
+                .warnings
+                .push("durable investigation store is not ready".to_string());
+        }
+        if self.config.correlation.enabled && !incident_store_health.ready {
+            report
+                .warnings
+                .push("durable incident store is not ready".to_string());
+        }
+        if let Some(reason) = &queue.last_failure_reason {
+            report.warnings.push(format!(
+                "investigation queue reported recent failure: {reason}"
+            ));
+        }
+
+        report.investigation_review = Some(InvestigationReviewStatus {
+            queue,
+            store: component_status_from_investigation_store(&investigation_store_health),
+            recent: recent_investigations.clone(),
+        });
+        report.incident_review = Some(IncidentReviewStatus {
+            store: component_status_from_incident_store(&incident_store_health),
+            recent: recent_incidents.clone(),
+        });
+        report.freshness.latest_investigation_update_at_ms = recent_investigations
+            .first()
+            .map(|record| record.last_updated_ms);
+        report.freshness.latest_incident_at_ms =
+            recent_incidents.first().map(|record| record.created_at_ms);
+
+        Ok(report)
     }
 
     pub fn save_replay_bundle(
@@ -659,6 +765,22 @@ fn component_status_from_substrate(health: &SubstrateHealth) -> ComponentStatus 
 }
 
 fn component_status_from_replay_store(health: &ReplayStoreHealth) -> ComponentStatus {
+    ComponentStatus {
+        ready: health.ready,
+        durable: Some(health.durable),
+        details: format!("{} ({})", health.backend, health.details),
+    }
+}
+
+fn component_status_from_investigation_store(health: &InvestigationStoreHealth) -> ComponentStatus {
+    ComponentStatus {
+        ready: health.ready,
+        durable: Some(health.durable),
+        details: format!("{} ({})", health.backend, health.details),
+    }
+}
+
+fn component_status_from_incident_store(health: &IncidentStoreHealth) -> ComponentStatus {
     ComponentStatus {
         ready: health.ready,
         durable: Some(health.durable),
@@ -1247,5 +1369,203 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.record.incident_id, outcome.record.incident_id);
+    }
+
+    #[tokio::test]
+    async fn operator_review_status_surfaces_async_context_and_freshness() {
+        let mut config = service_config(
+            RuntimeMode::LiveResponse,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        config.investigation = InvestigationConfig {
+            enabled: true,
+            worker_count: 1,
+            max_pending_jobs: 1,
+            time_budget_ms: 500,
+            bundle_store: BundleStoreConfig::Memory,
+        };
+        config.correlation = CorrelationConfig {
+            enabled: true,
+            time_window_ms: 5_000,
+            min_shared_keys: 1,
+            candidate_limit: 16,
+            incident_store: BundleStoreConfig::Memory,
+        };
+        let service = RuntimeService::new(
+            config.clone(),
+            SwarmRuntime::new(
+                RuntimeMode::LiveResponse,
+                StaticApprovalGate::default(),
+                SandboxExecutor,
+            ),
+        );
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let replay_store_root = std::env::temp_dir().join("swarm-runtime-review-replay-store");
+        let _ = std::fs::remove_dir_all(&replay_store_root);
+        let replay_store = FileReplayBundleStore::open(&replay_store_root).unwrap();
+        let investigation_store = MemoryInvestigationBundleStore::default();
+        let incident_store = MemoryIncidentStore::default();
+        let coordinator = crate::investigation::InvestigationCoordinator::new(
+            config.investigation.clone(),
+            SlowInvestigator { delay_ms: 100 },
+            investigation_store.clone(),
+        );
+        let event_one = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-review-1".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "winword".to_string(),
+                process_name: "powershell".to_string(),
+                command_line: "powershell.exe -enc AAA=".to_string(),
+                user: Some("alice".to_string()),
+            }),
+        };
+        let event_two = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-review-queue-fail".to_string(),
+            timestamp: 1_700_000_001,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "winword".to_string(),
+                process_name: "powershell".to_string(),
+                command_line: "powershell.exe -enc BBB=".to_string(),
+                user: Some("alice".to_string()),
+            }),
+        };
+        let context_one = ApprovalContext {
+            live_mode: true,
+            receipt_chain: vec!["receipt-upstream-review-1".to_string()],
+            now_ms: 1_700_000_000_010,
+        };
+        let context_two = ApprovalContext {
+            live_mode: true,
+            receipt_chain: vec!["receipt-upstream-review-2".to_string()],
+            now_ms: 1_700_000_000_020,
+        };
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let _ = service
+            .process_event_with_store_and_investigation(
+                &detector,
+                &substrate,
+                &replay_store,
+                &coordinator,
+                &event_one,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context_one,
+                },
+                |_finding| {
+                    Some(swarm_core::types::ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let _ = service
+            .process_event_with_store_and_investigation(
+                &detector,
+                &substrate,
+                &replay_store,
+                &coordinator,
+                &event_two,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context_two,
+                },
+                |_finding| {
+                    Some(swarm_core::types::ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        investigation_store
+            .persist(&swarm_spine::InvestigationBundle {
+                investigation_id: "investigation:hunt-2:1".to_string(),
+                source_bundle_id: "bundle:hunt-2:1".to_string(),
+                hunt_id: "hunt-2".to_string(),
+                trail_id: "trail:hunt-2:1".to_string(),
+                event_id: "evt:hunt-2".to_string(),
+                finding_id: "finding:hunt-2".to_string(),
+                threat_class: swarm_core::pheromone::ThreatClass::Execution,
+                severity: Severity::Critical,
+                strategy_id: "summary_investigator".to_string(),
+                response_kind: "success".to_string(),
+                related_receipt_ids: vec!["receipt:hunt-2".to_string()],
+                host_id: Some("host-1".to_string()),
+                user: Some("alice".to_string()),
+                process_name: Some("powershell".to_string()),
+                queued_at_ms: 1_700_000_003_000,
+                started_at_ms: Some(1_700_000_003_010),
+                completed_at_ms: Some(1_700_000_003_100),
+                status: swarm_spine::InvestigationStatus::Completed,
+                summary: Some("summary for hunt-2".to_string()),
+                evidence_points: vec!["host_id=host-1".to_string()],
+                correlation_keys: vec![
+                    "host:host-1".to_string(),
+                    "user:alice".to_string(),
+                    "strategy:summary_investigator".to_string(),
+                ],
+                failure_reason: None,
+            })
+            .unwrap();
+
+        let engine = CorrelationEngine::new(config.correlation.clone());
+        let _ = service
+            .correlate_hunt(
+                &engine,
+                &investigation_store,
+                &incident_store,
+                "evt-review-1",
+            )
+            .unwrap()
+            .unwrap();
+
+        let status = service
+            .operator_review_status(
+                &detector,
+                &substrate,
+                &replay_store,
+                &coordinator,
+                &incident_store,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(status.recent_decisions.len(), 2);
+        assert!(status.investigation_review.is_some());
+        assert!(status.incident_review.is_some());
+        assert!(status.freshness.latest_hot_path_decision_at_ms.is_some());
+        assert!(status.freshness.latest_investigation_update_at_ms.is_some());
+        assert!(status.freshness.latest_incident_at_ms.is_some());
+
+        let investigation_review = status.investigation_review.unwrap();
+        assert!(investigation_review.recent.len() >= 2);
+        assert!(investigation_review.queue.last_failure_reason.is_some());
+
+        let incident_review = status.incident_review.unwrap();
+        assert_eq!(incident_review.recent.len(), 1);
+        assert!(
+            status
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("investigation queue reported recent failure"))
+        );
+
+        let _ = std::fs::remove_dir_all(replay_store_root);
     }
 }

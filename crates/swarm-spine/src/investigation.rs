@@ -625,7 +625,7 @@ struct InvestigationIndex {
 
 fn sorted_recent_bundles(bundles: &[InvestigationBundle]) -> Vec<InvestigationBundle> {
     let mut ordered = bundles.to_vec();
-    ordered.sort_by(|left, right| right.last_updated_ms().cmp(&left.last_updated_ms()));
+    ordered.sort_by_key(|bundle| std::cmp::Reverse(bundle.last_updated_ms()));
     ordered
 }
 

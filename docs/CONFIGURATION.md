@@ -11,6 +11,90 @@ Hunt missions are defined in YAML files under `rulesets/`. The swarm assembles f
 
 The config is loaded at startup and validated fail-closed: invalid configuration rejects at load time, not at runtime. Unknown fields are rejected (`deny_unknown_fields`).
 
+## Rust-First Runtime Additions
+
+The current production slice is much narrower than the historical mission schema below. The live Rust runtime reads these repository-owned sections today:
+
+```yaml
+runtime:
+  mode: detect_only | live_response
+  telemetry_sources:
+    - name: synthetic-process
+      subject: telemetry.synthetic.process
+  max_in_flight_actions: 4
+  require_durable_live_response: true
+
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.90
+  medium_confidence_threshold: 0.70
+
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+  backend:
+    kind: in_memory | local_journal
+    path: data/pheromones.jsonl   # local_journal only
+
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+
+audit:
+  bundle_store:
+    kind: memory | local_files
+    directory: data/replay        # local_files only
+  recent_decisions_limit: 20
+
+investigation:
+  enabled: false
+  worker_count: 1
+  max_pending_jobs: 16
+  time_budget_ms: 250
+  bundle_store:
+    kind: memory | local_files
+    directory: data/investigations
+
+correlation:
+  enabled: false
+  time_window_ms: 300000
+  min_shared_keys: 1
+  candidate_limit: 32
+  incident_store:
+    kind: memory | local_files
+    directory: data/incidents
+```
+
+### Investigation
+
+- `enabled`: turns the async investigation queue on or off without affecting the hot path.
+- `worker_count`: concurrency limit for background investigation workers.
+- `max_pending_jobs`: queue depth before new submissions degrade visibly as async failures instead of blocking response execution.
+- `time_budget_ms`: hard timeout per investigation job.
+- `bundle_store`: where durable investigation bundles are written for later review and correlation.
+
+### Correlation
+
+- `enabled`: turns incident assembly on or off.
+- `time_window_ms`: maximum age difference allowed between investigation bundles considered for one incident.
+- `min_shared_keys`: minimum overlapping correlation keys required for inclusion.
+- `candidate_limit`: how many recent investigation bundles to scan when assembling one incident.
+- `incident_store`: where correlated incidents are persisted for operator review.
+
+### Operator Review Surface
+
+`RuntimeService::operator_review_status` combines the original hot-path report with:
+
+- investigation queue state, including `last_failure_reason`
+- recent persisted investigation summaries and status
+- recent incidents and linked hunt IDs
+- freshness markers for hot-path decisions, investigation updates, and incidents
+
+Degraded investigation or incident stores surface as warnings in the operator report. They do not block startup in this milestone.
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.
