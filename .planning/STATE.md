@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.7
-milestone_name: controlled-production-promotion
-status: milestone-complete
-last_updated: "2026-04-03T21:12:35Z"
+milestone: v1.8
+milestone_name: production-memory-and-strategy-scoring
+status: defining-requirements
+last_updated: "2026-04-03T21:22:26Z"
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 3
-  completed_plans: 3
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.7 Controlled Production Promotion` is shipped and archived. The next cycle has not been started yet.
+**Current focus:** `v1.8 Production Memory And Strategy Scoring` is being scoped from the shipped rollout ladder and deferred evolution docs.
 
 ## Memory
 
@@ -32,9 +32,10 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.6` is complete: bounded canary assignment, live observation metrics, automatic rollback, manual halt or rollback, and durable canary review artifacts now ship through `swarmctl`.
 - `v1.7` is complete: production promotion start, bounded production observation, automatic rollback to the retained baseline, and durable promotion records now ship through `swarmctl`.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
-- The repo now has enough rollout infrastructure to support real production promotion records before it adds governance or adaptive strategy selection.
-- Consensus, MemRL-based automatic selection, and richer operator surfaces remain future work.
+- The repo now has enough rollout infrastructure to support production-memory extraction from real canary and promotion evidence.
+- `v1.8` will focus on durable strategy memories, context-aware utility scoring, and advisory scorecards before governance or richer operator surfaces.
+- Consensus, automatic strategy selection, and richer operator surfaces remain future work.
 
 ## Next Command
 
-`$gsd-new-milestone`
+Continue milestone definition
