@@ -3,6 +3,11 @@ description: Benign process activity should not emit replay bundles or incidents
 seed_time_ms: 1700000200000
 requested_by: replay-whisker
 receipt_chain: []
+metadata:
+  class: benign
+  tags:
+    - baseline
+    - control
 
 input:
   kind: events

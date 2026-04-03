@@ -24,3 +24,4 @@ Thumbs.db
 *.log
 .ephemeral_state.json
 data/replay-runs/
+data/experiments/

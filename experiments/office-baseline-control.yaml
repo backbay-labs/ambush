@@ -1,0 +1,33 @@
+name: office_baseline_control
+description: Control experiment that mirrors the production suspicious process-tree detector against the office replay corpus
+corpus:
+  suite: ../scenario-suites/hellcat-office-v1.yaml
+candidate:
+  strategy: suspicious_process_tree
+  strategy_id: office_baseline_control
+  description: Candidate profile matches the production suspicious process-tree detector
+  profile:
+    suspicious_parents:
+      - winword
+      - excel
+      - outlook
+      - acrord32
+      - teams
+    suspicious_children:
+      - powershell
+      - pwsh
+      - cmd
+      - sh
+      - bash
+      - curl
+      - wget
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+lineage:
+  parent_strategy_id: suspicious_process_tree
+  mutation: control
+  rationale: Establish a no-drift baseline for offline experiment persistence and report rendering
+gates:
+  require_known_bad_coverage: true
+  max_false_positive_delta: 0
+  max_detect_latency_delta_us: 2000

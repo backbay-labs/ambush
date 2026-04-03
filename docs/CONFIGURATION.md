@@ -122,6 +122,19 @@ Repo-owned scenarios live under `scenarios/`:
 
 - `scenarios/office-dropper-correlation.yaml`
 - `scenarios/benign-baseline.yaml`
+- `scenarios/pdf-lolbin-execution.yaml`
+- `scenarios/python-maintenance-benign.yaml`
+
+Scenario manifests now carry explicit offline corpus metadata:
+
+- `metadata.class`: `adversarial`, `benign`, or `mixed`
+- `metadata.campaign`: campaign or operator workflow label
+- `metadata.techniques`: MITRE ATT&CK technique IDs or internal technique labels
+- `metadata.tags`: free-form suite or debugging tags
+
+Named suite manifests live under `scenario-suites/` and point at repo-owned scenario manifests:
+
+- `scenario-suites/hellcat-office-v1.yaml`
 
 Replay results are written under `data/replay-runs/` by default.
 
@@ -156,21 +169,56 @@ Examples:
 cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --scenario scenarios/office-dropper-correlation.yaml
 cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --run-id replay_run:office_dropper_correlation:1700000100000
 cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --scenarios-dir scenarios
+cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --suite scenario-suites/hellcat-office-v1.yaml
 ```
 
 Failure behavior:
 
 - `replay-evaluate` exits nonzero when any expectation or latency threshold fails
 - `--scenarios-dir` evaluates the full tracked corpus and is intended for local or CI gating
+- `--suite` evaluates one named replay suite and aggregates pass/fail status by scenario and technique group
 
 End-to-end flow:
 
 1. Run one tracked scenario with `replay-run`.
 2. Inspect the persisted result bundle with `replay-result`.
 3. Validate one scenario with `replay-evaluate --scenario ...`.
-4. Gate the whole tracked corpus with `replay-evaluate --scenarios-dir scenarios`.
+4. Validate one named suite with `replay-evaluate --suite scenario-suites/hellcat-office-v1.yaml`.
+5. Gate the whole tracked corpus with `replay-evaluate --scenarios-dir scenarios`.
 
 The runtime test suite also includes a tracked-scenario regression test in `swarm-runtime` so the repo corpus acts as an executable baseline.
+
+### Detector Experiments
+
+Offline baseline-vs-candidate detector experiments are defined under `experiments/`. Each manifest references one suite manifest, one candidate detector profile, lineage metadata, and offline gate thresholds.
+
+Tracked manifests:
+
+- `experiments/office-baseline-control.yaml` — control candidate matching production behavior
+- `experiments/office-python-parent-broadening.yaml` — intentionally broader candidate that should fail the false-positive gate
+
+Experiment results are written under `data/experiments/` by default.
+
+Examples:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- experiment-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime --bin swarmctl -- experiment-evaluate --experiment experiments/office-python-parent-broadening.yaml
+cargo run -p swarm-runtime --bin swarmctl -- experiment-result --experiment-id experiment:office_baseline_control:office_baseline_control
+```
+
+What the experiment report captures:
+
+- baseline and candidate suite reports over the same replay corpus
+- aggregate detection rate, false positive rate, and detect-latency comparisons
+- lineage metadata (`parent_strategy_id`, mutation, rationale)
+- scenario regressions and technique regressions
+- offline gate verdicts for known-bad coverage, false-positive delta, and detect-latency delta
+
+Failure behavior:
+
+- `experiment-evaluate` exits nonzero when any offline experiment gate fails
+- the persisted experiment report can still be loaded later with `experiment-result`
 
 ### Complete Field Reference
 

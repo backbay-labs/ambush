@@ -4,7 +4,8 @@ use swarm_runtime::control::{
     OperatorControlOutput, ReplayLookupSelector, render_output,
 };
 use swarm_runtime::replay::{
-    DefaultReplayHarness, render_evaluation_report, render_replay_run, render_suite_report,
+    DefaultReplayHarness, render_evaluation_report, render_experiment_report, render_replay_run,
+    render_suite_report,
 };
 
 #[derive(Debug, Parser)]
@@ -18,6 +19,9 @@ struct Cli {
 
     #[arg(long, global = true, default_value = "data/replay-runs")]
     replay_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/experiments")]
+    experiment_results_dir: std::path::PathBuf,
 
     #[arg(long, global = true)]
     json: bool,
@@ -35,6 +39,8 @@ enum Command {
     ReplayRun(ReplayRunArgs),
     ReplayResult(ReplayResultArgs),
     ReplayEvaluate(ReplayEvaluateArgs),
+    ExperimentEvaluate(ExperimentEvaluateArgs),
+    ExperimentResult(ExperimentResultArgs),
 }
 
 #[derive(Debug, Args)]
@@ -109,7 +115,7 @@ struct ReplayResultArgs {
 #[command(group(
     ArgGroup::new("selector")
         .required(true)
-        .args(["run_id", "scenario", "scenarios_dir"]),
+        .args(["run_id", "scenario", "scenarios_dir", "suite"]),
 ))]
 struct ReplayEvaluateArgs {
     #[arg(long)]
@@ -120,6 +126,21 @@ struct ReplayEvaluateArgs {
 
     #[arg(long)]
     scenarios_dir: Option<std::path::PathBuf>,
+
+    #[arg(long)]
+    suite: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct ExperimentEvaluateArgs {
+    #[arg(long)]
+    experiment: std::path::PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ExperimentResultArgs {
+    #[arg(long)]
+    experiment_id: String,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -201,6 +222,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
 
+            if let Some(suite_path) = args.suite {
+                let suite = replay_harness.evaluate_suite_path(suite_path).await?;
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&suite)?);
+                } else {
+                    println!("{}", render_suite_report(&suite));
+                }
+                if !suite.passed {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+
             let report = if let Some(run_id) = args.run_id.as_deref() {
                 let run = replay_harness.load_run(run_id)?.ok_or_else(|| {
                     std::io::Error::new(
@@ -221,6 +255,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if !report.passed {
                 std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::ExperimentEvaluate(args) => {
+            let lookup = replay_harness
+                .evaluate_experiment_path(args.experiment, &cli.experiment_results_dir)
+                .await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_experiment_report(&lookup.report));
+            }
+            if !lookup.report.passed {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::ExperimentResult(args) => {
+            let lookup = replay_harness
+                .load_experiment(&cli.experiment_results_dir, &args.experiment_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "offline detector experiment result was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_experiment_report(&lookup.report));
             }
             return Ok(());
         }

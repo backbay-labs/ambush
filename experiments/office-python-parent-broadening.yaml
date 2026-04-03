@@ -1,0 +1,34 @@
+name: office_python_parent_broadening
+description: Candidate profile broadens suspicious parent matching to python and should fail the offline false-positive gate on the control scenario
+corpus:
+  suite: ../scenario-suites/hellcat-office-v1.yaml
+candidate:
+  strategy: suspicious_process_tree
+  strategy_id: office_python_parent_broadening
+  description: Add python as a suspicious parent to probe downloader coverage
+  profile:
+    suspicious_parents:
+      - winword
+      - excel
+      - outlook
+      - acrord32
+      - teams
+      - python
+    suspicious_children:
+      - powershell
+      - pwsh
+      - cmd
+      - sh
+      - bash
+      - curl
+      - wget
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+lineage:
+  parent_strategy_id: suspicious_process_tree
+  mutation: broaden suspicious parent set with python
+  rationale: Explore whether python-launched downloaders improve adversarial coverage without widening false positives
+gates:
+  require_known_bad_coverage: true
+  max_false_positive_delta: 0
+  max_detect_latency_delta_us: 2000

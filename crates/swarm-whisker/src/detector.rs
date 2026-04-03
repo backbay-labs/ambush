@@ -67,32 +67,79 @@ pub struct DetectionFinding {
     pub strategy_id: String,
 }
 
+/// Serializable profile for the suspicious process-tree detector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuspiciousProcessTreeProfile {
+    #[serde(default = "default_suspicious_parents")]
+    pub suspicious_parents: Vec<String>,
+    #[serde(default = "default_suspicious_children")]
+    pub suspicious_children: Vec<String>,
+    #[serde(default = "default_high_confidence_threshold")]
+    pub high_confidence_threshold: f64,
+    #[serde(default = "default_medium_confidence_threshold")]
+    pub medium_confidence_threshold: f64,
+}
+
+impl Default for SuspiciousProcessTreeProfile {
+    fn default() -> Self {
+        Self {
+            suspicious_parents: default_suspicious_parents(),
+            suspicious_children: default_suspicious_children(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
+        }
+    }
+}
+
 /// Detector for suspicious parent-child process trees.
 #[derive(Debug, Clone)]
 pub struct SuspiciousProcessTreeDetector {
-    suspicious_parents: Vec<&'static str>,
-    suspicious_children: Vec<&'static str>,
+    suspicious_parents: Vec<String>,
+    suspicious_children: Vec<String>,
     high_confidence_threshold: f64,
     medium_confidence_threshold: f64,
 }
 
 impl Default for SuspiciousProcessTreeDetector {
     fn default() -> Self {
-        Self {
-            suspicious_parents: vec!["winword", "excel", "outlook", "acrord32", "teams"],
-            suspicious_children: vec!["powershell", "pwsh", "cmd", "sh", "bash", "curl", "wget"],
-            high_confidence_threshold: 0.9,
-            medium_confidence_threshold: 0.7,
-        }
+        Self::from_profile(SuspiciousProcessTreeProfile::default())
     }
 }
 
 impl SuspiciousProcessTreeDetector {
     pub fn new(high_confidence_threshold: f64, medium_confidence_threshold: f64) -> Self {
         Self {
+            suspicious_parents: default_suspicious_parents(),
+            suspicious_children: default_suspicious_children(),
             high_confidence_threshold,
             medium_confidence_threshold,
-            ..Self::default()
+        }
+    }
+
+    pub fn from_profile(profile: SuspiciousProcessTreeProfile) -> Self {
+        Self {
+            suspicious_parents: profile
+                .suspicious_parents
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            suspicious_children: profile
+                .suspicious_children
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            high_confidence_threshold: profile.high_confidence_threshold,
+            medium_confidence_threshold: profile.medium_confidence_threshold,
+        }
+    }
+
+    pub fn profile(&self) -> SuspiciousProcessTreeProfile {
+        SuspiciousProcessTreeProfile {
+            suspicious_parents: self.suspicious_parents.clone(),
+            suspicious_children: self.suspicious_children.clone(),
+            high_confidence_threshold: self.high_confidence_threshold,
+            medium_confidence_threshold: self.medium_confidence_threshold,
         }
     }
 
@@ -105,18 +152,10 @@ impl SuspiciousProcessTreeDetector {
         let child = process.process_name.to_ascii_lowercase();
         let command_line = process.command_line.to_ascii_lowercase();
 
-        if !self
-            .suspicious_parents
-            .iter()
-            .any(|candidate| *candidate == parent)
-        {
+        if !self.suspicious_parents.contains(&parent) {
             return None;
         }
-        if !self
-            .suspicious_children
-            .iter()
-            .any(|candidate| *candidate == child)
-        {
+        if !self.suspicious_children.contains(&child) {
             return None;
         }
 
@@ -176,11 +215,33 @@ impl DetectionStrategy for SuspiciousProcessTreeDetector {
     }
 }
 
+fn default_suspicious_parents() -> Vec<String> {
+    ["winword", "excel", "outlook", "acrord32", "teams"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn default_suspicious_children() -> Vec<String> {
+    ["powershell", "pwsh", "cmd", "sh", "bash", "curl", "wget"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn default_high_confidence_threshold() -> f64 {
+    0.9
+}
+
+fn default_medium_confidence_threshold() -> f64 {
+    0.7
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        DetectionStrategy, ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent,
-        TelemetryPayload,
+        DetectionStrategy, ProcessStartEvent, SuspiciousProcessTreeDetector,
+        SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
     };
     use swarm_core::types::Severity;
 
@@ -229,5 +290,29 @@ mod tests {
         };
 
         assert!(detector.evaluate(&event).is_empty());
+    }
+
+    #[test]
+    fn configured_profile_controls_parent_matching() {
+        let detector = SuspiciousProcessTreeDetector::from_profile(SuspiciousProcessTreeProfile {
+            suspicious_parents: vec!["python".to_string()],
+            suspicious_children: vec!["curl".to_string()],
+            high_confidence_threshold: 0.9,
+            medium_confidence_threshold: 0.7,
+        });
+        let event = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-3".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-2".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "python".to_string(),
+                process_name: "curl".to_string(),
+                command_line: "curl https://intranet.local/health".to_string(),
+                user: Some("alice".to_string()),
+            }),
+        };
+
+        assert_eq!(detector.evaluate(&event).len(), 1);
     }
 }

@@ -12,5 +12,5 @@ pub mod stream;
 
 pub use detector::{
     DetectionFinding, DetectionStrategy, NetworkConnectEvent, ProcessStartEvent,
-    SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
+    SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
 };
