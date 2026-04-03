@@ -19,9 +19,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - advisory scorecards compare the current production baseline and verified candidates without mutating production detector configuration
 - strategy memory and advisory scorecard directories are repo-owned, documented, and ignored by default under `data/strategy-memory/` and `data/strategy-scorecards/`
 
+## Current Milestone: v1.9 Verified Evolution Queue
+
+**Goal:** turn memory-backed advisory scoring into a proof-backed, operator-controlled evolution queue for detector proposals, without introducing automatic rollout or quorum governance.
+
+**Target features:**
+- persist repo-owned evolution proposals with stable IDs, lineage, evidence references, and review state
+- attach proof-backed safety artifacts and fail-closed admission checks to queued proposals
+- expose queue listing, reload, and operator decision workflows through `swarmctl`
+
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Start execution with `$gsd-plan-phase 29`.
 
 ## Requirements
 
@@ -84,21 +93,28 @@ Start the next cycle with `$gsd-new-milestone`.
 - ✓ Team can assemble a strategy scorecard that compares the production baseline and verified candidates using memory-backed scores, rollout lineage, and current promotion state — v1.8
 - ✓ Operator can inspect strategy memory histories, score explanations, and advisory selection scorecards through `swarmctl` — v1.8
 
+### Active
+
+- [ ] Team can persist verified detector proposals in a repo-owned evolution queue with stable IDs, lineage, and evidence references
+- [ ] Team can attach proof-backed safety artifacts and fail-closed admission checks to queued detector proposals
+- [ ] Operator can inspect and triage queued proposals with advisory review through `swarmctl`
+
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
 - HTTP or multi-user operator control plane — still secondary to verification and shadow-readiness work
 - Fleet-wide or partial-fleet rollout of evolved strategies — the runtime still supports only a bounded single-node promotion path
 - Automatic strategy promotion from memory scores — `v1.8` keeps memory-backed ranking advisory and operator-reviewed
+- Automatic queue-to-production promotion — `v1.9` keeps proposal review explicit and operator-controlled
 - Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 now turns those rollout artifacts into durable strategy memories and advisory scorecards.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards.
 
-The project now has an end-to-end rollout ladder plus a first memory-backed review layer: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard. Governance, richer operator surfaces, and formal evolution remain future work.
+The project now has an end-to-end rollout ladder plus a first memory-backed review layer: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard. The next missing documented step is a proof-backed proposal queue that can hold candidate detector updates for operator review before any governance or richer UI work.
 
 ## Constraints
 
@@ -136,6 +152,8 @@ The project now has an end-to-end rollout ladder plus a first memory-backed revi
 | Keep production promotion CLI-first and single-node | The runtime still lacks independent trust boundaries and multi-node rollout needs, so CLI plus durable artifacts is the smallest credible promotion surface | ✓ Good |
 | Choose production memory and strategy scoring as the next milestone | `docs/EVOLUTION.md` made production utility memory the next missing capability once real promotion evidence existed | ✓ Good |
 | Keep memory-backed ranking advisory only | The runtime still lacks quorum governance and proof-backed evolution, so scores guide operators instead of auto-promoting strategies | ✓ Good |
+| Choose a verified evolution queue as the next milestone | `docs/EVOLUTION.md` and the shipped advisory layer now point to proof-backed proposal handling as the next missing capability before governance | ✓ Chosen |
+| Keep the evolution queue operator-controlled and non-promoting | The runtime still lacks independent trust boundaries, so queued proposals must not advance to production automatically | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after shipping v1.8*
+*Last updated: 2026-04-03 after starting milestone v1.9*
