@@ -2,20 +2,20 @@
 
 ## What This Is
 
-Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped slice can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, and emit replayable audit artifacts. The next milestone is about making that slice durable and operator-usable under restart and real infrastructure conditions.
+Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped slice can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, and emit replayable audit artifacts. The next milestone is about adding slower investigation and correlation capabilities without contaminating the proven hot path.
 
 ## Core Value
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## Current Milestone: v1.1 Durability And Operators
+## Current Milestone: v1.2 Async Investigation And Correlation
 
-**Goal:** Make the shipped single-node Rust lane durable and operator-usable without expanding the architecture prematurely.
+**Goal:** Add async investigation and incident correlation on top of the durable runtime while keeping fast detection and live response deterministic.
 
 **Target features:**
-- persistent pheromone substrate with restart recovery
-- persisted receipt and replay storage with lookup by stable identifiers
-- operator-facing status, metrics, and correlation surfaces for the live-response lane
+- async investigation jobs that run off the hot path and attach evidence to prior findings
+- correlation logic that groups related findings into higher-confidence incident narratives
+- operator review surfaces that show enrichment status, summaries, and incident-level context
 
 ## Requirements
 
@@ -31,29 +31,29 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Active
 
-(None currently — milestone complete)
+- v1.2 requirements are being defined for async investigation, correlation, and operator review surfaces
 
 ### Out of Scope
 
-- Async investigation and correlation on the hot path — useful next, but not before durability and operator usability are real
+- Async investigation on the hot path — enrichment must not weaken the fast-detection proof point
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
-- Gossip membership / CRDT state sharing — not justified for the current single-node milestone
+- Gossip membership / CRDT state sharing — not justified for the current single-node operating model
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
-- Live evolution / red-team loops — offline evaluation work, not current production scope
+- Live evolution / red-team loops — still better treated as offline evaluation work
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory pheromone substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. The next practical gap is not new intelligence logic but operational durability: the current substrate is in-memory, replay persistence is file-local, and operator visibility is still closer to test scaffolding than day-two operations.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory pheromone substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status/metrics surfaces.
 
-The canonical product roadmap in `docs/ROADMAP.md` already sequences this next step as "Durability And Operators". This milestone stays narrow: make the existing slice survive restarts, expose its state clearly, and avoid mixing in slower async investigation or distributed coordination work.
+The canonical product roadmap in `docs/ROADMAP.md` sequences the next step as "Async Investigation And Correlation". That is the right move now that the runtime can preserve artifacts across restart: use those durable findings and receipts as inputs to slower enrichment, then aggregate related findings into operator-readable incidents. This milestone stays narrow by keeping enrichment asynchronous and deferring multi-node governance or offline evolution labs.
 
 ## Constraints
 
-- **Tech stack**: Production runtime remains pure Rust — keep one operational path and one type system
-- **Security**: Live response cannot bypass deterministic policy or auditable receipts — durability must strengthen, not weaken, safety boundaries
-- **Architecture**: This milestone stays single-node — avoid BFT, gossip, or multi-authority work
-- **Operations**: Durable mode must degrade predictably — operators need explicit readiness and failure signals
-- **Performance**: Added persistence and observability cannot erase the fast-detection proof point — measure the new costs
+- **Tech stack**: Production runtime remains pure Rust — enrichment should extend the same operational path and type system
+- **Security**: Async enrichment cannot mutate or backdoor the existing live-response verdict path
+- **Architecture**: This milestone stays single-node and composition-friendly — avoid BFT, gossip, or multi-authority work
+- **Operations**: Investigation jobs need explicit lifecycle and failure visibility so operators know what is enriched versus still pending
+- **Performance**: Added enrichment cannot erase the fast-detection proof point — hot-path latency must remain independently measurable
 
 ## Key Decisions
 
@@ -67,6 +67,9 @@ The canonical product roadmap in `docs/ROADMAP.md` already sequences this next s
 | Tackle durability before async investigation | The shipped lane needed restart safety and operator visibility before more reasoning features | ✓ Good |
 | Use a repo-owned local journal as the first durable substrate target | Keeps the milestone self-contained and testable without a hard external dependency | ✓ Good |
 | Make operator visibility API-first | A serializable Rust status report can back later CLI or HTTP surfaces without rework | ✓ Good |
+| Keep investigation asynchronous | Enrichment should improve operator trust and triage without blocking detection or response | ✓ Chosen |
+| Build correlation from durable findings and receipts | The runtime now has enough stable artifacts to group and explain related detections | ✓ Chosen |
+| Treat correlated incidents as operator context first | Correlation should sharpen review before it influences automated action policy | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after completing milestone v1.1*
+*Last updated: 2026-04-03 after starting milestone v1.2*
