@@ -13,16 +13,16 @@
 
 ### Detection
 
-- [ ] **DET-01**: Runtime accepts a normalized telemetry event in Rust without crossing a Python boundary
-- [ ] **DET-02**: Runtime evaluates at least one concrete detector against incoming telemetry
-- [ ] **DET-03**: Detector emits a structured finding with threat class, severity, confidence, and evidence
-- [ ] **DET-04**: Team can publish p50, p95, p99, and throughput numbers for the detector path
+- [x] **DET-01**: Runtime accepts a normalized telemetry event in Rust without crossing a Python boundary
+- [x] **DET-02**: Runtime evaluates at least one concrete detector against incoming telemetry
+- [x] **DET-03**: Detector emits a structured finding with threat class, severity, confidence, and evidence
+- [x] **DET-04**: Team can publish p50, p95, p99, and throughput numbers for the detector path
 
 ### Substrate
 
-- [ ] **SUB-01**: Runtime can deposit findings into an in-memory pheromone substrate
-- [ ] **SUB-02**: Runtime can query concentration with decay and source-diversity semantics
-- [ ] **SUB-03**: Runtime can reconstruct recent deposits for replay or debugging
+- [x] **SUB-01**: Runtime can deposit findings into an in-memory pheromone substrate
+- [x] **SUB-02**: Runtime can query concentration with decay and source-diversity semantics
+- [x] **SUB-03**: Runtime can reconstruct recent deposits for replay or debugging
 
 ### Policy
 
@@ -77,13 +77,13 @@
 | CFG-01 | Phase 1 | Complete |
 | CFG-02 | Phase 1 | Complete |
 | CFG-03 | Phase 1 | Complete |
-| DET-01 | Phase 2 | Pending |
-| DET-02 | Phase 2 | Pending |
-| DET-03 | Phase 2 | Pending |
-| DET-04 | Phase 2 | Pending |
-| SUB-01 | Phase 2 | Pending |
-| SUB-02 | Phase 2 | Pending |
-| SUB-03 | Phase 2 | Pending |
+| DET-01 | Phase 2 | Complete |
+| DET-02 | Phase 2 | Complete |
+| DET-03 | Phase 2 | Complete |
+| DET-04 | Phase 2 | Complete |
+| SUB-01 | Phase 2 | Complete |
+| SUB-02 | Phase 2 | Complete |
+| SUB-03 | Phase 2 | Complete |
 | POL-01 | Phase 3 | Pending |
 | POL-02 | Phase 3 | Pending |
 | POL-03 | Phase 3 | Pending |
