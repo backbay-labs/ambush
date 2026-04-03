@@ -820,13 +820,13 @@ pub enum DetectorCandidateManifest {
 }
 
 impl DetectorCandidateManifest {
-    fn strategy_id(&self) -> &str {
+    pub fn strategy_id(&self) -> &str {
         match self {
             Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
         }
     }
 
-    fn description(&self) -> &str {
+    pub fn description(&self) -> &str {
         match self {
             Self::SuspiciousProcessTree { description, .. } => description.as_str(),
         }
@@ -3001,6 +3001,12 @@ fn load_experiment_manifest(
     })?;
     validate_experiment_manifest(&path, &manifest)?;
     Ok(LoadedDetectorExperiment { path, manifest })
+}
+
+pub fn load_detector_experiment_manifest(
+    path: impl AsRef<Path>,
+) -> Result<DetectorExperimentManifest, ReplayHarnessError> {
+    Ok(load_experiment_manifest(path)?.manifest)
 }
 
 pub fn load_verification_manifest(

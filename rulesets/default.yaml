@@ -48,3 +48,12 @@ correlation:
   candidate_limit: 32
   incident_store:
     kind: memory
+
+canary:
+  enabled: true
+  slot_id: canary-primary
+  observation_window_events: 2
+  max_candidate_only_rate: 0.25
+  max_baseline_miss_rate: 0.25
+  max_detect_latency_us: 10000
+  max_total_detections: 8

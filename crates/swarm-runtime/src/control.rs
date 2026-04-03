@@ -429,7 +429,7 @@ mod tests {
     use crate::RuntimeMode;
     use crate::service::EventExecutionContext;
     use swarm_core::config::{
-        AuditConfig, BundleStoreConfig, CorrelationConfig, InvestigationConfig,
+        AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, InvestigationConfig,
         PheromoneBackendConfig, PheromoneConfig, PolicyConfig, RuntimeSettings, SwarmConfig,
         TelemetrySourceConfig,
     };
@@ -485,6 +485,7 @@ mod tests {
                 candidate_limit: 16,
                 incident_store: BundleStoreConfig::Memory,
             },
+            canary: CanaryConfig::default(),
         }
     }
 

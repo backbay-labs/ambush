@@ -320,6 +320,71 @@ Packets capture:
 
 This remains an operator review surface only. The packet does not approve, deploy, or promote anything automatically.
 
+### Bounded Canary
+
+Bounded canary extends the runtime from offline shadow into a scoped live detector lane. The candidate detector is admitted only after verification and shadow have already passed, and its findings remain inside a dedicated canary artifact instead of affecting the production substrate.
+
+Repo-owned canary settings now live in `rulesets/default.yaml`:
+
+```yaml
+canary:
+  enabled: true
+  slot_id: canary-primary
+  observation_window_events: 2
+  max_candidate_only_rate: 0.25
+  max_baseline_miss_rate: 0.25
+  max_detect_latency_us: 10000
+  max_total_detections: 8
+```
+
+Current canary inputs and semantics:
+
+- `slot_id`: stable identifier for the single bounded canary lane
+- `observation_window_events`: how many live events the candidate must survive before the run can complete normally
+- `max_candidate_only_rate`: conservative false-positive proxy bound, based on candidate-only detections versus the production baseline
+- `max_baseline_miss_rate`: bound on how often the candidate misses a detection that the baseline still produces
+- `max_detect_latency_us`: maximum candidate detect latency over the canary window
+- `max_total_detections`: resource budget for total candidate detections over the window
+
+Canary artifacts are written under `data/canaries/` by default.
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime --bin swarmctl -- shadow-evaluate --experiment experiments/office-baseline-control.yaml
+
+cargo run -p swarm-runtime --bin swarmctl -- canary-start \
+  --experiment experiments/office-baseline-control.yaml \
+  --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1 \
+  --shadow-id shadow:office_baseline_control:office_baseline_control:office_detector_safety_v1
+
+cargo run -p swarm-runtime --bin swarmctl -- canary-event \
+  --run-id YOUR_CANARY_RUN_ID \
+  --event fixtures/canary/word-powershell.yaml
+
+cargo run -p swarm-runtime --bin swarmctl -- canary-event \
+  --run-id YOUR_CANARY_RUN_ID \
+  --event fixtures/canary/outlook-cmd.yaml
+
+cargo run -p swarm-runtime --bin swarmctl -- canary-result --run-id YOUR_CANARY_RUN_ID
+```
+
+Automatic failure behavior:
+
+- `canary-event` exits nonzero when the canary auto-rolls back on a threshold or budget violation
+- rollback history preserves the trigger, reason, slot ID, and reverted baseline strategy
+- the final canary artifact carries an `observing`, `ready_for_promotion_review`, or `blocked` recommendation
+
+Manual operator actions:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- canary-halt --run-id YOUR_CANARY_RUN_ID --reason "operator requested stop"
+cargo run -p swarm-runtime --bin swarmctl -- canary-rollback --run-id YOUR_CANARY_RUN_ID --reason "candidate diverged from baseline"
+```
+
+This milestone still stops short of fleet-wide promotion. The canary artifact is the handoff into the next decision step, not the promotion itself.
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.

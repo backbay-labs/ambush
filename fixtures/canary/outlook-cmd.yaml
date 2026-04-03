@@ -1,0 +1,10 @@
+source: synthetic
+event_id: evt-canary-outlook-1
+timestamp: 1700000001
+host_id: host-1
+payload:
+  kind: process_start
+  parent_process: OUTLOOK
+  process_name: cmd
+  command_line: cmd.exe /c whoami
+  user: alice

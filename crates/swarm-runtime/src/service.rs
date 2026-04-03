@@ -1030,7 +1030,7 @@ mod tests {
     use crate::{RuntimeMode, SwarmRuntime};
     use async_trait::async_trait;
     use swarm_core::config::{
-        AuditConfig, BundleStoreConfig, CorrelationConfig, InvestigationConfig,
+        AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, InvestigationConfig,
         PheromoneBackendConfig, PheromoneConfig, PolicyConfig, RuntimeSettings, SwarmConfig,
         TelemetrySourceConfig,
     };
@@ -1089,6 +1089,7 @@ mod tests {
             },
             investigation: InvestigationConfig::default(),
             correlation: CorrelationConfig::default(),
+            canary: CanaryConfig::default(),
         }
     }
 

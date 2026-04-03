@@ -30,6 +30,9 @@ pub struct SwarmConfig {
     /// Correlation settings for assembling reviewable incidents.
     #[serde(default)]
     pub correlation: CorrelationConfig,
+    /// Bounded live canary settings for verified candidate detectors.
+    #[serde(default)]
+    pub canary: CanaryConfig,
 }
 
 /// Whether the runtime simulates or executes live response actions.
@@ -164,6 +167,33 @@ pub struct CorrelationConfig {
     /// Store used for correlated incident artifacts.
     #[serde(default)]
     pub incident_store: BundleStoreConfig,
+}
+
+/// Bounded canary settings layered on top of verified candidate detectors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanaryConfig {
+    /// Whether the bounded canary lane is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Stable slot identifier for the active canary lane.
+    #[serde(default = "default_canary_slot_id")]
+    pub slot_id: String,
+    /// Number of live events observed before a canary can complete normally.
+    #[serde(default = "default_canary_observation_window_events")]
+    pub observation_window_events: usize,
+    /// Maximum allowed candidate-only detection rate across the canary window.
+    #[serde(default = "default_canary_max_candidate_only_rate")]
+    pub max_candidate_only_rate: f64,
+    /// Maximum allowed rate of baseline detections that the candidate misses.
+    #[serde(default = "default_canary_max_baseline_miss_rate")]
+    pub max_baseline_miss_rate: f64,
+    /// Maximum allowed candidate detect latency in microseconds.
+    #[serde(default = "default_canary_max_detect_latency_us")]
+    pub max_detect_latency_us: u64,
+    /// Maximum allowed candidate detection volume across the canary window.
+    #[serde(default = "default_canary_max_total_detections")]
+    pub max_total_detections: usize,
 }
 
 /// Replay bundle storage backend selection.
@@ -396,6 +426,45 @@ impl SwarmConfig {
             }
         }
 
+        if self.canary.enabled {
+            if self.canary.slot_id.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "canary.slot_id",
+                    reason: "must not be empty when canary is enabled".to_string(),
+                });
+            }
+            if self.canary.observation_window_events == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "canary.observation_window_events",
+                    reason: "must be greater than zero when canary is enabled".to_string(),
+                });
+            }
+            if !(0.0..=1.0).contains(&self.canary.max_candidate_only_rate) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "canary.max_candidate_only_rate",
+                    reason: "must be between 0.0 and 1.0".to_string(),
+                });
+            }
+            if !(0.0..=1.0).contains(&self.canary.max_baseline_miss_rate) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "canary.max_baseline_miss_rate",
+                    reason: "must be between 0.0 and 1.0".to_string(),
+                });
+            }
+            if self.canary.max_detect_latency_us == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "canary.max_detect_latency_us",
+                    reason: "must be greater than zero when canary is enabled".to_string(),
+                });
+            }
+            if self.canary.max_total_detections == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "canary.max_total_detections",
+                    reason: "must be greater than zero when canary is enabled".to_string(),
+                });
+            }
+        }
+
         Ok(())
     }
 }
@@ -445,6 +514,20 @@ impl Default for CorrelationConfig {
     }
 }
 
+impl Default for CanaryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            slot_id: default_canary_slot_id(),
+            observation_window_events: default_canary_observation_window_events(),
+            max_candidate_only_rate: default_canary_max_candidate_only_rate(),
+            max_baseline_miss_rate: default_canary_max_baseline_miss_rate(),
+            max_detect_latency_us: default_canary_max_detect_latency_us(),
+            max_total_detections: default_canary_max_total_detections(),
+        }
+    }
+}
+
 const fn default_recent_decisions_limit() -> usize {
     20
 }
@@ -471,4 +554,28 @@ const fn default_correlation_min_shared_keys() -> usize {
 
 const fn default_correlation_candidate_limit() -> usize {
     32
+}
+
+fn default_canary_slot_id() -> String {
+    "canary-primary".to_string()
+}
+
+const fn default_canary_observation_window_events() -> usize {
+    3
+}
+
+const fn default_canary_max_candidate_only_rate() -> f64 {
+    0.25
+}
+
+const fn default_canary_max_baseline_miss_rate() -> f64 {
+    0.25
+}
+
+const fn default_canary_max_detect_latency_us() -> u64 {
+    10_000
+}
+
+const fn default_canary_max_total_detections() -> usize {
+    8
 }

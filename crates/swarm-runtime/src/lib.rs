@@ -4,6 +4,7 @@
 //! detection stays in Rust, policy stays deterministic, and live response
 //! execution is capability-scoped.
 
+pub mod canary;
 pub mod config;
 pub mod control;
 pub mod correlation;
