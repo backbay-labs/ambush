@@ -57,11 +57,15 @@ where
         context: &ApprovalContext,
     ) -> Result<ResponseReceipt, RuntimeError> {
         let decision = self.policy.evaluate(request, context)?;
-        if !decision.authorized {
-            return Err(ApprovalError::Denied(decision.reason).into());
-        }
-        if decision.requires_human && self.mode == RuntimeMode::LiveResponse {
-            return Err(ApprovalError::Denied("human approval required".to_string()).into());
+
+        match decision.verdict {
+            swarm_policy::PolicyVerdict::Deny => {
+                return Err(ApprovalError::Denied(decision.reason).into());
+            }
+            swarm_policy::PolicyVerdict::RequireHuman if self.mode == RuntimeMode::LiveResponse => {
+                return Err(ApprovalError::Denied(decision.reason).into());
+            }
+            swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {}
         }
 
         let lease = self.policy.issue_lease(request, context)?;
@@ -83,7 +87,7 @@ mod tests {
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
     use swarm_policy::static_gate::StaticApprovalGate;
     use swarm_policy::{ActionRequest, ApprovalContext};
-    use swarm_response::adapters::SandboxExecutor;
+    use swarm_response::{adapters::SandboxExecutor, ExecutionMode, ResponseStatus};
 
     fn sample_context() -> ApprovalContext {
         ApprovalContext {
@@ -114,7 +118,8 @@ mod tests {
             .authorize_and_execute(&request, &sample_context())
             .await
             .unwrap();
-        assert!(receipt.summary.contains("DryRun"));
+        assert_eq!(receipt.mode, ExecutionMode::DryRun);
+        assert_eq!(receipt.status, ResponseStatus::Simulated);
     }
 
     #[tokio::test]
@@ -138,6 +143,58 @@ mod tests {
             .authorize_and_execute(&request, &sample_context())
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("human approval required"));
+        assert!(error.to_string().contains("authorized but held for human approval"));
+    }
+
+    #[tokio::test]
+    async fn live_runtime_executes_allowed_action() {
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            SandboxExecutor,
+        );
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-1".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::DeployDecoy {
+                decoy_type: "honeypot".to_string(),
+                target_zone: "dmz".to_string(),
+            },
+            severity: Severity::Medium,
+            evidence: serde_json::json!({"signal": "lure"}),
+        };
+
+        let receipt = runtime
+            .authorize_and_execute(&request, &sample_context())
+            .await
+            .unwrap();
+        assert_eq!(receipt.mode, ExecutionMode::Enforced);
+        assert_eq!(receipt.status, ResponseStatus::Executed);
+    }
+
+    #[tokio::test]
+    async fn live_runtime_denies_low_severity_destructive_action() {
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            SandboxExecutor,
+        );
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-2".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::IsolateHost {
+                host_id: "host-2".to_string(),
+            },
+            severity: Severity::Low,
+            evidence: serde_json::json!({"signal": "weak-indicator"}),
+        };
+
+        let error = runtime
+            .authorize_and_execute(&request, &sample_context())
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("destructive actions require at least medium severity"));
     }
 }

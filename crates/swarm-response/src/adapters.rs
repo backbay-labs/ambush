@@ -1,4 +1,4 @@
-use crate::{ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt};
+use crate::{ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt, ResponseStatus};
 use async_trait::async_trait;
 use serde_json::json;
 use swarm_policy::{ActionRequest, CapabilityLease};
@@ -6,6 +6,16 @@ use swarm_policy::{ActionRequest, CapabilityLease};
 /// Minimal executor used for dry-run and sandbox integration tests.
 #[derive(Debug, Default)]
 pub struct SandboxExecutor;
+
+fn action_name(request: &ActionRequest) -> &'static str {
+    match request.action {
+        swarm_core::types::ResponseAction::BlockEgress { .. } => "block_egress",
+        swarm_core::types::ResponseAction::IsolateHost { .. } => "isolate_host",
+        swarm_core::types::ResponseAction::RevokeCredential { .. } => "revoke_credential",
+        swarm_core::types::ResponseAction::DeployDecoy { .. } => "deploy_decoy",
+        swarm_core::types::ResponseAction::Escalate { .. } => "escalate",
+    }
+}
 
 #[async_trait]
 impl ResponseExecutor for SandboxExecutor {
@@ -15,13 +25,41 @@ impl ResponseExecutor for SandboxExecutor {
         lease: &CapabilityLease,
         mode: ExecutionMode,
     ) -> Result<ResponseReceipt, ResponseError> {
+        let action = action_name(request);
+        if matches!(
+            request.action,
+            swarm_core::types::ResponseAction::BlockEgress { .. }
+                | swarm_core::types::ResponseAction::IsolateHost { .. }
+                | swarm_core::types::ResponseAction::RevokeCredential { .. }
+                | swarm_core::types::ResponseAction::DeployDecoy { .. }
+        ) && lease.scope.is_none()
+        {
+            return Err(ResponseError::execution_failed(
+                format!("resp:{}:{}", request.hunt_id.0, lease.capability_id),
+                action,
+                mode,
+                "sandbox execution requires a scoped lease",
+                json!({
+                    "capability_id": lease.capability_id,
+                    "scope": lease.scope,
+                }),
+            ));
+        }
+
         Ok(ResponseReceipt {
             receipt_id: format!("resp:{}:{}", request.hunt_id.0, lease.capability_id),
-            summary: format!("sandbox {:?} for {:?}", mode, request.action),
+            action: action.to_string(),
+            mode,
+            status: match mode {
+                ExecutionMode::DryRun => ResponseStatus::Simulated,
+                ExecutionMode::Enforced => ResponseStatus::Executed,
+            },
+            summary: format!("sandbox {:?} for {}", mode, action),
             details: json!({
                 "mode": mode,
                 "capability_id": lease.capability_id,
                 "scope": lease.scope,
+                "requested_by": request.requested_by,
             }),
         })
     }
@@ -30,7 +68,7 @@ impl ResponseExecutor for SandboxExecutor {
 #[cfg(test)]
 mod tests {
     use super::SandboxExecutor;
-    use crate::{ExecutionMode, ResponseExecutor};
+    use crate::{ExecutionMode, ResponseExecutor, ResponseStatus};
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
     use swarm_policy::{ActionRequest, CapabilityLease};
 
@@ -49,6 +87,7 @@ mod tests {
         let lease = CapabilityLease {
             capability_id: "lease-1".to_string(),
             expires_at_ms: 1000,
+            action: "block_egress".to_string(),
             scope: Some("198.51.100.4".to_string()),
         };
 
@@ -57,5 +96,32 @@ mod tests {
             .await
             .unwrap();
         assert!(receipt.receipt_id.contains("hunt-1"));
+        assert_eq!(receipt.status, ResponseStatus::Simulated);
+    }
+
+    #[tokio::test]
+    async fn sandbox_executor_returns_structured_failure_when_scope_missing() {
+        let executor = SandboxExecutor;
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-1".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::IsolateHost {
+                host_id: "host-1".to_string(),
+            },
+            severity: Severity::High,
+            evidence: serde_json::json!({"signal": "contain"}),
+        };
+        let lease = CapabilityLease {
+            capability_id: "lease-1".to_string(),
+            expires_at_ms: 1000,
+            action: "isolate_host".to_string(),
+            scope: None,
+        };
+
+        let error = executor
+            .execute(&request, &lease, ExecutionMode::Enforced)
+            .await
+            .unwrap_err();
+        assert_eq!(error.failure.action, "isolate_host");
     }
 }
