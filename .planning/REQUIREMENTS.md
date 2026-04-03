@@ -3,37 +3,25 @@
 **Defined:** 2026-04-03
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.1 Requirements
+## v1.2 Requirements
 
-### Configuration
+### Async Investigation
 
-- [ ] **CFG-04**: Operator can configure durable substrate and receipt storage backends through repository-owned config files without code changes
+- [ ] **INV-01**: Operator can enable automatic post-decision investigation for selected findings without delaying the original detect or response path
+- [ ] **INV-02**: Operator can configure investigation workers, concurrency limits, and time budgets separately from the live-response hot path
+- [ ] **INV-03**: Operator can retrieve a persisted investigation bundle linked to the originating hunt ID and receipt trail
 
-### Durability
+### Correlation
 
-- [x] **DUR-01**: Operator can switch the pheromone substrate between in-memory and local-journal implementations without changing detector or policy contracts
-- [x] **DUR-02**: Operator can recover recent pheromone state after restart when durable mode is enabled
-- [x] **DUR-03**: Operator can query persisted deposits by threat class and recency window for operational inspection
-- [x] **DUR-04**: Operator can require durable substrate readiness before the runtime accepts `live_response`
+- [ ] **COR-01**: Operator can group related findings and investigation bundles into one incident narrative using stable identifiers, time windows, and shared evidence
+- [ ] **COR-02**: Operator can inspect which findings and evidence caused a correlation decision and which inputs were rejected
 
-### Audit And Replay
+### Operator Review
 
-- [x] **AUD-03**: Operator can persist receipt and replay bundles outside process memory
-- [x] **AUD-04**: Operator can retrieve a replay bundle by hunt ID or receipt ID after restart
-- [x] **AUD-05**: Operator can replay a persisted decision flow without re-executing the live response action
-
-### Operations
-
-- [x] **OPS-03**: Operator can inspect runtime mode and component readiness for detector, substrate, policy, and response services from one status surface
-- [x] **OPS-04**: Operator can inspect counters and latency metrics for detect, policy, persist, and response stages
-- [x] **OPS-05**: Operator can correlate a runtime trace, receipt trail, and replay bundle using stable identifiers
+- [ ] **REV-01**: Operator can view investigation status, summary, and failure state from one runtime surface without reading raw storage files
+- [ ] **REV-02**: Operator can distinguish hot-path response decisions from later async enrichment and see freshness timestamps for both layers
 
 ## Future Requirements
-
-### Investigation And Correlation
-
-- **INV-01**: Runtime can attach slower investigation context to findings without blocking the hot path
-- **INV-02**: Runtime can correlate multiple findings into a higher-confidence incident narrative
 
 ### Advanced Governance
 
@@ -45,13 +33,19 @@
 - **EVA-01**: Team can run offline replay and adversarial evaluation workflows against durable runtime artifacts
 - **EVA-02**: Team can experiment with detector evolution without coupling it to the live response runtime
 
+### Deferred Investigation Follow-Ons
+
+- **COR-03**: Runtime can let correlated incidents influence later automated policy only after operator review and explicit safeguards
+- **REV-03**: Operator can manage investigation and incident review through a richer CLI or HTTP control surface
+
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Async investigation on the hot path | Would destabilize the just-shipped critical lane before durability is proven |
+| Async investigation on the hot path | Enrichment must not weaken the fast-detection latency proof point |
+| Correlation directly changing automated response policy | Incident grouping should stay operator-context-first in this milestone |
 | Distributed governance / quorum approvals | Still premature without independent nodes and trust boundaries |
-| Gossip membership / CRDT state sharing | Not required for the current single-node operational milestone |
+| Gossip membership / CRDT state sharing | Not required for the current single-node operating model |
 | Python runtime or PyO3 expansion | Conflicts with the Rust-first production path |
 | Live evolution loops | Better handled as offline evaluation after durable artifacts exist |
 
@@ -59,23 +53,20 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CFG-04 | Phase 5 | Complete |
-| DUR-01 | Phase 5 | Complete |
-| DUR-02 | Phase 5 | Complete |
-| DUR-03 | Phase 5 | Complete |
-| DUR-04 | Phase 5 | Complete |
-| AUD-03 | Phase 6 | Complete |
-| AUD-04 | Phase 6 | Complete |
-| AUD-05 | Phase 6 | Complete |
-| OPS-03 | Phase 7 | Complete |
-| OPS-04 | Phase 7 | Complete |
-| OPS-05 | Phase 7 | Complete |
+| INV-01 | TBD | Planned |
+| INV-02 | TBD | Planned |
+| INV-03 | TBD | Planned |
+| COR-01 | TBD | Planned |
+| COR-02 | TBD | Planned |
+| REV-01 | TBD | Planned |
+| REV-02 | TBD | Planned |
 
 **Coverage:**
-- v1.1 requirements: 11 total
-- Mapped to phases: 11
-- Unmapped: 0 ✓
+- v1.2 requirements: 7 total
+- Mapped to phases: 0
+- Unmapped: 7
+- Future requirements: 6
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.1 completion*
+*Last updated: 2026-04-03 for milestone v1.2 definition*
