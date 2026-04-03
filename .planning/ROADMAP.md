@@ -11,7 +11,7 @@
 |---|-------|------|--------------|------------------|--------|
 | 1 | Baseline Contracts | Lock configuration and runtime contracts so the core lane can be built without churn | CFG-01, CFG-02, CFG-03 | 3 | Complete (2026-04-03) |
 | 2 | Fast Detection Lane | Ship one benchmarked Rust detector and in-memory pheromone substrate | DET-01, DET-02, DET-03, DET-04, SUB-01, SUB-02, SUB-03 | 4 | Complete (2026-04-03) |
-| 3 | Safe Live Response | Add deterministic policy, scoped capability leases, and sandboxed response execution | POL-01, POL-02, POL-03, RSP-01, RSP-02, RSP-03 | 4 | Planned |
+| 3 | Safe Live Response | Add deterministic policy, scoped capability leases, and sandboxed response execution | POL-01, POL-02, POL-03, RSP-01, RSP-02, RSP-03 | 4 | Complete (2026-04-03) |
 | 4 | Audit And Hardening | Make the critical path observable, testable, and replayable | AUD-01, AUD-02, OPS-01, OPS-02 | 4 | Planned |
 
 ## Phase Details
@@ -44,6 +44,7 @@
 ### Phase 3: Safe Live Response
 
 **Goal:** Prove a narrow live-response path without requiring distributed governance.
+**Status:** Complete (2026-04-03)
 
 **Requirements:** POL-01, POL-02, POL-03, RSP-01, RSP-02, RSP-03
 
@@ -84,4 +85,4 @@ These are intentionally excluded from the first roadmap:
 
 ---
 *Roadmap created: 2026-04-02*
-*Last updated: 2026-04-03 after Phase 2 completion*
+*Last updated: 2026-04-03 after Phase 3 completion*

@@ -26,15 +26,15 @@
 
 ### Policy
 
-- [ ] **POL-01**: Runtime evaluates response proposals through a deterministic Rust policy gate
-- [ ] **POL-02**: Policy gate can deny, authorize, or require human approval based on action type and severity
-- [ ] **POL-03**: Authorized requests receive a short-lived capability lease with explicit scope
+- [x] **POL-01**: Runtime evaluates response proposals through a deterministic Rust policy gate
+- [x] **POL-02**: Policy gate can deny, authorize, or require human approval based on action type and severity
+- [x] **POL-03**: Authorized requests receive a short-lived capability lease with explicit scope
 
 ### Response
 
-- [ ] **RSP-01**: Runtime supports dry-run response execution for safe validation
-- [ ] **RSP-02**: Runtime supports at least one sandboxed enforced response adapter
-- [ ] **RSP-03**: Response execution returns a normalized receipt or failure record
+- [x] **RSP-01**: Runtime supports dry-run response execution for safe validation
+- [x] **RSP-02**: Runtime supports at least one sandboxed enforced response adapter
+- [x] **RSP-03**: Response execution returns a normalized receipt or failure record
 
 ### Audit And Operations
 
@@ -84,12 +84,12 @@
 | SUB-01 | Phase 2 | Complete |
 | SUB-02 | Phase 2 | Complete |
 | SUB-03 | Phase 2 | Complete |
-| POL-01 | Phase 3 | Pending |
-| POL-02 | Phase 3 | Pending |
-| POL-03 | Phase 3 | Pending |
-| RSP-01 | Phase 3 | Pending |
-| RSP-02 | Phase 3 | Pending |
-| RSP-03 | Phase 3 | Pending |
+| POL-01 | Phase 3 | Complete |
+| POL-02 | Phase 3 | Complete |
+| POL-03 | Phase 3 | Complete |
+| RSP-01 | Phase 3 | Complete |
+| RSP-02 | Phase 3 | Complete |
+| RSP-03 | Phase 3 | Complete |
 | AUD-01 | Phase 4 | Pending |
 | AUD-02 | Phase 4 | Pending |
 | OPS-01 | Phase 4 | Pending |

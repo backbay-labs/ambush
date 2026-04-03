@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-03T04:05:11.076Z"
+last_updated: "2026-04-03T04:12:23.637Z"
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 4
+  completed_plans: 6
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-02)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** Phase 3 — Safe Live Response
+**Current focus:** Phase 4 — Audit And Hardening
 
 ## Memory
 
@@ -28,7 +28,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-02)
 - The first proof point is fast detection, followed by narrow and controlled live response.
 - Phase 1 is complete: typed config loading is real, invalid config fails fast, and local project instructions now match the Rust-first direction.
 - Phase 2 is complete: the runtime has a concrete detector, an in-memory pheromone substrate, and published hot-path benchmark numbers.
+- Phase 3 is complete: policy verdicts, scoped leases, and sandbox execution now form a real live-response lane.
 
 ## Next Command
 
-`$gsd-execute-phase 3`
+`$gsd-execute-phase 4`
