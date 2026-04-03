@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.9
-milestone_name: verified-evolution-queue
+milestone: v1.10
+milestone_name: queue-handoff-and-canary-launch
 status: ready-to-plan
-last_updated: "2026-04-03T22:05:16Z"
+last_updated: "2026-04-03T22:31:19Z"
 progress:
   total_phases: 3
   completed_phases: 0
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.9 Verified Evolution Queue` is active. Phase 29 is next.
+**Current focus:** `v1.10 Queue Handoff And Canary Launch` is active. Phase 32 is next.
 
 ## Memory
 
@@ -34,10 +34,12 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.8` is complete: durable strategy-memory records, advisory utility scoring, and baseline-vs-candidate scorecards now ship through `swarmctl`.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
 - The repo now has a full evidence ladder from replay and verification through production promotion plus one advisory memory layer above it.
-- `v1.9` focuses on turning that advisory layer into a proof-backed detector proposal queue with durable review state.
-- Phase 29 will establish stable evolution proposal artifacts before proof admission or operator decision workflows are added.
+- `v1.9` is complete: proof-backed detector proposal queue artifacts, fail-closed admission, and CLI-backed review decisions now ship through `swarmctl`.
+- The runtime now needs to bridge accepted proposals into the existing canary lane without forcing operators to hand-translate experiment, verification, and proof metadata.
+- `v1.10` focuses on durable handoff packets plus operator-launched canary entry from accepted proposals.
+- Phase 32 will establish stable queue-to-canary handoff artifacts before handoff admission checks or launch commands are added.
 - Consensus, automatic strategy selection, and richer operator surfaces remain future work.
 
 ## Next Command
 
-`$gsd-plan-phase 29`
+`$gsd-plan-phase 32`

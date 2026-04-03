@@ -3,23 +3,18 @@
 **Defined:** 2026-04-03
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.9 Requirements
+## v1.10 Requirements
 
-### Evolution Queue
+### Queue Handoff
 
-- [x] **EVOL-01**: Candidate detector strategies carry proof-backed safety artifacts rather than heuristic invariant summaries alone
-- [x] **EVOL-02**: Team can propose verified detector strategy updates through a repo-owned evolution queue without widening live autonomy beyond operator-controlled rollout
-- [x] **EVOL-03**: Evolution queue admission fails closed when proof artifacts, verification evidence, or lineage metadata are missing or inconsistent
+- [ ] **HAND-01**: Accepted queue proposals can feed the existing canary rollout path without manual artifact translation
+- [ ] **HAND-02**: Team can persist a durable handoff artifact that binds one accepted proposal, one verification reference, one proof summary, and one passed shadow artifact
+- [ ] **HAND-03**: Handoff creation fails closed when proposal state, proof status, verification linkage, or shadow evidence is missing or inconsistent
 
-### Queue Records
+### Canary Launch
 
-- [x] **EVOL-04**: Queue records preserve lineage, replay or verification evidence, advisory scorecard references, and current review state in one durable artifact
-- [x] **EVOL-05**: Operator can list and reload queued proposals by stable proposal ID, strategy ID, or review state through `swarmctl`
-
-### Operator Review
-
-- [x] **EVOL-06**: Operator can record queue decisions such as accept for canary, defer, or reject without mutating production detector configuration directly
-- [x] **EVOL-07**: Queue review surfaces explain proof status and advisory ranking so operators can understand why a proposal is ready, blocked, or deferred
+- [ ] **HAND-04**: Operator can inspect a stable handoff artifact and launch canary from it through `swarmctl`
+- [ ] **HAND-05**: Queue-to-canary launch records preserve source proposal, proof, verification, shadow, and resulting canary-run references in one durable artifact
 
 ## Future Requirements
 
@@ -43,9 +38,9 @@
 | Feature | Reason |
 |---------|--------|
 | Quorum or BFT approval for queued proposal promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
-| Multi-node or partial-fleet production rollout | The runtime is still single-node and self-contained; this cycle focuses on queued detector proposals, not distributed traffic management |
-| Automatic detector promotion from queue decisions | `v1.9` keeps review operator-controlled and stops short of live rollout mutation |
-| Hot-path proposal scoring on live events | Fast detection remains the core value, so queue assembly and proof review stay off the critical lane |
+| Multi-node or partial-fleet production rollout | The runtime is still single-node and self-contained; this cycle focuses on queue-to-canary handoff, not distributed traffic management |
+| Automatic canary launch from accepted proposals | `v1.10` keeps rollout launch explicit and operator-triggered |
+| Hot-path proposal scoring or handoff evaluation on live events | Fast detection remains the core value, so queue and handoff assembly stay off the critical lane |
 | Authenticated HTTP or TUI control plane | CLI-first remains the smallest practical operator surface for the current runtime |
 | Autonomous strategy mutation in the live hot path | Production detection remains deterministic and operator-controlled |
 
@@ -53,19 +48,17 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVOL-01 | Phase 30 | Complete |
-| EVOL-02 | Phase 29 | Complete |
-| EVOL-03 | Phase 30 | Complete |
-| EVOL-04 | Phase 29 | Complete |
-| EVOL-05 | Phase 31 | Complete |
-| EVOL-06 | Phase 31 | Complete |
-| EVOL-07 | Phase 31 | Complete |
+| HAND-01 | Phase 34 | Pending |
+| HAND-02 | Phase 32 | Pending |
+| HAND-03 | Phase 33 | Pending |
+| HAND-04 | Phase 34 | Pending |
+| HAND-05 | Phase 34 | Pending |
 
 **Coverage:**
-- v1.9 requirements: 7 total
-- Mapped to phases: 7
+- v1.10 requirements: 5 total
+- Mapped to phases: 5
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.9 completion*
+*Last updated: 2026-04-03 after milestone v1.10 creation*

@@ -1,88 +1,86 @@
-# Milestone v1.9: Verified Evolution Queue
+# Milestone v1.10: Queue Handoff And Canary Launch
 
-**Status:** COMPLETE
+**Status:** NOT STARTED
 **Date:** 2026-04-03
-**Milestone Goal:** Add a proof-backed, operator-controlled evolution queue for detector proposals so verified candidate strategies can be reviewed, deferred, or prepared for later rollout without introducing automatic promotion or quorum governance.
+**Milestone Goal:** Bridge accepted evolution proposals into the bounded canary lane through durable handoff artifacts and operator-launched rollout, without introducing automatic launch or quorum governance.
 
 ## Overview
 
-This milestone turns the new advisory scoring layer into a durable proposal workflow. The runtime already persists experiment, verification, shadow, canary, production-promotion, strategy-memory, and advisory scorecard artifacts; the next useful step is to assemble those into repo-owned evolution proposals that carry proof-backed safety evidence and explicit review state.
+This milestone turns the new proof-backed queue into a rollout bridge. The runtime already persists experiments, verifications, proofs, proposals, shadows, and canary runs; the next useful step is to bind accepted proposals to the shadow evidence required for canary entry and preserve that handoff as a first-class artifact.
 
-The milestone stays deliberately narrow. It does not add autonomous mutation, quorum approval, or richer HTTP or TUI operator surfaces. The goal is to make candidate detector updates reviewable and durable while keeping deployment decisions explicit and operator-controlled.
+The milestone stays deliberately narrow. It does not add automatic launch, production promotion, quorum approval, or richer HTTP or TUI operator surfaces. The goal is to remove manual artifact translation between queue review and bounded canary while keeping rollout initiation explicit and operator-controlled.
 
 ## Phase Plan
 
-### Phase 29: Evolution Queue And Proposal Artifacts
+### Phase 32: Queue Handoff Artifacts
 
-**Goal:** Persist repo-owned evolution proposals with stable IDs, lineage, evidence references, and durable review state.
+**Goal:** Persist durable handoff packets that bind an accepted proposal to the shadow evidence required for canary entry.
 
-**Requirements:** EVOL-02, EVOL-04
+**Requirements:** HAND-02
 
-**Depends on:** Phase 28
+**Depends on:** Phase 31
 
-**Plans:** 1/1 plans complete
-
-**Success Criteria:**
-- Verified detector proposals can be written to a durable evolution queue without mutating production detector configuration.
-- Queue records persist stable proposal IDs, lineage, verification evidence, and advisory scorecard references in one artifact.
-- Operators can reload queued proposal artifacts later without reading raw store files.
-- Queue state remains deterministic and repo-owned.
-
-### Phase 30: Proof-Backed Admission Gate
-
-**Goal:** Attach proof-backed safety artifacts to queued proposals and fail closed when required evidence is missing or inconsistent.
-
-**Requirements:** EVOL-01, EVOL-03
-
-**Depends on:** Phase 29
-
-**Plans:** 1/1 plans complete
+**Plans:** 0/1 plans complete
 
 **Success Criteria:**
-- Proposal admission requires proof-backed safety artifacts rather than heuristic summaries alone.
-- Queue admission rejects proposals with missing or inconsistent proof, verification, or lineage metadata.
-- Blocked proposals preserve explicit denial reasons for later operator review.
-- Proof-backed proposal checks remain off the hot path and auditable.
+- Operators can create a durable handoff packet from one accepted proposal plus one passed shadow artifact.
+- Handoff records preserve stable IDs, queue references, verification references, proof summary, advisory summary, and shadow summary in one artifact.
+- Handoff artifacts can be reloaded later without reading raw storage files.
+- The handoff lane remains repo-owned and CLI-first.
 
-### Phase 31: Operator Queue Review And Decisions
+### Phase 33: Queue-To-Canary Admission Gate
 
-**Goal:** Surface queued proposals, proof status, advisory ranking, and operator decisions through `swarmctl`.
+**Goal:** Fail handoff creation closed when accepted proposal, proof, verification, or shadow evidence is missing or inconsistent.
 
-**Requirements:** EVOL-05, EVOL-06, EVOL-07
+**Requirements:** HAND-03
 
-**Depends on:** Phase 30
+**Depends on:** Phase 32
 
-**Plans:** 1/1 plans complete
+**Plans:** 0/1 plans complete
 
 **Success Criteria:**
-- Operators can list and reload queued proposals by stable ID, strategy ID, or review state.
-- Operators can record explicit queue decisions such as accept for canary, defer, or reject without mutating production detector config directly.
-- Queue review output explains proof status, evidence references, and advisory ranking in one operator-readable surface.
-- Documentation explains how the evolution queue fits between advisory scoring and any future governance-backed rollout path.
+- Handoff creation requires an accepted proposal with proved status and a passed shadow artifact for the same experiment.
+- Handoff creation records explicit blocking reasons when proposal state, proof status, verification linkage, or shadow evidence is invalid.
+- Failed handoff attempts remain auditable and off the hot path.
+- Admission checks never mutate canary state directly.
+
+### Phase 34: Canary Launch From Handoff
+
+**Goal:** Let operators inspect a stable handoff artifact and launch canary from it through `swarmctl`.
+
+**Requirements:** HAND-01, HAND-04, HAND-05
+
+**Depends on:** Phase 33
+
+**Plans:** 0/1 plans complete
+
+**Success Criteria:**
+- Operators can reload handoff packets by stable ID and launch bounded canary without manually restating experiment, verification, or shadow metadata.
+- Launch records preserve queue proposal, proof, verification, shadow, and resulting canary-run references in one durable artifact.
+- Launch remains operator-triggered; accepted proposals do not start canary implicitly.
+- Documentation explains how queue handoff fits between proposal review and bounded canary.
 
 ## Traceability
 
 | Requirement | Phase |
 |-------------|-------|
-| EVOL-01 | Phase 30 |
-| EVOL-02 | Phase 29 |
-| EVOL-03 | Phase 30 |
-| EVOL-04 | Phase 29 |
-| EVOL-05 | Phase 31 |
-| EVOL-06 | Phase 31 |
-| EVOL-07 | Phase 31 |
+| HAND-01 | Phase 34 |
+| HAND-02 | Phase 32 |
+| HAND-03 | Phase 33 |
+| HAND-04 | Phase 34 |
+| HAND-05 | Phase 34 |
 
 ## Deferred Work
 
 - Quorum-based approval and signed governance receipts remain deferred until independent trust boundaries exist.
 - Multi-node or partial-fleet rollout remains out of scope while the runtime is still single-node.
 - Authenticated HTTP or TUI operator surfaces remain secondary to the repo-owned CLI and durable artifact flow.
-- Automatic mutation, automatic selection, and automatic promotion remain future work after a verified queue proves useful.
+- Automatic canary launch, automatic selection, and automatic promotion remain future work after the queue-to-canary handoff proves useful.
 
 ## Next Step
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 32`
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.9 completion*
+*Last updated: 2026-04-03 after milestone v1.10 creation*

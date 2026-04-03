@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.9 Verified Evolution Queue (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- candidate detector updates can now be persisted as proof-backed evolution proposals with stable IDs, lineage, verification references, advisory summaries, and durable review state
+- proof artifacts now attest experiment, verification, and lineage evidence with deterministic SHA-256 digests and fail queue admission closed when evidence is missing or inconsistent
+- operators can create proofs, inspect queue entries, and record accept, defer, or reject decisions through `swarmctl` without mutating canary or production state
+
+---
+
 ## v1.8 Production Memory And Strategy Scoring (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

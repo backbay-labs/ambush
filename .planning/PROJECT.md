@@ -10,27 +10,26 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.8 Production Memory And Strategy Scoring` shipped on 2026-04-03.
+`v1.9 Verified Evolution Queue` shipped on 2026-04-03.
 
 **What is now real:**
-- completed canary and production-promotion artifacts can now be converted into durable per-strategy memory records without rerunning telemetry
-- strategy-memory histories persist stable IDs, rollout lineage, artifact references, and latest rollout state for operator reload through `swarmctl`
-- verified strategies can now be scored with deterministic context-aware utility breakdowns that combine live rollout memory and replay-fitness fallback
-- advisory scorecards compare the current production baseline and verified candidates without mutating production detector configuration
-- strategy memory and advisory scorecard directories are repo-owned, documented, and ignored by default under `data/strategy-memory/` and `data/strategy-scorecards/`
+- verified candidate detector updates can now be persisted as proof-backed evolution proposals with stable IDs, lineage, verification references, advisory summaries, and durable review state
+- proposal admission now fails closed against proof, verification, lineage, corpus, and digest mismatches while still preserving blocked artifacts for operator review
+- `swarmctl` now exposes proof creation plus queue create, list, reload, and decision workflows for accept, defer, or reject review
+- the rollout ladder now extends through proposal review: experiment -> verification -> proof -> proposal queue
 
-## Current Milestone: v1.9 Verified Evolution Queue
+## Current Milestone: v1.10 Queue Handoff And Canary Launch
 
-**Goal:** turn memory-backed advisory scoring into a proof-backed, operator-controlled evolution queue for detector proposals, without introducing automatic rollout or quorum governance.
+**Goal:** bridge accepted evolution proposals into the bounded canary lane without manual artifact translation and without widening live autonomy beyond operator-launched rollout.
 
 **Target features:**
-- persist repo-owned evolution proposals with stable IDs, lineage, evidence references, and review state
-- attach proof-backed safety artifacts and fail-closed admission checks to queued proposals
-- expose queue listing, reload, and operator decision workflows through `swarmctl`
+- persist rollout handoff packets that bind an accepted proposal to the shadow evidence required for canary entry
+- fail handoff creation closed when proposal, proof, verification, or shadow evidence is missing or inconsistent
+- let operators launch canary from a stable handoff packet through `swarmctl` while preserving the queue-to-canary lineage
 
 ## Next Planning Step
 
-Start execution with `$gsd-plan-phase 29`.
+Start execution with `$gsd-plan-phase 32`.
 
 ## Requirements
 
@@ -93,11 +92,17 @@ Start execution with `$gsd-plan-phase 29`.
 - ✓ Team can assemble a strategy scorecard that compares the production baseline and verified candidates using memory-backed scores, rollout lineage, and current promotion state — v1.8
 - ✓ Operator can inspect strategy memory histories, score explanations, and advisory selection scorecards through `swarmctl` — v1.8
 
+### Just Shipped
+
+- ✓ Team can persist verified detector proposals in a repo-owned evolution queue with stable IDs, lineage, and evidence references — v1.9
+- ✓ Team can attach proof-backed safety artifacts and fail-closed admission checks to queued detector proposals — v1.9
+- ✓ Operator can inspect and triage queued proposals with advisory review through `swarmctl` — v1.9
+
 ### Active
 
-- [ ] Team can persist verified detector proposals in a repo-owned evolution queue with stable IDs, lineage, and evidence references
-- [ ] Team can attach proof-backed safety artifacts and fail-closed admission checks to queued detector proposals
-- [ ] Operator can inspect and triage queued proposals with advisory review through `swarmctl`
+- [ ] Accepted queue proposals can feed the existing canary rollout path without manual artifact translation
+- [ ] Team can persist a durable queue-to-canary handoff artifact with stable IDs and linked evidence references
+- [ ] Operator can inspect and launch canary from one accepted handoff packet through `swarmctl`
 
 ### Out of Scope
 
@@ -152,8 +157,10 @@ The project now has an end-to-end rollout ladder plus a first memory-backed revi
 | Keep production promotion CLI-first and single-node | The runtime still lacks independent trust boundaries and multi-node rollout needs, so CLI plus durable artifacts is the smallest credible promotion surface | ✓ Good |
 | Choose production memory and strategy scoring as the next milestone | `docs/EVOLUTION.md` made production utility memory the next missing capability once real promotion evidence existed | ✓ Good |
 | Keep memory-backed ranking advisory only | The runtime still lacks quorum governance and proof-backed evolution, so scores guide operators instead of auto-promoting strategies | ✓ Good |
-| Choose a verified evolution queue as the next milestone | `docs/EVOLUTION.md` and the shipped advisory layer now point to proof-backed proposal handling as the next missing capability before governance | ✓ Chosen |
-| Keep the evolution queue operator-controlled and non-promoting | The runtime still lacks independent trust boundaries, so queued proposals must not advance to production automatically | ✓ Chosen |
+| Choose a verified evolution queue as the next milestone | `docs/EVOLUTION.md` and the shipped advisory layer now point to proof-backed proposal handling as the next missing capability before governance | ✓ Good |
+| Keep the evolution queue operator-controlled and non-promoting | The runtime still lacks independent trust boundaries, so queued proposals must not advance to production automatically | ✓ Good |
+| Choose queue-to-canary handoff as the next milestone | The accepted queue state currently stops at review; the next missing bridge is a durable operator-launched handoff into the existing canary lane | ✓ Chosen |
+| Keep handoff launch operator-driven | The runtime still avoids automatic rollout mutation, so accepted proposals should prepare canary launch rather than start it implicitly | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after starting milestone v1.9*
+*Last updated: 2026-04-03 after starting milestone v1.10*
