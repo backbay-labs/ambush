@@ -13,6 +13,7 @@ pub mod pipeline;
 pub mod promotion;
 pub mod replay;
 pub mod service;
+pub mod strategy;
 
 use std::time::Instant;
 pub use swarm_core::config::RuntimeMode;

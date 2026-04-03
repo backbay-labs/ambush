@@ -447,6 +447,64 @@ cargo run -p swarm-runtime --bin swarmctl -- promotion-rollback --promotion-id Y
 
 This milestone still stops short of quorum governance or partial-fleet rollout. The production-promotion artifact is the bounded single-node promotion record, not a distributed approval system.
 
+### Strategy Memory And Advisory Scorecards
+
+The repo now ships a durable strategy-memory and advisory scorecard lane. This is built entirely from existing rollout artifacts: completed canary runs and completed production promotions. It does not rerun telemetry to build memories, and it does not promote or mutate strategies automatically.
+
+The first slice uses deterministic built-in weighting for:
+
+- rollout outcome weight (`ready_for_promotion_review`, `stable_in_production`, `blocked`, `halted`)
+- rollout stage weight (`canary` vs `promotion`)
+- recency decay
+- context matching across suite name, corpus version, parent strategy, and reference strategy
+
+Strategy-memory artifacts are written under `data/strategy-memory/` by default.
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- strategy-memory-canary \
+  --run-id YOUR_CANARY_RUN_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- strategy-memory-promotion \
+  --promotion-id YOUR_PROMOTION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- strategy-memory-result \
+  --memory-id strategy_memory:promotion:YOUR_PROMOTION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- strategy-memory-history \
+  --strategy-id office_baseline_control
+```
+
+Each durable memory preserves:
+
+- the source artifact ID and rollout stage (`canary` or `promotion`)
+- the strategy ID, lineage, suite name, and corpus version
+- explicit outcome and rollout weights
+- observed detection, divergence, latency, and budget summaries
+- any blocking or rollback reasons
+
+Advisory scorecards are written under `data/strategy-scorecards/` by default.
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- strategy-scorecard-create \
+  --experiment experiments/office-baseline-control.yaml \
+  --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
+
+cargo run -p swarm-runtime --bin swarmctl -- strategy-scorecard-result \
+  --scorecard-id YOUR_SCORECARD_ID
+```
+
+Scorecards compare the current production baseline and the verified candidate using:
+
+- durable live rollout memories when they exist
+- replay-fitness fallback when live memory is sparse
+- per-memory explanations with outcome weights, recency decay, context matches, and weighted contribution
+
+This lane is advisory only. The scorecard does not approve, deploy, or promote a detector by itself.
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.

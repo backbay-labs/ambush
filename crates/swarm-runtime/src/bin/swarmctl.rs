@@ -13,6 +13,10 @@ use swarm_runtime::replay::{
     render_promotion_review_packet, render_replay_run, render_shadow_report, render_suite_report,
     render_verification_report,
 };
+use swarm_runtime::strategy::{
+    DefaultStrategyMemoryHarness, DefaultStrategyScorecardHarness, render_strategy_memory,
+    render_strategy_memory_history, render_strategy_scorecard,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -43,6 +47,12 @@ struct Cli {
 
     #[arg(long, global = true, default_value = "data/promotions")]
     promotion_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/strategy-memory")]
+    strategy_memory_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/strategy-scorecards")]
+    strategy_scorecard_results_dir: std::path::PathBuf,
 
     #[arg(long, global = true)]
     json: bool,
@@ -78,6 +88,12 @@ enum Command {
     PromotionHalt(PromotionActionArgs),
     PromotionRollback(PromotionActionArgs),
     PromotionResult(PromotionResultArgs),
+    StrategyMemoryCanary(StrategyMemoryCanaryArgs),
+    StrategyMemoryPromotion(StrategyMemoryPromotionArgs),
+    StrategyMemoryResult(StrategyMemoryResultArgs),
+    StrategyMemoryHistory(StrategyMemoryHistoryArgs),
+    StrategyScorecardCreate(StrategyScorecardCreateArgs),
+    StrategyScorecardResult(StrategyScorecardResultArgs),
 }
 
 #[derive(Debug, Args)]
@@ -288,6 +304,45 @@ struct PromotionResultArgs {
     promotion_id: String,
 }
 
+#[derive(Debug, Args)]
+struct StrategyMemoryCanaryArgs {
+    #[arg(long)]
+    run_id: String,
+}
+
+#[derive(Debug, Args)]
+struct StrategyMemoryPromotionArgs {
+    #[arg(long)]
+    promotion_id: String,
+}
+
+#[derive(Debug, Args)]
+struct StrategyMemoryResultArgs {
+    #[arg(long)]
+    memory_id: String,
+}
+
+#[derive(Debug, Args)]
+struct StrategyMemoryHistoryArgs {
+    #[arg(long)]
+    strategy_id: String,
+}
+
+#[derive(Debug, Args)]
+struct StrategyScorecardCreateArgs {
+    #[arg(long)]
+    experiment: std::path::PathBuf,
+
+    #[arg(long)]
+    verification_id: String,
+}
+
+#[derive(Debug, Args)]
+struct StrategyScorecardResultArgs {
+    #[arg(long)]
+    scorecard_id: String,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -296,6 +351,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let canary_harness = DefaultCanaryHarness::from_path(&cli.config, &cli.canary_results_dir)?;
     let promotion_harness =
         DefaultProductionPromotionHarness::from_path(&cli.config, &cli.promotion_results_dir)?;
+    let strategy_memory_harness =
+        DefaultStrategyMemoryHarness::from_path(&cli.config, &cli.strategy_memory_results_dir)?;
+    let strategy_scorecard_harness = DefaultStrategyScorecardHarness::from_path(
+        &cli.config,
+        &cli.strategy_memory_results_dir,
+        &cli.strategy_scorecard_results_dir,
+    )?;
 
     let output = match cli.command {
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
@@ -640,6 +702,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_production_promotion_report(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::StrategyMemoryCanary(args) => {
+            let lookup =
+                strategy_memory_harness.ingest_canary(&cli.canary_results_dir, &args.run_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_strategy_memory(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::StrategyMemoryPromotion(args) => {
+            let lookup = strategy_memory_harness
+                .ingest_promotion(&cli.promotion_results_dir, &args.promotion_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_strategy_memory(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::StrategyMemoryResult(args) => {
+            let lookup = strategy_memory_harness
+                .load_memory(&args.memory_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "strategy memory was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_strategy_memory(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::StrategyMemoryHistory(args) => {
+            let history = strategy_memory_harness.history(&args.strategy_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&history)?);
+            } else {
+                println!("{}", render_strategy_memory_history(&history));
+            }
+            return Ok(());
+        }
+        Command::StrategyScorecardCreate(args) => {
+            let lookup = strategy_scorecard_harness
+                .create_scorecard(
+                    &replay_harness,
+                    args.experiment,
+                    &cli.experiment_results_dir,
+                    &cli.verification_results_dir,
+                    &args.verification_id,
+                )
+                .await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_strategy_scorecard(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::StrategyScorecardResult(args) => {
+            let lookup = strategy_scorecard_harness
+                .load_scorecard(&args.scorecard_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "strategy scorecard was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_strategy_scorecard(&lookup.report));
             }
             return Ok(());
         }
