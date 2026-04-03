@@ -1053,7 +1053,7 @@ mod tests {
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
         InvestigationConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        PromotionConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
     };
     use swarm_core::types::Severity;
     use swarm_whisker::{
@@ -1117,6 +1117,7 @@ mod tests {
                 max_detect_latency_us: 10_000,
                 max_total_detections: 4,
             },
+            promotion: PromotionConfig::default(),
         }
     }
 

@@ -57,3 +57,12 @@ canary:
   max_baseline_miss_rate: 0.25
   max_detect_latency_us: 10000
   max_total_detections: 8
+
+promotion:
+  enabled: true
+  window_id: production-primary
+  observation_window_events: 2
+  max_promoted_only_rate: 0.20
+  max_fallback_recovery_rate: 0.20
+  max_detect_latency_us: 10000
+  max_total_detections: 12

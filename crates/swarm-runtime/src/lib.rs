@@ -10,6 +10,7 @@ pub mod control;
 pub mod correlation;
 pub mod investigation;
 pub mod pipeline;
+pub mod promotion;
 pub mod replay;
 pub mod service;
 

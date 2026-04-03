@@ -430,8 +430,8 @@ mod tests {
     use crate::service::EventExecutionContext;
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, InvestigationConfig,
-        PheromoneBackendConfig, PheromoneConfig, PolicyConfig, RuntimeSettings, SwarmConfig,
-        TelemetrySourceConfig,
+        PheromoneBackendConfig, PheromoneConfig, PolicyConfig, PromotionConfig, RuntimeSettings,
+        SwarmConfig, TelemetrySourceConfig,
     };
     use swarm_core::types::{AgentId, Severity};
     use swarm_policy::ApprovalContext;
@@ -486,6 +486,7 @@ mod tests {
                 incident_store: BundleStoreConfig::Memory,
             },
             canary: CanaryConfig::default(),
+            promotion: PromotionConfig::default(),
         }
     }
 

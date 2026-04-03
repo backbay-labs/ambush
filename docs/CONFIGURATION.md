@@ -385,6 +385,68 @@ cargo run -p swarm-runtime --bin swarmctl -- canary-rollback --run-id YOUR_CANAR
 
 This milestone still stops short of fleet-wide promotion. The canary artifact is the handoff into the next decision step, not the promotion itself.
 
+### Controlled Production Promotion
+
+Controlled production promotion extends the staged rollout from canary into the production detector role. Promotion starts from a completed canary artifact that is already `ready_for_promotion_review`, rotates the promoted detector into the production lane, retains the previous production detector as the rollback target, and observes the promoted detector through a bounded production window.
+
+Repo-owned promotion settings now live in `rulesets/default.yaml`:
+
+```yaml
+promotion:
+  enabled: true
+  window_id: production-primary
+  observation_window_events: 2
+  max_promoted_only_rate: 0.20
+  max_fallback_recovery_rate: 0.20
+  max_detect_latency_us: 10000
+  max_total_detections: 12
+```
+
+Current promotion inputs and semantics:
+
+- `window_id`: stable identifier for the active production observation window
+- `observation_window_events`: how many live events the promoted detector must survive before the promotion can complete normally
+- `max_promoted_only_rate`: divergence bound for promoted-only detections versus the retained fallback baseline
+- `max_fallback_recovery_rate`: bound on how often the retained fallback baseline still detects activity that the promoted detector misses
+- `max_detect_latency_us`: maximum promoted detect latency during the observation window
+- `max_total_detections`: resource budget for total promoted detections over the production window
+
+Production-promotion artifacts are written under `data/promotions/` by default.
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- canary-result --run-id YOUR_CANARY_RUN_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- promotion-start \
+  --canary-run-id YOUR_CANARY_RUN_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- promotion-event \
+  --promotion-id YOUR_PROMOTION_ID \
+  --event fixtures/canary/word-powershell.yaml
+
+cargo run -p swarm-runtime --bin swarmctl -- promotion-event \
+  --promotion-id YOUR_PROMOTION_ID \
+  --event fixtures/canary/outlook-cmd.yaml
+
+cargo run -p swarm-runtime --bin swarmctl -- promotion-result --promotion-id YOUR_PROMOTION_ID
+```
+
+Automatic failure behavior:
+
+- `promotion-event` exits nonzero when the promoted detector auto-rolls back on a threshold or budget violation
+- rollback history preserves the trigger, reason, restored baseline strategy, and observed event count
+- the final promotion artifact carries an `observing`, `stable_in_production`, or `blocked` recommendation
+
+Manual operator actions:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- promotion-halt --promotion-id YOUR_PROMOTION_ID --reason "operator requested stop"
+cargo run -p swarm-runtime --bin swarmctl -- promotion-rollback --promotion-id YOUR_PROMOTION_ID --reason "promoted detector diverged from fallback baseline"
+```
+
+This milestone still stops short of quorum governance or partial-fleet rollout. The production-promotion artifact is the bounded single-node promotion record, not a distributed approval system.
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.

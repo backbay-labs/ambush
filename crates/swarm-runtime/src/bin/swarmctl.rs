@@ -4,6 +4,10 @@ use swarm_runtime::control::{
     DefaultControlPlane, IncidentLookupSelector, InvestigationLookupSelector,
     OperatorControlOutput, ReplayLookupSelector, render_output,
 };
+use swarm_runtime::promotion::{
+    DefaultProductionPromotionHarness, ProductionPromotionStatus,
+    render_production_promotion_report,
+};
 use swarm_runtime::replay::{
     DefaultReplayHarness, render_evaluation_report, render_experiment_report,
     render_promotion_review_packet, render_replay_run, render_shadow_report, render_suite_report,
@@ -37,6 +41,9 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/canaries")]
     canary_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/promotions")]
+    promotion_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -66,6 +73,11 @@ enum Command {
     CanaryHalt(CanaryActionArgs),
     CanaryRollback(CanaryActionArgs),
     CanaryResult(CanaryResultArgs),
+    PromotionStart(PromotionStartArgs),
+    PromotionEvent(PromotionEventArgs),
+    PromotionHalt(PromotionActionArgs),
+    PromotionRollback(PromotionActionArgs),
+    PromotionResult(PromotionResultArgs),
 }
 
 #[derive(Debug, Args)]
@@ -246,12 +258,44 @@ struct CanaryResultArgs {
     run_id: String,
 }
 
+#[derive(Debug, Args)]
+struct PromotionStartArgs {
+    #[arg(long)]
+    canary_run_id: String,
+}
+
+#[derive(Debug, Args)]
+struct PromotionEventArgs {
+    #[arg(long)]
+    promotion_id: String,
+
+    #[arg(long)]
+    event: std::path::PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct PromotionActionArgs {
+    #[arg(long)]
+    promotion_id: String,
+
+    #[arg(long)]
+    reason: String,
+}
+
+#[derive(Debug, Args)]
+struct PromotionResultArgs {
+    #[arg(long)]
+    promotion_id: String,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let plane = DefaultControlPlane::from_path(&cli.config)?;
     let replay_harness = DefaultReplayHarness::from_path(&cli.config, &cli.replay_results_dir)?;
     let canary_harness = DefaultCanaryHarness::from_path(&cli.config, &cli.canary_results_dir)?;
+    let promotion_harness =
+        DefaultProductionPromotionHarness::from_path(&cli.config, &cli.promotion_results_dir)?;
 
     let output = match cli.command {
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
@@ -540,6 +584,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_canary_run_report(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::PromotionStart(args) => {
+            let lookup =
+                promotion_harness.start_run(&cli.canary_results_dir, &args.canary_run_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_production_promotion_report(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::PromotionEvent(args) => {
+            let lookup = promotion_harness.ingest_event_path(&args.promotion_id, args.event)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_production_promotion_report(&lookup.report));
+            }
+            if matches!(lookup.report.status, ProductionPromotionStatus::RolledBack) {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::PromotionHalt(args) => {
+            let lookup = promotion_harness.halt_run(&args.promotion_id, &args.reason)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_production_promotion_report(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::PromotionRollback(args) => {
+            let lookup = promotion_harness.rollback_run(&args.promotion_id, &args.reason)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_production_promotion_report(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::PromotionResult(args) => {
+            let lookup = promotion_harness
+                .load_run(&args.promotion_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "production promotion was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_production_promotion_report(&lookup.report));
             }
             return Ok(());
         }

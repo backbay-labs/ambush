@@ -1031,8 +1031,8 @@ mod tests {
     use async_trait::async_trait;
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, InvestigationConfig,
-        PheromoneBackendConfig, PheromoneConfig, PolicyConfig, RuntimeSettings, SwarmConfig,
-        TelemetrySourceConfig,
+        PheromoneBackendConfig, PheromoneConfig, PolicyConfig, PromotionConfig, RuntimeSettings,
+        SwarmConfig, TelemetrySourceConfig,
     };
     use swarm_core::types::AgentId;
     use swarm_core::types::Severity;
@@ -1090,6 +1090,7 @@ mod tests {
             investigation: InvestigationConfig::default(),
             correlation: CorrelationConfig::default(),
             canary: CanaryConfig::default(),
+            promotion: PromotionConfig::default(),
         }
     }
 

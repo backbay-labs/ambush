@@ -33,6 +33,9 @@ pub struct SwarmConfig {
     /// Bounded live canary settings for verified candidate detectors.
     #[serde(default)]
     pub canary: CanaryConfig,
+    /// Controlled production-promotion settings for canary-approved detectors.
+    #[serde(default)]
+    pub promotion: PromotionConfig,
 }
 
 /// Whether the runtime simulates or executes live response actions.
@@ -193,6 +196,33 @@ pub struct CanaryConfig {
     pub max_detect_latency_us: u64,
     /// Maximum allowed candidate detection volume across the canary window.
     #[serde(default = "default_canary_max_total_detections")]
+    pub max_total_detections: usize,
+}
+
+/// Controlled production-promotion settings layered on top of completed canary runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromotionConfig {
+    /// Whether the controlled production-promotion lane is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Stable window identifier for the active production observation window.
+    #[serde(default = "default_promotion_window_id")]
+    pub window_id: String,
+    /// Number of live events observed before a promotion can complete normally.
+    #[serde(default = "default_promotion_observation_window_events")]
+    pub observation_window_events: usize,
+    /// Maximum allowed promoted-only detection rate across the observation window.
+    #[serde(default = "default_promotion_max_promoted_only_rate")]
+    pub max_promoted_only_rate: f64,
+    /// Maximum allowed rate of fallback detections that the promoted detector misses.
+    #[serde(default = "default_promotion_max_fallback_recovery_rate")]
+    pub max_fallback_recovery_rate: f64,
+    /// Maximum allowed promoted detect latency in microseconds.
+    #[serde(default = "default_promotion_max_detect_latency_us")]
+    pub max_detect_latency_us: u64,
+    /// Maximum allowed promoted detection volume across the observation window.
+    #[serde(default = "default_promotion_max_total_detections")]
     pub max_total_detections: usize,
 }
 
@@ -465,6 +495,45 @@ impl SwarmConfig {
             }
         }
 
+        if self.promotion.enabled {
+            if self.promotion.window_id.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "promotion.window_id",
+                    reason: "must not be empty when promotion is enabled".to_string(),
+                });
+            }
+            if self.promotion.observation_window_events == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "promotion.observation_window_events",
+                    reason: "must be greater than zero when promotion is enabled".to_string(),
+                });
+            }
+            if !(0.0..=1.0).contains(&self.promotion.max_promoted_only_rate) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "promotion.max_promoted_only_rate",
+                    reason: "must be between 0.0 and 1.0".to_string(),
+                });
+            }
+            if !(0.0..=1.0).contains(&self.promotion.max_fallback_recovery_rate) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "promotion.max_fallback_recovery_rate",
+                    reason: "must be between 0.0 and 1.0".to_string(),
+                });
+            }
+            if self.promotion.max_detect_latency_us == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "promotion.max_detect_latency_us",
+                    reason: "must be greater than zero when promotion is enabled".to_string(),
+                });
+            }
+            if self.promotion.max_total_detections == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "promotion.max_total_detections",
+                    reason: "must be greater than zero when promotion is enabled".to_string(),
+                });
+            }
+        }
+
         Ok(())
     }
 }
@@ -528,6 +597,20 @@ impl Default for CanaryConfig {
     }
 }
 
+impl Default for PromotionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            window_id: default_promotion_window_id(),
+            observation_window_events: default_promotion_observation_window_events(),
+            max_promoted_only_rate: default_promotion_max_promoted_only_rate(),
+            max_fallback_recovery_rate: default_promotion_max_fallback_recovery_rate(),
+            max_detect_latency_us: default_promotion_max_detect_latency_us(),
+            max_total_detections: default_promotion_max_total_detections(),
+        }
+    }
+}
+
 const fn default_recent_decisions_limit() -> usize {
     20
 }
@@ -578,4 +661,28 @@ const fn default_canary_max_detect_latency_us() -> u64 {
 
 const fn default_canary_max_total_detections() -> usize {
     8
+}
+
+fn default_promotion_window_id() -> String {
+    "production-primary".to_string()
+}
+
+const fn default_promotion_observation_window_events() -> usize {
+    3
+}
+
+const fn default_promotion_max_promoted_only_rate() -> f64 {
+    0.20
+}
+
+const fn default_promotion_max_fallback_recovery_rate() -> f64 {
+    0.20
+}
+
+const fn default_promotion_max_detect_latency_us() -> u64 {
+    10_000
+}
+
+const fn default_promotion_max_total_detections() -> usize {
+    12
 }

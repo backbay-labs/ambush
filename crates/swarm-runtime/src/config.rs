@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 pub use swarm_core::config::{
     CanaryConfig, ConfigValidationError, CorrelationConfig, DetectionConfig, InvestigationConfig,
-    PheromoneConfig, PolicyConfig, RuntimeMode, RuntimeSettings, SwarmConfig,
+    PheromoneConfig, PolicyConfig, PromotionConfig, RuntimeMode, RuntimeSettings, SwarmConfig,
     TelemetrySourceConfig,
 };
 
@@ -81,6 +81,7 @@ mod tests {
         assert_eq!(config.runtime.telemetry_sources.len(), 1);
         assert!(config.runtime.require_durable_live_response);
         assert!(config.canary.enabled);
+        assert!(config.promotion.enabled);
     }
 
     #[test]
@@ -250,6 +251,47 @@ canary:
   observation_window_events: 2
   max_candidate_only_rate: 1.5
   max_baseline_miss_rate: 0.25
+  max_detect_latency_us: 10000
+  max_total_detections: 4
+"#;
+
+        let error = parse_config(yaml, "inline").unwrap_err();
+        match error {
+            RuntimeConfigError::Validation { source_name, .. } => assert_eq!(source_name, "inline"),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_promotion_rate_is_rejected() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+promotion:
+  enabled: true
+  window_id: production-primary
+  observation_window_events: 2
+  max_promoted_only_rate: 1.5
+  max_fallback_recovery_rate: 0.25
   max_detect_latency_us: 10000
   max_total_detections: 4
 "#;
