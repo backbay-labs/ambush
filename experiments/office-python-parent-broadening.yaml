@@ -2,6 +2,8 @@ name: office_python_parent_broadening
 description: Candidate profile broadens suspicious parent matching to python and should fail the offline false-positive gate on the control scenario
 corpus:
   suite: ../scenario-suites/hellcat-office-v1.yaml
+verification:
+  corpus: ../verifications/office-detector-safety-v1.yaml
 candidate:
   strategy: suspicious_process_tree
   strategy_id: office_python_parent_broadening

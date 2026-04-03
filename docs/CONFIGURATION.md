@@ -220,6 +220,106 @@ Failure behavior:
 - `experiment-evaluate` exits nonzero when any offline experiment gate fails
 - the persisted experiment report can still be loaded later with `experiment-result`
 
+### Verification Corpora
+
+Repo-owned detector verification inputs now live under `verifications/`. A verification corpus defines the invariant inputs that later candidate-gating and promotion-review workflows use.
+
+Tracked corpora:
+
+- `verifications/office-detector-safety-v1.yaml`
+
+Each verification corpus currently records:
+
+- `known_bad.suite`: the named replay suite the candidate must continue to cover
+- `benign_controls.scenarios`: explicit benign scenarios used for false-positive inspection
+- `canonical_templates`: one or more threat-class templates the detector must still match
+- `resource_budgets`: repo-owned thresholds such as max false-positive rate, max detect latency, and max total detections
+
+Existing experiment manifests now bind to one verification corpus through:
+
+```yaml
+verification:
+  corpus: ../verifications/office-detector-safety-v1.yaml
+```
+
+This keeps canonical verification inputs in tracked YAML instead of hardcoded tests and gives later phases one stable contract for per-invariant pass or fail reporting.
+
+### Verification Gate
+
+Candidate verification runs the experiment's candidate detector against the repo-owned verification corpus and emits per-invariant pass or fail output.
+
+Verification results are written under `data/verifications/` by default.
+
+Examples:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate --experiment experiments/office-python-parent-broadening.yaml
+cargo run -p swarm-runtime --bin swarmctl -- verification-result --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
+```
+
+Current invariant set:
+
+- `known_bad_coverage`: candidate must not miss tracked adversarial verification scenarios
+- `threat_class_templates`: candidate must still match canonical threat-class templates
+- `false_positive_bound`: candidate must stay under the repo-owned benign false-positive threshold
+- `detect_latency_budget`: candidate max detect latency must stay within the corpus budget
+- `total_detection_budget`: candidate total emitted detections must stay within the corpus volume budget
+
+Failure behavior:
+
+- `verification-evaluate` exits nonzero when any invariant fails
+- failing output preserves scenario or template references for operator inspection
+
+### Offline Shadow
+
+Offline shadow reuses the same baseline-vs-candidate replay comparison as the experiment flow, but persists the result as a dedicated shadow artifact for later promotion review.
+
+Shadow results are written under `data/shadows/` by default.
+
+Examples:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- shadow-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime --bin swarmctl -- shadow-result --shadow-id shadow:office_baseline_control:office_baseline_control:2026-04-03
+```
+
+Shadow reports capture:
+
+- baseline-vs-candidate detection-rate delta
+- false-positive-rate delta
+- detect-latency delta
+- the replay artifacts used as the comparison window
+- pass or fail shadow gates derived from the experiment manifest thresholds
+
+Failure behavior:
+
+- `shadow-evaluate` exits nonzero when the candidate fails the offline shadow gates
+- shadow execution remains fully offline and never emits live pheromones or response actions
+
+### Promotion Review Packets
+
+Promotion review packets assemble one candidate experiment, one persisted verification artifact, and one persisted shadow artifact into a durable manual-review handoff.
+
+Promotion review packets are written under `data/promotion-reviews/` by default.
+
+Examples:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- promotion-review-create --experiment experiments/office-baseline-control.yaml --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1 --shadow-id shadow:office_baseline_control:office_baseline_control:2026-04-03
+cargo run -p swarm-runtime --bin swarmctl -- promotion-review-result --review-id promotion_review:office_baseline_control:office_baseline_control:2026-04-03
+```
+
+Packets capture:
+
+- candidate lineage and description from the experiment manifest
+- stable verification and shadow IDs
+- shadow deltas for detection rate, false-positive rate, and detect latency
+- a `ready_for_manual_review` or `blocked` recommendation
+- blocking reasons derived from failed verification invariants or failed shadow gates
+
+This remains an operator review surface only. The packet does not approve, deploy, or promote anything automatically.
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.

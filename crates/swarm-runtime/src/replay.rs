@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::{CorrelationConfig, SwarmConfig};
+use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{AgentId, ResponseAction};
 use swarm_pheromone::InMemoryPheromoneSubstrate;
 use swarm_policy::static_gate::StaticApprovalGate;
@@ -45,6 +46,15 @@ pub enum ReplayHarnessError {
 
     #[error(transparent)]
     ExperimentStore(#[from] ExperimentStoreError),
+
+    #[error(transparent)]
+    VerificationStore(#[from] VerificationStoreError),
+
+    #[error(transparent)]
+    ShadowStore(#[from] ShadowStoreError),
+
+    #[error(transparent)]
+    PromotionReviewStore(#[from] PromotionReviewStoreError),
 
     #[error("failed to read replay scenario `{path}`: {source}")]
     ScenarioRead {
@@ -96,6 +106,29 @@ pub enum ReplayHarnessError {
 
     #[error("invalid detector experiment `{path}`: {reason}")]
     ExperimentValidation { path: PathBuf, reason: String },
+
+    #[error("failed to read verification corpus `{path}`: {source}")]
+    VerificationRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse verification corpus `{path}`: {source}")]
+    VerificationParse {
+        path: PathBuf,
+        #[source]
+        source: serde_yaml::Error,
+    },
+
+    #[error("invalid verification corpus `{path}`: {reason}")]
+    VerificationValidation { path: PathBuf, reason: String },
+
+    #[error("required {kind} artifact `{id}` was not found")]
+    ArtifactMissing { kind: &'static str, id: String },
+
+    #[error("invalid promotion review request: {reason}")]
+    ReviewValidation { reason: String },
 
     #[error("failed to read replay bundle fixture `{path}`: {source}")]
     BundleRead {
@@ -223,6 +256,57 @@ pub struct ReplaySuiteManifest {
     #[serde(default)]
     pub metadata: ReplaySuiteMetadata,
     pub scenarios: Vec<String>,
+}
+
+/// Repo-owned verification corpus target referenced by one candidate experiment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExperimentVerificationTarget {
+    pub corpus: String,
+}
+
+/// Known-bad coverage source for one verification corpus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationKnownBadCorpus {
+    pub suite: String,
+}
+
+/// Benign-control source for one verification corpus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationBenignControlCorpus {
+    pub scenarios: Vec<String>,
+}
+
+/// Canonical threat-class template used to prevent detector self-suppression.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationThreatClassTemplate {
+    pub name: String,
+    pub threat_class: ThreatClass,
+    pub event: TelemetryEvent,
+}
+
+/// Repo-owned resource budgets that candidate detectors must stay within.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationResourceBudgets {
+    pub max_false_positive_rate: f64,
+    pub max_detect_latency_us: u64,
+    pub max_total_detections: usize,
+}
+
+/// Repo-owned verification corpus and invariant inputs for candidate detectors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationCorpusManifest {
+    pub name: String,
+    pub description: String,
+    pub known_bad: VerificationKnownBadCorpus,
+    pub benign_controls: VerificationBenignControlCorpus,
+    pub canonical_templates: Vec<VerificationThreatClassTemplate>,
+    pub resource_budgets: VerificationResourceBudgets,
 }
 
 /// Replay input source for one scenario.
@@ -650,6 +734,7 @@ pub struct ReplayEvaluationReport {
 pub enum ReplaySuiteSourceKind {
     ScenariosDir,
     SuiteManifest,
+    ScenarioList,
 }
 
 /// Per-technique status for one evaluated replay suite.
@@ -755,6 +840,7 @@ pub struct DetectorExperimentManifest {
     pub name: String,
     pub description: String,
     pub corpus: ExperimentCorpusTarget,
+    pub verification: ExperimentVerificationTarget,
     pub candidate: DetectorCandidateManifest,
     pub lineage: ExperimentLineage,
     #[serde(default)]
@@ -876,6 +962,203 @@ pub struct StrategyExperimentLookup {
     pub report: StrategyExperimentReport,
 }
 
+/// One failing reference or counterexample for a verification invariant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationCounterexample {
+    pub subject: String,
+    pub reference: String,
+    pub details: String,
+}
+
+/// One verification invariant verdict for a candidate detector.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationInvariantResult {
+    pub name: String,
+    pub passed: bool,
+    pub expected: serde_json::Value,
+    pub actual: serde_json::Value,
+    pub details: String,
+    pub counterexamples: Vec<VerificationCounterexample>,
+}
+
+/// Persisted candidate-verification report derived from one experiment plus a verification corpus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectorVerificationReport {
+    pub verification_id: String,
+    pub experiment_id: String,
+    pub experiment_name: String,
+    pub corpus_name: String,
+    pub corpus_path: String,
+    pub created_at_ms: i64,
+    pub lineage: ExperimentLineage,
+    pub candidate_strategy_id: String,
+    pub candidate_description: String,
+    pub invariants: Vec<VerificationInvariantResult>,
+    pub passed: bool,
+}
+
+/// Metadata surfaced for one persisted verification report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectorVerificationRecord {
+    pub verification_id: String,
+    pub experiment_id: String,
+    pub candidate_strategy_id: String,
+    pub corpus_name: String,
+    pub created_at_ms: i64,
+    pub passed: bool,
+    pub bundle_path: String,
+}
+
+impl DetectorVerificationRecord {
+    fn from_report(report: &DetectorVerificationReport, bundle_path: String) -> Self {
+        Self {
+            verification_id: report.verification_id.clone(),
+            experiment_id: report.experiment_id.clone(),
+            candidate_strategy_id: report.candidate_strategy_id.clone(),
+            corpus_name: report.corpus_name.clone(),
+            created_at_ms: report.created_at_ms,
+            passed: report.passed,
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted verification report loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct DetectorVerificationLookup {
+    pub record: DetectorVerificationRecord,
+    pub report: DetectorVerificationReport,
+}
+
+/// Persisted shadow-comparison report derived from one offline experiment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyShadowReport {
+    pub shadow_id: String,
+    pub experiment_id: String,
+    pub experiment_name: String,
+    pub created_at_ms: i64,
+    pub source_artifacts: Vec<String>,
+    pub suite_name: String,
+    pub suite_path: String,
+    pub corpus_version: String,
+    pub lineage: ExperimentLineage,
+    pub baseline_strategy_id: String,
+    pub candidate_strategy_id: String,
+    pub candidate_description: String,
+    pub comparison: StrategyExperimentComparison,
+    pub gates: Vec<ExperimentGateResult>,
+    pub passed: bool,
+}
+
+/// Metadata surfaced for one persisted shadow report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyShadowRecord {
+    pub shadow_id: String,
+    pub experiment_id: String,
+    pub candidate_strategy_id: String,
+    pub suite_name: String,
+    pub corpus_version: String,
+    pub created_at_ms: i64,
+    pub passed: bool,
+    pub bundle_path: String,
+}
+
+impl StrategyShadowRecord {
+    fn from_report(report: &StrategyShadowReport, bundle_path: String) -> Self {
+        Self {
+            shadow_id: report.shadow_id.clone(),
+            experiment_id: report.experiment_id.clone(),
+            candidate_strategy_id: report.candidate_strategy_id.clone(),
+            suite_name: report.suite_name.clone(),
+            corpus_version: report.corpus_version.clone(),
+            created_at_ms: report.created_at_ms,
+            passed: report.passed,
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted shadow report loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct StrategyShadowLookup {
+    pub record: StrategyShadowRecord,
+    pub report: StrategyShadowReport,
+}
+
+/// Final operator recommendation for one promotion review packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromotionReviewRecommendation {
+    ReadyForManualReview,
+    Blocked,
+}
+
+/// One blocking reason preserved in a promotion review packet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionReviewBlockingReason {
+    pub source: String,
+    pub name: String,
+    pub details: String,
+    pub references: Vec<String>,
+}
+
+/// Durable operator-facing packet tying verification and shadow evidence together.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromotionReviewPacket {
+    pub review_id: String,
+    pub experiment_id: String,
+    pub experiment_name: String,
+    pub created_at_ms: i64,
+    pub suite_name: String,
+    pub corpus_version: String,
+    pub lineage: ExperimentLineage,
+    pub candidate_strategy_id: String,
+    pub candidate_description: String,
+    pub verification_id: String,
+    pub verification_passed: bool,
+    pub shadow_id: String,
+    pub shadow_passed: bool,
+    pub detection_rate_delta: f64,
+    pub false_positive_rate_delta: f64,
+    pub max_detect_latency_delta_us: i64,
+    pub recommendation: PromotionReviewRecommendation,
+    pub blocking_reasons: Vec<PromotionReviewBlockingReason>,
+}
+
+/// Metadata surfaced for one persisted promotion review packet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionReviewRecord {
+    pub review_id: String,
+    pub experiment_id: String,
+    pub candidate_strategy_id: String,
+    pub corpus_version: String,
+    pub created_at_ms: i64,
+    pub ready_for_review: bool,
+    pub bundle_path: String,
+}
+
+impl PromotionReviewRecord {
+    fn from_packet(packet: &PromotionReviewPacket, bundle_path: String) -> Self {
+        Self {
+            review_id: packet.review_id.clone(),
+            experiment_id: packet.experiment_id.clone(),
+            candidate_strategy_id: packet.candidate_strategy_id.clone(),
+            corpus_version: packet.corpus_version.clone(),
+            created_at_ms: packet.created_at_ms,
+            ready_for_review: packet.recommendation
+                == PromotionReviewRecommendation::ReadyForManualReview,
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted promotion review packet loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct PromotionReviewLookup {
+    pub record: PromotionReviewRecord,
+    pub packet: PromotionReviewPacket,
+}
+
 /// Detector experiment store errors.
 #[derive(Debug, thiserror::Error)]
 pub enum ExperimentStoreError {
@@ -894,6 +1177,81 @@ pub enum ExperimentStoreError {
     },
 
     #[error("failed to parse experiment store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Detector verification store errors.
+#[derive(Debug, thiserror::Error)]
+pub enum VerificationStoreError {
+    #[error("failed to read verification store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write verification store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse verification store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Shadow report store errors.
+#[derive(Debug, thiserror::Error)]
+pub enum ShadowStoreError {
+    #[error("failed to read shadow store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write shadow store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse shadow store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Promotion review store errors.
+#[derive(Debug, thiserror::Error)]
+pub enum PromotionReviewStoreError {
+    #[error("failed to read promotion review store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write promotion review store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse promotion review store file `{path}`: {source}")]
     Parse {
         path: PathBuf,
         #[source]
@@ -1000,6 +1358,320 @@ impl FileExperimentStore {
             source,
         })?;
         Ok(Some(StrategyExperimentLookup { record, report }))
+    }
+}
+
+/// File-backed store for detector verification reports.
+#[derive(Debug, Clone)]
+pub struct FileVerificationStore {
+    root: PathBuf,
+}
+
+impl FileVerificationStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, VerificationStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            VerificationStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, verification_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(verification_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(&self) -> Result<VerificationIndex, VerificationStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(VerificationIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| VerificationStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&raw).map_err(|source| VerificationStoreError::Parse { path, source })
+    }
+
+    fn write_index(&self, index: &VerificationIndex) -> Result<(), VerificationStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            VerificationStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| VerificationStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        report: &DetectorVerificationReport,
+    ) -> Result<DetectorVerificationRecord, VerificationStoreError> {
+        let path = self.report_path(&report.verification_id);
+        let raw = serde_json::to_string_pretty(report).map_err(|source| {
+            VerificationStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| VerificationStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let record = DetectorVerificationRecord::from_report(report, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.verification_id != record.verification_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(record)
+    }
+
+    pub fn load(
+        &self,
+        verification_id: &str,
+    ) -> Result<Option<DetectorVerificationLookup>, VerificationStoreError> {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.verification_id == verification_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| VerificationStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let report =
+            serde_json::from_str(&raw).map_err(|source| VerificationStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        Ok(Some(DetectorVerificationLookup { record, report }))
+    }
+}
+
+/// File-backed store for shadow comparison reports.
+#[derive(Debug, Clone)]
+pub struct FileShadowStore {
+    root: PathBuf,
+}
+
+impl FileShadowStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, ShadowStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| ShadowStoreError::Write {
+            path: root.clone(),
+            source,
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, shadow_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(shadow_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(&self) -> Result<ShadowIndex, ShadowStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(ShadowIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| ShadowStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&raw).map_err(|source| ShadowStoreError::Parse { path, source })
+    }
+
+    fn write_index(&self, index: &ShadowIndex) -> Result<(), ShadowStoreError> {
+        let path = self.index_path();
+        let raw =
+            serde_json::to_string_pretty(index).map_err(|source| ShadowStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        fs::write(&path, raw).map_err(|source| ShadowStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        report: &StrategyShadowReport,
+    ) -> Result<StrategyShadowRecord, ShadowStoreError> {
+        let path = self.report_path(&report.shadow_id);
+        let raw =
+            serde_json::to_string_pretty(report).map_err(|source| ShadowStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        fs::write(&path, raw).map_err(|source| ShadowStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let record = StrategyShadowRecord::from_report(report, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.shadow_id != record.shadow_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(record)
+    }
+
+    pub fn load(&self, shadow_id: &str) -> Result<Option<StrategyShadowLookup>, ShadowStoreError> {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.shadow_id == shadow_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| ShadowStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let report = serde_json::from_str(&raw).map_err(|source| ShadowStoreError::Parse {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(Some(StrategyShadowLookup { record, report }))
+    }
+}
+
+/// File-backed store for promotion review packets.
+#[derive(Debug, Clone)]
+pub struct FilePromotionReviewStore {
+    root: PathBuf,
+}
+
+impl FilePromotionReviewStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, PromotionReviewStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            PromotionReviewStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, review_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(review_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(&self) -> Result<PromotionReviewIndex, PromotionReviewStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(PromotionReviewIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| PromotionReviewStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&raw)
+            .map_err(|source| PromotionReviewStoreError::Parse { path, source })
+    }
+
+    fn write_index(&self, index: &PromotionReviewIndex) -> Result<(), PromotionReviewStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            PromotionReviewStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| PromotionReviewStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        packet: &PromotionReviewPacket,
+    ) -> Result<PromotionReviewRecord, PromotionReviewStoreError> {
+        let path = self.report_path(&packet.review_id);
+        let raw = serde_json::to_string_pretty(packet).map_err(|source| {
+            PromotionReviewStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| PromotionReviewStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let record = PromotionReviewRecord::from_packet(packet, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.review_id != record.review_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(record)
+    }
+
+    pub fn load(
+        &self,
+        review_id: &str,
+    ) -> Result<Option<PromotionReviewLookup>, PromotionReviewStoreError> {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.review_id == review_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| PromotionReviewStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let packet =
+            serde_json::from_str(&raw).map_err(|source| PromotionReviewStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        Ok(Some(PromotionReviewLookup { record, packet }))
     }
 }
 
@@ -1139,61 +1811,7 @@ impl DefaultReplayHarness {
         experiments_dir: impl AsRef<Path>,
     ) -> Result<StrategyExperimentLookup, ReplayHarnessError> {
         let loaded_experiment = load_experiment_manifest(experiment_path)?;
-        let suite_path = resolve_relative_path(
-            &loaded_experiment.path,
-            &loaded_experiment.manifest.corpus.suite,
-        );
-        let loaded_suite = load_suite_manifest(&suite_path)?;
-        let scenario_paths = loaded_suite
-            .manifest
-            .scenarios
-            .iter()
-            .map(|scenario| resolve_relative_path(&loaded_suite.path, scenario))
-            .collect::<Vec<_>>();
-        let selection = ReplaySuiteSelection {
-            source: loaded_suite.path.display().to_string(),
-            source_kind: ReplaySuiteSourceKind::SuiteManifest,
-            suite_name: Some(loaded_suite.manifest.name.clone()),
-            suite_description: Some(loaded_suite.manifest.description.clone()),
-            corpus_version: Some(loaded_suite.manifest.corpus_version.clone()),
-        };
-
-        let baseline_report = self
-            .evaluate_suite_selection(&self.detector, scenario_paths.clone(), selection.clone())
-            .await?;
-        let candidate_detector = detector_from_candidate(&loaded_experiment.manifest.candidate)?;
-        let candidate_report = self
-            .evaluate_suite_selection(&candidate_detector, scenario_paths, selection)
-            .await?;
-        let comparison = compare_suite_reports(&baseline_report, &candidate_report);
-        let gates = evaluate_experiment_gates(&loaded_experiment.manifest.gates, &comparison);
-        let passed = gates.iter().all(|gate| gate.passed);
-        let report = StrategyExperimentReport {
-            experiment_id: experiment_id_for_manifest(&loaded_experiment.manifest),
-            experiment_name: loaded_experiment.manifest.name.clone(),
-            description: loaded_experiment.manifest.description.clone(),
-            created_at_ms: now_ms(),
-            suite_name: loaded_suite.manifest.name.clone(),
-            suite_path: loaded_suite.path.display().to_string(),
-            corpus_version: loaded_suite.manifest.corpus_version.clone(),
-            lineage: loaded_experiment.manifest.lineage.clone(),
-            baseline_strategy_id: self.detector.id().to_string(),
-            candidate_strategy_id: loaded_experiment
-                .manifest
-                .candidate
-                .strategy_id()
-                .to_string(),
-            candidate_description: loaded_experiment
-                .manifest
-                .candidate
-                .description()
-                .to_string(),
-            baseline_report,
-            candidate_report,
-            comparison,
-            gates,
-            passed,
-        };
+        let (report, _) = self.build_experiment_report(&loaded_experiment).await?;
         let store = FileExperimentStore::open(experiments_dir.as_ref())?;
         let record = store.persist(&report)?;
         Ok(StrategyExperimentLookup { record, report })
@@ -1207,6 +1825,165 @@ impl DefaultReplayHarness {
     ) -> Result<Option<StrategyExperimentLookup>, ReplayHarnessError> {
         let store = FileExperimentStore::open(experiments_dir.as_ref())?;
         Ok(store.load(experiment_id)?)
+    }
+
+    /// Evaluate and persist one candidate verification report against the repo-owned corpus.
+    pub async fn evaluate_verification_path(
+        &self,
+        experiment_path: impl AsRef<Path>,
+        verifications_dir: impl AsRef<Path>,
+    ) -> Result<DetectorVerificationLookup, ReplayHarnessError> {
+        let loaded_experiment = load_experiment_manifest(experiment_path)?;
+        let report = self.build_verification_report(&loaded_experiment).await?;
+        let store = FileVerificationStore::open(verifications_dir.as_ref())?;
+        let record = store.persist(&report)?;
+        Ok(DetectorVerificationLookup { record, report })
+    }
+
+    /// Load a persisted candidate verification report by its stable id.
+    pub fn load_verification(
+        &self,
+        verifications_dir: impl AsRef<Path>,
+        verification_id: &str,
+    ) -> Result<Option<DetectorVerificationLookup>, ReplayHarnessError> {
+        let store = FileVerificationStore::open(verifications_dir.as_ref())?;
+        Ok(store.load(verification_id)?)
+    }
+
+    /// Evaluate and persist one offline shadow comparison report.
+    pub async fn evaluate_shadow_path(
+        &self,
+        experiment_path: impl AsRef<Path>,
+        shadows_dir: impl AsRef<Path>,
+    ) -> Result<StrategyShadowLookup, ReplayHarnessError> {
+        let loaded_experiment = load_experiment_manifest(experiment_path)?;
+        let (report, source_artifacts) = self.build_experiment_report(&loaded_experiment).await?;
+        let shadow_report = StrategyShadowReport {
+            shadow_id: shadow_id_for_report(&report),
+            experiment_id: report.experiment_id.clone(),
+            experiment_name: report.experiment_name.clone(),
+            created_at_ms: report.created_at_ms,
+            source_artifacts,
+            suite_name: report.suite_name.clone(),
+            suite_path: report.suite_path.clone(),
+            corpus_version: report.corpus_version.clone(),
+            lineage: report.lineage.clone(),
+            baseline_strategy_id: report.baseline_strategy_id.clone(),
+            candidate_strategy_id: report.candidate_strategy_id.clone(),
+            candidate_description: report.candidate_description.clone(),
+            comparison: report.comparison.clone(),
+            gates: report.gates.clone(),
+            passed: report.passed,
+        };
+        let store = FileShadowStore::open(shadows_dir.as_ref())?;
+        let record = store.persist(&shadow_report)?;
+        Ok(StrategyShadowLookup {
+            record,
+            report: shadow_report,
+        })
+    }
+
+    /// Load a persisted shadow report by its stable id.
+    pub fn load_shadow(
+        &self,
+        shadows_dir: impl AsRef<Path>,
+        shadow_id: &str,
+    ) -> Result<Option<StrategyShadowLookup>, ReplayHarnessError> {
+        let store = FileShadowStore::open(shadows_dir.as_ref())?;
+        Ok(store.load(shadow_id)?)
+    }
+
+    /// Create and persist one promotion review packet from stable verification and shadow ids.
+    pub fn create_promotion_review_packet(
+        &self,
+        experiment_path: impl AsRef<Path>,
+        verifications_dir: impl AsRef<Path>,
+        verification_id: &str,
+        shadows_dir: impl AsRef<Path>,
+        shadow_id: &str,
+        reviews_dir: impl AsRef<Path>,
+    ) -> Result<PromotionReviewLookup, ReplayHarnessError> {
+        let loaded_experiment = load_experiment_manifest(experiment_path)?;
+        let experiment_id = experiment_id_for_manifest(&loaded_experiment.manifest);
+        let verification = self
+            .load_verification(verifications_dir, verification_id)?
+            .ok_or_else(|| ReplayHarnessError::ArtifactMissing {
+                kind: "verification",
+                id: verification_id.to_string(),
+            })?;
+        let shadow = self.load_shadow(shadows_dir, shadow_id)?.ok_or_else(|| {
+            ReplayHarnessError::ArtifactMissing {
+                kind: "shadow",
+                id: shadow_id.to_string(),
+            }
+        })?;
+
+        if verification.report.experiment_id != experiment_id {
+            return Err(ReplayHarnessError::ReviewValidation {
+                reason: format!(
+                    "verification `{}` does not belong to experiment `{}`",
+                    verification_id, experiment_id
+                ),
+            });
+        }
+        if shadow.report.experiment_id != experiment_id {
+            return Err(ReplayHarnessError::ReviewValidation {
+                reason: format!(
+                    "shadow `{}` does not belong to experiment `{}`",
+                    shadow_id, experiment_id
+                ),
+            });
+        }
+
+        let blocking_reasons =
+            collect_review_blocking_reasons(&verification.report, &shadow.report);
+        let recommendation = if verification.report.passed && shadow.report.passed {
+            PromotionReviewRecommendation::ReadyForManualReview
+        } else {
+            PromotionReviewRecommendation::Blocked
+        };
+
+        let packet = PromotionReviewPacket {
+            review_id: promotion_review_id_for_packet(&loaded_experiment.manifest, &shadow.report),
+            experiment_id,
+            experiment_name: loaded_experiment.manifest.name.clone(),
+            created_at_ms: now_ms(),
+            suite_name: shadow.report.suite_name.clone(),
+            corpus_version: shadow.report.corpus_version.clone(),
+            lineage: loaded_experiment.manifest.lineage.clone(),
+            candidate_strategy_id: loaded_experiment
+                .manifest
+                .candidate
+                .strategy_id()
+                .to_string(),
+            candidate_description: loaded_experiment
+                .manifest
+                .candidate
+                .description()
+                .to_string(),
+            verification_id: verification.report.verification_id.clone(),
+            verification_passed: verification.report.passed,
+            shadow_id: shadow.report.shadow_id.clone(),
+            shadow_passed: shadow.report.passed,
+            detection_rate_delta: shadow.report.comparison.delta.detection_rate_delta,
+            false_positive_rate_delta: shadow.report.comparison.delta.false_positive_rate_delta,
+            max_detect_latency_delta_us: shadow.report.comparison.delta.max_detect_latency_delta_us,
+            recommendation,
+            blocking_reasons,
+        };
+        let store = FilePromotionReviewStore::open(reviews_dir.as_ref())?;
+        let record = store.persist(&packet)?;
+        Ok(PromotionReviewLookup { record, packet })
+    }
+
+    /// Load a persisted promotion review packet by its stable id.
+    pub fn load_promotion_review(
+        &self,
+        reviews_dir: impl AsRef<Path>,
+        review_id: &str,
+    ) -> Result<Option<PromotionReviewLookup>, ReplayHarnessError> {
+        let store = FilePromotionReviewStore::open(reviews_dir.as_ref())?;
+        Ok(store.load(review_id)?)
     }
 
     /// Evaluate one persisted or freshly-executed replay run against repo-owned expectations.
@@ -1331,6 +2108,177 @@ impl DefaultReplayHarness {
             deterministic_summary: summary.clone(),
             performance: run.performance.clone(),
         }
+    }
+
+    async fn build_experiment_report(
+        &self,
+        loaded_experiment: &LoadedDetectorExperiment,
+    ) -> Result<(StrategyExperimentReport, Vec<String>), ReplayHarnessError> {
+        let suite_path = resolve_relative_path(
+            &loaded_experiment.path,
+            &loaded_experiment.manifest.corpus.suite,
+        );
+        let loaded_suite = load_suite_manifest(&suite_path)?;
+        let scenario_paths = loaded_suite
+            .manifest
+            .scenarios
+            .iter()
+            .map(|scenario| resolve_relative_path(&loaded_suite.path, scenario))
+            .collect::<Vec<_>>();
+        let source_artifacts = scenario_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        let selection = ReplaySuiteSelection {
+            source: loaded_suite.path.display().to_string(),
+            source_kind: ReplaySuiteSourceKind::SuiteManifest,
+            suite_name: Some(loaded_suite.manifest.name.clone()),
+            suite_description: Some(loaded_suite.manifest.description.clone()),
+            corpus_version: Some(loaded_suite.manifest.corpus_version.clone()),
+        };
+
+        let baseline_report = self
+            .evaluate_suite_selection(&self.detector, scenario_paths.clone(), selection.clone())
+            .await?;
+        let candidate_detector = detector_from_candidate(&loaded_experiment.manifest.candidate)?;
+        let candidate_report = self
+            .evaluate_suite_selection(&candidate_detector, scenario_paths, selection)
+            .await?;
+        let comparison = compare_suite_reports(&baseline_report, &candidate_report);
+        let gates = evaluate_experiment_gates(&loaded_experiment.manifest.gates, &comparison);
+        let passed = gates.iter().all(|gate| gate.passed);
+        let report = StrategyExperimentReport {
+            experiment_id: experiment_id_for_manifest(&loaded_experiment.manifest),
+            experiment_name: loaded_experiment.manifest.name.clone(),
+            description: loaded_experiment.manifest.description.clone(),
+            created_at_ms: now_ms(),
+            suite_name: loaded_suite.manifest.name.clone(),
+            suite_path: loaded_suite.path.display().to_string(),
+            corpus_version: loaded_suite.manifest.corpus_version.clone(),
+            lineage: loaded_experiment.manifest.lineage.clone(),
+            baseline_strategy_id: self.detector.id().to_string(),
+            candidate_strategy_id: loaded_experiment
+                .manifest
+                .candidate
+                .strategy_id()
+                .to_string(),
+            candidate_description: loaded_experiment
+                .manifest
+                .candidate
+                .description()
+                .to_string(),
+            baseline_report,
+            candidate_report,
+            comparison,
+            gates,
+            passed,
+        };
+        Ok((report, source_artifacts))
+    }
+
+    async fn build_verification_report(
+        &self,
+        loaded_experiment: &LoadedDetectorExperiment,
+    ) -> Result<DetectorVerificationReport, ReplayHarnessError> {
+        let verification_path = resolve_relative_path(
+            &loaded_experiment.path,
+            &loaded_experiment.manifest.verification.corpus,
+        );
+        let verification_manifest = load_verification_manifest(&verification_path)?;
+        let candidate_detector = detector_from_candidate(&loaded_experiment.manifest.candidate)?;
+
+        let known_bad_suite_path =
+            resolve_relative_path(&verification_path, &verification_manifest.known_bad.suite);
+        let known_bad_suite = load_suite_manifest(&known_bad_suite_path)?;
+        let known_bad_paths = known_bad_suite
+            .manifest
+            .scenarios
+            .iter()
+            .map(|scenario| resolve_relative_path(&known_bad_suite.path, scenario))
+            .collect::<Vec<_>>();
+        let known_bad_report = self
+            .evaluate_suite_selection(
+                &candidate_detector,
+                known_bad_paths,
+                ReplaySuiteSelection {
+                    source: known_bad_suite.path.display().to_string(),
+                    source_kind: ReplaySuiteSourceKind::SuiteManifest,
+                    suite_name: Some(known_bad_suite.manifest.name.clone()),
+                    suite_description: Some(known_bad_suite.manifest.description.clone()),
+                    corpus_version: Some(known_bad_suite.manifest.corpus_version.clone()),
+                },
+            )
+            .await?;
+
+        let benign_paths = verification_manifest
+            .benign_controls
+            .scenarios
+            .iter()
+            .map(|scenario| resolve_relative_path(&verification_path, scenario))
+            .collect::<Vec<_>>();
+        let benign_report = self
+            .evaluate_suite_selection(
+                &candidate_detector,
+                benign_paths,
+                ReplaySuiteSelection {
+                    source: verification_path.display().to_string(),
+                    source_kind: ReplaySuiteSourceKind::ScenarioList,
+                    suite_name: Some(format!("{} benign controls", verification_manifest.name)),
+                    suite_description: Some(
+                        "verification-corpus benign control selection".to_string(),
+                    ),
+                    corpus_version: None,
+                },
+            )
+            .await?;
+
+        let invariants = vec![
+            verify_known_bad_coverage(&known_bad_report),
+            verify_canonical_templates(
+                &candidate_detector,
+                &verification_manifest.canonical_templates,
+            ),
+            verify_false_positive_bound(
+                &benign_report,
+                verification_manifest
+                    .resource_budgets
+                    .max_false_positive_rate,
+            ),
+            verify_detect_latency_budget(
+                &[&known_bad_report, &benign_report],
+                verification_manifest.resource_budgets.max_detect_latency_us,
+            ),
+            verify_total_detection_budget(
+                &[&known_bad_report, &benign_report],
+                verification_manifest.resource_budgets.max_total_detections,
+            ),
+        ];
+        let passed = invariants.iter().all(|invariant| invariant.passed);
+
+        Ok(DetectorVerificationReport {
+            verification_id: verification_id_for_experiment(
+                &loaded_experiment.manifest,
+                &verification_manifest,
+            ),
+            experiment_id: experiment_id_for_manifest(&loaded_experiment.manifest),
+            experiment_name: loaded_experiment.manifest.name.clone(),
+            corpus_name: verification_manifest.name,
+            corpus_path: verification_path.display().to_string(),
+            created_at_ms: now_ms(),
+            lineage: loaded_experiment.manifest.lineage.clone(),
+            candidate_strategy_id: loaded_experiment
+                .manifest
+                .candidate
+                .strategy_id()
+                .to_string(),
+            candidate_description: loaded_experiment
+                .manifest
+                .candidate
+                .description()
+                .to_string(),
+            invariants,
+            passed,
+        })
     }
 
     async fn evaluate_suite_selection(
@@ -1640,6 +2588,7 @@ pub fn render_suite_report(report: &ReplaySuiteReport) -> String {
             match report.source_kind {
                 ReplaySuiteSourceKind::ScenariosDir => "tracked directory",
                 ReplaySuiteSourceKind::SuiteManifest => "named suite",
+                ReplaySuiteSourceKind::ScenarioList => "explicit scenario list",
             }
         ),
         format!(
@@ -1767,6 +2716,132 @@ pub fn render_experiment_report(report: &StrategyExperimentReport) -> String {
     lines.join("\n")
 }
 
+/// Render one persisted detector verification report.
+pub fn render_verification_report(report: &DetectorVerificationReport) -> String {
+    let mut lines = vec![
+        "Swarm Team Six Detector Verification".to_string(),
+        format!("Experiment: {}", report.experiment_name),
+        format!("Verification ID: {}", report.verification_id),
+        format!("Corpus: {}", report.corpus_name),
+        format!("Candidate: {}", report.candidate_strategy_id),
+        format!("Status: {}", if report.passed { "pass" } else { "fail" }),
+    ];
+
+    lines.push("Invariants:".to_string());
+    for invariant in &report.invariants {
+        lines.push(format!(
+            "- [{}] {} | expected={} actual={} | {}",
+            if invariant.passed { "pass" } else { "fail" },
+            invariant.name,
+            invariant.expected,
+            invariant.actual,
+            invariant.details
+        ));
+        for counterexample in &invariant.counterexamples {
+            lines.push(format!(
+                "  counterexample: {} | {} | {}",
+                counterexample.subject, counterexample.reference, counterexample.details
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Render one persisted shadow comparison report.
+pub fn render_shadow_report(report: &StrategyShadowReport) -> String {
+    let mut lines = vec![
+        "Swarm Team Six Shadow Evaluation".to_string(),
+        format!("Experiment: {}", report.experiment_name),
+        format!("Shadow ID: {}", report.shadow_id),
+        format!("Suite: {} ({})", report.suite_name, report.corpus_version),
+        format!("Baseline: {}", report.baseline_strategy_id),
+        format!("Candidate: {}", report.candidate_strategy_id),
+        format!("Status: {}", if report.passed { "pass" } else { "fail" }),
+        format!("Source artifacts: {}", report.source_artifacts.len()),
+        format!(
+            "Detection rate delta: {:.2}",
+            report.comparison.delta.detection_rate_delta
+        ),
+        format!(
+            "False positive rate delta: {:.2}",
+            report.comparison.delta.false_positive_rate_delta
+        ),
+        format!(
+            "Max detect latency delta us: {}",
+            report.comparison.delta.max_detect_latency_delta_us
+        ),
+    ];
+
+    lines.push("Shadow gates:".to_string());
+    for gate in &report.gates {
+        lines.push(format!(
+            "- [{}] {} | expected={} actual={} | {}",
+            if gate.passed { "pass" } else { "fail" },
+            gate.name,
+            gate.expected,
+            gate.actual,
+            gate.details
+        ));
+    }
+
+    if !report.comparison.scenario_regressions.is_empty() {
+        lines.push("Scenario regressions:".to_string());
+        for regression in &report.comparison.scenario_regressions {
+            lines.push(format!(
+                "- {} [{:?}] | {}",
+                regression.scenario_name, regression.class, regression.reason
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Render one persisted promotion review packet.
+pub fn render_promotion_review_packet(packet: &PromotionReviewPacket) -> String {
+    let mut lines = vec![
+        "Swarm Team Six Promotion Review Packet".to_string(),
+        format!("Experiment: {}", packet.experiment_name),
+        format!("Review ID: {}", packet.review_id),
+        format!("Candidate: {}", packet.candidate_strategy_id),
+        format!("Verification: {}", packet.verification_id),
+        format!("Shadow: {}", packet.shadow_id),
+        format!(
+            "Recommendation: {}",
+            match packet.recommendation {
+                PromotionReviewRecommendation::ReadyForManualReview => {
+                    "ready_for_manual_review"
+                }
+                PromotionReviewRecommendation::Blocked => "blocked",
+            }
+        ),
+        format!(
+            "Deltas: detection={:.2} false_positive={:.2} detect_latency_us={}",
+            packet.detection_rate_delta,
+            packet.false_positive_rate_delta,
+            packet.max_detect_latency_delta_us
+        ),
+    ];
+
+    if packet.blocking_reasons.is_empty() {
+        lines.push("Blocking reasons: none".to_string());
+    } else {
+        lines.push("Blocking reasons:".to_string());
+        for reason in &packet.blocking_reasons {
+            lines.push(format!(
+                "- {}:{} | {}",
+                reason.source, reason.name, reason.details
+            ));
+            for reference in &reason.references {
+                lines.push(format!("  reference: {}", reference));
+            }
+        }
+    }
+
+    lines.join("\n")
+}
+
 fn supported_detector(config: &SwarmConfig) -> Result<SupportedDetector, ReplayHarnessError> {
     match config.detection.strategy.as_str() {
         "suspicious_process_tree" => Ok(SupportedDetector::suspicious_process_tree(
@@ -1845,6 +2920,37 @@ fn experiment_id_for_manifest(manifest: &DetectorExperimentManifest) -> String {
     )
 }
 
+fn verification_id_for_experiment(
+    experiment: &DetectorExperimentManifest,
+    corpus: &VerificationCorpusManifest,
+) -> String {
+    format!(
+        "verification:{}:{}:{}",
+        experiment.name,
+        experiment.candidate.strategy_id(),
+        corpus.name
+    )
+}
+
+fn shadow_id_for_report(report: &StrategyExperimentReport) -> String {
+    format!(
+        "shadow:{}:{}:{}",
+        report.experiment_name, report.candidate_strategy_id, report.corpus_version
+    )
+}
+
+fn promotion_review_id_for_packet(
+    experiment: &DetectorExperimentManifest,
+    shadow: &StrategyShadowReport,
+) -> String {
+    format!(
+        "promotion_review:{}:{}:{}",
+        experiment.name,
+        experiment.candidate.strategy_id(),
+        shadow.corpus_version
+    )
+}
+
 fn load_scenario_manifest(
     path: impl AsRef<Path>,
 ) -> Result<LoadedReplayScenario, ReplayHarnessError> {
@@ -1895,6 +3001,24 @@ fn load_experiment_manifest(
     })?;
     validate_experiment_manifest(&path, &manifest)?;
     Ok(LoadedDetectorExperiment { path, manifest })
+}
+
+pub fn load_verification_manifest(
+    path: impl AsRef<Path>,
+) -> Result<VerificationCorpusManifest, ReplayHarnessError> {
+    let path = path.as_ref().to_path_buf();
+    let raw = fs::read_to_string(&path).map_err(|source| ReplayHarnessError::VerificationRead {
+        path: path.clone(),
+        source,
+    })?;
+    let manifest = serde_yaml::from_str::<VerificationCorpusManifest>(&raw).map_err(|source| {
+        ReplayHarnessError::VerificationParse {
+            path: path.clone(),
+            source,
+        }
+    })?;
+    validate_verification_manifest(&path, &manifest)?;
+    Ok(manifest)
 }
 
 fn validate_manifest(
@@ -1996,6 +3120,12 @@ fn validate_experiment_manifest(
             reason: "experiment must reference a suite path".to_string(),
         });
     }
+    if manifest.verification.corpus.trim().is_empty() {
+        return Err(ReplayHarnessError::ExperimentValidation {
+            path: path.to_path_buf(),
+            reason: "experiment must reference a verification corpus path".to_string(),
+        });
+    }
     if manifest.lineage.parent_strategy_id.trim().is_empty() {
         return Err(ReplayHarnessError::ExperimentValidation {
             path: path.to_path_buf(),
@@ -2039,6 +3169,89 @@ fn validate_experiment_manifest(
                         .to_string(),
                 });
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_verification_manifest(
+    path: &Path,
+    manifest: &VerificationCorpusManifest,
+) -> Result<(), ReplayHarnessError> {
+    if manifest.name.trim().is_empty() {
+        return Err(ReplayHarnessError::VerificationValidation {
+            path: path.to_path_buf(),
+            reason: "verification corpus name must not be empty".to_string(),
+        });
+    }
+    if manifest.description.trim().is_empty() {
+        return Err(ReplayHarnessError::VerificationValidation {
+            path: path.to_path_buf(),
+            reason: "verification corpus description must not be empty".to_string(),
+        });
+    }
+    if manifest.known_bad.suite.trim().is_empty() {
+        return Err(ReplayHarnessError::VerificationValidation {
+            path: path.to_path_buf(),
+            reason: "known_bad.suite must not be empty".to_string(),
+        });
+    }
+    if manifest.benign_controls.scenarios.is_empty() {
+        return Err(ReplayHarnessError::VerificationValidation {
+            path: path.to_path_buf(),
+            reason: "benign_controls.scenarios must include at least one scenario".to_string(),
+        });
+    }
+    if manifest.canonical_templates.is_empty() {
+        return Err(ReplayHarnessError::VerificationValidation {
+            path: path.to_path_buf(),
+            reason: "canonical_templates must include at least one threat-class template"
+                .to_string(),
+        });
+    }
+    if manifest.resource_budgets.max_detect_latency_us == 0 {
+        return Err(ReplayHarnessError::VerificationValidation {
+            path: path.to_path_buf(),
+            reason: "resource_budgets.max_detect_latency_us must be greater than zero".to_string(),
+        });
+    }
+    if !(0.0..=1.0).contains(&manifest.resource_budgets.max_false_positive_rate) {
+        return Err(ReplayHarnessError::VerificationValidation {
+            path: path.to_path_buf(),
+            reason: "resource_budgets.max_false_positive_rate must be between 0.0 and 1.0"
+                .to_string(),
+        });
+    }
+    if manifest.resource_budgets.max_total_detections == 0 {
+        return Err(ReplayHarnessError::VerificationValidation {
+            path: path.to_path_buf(),
+            reason: "resource_budgets.max_total_detections must be greater than zero".to_string(),
+        });
+    }
+    for template in &manifest.canonical_templates {
+        if template.name.trim().is_empty() {
+            return Err(ReplayHarnessError::VerificationValidation {
+                path: path.to_path_buf(),
+                reason: "canonical template names must not be empty".to_string(),
+            });
+        }
+        if template.event.event_id.trim().is_empty() {
+            return Err(ReplayHarnessError::VerificationValidation {
+                path: path.to_path_buf(),
+                reason: "canonical template event_id must not be empty".to_string(),
+            });
+        }
+        if template.event.source.trim().is_empty() {
+            return Err(ReplayHarnessError::VerificationValidation {
+                path: path.to_path_buf(),
+                reason: "canonical template source must not be empty".to_string(),
+            });
+        }
+        if template.event.timestamp <= 0 {
+            return Err(ReplayHarnessError::VerificationValidation {
+                path: path.to_path_buf(),
+                reason: "canonical template timestamps must be greater than zero".to_string(),
+            });
         }
     }
     Ok(())
@@ -2316,6 +3529,234 @@ fn evaluate_experiment_gates(
     gates
 }
 
+fn verify_known_bad_coverage(report: &ReplaySuiteReport) -> VerificationInvariantResult {
+    let counterexamples = report
+        .scenario_reports
+        .iter()
+        .filter(|scenario| {
+            scenario.metadata.class == ReplayScenarioClass::Adversarial
+                && !scenario_detected(scenario)
+        })
+        .map(|scenario| VerificationCounterexample {
+            subject: scenario.scenario_name.clone(),
+            reference: scenario.scenario_path.clone(),
+            details: "expected at least one detection on adversarial coverage scenario".to_string(),
+        })
+        .collect::<Vec<_>>();
+    let missed = counterexamples.len();
+    VerificationInvariantResult {
+        name: "known_bad_coverage".to_string(),
+        passed: missed == 0,
+        expected: json!(0),
+        actual: json!(missed),
+        details: if missed == 0 {
+            "candidate preserved detection across all adversarial verification scenarios"
+                .to_string()
+        } else {
+            "candidate missed one or more adversarial verification scenarios".to_string()
+        },
+        counterexamples,
+    }
+}
+
+fn verify_canonical_templates(
+    detector: &SupportedDetector,
+    templates: &[VerificationThreatClassTemplate],
+) -> VerificationInvariantResult {
+    let counterexamples = templates
+        .iter()
+        .filter_map(|template| {
+            let matches = detector.evaluate(&template.event);
+            let matched = matches
+                .iter()
+                .any(|finding| finding.threat_class == template.threat_class);
+            if matched {
+                None
+            } else {
+                Some(VerificationCounterexample {
+                    subject: template.name.clone(),
+                    reference: template.event.event_id.clone(),
+                    details: format!(
+                        "expected threat_class {:?} but candidate emitted no matching finding",
+                        template.threat_class
+                    ),
+                })
+            }
+        })
+        .collect::<Vec<_>>();
+    let missed = counterexamples.len();
+    VerificationInvariantResult {
+        name: "threat_class_templates".to_string(),
+        passed: missed == 0,
+        expected: json!(0),
+        actual: json!(missed),
+        details: if missed == 0 {
+            "candidate matched every canonical threat-class template".to_string()
+        } else {
+            "candidate failed one or more canonical threat-class templates".to_string()
+        },
+        counterexamples,
+    }
+}
+
+fn verify_false_positive_bound(
+    benign_report: &ReplaySuiteReport,
+    max_false_positive_rate: f64,
+) -> VerificationInvariantResult {
+    let metrics = suite_metrics(benign_report);
+    let counterexamples = benign_report
+        .scenario_reports
+        .iter()
+        .filter(|scenario| scenario_is_benign(scenario) && scenario_detected(scenario))
+        .map(|scenario| VerificationCounterexample {
+            subject: scenario.scenario_name.clone(),
+            reference: scenario.scenario_path.clone(),
+            details: "candidate produced a detection on a benign control scenario".to_string(),
+        })
+        .collect::<Vec<_>>();
+    VerificationInvariantResult {
+        name: "false_positive_bound".to_string(),
+        passed: metrics.false_positive_rate <= max_false_positive_rate,
+        expected: json!(max_false_positive_rate),
+        actual: json!(metrics.false_positive_rate),
+        details: if metrics.false_positive_rate <= max_false_positive_rate {
+            "candidate stayed within the verification false-positive bound".to_string()
+        } else {
+            "candidate exceeded the verification false-positive bound".to_string()
+        },
+        counterexamples,
+    }
+}
+
+fn verify_detect_latency_budget(
+    reports: &[&ReplaySuiteReport],
+    max_detect_latency_us: u64,
+) -> VerificationInvariantResult {
+    let mut worst_case = 0u64;
+    let mut worst_reference = None::<VerificationCounterexample>;
+    for report in reports {
+        for scenario in &report.scenario_reports {
+            let scenario_latency = scenario.evaluation.performance.detect.max_latency_us;
+            if scenario_latency > worst_case {
+                worst_case = scenario_latency;
+                worst_reference = Some(VerificationCounterexample {
+                    subject: scenario.scenario_name.clone(),
+                    reference: scenario.scenario_path.clone(),
+                    details: format!("scenario reached detect latency {}us", scenario_latency),
+                });
+            }
+        }
+    }
+
+    VerificationInvariantResult {
+        name: "detect_latency_budget".to_string(),
+        passed: worst_case <= max_detect_latency_us,
+        expected: json!(max_detect_latency_us),
+        actual: json!(worst_case),
+        details: if worst_case <= max_detect_latency_us {
+            "candidate stayed within the verification detect-latency budget".to_string()
+        } else {
+            "candidate exceeded the verification detect-latency budget".to_string()
+        },
+        counterexamples: if worst_case <= max_detect_latency_us {
+            Vec::new()
+        } else {
+            worst_reference.into_iter().collect()
+        },
+    }
+}
+
+fn verify_total_detection_budget(
+    reports: &[&ReplaySuiteReport],
+    max_total_detections: usize,
+) -> VerificationInvariantResult {
+    let mut total_detections = 0usize;
+    let mut by_scenario = Vec::new();
+    for report in reports {
+        for scenario in &report.scenario_reports {
+            let count = scenario
+                .evaluation
+                .deterministic_summary
+                .replay_bundle_count;
+            total_detections += count;
+            if count > 0 {
+                by_scenario.push((scenario, count));
+            }
+        }
+    }
+    by_scenario.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    let counterexamples = if total_detections > max_total_detections {
+        by_scenario
+            .into_iter()
+            .take(3)
+            .map(|(scenario, count)| VerificationCounterexample {
+                subject: scenario.scenario_name.clone(),
+                reference: scenario.scenario_path.clone(),
+                details: format!("scenario contributed {} detections", count),
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    VerificationInvariantResult {
+        name: "total_detection_budget".to_string(),
+        passed: total_detections <= max_total_detections,
+        expected: json!(max_total_detections),
+        actual: json!(total_detections),
+        details: if total_detections <= max_total_detections {
+            "candidate stayed within the verification detection-volume budget".to_string()
+        } else {
+            "candidate exceeded the verification detection-volume budget".to_string()
+        },
+        counterexamples,
+    }
+}
+
+fn collect_review_blocking_reasons(
+    verification: &DetectorVerificationReport,
+    shadow: &StrategyShadowReport,
+) -> Vec<PromotionReviewBlockingReason> {
+    let mut reasons = verification
+        .invariants
+        .iter()
+        .filter(|invariant| !invariant.passed)
+        .map(|invariant| PromotionReviewBlockingReason {
+            source: "verification".to_string(),
+            name: invariant.name.clone(),
+            details: invariant.details.clone(),
+            references: invariant
+                .counterexamples
+                .iter()
+                .map(|counterexample| {
+                    format!("{} | {}", counterexample.subject, counterexample.reference)
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+
+    reasons.extend(shadow.gates.iter().filter(|gate| !gate.passed).map(|gate| {
+        PromotionReviewBlockingReason {
+            source: "shadow_gate".to_string(),
+            name: gate.name.clone(),
+            details: gate.details.clone(),
+            references: shadow
+                .comparison
+                .scenario_regressions
+                .iter()
+                .map(|regression| {
+                    format!(
+                        "{} | {}",
+                        regression.scenario_name, regression.scenario_path
+                    )
+                })
+                .collect(),
+        }
+    }));
+
+    reasons
+}
+
 fn offline_correlation_config(config: &SwarmConfig) -> CorrelationConfig {
     let mut correlation = config.correlation.clone();
     correlation.enabled = true;
@@ -2393,6 +3834,21 @@ struct ExperimentIndex {
     entries: Vec<StrategyExperimentRecord>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct VerificationIndex {
+    entries: Vec<DetectorVerificationRecord>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ShadowIndex {
+    entries: Vec<StrategyShadowRecord>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct PromotionReviewIndex {
+    entries: Vec<PromotionReviewRecord>,
+}
+
 fn default_require_known_bad_coverage() -> bool {
     true
 }
@@ -2404,10 +3860,12 @@ fn default_max_detect_latency_delta_us() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DefaultReplayHarness, DetectorExperimentManifest, ReplayEvaluationReport, ReplayRunBundle,
-        ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest, ReplayScenarioMetadata,
-        ReplayScenarioStep, ReplaySuiteManifest, render_evaluation_report,
-        render_experiment_report, render_replay_run, render_suite_report,
+        DefaultReplayHarness, DetectorExperimentManifest, PromotionReviewRecommendation,
+        ReplayEvaluationReport, ReplayRunBundle, ReplayScenarioClass, ReplayScenarioInput,
+        ReplayScenarioManifest, ReplayScenarioMetadata, ReplayScenarioStep, ReplaySuiteManifest,
+        VerificationCorpusManifest, load_verification_manifest, render_evaluation_report,
+        render_experiment_report, render_promotion_review_packet, render_replay_run,
+        render_shadow_report, render_suite_report, render_verification_report,
     };
     use crate::config::parse_config;
     use serde_json::Value;
@@ -2738,6 +4196,16 @@ max_response_latency_us: 5000
         path
     }
 
+    fn write_verification(
+        root: &Path,
+        name: &str,
+        manifest: &VerificationCorpusManifest,
+    ) -> PathBuf {
+        let path = root.join(name);
+        fs::write(&path, serde_yaml::to_string(manifest).unwrap()).unwrap();
+        path
+    }
+
     fn replay_without_performance(bundle: &ReplayRunBundle) -> Value {
         serde_json::json!({
             "run_id": bundle.run_id,
@@ -2985,9 +4453,11 @@ expectations:
         let scenarios_dir = root.join("scenarios");
         let suites_dir = root.join("scenario-suites");
         let experiments_src_dir = root.join("experiments");
+        let verifications_dir = root.join("verifications");
         fs::create_dir_all(&scenarios_dir).unwrap();
         fs::create_dir_all(&suites_dir).unwrap();
         fs::create_dir_all(&experiments_src_dir).unwrap();
+        fs::create_dir_all(&verifications_dir).unwrap();
 
         let office_path = write_scenario(
             &scenarios_dir,
@@ -3013,6 +4483,42 @@ expectations:
                 ],
             },
         );
+        let verification_path = write_verification(
+            &verifications_dir,
+            "office-detector-safety-v1.yaml",
+            &serde_yaml::from_str::<VerificationCorpusManifest>(&format!(
+                r#"
+name: office_detector_safety_v1
+description: safety corpus
+known_bad:
+  suite: {}
+benign_controls:
+  scenarios:
+    - {}
+canonical_templates:
+  - name: office_encoded_powershell_execution
+    threat_class: execution
+    event:
+      source: verification-template
+      event_id: tpl-execution-1
+      timestamp: 1700000300000
+      host_id: template-host-1
+      payload:
+        kind: process_start
+        parent_process: WINWORD
+        process_name: powershell
+        command_line: powershell -enc SQBFAFgA
+        user: alice
+resource_budgets:
+  max_false_positive_rate: 0.05
+  max_detect_latency_us: 2000
+  max_total_detections: 8
+"#,
+                suite_path.display(),
+                benign_path.display(),
+            ))
+            .unwrap(),
+        );
 
         let experiment_path = write_experiment(
             &experiments_src_dir,
@@ -3023,6 +4529,8 @@ name: python_parent_broadening
 description: broaden suspicious parents to python
 corpus:
   suite: {}
+verification:
+  corpus: {}
 candidate:
   strategy: suspicious_process_tree
   strategy_id: python_parent_broadening
@@ -3054,7 +4562,8 @@ gates:
   max_false_positive_delta: 0
   max_detect_latency_delta_us: 5000
 "#,
-                suite_path.display()
+                suite_path.display(),
+                verification_path.display()
             ))
             .unwrap(),
         );
@@ -3088,6 +4597,507 @@ gates:
             .unwrap()
             .unwrap();
         assert_eq!(reloaded.record.experiment_id, lookup.record.experiment_id);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn verification_report_persists_and_flags_false_positive_counterexample() {
+        let root = unique_temp_dir("verification-report");
+        let results_dir = root.join("results");
+        let verifications_dir = root.join("verification-results");
+        let scenarios_dir = root.join("scenarios");
+        let suites_dir = root.join("scenario-suites");
+        let experiments_src_dir = root.join("experiments");
+        let verification_src_dir = root.join("verifications");
+        fs::create_dir_all(&scenarios_dir).unwrap();
+        fs::create_dir_all(&suites_dir).unwrap();
+        fs::create_dir_all(&experiments_src_dir).unwrap();
+        fs::create_dir_all(&verification_src_dir).unwrap();
+
+        let office_path = write_scenario(
+            &scenarios_dir,
+            "office-dropper-correlation.yaml",
+            &scenario_manifest(),
+        );
+        let benign_path = write_scenario(
+            &scenarios_dir,
+            "python-maintenance-benign.yaml",
+            &python_benign_manifest(),
+        );
+        let suite_path = write_suite(
+            &suites_dir,
+            "hellcat-office-v1.yaml",
+            &ReplaySuiteManifest {
+                name: "hellcat_office_v1".to_string(),
+                description: "Hellcat office corpus".to_string(),
+                corpus_version: "test-1".to_string(),
+                metadata: Default::default(),
+                scenarios: vec![
+                    office_path.display().to_string(),
+                    benign_path.display().to_string(),
+                ],
+            },
+        );
+        let verification_path = write_verification(
+            &verification_src_dir,
+            "office-detector-safety-v1.yaml",
+            &serde_yaml::from_str::<VerificationCorpusManifest>(&format!(
+                r#"
+name: office_detector_safety_v1
+description: safety corpus
+known_bad:
+  suite: {}
+benign_controls:
+  scenarios:
+    - {}
+canonical_templates:
+  - name: office_encoded_powershell_execution
+    threat_class: execution
+    event:
+      source: verification-template
+      event_id: tpl-execution-1
+      timestamp: 1700000300000
+      host_id: template-host-1
+      payload:
+        kind: process_start
+        parent_process: WINWORD
+        process_name: powershell
+        command_line: powershell -enc SQBFAFgA
+        user: alice
+resource_budgets:
+  max_false_positive_rate: 0.0
+  max_detect_latency_us: 2000
+  max_total_detections: 8
+"#,
+                suite_path.display(),
+                benign_path.display(),
+            ))
+            .unwrap(),
+        );
+        let experiment_path = write_experiment(
+            &experiments_src_dir,
+            "python-parent-broadening.yaml",
+            &serde_yaml::from_str::<DetectorExperimentManifest>(&format!(
+                r#"
+name: python_parent_broadening
+description: broaden suspicious parents to python
+corpus:
+  suite: {}
+verification:
+  corpus: {}
+candidate:
+  strategy: suspicious_process_tree
+  strategy_id: python_parent_broadening
+  description: add python to suspicious parents
+  profile:
+    suspicious_parents:
+      - winword
+      - excel
+      - outlook
+      - acrord32
+      - teams
+      - python
+    suspicious_children:
+      - powershell
+      - pwsh
+      - cmd
+      - sh
+      - bash
+      - curl
+      - wget
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+lineage:
+  parent_strategy_id: suspicious_process_tree
+  mutation: broaden suspicious parent set with python
+  rationale: explore downloader coverage
+gates:
+  require_known_bad_coverage: true
+  max_false_positive_delta: 0
+  max_detect_latency_delta_us: 5000
+"#,
+                suite_path.display(),
+                verification_path.display(),
+            ))
+            .unwrap(),
+        );
+
+        let harness =
+            DefaultReplayHarness::from_config("inline", sample_config(), &results_dir).unwrap();
+        let lookup = harness
+            .evaluate_verification_path(&experiment_path, &verifications_dir)
+            .await
+            .unwrap();
+
+        assert!(!lookup.report.passed);
+        assert!(
+            lookup
+                .report
+                .invariants
+                .iter()
+                .any(|invariant| invariant.name == "false_positive_bound" && !invariant.passed)
+        );
+        assert!(render_verification_report(&lookup.report).contains("Detector Verification"));
+        let reloaded = harness
+            .load_verification(&verifications_dir, &lookup.record.verification_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reloaded.record.verification_id,
+            lookup.record.verification_id
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn shadow_report_persists_for_control_candidate() {
+        let root = unique_temp_dir("shadow-report");
+        let results_dir = root.join("results");
+        let shadows_dir = root.join("shadow-results");
+        let scenarios_dir = root.join("scenarios");
+        let suites_dir = root.join("scenario-suites");
+        let experiments_src_dir = root.join("experiments");
+        let verification_src_dir = root.join("verifications");
+        fs::create_dir_all(&scenarios_dir).unwrap();
+        fs::create_dir_all(&suites_dir).unwrap();
+        fs::create_dir_all(&experiments_src_dir).unwrap();
+        fs::create_dir_all(&verification_src_dir).unwrap();
+
+        let office_path = write_scenario(
+            &scenarios_dir,
+            "office-dropper-correlation.yaml",
+            &scenario_manifest(),
+        );
+        let benign_path = write_scenario(
+            &scenarios_dir,
+            "python-maintenance-benign.yaml",
+            &python_benign_manifest(),
+        );
+        let suite_path = write_suite(
+            &suites_dir,
+            "hellcat-office-v1.yaml",
+            &ReplaySuiteManifest {
+                name: "hellcat_office_v1".to_string(),
+                description: "Hellcat office corpus".to_string(),
+                corpus_version: "test-1".to_string(),
+                metadata: Default::default(),
+                scenarios: vec![
+                    office_path.display().to_string(),
+                    benign_path.display().to_string(),
+                ],
+            },
+        );
+        let verification_path = write_verification(
+            &verification_src_dir,
+            "office-detector-safety-v1.yaml",
+            &serde_yaml::from_str::<VerificationCorpusManifest>(&format!(
+                r#"
+name: office_detector_safety_v1
+description: safety corpus
+known_bad:
+  suite: {}
+benign_controls:
+  scenarios:
+    - {}
+canonical_templates:
+  - name: office_encoded_powershell_execution
+    threat_class: execution
+    event:
+      source: verification-template
+      event_id: tpl-execution-1
+      timestamp: 1700000300000
+      host_id: template-host-1
+      payload:
+        kind: process_start
+        parent_process: WINWORD
+        process_name: powershell
+        command_line: powershell -enc SQBFAFgA
+        user: alice
+resource_budgets:
+  max_false_positive_rate: 0.05
+  max_detect_latency_us: 2000
+  max_total_detections: 8
+"#,
+                suite_path.display(),
+                benign_path.display(),
+            ))
+            .unwrap(),
+        );
+        let experiment_path = write_experiment(
+            &experiments_src_dir,
+            "office-baseline-control.yaml",
+            &serde_yaml::from_str::<DetectorExperimentManifest>(&format!(
+                r#"
+name: office_baseline_control
+description: control candidate
+corpus:
+  suite: {}
+verification:
+  corpus: {}
+candidate:
+  strategy: suspicious_process_tree
+  strategy_id: office_baseline_control
+  description: candidate matches baseline
+  profile:
+    suspicious_parents:
+      - winword
+      - excel
+      - outlook
+      - acrord32
+      - teams
+    suspicious_children:
+      - powershell
+      - pwsh
+      - cmd
+      - sh
+      - bash
+      - curl
+      - wget
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+lineage:
+  parent_strategy_id: suspicious_process_tree
+  mutation: control
+  rationale: preserve baseline behavior
+gates:
+  require_known_bad_coverage: true
+  max_false_positive_delta: 0
+  max_detect_latency_delta_us: 5000
+"#,
+                suite_path.display(),
+                verification_path.display(),
+            ))
+            .unwrap(),
+        );
+
+        let harness =
+            DefaultReplayHarness::from_config("inline", sample_config(), &results_dir).unwrap();
+        let lookup = harness
+            .evaluate_shadow_path(&experiment_path, &shadows_dir)
+            .await
+            .unwrap();
+
+        assert!(lookup.report.passed);
+        assert_eq!(
+            lookup.report.comparison.delta.false_positive_rate_delta,
+            0.0
+        );
+        assert!(render_shadow_report(&lookup.report).contains("Shadow Evaluation"));
+        let reloaded = harness
+            .load_shadow(&shadows_dir, &lookup.record.shadow_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.record.shadow_id, lookup.record.shadow_id);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn promotion_review_packet_persists_and_reloads() {
+        let root = unique_temp_dir("promotion-review");
+        let results_dir = root.join("results");
+        let verifications_dir = root.join("verification-results");
+        let shadows_dir = root.join("shadow-results");
+        let reviews_dir = root.join("promotion-reviews");
+        let scenarios_dir = root.join("scenarios");
+        let suites_dir = root.join("scenario-suites");
+        let experiments_src_dir = root.join("experiments");
+        let verification_src_dir = root.join("verifications");
+        fs::create_dir_all(&scenarios_dir).unwrap();
+        fs::create_dir_all(&suites_dir).unwrap();
+        fs::create_dir_all(&experiments_src_dir).unwrap();
+        fs::create_dir_all(&verification_src_dir).unwrap();
+
+        let office_path = write_scenario(
+            &scenarios_dir,
+            "office-dropper-correlation.yaml",
+            &scenario_manifest(),
+        );
+        let benign_path = write_scenario(
+            &scenarios_dir,
+            "python-maintenance-benign.yaml",
+            &python_benign_manifest(),
+        );
+        let suite_path = write_suite(
+            &suites_dir,
+            "hellcat-office-v1.yaml",
+            &ReplaySuiteManifest {
+                name: "hellcat_office_v1".to_string(),
+                description: "Hellcat office corpus".to_string(),
+                corpus_version: "test-1".to_string(),
+                metadata: Default::default(),
+                scenarios: vec![
+                    office_path.display().to_string(),
+                    benign_path.display().to_string(),
+                ],
+            },
+        );
+        let verification_path = write_verification(
+            &verification_src_dir,
+            "office-detector-safety-v1.yaml",
+            &serde_yaml::from_str::<VerificationCorpusManifest>(&format!(
+                r#"
+name: office_detector_safety_v1
+description: safety corpus
+known_bad:
+  suite: {}
+benign_controls:
+  scenarios:
+    - {}
+canonical_templates:
+  - name: office_encoded_powershell_execution
+    threat_class: execution
+    event:
+      source: verification-template
+      event_id: tpl-execution-1
+      timestamp: 1700000300000
+      host_id: template-host-1
+      payload:
+        kind: process_start
+        parent_process: WINWORD
+        process_name: powershell
+        command_line: powershell -enc SQBFAFgA
+        user: alice
+resource_budgets:
+  max_false_positive_rate: 0.05
+  max_detect_latency_us: 2000
+  max_total_detections: 8
+"#,
+                suite_path.display(),
+                benign_path.display(),
+            ))
+            .unwrap(),
+        );
+        let experiment_path = write_experiment(
+            &experiments_src_dir,
+            "office-baseline-control.yaml",
+            &serde_yaml::from_str::<DetectorExperimentManifest>(&format!(
+                r#"
+name: office_baseline_control
+description: control candidate
+corpus:
+  suite: {}
+verification:
+  corpus: {}
+candidate:
+  strategy: suspicious_process_tree
+  strategy_id: office_baseline_control
+  description: candidate matches baseline
+  profile:
+    suspicious_parents:
+      - winword
+      - excel
+      - outlook
+      - acrord32
+      - teams
+    suspicious_children:
+      - powershell
+      - pwsh
+      - cmd
+      - sh
+      - bash
+      - curl
+      - wget
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+lineage:
+  parent_strategy_id: suspicious_process_tree
+  mutation: control
+  rationale: preserve baseline behavior
+gates:
+  require_known_bad_coverage: true
+  max_false_positive_delta: 0
+  max_detect_latency_delta_us: 5000
+"#,
+                suite_path.display(),
+                verification_path.display(),
+            ))
+            .unwrap(),
+        );
+
+        let harness =
+            DefaultReplayHarness::from_config("inline", sample_config(), &results_dir).unwrap();
+        let verification = harness
+            .evaluate_verification_path(&experiment_path, &verifications_dir)
+            .await
+            .unwrap();
+        let shadow = harness
+            .evaluate_shadow_path(&experiment_path, &shadows_dir)
+            .await
+            .unwrap();
+        let review = harness
+            .create_promotion_review_packet(
+                &experiment_path,
+                &verifications_dir,
+                &verification.record.verification_id,
+                &shadows_dir,
+                &shadow.record.shadow_id,
+                &reviews_dir,
+            )
+            .unwrap();
+
+        assert_eq!(
+            review.packet.recommendation,
+            PromotionReviewRecommendation::ReadyForManualReview
+        );
+        assert!(review.packet.blocking_reasons.is_empty());
+        assert!(render_promotion_review_packet(&review.packet).contains("Promotion Review Packet"));
+
+        let reloaded = harness
+            .load_promotion_review(&reviews_dir, &review.record.review_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.record.review_id, review.record.review_id);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verification_corpus_manifest_loads_and_validates() {
+        let root = unique_temp_dir("verification-corpus");
+        let corpus_path = write_verification(
+            &root,
+            "office-detector-safety-v1.yaml",
+            &serde_yaml::from_str::<VerificationCorpusManifest>(
+                r#"
+name: office_detector_safety_v1
+description: safety corpus
+known_bad:
+  suite: ../scenario-suites/hellcat-office-v1.yaml
+benign_controls:
+  scenarios:
+    - ../scenarios/benign-baseline.yaml
+canonical_templates:
+  - name: office_encoded_powershell_execution
+    threat_class: execution
+    event:
+      source: verification-template
+      event_id: tpl-execution-1
+      timestamp: 1700000300000
+      host_id: template-host-1
+      payload:
+        kind: process_start
+        parent_process: WINWORD
+        process_name: powershell
+        command_line: powershell -enc SQBFAFgA
+        user: alice
+resource_budgets:
+  max_false_positive_rate: 0.05
+  max_detect_latency_us: 2000
+  max_total_detections: 8
+"#,
+            )
+            .unwrap(),
+        );
+
+        let manifest = load_verification_manifest(&corpus_path).unwrap();
+        assert_eq!(manifest.name, "office_detector_safety_v1");
+        assert_eq!(manifest.benign_controls.scenarios.len(), 1);
+        assert_eq!(manifest.canonical_templates.len(), 1);
+        assert_eq!(manifest.resource_budgets.max_false_positive_rate, 0.05);
+        assert_eq!(manifest.resource_budgets.max_detect_latency_us, 2000);
 
         let _ = fs::remove_dir_all(root);
     }

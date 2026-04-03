@@ -4,8 +4,9 @@ use swarm_runtime::control::{
     OperatorControlOutput, ReplayLookupSelector, render_output,
 };
 use swarm_runtime::replay::{
-    DefaultReplayHarness, render_evaluation_report, render_experiment_report, render_replay_run,
-    render_suite_report,
+    DefaultReplayHarness, render_evaluation_report, render_experiment_report,
+    render_promotion_review_packet, render_replay_run, render_shadow_report, render_suite_report,
+    render_verification_report,
 };
 
 #[derive(Debug, Parser)]
@@ -22,6 +23,15 @@ struct Cli {
 
     #[arg(long, global = true, default_value = "data/experiments")]
     experiment_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/verifications")]
+    verification_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/shadows")]
+    shadow_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/promotion-reviews")]
+    promotion_review_results_dir: std::path::PathBuf,
 
     #[arg(long, global = true)]
     json: bool,
@@ -41,6 +51,12 @@ enum Command {
     ReplayEvaluate(ReplayEvaluateArgs),
     ExperimentEvaluate(ExperimentEvaluateArgs),
     ExperimentResult(ExperimentResultArgs),
+    VerificationEvaluate(VerificationEvaluateArgs),
+    VerificationResult(VerificationResultArgs),
+    ShadowEvaluate(ShadowEvaluateArgs),
+    ShadowResult(ShadowResultArgs),
+    PromotionReviewCreate(PromotionReviewCreateArgs),
+    PromotionReviewResult(PromotionReviewResultArgs),
 }
 
 #[derive(Debug, Args)]
@@ -141,6 +157,48 @@ struct ExperimentEvaluateArgs {
 struct ExperimentResultArgs {
     #[arg(long)]
     experiment_id: String,
+}
+
+#[derive(Debug, Args)]
+struct VerificationEvaluateArgs {
+    #[arg(long)]
+    experiment: std::path::PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct VerificationResultArgs {
+    #[arg(long)]
+    verification_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ShadowEvaluateArgs {
+    #[arg(long)]
+    experiment: std::path::PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ShadowResultArgs {
+    #[arg(long)]
+    shadow_id: String,
+}
+
+#[derive(Debug, Args)]
+struct PromotionReviewCreateArgs {
+    #[arg(long)]
+    experiment: std::path::PathBuf,
+
+    #[arg(long)]
+    verification_id: String,
+
+    #[arg(long)]
+    shadow_id: String,
+}
+
+#[derive(Debug, Args)]
+struct PromotionReviewResultArgs {
+    #[arg(long)]
+    review_id: String,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -285,6 +343,98 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_experiment_report(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::VerificationEvaluate(args) => {
+            let lookup = replay_harness
+                .evaluate_verification_path(args.experiment, &cli.verification_results_dir)
+                .await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_verification_report(&lookup.report));
+            }
+            if !lookup.report.passed {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::VerificationResult(args) => {
+            let lookup = replay_harness
+                .load_verification(&cli.verification_results_dir, &args.verification_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "offline verification result was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_verification_report(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::ShadowEvaluate(args) => {
+            let lookup = replay_harness
+                .evaluate_shadow_path(args.experiment, &cli.shadow_results_dir)
+                .await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_shadow_report(&lookup.report));
+            }
+            if !lookup.report.passed {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::ShadowResult(args) => {
+            let lookup = replay_harness
+                .load_shadow(&cli.shadow_results_dir, &args.shadow_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "offline shadow result was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_shadow_report(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::PromotionReviewCreate(args) => {
+            let lookup = replay_harness.create_promotion_review_packet(
+                args.experiment,
+                &cli.verification_results_dir,
+                &args.verification_id,
+                &cli.shadow_results_dir,
+                &args.shadow_id,
+                &cli.promotion_review_results_dir,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.packet)?);
+            } else {
+                println!("{}", render_promotion_review_packet(&lookup.packet));
+            }
+            return Ok(());
+        }
+        Command::PromotionReviewResult(args) => {
+            let lookup = replay_harness
+                .load_promotion_review(&cli.promotion_review_results_dir, &args.review_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "promotion review packet was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.packet)?);
+            } else {
+                println!("{}", render_promotion_review_packet(&lookup.packet));
             }
             return Ok(());
         }

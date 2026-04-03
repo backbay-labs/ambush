@@ -2,6 +2,8 @@ name: office_baseline_control
 description: Control experiment that mirrors the production suspicious process-tree detector against the office replay corpus
 corpus:
   suite: ../scenario-suites/hellcat-office-v1.yaml
+verification:
+  corpus: ../verifications/office-detector-safety-v1.yaml
 candidate:
   strategy: suspicious_process_tree
   strategy_id: office_baseline_control

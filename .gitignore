@@ -25,3 +25,6 @@ Thumbs.db
 .ephemeral_state.json
 data/replay-runs/
 data/experiments/
+data/verifications/
+data/shadows/
+data/promotion-reviews/
