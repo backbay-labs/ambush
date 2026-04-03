@@ -96,22 +96,36 @@ impl SuspiciousProcessTreeDetector {
         }
     }
 
-    fn process_match(&self, event: &TelemetryEvent, process: &ProcessStartEvent) -> Option<DetectionFinding> {
+    fn process_match(
+        &self,
+        event: &TelemetryEvent,
+        process: &ProcessStartEvent,
+    ) -> Option<DetectionFinding> {
         let parent = process.parent_process.to_ascii_lowercase();
         let child = process.process_name.to_ascii_lowercase();
         let command_line = process.command_line.to_ascii_lowercase();
 
-        if !self.suspicious_parents.iter().any(|candidate| *candidate == parent) {
+        if !self
+            .suspicious_parents
+            .iter()
+            .any(|candidate| *candidate == parent)
+        {
             return None;
         }
-        if !self.suspicious_children.iter().any(|candidate| *candidate == child) {
+        if !self
+            .suspicious_children
+            .iter()
+            .any(|candidate| *candidate == child)
+        {
             return None;
         }
 
-        let has_encoded_flag =
-            command_line.contains("-enc") || command_line.contains("base64") || command_line.contains("frombase64string");
-        let has_download_hint =
-            command_line.contains("http://") || command_line.contains("https://") || command_line.contains("downloadstring");
+        let has_encoded_flag = command_line.contains("-enc")
+            || command_line.contains("base64")
+            || command_line.contains("frombase64string");
+        let has_download_hint = command_line.contains("http://")
+            || command_line.contains("https://")
+            || command_line.contains("downloadstring");
 
         let confidence = if has_encoded_flag || has_download_hint {
             self.high_confidence_threshold
@@ -154,10 +168,9 @@ impl DetectionStrategy for SuspiciousProcessTreeDetector {
 
     fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
         match &event.payload {
-            TelemetryPayload::ProcessStart(process) => self
-                .process_match(event, process)
-                .into_iter()
-                .collect(),
+            TelemetryPayload::ProcessStart(process) => {
+                self.process_match(event, process).into_iter().collect()
+            }
             TelemetryPayload::NetworkConnect(_) => Vec::new(),
         }
     }

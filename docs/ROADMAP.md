@@ -1,7 +1,7 @@
 # Swarm Team Six: Rust-First Roadmap
 
 > Product name: ClawdStrike Ambush  
-> Last updated: 2026-04-02
+> Last updated: 2026-04-03
 
 This roadmap replaces the earlier Python-first swarm plan with a Rust-first implementation sequence centered on fast detection and safe live response.
 
@@ -81,9 +81,9 @@ This roadmap replaces the earlier Python-first swarm plan with a Rust-first impl
 
 ### Deliverables
 
-- JetStream-backed substrate
+- local journal-backed substrate
 - replay support
-- richer receipt persistence
+- local replay-bundle store with receipt and hunt lookup
 - metrics and tracing
 - operator-facing status output
 

@@ -8,10 +8,11 @@ pub mod config;
 pub mod pipeline;
 pub mod service;
 
+use std::time::Instant;
 pub use swarm_core::config::RuntimeMode;
-use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
 use swarm_policy::{ActionRequest, ApprovalContext, ApprovalError, ApprovalGate};
 use swarm_response::{ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt};
+use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
 use swarm_whisker::DetectionFinding;
 
 /// Runtime errors surfaced while authorizing or executing actions.
@@ -29,6 +30,16 @@ pub struct SwarmRuntime<P, E> {
     mode: RuntimeMode,
     policy: P,
     response: E,
+}
+
+/// Timing and outcome details for one audited execution.
+#[derive(Debug, Clone)]
+pub struct RuntimeExecutionReport {
+    pub audit: AuditTrail,
+    pub policy_elapsed_us: u64,
+    pub response_elapsed_us: Option<u64>,
+    pub response_attempted: bool,
+    pub response_succeeded: bool,
 }
 
 impl<P, E> SwarmRuntime<P, E> {
@@ -104,7 +115,22 @@ where
         request: &ActionRequest,
         context: &ApprovalContext,
     ) -> Result<AuditTrail, RuntimeError> {
+        Ok(self
+            .audit_authorize_and_execute_instrumented(detection, request, context)
+            .await?
+            .audit)
+    }
+
+    /// Evaluate, execute, and record the full response decision with stage timings.
+    pub async fn audit_authorize_and_execute_instrumented(
+        &self,
+        detection: &DetectionFinding,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+    ) -> Result<RuntimeExecutionReport, RuntimeError> {
+        let policy_started = Instant::now();
         let decision = self.policy.evaluate(request, context)?;
+        let policy_elapsed_us = policy_started.elapsed().as_micros() as u64;
         tracing::info!(
             hunt_id = %request.hunt_id.0,
             event_id = %detection.event_id,
@@ -118,40 +144,68 @@ where
             RuntimeMode::LiveResponse => ExecutionMode::Enforced,
         };
 
-        let (lease, response) = match decision.verdict {
-            swarm_policy::PolicyVerdict::Deny => (
-                None,
-                AuditResponseRecord::Skipped {
-                    reason: decision.reason.clone(),
-                },
-            ),
-            swarm_policy::PolicyVerdict::RequireHuman if self.mode == RuntimeMode::LiveResponse => (
-                None,
-                AuditResponseRecord::Skipped {
-                    reason: decision.reason.clone(),
-                },
-            ),
-            swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {
-                let lease = self.policy.issue_lease(request, context)?;
-                let response = match self.response.execute(request, &lease, execution_mode).await {
-                    Ok(receipt) => AuditResponseRecord::Success(receipt),
-                    Err(error) => AuditResponseRecord::Failure(error.failure),
-                };
-                (Some(lease), response)
-            }
-        };
+        let (lease, response, response_elapsed_us, response_attempted, response_succeeded) =
+            match decision.verdict {
+                swarm_policy::PolicyVerdict::Deny => (
+                    None,
+                    AuditResponseRecord::Skipped {
+                        reason: decision.reason.clone(),
+                    },
+                    None,
+                    false,
+                    false,
+                ),
+                swarm_policy::PolicyVerdict::RequireHuman
+                    if self.mode == RuntimeMode::LiveResponse =>
+                {
+                    (
+                        None,
+                        AuditResponseRecord::Skipped {
+                            reason: decision.reason.clone(),
+                        },
+                        None,
+                        false,
+                        false,
+                    )
+                }
+                swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {
+                    let lease = self.policy.issue_lease(request, context)?;
+                    let response_started = Instant::now();
+                    let response =
+                        match self.response.execute(request, &lease, execution_mode).await {
+                            Ok(receipt) => AuditResponseRecord::Success(receipt),
+                            Err(error) => AuditResponseRecord::Failure(error.failure),
+                        };
+                    let response_elapsed_us = response_started.elapsed().as_micros() as u64;
+                    let response_succeeded = matches!(response, AuditResponseRecord::Success(_));
+                    (
+                        Some(lease),
+                        response,
+                        Some(response_elapsed_us),
+                        true,
+                        response_succeeded,
+                    )
+                }
+            };
 
-        Ok(AuditTrail {
-            trail_id: format!("trail:{}:{}", request.hunt_id.0, context.now_ms),
-            hunt_id: request.hunt_id.0.clone(),
-            detection: detection.clone(),
-            policy: PolicyRecord {
-                verdict: decision.verdict,
-                reason: decision.reason,
-                lease,
+        Ok(RuntimeExecutionReport {
+            audit: AuditTrail {
+                trail_id: format!("trail:{}:{}", request.hunt_id.0, context.now_ms),
+                hunt_id: request.hunt_id.0.clone(),
+                related_receipt_ids: context.receipt_chain.clone(),
+                detection: detection.clone(),
+                policy: PolicyRecord {
+                    verdict: decision.verdict,
+                    reason: decision.reason,
+                    lease,
+                },
+                response,
+                created_at_ms: context.now_ms,
             },
-            response,
-            created_at_ms: context.now_ms,
+            policy_elapsed_us,
+            response_elapsed_us,
+            response_attempted,
+            response_succeeded,
         })
     }
 }
@@ -162,7 +216,7 @@ mod tests {
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
     use swarm_policy::static_gate::StaticApprovalGate;
     use swarm_policy::{ActionRequest, ApprovalContext};
-    use swarm_response::{adapters::SandboxExecutor, ExecutionMode, ResponseStatus};
+    use swarm_response::{ExecutionMode, ResponseStatus, adapters::SandboxExecutor};
 
     fn sample_context() -> ApprovalContext {
         ApprovalContext {
@@ -218,7 +272,11 @@ mod tests {
             .authorize_and_execute(&request, &sample_context())
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("authorized but held for human approval"));
+        assert!(
+            error
+                .to_string()
+                .contains("authorized but held for human approval")
+        );
     }
 
     #[tokio::test]
@@ -268,8 +326,10 @@ mod tests {
             .authorize_and_execute(&request, &sample_context())
             .await
             .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("destructive actions require at least medium severity"));
+        assert!(
+            error
+                .to_string()
+                .contains("destructive actions require at least medium severity")
+        );
     }
 }

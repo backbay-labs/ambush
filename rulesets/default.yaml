@@ -8,6 +8,7 @@ runtime:
     - name: synthetic-process
       subject: telemetry.synthetic.process
   max_in_flight_actions: 4
+  require_durable_live_response: true
 
 detection:
   strategy: suspicious_process_tree
@@ -20,7 +21,14 @@ pheromone:
   min_sources_for_escalation: 2
   alert_threshold: 2.0
   incident_threshold: 5.0
+  backend:
+    kind: in_memory
 
 policy:
   human_gate_severity: HIGH
   lease_ttl_ms: 60000
+
+audit:
+  bundle_store:
+    kind: memory
+  recent_decisions_limit: 20

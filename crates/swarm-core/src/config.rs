@@ -21,6 +21,9 @@ pub struct SwarmConfig {
     pub pheromone: PheromoneConfig,
     /// Deterministic live-response policy settings.
     pub policy: PolicyConfig,
+    /// Audit and replay storage settings.
+    #[serde(default)]
+    pub audit: AuditConfig,
 }
 
 /// Whether the runtime simulates or executes live response actions.
@@ -41,6 +44,9 @@ pub struct RuntimeSettings {
     pub telemetry_sources: Vec<TelemetrySourceConfig>,
     /// Maximum concurrent response executions.
     pub max_in_flight_actions: usize,
+    /// Require a durable substrate before live response can start.
+    #[serde(default)]
+    pub require_durable_live_response: bool,
 }
 
 /// One configured telemetry source.
@@ -74,6 +80,20 @@ pub struct PheromoneConfig {
     pub alert_threshold: f64,
     /// Strength threshold for incident mode transition.
     pub incident_threshold: f64,
+    /// Backend used to store and recover deposits.
+    #[serde(default)]
+    pub backend: PheromoneBackendConfig,
+}
+
+/// Pheromone substrate backend selection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PheromoneBackendConfig {
+    #[default]
+    InMemory,
+    LocalJournal {
+        path: String,
+    },
 }
 
 /// Deterministic policy settings for live response.
@@ -86,14 +106,34 @@ pub struct PolicyConfig {
     pub lease_ttl_ms: i64,
 }
 
+/// Audit persistence settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuditConfig {
+    /// Store used for replay bundles and receipt lookup.
+    #[serde(default)]
+    pub bundle_store: BundleStoreConfig,
+    /// How many recent decision records to surface to operators by default.
+    #[serde(default = "default_recent_decisions_limit")]
+    pub recent_decisions_limit: usize,
+}
+
+/// Replay bundle storage backend selection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BundleStoreConfig {
+    #[default]
+    Memory,
+    LocalFiles {
+        directory: String,
+    },
+}
+
 /// Semantic validation errors that survive after deserialization.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigValidationError {
     #[error("invalid field `{field}`: {reason}")]
-    InvalidField {
-        field: &'static str,
-        reason: String,
-    },
+    InvalidField { field: &'static str, reason: String },
 }
 
 impl SwarmConfig {
@@ -197,6 +237,27 @@ impl SwarmConfig {
                 reason: "must be greater than or equal to alert_threshold".to_string(),
             });
         }
+        match &self.pheromone.backend {
+            PheromoneBackendConfig::InMemory => {
+                if self.runtime.mode == RuntimeMode::LiveResponse
+                    && self.runtime.require_durable_live_response
+                {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "runtime.require_durable_live_response",
+                        reason: "requires a durable pheromone backend in live_response mode"
+                            .to_string(),
+                    });
+                }
+            }
+            PheromoneBackendConfig::LocalJournal { path } => {
+                if path.trim().is_empty() {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "pheromone.backend.path",
+                        reason: "must not be empty".to_string(),
+                    });
+                }
+            }
+        }
 
         if self.policy.lease_ttl_ms <= 0 {
             return Err(ConfigValidationError::InvalidField {
@@ -205,6 +266,49 @@ impl SwarmConfig {
             });
         }
 
+        if self.audit.recent_decisions_limit == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "audit.recent_decisions_limit",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        match &self.audit.bundle_store {
+            BundleStoreConfig::Memory => {}
+            BundleStoreConfig::LocalFiles { directory } => {
+                if directory.trim().is_empty() {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "audit.bundle_store.directory",
+                        reason: "must not be empty".to_string(),
+                    });
+                }
+            }
+        }
+
         Ok(())
     }
+}
+
+impl PheromoneBackendConfig {
+    pub fn is_durable(&self) -> bool {
+        matches!(self, Self::LocalJournal { .. })
+    }
+}
+
+impl BundleStoreConfig {
+    pub fn is_durable(&self) -> bool {
+        matches!(self, Self::LocalFiles { .. })
+    }
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            bundle_store: BundleStoreConfig::default(),
+            recent_decisions_limit: default_recent_decisions_limit(),
+        }
+    }
+}
+
+const fn default_recent_decisions_limit() -> usize {
+    20
 }

@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.1 Durability And Operators (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- self-contained local-journal substrate durability now survives restart and live-response mode fails closed when durability is required
+- replay bundles now persist to configurable stores and can be reloaded by hunt or receipt ID without re-executing actions
+- runtime stage metrics, component readiness, and recent decision correlation now ship in one operator status report
+
+---
+
 ## v1.0 v1.0 (Shipped: 2026-04-03)
 
 **Phases completed:** 4 phases, 8 plans, 0 tasks

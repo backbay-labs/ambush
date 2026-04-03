@@ -25,14 +25,13 @@ Detect real threats quickly enough to take safe action before the window to resp
 - ✓ Runtime can evaluate a concrete detector, deposit to an in-memory substrate, and publish benchmarked hot-path latency — v1.0
 - ✓ Runtime can gate live response through deterministic policy, scoped leases, sandboxed execution, and normalized receipts — v1.0
 - ✓ Runtime can emit auditable replay bundles and cover the critical path with integration tests — v1.0
+- ✓ Operator can switch between in-memory and local-journal substrate backends and require durable live response at runtime boundaries — v1.1
+- ✓ Operator can persist replay bundles to a configured store and reload them by hunt or receipt ID after restart — v1.1
+- ✓ Operator can inspect one status surface with stage metrics, component readiness, and recent decision correlation — v1.1
 
 ### Active
 
-- [ ] Make substrate durability selectable and restart-safe without changing hot-path contracts
-- [ ] Persist receipt and replay artifacts so past decisions survive process restarts
-- [ ] Give operators one clear surface for status, metrics, and cross-artifact correlation
-- [ ] Keep the milestone single-node and Rust-only while hardening real operational paths
-- [ ] Preserve fast-detection characteristics while adding durability and observability
+(None currently — milestone complete)
 
 ### Out of Scope
 
@@ -65,8 +64,9 @@ The canonical product roadmap in `docs/ROADMAP.md` already sequences this next s
 | Keep `swarm-bridge` as legacy only | PyO3 is unnecessary for the current product direction | ✓ Good |
 | Start with a narrow response safety model | Deterministic policy and scoped leases proved the basic live-response boundary without fake distributed consensus | ✓ Good |
 | Copy focused upstream code into `vendor/reference/` | Local references reduced upstream dependency risk while preserving freedom to refactor inward | ✓ Good |
-| Tackle durability before async investigation | The shipped lane must survive restarts and support operators before it grows new reasoning features | — Pending |
-| Use JetStream as the first durable substrate target | Matches the existing architecture docs and preserves the current substrate abstraction | — Pending |
+| Tackle durability before async investigation | The shipped lane needed restart safety and operator visibility before more reasoning features | ✓ Good |
+| Use a repo-owned local journal as the first durable substrate target | Keeps the milestone self-contained and testable without a hard external dependency | ✓ Good |
+| Make operator visibility API-first | A serializable Rust status report can back later CLI or HTTP surfaces without rework | ✓ Good |
 
 ---
-*Last updated: 2026-04-03 after starting milestone v1.1*
+*Last updated: 2026-04-03 after completing milestone v1.1*

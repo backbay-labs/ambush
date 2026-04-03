@@ -49,7 +49,9 @@ impl StaticApprovalGate {
                     "host_id must not be empty".to_string(),
                 ));
             }
-            ResponseAction::RevokeCredential { credential_id } if credential_id.trim().is_empty() => {
+            ResponseAction::RevokeCredential { credential_id }
+                if credential_id.trim().is_empty() =>
+            {
                 return Err(ApprovalError::InvalidRequest(
                     "credential_id must not be empty".to_string(),
                 ));

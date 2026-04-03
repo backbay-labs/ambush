@@ -11,4 +11,7 @@
 
 pub mod substrate;
 
-pub use substrate::{InMemoryPheromoneSubstrate, PheromoneSubstrate, SubstrateError};
+pub use substrate::{
+    ConfiguredPheromoneSubstrate, DepositQuery, InMemoryPheromoneSubstrate,
+    LocalJournalPheromoneSubstrate, PheromoneSubstrate, SubstrateError, SubstrateHealth,
+};

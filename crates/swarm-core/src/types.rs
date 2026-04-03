@@ -99,3 +99,15 @@ pub enum ResponseAction {
     /// Escalate to human operator.
     Escalate { summary: String, urgency: Severity },
 }
+
+impl ResponseAction {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::BlockEgress { .. } => "block_egress",
+            Self::IsolateHost { .. } => "isolate_host",
+            Self::RevokeCredential { .. } => "revoke_credential",
+            Self::DeployDecoy { .. } => "deploy_decoy",
+            Self::Escalate { .. } => "escalate",
+        }
+    }
+}

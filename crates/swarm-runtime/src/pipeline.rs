@@ -49,7 +49,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::detect_and_deposit;
-    use swarm_core::config::PheromoneConfig;
+    use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::types::AgentId;
     use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
     use swarm_whisker::{
@@ -63,6 +63,7 @@ mod tests {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            backend: PheromoneBackendConfig::InMemory,
         }
     }
 

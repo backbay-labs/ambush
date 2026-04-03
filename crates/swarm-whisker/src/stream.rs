@@ -49,7 +49,7 @@ mod tests {
     use crate::detector::{
         ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
     };
-    use swarm_core::config::PheromoneConfig;
+    use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::types::AgentId;
 
     #[test]
@@ -79,6 +79,7 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                backend: PheromoneBackendConfig::InMemory,
             },
         );
 

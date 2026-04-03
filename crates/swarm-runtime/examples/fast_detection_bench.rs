@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use swarm_core::config::PheromoneConfig;
+use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
 use swarm_core::types::AgentId;
 use swarm_pheromone::InMemoryPheromoneSubstrate;
 use swarm_runtime::pipeline::detect_and_deposit;
@@ -20,6 +20,7 @@ fn pheromone_config() -> PheromoneConfig {
         min_sources_for_escalation: 2,
         alert_threshold: 2.0,
         incident_threshold: 5.0,
+        backend: PheromoneBackendConfig::InMemory,
     }
 }
 
@@ -46,7 +47,8 @@ async fn main() {
         payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
             parent_process: "winword".to_string(),
             process_name: "powershell".to_string(),
-            command_line: "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ==".to_string(),
+            command_line: "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ=="
+                .to_string(),
             user: Some("benchmark".to_string()),
         }),
     };
@@ -54,9 +56,15 @@ async fn main() {
     for index in 0..warmup {
         let mut event = base_event.clone();
         event.event_id = format!("warmup-{index}");
-        let _ = detect_and_deposit(&detector, &substrate, &event, &agent_id, &pheromone_config())
-            .await
-            .unwrap();
+        let _ = detect_and_deposit(
+            &detector,
+            &substrate,
+            &event,
+            &agent_id,
+            &pheromone_config(),
+        )
+        .await
+        .unwrap();
     }
 
     let mut latencies_us = Vec::with_capacity(iterations);
@@ -67,10 +75,15 @@ async fn main() {
         event.event_id = format!("evt-{index}");
 
         let started = Instant::now();
-        let outcome =
-            detect_and_deposit(&detector, &substrate, &event, &agent_id, &pheromone_config())
-                .await
-                .unwrap();
+        let outcome = detect_and_deposit(
+            &detector,
+            &substrate,
+            &event,
+            &agent_id,
+            &pheromone_config(),
+        )
+        .await
+        .unwrap();
         let elapsed_us = started.elapsed().as_secs_f64() * 1_000_000.0;
 
         assert_eq!(outcome.findings.len(), 1);
