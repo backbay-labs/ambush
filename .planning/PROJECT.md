@@ -2,20 +2,20 @@
 
 ## What This Is
 
-Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, surface the full chain in one operator review report, and now execute offline replay plus regression evaluation over a tracked scenario corpus.
+Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, surface the full chain in one operator review report, and execute offline replay plus regression evaluation over a tracked scenario corpus.
 
 ## Core Value
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## Current Milestone: v1.3 Operator Control And Replay Evaluation (Completed)
+## Current Milestone: v1.4 Adversarial Replay And Strategy Bench
 
-**Goal:** Turn the shipped runtime artifacts into operator-facing control and deterministic replay workflows without widening live-response autonomy.
+**Goal:** Turn the replay loop into an offline adversarial lab for Hellcat-inspired scenario suites and candidate detector evaluation, without widening live-runtime autonomy.
 
-**Delivered features:**
-- operator CLI commands for runtime review and artifact lookup
-- deterministic offline replay from persisted bundles or fixture corpora
-- regression reports and replay gates that protect detection quality and hot-path latency
+**Target features:**
+- adversarial replay suites with campaign and technique metadata
+- repo-owned candidate detector experiment manifests with baseline-vs-candidate evaluation
+- persisted experiment reports, lineage, and offline safety gates
 
 ## Requirements
 
@@ -41,27 +41,38 @@ Detect real threats quickly enough to take safe action before the window to resp
 - ✓ Team can define replay scenarios with expected outcomes and reproduce them locally or in CI — v1.3
 - ✓ Team can generate regression reports and fail when replay behavior or hot-path latency drifts past configured limits — v1.3
 
+### Active
+
+- [ ] Team can run Hellcat-inspired adversarial scenario corpora against the offline replay harness — v1.4
+- [ ] Team can organize adversarial scenarios into named suites with campaign and technique metadata for repeatable execution — v1.4
+- [ ] Evaluation reports can identify which adversarial scenarios, suites, or technique groups regressed — v1.4
+- [ ] Team can register a candidate detection strategy as a repo-owned experiment input without changing the production detector configuration — v1.4
+- [ ] Team can compare baseline and candidate strategies against the same replay corpus on detection quality, false positives, and latency — v1.4
+- [ ] Candidate strategy experiments persist lineage, corpus version, and score summaries for offline review — v1.4
+- [ ] Offline experiment gates fail when a candidate regresses known-bad coverage or misses configured comparison thresholds — v1.4
+
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
-- HTTP or multi-user operator control plane — CLI-first keeps the auth and deployment story narrow for this cycle
-- Live policy mutation from replay or evaluation output — replay remains advisory and offline
-- Live red-swarm distribution or autonomous detector evolution — still better treated as offline evaluation work
+- HTTP or multi-user operator control plane — still secondary to offline adversarial and experiment workflows
+- Live canary deployment or production promotion of evolved strategies — offline evaluation comes first
+- Automatic strategy mutation or self-evolution in the runtime hot path — this milestone is about bench tooling, not autonomous adaptation
+- Response-action evolution — response behavior remains static and policy-controlled
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop.
 
-The runtime remains intentionally single-node and deterministic. Async enrichment is durable and operator-visible, but it still does not mutate live-response policy automatically. `v1.3` completed the operator CLI plus replay and regression loop. The next milestone should either deepen offline red-team or evolution work, or expand operator surfaces, but it no longer needs to reopen the replay contract itself.
+The next useful step from the canonical docs is the deferred Phase 7 track in `docs/ROADMAP.md`: offline replay, red-team pressure, and detector evolution experiments. `docs/EVOLUTION.md` and `docs/AGENTS.md` are explicit that candidate strategies should be exercised against deterministic replay corpora before any promotion workflow is considered. That makes `v1.4` the right place to build adversarial scenario suites and a candidate-strategy evaluation bench, while still deferring canary deployment, consensus promotion, and live mutation.
 
 ## Constraints
 
-- **Tech stack**: Production runtime remains pure Rust — operator control, replay, and evaluation should extend the same operational path and type system
-- **Security**: Replay and evaluation must never execute live response actions by default — offline analysis cannot backdoor production actions
-- **Architecture**: This milestone stays single-node and composition-friendly — avoid BFT, gossip, or multi-authority work
-- **Operations**: Start with a repo-owned CLI surface — do not widen scope to a multi-user HTTP service before the artifact model is proven
-- **Performance**: Replay and regression gates must preserve the fast-detection proof point — hot-path latency remains independently measurable
+- **Tech stack**: Production runtime remains pure Rust — adversarial replay and strategy experiments must extend the same type system and CLI path
+- **Security**: Replay and candidate evaluation must stay offline and non-destructive — no live-response side effects
+- **Architecture**: Keep the runtime single-node and composition-friendly — no BFT, gossip, or distributed red-swarm work
+- **Operations**: Prefer repo-owned manifests and CLI workflows over external services
+- **Performance**: Candidate strategy evaluation must continue to preserve the fast-detection proof point through comparable latency measurements
 
 ## Key Decisions
 
@@ -84,6 +95,7 @@ The runtime remains intentionally single-node and deterministic. Async enrichmen
 | Prioritize replay/evaluation over advanced governance for the next cycle | Governance is explicitly optional in the roadmap, while replay and operator tooling unlock immediate validation value | ✓ Chosen |
 | Start with a CLI-backed operator surface | The existing runtime already exposes serializable reports and stores; CLI is the smallest practical control seam | ✓ Chosen |
 | Keep replay offline and deterministic | Evaluation should strengthen trust in production behavior without widening the live-response blast radius | ✓ Chosen |
+| Choose adversarial replay and strategy evaluation as the next milestone | `docs/ROADMAP.md` and `docs/EVOLUTION.md` both place offline red-team and detector bench work ahead of live promotion workflows | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after completing v1.3*
+*Last updated: 2026-04-03 after starting v1.4*
