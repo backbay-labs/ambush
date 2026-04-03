@@ -2,14 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: formal-verification-and-shadow-readiness
-status: ready
-last_updated: "2026-04-03T16:45:00Z"
+status: milestone-complete
+last_updated: "2026-04-03T17:38:06Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 0
-  percent: 0
+  completed_plans: 3
 ---
 
 # State
@@ -19,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** Defining and executing v1.5 formal verification and shadow-readiness work
+**Current focus:** `v1.5 Formal Verification And Shadow Readiness` is complete and archived; the project is ready for the next milestone.
 
 ## Memory
 
@@ -29,11 +28,11 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.2` shipped async investigation, explainable incident assembly, one operator review report, and config-backed async stack composition.
 - `v1.3` shipped the repo-owned operator CLI, deterministic offline replay, and replay regression gates over a tracked scenario corpus.
 - `v1.4` is complete: named suites, candidate experiments, persisted reports, and offline gates all shipped.
-- `v1.5` is derived directly from `docs/EVOLUTION.md`: verification gate first, then shadow readiness, with canary and consensus still deferred.
-- The repo now has enough offline bench infrastructure to build promotion-readiness artifacts without widening live autonomy.
+- `v1.5` is complete: repo-owned verification corpora, invariant verdicts, shadow comparisons, and promotion review packets now ship through `swarmctl`.
+- The repo now has enough offline bench infrastructure to evaluate candidate detectors for promotion readiness without widening live autonomy.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
-- Additional milestone research was skipped because the canonical docs already make the next track explicit.
+- Additional milestone research can be deferred until the next cycle is chosen because the canonical docs already enumerate the remaining roadmap themes.
 
 ## Next Command
 
-`$gsd-plan-phase 17`
+`$gsd-new-milestone`

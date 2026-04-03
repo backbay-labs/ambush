@@ -1,74 +1,12 @@
-# Requirements: Swarm Team Six
+# Requirements
 
-**Defined:** 2026-04-03
-**Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
+No active milestone requirements.
 
-## v1.5 Requirements
+Most recent archive:
+- `v1.5 Formal Verification And Shadow Readiness` — see `.planning/milestones/v1.5-REQUIREMENTS.md`
 
-### Strategy Verification
-
-- [ ] **VER-01**: Team can run a repo-owned verification gate against a candidate detector and get per-invariant pass/fail results before any promotion workflow
-- [ ] **VER-02**: Verification failures preserve counterexamples or failing corpus references so operators can inspect exactly what broke
-- [ ] **VER-03**: Canonical known-bad indicators, benign controls, and resource budgets are stored in repo-owned manifests or config, not hardcoded in tests
-
-### Shadow Evaluation
-
-- [ ] **SHD-01**: Team can run a candidate detector in shadow mode against recorded replay or runtime artifacts without emitting pheromones or response actions
-- [ ] **SHD-02**: Shadow reports compare candidate and production baseline on detection deltas, false positives, and latency over the same artifact window
-
-### Promotion Review
-
-- [ ] **PRM-01**: Team can assemble a promotion review packet with lineage, verification verdicts, and shadow comparison summaries for manual approval
-- [ ] **PRM-02**: Operator CLI can load the latest verification, shadow, or promotion-review artifacts by stable ID
-
-## Future Requirements
-
-### Live Promotion
-
-- **CAN-01**: Team can run one candidate detector on a bounded canary Whisker population without affecting fleet-wide escalation semantics
-- **CAN-02**: Canary promotion automatically rolls back when detection, false-positive, or latency metrics diverge beyond configured bounds
-
-### Governance
-
-- **GOV-01**: Strategy promotion to production requires quorum-based approval once independent trust boundaries exist
-- **GOV-02**: Promotion records include signed votes and durable consensus receipts
-
-### Adaptive Selection
-
-- **MEM-01**: Team can score verified strategies with context-aware utility memories instead of replay fitness alone
-
-### Rich Operator Surfaces
-
-- **OPS-04**: Operator can use an authenticated HTTP or TUI control surface in addition to the initial repo-owned CLI
-- **OPS-05**: Operator can trigger approved maintenance operations from the control surface with explicit audit trails
-
-## Out of Scope
-
-| Feature | Reason |
-|---------|--------|
-| Live canary deployment or production promotion of candidate strategies | This milestone stops at offline verification, shadow evaluation, and review packets |
-| BFT or quorum approval for promotion | Independent trust boundaries still do not exist |
-| Fully autonomous mutation or continuous evolution in the hot path | Production detection remains deterministic and operator-controlled |
-| Python Kitten runtime revival | Conflicts with the Rust-first implementation direction |
-| Multi-user HTTP control plane or auth/RBAC | Secondary to verification and promotion-readiness artifacts |
-
-## Traceability
-
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| VER-03 | Phase 17 | Pending |
-| VER-01 | Phase 18 | Pending |
-| SHD-01 | Phase 18 | Pending |
-| SHD-02 | Phase 18 | Pending |
-| VER-02 | Phase 19 | Pending |
-| PRM-01 | Phase 19 | Pending |
-| PRM-02 | Phase 19 | Pending |
-
-**Coverage:**
-- v1.5 requirements: 7 total
-- Mapped to phases: 7
-- Unmapped: 0
+Next step:
+- `$gsd-new-milestone`
 
 ---
-*Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.5 definition*
+*Last updated: 2026-04-03 after completing v1.5*

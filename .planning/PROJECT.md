@@ -10,21 +10,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.4 Adversarial Replay And Strategy Bench` shipped on 2026-04-03.
+`v1.5 Formal Verification And Shadow Readiness` shipped on 2026-04-03.
 
 **What is now real:**
 - named adversarial replay suites with campaign, technique, and benign-vs-adversarial metadata
 - repo-owned detector experiment manifests with baseline-vs-candidate evaluation
 - persisted experiment reports with lineage, corpus version, score summaries, and explicit offline gates
+- canonical verification corpus manifests with known-bad coverage, benign controls, threat templates, and resource budgets
+- persisted verification reports, shadow reports, and promotion-review packets addressable by stable IDs through `swarmctl`
 
-## Current Milestone: v1.5 Formal Verification And Shadow Readiness
+## Current Milestone
 
-**Goal:** Add repo-owned detector verification and shadow-style promotion readiness on top of the offline bench, without moving into live canary or consensus yet.
-
-**Target features:**
-- repo-owned verification corpora, invariants, and resource budgets for candidate detectors
-- offline verification gate with per-invariant pass or fail output plus inspectable failures
-- shadow comparison and promotion-review artifacts that stay outside the live runtime path
+No active milestone. Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -57,15 +54,15 @@ Detect real threats quickly enough to take safe action before the window to resp
 - ✓ Candidate strategy experiments persist lineage, corpus version, and score summaries for offline review — v1.4
 - ✓ Offline experiment gates fail when a candidate regresses known-bad coverage or misses configured comparison thresholds — v1.4
 
-### Active
+### Just Shipped
 
-- [ ] Team can run a repo-owned verification gate against a candidate detector and get per-invariant pass/fail results before any promotion workflow — v1.5
-- [ ] Verification failures preserve counterexamples or failing corpus references so operators can inspect exactly what broke — v1.5
-- [ ] Canonical known-bad indicators, benign controls, and resource budgets are stored in repo-owned manifests or config, not hardcoded in tests — v1.5
-- [ ] Team can run a candidate detector in shadow mode against recorded replay or runtime artifacts without emitting pheromones or response actions — v1.5
-- [ ] Shadow reports compare candidate and production baseline on detection deltas, false positives, and latency over the same artifact window — v1.5
-- [ ] Team can assemble a promotion review packet with lineage, verification verdicts, and shadow comparison summaries for manual approval — v1.5
-- [ ] Operator CLI can load the latest verification, shadow, or promotion-review artifacts by stable ID — v1.5
+- ✓ Team can run a repo-owned verification gate against a candidate detector and get per-invariant pass/fail results before any promotion workflow — v1.5
+- ✓ Verification failures preserve counterexamples or failing corpus references so operators can inspect exactly what broke — v1.5
+- ✓ Canonical known-bad indicators, benign controls, and resource budgets are stored in repo-owned manifests or config, not hardcoded in tests — v1.5
+- ✓ Team can run a candidate detector in shadow mode against recorded replay or runtime artifacts without emitting pheromones or response actions — v1.5
+- ✓ Shadow reports compare candidate and production baseline on detection deltas, false positives, and latency over the same artifact window — v1.5
+- ✓ Team can assemble a promotion review packet with lineage, verification verdicts, and shadow comparison summaries for manual approval — v1.5
+- ✓ Operator CLI can load the latest verification, shadow, or promotion-review artifacts by stable ID — v1.5
 
 ### Out of Scope
 
@@ -78,9 +75,9 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy.
 
-The docs now point to the next missing step: formal verification and shadow-style promotion readiness. `docs/EVOLUTION.md` explicitly sequences the Z3 gate before shadow, canary, and production, and the Rust roadmap still defers governance until reality demands it. That makes `v1.5` the right place to define repo-owned invariants, verification corpora, shadow comparison artifacts, and promotion review packets without introducing live canaries or quorum approvals yet.
+The docs now point beyond offline promotion readiness toward whatever next milestone is chosen from the archived roadmap themes: bounded live promotion mechanics, richer operator control surfaces, or stronger governance once real trust boundaries exist. The active planning files are intentionally clear that `v1.5` is complete and the next cycle has not been selected yet.
 
 ## Constraints
 
@@ -112,7 +109,7 @@ The docs now point to the next missing step: formal verification and shadow-styl
 | Start with a CLI-backed operator surface | The existing runtime already exposes serializable reports and stores; CLI is the smallest practical control seam | ✓ Chosen |
 | Keep replay offline and deterministic | Evaluation should strengthen trust in production behavior without widening the live-response blast radius | ✓ Chosen |
 | Choose adversarial replay and strategy evaluation as the next milestone | `docs/ROADMAP.md` and `docs/EVOLUTION.md` both place offline red-team and detector bench work ahead of live promotion workflows | ✓ Chosen |
-| Choose formal verification and shadow readiness as the next milestone | `docs/EVOLUTION.md` places verification and shadow before canary or production, while governance remains explicitly deferred | ✓ Chosen |
+| Complete formal verification and shadow readiness before any live promotion work | `docs/EVOLUTION.md` places verification and shadow before canary or production, while governance remains explicitly deferred | ✓ Good |
 
 ---
-*Last updated: 2026-04-03 after starting v1.5*
+*Last updated: 2026-04-03 after shipping v1.5*
