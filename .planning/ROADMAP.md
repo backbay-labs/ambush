@@ -3,70 +3,71 @@
 **Created:** 2026-04-03
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## Milestone v1.1: Durability And Operators
+## Milestone v1.2: Async Investigation And Correlation
 
-**Milestone Goal:** Make the shipped single-node Rust lane durable and operator-usable without expanding the architecture prematurely.
+**Milestone Goal:** Add async investigation and incident correlation on top of the durable runtime without weakening the hot path or over-expanding the architecture.
 
 ## Summary
 
-**3 phases** | **11 v1.1 requirements mapped** | All covered ✓
+**3 phases** | **7 v1.2 requirements mapped** | All covered ✓
 
-- [x] **Phase 5: Durable Substrate** (completed 2026-04-03)
-- [x] **Phase 6: Persistent Audit And Replay** (completed 2026-04-03)
-- [x] **Phase 7: Operator Visibility** (completed 2026-04-03)
+- [ ] **Phase 8: Async Investigation Pipeline**
+- [ ] **Phase 9: Correlation And Incident Assembly**
+- [ ] **Phase 10: Operator Review Surfaces**
 
 | # | Phase | Goal | Requirements | Success Criteria | Status |
 |---|-------|------|--------------|------------------|--------|
-| 5 | Durable Substrate | Add persistent substrate selection, recovery, and durability gating without changing hot-path contracts | CFG-04, DUR-01, DUR-02, DUR-03, DUR-04 | 4 | Complete (2026-04-03) |
-| 6 | Persistent Audit And Replay | Persist decision artifacts and support offline retrieval and replay by stable identifiers | AUD-03, AUD-04, AUD-05 | 4 | Complete (2026-04-03) |
-| 7 | Operator Visibility | Expose runtime health, metrics, and cross-artifact correlation for operators | OPS-03, OPS-04, OPS-05 | 4 | Complete (2026-04-03) |
+| 8 | Async Investigation Pipeline | Add a background investigation lane that enriches prior findings without delaying the original decision path | INV-01, INV-02, INV-03 | 4 | Planned |
+| 9 | Correlation And Incident Assembly | Group related findings and investigation bundles into reviewable incidents with explainable inclusion logic | COR-01, COR-02 | 4 | Planned |
+| 10 | Operator Review Surfaces | Expose investigation and incident context in one operator-facing surface with clear hot-path versus async boundaries | REV-01, REV-02 | 4 | Planned |
 
 ## Phase Details
 
-### Phase 5: Durable Substrate
+### Phase 8: Async Investigation Pipeline
 
-**Goal:** Add persistent substrate selection, recovery, and durability gating without changing the hot-path contract.
-**Status:** Complete (2026-04-03)
+**Goal:** Add a background investigation lane that enriches prior findings without delaying the original decision path.
+**Status:** Planned
 
-**Requirements:** CFG-04, DUR-01, DUR-02, DUR-03, DUR-04
-
-**Success criteria:**
-1. Runtime can load durable substrate configuration and select in-memory or local-journal substrate at startup.
-2. Detector and policy code continue to depend only on the substrate trait while deposits land in the configured backend.
-3. Restarting the runtime in durable mode preserves recent pheromone state and supports query by threat class and recency.
-4. `live_response` fails closed when durable substrate readiness is required but unavailable.
-
-### Phase 6: Persistent Audit And Replay
-
-**Goal:** Persist decision artifacts and support offline retrieval and replay without re-running live actions.
-**Status:** Complete (2026-04-03)
-
-**Requirements:** AUD-03, AUD-04, AUD-05
+**Requirements:** INV-01, INV-02, INV-03
 
 **Success criteria:**
-1. Detect -> authorize -> execute writes receipt and replay artifacts to a configured durable store.
-2. Operators can retrieve persisted bundles by hunt ID or receipt ID after restart.
-3. Replay tooling can reconstruct a saved decision flow without re-executing the original live response.
-4. Persisted artifacts preserve stable identifiers linking receipt chain, findings, and execution records.
+1. Detect-only and live-response flows can emit an investigation request and complete the original decision path without waiting for enrichment.
+2. Operators can configure investigation enablement, worker count, concurrency, and time budgets through repository-owned config.
+3. Investigation outputs persist as durable bundles linked to the originating hunt ID and receipt IDs.
+4. Tests prove that investigation failure or timeout degrades to visible async status rather than blocking the hot path.
 
-### Phase 7: Operator Visibility
+### Phase 9: Correlation And Incident Assembly
 
-**Goal:** Give operators usable health, performance, and correlation visibility for the durable runtime.
-**Status:** Complete (2026-04-03)
+**Goal:** Group related findings and investigation bundles into reviewable incidents with explainable inclusion logic.
+**Status:** Planned
 
-**Requirements:** OPS-03, OPS-04, OPS-05
+**Requirements:** COR-01, COR-02
 
 **Success criteria:**
-1. One operator-facing status surface reports runtime mode plus detector, substrate, policy, and response readiness.
-2. Metrics expose counters and latency distributions for detect, policy, persist, and response stages.
-3. Runtime traces and logs share stable hunt and receipt identifiers with stored artifacts for correlation.
-4. Operator workflows document how to inspect status, recent persisted decisions, and degraded durability modes.
+1. Runtime can assemble a correlated incident record from multiple findings and investigation bundles using stable identifiers, time windows, and shared evidence.
+2. Correlation output records which inputs were included, which were rejected, and why.
+3. Incident records persist across restart and remain linked to the underlying hunts, receipts, and investigation bundles.
+4. Tests cover both successful grouping and rejection cases so false merges are visible and bounded.
+
+### Phase 10: Operator Review Surfaces
+
+**Goal:** Expose investigation and incident context in one operator-facing surface with clear hot-path versus async boundaries.
+**Status:** Planned
+
+**Requirements:** REV-01, REV-02
+
+**Success criteria:**
+1. One operator-facing surface reports investigation queue state, recent job status, summaries, and failure reasons without requiring raw file inspection.
+2. Operators can inspect correlated incidents, underlying findings, and linked evidence from that same surface.
+3. Hot-path decisions and later async enrichment show distinct timestamps and freshness markers so operators can see what is authoritative versus newly attached context.
+4. Operator documentation covers how to review enriched findings, interpret incident membership, and handle degraded investigation states.
 
 ## Deferred Work
 
 These remain intentionally outside this milestone:
 
-- async investigation and correlation on the hot path
+- async investigation on the hot path
+- correlation directly changing automated response policy
 - distributed governance / quorum approvals
 - gossip / CRDT membership
 - Python runtime or PyO3 expansion
@@ -74,10 +75,10 @@ These remain intentionally outside this milestone:
 
 ## Sequencing Rationale
 
-- Phase 5 hardens the substrate boundary before broader persistence work depends on it.
-- Phase 6 makes the audit path durable once the underlying storage posture is real.
-- Phase 7 turns the durable runtime into something operators can inspect and trust day to day.
+- Phase 8 creates the async job and bundle model before any higher-level correlation logic depends on it.
+- Phase 9 assembles incidents only after the runtime can produce durable investigation outputs.
+- Phase 10 turns the new enrichment and incident layers into something operators can review without ambiguity.
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.1 completion*
+*Last updated: 2026-04-03 for milestone v1.2 initialization*

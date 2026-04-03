@@ -53,18 +53,18 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INV-01 | TBD | Planned |
-| INV-02 | TBD | Planned |
-| INV-03 | TBD | Planned |
-| COR-01 | TBD | Planned |
-| COR-02 | TBD | Planned |
-| REV-01 | TBD | Planned |
-| REV-02 | TBD | Planned |
+| INV-01 | Phase 8 | Planned |
+| INV-02 | Phase 8 | Planned |
+| INV-03 | Phase 8 | Planned |
+| COR-01 | Phase 9 | Planned |
+| COR-02 | Phase 9 | Planned |
+| REV-01 | Phase 10 | Planned |
+| REV-02 | Phase 10 | Planned |
 
 **Coverage:**
 - v1.2 requirements: 7 total
-- Mapped to phases: 0
-- Unmapped: 7
+- Mapped to phases: 7
+- Unmapped: 0 ✓
 - Future requirements: 6
 
 ---

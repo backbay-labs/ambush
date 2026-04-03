@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: async-investigation-and-correlation
-status: planning
-last_updated: "2026-04-03T05:22:05Z"
+status: ready
+last_updated: "2026-04-03T05:24:47Z"
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
-  total_plans: 0
+  total_plans: 3
   completed_plans: 0
   percent: 0
 ---
@@ -19,7 +19,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** Defining milestone v1.2 requirements and roadmap
+**Current focus:** Milestone v1.2 initialized, Phase 8 ready for discussion or planning
 
 ## Memory
 
@@ -31,4 +31,4 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 ## Next Command
 
-`$gsd-new-milestone` in progress
+`$gsd-plan-phase 8`
