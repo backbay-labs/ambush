@@ -1,6 +1,6 @@
 # Milestone v1.3: Operator Control And Replay Evaluation
 
-**Status:** READY
+**Status:** IN PROGRESS
 **Phases:** 11-13
 **Total Plans:** 3
 **Requirements:** 8 mapped, all covered
@@ -18,7 +18,7 @@
 **Plans:** 1
 
 Plans:
-- [ ] 11-01: CLI-backed status, investigation, incident, and replay lookup surface
+- [x] 11-01: CLI-backed status, investigation, incident, and replay lookup surface
 
 **Success criteria:**
 1. Operator can inspect runtime status, recent decisions, investigations, and incidents through one CLI surface.
@@ -60,9 +60,9 @@ Plans:
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-01 | Phase 11 | Pending |
-| OPS-02 | Phase 11 | Pending |
-| OPS-03 | Phase 11 | Pending |
+| OPS-01 | Phase 11 | Complete |
+| OPS-02 | Phase 11 | Complete |
+| OPS-03 | Phase 11 | Complete |
 | RPLY-01 | Phase 12 | Pending |
 | RPLY-02 | Phase 12 | Pending |
 | RPLY-03 | Phase 12 | Pending |
@@ -76,4 +76,4 @@ Plans:
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after starting v1.3*
+*Last updated: 2026-04-03 after Phase 11*

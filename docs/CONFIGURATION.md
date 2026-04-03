@@ -95,6 +95,25 @@ correlation:
 
 Degraded investigation or incident stores surface as warnings in the operator report. They do not block startup in this milestone.
 
+### Operator Control CLI
+
+The repo now ships a CLI-backed control surface in `swarmctl` for runtime review and stable-ID artifact lookup.
+
+Examples:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- status --config rulesets/default.yaml
+cargo run -p swarm-runtime --bin swarmctl -- --json replay --receipt-id receipt-123 --config rulesets/default.yaml
+cargo run -p swarm-runtime --bin swarmctl -- investigation --hunt-id evt-123 --config rulesets/default.yaml
+cargo run -p swarm-runtime --bin swarmctl -- incident --incident-id incident:evt-123:1 --config rulesets/default.yaml
+```
+
+The CLI labels output by origin:
+
+- `live_runtime_status`: current operator review report from the configured runtime stack
+- `persisted_runtime_artifact`: replay, investigation, or incident artifacts loaded from durable runtime stores
+- `offline_replay_artifact`: reserved for the offline replay workflows added in later milestones
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.

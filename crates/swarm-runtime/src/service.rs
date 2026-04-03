@@ -542,6 +542,17 @@ where
         Ok(store.load_by_hunt_id(hunt_id)?)
     }
 
+    pub fn load_persisted_bundle_by_bundle_id<Store>(
+        &self,
+        store: &Store,
+        bundle_id: &str,
+    ) -> Result<Option<ReplayBundleLookup>, ServiceError>
+    where
+        Store: ReplayBundleStore,
+    {
+        Ok(store.load_by_bundle_id(bundle_id)?)
+    }
+
     pub fn load_persisted_bundle_by_receipt_id<Store>(
         &self,
         store: &Store,
@@ -563,6 +574,19 @@ where
     {
         Ok(store
             .load_by_hunt_id(hunt_id)
+            .map_err(InvestigationError::from)?)
+    }
+
+    pub fn load_persisted_investigation_by_investigation_id<Store>(
+        &self,
+        store: &Store,
+        investigation_id: &str,
+    ) -> Result<Option<InvestigationBundleLookup>, ServiceError>
+    where
+        Store: InvestigationBundleStore,
+    {
+        Ok(store
+            .load_by_investigation_id(investigation_id)
             .map_err(InvestigationError::from)?)
     }
 
@@ -603,6 +627,19 @@ where
     {
         Ok(store
             .load_by_hunt_id(hunt_id)
+            .map_err(CorrelationError::from)?)
+    }
+
+    pub fn load_incident_by_incident_id<Store>(
+        &self,
+        store: &Store,
+        incident_id: &str,
+    ) -> Result<Option<IncidentLookup>, ServiceError>
+    where
+        Store: IncidentStore,
+    {
+        Ok(store
+            .load_by_incident_id(incident_id)
             .map_err(CorrelationError::from)?)
     }
 
@@ -856,6 +893,81 @@ where
             &self.incident_store,
             hunt_id,
         )
+    }
+
+    /// Load a persisted replay bundle from the configured replay store.
+    pub fn replay_bundle_by_bundle_id(
+        &self,
+        bundle_id: &str,
+    ) -> Result<Option<ReplayBundleLookup>, ServiceError> {
+        self.service
+            .load_persisted_bundle_by_bundle_id(&self.replay_store, bundle_id)
+    }
+
+    /// Load a persisted replay bundle by hunt identifier from the configured replay store.
+    pub fn replay_bundle_by_hunt_id(
+        &self,
+        hunt_id: &str,
+    ) -> Result<Option<ReplayBundleLookup>, ServiceError> {
+        self.service
+            .load_persisted_bundle_by_hunt_id(&self.replay_store, hunt_id)
+    }
+
+    /// Load a persisted replay bundle by receipt identifier from the configured replay store.
+    pub fn replay_bundle_by_receipt_id(
+        &self,
+        receipt_id: &str,
+    ) -> Result<Option<ReplayBundleLookup>, ServiceError> {
+        self.service
+            .load_persisted_bundle_by_receipt_id(&self.replay_store, receipt_id)
+    }
+
+    /// Load a persisted investigation bundle from the configured investigation store.
+    pub fn investigation_by_investigation_id(
+        &self,
+        investigation_id: &str,
+    ) -> Result<Option<InvestigationBundleLookup>, ServiceError> {
+        self.service
+            .load_persisted_investigation_by_investigation_id(
+                &self.investigation_store,
+                investigation_id,
+            )
+    }
+
+    /// Load a persisted investigation bundle by hunt identifier from the configured store.
+    pub fn investigation_by_hunt_id(
+        &self,
+        hunt_id: &str,
+    ) -> Result<Option<InvestigationBundleLookup>, ServiceError> {
+        self.service
+            .load_persisted_investigation_by_hunt_id(&self.investigation_store, hunt_id)
+    }
+
+    /// Load a persisted investigation bundle by receipt identifier from the configured store.
+    pub fn investigation_by_receipt_id(
+        &self,
+        receipt_id: &str,
+    ) -> Result<Option<InvestigationBundleLookup>, ServiceError> {
+        self.service
+            .load_persisted_investigation_by_receipt_id(&self.investigation_store, receipt_id)
+    }
+
+    /// Load a correlated incident from the configured incident store by incident id.
+    pub fn incident_by_incident_id(
+        &self,
+        incident_id: &str,
+    ) -> Result<Option<IncidentLookup>, ServiceError> {
+        self.service
+            .load_incident_by_incident_id(&self.incident_store, incident_id)
+    }
+
+    /// Load a correlated incident from the configured incident store by hunt id.
+    pub fn incident_by_hunt_id(
+        &self,
+        hunt_id: &str,
+    ) -> Result<Option<IncidentLookup>, ServiceError> {
+        self.service
+            .load_incident_by_hunt_id(&self.incident_store, hunt_id)
     }
 
     /// Produce the full operator review report from the configured stack.

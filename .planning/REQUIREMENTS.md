@@ -53,9 +53,9 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-01 | Phase 11 | Pending |
-| OPS-02 | Phase 11 | Pending |
-| OPS-03 | Phase 11 | Pending |
+| OPS-01 | Phase 11 | Complete |
+| OPS-02 | Phase 11 | Complete |
+| OPS-03 | Phase 11 | Complete |
 | RPLY-01 | Phase 12 | Pending |
 | RPLY-02 | Phase 12 | Pending |
 | RPLY-03 | Phase 12 | Pending |
