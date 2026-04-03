@@ -10,23 +10,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.5 Formal Verification And Shadow Readiness` shipped on 2026-04-03.
+`v1.6 Bounded Canary And Rollback` shipped on 2026-04-03.
 
 **What is now real:**
-- named adversarial replay suites with campaign, technique, and benign-vs-adversarial metadata
-- repo-owned detector experiment manifests with baseline-vs-candidate evaluation
-- persisted experiment reports with lineage, corpus version, score summaries, and explicit offline gates
-- canonical verification corpus manifests with known-bad coverage, benign controls, threat templates, and resource budgets
-- persisted verification reports, shadow reports, and promotion-review packets addressable by stable IDs through `swarmctl`
+- verified candidate detectors can be attached to one repo-owned canary slot without mutating the production baseline detector
+- canary runs persist assignment lineage, verification and shadow evidence, observation metrics, threshold verdicts, and operator recommendations under stable run IDs
+- operators can drive canary start, live event ingestion, rollback, halt, and stable-ID reload through `swarmctl`
+- canary runs automatically block and roll back on configured threshold or budget failures, and manual rollback preserves explicit reason history
+- canary configuration is validated in the shared Rust config model and shipped in `rulesets/default.yaml`
 
-## Current Milestone: v1.6 Bounded Canary And Rollback
+## Next Planning Step
 
-**Goal:** Add a bounded live canary lane for verified candidate detectors, with observation metrics and rollback, without introducing fleet-wide promotion or quorum governance.
-
-**Target features:**
-- assign a verified candidate detector to a scoped canary slot without replacing the production baseline
-- observe live canary metrics and bounded live outputs over a configurable window
-- roll back automatically or manually and emit a canary decision artifact for later promotion review
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -61,23 +56,13 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Just Shipped
 
-- ✓ Team can run a repo-owned verification gate against a candidate detector and get per-invariant pass/fail results before any promotion workflow — v1.5
-- ✓ Verification failures preserve counterexamples or failing corpus references so operators can inspect exactly what broke — v1.5
-- ✓ Canonical known-bad indicators, benign controls, and resource budgets are stored in repo-owned manifests or config, not hardcoded in tests — v1.5
-- ✓ Team can run a candidate detector in shadow mode against recorded replay or runtime artifacts without emitting pheromones or response actions — v1.5
-- ✓ Shadow reports compare candidate and production baseline on detection deltas, false positives, and latency over the same artifact window — v1.5
-- ✓ Team can assemble a promotion review packet with lineage, verification verdicts, and shadow comparison summaries for manual approval — v1.5
-- ✓ Operator CLI can load the latest verification, shadow, or promotion-review artifacts by stable ID — v1.5
-
-### Active
-
-- [ ] Team can assign a verified candidate detector to a bounded canary slot without replacing the production baseline — v1.6
-- [ ] Canary execution emits live detections only within the scoped canary lane and cannot by itself trigger fleet-wide escalation semantics — v1.6
-- [ ] Canary observation records detection, false-positive, latency, and resource metrics over a configurable live window — v1.6
-- [ ] Canary runs automatically roll back when configured metrics diverge beyond thresholds or resource budgets — v1.6
-- [ ] Operator can manually halt or roll back a canary and retrieve the reason, affected slot, and reverted baseline — v1.6
-- [ ] Team can assemble a canary evaluation report that links verification, shadow, and canary evidence into one ready-for-promotion or blocked recommendation — v1.6
-- [ ] Operator CLI can inspect active or completed canary runs and rollback history by stable ID — v1.6
+- ✓ Team can assign a verified candidate detector to a bounded canary slot without replacing the production baseline — v1.6
+- ✓ Canary execution emits live detections only within the scoped canary lane and cannot by itself trigger fleet-wide escalation semantics — v1.6
+- ✓ Canary observation records detection, false-positive, latency, and resource metrics over a configurable live window — v1.6
+- ✓ Canary runs automatically roll back when configured metrics diverge beyond thresholds or resource budgets — v1.6
+- ✓ Operator can manually halt or roll back a canary and retrieve the reason, affected slot, and reverted baseline — v1.6
+- ✓ Team can assemble a canary evaluation report that links verification, shadow, and canary evidence into one ready-for-promotion or blocked recommendation — v1.6
+- ✓ Operator CLI can inspect active or completed canary runs and rollback history by stable ID — v1.6
 
 ### Out of Scope
 
@@ -90,9 +75,9 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed the next staged-deployment step with bounded canary execution, persisted canary evidence, and explicit rollback workflows.
 
-The next milestone follows the staged deployment path that the docs already describe: shadow is complete, so the next bounded step is canary. `docs/EVOLUTION.md` and `docs/INTEGRATION.md` both sequence the rollout as `shadow -> canary -> production`, while the Rust-first roadmap still keeps quorum governance optional and deferred. That makes `v1.6` the right place to introduce a narrowly scoped live canary lane, observation metrics, and rollback without yet attempting consensus promotion or fleet-wide rollout.
+The project now has an end-to-end candidate promotion ladder up through canary: experiment -> verification -> shadow -> canary. The next cycle can focus on controlled production promotion, richer operator review, or governance only after bounded canary remains stable and inspectable.
 
 ## Constraints
 
@@ -128,4 +113,4 @@ The next milestone follows the staged deployment path that the docs already desc
 | Choose bounded canary and rollback as the next milestone | The canonical staged deployment path moves from shadow to canary, while consensus promotion remains deferred | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after starting v1.6*
+*Last updated: 2026-04-03 after shipping v1.6*
