@@ -9,8 +9,10 @@ pub mod pipeline;
 pub mod service;
 
 pub use swarm_core::config::RuntimeMode;
+use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
 use swarm_policy::{ActionRequest, ApprovalContext, ApprovalError, ApprovalGate};
 use swarm_response::{ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt};
+use swarm_whisker::DetectionFinding;
 
 /// Runtime errors surfaced while authorizing or executing actions.
 #[derive(Debug, thiserror::Error)]
@@ -57,6 +59,12 @@ where
         context: &ApprovalContext,
     ) -> Result<ResponseReceipt, RuntimeError> {
         let decision = self.policy.evaluate(request, context)?;
+        tracing::info!(
+            hunt_id = %request.hunt_id.0,
+            verdict = ?decision.verdict,
+            mode = ?self.mode,
+            "policy evaluated response request"
+        );
 
         match decision.verdict {
             swarm_policy::PolicyVerdict::Deny => {
@@ -74,10 +82,77 @@ where
             RuntimeMode::LiveResponse => ExecutionMode::Enforced,
         };
 
-        self.response
+        let receipt = self
+            .response
             .execute(request, &lease, execution_mode)
             .await
-            .map_err(RuntimeError::from)
+            .map_err(RuntimeError::from)?;
+        tracing::info!(
+            hunt_id = %request.hunt_id.0,
+            action = %receipt.action,
+            mode = ?receipt.mode,
+            status = ?receipt.status,
+            "response executed"
+        );
+        Ok(receipt)
+    }
+
+    /// Evaluate, execute, and record the full response decision for one detection finding.
+    pub async fn audit_authorize_and_execute(
+        &self,
+        detection: &DetectionFinding,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+    ) -> Result<AuditTrail, RuntimeError> {
+        let decision = self.policy.evaluate(request, context)?;
+        tracing::info!(
+            hunt_id = %request.hunt_id.0,
+            event_id = %detection.event_id,
+            verdict = ?decision.verdict,
+            mode = ?self.mode,
+            "building audit trail for response decision"
+        );
+
+        let execution_mode = match self.mode {
+            RuntimeMode::DetectOnly => ExecutionMode::DryRun,
+            RuntimeMode::LiveResponse => ExecutionMode::Enforced,
+        };
+
+        let (lease, response) = match decision.verdict {
+            swarm_policy::PolicyVerdict::Deny => (
+                None,
+                AuditResponseRecord::Skipped {
+                    reason: decision.reason.clone(),
+                },
+            ),
+            swarm_policy::PolicyVerdict::RequireHuman if self.mode == RuntimeMode::LiveResponse => (
+                None,
+                AuditResponseRecord::Skipped {
+                    reason: decision.reason.clone(),
+                },
+            ),
+            swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {
+                let lease = self.policy.issue_lease(request, context)?;
+                let response = match self.response.execute(request, &lease, execution_mode).await {
+                    Ok(receipt) => AuditResponseRecord::Success(receipt),
+                    Err(error) => AuditResponseRecord::Failure(error.failure),
+                };
+                (Some(lease), response)
+            }
+        };
+
+        Ok(AuditTrail {
+            trail_id: format!("trail:{}:{}", request.hunt_id.0, context.now_ms),
+            hunt_id: request.hunt_id.0.clone(),
+            detection: detection.clone(),
+            policy: PolicyRecord {
+                verdict: decision.verdict,
+                reason: decision.reason,
+                lease,
+            },
+            response,
+            created_at_ms: context.now_ms,
+        })
     }
 }
 
