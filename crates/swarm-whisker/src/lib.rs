@@ -9,3 +9,8 @@
 
 pub mod detector;
 pub mod stream;
+
+pub use detector::{
+    DetectionFinding, DetectionStrategy, NetworkConnectEvent, ProcessStartEvent,
+    SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
+};
