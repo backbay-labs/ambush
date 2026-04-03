@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: async-investigation-and-correlation
+milestone: v1.3
+milestone_name: operator-control-and-replay-evaluation
 status: ready
-last_updated: "2026-04-03T14:50:46Z"
+last_updated: "2026-04-03T15:11:47Z"
 progress:
   total_phases: 3
-  completed_phases: 3
+  completed_phases: 0
   total_plans: 3
-  completed_plans: 3
-  percent: 100
+  completed_plans: 0
+  percent: 0
 ---
 
 # State
@@ -19,19 +19,18 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** Milestone v1.2 complete and archived; ready for next milestone
+**Current focus:** Milestone v1.3 initialized; Phase 11 is next
 
 ## Memory
 
 - This is a brownfield repository with a Rust-first runtime and Python retained as reference-only material.
 - `v1.0` shipped the first trusted vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response, and replayable audit artifacts.
-- `v1.1` shipped the operational hardening slice: local durable substrate, persistent replay storage, and operator status/metrics surfaces.
-- `v1.2` now has Phase 8 complete: persisted replay bundles can seed an async investigation queue with durable queued/completed/failed outcomes.
-- `v1.2` now has Phase 9 complete: correlation can assemble durable incidents with explicit inclusion and rejection reasons.
-- `v1.2` now has Phase 10 complete: one operator review report combines hot-path decisions, async investigation state, incidents, and freshness markers.
+- `v1.1` shipped the operational hardening slice: local durable substrate, persistent replay storage, and operator status or metrics surfaces.
+- `v1.2` shipped async investigation, explainable incident assembly, one operator review report, and config-backed async stack composition.
+- `v1.3` is scoped around a repo-owned operator CLI, deterministic offline replay, and regression evaluation over the existing durable artifact model.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
-- `v1.2` audit passed with full requirement coverage, config-backed async stack composition, and green workspace tests plus clippy.
+- Research was intentionally skipped for this milestone because the existing docs and archived roadmap already identified the next scope clearly.
 
 ## Next Command
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 11`
