@@ -27,6 +27,9 @@ pub struct SwarmConfig {
     /// Async investigation settings layered on top of the hot path.
     #[serde(default)]
     pub investigation: InvestigationConfig,
+    /// Correlation settings for assembling reviewable incidents.
+    #[serde(default)]
+    pub correlation: CorrelationConfig,
 }
 
 /// Whether the runtime simulates or executes live response actions.
@@ -140,6 +143,27 @@ pub struct InvestigationConfig {
     /// Store used for investigation bundles and lookup by stable identifiers.
     #[serde(default)]
     pub bundle_store: BundleStoreConfig,
+}
+
+/// Incident correlation settings layered on top of investigation bundles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CorrelationConfig {
+    /// Whether incident correlation is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum age difference between investigations to be considered together.
+    #[serde(default = "default_correlation_time_window_ms")]
+    pub time_window_ms: i64,
+    /// Minimum shared correlation keys required for inclusion.
+    #[serde(default = "default_correlation_min_shared_keys")]
+    pub min_shared_keys: usize,
+    /// Maximum recent investigations to scan when assembling one incident.
+    #[serde(default = "default_correlation_candidate_limit")]
+    pub candidate_limit: usize,
+    /// Store used for correlated incident artifacts.
+    #[serde(default)]
+    pub incident_store: BundleStoreConfig,
 }
 
 /// Replay bundle storage backend selection.
@@ -340,6 +364,38 @@ impl SwarmConfig {
             }
         }
 
+        if self.correlation.enabled {
+            if self.correlation.time_window_ms <= 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "correlation.time_window_ms",
+                    reason: "must be greater than zero when correlation is enabled".to_string(),
+                });
+            }
+            if self.correlation.min_shared_keys == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "correlation.min_shared_keys",
+                    reason: "must be greater than zero when correlation is enabled".to_string(),
+                });
+            }
+            if self.correlation.candidate_limit == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "correlation.candidate_limit",
+                    reason: "must be greater than zero when correlation is enabled".to_string(),
+                });
+            }
+        }
+        match &self.correlation.incident_store {
+            BundleStoreConfig::Memory => {}
+            BundleStoreConfig::LocalFiles { directory } => {
+                if directory.trim().is_empty() {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "correlation.incident_store.directory",
+                        reason: "must not be empty".to_string(),
+                    });
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -377,6 +433,18 @@ impl Default for InvestigationConfig {
     }
 }
 
+impl Default for CorrelationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            time_window_ms: default_correlation_time_window_ms(),
+            min_shared_keys: default_correlation_min_shared_keys(),
+            candidate_limit: default_correlation_candidate_limit(),
+            incident_store: BundleStoreConfig::default(),
+        }
+    }
+}
+
 const fn default_recent_decisions_limit() -> usize {
     20
 }
@@ -391,4 +459,16 @@ const fn default_investigation_max_pending_jobs() -> usize {
 
 const fn default_investigation_time_budget_ms() -> u64 {
     250
+}
+
+const fn default_correlation_time_window_ms() -> i64 {
+    300_000
+}
+
+const fn default_correlation_min_shared_keys() -> usize {
+    1
+}
+
+const fn default_correlation_candidate_limit() -> usize {
+    32
 }

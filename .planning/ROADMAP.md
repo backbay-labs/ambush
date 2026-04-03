@@ -12,13 +12,13 @@
 **3 phases** | **7 v1.2 requirements mapped** | All covered ✓
 
 - [x] **Phase 8: Async Investigation Pipeline** (completed 2026-04-03)
-- [ ] **Phase 9: Correlation And Incident Assembly**
+- [x] **Phase 9: Correlation And Incident Assembly** (completed 2026-04-03)
 - [ ] **Phase 10: Operator Review Surfaces**
 
 | # | Phase | Goal | Requirements | Success Criteria | Status |
 |---|-------|------|--------------|------------------|--------|
 | 8 | Async Investigation Pipeline | Add a background investigation lane that enriches prior findings without delaying the original decision path | INV-01, INV-02, INV-03 | 4 | Complete (2026-04-03) |
-| 9 | Correlation And Incident Assembly | Group related findings and investigation bundles into reviewable incidents with explainable inclusion logic | COR-01, COR-02 | 4 | Planned |
+| 9 | Correlation And Incident Assembly | Group related findings and investigation bundles into reviewable incidents with explainable inclusion logic | COR-01, COR-02 | 4 | Complete (2026-04-03) |
 | 10 | Operator Review Surfaces | Expose investigation and incident context in one operator-facing surface with clear hot-path versus async boundaries | REV-01, REV-02 | 4 | Planned |
 
 ## Phase Details
@@ -39,7 +39,7 @@
 ### Phase 9: Correlation And Incident Assembly
 
 **Goal:** Group related findings and investigation bundles into reviewable incidents with explainable inclusion logic.
-**Status:** Planned
+**Status:** Complete (2026-04-03)
 
 **Requirements:** COR-01, COR-02
 

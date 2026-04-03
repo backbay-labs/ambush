@@ -40,3 +40,11 @@ investigation:
   time_budget_ms: 250
   bundle_store:
     kind: memory
+
+correlation:
+  enabled: false
+  time_window_ms: 300000
+  min_shared_keys: 1
+  candidate_limit: 32
+  incident_store:
+    kind: memory

@@ -1,4 +1,5 @@
 use crate::config::RuntimeConfig;
+use crate::correlation::{CorrelationEngine, CorrelationError, CorrelationOutcome};
 use crate::investigation::{InvestigationCoordinator, InvestigationError, InvestigationStrategy};
 use crate::pipeline::{DetectionPipelineOutcome, PipelineError, detect_and_deposit};
 use crate::{RuntimeError, RuntimeMode, SwarmRuntime};
@@ -15,9 +16,9 @@ use swarm_policy::ApprovalGate;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::ResponseExecutor;
 use swarm_spine::{
-    InvestigationBundleLookup, InvestigationBundleRecord, InvestigationBundleStore, ReplayBundle,
-    ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,
-    ReplayStoreHealth,
+    IncidentLookup, IncidentStore, InvestigationBundleLookup, InvestigationBundleRecord,
+    InvestigationBundleStore, ReplayBundle, ReplayBundleLookup, ReplayBundleRecord,
+    ReplayBundleStore, ReplayPreview, ReplayStoreError, ReplayStoreHealth,
 };
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 
@@ -38,6 +39,9 @@ pub enum ServiceError {
 
     #[error(transparent)]
     Investigation(#[from] InvestigationError),
+
+    #[error(transparent)]
+    Correlation(#[from] CorrelationError),
 
     #[error("failed to write replay bundle `{path}`: {source}")]
     Write {
@@ -534,6 +538,33 @@ where
             .map_err(InvestigationError::from)?)
     }
 
+    pub fn correlate_hunt<Investigations, Incidents>(
+        &self,
+        engine: &CorrelationEngine,
+        investigations: &Investigations,
+        incidents: &Incidents,
+        hunt_id: &str,
+    ) -> Result<Option<CorrelationOutcome>, ServiceError>
+    where
+        Investigations: InvestigationBundleStore,
+        Incidents: IncidentStore,
+    {
+        Ok(engine.correlate_hunt(investigations, incidents, hunt_id)?)
+    }
+
+    pub fn load_incident_by_hunt_id<Store>(
+        &self,
+        store: &Store,
+        hunt_id: &str,
+    ) -> Result<Option<IncidentLookup>, ServiceError>
+    where
+        Store: IncidentStore,
+    {
+        Ok(store
+            .load_by_hunt_id(hunt_id)
+            .map_err(CorrelationError::from)?)
+    }
+
     pub fn replay_preview(&self, bundle: &ReplayBundle) -> ReplayPreview {
         ReplayPreview::from_bundle(bundle)
     }
@@ -638,12 +669,14 @@ fn component_status_from_replay_store(health: &ReplayStoreHealth) -> ComponentSt
 #[cfg(test)]
 mod tests {
     use super::{EventExecutionContext, RuntimeService};
+    use crate::correlation::CorrelationEngine;
     use crate::investigation::{InvestigationOutcome, InvestigationStrategy};
     use crate::{RuntimeMode, SwarmRuntime};
     use async_trait::async_trait;
     use swarm_core::config::{
-        AuditConfig, BundleStoreConfig, InvestigationConfig, PheromoneBackendConfig,
-        PheromoneConfig, PolicyConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        AuditConfig, BundleStoreConfig, CorrelationConfig, InvestigationConfig,
+        PheromoneBackendConfig, PheromoneConfig, PolicyConfig, RuntimeSettings, SwarmConfig,
+        TelemetrySourceConfig,
     };
     use swarm_core::types::AgentId;
     use swarm_core::types::Severity;
@@ -653,8 +686,8 @@ mod tests {
     use swarm_response::ResponseStatus;
     use swarm_response::adapters::SandboxExecutor;
     use swarm_spine::{
-        AuditResponseRecord, FileReplayBundleStore, MemoryInvestigationBundleStore, ReplayBundle,
-        ReplayBundleStore,
+        AuditResponseRecord, FileReplayBundleStore, InvestigationBundleStore, MemoryIncidentStore,
+        MemoryInvestigationBundleStore, ReplayBundle, ReplayBundleStore,
     };
     use swarm_whisker::{
         ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
@@ -699,6 +732,7 @@ mod tests {
                 recent_decisions_limit: 20,
             },
             investigation: InvestigationConfig::default(),
+            correlation: CorrelationConfig::default(),
         }
     }
 
@@ -1102,5 +1136,116 @@ mod tests {
         assert!(coordinator.snapshot().completed_jobs >= 1);
 
         let _ = std::fs::remove_dir_all(replay_store_root);
+    }
+
+    #[tokio::test]
+    async fn correlate_hunt_persists_incident_with_rejected_candidates() {
+        let mut config = service_config(
+            RuntimeMode::LiveResponse,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        config.investigation = InvestigationConfig {
+            enabled: true,
+            worker_count: 1,
+            max_pending_jobs: 4,
+            time_budget_ms: 250,
+            bundle_store: BundleStoreConfig::Memory,
+        };
+        config.correlation = CorrelationConfig {
+            enabled: true,
+            time_window_ms: 5_000,
+            min_shared_keys: 1,
+            candidate_limit: 16,
+            incident_store: BundleStoreConfig::Memory,
+        };
+        let service = RuntimeService::new(
+            config.clone(),
+            SwarmRuntime::new(
+                RuntimeMode::LiveResponse,
+                StaticApprovalGate::default(),
+                SandboxExecutor,
+            ),
+        );
+        let investigation_store = MemoryInvestigationBundleStore::default();
+        let incident_store = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config.correlation.clone());
+
+        let completed = |investigation_id: &str,
+                         hunt_id: &str,
+                         queued_at_ms: i64,
+                         correlation_keys: &[&str]| {
+            swarm_spine::InvestigationBundle {
+                investigation_id: investigation_id.to_string(),
+                source_bundle_id: format!("bundle:{hunt_id}:1"),
+                hunt_id: hunt_id.to_string(),
+                trail_id: format!("trail:{hunt_id}:1"),
+                event_id: format!("evt:{hunt_id}"),
+                finding_id: format!("finding:{hunt_id}"),
+                threat_class: swarm_core::pheromone::ThreatClass::Execution,
+                severity: Severity::Critical,
+                strategy_id: "summary_investigator".to_string(),
+                response_kind: "success".to_string(),
+                related_receipt_ids: vec![format!("receipt:{hunt_id}")],
+                host_id: Some("host-1".to_string()),
+                user: Some("alice".to_string()),
+                process_name: Some("powershell".to_string()),
+                queued_at_ms,
+                started_at_ms: Some(queued_at_ms + 10),
+                completed_at_ms: Some(queued_at_ms + 100),
+                status: swarm_spine::InvestigationStatus::Completed,
+                summary: Some(format!("summary for {hunt_id}")),
+                evidence_points: vec!["host_id=host-1".to_string()],
+                correlation_keys: correlation_keys.iter().map(|key| key.to_string()).collect(),
+                failure_reason: None,
+            }
+        };
+
+        investigation_store
+            .persist(&completed(
+                "investigation:hunt-1:1",
+                "hunt-1",
+                1_700_000_000_000,
+                &["host:host-1", "user:alice", "strategy:summary"],
+            ))
+            .unwrap();
+        investigation_store
+            .persist(&completed(
+                "investigation:hunt-2:1",
+                "hunt-2",
+                1_700_000_003_000,
+                &["host:host-1", "user:alice"],
+            ))
+            .unwrap();
+        investigation_store
+            .persist(&completed(
+                "investigation:hunt-3:1",
+                "hunt-3",
+                1_700_000_010_500,
+                &["host:host-1"],
+            ))
+            .unwrap();
+
+        let outcome = service
+            .correlate_hunt(&engine, &investigation_store, &incident_store, "hunt-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.incident.included_members.len(), 2);
+        assert_eq!(outcome.incident.rejected_members.len(), 1);
+        assert!(
+            outcome
+                .incident
+                .rejected_members
+                .first()
+                .unwrap()
+                .reason
+                .contains("outside correlation time window")
+        );
+
+        let loaded = service
+            .load_incident_by_hunt_id(&incident_store, "hunt-2")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.record.incident_id, outcome.record.incident_id);
     }
 }

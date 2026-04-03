@@ -4,6 +4,7 @@
 //! checkpoint machinery. It needs a small, serializable record format
 //! that captures what happened in the critical lane and can be replayed.
 
+pub mod incident;
 pub mod investigation;
 pub mod store;
 
@@ -13,6 +14,11 @@ use swarm_policy::{ActionRequest, CapabilityLease, PolicyVerdict};
 use swarm_response::{ResponseFailure, ResponseReceipt};
 use swarm_whisker::{DetectionFinding, TelemetryEvent};
 
+pub use incident::{
+    ConfiguredIncidentStore, CorrelatedIncident, FileIncidentStore, IncidentLookup,
+    IncidentMemberDecision, IncidentRecord, IncidentStore, IncidentStoreError, IncidentStoreHealth,
+    MemoryIncidentStore,
+};
 pub use investigation::{
     ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
     InvestigationBundleLookup, InvestigationBundleRecord, InvestigationBundleStore,
