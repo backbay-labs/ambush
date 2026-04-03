@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.2 Async Investigation And Correlation (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- replay bundles now seed a config-backed background investigation queue with durable queued, completed, failed, and timed-out investigation artifacts
+- durable incidents now assemble from investigation bundles with explicit inclusion and rejection reasons
+- one operator review report now combines hot-path decisions, async investigation state, incidents, and freshness markers
+
+---
+
 ## v1.1 Durability And Operators (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks
@@ -11,7 +22,7 @@
 
 ---
 
-## v1.0 v1.0 (Shipped: 2026-04-03)
+## v1.0 (Shipped: 2026-04-03)
 
 **Phases completed:** 4 phases, 8 plans, 0 tasks
 

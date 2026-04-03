@@ -2,20 +2,21 @@
 
 ## What This Is
 
-Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped slice can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, and emit replayable audit artifacts. The next milestone is about adding slower investigation and correlation capabilities without contaminating the proven hot path.
+Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can now detect suspicious behavior, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, and surface the full chain in one operator review report.
 
 ## Core Value
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## Current Milestone: v1.2 Async Investigation And Correlation
+## Current State: v1.2 Shipped
 
-**Goal:** Add async investigation and incident correlation on top of the durable runtime while keeping fast detection and live response deterministic.
+**Latest shipped milestone:** v1.2 Async Investigation And Correlation
 
-**Target features:**
-- async investigation jobs that run off the hot path and attach evidence to prior findings
-- correlation logic that groups related findings into higher-confidence incident narratives
-- operator review surfaces that show enrichment status, summaries, and incident-level context
+**What shipped:**
+- async investigation jobs that run off the hot path and persist durable investigation bundles
+- deterministic incident correlation with explicit inclusion and rejection reasoning
+- one operator review surface with queue state, recent investigations, recent incidents, warnings, and freshness markers
+- one config-backed runtime stack that composes substrate, replay, investigation, and incident components from repo-owned settings
 
 ## Requirements
 
@@ -28,10 +29,14 @@ Detect real threats quickly enough to take safe action before the window to resp
 - ✓ Operator can switch between in-memory and local-journal substrate backends and require durable live response at runtime boundaries — v1.1
 - ✓ Operator can persist replay bundles to a configured store and reload them by hunt or receipt ID after restart — v1.1
 - ✓ Operator can inspect one status surface with stage metrics, component readiness, and recent decision correlation — v1.1
+- ✓ Operator can queue async investigation off persisted replay bundles and retrieve durable investigation artifacts by hunt or receipt ID — v1.2
+- ✓ Operator can assemble explainable incidents from investigation bundles using shared evidence and time windows — v1.2
+- ✓ Operator can review hot-path decisions, async investigation state, incidents, and freshness markers from one serializable report — v1.2
+- ✓ Operator can bootstrap the async investigation and correlation stack from repository-owned config instead of test-only manual wiring — v1.2
 
 ### Active
 
-- v1.2 requirements are being defined for async investigation, correlation, and operator review surfaces
+(None currently — start the next milestone with `$gsd-new-milestone`)
 
 ### Out of Scope
 
@@ -43,9 +48,9 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory pheromone substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status/metrics surfaces.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory pheromone substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path.
 
-The canonical product roadmap in `docs/ROADMAP.md` sequences the next step as "Async Investigation And Correlation". That is the right move now that the runtime can preserve artifacts across restart: use those durable findings and receipts as inputs to slower enrichment, then aggregate related findings into operator-readable incidents. This milestone stays narrow by keeping enrichment asynchronous and deferring multi-node governance or offline evolution labs.
+The runtime remains intentionally single-node and deterministic. Async enrichment is durable and operator-visible, but it still does not mutate live-response policy automatically. Distributed governance, gossip, and offline evolution labs remain future work.
 
 ## Constraints
 
@@ -70,6 +75,9 @@ The canonical product roadmap in `docs/ROADMAP.md` sequences the next step as "A
 | Keep investigation asynchronous | Enrichment should improve operator trust and triage without blocking detection or response | ✓ Chosen |
 | Build correlation from durable findings and receipts | The runtime now has enough stable artifacts to group and explain related detections | ✓ Chosen |
 | Treat correlated incidents as operator context first | Correlation should sharpen review before it influences automated action policy | ✓ Chosen |
+| Seed investigation from replay bundles | Durable hot-path artifacts already carry the identifiers and evidence needed for async review | ✓ Good |
+| Persist rejected incident candidates | Correlation stays auditable when rejected inputs remain visible instead of being discarded | ✓ Good |
+| Extend operator status instead of forking a new API | One serializable report keeps hot-path and async review data aligned for future tooling | ✓ Good |
 
 ---
-*Last updated: 2026-04-03 after starting milestone v1.2*
+*Last updated: 2026-04-03 after shipping v1.2*

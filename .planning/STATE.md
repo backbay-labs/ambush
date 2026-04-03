@@ -19,7 +19,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** All v1.2 phases complete, lifecycle audit pending
+**Current focus:** Milestone v1.2 complete and archived; ready for next milestone
 
 ## Memory
 
@@ -30,7 +30,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.2` now has Phase 9 complete: correlation can assemble durable incidents with explicit inclusion and rejection reasons.
 - `v1.2` now has Phase 10 complete: one operator review report combines hot-path decisions, async investigation state, incidents, and freshness markers.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
+- `v1.2` audit passed with full requirement coverage, config-backed async stack composition, and green workspace tests plus clippy.
 
 ## Next Command
 
-`$gsd-audit-milestone`
+`$gsd-new-milestone`
