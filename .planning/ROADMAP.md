@@ -1,20 +1,88 @@
-# Roadmap Status
+# Milestone v1.7: Controlled Production Promotion
 
-**Status:** NO ACTIVE MILESTONE
-**Last Shipped Milestone:** `v1.6 Bounded Canary And Rollback`
-**Shipped On:** 2026-04-03
+**Status:** READY
+**Date:** 2026-04-03
+**Milestone Goal:** Add a controlled production-promotion path for canary-approved detectors with fallback retention, observation-window rollback, and durable promotion records, without introducing quorum governance or distributed rollout.
 
-## Current State
+## Overview
 
-The active milestone roadmap has been archived. `v1.6` is complete, its phase artifacts are stored under `.planning/milestones/v1.6-phases/`, and the project is waiting for the next milestone definition.
+This milestone extends the staged deployment pipeline from canary into production. It turns the canary artifact into a production handoff, rotates the promoted detector into the production role while preserving the previous baseline as an explicit fallback, and watches the promoted strategy through a bounded observation window.
 
-## Archived Milestone
+The milestone stays deliberately narrow. It does not add multi-node rollout control, partial-fleet scheduling, or BFT approval. The goal is to prove that the runtime can promote a canary-approved detector into production safely, observe it under real load, and roll back cleanly if metrics degrade.
 
-- [v1.6 roadmap](/Users/connor/Medica/backbay/standalone/swarm-team-six/.planning/milestones/v1.6-ROADMAP.md)
+## Phase Plan
+
+### Phase 23: Production Promotion And Baseline Rotation
+
+**Goal:** Promote a ready canary artifact into the production detector role with explicit baseline rotation, fallback retention, and stable promotion identity.
+
+**Requirements:** PROD-01, PROD-02
+
+**Depends on:** Phase 20, Phase 21, Phase 22
+
+**Plans:** 0/1 plans complete
+
+**Success Criteria:**
+- A ready canary artifact can be promoted without hand-editing repository config or detector code.
+- The previous production detector is retained as the explicit rollback target for the promotion window.
+- Promotion artifacts persist baseline lineage, canary evidence, and a stable promotion ID.
+- Operator CLI can initiate a promotion from canary evidence instead of from ad hoc local state.
+
+### Phase 24: Production Observation Window And Metrics
+
+**Goal:** Observe the promoted production detector over a bounded window and enforce automatic rollback when post-promotion metrics diverge.
+
+**Requirements:** PROD-03, PROD-04
+
+**Depends on:** Phase 23
+
+**Plans:** 0/1 plans complete
+
+**Success Criteria:**
+- The runtime records post-promotion detection, divergence, latency, and budget metrics over a configurable observation window.
+- Observation state survives reload and can be inspected without reading raw store files.
+- Automatic rollback triggers when production metrics cross configured bounds.
+- The observation lane remains deterministic and auditable.
+
+### Phase 25: Promotion Rollback And Records
+
+**Goal:** Make production promotion reversible and operator-readable through durable promotion records, manual rollback controls, and stable-ID reload.
+
+**Requirements:** PROD-05, PROD-06, PROD-07
+
+**Depends on:** Phase 24
+
+**Plans:** 0/1 plans complete
+
+**Success Criteria:**
+- Operators can manually halt or roll back a production promotion during its observation window.
+- Durable promotion records preserve canary evidence, baseline rotation, rollback history, and final recommendation.
+- Operator CLI can reload active or completed promotions plus rollback history by stable ID.
+- Docs explain the canary-to-production workflow and rollback semantics end to end.
+
+## Traceability
+
+| Requirement | Phase |
+|-------------|-------|
+| PROD-01 | Phase 23 |
+| PROD-02 | Phase 23 |
+| PROD-03 | Phase 24 |
+| PROD-04 | Phase 24 |
+| PROD-05 | Phase 25 |
+| PROD-06 | Phase 25 |
+| PROD-07 | Phase 25 |
+
+## Deferred Work
+
+- Quorum-based or BFT promotion approval remains deferred until the runtime has real independent trust boundaries.
+- Multi-node rollout or partial-fleet exposure remains out of scope while the runtime is still single-node.
+- MemRL-backed strategy scoring remains future work after real production promotions exist.
+- Authenticated HTTP or TUI operator surfaces remain secondary to a correct CLI and durable promotion record flow.
 
 ## Next Step
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 23`
 
 ---
-*Last updated: 2026-04-03 after milestone v1.6 archival*
+*Roadmap created: 2026-04-03*
+*Last updated: 2026-04-03 for milestone v1.7*
