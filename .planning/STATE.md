@@ -6,7 +6,7 @@ current_phase: "5"
 current_phase_name: durable substrate
 current_plan: Not started
 status: planning
-last_updated: "2026-04-03T04:46:40Z"
+last_updated: "2026-04-03T04:48:12Z"
 last_activity: "2026-04-03"
 progress:
   total_phases: 3
@@ -23,7 +23,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** Phase 5 planning
+**Current focus:** Phase 5 durable substrate
 
 ## Current Position
 
@@ -34,7 +34,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 **Total Plans in Phase:** 0
 **Status:** Ready to plan
 **Last Activity:** 2026-04-03
-**Last Activity Description:** Milestone v1.1 started and scoped around durability and operator usability
+**Last Activity Description:** Milestone v1.1 roadmap created; Phase 5 is ready to plan
 
 **Progress:** [░░░░░░░░░░] 0%
 

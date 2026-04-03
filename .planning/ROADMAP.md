@@ -1,89 +1,79 @@
 # Roadmap: Swarm Team Six
 
-**Created:** 2026-04-02
+**Created:** 2026-04-03
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
+
+## Milestone v1.1: Durability And Operators
+
+**Milestone Goal:** Make the shipped single-node Rust lane durable and operator-usable without expanding the architecture prematurely.
 
 ## Summary
 
-**4 phases** | **20 v1 requirements mapped** | All v1 requirements covered ✓
+**3 phases** | **11 v1.1 requirements mapped** | All covered ✓
 
 | # | Phase | Goal | Requirements | Success Criteria | Status |
 |---|-------|------|--------------|------------------|--------|
-| 1 | Baseline Contracts | Lock configuration and runtime contracts so the core lane can be built without churn | CFG-01, CFG-02, CFG-03 | 3 | Complete (2026-04-03) |
-| 2 | Fast Detection Lane | Ship one benchmarked Rust detector and in-memory pheromone substrate | DET-01, DET-02, DET-03, DET-04, SUB-01, SUB-02, SUB-03 | 4 | Complete (2026-04-03) |
-| 3 | Safe Live Response | Add deterministic policy, scoped capability leases, and sandboxed response execution | POL-01, POL-02, POL-03, RSP-01, RSP-02, RSP-03 | 4 | Complete (2026-04-03) |
-| 4 | Audit And Hardening | Make the critical path observable, testable, and replayable | AUD-01, AUD-02, OPS-01, OPS-02 | 4 | Complete (2026-04-03) |
+| 5 | Durable Substrate | Add persistent substrate selection, recovery, and durability gating without changing hot-path contracts | CFG-04, DUR-01, DUR-02, DUR-03, DUR-04 | 4 | Planned |
+| 6 | Persistent Audit And Replay | Persist decision artifacts and support offline retrieval and replay by stable identifiers | AUD-03, AUD-04, AUD-05 | 4 | Planned |
+| 7 | Operator Visibility | Expose runtime health, metrics, and cross-artifact correlation for operators | OPS-03, OPS-04, OPS-05 | 4 | Planned |
 
 ## Phase Details
 
-### Phase 1: Baseline Contracts
+### Phase 5: Durable Substrate
 
-**Goal:** Replace doc-only assumptions with strict configuration and runtime-owned contracts.
-**Status:** Complete (2026-04-03)
+**Goal:** Add persistent substrate selection, recovery, and durability gating without changing the hot-path contract.
+**Status:** Planned
 
-**Requirements:** CFG-01, CFG-02, CFG-03
-
-**Success criteria:**
-1. Runtime can load repository-owned config files into typed Rust structures.
-2. Invalid or unknown config fields fail at load time with actionable errors.
-3. Runtime mode is explicit and test-covered for `detect_only` and `live_response`.
-
-### Phase 2: Fast Detection Lane
-
-**Goal:** Ship a real Rust detector path that turns telemetry into pheromone deposits with published measurements.
-**Status:** Complete (2026-04-03)
-
-**Requirements:** DET-01, DET-02, DET-03, DET-04, SUB-01, SUB-02, SUB-03
+**Requirements:** CFG-04, DUR-01, DUR-02, DUR-03, DUR-04
 
 **Success criteria:**
-1. A normalized telemetry event can enter the Rust runtime and be evaluated by a concrete detector.
-2. Detector output includes threat class, severity, confidence, and evidence.
-3. Findings can be deposited into and queried from an in-memory pheromone substrate with decay and source-diversity semantics.
-4. Benchmark artifacts publish p50, p95, p99, and throughput numbers for the detector path.
+1. Runtime can load durable substrate configuration and select in-memory or JetStream-backed substrate at startup.
+2. Detector and policy code continue to depend only on the substrate trait while deposits land in the configured backend.
+3. Restarting the runtime in durable mode preserves recent pheromone state and supports query by threat class and recency.
+4. `live_response` fails closed when durable substrate readiness is required but unavailable.
 
-### Phase 3: Safe Live Response
+### Phase 6: Persistent Audit And Replay
 
-**Goal:** Prove a narrow live-response path without requiring distributed governance.
-**Status:** Complete (2026-04-03)
+**Goal:** Persist decision artifacts and support offline retrieval and replay without re-running live actions.
+**Status:** Planned
 
-**Requirements:** POL-01, POL-02, POL-03, RSP-01, RSP-02, RSP-03
-
-**Success criteria:**
-1. Response proposals are evaluated through a deterministic Rust policy gate.
-2. Policy results can deny, authorize, or require human approval based on action and severity.
-3. Authorized actions receive scoped capability leases before execution.
-4. The runtime supports dry-run and at least one sandboxed enforced response adapter with normalized receipts.
-
-### Phase 4: Audit And Hardening
-
-**Goal:** Make the critical path trustworthy through observability, replay, and end-to-end verification.
-**Status:** Complete (2026-04-03)
-
-**Requirements:** AUD-01, AUD-02, OPS-01, OPS-02
+**Requirements:** AUD-03, AUD-04, AUD-05
 
 **Success criteria:**
-1. The system records an auditable receipt trail spanning detection, policy, and response.
-2. Operators can replay a detect -> authorize -> execute flow from saved artifacts.
-3. Structured traces or logs make latency and decision paths inspectable.
-4. Integration tests cover the critical path from telemetry ingest to receipt creation.
+1. Detect -> authorize -> execute writes receipt and replay artifacts to a configured durable store.
+2. Operators can retrieve persisted bundles by hunt ID or receipt ID after restart.
+3. Replay tooling can reconstruct a saved decision flow without re-executing the original live response.
+4. Persisted artifacts preserve stable identifiers linking receipt chain, findings, and execution records.
+
+### Phase 7: Operator Visibility
+
+**Goal:** Give operators usable health, performance, and correlation visibility for the durable runtime.
+**Status:** Planned
+
+**Requirements:** OPS-03, OPS-04, OPS-05
+
+**Success criteria:**
+1. One operator-facing status surface reports runtime mode plus detector, substrate, policy, and response readiness.
+2. Metrics expose counters and latency distributions for detect, policy, persist, and response stages.
+3. Runtime traces and logs share stable hunt and receipt identifiers with stored artifacts for correlation.
+4. Operator workflows document how to inspect status, recent persisted decisions, and degraded durability modes.
 
 ## Deferred Work
 
-These are intentionally excluded from the first roadmap:
+These remain intentionally outside this milestone:
 
-- investigation and correlation on the hot path
-- JetStream-backed durability as a prerequisite for Phase 1
-- BFT / VRF governance
+- async investigation and correlation on the hot path
+- distributed governance / quorum approvals
 - gossip / CRDT membership
-- live co-evolution and broader red-team runtime loops
+- Python runtime or PyO3 expansion
+- offline evolution and adversarial evaluation loops
 
 ## Sequencing Rationale
 
-- Phase 1 removes contract churn risk before detector work begins.
-- Phase 2 proves the product’s first non-negotiable claim: fast detection.
-- Phase 3 adds controlled live response only after findings are real.
-- Phase 4 hardens observability and replay so the system can be trusted operationally.
+- Phase 5 hardens the substrate boundary before broader persistence work depends on it.
+- Phase 6 makes the audit path durable once the underlying storage posture is real.
+- Phase 7 turns the durable runtime into something operators can inspect and trust day to day.
 
 ---
-*Roadmap created: 2026-04-02*
-*Last updated: 2026-04-03 after Phase 4 completion*
+*Roadmap created: 2026-04-03*
+*Last updated: 2026-04-03 after initializing milestone v1.1*
