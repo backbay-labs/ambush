@@ -32,3 +32,11 @@ audit:
   bundle_store:
     kind: memory
   recent_decisions_limit: 20
+
+investigation:
+  enabled: false
+  worker_count: 1
+  max_pending_jobs: 16
+  time_budget_ms: 250
+  bundle_store:
+    kind: memory

@@ -4,6 +4,7 @@
 //! checkpoint machinery. It needs a small, serializable record format
 //! that captures what happened in the critical lane and can be replayed.
 
+pub mod investigation;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,12 @@ use swarm_policy::{ActionRequest, CapabilityLease, PolicyVerdict};
 use swarm_response::{ResponseFailure, ResponseReceipt};
 use swarm_whisker::{DetectionFinding, TelemetryEvent};
 
+pub use investigation::{
+    ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
+    InvestigationBundleLookup, InvestigationBundleRecord, InvestigationBundleStore,
+    InvestigationStatus, InvestigationStoreError, InvestigationStoreHealth,
+    MemoryInvestigationBundleStore,
+};
 pub use store::{
     ConfiguredReplayBundleStore, FileReplayBundleStore, MemoryReplayBundleStore,
     ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,

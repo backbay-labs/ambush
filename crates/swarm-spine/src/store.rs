@@ -573,6 +573,7 @@ mod tests {
     #[test]
     fn file_store_persists_and_loads_by_hunt_and_receipt() {
         let root = std::env::temp_dir().join("swarm-spine-store");
+        let _ = std::fs::remove_dir_all(&root);
         let store = FileReplayBundleStore::open(&root).unwrap();
         let bundle = sample_bundle();
         let record = store.persist(&bundle).unwrap();
@@ -621,6 +622,7 @@ mod tests {
         assert_eq!(memory.health().unwrap().backend, "memory");
 
         let root = std::env::temp_dir().join("swarm-spine-configured-store");
+        let _ = std::fs::remove_dir_all(&root);
         let local = ConfiguredReplayBundleStore::from_config(&BundleStoreConfig::LocalFiles {
             directory: root.display().to_string(),
         })

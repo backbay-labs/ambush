@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use swarm_core::config::{
-    ConfigValidationError, DetectionConfig, PheromoneConfig, PolicyConfig, RuntimeMode,
-    RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+    ConfigValidationError, DetectionConfig, InvestigationConfig, PheromoneConfig, PolicyConfig,
+    RuntimeMode, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
 };
 
 pub type RuntimeConfig = RuntimeSettings;

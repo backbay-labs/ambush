@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 swarm-core.workspace = true
 swarm-policy.workspace = true
 swarm-response.workspace = true

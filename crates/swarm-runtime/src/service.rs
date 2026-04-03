@@ -1,4 +1,5 @@
 use crate::config::RuntimeConfig;
+use crate::investigation::{InvestigationCoordinator, InvestigationError, InvestigationStrategy};
 use crate::pipeline::{DetectionPipelineOutcome, PipelineError, detect_and_deposit};
 use crate::{RuntimeError, RuntimeMode, SwarmRuntime};
 use serde::{Deserialize, Serialize};
@@ -14,8 +15,9 @@ use swarm_policy::ApprovalGate;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::ResponseExecutor;
 use swarm_spine::{
-    ReplayBundle, ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview,
-    ReplayStoreError, ReplayStoreHealth,
+    InvestigationBundleLookup, InvestigationBundleRecord, InvestigationBundleStore, ReplayBundle,
+    ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,
+    ReplayStoreHealth,
 };
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 
@@ -33,6 +35,9 @@ pub enum ServiceError {
 
     #[error(transparent)]
     ReplayStore(#[from] ReplayStoreError),
+
+    #[error(transparent)]
+    Investigation(#[from] InvestigationError),
 
     #[error("failed to write replay bundle `{path}`: {source}")]
     Write {
@@ -112,6 +117,12 @@ pub struct OperatorStatusReport {
 pub struct PersistedReplayBundle {
     pub record: ReplayBundleRecord,
     pub bundle: ReplayBundle,
+}
+
+#[derive(Debug, Clone)]
+pub struct PersistedReplayBundleWithInvestigation {
+    pub replay: PersistedReplayBundle,
+    pub investigation: Option<InvestigationBundleRecord>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -430,6 +441,51 @@ where
         Ok(Some(PersistedReplayBundle { record, bundle }))
     }
 
+    pub async fn process_event_with_store_and_investigation<
+        D,
+        S,
+        F,
+        Store,
+        Strategy,
+        InvestigationStore,
+    >(
+        &self,
+        detector: &D,
+        substrate: &S,
+        store: &Store,
+        investigation: &InvestigationCoordinator<Strategy, InvestigationStore>,
+        event: &TelemetryEvent,
+        execution: EventExecutionContext<'_>,
+        request_builder: F,
+    ) -> Result<Option<PersistedReplayBundleWithInvestigation>, ServiceError>
+    where
+        D: DetectionStrategy,
+        S: PheromoneSubstrate,
+        F: Fn(&DetectionFinding) -> Option<ResponseAction>,
+        Store: ReplayBundleStore,
+        Strategy: InvestigationStrategy,
+        InvestigationStore: InvestigationBundleStore + Clone + Send + Sync + 'static,
+    {
+        let Some(replay) = self
+            .process_event_with_store(
+                detector,
+                substrate,
+                store,
+                event,
+                execution,
+                request_builder,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
+        let investigation_record = investigation.submit(&replay.bundle)?;
+        Ok(Some(PersistedReplayBundleWithInvestigation {
+            replay,
+            investigation: investigation_record,
+        }))
+    }
+
     pub fn load_persisted_bundle_by_hunt_id<Store>(
         &self,
         store: &Store,
@@ -450,6 +506,32 @@ where
         Store: ReplayBundleStore,
     {
         Ok(store.load_by_receipt_id(receipt_id)?)
+    }
+
+    pub fn load_persisted_investigation_by_hunt_id<Store>(
+        &self,
+        store: &Store,
+        hunt_id: &str,
+    ) -> Result<Option<InvestigationBundleLookup>, ServiceError>
+    where
+        Store: InvestigationBundleStore,
+    {
+        Ok(store
+            .load_by_hunt_id(hunt_id)
+            .map_err(InvestigationError::from)?)
+    }
+
+    pub fn load_persisted_investigation_by_receipt_id<Store>(
+        &self,
+        store: &Store,
+        receipt_id: &str,
+    ) -> Result<Option<InvestigationBundleLookup>, ServiceError>
+    where
+        Store: InvestigationBundleStore,
+    {
+        Ok(store
+            .load_by_receipt_id(receipt_id)
+            .map_err(InvestigationError::from)?)
     }
 
     pub fn replay_preview(&self, bundle: &ReplayBundle) -> ReplayPreview {
@@ -556,10 +638,12 @@ fn component_status_from_replay_store(health: &ReplayStoreHealth) -> ComponentSt
 #[cfg(test)]
 mod tests {
     use super::{EventExecutionContext, RuntimeService};
+    use crate::investigation::{InvestigationOutcome, InvestigationStrategy};
     use crate::{RuntimeMode, SwarmRuntime};
+    use async_trait::async_trait;
     use swarm_core::config::{
-        AuditConfig, BundleStoreConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        AuditConfig, BundleStoreConfig, InvestigationConfig, PheromoneBackendConfig,
+        PheromoneConfig, PolicyConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
     };
     use swarm_core::types::AgentId;
     use swarm_core::types::Severity;
@@ -568,7 +652,10 @@ mod tests {
     use swarm_policy::static_gate::StaticApprovalGate;
     use swarm_response::ResponseStatus;
     use swarm_response::adapters::SandboxExecutor;
-    use swarm_spine::{AuditResponseRecord, FileReplayBundleStore, ReplayBundleStore};
+    use swarm_spine::{
+        AuditResponseRecord, FileReplayBundleStore, MemoryInvestigationBundleStore, ReplayBundle,
+        ReplayBundleStore,
+    };
     use swarm_whisker::{
         ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
     };
@@ -611,6 +698,7 @@ mod tests {
                 bundle_store: BundleStoreConfig::Memory,
                 recent_decisions_limit: 20,
             },
+            investigation: InvestigationConfig::default(),
         }
     }
 
@@ -627,6 +715,27 @@ mod tests {
                 SandboxExecutor,
             ),
         )
+    }
+
+    #[derive(Debug, Clone)]
+    struct SlowInvestigator {
+        delay_ms: u64,
+    }
+
+    #[async_trait]
+    impl InvestigationStrategy for SlowInvestigator {
+        fn id(&self) -> &str {
+            "slow_service_test_investigator"
+        }
+
+        async fn investigate(&self, replay: &ReplayBundle) -> Result<InvestigationOutcome, String> {
+            tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            Ok(InvestigationOutcome {
+                summary: format!("investigated {}", replay.audit.hunt_id),
+                evidence_points: vec!["host_id=host-1".to_string()],
+                correlation_keys: vec!["host:host-1".to_string()],
+            })
+        }
     }
 
     #[tokio::test]
@@ -749,6 +858,7 @@ mod tests {
         let detector = SuspiciousProcessTreeDetector::default();
         let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
         let store_root = std::env::temp_dir().join("swarm-runtime-file-store");
+        let _ = std::fs::remove_dir_all(&store_root);
         let store = FileReplayBundleStore::open(&store_root).unwrap();
         let event = TelemetryEvent {
             source: "synthetic".to_string(),
@@ -818,6 +928,7 @@ mod tests {
         let detector = SuspiciousProcessTreeDetector::default();
         let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
         let store_root = std::env::temp_dir().join("swarm-runtime-operator-store");
+        let _ = std::fs::remove_dir_all(&store_root);
         let store = FileReplayBundleStore::open(&store_root).unwrap();
         let event = TelemetryEvent {
             source: "synthetic".to_string(),
@@ -880,5 +991,116 @@ mod tests {
         assert_eq!(recent.len(), 1);
 
         let _ = std::fs::remove_dir_all(store_root);
+    }
+
+    #[tokio::test]
+    async fn process_event_with_investigation_stays_nonblocking_and_persists_bundle() {
+        let mut config = service_config(
+            RuntimeMode::LiveResponse,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        config.investigation = InvestigationConfig {
+            enabled: true,
+            worker_count: 1,
+            max_pending_jobs: 2,
+            time_budget_ms: 250,
+            bundle_store: BundleStoreConfig::Memory,
+        };
+        let service = RuntimeService::new(
+            config.clone(),
+            SwarmRuntime::new(
+                RuntimeMode::LiveResponse,
+                StaticApprovalGate::default(),
+                SandboxExecutor,
+            ),
+        );
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let replay_store_root =
+            std::env::temp_dir().join("swarm-runtime-investigation-replay-store");
+        let _ = std::fs::remove_dir_all(&replay_store_root);
+        let replay_store = FileReplayBundleStore::open(&replay_store_root).unwrap();
+        let investigation_store = MemoryInvestigationBundleStore::default();
+        let coordinator = crate::investigation::InvestigationCoordinator::new(
+            config.investigation.clone(),
+            SlowInvestigator { delay_ms: 75 },
+            investigation_store.clone(),
+        );
+        let event = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-investigation-1".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "winword".to_string(),
+                process_name: "powershell".to_string(),
+                command_line: "powershell.exe -enc AAA=".to_string(),
+                user: Some("alice".to_string()),
+            }),
+        };
+        let context = ApprovalContext {
+            live_mode: true,
+            receipt_chain: vec!["receipt-upstream-3".to_string()],
+            now_ms: 1_700_000_000_003,
+        };
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let started = std::time::Instant::now();
+        let persisted = service
+            .process_event_with_store_and_investigation(
+                &detector,
+                &substrate,
+                &replay_store,
+                &coordinator,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context,
+                },
+                |_finding| {
+                    Some(swarm_core::types::ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(elapsed < std::time::Duration::from_millis(40));
+        let investigation = persisted.investigation.expect("queued investigation");
+        assert_eq!(
+            investigation.status,
+            swarm_spine::InvestigationStatus::Queued
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(125)).await;
+
+        let by_hunt = service
+            .load_persisted_investigation_by_hunt_id(&investigation_store, "evt-investigation-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            by_hunt.bundle.status,
+            swarm_spine::InvestigationStatus::Completed
+        );
+
+        let receipt_id = persisted
+            .replay
+            .record
+            .response_receipt_id
+            .clone()
+            .expect("response receipt id");
+        let by_receipt = service
+            .load_persisted_investigation_by_receipt_id(&investigation_store, &receipt_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_receipt.bundle.hunt_id, "evt-investigation-1");
+        assert!(coordinator.snapshot().completed_jobs >= 1);
+
+        let _ = std::fs::remove_dir_all(replay_store_root);
     }
 }

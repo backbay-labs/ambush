@@ -5,6 +5,7 @@
 //! execution is capability-scoped.
 
 pub mod config;
+pub mod investigation;
 pub mod pipeline;
 pub mod service;
 

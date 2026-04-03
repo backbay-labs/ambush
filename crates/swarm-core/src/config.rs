@@ -24,6 +24,9 @@ pub struct SwarmConfig {
     /// Audit and replay storage settings.
     #[serde(default)]
     pub audit: AuditConfig,
+    /// Async investigation settings layered on top of the hot path.
+    #[serde(default)]
+    pub investigation: InvestigationConfig,
 }
 
 /// Whether the runtime simulates or executes live response actions.
@@ -116,6 +119,27 @@ pub struct AuditConfig {
     /// How many recent decision records to surface to operators by default.
     #[serde(default = "default_recent_decisions_limit")]
     pub recent_decisions_limit: usize,
+}
+
+/// Async investigation settings that stay off the critical lane.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvestigationConfig {
+    /// Whether the investigation queue is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Number of background workers allowed to process queued jobs concurrently.
+    #[serde(default = "default_investigation_worker_count")]
+    pub worker_count: usize,
+    /// Maximum queued jobs buffered before new submissions degrade visibly.
+    #[serde(default = "default_investigation_max_pending_jobs")]
+    pub max_pending_jobs: usize,
+    /// Maximum time budget for one investigation run.
+    #[serde(default = "default_investigation_time_budget_ms")]
+    pub time_budget_ms: u64,
+    /// Store used for investigation bundles and lookup by stable identifiers.
+    #[serde(default)]
+    pub bundle_store: BundleStoreConfig,
 }
 
 /// Replay bundle storage backend selection.
@@ -284,6 +308,38 @@ impl SwarmConfig {
             }
         }
 
+        if self.investigation.enabled {
+            if self.investigation.worker_count == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "investigation.worker_count",
+                    reason: "must be greater than zero when investigation is enabled".to_string(),
+                });
+            }
+            if self.investigation.max_pending_jobs == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "investigation.max_pending_jobs",
+                    reason: "must be greater than zero when investigation is enabled".to_string(),
+                });
+            }
+            if self.investigation.time_budget_ms == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "investigation.time_budget_ms",
+                    reason: "must be greater than zero when investigation is enabled".to_string(),
+                });
+            }
+        }
+        match &self.investigation.bundle_store {
+            BundleStoreConfig::Memory => {}
+            BundleStoreConfig::LocalFiles { directory } => {
+                if directory.trim().is_empty() {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "investigation.bundle_store.directory",
+                        reason: "must not be empty".to_string(),
+                    });
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -309,6 +365,30 @@ impl Default for AuditConfig {
     }
 }
 
+impl Default for InvestigationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            worker_count: default_investigation_worker_count(),
+            max_pending_jobs: default_investigation_max_pending_jobs(),
+            time_budget_ms: default_investigation_time_budget_ms(),
+            bundle_store: BundleStoreConfig::default(),
+        }
+    }
+}
+
 const fn default_recent_decisions_limit() -> usize {
     20
+}
+
+const fn default_investigation_worker_count() -> usize {
+    1
+}
+
+const fn default_investigation_max_pending_jobs() -> usize {
+    16
+}
+
+const fn default_investigation_time_budget_ms() -> u64 {
+    250
 }
