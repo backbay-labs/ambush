@@ -7,14 +7,14 @@
 
 ### Queue Handoff
 
-- [ ] **HAND-01**: Accepted queue proposals can feed the existing canary rollout path without manual artifact translation
-- [ ] **HAND-02**: Team can persist a durable handoff artifact that binds one accepted proposal, one verification reference, one proof summary, and one passed shadow artifact
-- [ ] **HAND-03**: Handoff creation fails closed when proposal state, proof status, verification linkage, or shadow evidence is missing or inconsistent
+- [x] **HAND-01**: Accepted queue proposals can feed the existing canary rollout path without manual artifact translation
+- [x] **HAND-02**: Team can persist a durable handoff artifact that binds one accepted proposal, one verification reference, one proof summary, and one passed shadow artifact
+- [x] **HAND-03**: Handoff creation fails closed when proposal state, proof status, verification linkage, or shadow evidence is missing or inconsistent
 
 ### Canary Launch
 
-- [ ] **HAND-04**: Operator can inspect a stable handoff artifact and launch canary from it through `swarmctl`
-- [ ] **HAND-05**: Queue-to-canary launch records preserve source proposal, proof, verification, shadow, and resulting canary-run references in one durable artifact
+- [x] **HAND-04**: Operator can inspect a stable handoff artifact and launch canary from it through `swarmctl`
+- [x] **HAND-05**: Queue-to-canary launch records preserve source proposal, proof, verification, shadow, and resulting canary-run references in one durable artifact
 
 ## Future Requirements
 
@@ -48,11 +48,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HAND-01 | Phase 34 | Pending |
-| HAND-02 | Phase 32 | Pending |
-| HAND-03 | Phase 33 | Pending |
-| HAND-04 | Phase 34 | Pending |
-| HAND-05 | Phase 34 | Pending |
+| HAND-01 | Phase 34 | Complete |
+| HAND-02 | Phase 32 | Complete |
+| HAND-03 | Phase 33 | Complete |
+| HAND-04 | Phase 34 | Complete |
+| HAND-05 | Phase 34 | Complete |
 
 **Coverage:**
 - v1.10 requirements: 5 total
@@ -61,4 +61,4 @@
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.10 creation*
+*Last updated: 2026-04-03 after milestone v1.10 completion*

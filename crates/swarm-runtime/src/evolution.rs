@@ -1,8 +1,10 @@
+use crate::canary::{CanaryError, DefaultCanaryHarness};
 use crate::config::{RuntimeConfigError, load_config};
 use crate::replay::{
     DefaultReplayHarness, DetectorVerificationLookup, DetectorVerificationReport,
-    ExperimentLineage, FileVerificationStore, ReplayHarnessError, VerificationCounterexample,
-    VerificationStoreError, load_detector_experiment_manifest,
+    ExperimentLineage, FileShadowStore, FileVerificationStore, ReplayHarnessError,
+    ShadowStoreError, StrategyShadowLookup, VerificationCounterexample, VerificationStoreError,
+    load_detector_experiment_manifest,
 };
 use crate::strategy::{
     DefaultStrategyScorecardHarness, StrategyAdvisorError, StrategyAdvisoryRecommendation,
@@ -37,6 +39,15 @@ pub enum EvolutionQueueError {
     ProposalStore(#[from] EvolutionProposalStoreError),
 
     #[error(transparent)]
+    HandoffStore(#[from] EvolutionHandoffStoreError),
+
+    #[error(transparent)]
+    ShadowStore(#[from] ShadowStoreError),
+
+    #[error(transparent)]
+    Canary(#[from] CanaryError),
+
+    #[error(transparent)]
     Serialization(#[from] serde_json::Error),
 
     #[error("verification artifact `{verification_id}` was not found")]
@@ -51,6 +62,9 @@ pub enum EvolutionQueueError {
     #[error("evolution proposal `{proposal_id}` was not found")]
     ProposalNotFound { proposal_id: String },
 
+    #[error("evolution handoff `{handoff_id}` was not found")]
+    HandoffNotFound { handoff_id: String },
+
     #[error(
         "proposal `{proposal_id}` cannot apply decision `{decision}` from state `{state}`: {reason}"
     )]
@@ -58,6 +72,13 @@ pub enum EvolutionQueueError {
         proposal_id: String,
         state: String,
         decision: String,
+        reason: String,
+    },
+
+    #[error("handoff `{handoff_id}` cannot launch canary from state `{state}`: {reason}")]
+    InvalidHandoffLaunch {
+        handoff_id: String,
+        state: String,
         reason: String,
     },
 }
@@ -353,6 +374,8 @@ pub struct EvolutionProposalReport {
     pub proposal_id: String,
     pub experiment_id: String,
     pub experiment_name: String,
+    #[serde(default)]
+    pub experiment_path: String,
     pub created_at_ms: i64,
     pub strategy_id: String,
     pub strategy_description: String,
@@ -409,6 +432,75 @@ pub struct EvolutionProposalList {
     pub proposals: Vec<EvolutionProposalRecord>,
 }
 
+/// Durable launch state for one queue-to-canary handoff packet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvolutionHandoffStatus {
+    PendingLaunch,
+    CanaryLaunched,
+    Blocked,
+}
+
+/// Durable queue-to-canary handoff packet assembled from accepted queue review evidence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvolutionHandoffReport {
+    pub handoff_id: String,
+    pub proposal_id: String,
+    pub experiment_id: String,
+    pub experiment_name: String,
+    pub experiment_path: String,
+    pub created_at_ms: i64,
+    pub launched_at_ms: Option<i64>,
+    pub strategy_id: String,
+    pub strategy_description: String,
+    pub lineage: ExperimentLineage,
+    pub verification_id: String,
+    pub proof: EvolutionProposalProofSummary,
+    pub advisory: Option<EvolutionProposalAdvisorySummary>,
+    pub shadow_id: String,
+    pub shadow_passed: bool,
+    pub suite_name: String,
+    pub corpus_version: String,
+    pub launch_status: EvolutionHandoffStatus,
+    pub blocking_reasons: Vec<EvolutionProposalBlockingReason>,
+    pub canary_run_id: Option<String>,
+}
+
+/// Metadata surfaced for one persisted handoff packet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvolutionHandoffRecord {
+    pub handoff_id: String,
+    pub proposal_id: String,
+    pub strategy_id: String,
+    pub created_at_ms: i64,
+    pub launched_at_ms: Option<i64>,
+    pub launch_status: EvolutionHandoffStatus,
+    pub canary_run_id: Option<String>,
+    pub bundle_path: String,
+}
+
+impl EvolutionHandoffRecord {
+    fn from_report(report: &EvolutionHandoffReport, bundle_path: String) -> Self {
+        Self {
+            handoff_id: report.handoff_id.clone(),
+            proposal_id: report.proposal_id.clone(),
+            strategy_id: report.strategy_id.clone(),
+            created_at_ms: report.created_at_ms,
+            launched_at_ms: report.launched_at_ms,
+            launch_status: report.launch_status,
+            canary_run_id: report.canary_run_id.clone(),
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted handoff packet loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct EvolutionHandoffLookup {
+    pub record: EvolutionHandoffRecord,
+    pub report: EvolutionHandoffReport,
+}
+
 /// Errors raised by the persisted evolution queue store.
 #[derive(Debug, thiserror::Error)]
 pub enum EvolutionProposalStoreError {
@@ -427,6 +519,31 @@ pub enum EvolutionProposalStoreError {
     },
 
     #[error("failed to parse evolution proposal store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Errors raised by the persisted queue-to-canary handoff store.
+#[derive(Debug, thiserror::Error)]
+pub enum EvolutionHandoffStoreError {
+    #[error("failed to read evolution handoff store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write evolution handoff store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse evolution handoff store file `{path}`: {source}")]
     Parse {
         path: PathBuf,
         #[source]
@@ -570,6 +687,112 @@ impl FileEvolutionProposalStore {
             review_state,
             proposals,
         })
+    }
+}
+
+/// File-backed store for durable queue-to-canary handoff packets.
+#[derive(Debug, Clone)]
+pub struct FileEvolutionHandoffStore {
+    root: PathBuf,
+}
+
+impl FileEvolutionHandoffStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, EvolutionHandoffStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            EvolutionHandoffStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, handoff_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(handoff_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(&self) -> Result<EvolutionHandoffIndex, EvolutionHandoffStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(EvolutionHandoffIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| EvolutionHandoffStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&raw)
+            .map_err(|source| EvolutionHandoffStoreError::Parse { path, source })
+    }
+
+    fn write_index(&self, index: &EvolutionHandoffIndex) -> Result<(), EvolutionHandoffStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            EvolutionHandoffStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| EvolutionHandoffStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        report: &EvolutionHandoffReport,
+    ) -> Result<EvolutionHandoffRecord, EvolutionHandoffStoreError> {
+        let path = self.report_path(&report.handoff_id);
+        let raw = serde_json::to_string_pretty(report).map_err(|source| {
+            EvolutionHandoffStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| EvolutionHandoffStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let record = EvolutionHandoffRecord::from_report(report, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.handoff_id != record.handoff_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(record)
+    }
+
+    pub fn load(
+        &self,
+        handoff_id: &str,
+    ) -> Result<Option<EvolutionHandoffLookup>, EvolutionHandoffStoreError> {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.handoff_id == handoff_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| EvolutionHandoffStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let report = serde_json::from_str(&raw)
+            .map_err(|source| EvolutionHandoffStoreError::Parse { path, source })?;
+        Ok(Some(EvolutionHandoffLookup { record, report }))
     }
 }
 
@@ -829,6 +1052,7 @@ impl DefaultEvolutionQueueHarness {
             ),
             experiment_id,
             experiment_name: manifest.name.clone(),
+            experiment_path: experiment_path.display().to_string(),
             created_at_ms,
             strategy_id: manifest.candidate.strategy_id().to_string(),
             strategy_description: manifest.candidate.description().to_string(),
@@ -948,6 +1172,260 @@ impl DefaultEvolutionQueueHarness {
             });
         let record = self.store.persist(&lookup.report)?;
         Ok(EvolutionProposalLookup {
+            record,
+            report: lookup.report,
+        })
+    }
+}
+
+/// Harness that bridges accepted proposals into durable canary-launch handoff packets.
+pub struct DefaultEvolutionHandoffHarness {
+    pub config_path: PathBuf,
+    pub config: SwarmConfig,
+    pub store: FileEvolutionHandoffStore,
+}
+
+impl DefaultEvolutionHandoffHarness {
+    pub fn from_path(
+        config_path: impl AsRef<Path>,
+        results_dir: impl AsRef<Path>,
+    ) -> Result<Self, EvolutionQueueError> {
+        let config_path = config_path.as_ref();
+        let config = load_config(config_path)?;
+        Self::from_config(config_path, config, results_dir)
+    }
+
+    pub fn from_config(
+        config_path: impl Into<PathBuf>,
+        config: SwarmConfig,
+        results_dir: impl AsRef<Path>,
+    ) -> Result<Self, EvolutionQueueError> {
+        Ok(Self {
+            config_path: config_path.into(),
+            config,
+            store: FileEvolutionHandoffStore::open(results_dir)?,
+        })
+    }
+
+    pub fn create_handoff(
+        &self,
+        queue_results_dir: impl AsRef<Path>,
+        proposal_id: &str,
+        shadow_results_dir: impl AsRef<Path>,
+        shadow_id: &str,
+    ) -> Result<EvolutionHandoffLookup, EvolutionQueueError> {
+        let proposal_store = FileEvolutionProposalStore::open(queue_results_dir)?;
+        let proposal = proposal_store.load(proposal_id)?.ok_or_else(|| {
+            EvolutionQueueError::ProposalNotFound {
+                proposal_id: proposal_id.to_string(),
+            }
+        })?;
+
+        let mut blocking_reasons = Vec::new();
+        if proposal.report.review_state != EvolutionProposalReviewState::AcceptedForCanary {
+            blocking_reasons.push(EvolutionProposalBlockingReason {
+                source: "proposal".to_string(),
+                name: "proposal_not_accepted_for_canary".to_string(),
+                details: format!(
+                    "proposal `{}` is in state `{}` instead of `accepted_for_canary`",
+                    proposal.report.proposal_id,
+                    review_state_label(proposal.report.review_state)
+                ),
+                references: vec![proposal.report.proposal_id.clone()],
+            });
+        }
+        if proposal.report.proof_status != EvolutionProposalProofStatus::Proved {
+            blocking_reasons.push(EvolutionProposalBlockingReason {
+                source: "proposal".to_string(),
+                name: "proposal_not_proved".to_string(),
+                details: "proposal proof status is not `proved`".to_string(),
+                references: vec![proposal.report.proposal_id.clone()],
+            });
+        }
+        if !proposal.report.blocking_reasons.is_empty() {
+            blocking_reasons.push(EvolutionProposalBlockingReason {
+                source: "proposal".to_string(),
+                name: "proposal_already_blocked".to_string(),
+                details: "proposal still carries blocking reasons and cannot enter handoff"
+                    .to_string(),
+                references: vec![proposal.report.proposal_id.clone()],
+            });
+        }
+        if !proposal.report.verification_passed {
+            blocking_reasons.push(EvolutionProposalBlockingReason {
+                source: "proposal".to_string(),
+                name: "verification_not_passed".to_string(),
+                details: "proposal does not reference a passed verification result".to_string(),
+                references: vec![proposal.report.proposal_id.clone()],
+            });
+        }
+        if proposal.report.experiment_path.trim().is_empty() {
+            blocking_reasons.push(EvolutionProposalBlockingReason {
+                source: "proposal".to_string(),
+                name: "missing_experiment_path".to_string(),
+                details: "proposal does not preserve an experiment manifest path for canary entry"
+                    .to_string(),
+                references: vec![proposal.report.proposal_id.clone()],
+            });
+        }
+
+        let shadow = load_shadow_lookup(shadow_results_dir, shadow_id)?;
+        match shadow.as_ref() {
+            Some(lookup) if lookup.report.experiment_id != proposal.report.experiment_id => {
+                blocking_reasons.push(EvolutionProposalBlockingReason {
+                    source: "shadow".to_string(),
+                    name: "experiment_mismatch".to_string(),
+                    details: format!(
+                        "shadow `{}` belongs to `{}` instead of `{}`",
+                        lookup.report.shadow_id,
+                        lookup.report.experiment_id,
+                        proposal.report.experiment_id
+                    ),
+                    references: vec![lookup.report.shadow_id.clone()],
+                });
+            }
+            Some(lookup) if lookup.report.candidate_strategy_id != proposal.report.strategy_id => {
+                blocking_reasons.push(EvolutionProposalBlockingReason {
+                    source: "shadow".to_string(),
+                    name: "strategy_mismatch".to_string(),
+                    details: format!(
+                        "shadow `{}` targets strategy `{}` instead of `{}`",
+                        lookup.report.shadow_id,
+                        lookup.report.candidate_strategy_id,
+                        proposal.report.strategy_id
+                    ),
+                    references: vec![lookup.report.shadow_id.clone()],
+                });
+            }
+            Some(lookup) if !lookup.report.passed => {
+                blocking_reasons.push(EvolutionProposalBlockingReason {
+                    source: "shadow".to_string(),
+                    name: "shadow_failed".to_string(),
+                    details: "shadow artifact did not pass its offline gates".to_string(),
+                    references: vec![lookup.report.shadow_id.clone()],
+                });
+            }
+            Some(_) => {}
+            None => {
+                blocking_reasons.push(EvolutionProposalBlockingReason {
+                    source: "shadow".to_string(),
+                    name: "missing_shadow".to_string(),
+                    details: format!("shadow artifact `{shadow_id}` could not be loaded"),
+                    references: vec![shadow_id.to_string()],
+                });
+            }
+        }
+
+        let created_at_ms = now_ms();
+        let shadow = shadow.map(|lookup| lookup.report);
+        let launch_status = if blocking_reasons.is_empty() {
+            EvolutionHandoffStatus::PendingLaunch
+        } else {
+            EvolutionHandoffStatus::Blocked
+        };
+        let report = EvolutionHandoffReport {
+            handoff_id: handoff_id(
+                &proposal.report.proposal_id,
+                &proposal.report.strategy_id,
+                created_at_ms,
+            ),
+            proposal_id: proposal.report.proposal_id.clone(),
+            experiment_id: proposal.report.experiment_id.clone(),
+            experiment_name: proposal.report.experiment_name.clone(),
+            experiment_path: proposal.report.experiment_path.clone(),
+            created_at_ms,
+            launched_at_ms: None,
+            strategy_id: proposal.report.strategy_id.clone(),
+            strategy_description: proposal.report.strategy_description.clone(),
+            lineage: proposal.report.lineage.clone(),
+            verification_id: proposal.report.verification_id.clone().unwrap_or_default(),
+            proof: proposal
+                .report
+                .proof
+                .clone()
+                .unwrap_or(EvolutionProposalProofSummary {
+                    proof_id: String::new(),
+                    proof_system: String::new(),
+                    attestation_sha256: String::new(),
+                    invariant_count: 0,
+                }),
+            advisory: proposal.report.advisory.clone(),
+            shadow_id: shadow
+                .as_ref()
+                .map(|report| report.shadow_id.clone())
+                .unwrap_or_else(|| shadow_id.to_string()),
+            shadow_passed: shadow.as_ref().map(|report| report.passed).unwrap_or(false),
+            suite_name: shadow
+                .as_ref()
+                .map(|report| report.suite_name.clone())
+                .unwrap_or_default(),
+            corpus_version: shadow
+                .as_ref()
+                .map(|report| report.corpus_version.clone())
+                .unwrap_or_default(),
+            launch_status,
+            blocking_reasons,
+            canary_run_id: None,
+        };
+        let record = self.store.persist(&report)?;
+        Ok(EvolutionHandoffLookup { record, report })
+    }
+
+    pub fn load_handoff(
+        &self,
+        handoff_id: &str,
+    ) -> Result<Option<EvolutionHandoffLookup>, EvolutionQueueError> {
+        Ok(self.store.load(handoff_id)?)
+    }
+
+    pub fn launch_canary(
+        &self,
+        canary_harness: &DefaultCanaryHarness,
+        verification_results_dir: impl AsRef<Path>,
+        shadow_results_dir: impl AsRef<Path>,
+        handoff_id: &str,
+    ) -> Result<EvolutionHandoffLookup, EvolutionQueueError> {
+        let mut lookup =
+            self.store
+                .load(handoff_id)?
+                .ok_or_else(|| EvolutionQueueError::HandoffNotFound {
+                    handoff_id: handoff_id.to_string(),
+                })?;
+
+        if lookup.report.launch_status != EvolutionHandoffStatus::PendingLaunch {
+            return Err(EvolutionQueueError::InvalidHandoffLaunch {
+                handoff_id: handoff_id.to_string(),
+                state: handoff_status_label(lookup.report.launch_status).to_string(),
+                reason: "handoff is not in a launchable pending state".to_string(),
+            });
+        }
+        if !lookup.report.blocking_reasons.is_empty() {
+            return Err(EvolutionQueueError::InvalidHandoffLaunch {
+                handoff_id: handoff_id.to_string(),
+                state: handoff_status_label(lookup.report.launch_status).to_string(),
+                reason: "handoff still carries blocking reasons".to_string(),
+            });
+        }
+        if lookup.report.canary_run_id.is_some() {
+            return Err(EvolutionQueueError::InvalidHandoffLaunch {
+                handoff_id: handoff_id.to_string(),
+                state: handoff_status_label(lookup.report.launch_status).to_string(),
+                reason: "handoff already references a canary run".to_string(),
+            });
+        }
+
+        let canary = canary_harness.start_run(
+            PathBuf::from(&lookup.report.experiment_path),
+            verification_results_dir,
+            &lookup.report.verification_id,
+            shadow_results_dir,
+            &lookup.report.shadow_id,
+        )?;
+        lookup.report.launched_at_ms = Some(now_ms());
+        lookup.report.launch_status = EvolutionHandoffStatus::CanaryLaunched;
+        lookup.report.canary_run_id = Some(canary.report.run_id.clone());
+        let record = self.store.persist(&lookup.report)?;
+        Ok(EvolutionHandoffLookup {
             record,
             report: lookup.report,
         })
@@ -1111,12 +1589,75 @@ pub fn render_evolution_proposal_list(list: &EvolutionProposalList) -> String {
     lines.join("\n")
 }
 
+/// Render one durable queue-to-canary handoff packet.
+pub fn render_evolution_handoff(report: &EvolutionHandoffReport) -> String {
+    let mut lines = vec![
+        "Evolution Canary Handoff".to_string(),
+        format!("Handoff ID: {}", report.handoff_id),
+        format!("Proposal: {}", report.proposal_id),
+        format!(
+            "Experiment: {} ({})",
+            report.experiment_name, report.experiment_id
+        ),
+        format!(
+            "Strategy: {} | {}",
+            report.strategy_id, report.strategy_description
+        ),
+        format!(
+            "Launch status: {} | canary_run_id={}",
+            handoff_status_label(report.launch_status),
+            report.canary_run_id.as_deref().unwrap_or("none")
+        ),
+        format!(
+            "Verification: {} | Proof: {} | Shadow: {} (passed={})",
+            report.verification_id, report.proof.proof_id, report.shadow_id, report.shadow_passed
+        ),
+        format!(
+            "Context: suite={} corpus={}",
+            report.suite_name, report.corpus_version
+        ),
+    ];
+
+    if let Some(advisory) = &report.advisory {
+        lines.push(format!(
+            "Advisory: scorecard={} recommendation={} delta={:.3}",
+            advisory.scorecard_id,
+            advisory_recommendation_label(advisory.recommendation),
+            advisory.score_delta
+        ));
+    } else {
+        lines.push("Advisory: unavailable".to_string());
+    }
+
+    if report.blocking_reasons.is_empty() {
+        lines.push("Blocking reasons: none".to_string());
+    } else {
+        lines.push("Blocking reasons:".to_string());
+        for reason in &report.blocking_reasons {
+            lines.push(format!(
+                "- [{}] {}: {}",
+                reason.source, reason.name, reason.details
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
 fn load_verification_lookup(
     verification_results_dir: impl AsRef<Path>,
     verification_id: &str,
 ) -> Result<Option<DetectorVerificationLookup>, EvolutionQueueError> {
     let store = FileVerificationStore::open(verification_results_dir)?;
     Ok(store.load(verification_id)?)
+}
+
+fn load_shadow_lookup(
+    shadow_results_dir: impl AsRef<Path>,
+    shadow_id: &str,
+) -> Result<Option<StrategyShadowLookup>, EvolutionQueueError> {
+    let store = FileShadowStore::open(shadow_results_dir)?;
+    Ok(store.load(shadow_id)?)
 }
 
 fn assess_proof_status(
@@ -1280,6 +1821,13 @@ fn proposal_id(experiment_name: &str, strategy_id: &str, created_at_ms: i64) -> 
     )
 }
 
+fn handoff_id(proposal_id: &str, strategy_id: &str, created_at_ms: i64) -> String {
+    format!(
+        "evolution_handoff:{}:{}:{}",
+        proposal_id, strategy_id, created_at_ms
+    )
+}
+
 fn review_state_label(state: EvolutionProposalReviewState) -> &'static str {
     match state {
         EvolutionProposalReviewState::PendingReview => "pending_review",
@@ -1313,6 +1861,14 @@ fn advisory_recommendation_label(recommendation: StrategyAdvisoryRecommendation)
         StrategyAdvisoryRecommendation::CandidateAlreadyStableInProduction => {
             "candidate_already_stable_in_production"
         }
+    }
+}
+
+fn handoff_status_label(status: EvolutionHandoffStatus) -> &'static str {
+    match status {
+        EvolutionHandoffStatus::PendingLaunch => "pending_launch",
+        EvolutionHandoffStatus::CanaryLaunched => "canary_launched",
+        EvolutionHandoffStatus::Blocked => "blocked",
     }
 }
 
@@ -1352,6 +1908,11 @@ struct EvolutionProposalIndex {
     entries: Vec<EvolutionProposalRecord>,
 }
 
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct EvolutionHandoffIndex {
+    entries: Vec<EvolutionHandoffRecord>,
+}
+
 #[derive(Debug, Serialize)]
 struct ProofAttestationPayload {
     experiment_manifest_sha256: String,
@@ -1363,11 +1924,12 @@ struct ProofAttestationPayload {
 #[cfg(test)]
 mod tests {
     use super::{
-        DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness, EvolutionProposalCreateRequest,
-        EvolutionProposalDecisionAction, EvolutionProposalProofStatus,
-        EvolutionProposalReviewState, render_evolution_proof, render_evolution_proposal,
-        render_evolution_proposal_list,
+        DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness,
+        EvolutionHandoffStatus, EvolutionProposalCreateRequest, EvolutionProposalDecisionAction,
+        EvolutionProposalProofStatus, EvolutionProposalReviewState, render_evolution_handoff,
+        render_evolution_proof, render_evolution_proposal, render_evolution_proposal_list,
     };
+    use crate::canary::DefaultCanaryHarness;
     use crate::replay::DefaultReplayHarness;
     use crate::strategy::DefaultStrategyScorecardHarness;
     use std::fs;
@@ -1629,5 +2191,263 @@ mod tests {
             EvolutionProposalReviewState::AcceptedForCanary
         );
         assert_eq!(decided.report.decision_history.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn evolution_handoff_persists_pending_launch_packet() {
+        let root = unique_temp_dir("handoff-create");
+        let replay_dir = root.join("replay");
+        let experiment_dir = root.join("experiments");
+        let verification_dir = root.join("verification");
+        let shadow_dir = root.join("shadows");
+        let memory_dir = root.join("memory");
+        let scorecard_dir = root.join("scorecards");
+        let proofs_dir = root.join("proofs");
+        let queue_dir = root.join("queue");
+        let handoff_dir = root.join("handoffs");
+        let config = sample_config();
+        let replay =
+            DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
+        let verification = replay
+            .evaluate_verification_path(office_control_experiment(), &verification_dir)
+            .await
+            .unwrap();
+        let shadow = replay
+            .evaluate_shadow_path(office_control_experiment(), &shadow_dir)
+            .await
+            .unwrap();
+        let proof_harness =
+            DefaultEvolutionProofHarness::from_config("inline", config.clone(), &proofs_dir)
+                .unwrap();
+        let proof = proof_harness
+            .create_proof(
+                office_control_experiment(),
+                &verification_dir,
+                &verification.report.verification_id,
+            )
+            .unwrap();
+        let scorecards = DefaultStrategyScorecardHarness::from_config(
+            "inline",
+            config.clone(),
+            &memory_dir,
+            &scorecard_dir,
+        )
+        .unwrap();
+        let queue = DefaultEvolutionQueueHarness::from_config("inline", config.clone(), &queue_dir)
+            .unwrap();
+        let proposal = queue
+            .create_proposal(
+                &replay,
+                &scorecards,
+                EvolutionProposalCreateRequest {
+                    experiment_path: office_control_experiment(),
+                    experiment_results_dir: experiment_dir.clone(),
+                    verification_results_dir: verification_dir.clone(),
+                    verification_id: verification.report.verification_id.clone(),
+                    proof_results_dir: proofs_dir.clone(),
+                    proof_id: proof.report.proof_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let accepted = queue
+            .record_decision(
+                &proposal.report.proposal_id,
+                EvolutionProposalDecisionAction::AcceptForCanary,
+                "ready for queue handoff",
+            )
+            .unwrap();
+        let handoff =
+            DefaultEvolutionHandoffHarness::from_config("inline", config, &handoff_dir).unwrap();
+
+        let lookup = handoff
+            .create_handoff(
+                &queue_dir,
+                &accepted.report.proposal_id,
+                &shadow_dir,
+                &shadow.report.shadow_id,
+            )
+            .unwrap();
+
+        assert_eq!(
+            lookup.report.launch_status,
+            EvolutionHandoffStatus::PendingLaunch
+        );
+        assert!(lookup.report.blocking_reasons.is_empty());
+        assert_eq!(lookup.report.shadow_id, shadow.report.shadow_id);
+        assert!(render_evolution_handoff(&lookup.report).contains("Evolution Canary Handoff"));
+    }
+
+    #[tokio::test]
+    async fn evolution_handoff_blocks_unaccepted_proposal() {
+        let root = unique_temp_dir("handoff-blocked");
+        let replay_dir = root.join("replay");
+        let experiment_dir = root.join("experiments");
+        let verification_dir = root.join("verification");
+        let shadow_dir = root.join("shadows");
+        let memory_dir = root.join("memory");
+        let scorecard_dir = root.join("scorecards");
+        let proofs_dir = root.join("proofs");
+        let queue_dir = root.join("queue");
+        let handoff_dir = root.join("handoffs");
+        let config = sample_config();
+        let replay =
+            DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
+        let verification = replay
+            .evaluate_verification_path(office_control_experiment(), &verification_dir)
+            .await
+            .unwrap();
+        let shadow = replay
+            .evaluate_shadow_path(office_control_experiment(), &shadow_dir)
+            .await
+            .unwrap();
+        let proof_harness =
+            DefaultEvolutionProofHarness::from_config("inline", config.clone(), &proofs_dir)
+                .unwrap();
+        let proof = proof_harness
+            .create_proof(
+                office_control_experiment(),
+                &verification_dir,
+                &verification.report.verification_id,
+            )
+            .unwrap();
+        let scorecards = DefaultStrategyScorecardHarness::from_config(
+            "inline",
+            config.clone(),
+            &memory_dir,
+            &scorecard_dir,
+        )
+        .unwrap();
+        let queue = DefaultEvolutionQueueHarness::from_config("inline", config.clone(), &queue_dir)
+            .unwrap();
+        let proposal = queue
+            .create_proposal(
+                &replay,
+                &scorecards,
+                EvolutionProposalCreateRequest {
+                    experiment_path: office_control_experiment(),
+                    experiment_results_dir: experiment_dir.clone(),
+                    verification_results_dir: verification_dir.clone(),
+                    verification_id: verification.report.verification_id.clone(),
+                    proof_results_dir: proofs_dir.clone(),
+                    proof_id: proof.report.proof_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let handoff =
+            DefaultEvolutionHandoffHarness::from_config("inline", config, &handoff_dir).unwrap();
+
+        let lookup = handoff
+            .create_handoff(
+                &queue_dir,
+                &proposal.report.proposal_id,
+                &shadow_dir,
+                &shadow.report.shadow_id,
+            )
+            .unwrap();
+
+        assert_eq!(lookup.report.launch_status, EvolutionHandoffStatus::Blocked);
+        assert!(!lookup.report.blocking_reasons.is_empty());
+        assert_eq!(lookup.report.canary_run_id, None);
+    }
+
+    #[tokio::test]
+    async fn evolution_handoff_launches_canary_and_persists_run_id() {
+        let root = unique_temp_dir("handoff-launch");
+        let replay_dir = root.join("replay");
+        let experiment_dir = root.join("experiments");
+        let verification_dir = root.join("verification");
+        let shadow_dir = root.join("shadows");
+        let memory_dir = root.join("memory");
+        let scorecard_dir = root.join("scorecards");
+        let proofs_dir = root.join("proofs");
+        let queue_dir = root.join("queue");
+        let handoff_dir = root.join("handoffs");
+        let canary_dir = root.join("canaries");
+        let config = sample_config();
+        let replay =
+            DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
+        let verification = replay
+            .evaluate_verification_path(office_control_experiment(), &verification_dir)
+            .await
+            .unwrap();
+        let shadow = replay
+            .evaluate_shadow_path(office_control_experiment(), &shadow_dir)
+            .await
+            .unwrap();
+        let proof_harness =
+            DefaultEvolutionProofHarness::from_config("inline", config.clone(), &proofs_dir)
+                .unwrap();
+        let proof = proof_harness
+            .create_proof(
+                office_control_experiment(),
+                &verification_dir,
+                &verification.report.verification_id,
+            )
+            .unwrap();
+        let scorecards = DefaultStrategyScorecardHarness::from_config(
+            "inline",
+            config.clone(),
+            &memory_dir,
+            &scorecard_dir,
+        )
+        .unwrap();
+        let queue = DefaultEvolutionQueueHarness::from_config("inline", config.clone(), &queue_dir)
+            .unwrap();
+        let proposal = queue
+            .create_proposal(
+                &replay,
+                &scorecards,
+                EvolutionProposalCreateRequest {
+                    experiment_path: office_control_experiment(),
+                    experiment_results_dir: experiment_dir.clone(),
+                    verification_results_dir: verification_dir.clone(),
+                    verification_id: verification.report.verification_id.clone(),
+                    proof_results_dir: proofs_dir.clone(),
+                    proof_id: proof.report.proof_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let accepted = queue
+            .record_decision(
+                &proposal.report.proposal_id,
+                EvolutionProposalDecisionAction::AcceptForCanary,
+                "ready for queue handoff",
+            )
+            .unwrap();
+        let handoff_harness =
+            DefaultEvolutionHandoffHarness::from_config("inline", config.clone(), &handoff_dir)
+                .unwrap();
+        let handoff = handoff_harness
+            .create_handoff(
+                &queue_dir,
+                &accepted.report.proposal_id,
+                &shadow_dir,
+                &shadow.report.shadow_id,
+            )
+            .unwrap();
+        let canary_harness =
+            DefaultCanaryHarness::from_config("inline", config, &canary_dir).unwrap();
+
+        let launched = handoff_harness
+            .launch_canary(
+                &canary_harness,
+                &verification_dir,
+                &shadow_dir,
+                &handoff.report.handoff_id,
+            )
+            .unwrap();
+
+        assert_eq!(
+            launched.report.launch_status,
+            EvolutionHandoffStatus::CanaryLaunched
+        );
+        assert!(launched.report.canary_run_id.is_some());
+        let canary_run = canary_harness
+            .load_run(launched.report.canary_run_id.as_deref().unwrap())
+            .unwrap();
+        assert!(canary_run.is_some());
     }
 }

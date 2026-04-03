@@ -574,6 +574,46 @@ Failure behavior:
 
 This lane still stops short of governance and rollout mutation. Queue decisions prepare the candidate for later workflows; they do not bypass verification, shadow, canary, or production-promotion steps.
 
+### Queue Handoff And Canary Launch
+
+The repo now ships a queue-to-canary handoff lane. This bridges accepted evolution proposals into the existing bounded canary path without making the operator restate experiment, verification, or proof metadata by hand.
+
+The current slice stays deliberately conservative:
+
+- handoff packets are durable repo-owned artifacts under `data/evolution-handoffs/`
+- only `accepted_for_canary` proposals with proved evidence can produce an unblocked handoff
+- canary launch is still operator-triggered; accepted proposals do not start rollout implicitly
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-handoff-create \
+  --proposal-id YOUR_ACCEPTED_PROPOSAL_ID \
+  --shadow-id YOUR_SHADOW_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-handoff-result \
+  --handoff-id YOUR_HANDOFF_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-handoff-launch-canary \
+  --handoff-id YOUR_HANDOFF_ID
+```
+
+Each handoff packet preserves:
+
+- source proposal ID and accepted review state
+- experiment path, verification reference, proof summary, and advisory summary
+- shadow artifact reference plus suite and corpus context
+- blocking reasons when handoff creation fails closed
+- resulting canary run ID once launch succeeds
+
+Failure behavior:
+
+- `evolution-handoff-create` exits nonzero when the proposal is not accepted, proof status is not `proved`, or the shadow artifact is missing or inconsistent
+- blocked handoff packets are still persisted for later review
+- `evolution-handoff-launch-canary` fails when the handoff is blocked or has already launched a canary run
+
+This lane does not replace the existing bounded canary gates. It only preserves and reuses the reviewed queue evidence so operators can launch canary from one durable handoff artifact.
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.

@@ -5,9 +5,10 @@ use swarm_runtime::control::{
     OperatorControlOutput, ReplayLookupSelector, render_output,
 };
 use swarm_runtime::evolution::{
-    DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness, EvolutionProposalCreateRequest,
-    EvolutionProposalDecisionAction, EvolutionProposalReviewState, render_evolution_proof,
-    render_evolution_proposal, render_evolution_proposal_list,
+    DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness,
+    EvolutionProposalCreateRequest, EvolutionProposalDecisionAction, EvolutionProposalReviewState,
+    render_evolution_handoff, render_evolution_proof, render_evolution_proposal,
+    render_evolution_proposal_list,
 };
 use swarm_runtime::promotion::{
     DefaultProductionPromotionHarness, ProductionPromotionStatus,
@@ -65,6 +66,9 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/evolution-queue")]
     evolution_queue_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evolution-handoffs")]
+    evolution_handoff_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -111,6 +115,9 @@ enum Command {
     EvolutionQueueResult(EvolutionQueueResultArgs),
     EvolutionQueueList(EvolutionQueueListArgs),
     EvolutionQueueDecision(EvolutionQueueDecisionArgs),
+    EvolutionHandoffCreate(EvolutionHandoffCreateArgs),
+    EvolutionHandoffResult(EvolutionHandoffResultArgs),
+    EvolutionHandoffLaunchCanary(EvolutionHandoffLaunchCanaryArgs),
 }
 
 #[derive(Debug, Args)]
@@ -452,6 +459,27 @@ struct EvolutionQueueDecisionArgs {
     reason: String,
 }
 
+#[derive(Debug, Args)]
+struct EvolutionHandoffCreateArgs {
+    #[arg(long)]
+    proposal_id: String,
+
+    #[arg(long)]
+    shadow_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionHandoffResultArgs {
+    #[arg(long)]
+    handoff_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionHandoffLaunchCanaryArgs {
+    #[arg(long)]
+    handoff_id: String,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -471,6 +499,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         DefaultEvolutionProofHarness::from_path(&cli.config, &cli.evolution_proof_results_dir)?;
     let evolution_queue_harness =
         DefaultEvolutionQueueHarness::from_path(&cli.config, &cli.evolution_queue_results_dir)?;
+    let evolution_handoff_harness =
+        DefaultEvolutionHandoffHarness::from_path(&cli.config, &cli.evolution_handoff_results_dir)?;
 
     let output = match cli.command {
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
@@ -988,6 +1018,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_evolution_proposal(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionHandoffCreate(args) => {
+            let lookup = evolution_handoff_harness.create_handoff(
+                &cli.evolution_queue_results_dir,
+                &args.proposal_id,
+                &cli.shadow_results_dir,
+                &args.shadow_id,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_handoff(&lookup.report));
+            }
+            if !lookup.report.blocking_reasons.is_empty() {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvolutionHandoffResult(args) => {
+            let lookup = evolution_handoff_harness
+                .load_handoff(&args.handoff_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution handoff was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_handoff(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionHandoffLaunchCanary(args) => {
+            let lookup = evolution_handoff_harness.launch_canary(
+                &canary_harness,
+                &cli.verification_results_dir,
+                &cli.shadow_results_dir,
+                &args.handoff_id,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_handoff(&lookup.report));
             }
             return Ok(());
         }
