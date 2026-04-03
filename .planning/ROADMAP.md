@@ -7,18 +7,19 @@
 
 **4 phases** | **20 v1 requirements mapped** | All v1 requirements covered ✓
 
-| # | Phase | Goal | Requirements | Success Criteria |
-|---|-------|------|--------------|------------------|
-| 1 | Baseline Contracts | Lock configuration and runtime contracts so the core lane can be built without churn | CFG-01, CFG-02, CFG-03 | 3 |
-| 2 | Fast Detection Lane | Ship one benchmarked Rust detector and in-memory pheromone substrate | DET-01, DET-02, DET-03, DET-04, SUB-01, SUB-02, SUB-03 | 4 |
-| 3 | Safe Live Response | Add deterministic policy, scoped capability leases, and sandboxed response execution | POL-01, POL-02, POL-03, RSP-01, RSP-02, RSP-03 | 4 |
-| 4 | Audit And Hardening | Make the critical path observable, testable, and replayable | AUD-01, AUD-02, OPS-01, OPS-02 | 4 |
+| # | Phase | Goal | Requirements | Success Criteria | Status |
+|---|-------|------|--------------|------------------|--------|
+| 1 | Baseline Contracts | Lock configuration and runtime contracts so the core lane can be built without churn | CFG-01, CFG-02, CFG-03 | 3 | Complete (2026-04-03) |
+| 2 | Fast Detection Lane | Ship one benchmarked Rust detector and in-memory pheromone substrate | DET-01, DET-02, DET-03, DET-04, SUB-01, SUB-02, SUB-03 | 4 | In progress |
+| 3 | Safe Live Response | Add deterministic policy, scoped capability leases, and sandboxed response execution | POL-01, POL-02, POL-03, RSP-01, RSP-02, RSP-03 | 4 | Planned |
+| 4 | Audit And Hardening | Make the critical path observable, testable, and replayable | AUD-01, AUD-02, OPS-01, OPS-02 | 4 | Planned |
 
 ## Phase Details
 
 ### Phase 1: Baseline Contracts
 
 **Goal:** Replace doc-only assumptions with strict configuration and runtime-owned contracts.
+**Status:** Complete (2026-04-03)
 
 **Requirements:** CFG-01, CFG-02, CFG-03
 
@@ -82,4 +83,4 @@ These are intentionally excluded from the first roadmap:
 
 ---
 *Roadmap created: 2026-04-02*
-*Last updated: 2026-04-02 after initialization*
+*Last updated: 2026-04-03 after Phase 1 completion*

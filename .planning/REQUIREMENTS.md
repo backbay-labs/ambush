@@ -7,9 +7,9 @@
 
 ### Configuration
 
-- [ ] **CFG-01**: Operator can load runtime and ruleset configuration from repository-owned config files
-- [ ] **CFG-02**: Runtime rejects malformed or unknown configuration fields at load time
-- [ ] **CFG-03**: Operator can enable `detect_only` or `live_response` mode explicitly
+- [x] **CFG-01**: Operator can load runtime and ruleset configuration from repository-owned config files
+- [x] **CFG-02**: Runtime rejects malformed or unknown configuration fields at load time
+- [x] **CFG-03**: Operator can enable `detect_only` or `live_response` mode explicitly
 
 ### Detection
 
@@ -74,9 +74,9 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CFG-01 | Phase 1 | Pending |
-| CFG-02 | Phase 1 | Pending |
-| CFG-03 | Phase 1 | Pending |
+| CFG-01 | Phase 1 | Complete |
+| CFG-02 | Phase 1 | Complete |
+| CFG-03 | Phase 1 | Complete |
 | DET-01 | Phase 2 | Pending |
 | DET-02 | Phase 2 | Pending |
 | DET-03 | Phase 2 | Pending |
