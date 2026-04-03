@@ -1,6 +1,6 @@
 # Milestone v1.9: Verified Evolution Queue
 
-**Status:** NOT STARTED
+**Status:** COMPLETE
 **Date:** 2026-04-03
 **Milestone Goal:** Add a proof-backed, operator-controlled evolution queue for detector proposals so verified candidate strategies can be reviewed, deferred, or prepared for later rollout without introducing automatic promotion or quorum governance.
 
@@ -20,7 +20,7 @@ The milestone stays deliberately narrow. It does not add autonomous mutation, qu
 
 **Depends on:** Phase 28
 
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - Verified detector proposals can be written to a durable evolution queue without mutating production detector configuration.
@@ -36,7 +36,7 @@ The milestone stays deliberately narrow. It does not add autonomous mutation, qu
 
 **Depends on:** Phase 29
 
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - Proposal admission requires proof-backed safety artifacts rather than heuristic summaries alone.
@@ -52,7 +52,7 @@ The milestone stays deliberately narrow. It does not add autonomous mutation, qu
 
 **Depends on:** Phase 30
 
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - Operators can list and reload queued proposals by stable ID, strategy ID, or review state.
@@ -81,8 +81,8 @@ The milestone stays deliberately narrow. It does not add autonomous mutation, qu
 
 ## Next Step
 
-`$gsd-plan-phase 29`
+`$gsd-new-milestone`
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.9 initialization*
+*Last updated: 2026-04-03 after milestone v1.9 completion*

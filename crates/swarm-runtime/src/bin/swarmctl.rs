@@ -1,8 +1,13 @@
-use clap::{ArgGroup, Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use swarm_runtime::canary::{DefaultCanaryHarness, render_canary_run_report};
 use swarm_runtime::control::{
     DefaultControlPlane, IncidentLookupSelector, InvestigationLookupSelector,
     OperatorControlOutput, ReplayLookupSelector, render_output,
+};
+use swarm_runtime::evolution::{
+    DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness, EvolutionProposalCreateRequest,
+    EvolutionProposalDecisionAction, EvolutionProposalReviewState, render_evolution_proof,
+    render_evolution_proposal, render_evolution_proposal_list,
 };
 use swarm_runtime::promotion::{
     DefaultProductionPromotionHarness, ProductionPromotionStatus,
@@ -54,6 +59,12 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/strategy-scorecards")]
     strategy_scorecard_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evolution-proofs")]
+    evolution_proof_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/evolution-queue")]
+    evolution_queue_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -94,6 +105,12 @@ enum Command {
     StrategyMemoryHistory(StrategyMemoryHistoryArgs),
     StrategyScorecardCreate(StrategyScorecardCreateArgs),
     StrategyScorecardResult(StrategyScorecardResultArgs),
+    EvolutionProofCreate(EvolutionProofCreateArgs),
+    EvolutionProofResult(EvolutionProofResultArgs),
+    EvolutionQueueCreate(EvolutionQueueCreateArgs),
+    EvolutionQueueResult(EvolutionQueueResultArgs),
+    EvolutionQueueList(EvolutionQueueListArgs),
+    EvolutionQueueDecision(EvolutionQueueDecisionArgs),
 }
 
 #[derive(Debug, Args)]
@@ -343,6 +360,98 @@ struct StrategyScorecardResultArgs {
     scorecard_id: String,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum EvolutionQueueReviewStateArg {
+    PendingReview,
+    AcceptedForCanary,
+    Deferred,
+    Rejected,
+    Blocked,
+}
+
+impl From<EvolutionQueueReviewStateArg> for EvolutionProposalReviewState {
+    fn from(value: EvolutionQueueReviewStateArg) -> Self {
+        match value {
+            EvolutionQueueReviewStateArg::PendingReview => Self::PendingReview,
+            EvolutionQueueReviewStateArg::AcceptedForCanary => Self::AcceptedForCanary,
+            EvolutionQueueReviewStateArg::Deferred => Self::Deferred,
+            EvolutionQueueReviewStateArg::Rejected => Self::Rejected,
+            EvolutionQueueReviewStateArg::Blocked => Self::Blocked,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum EvolutionQueueDecisionArg {
+    AcceptForCanary,
+    Defer,
+    Reject,
+}
+
+impl From<EvolutionQueueDecisionArg> for EvolutionProposalDecisionAction {
+    fn from(value: EvolutionQueueDecisionArg) -> Self {
+        match value {
+            EvolutionQueueDecisionArg::AcceptForCanary => Self::AcceptForCanary,
+            EvolutionQueueDecisionArg::Defer => Self::Defer,
+            EvolutionQueueDecisionArg::Reject => Self::Reject,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct EvolutionProofCreateArgs {
+    #[arg(long)]
+    experiment: std::path::PathBuf,
+
+    #[arg(long)]
+    verification_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionProofResultArgs {
+    #[arg(long)]
+    proof_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionQueueCreateArgs {
+    #[arg(long)]
+    experiment: std::path::PathBuf,
+
+    #[arg(long)]
+    verification_id: String,
+
+    #[arg(long)]
+    proof_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionQueueResultArgs {
+    #[arg(long)]
+    proposal_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionQueueListArgs {
+    #[arg(long)]
+    strategy_id: Option<String>,
+
+    #[arg(long, value_enum)]
+    review_state: Option<EvolutionQueueReviewStateArg>,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionQueueDecisionArgs {
+    #[arg(long)]
+    proposal_id: String,
+
+    #[arg(long, value_enum)]
+    decision: EvolutionQueueDecisionArg,
+
+    #[arg(long)]
+    reason: String,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -358,6 +467,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.strategy_memory_results_dir,
         &cli.strategy_scorecard_results_dir,
     )?;
+    let evolution_proof_harness =
+        DefaultEvolutionProofHarness::from_path(&cli.config, &cli.evolution_proof_results_dir)?;
+    let evolution_queue_harness =
+        DefaultEvolutionQueueHarness::from_path(&cli.config, &cli.evolution_queue_results_dir)?;
 
     let output = match cli.command {
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
@@ -780,6 +893,101 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_strategy_scorecard(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionProofCreate(args) => {
+            let lookup = evolution_proof_harness.create_proof(
+                args.experiment,
+                &cli.verification_results_dir,
+                &args.verification_id,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_proof(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionProofResult(args) => {
+            let lookup = evolution_proof_harness
+                .load_proof(&args.proof_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution proof was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_proof(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionQueueCreate(args) => {
+            let lookup = evolution_queue_harness
+                .create_proposal(
+                    &replay_harness,
+                    &strategy_scorecard_harness,
+                    EvolutionProposalCreateRequest {
+                        experiment_path: args.experiment,
+                        experiment_results_dir: cli.experiment_results_dir.clone(),
+                        verification_results_dir: cli.verification_results_dir.clone(),
+                        verification_id: args.verification_id.clone(),
+                        proof_results_dir: cli.evolution_proof_results_dir.clone(),
+                        proof_id: args.proof_id.clone(),
+                    },
+                )
+                .await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_proposal(&lookup.report));
+            }
+            if lookup.report.review_state == EvolutionProposalReviewState::Blocked {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvolutionQueueResult(args) => {
+            let lookup = evolution_queue_harness
+                .load_proposal(&args.proposal_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution proposal was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_proposal(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionQueueList(args) => {
+            let list = evolution_queue_harness.list_proposals(
+                args.strategy_id.as_deref(),
+                args.review_state.map(Into::into),
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                println!("{}", render_evolution_proposal_list(&list));
+            }
+            return Ok(());
+        }
+        Command::EvolutionQueueDecision(args) => {
+            let lookup = evolution_queue_harness.record_decision(
+                &args.proposal_id,
+                args.decision.into(),
+                &args.reason,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_proposal(&lookup.report));
             }
             return Ok(());
         }

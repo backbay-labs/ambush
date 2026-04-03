@@ -7,19 +7,19 @@
 
 ### Evolution Queue
 
-- [ ] **EVOL-01**: Candidate detector strategies carry proof-backed safety artifacts rather than heuristic invariant summaries alone
-- [ ] **EVOL-02**: Team can propose verified detector strategy updates through a repo-owned evolution queue without widening live autonomy beyond operator-controlled rollout
-- [ ] **EVOL-03**: Evolution queue admission fails closed when proof artifacts, verification evidence, or lineage metadata are missing or inconsistent
+- [x] **EVOL-01**: Candidate detector strategies carry proof-backed safety artifacts rather than heuristic invariant summaries alone
+- [x] **EVOL-02**: Team can propose verified detector strategy updates through a repo-owned evolution queue without widening live autonomy beyond operator-controlled rollout
+- [x] **EVOL-03**: Evolution queue admission fails closed when proof artifacts, verification evidence, or lineage metadata are missing or inconsistent
 
 ### Queue Records
 
-- [ ] **EVOL-04**: Queue records preserve lineage, replay or verification evidence, advisory scorecard references, and current review state in one durable artifact
-- [ ] **EVOL-05**: Operator can list and reload queued proposals by stable proposal ID, strategy ID, or review state through `swarmctl`
+- [x] **EVOL-04**: Queue records preserve lineage, replay or verification evidence, advisory scorecard references, and current review state in one durable artifact
+- [x] **EVOL-05**: Operator can list and reload queued proposals by stable proposal ID, strategy ID, or review state through `swarmctl`
 
 ### Operator Review
 
-- [ ] **EVOL-06**: Operator can record queue decisions such as accept for canary, defer, or reject without mutating production detector configuration directly
-- [ ] **EVOL-07**: Queue review surfaces explain proof status and advisory ranking so operators can understand why a proposal is ready, blocked, or deferred
+- [x] **EVOL-06**: Operator can record queue decisions such as accept for canary, defer, or reject without mutating production detector configuration directly
+- [x] **EVOL-07**: Queue review surfaces explain proof status and advisory ranking so operators can understand why a proposal is ready, blocked, or deferred
 
 ## Future Requirements
 
@@ -53,13 +53,13 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVOL-01 | Phase 30 | Pending |
-| EVOL-02 | Phase 29 | Pending |
-| EVOL-03 | Phase 30 | Pending |
-| EVOL-04 | Phase 29 | Pending |
-| EVOL-05 | Phase 31 | Pending |
-| EVOL-06 | Phase 31 | Pending |
-| EVOL-07 | Phase 31 | Pending |
+| EVOL-01 | Phase 30 | Complete |
+| EVOL-02 | Phase 29 | Complete |
+| EVOL-03 | Phase 30 | Complete |
+| EVOL-04 | Phase 29 | Complete |
+| EVOL-05 | Phase 31 | Complete |
+| EVOL-06 | Phase 31 | Complete |
+| EVOL-07 | Phase 31 | Complete |
 
 **Coverage:**
 - v1.9 requirements: 7 total
@@ -68,4 +68,4 @@
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.9 roadmap creation*
+*Last updated: 2026-04-03 after milestone v1.9 completion*

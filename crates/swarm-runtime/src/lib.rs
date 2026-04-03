@@ -8,6 +8,7 @@ pub mod canary;
 pub mod config;
 pub mod control;
 pub mod correlation;
+pub mod evolution;
 pub mod investigation;
 pub mod pipeline;
 pub mod promotion;

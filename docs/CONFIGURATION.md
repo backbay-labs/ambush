@@ -505,6 +505,75 @@ Scorecards compare the current production baseline and the verified candidate us
 
 This lane is advisory only. The scorecard does not approve, deploy, or promote a detector by itself.
 
+### Evolution Proofs And Verified Proposal Queue
+
+The repo now ships a proof-backed evolution queue for detector proposals. This sits above the advisory scorecard lane and below any future governance-backed rollout system.
+
+The current slice remains deliberately narrow:
+
+- proposals are repo-owned durable artifacts
+- queue admission is fail-closed when proof, verification, or lineage evidence is missing or inconsistent
+- operator decisions are explicit review records only and do not mutate production detector state directly
+
+Evolution proof artifacts are written under `data/evolution-proofs/` by default.
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate \
+  --experiment experiments/office-baseline-control.yaml
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-proof-create \
+  --experiment experiments/office-baseline-control.yaml \
+  --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-proof-result \
+  --proof-id YOUR_PROOF_ID
+```
+
+Each persisted proof captures:
+
+- the candidate strategy, experiment, and verification IDs
+- lineage metadata from the experiment manifest
+- proof-system label and deterministic SHA-256 digests for the manifest, verification report, and lineage payload
+- invariant coverage copied from the passed verification artifact
+
+Evolution queue artifacts are written under `data/evolution-queue/` by default.
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-create \
+  --experiment experiments/office-baseline-control.yaml \
+  --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1 \
+  --proof-id YOUR_PROOF_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-list --review-state pending-review
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-decision \
+  --proposal-id YOUR_PROPOSAL_ID \
+  --decision accept-for-canary \
+  --reason "control candidate is ready for bounded canary"
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-result \
+  --proposal-id YOUR_PROPOSAL_ID
+```
+
+Queue artifacts preserve:
+
+- stable proposal IDs plus current review state
+- candidate lineage, verification reference, proof summary, and advisory scorecard summary
+- explicit blocking reasons when admission fails closed
+- explicit operator decision history such as `accept_for_canary`, `defer`, or `reject`
+
+Failure behavior:
+
+- `evolution-queue-create` exits nonzero when the proposal is blocked
+- blocked proposals are still persisted for later review with preserved denial reasons
+- `accept-for-canary` is allowed only for unblocked proposals with proved safety evidence
+
+This lane still stops short of governance and rollout mutation. Queue decisions prepare the candidate for later workflows; they do not bypass verification, shadow, canary, or production-promotion steps.
+
 ### Complete Field Reference
 
 Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.
