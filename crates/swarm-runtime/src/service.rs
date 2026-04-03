@@ -13,11 +13,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use swarm_core::config::SwarmConfig;
 use swarm_core::types::{AgentId, ResponseAction};
-use swarm_pheromone::{PheromoneSubstrate, SubstrateError, SubstrateHealth};
+use swarm_pheromone::{
+    ConfiguredPheromoneSubstrate, PheromoneSubstrate, SubstrateError, SubstrateHealth,
+};
 use swarm_policy::ApprovalGate;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::ResponseExecutor;
 use swarm_spine::{
+    ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, ConfiguredReplayBundleStore,
     IncidentLookup, IncidentRecord, IncidentStore, IncidentStoreHealth, InvestigationBundleLookup,
     InvestigationBundleRecord, InvestigationBundleStore, InvestigationStoreHealth, ReplayBundle,
     ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,
@@ -153,6 +156,17 @@ pub struct PersistedReplayBundle {
 pub struct PersistedReplayBundleWithInvestigation {
     pub replay: PersistedReplayBundle,
     pub investigation: Option<InvestigationBundleRecord>,
+}
+
+/// Repository-configured runtime stack that composes critical-lane and async review components.
+pub struct ConfiguredRuntimeStack<P, E, Strategy> {
+    pub service: RuntimeService<P, E>,
+    pub substrate: ConfiguredPheromoneSubstrate,
+    pub replay_store: ConfiguredReplayBundleStore,
+    pub investigation: InvestigationCoordinator<Strategy, ConfiguredInvestigationBundleStore>,
+    pub investigation_store: ConfiguredInvestigationBundleStore,
+    pub correlation: CorrelationEngine,
+    pub incident_store: ConfiguredIncidentStore,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -756,6 +770,114 @@ where
     }
 }
 
+impl<P, E, Strategy> ConfiguredRuntimeStack<P, E, Strategy>
+where
+    P: ApprovalGate,
+    E: ResponseExecutor,
+    Strategy: InvestigationStrategy,
+{
+    /// Build the runtime composition root directly from repository-owned config.
+    pub fn from_runtime(
+        config: SwarmConfig,
+        runtime: SwarmRuntime<P, E>,
+        strategy: Strategy,
+    ) -> Result<Self, ServiceError> {
+        let substrate = ConfiguredPheromoneSubstrate::from_config(&config.pheromone)?;
+        let replay_store = ConfiguredReplayBundleStore::from_config(&config.audit.bundle_store)?;
+        let investigation_store =
+            ConfiguredInvestigationBundleStore::from_config(&config.investigation.bundle_store)
+                .map_err(InvestigationError::from)?;
+        let incident_store =
+            ConfiguredIncidentStore::from_config(&config.correlation.incident_store)
+                .map_err(CorrelationError::from)?;
+        let investigation = InvestigationCoordinator::new(
+            config.investigation.clone(),
+            strategy,
+            investigation_store.clone(),
+        );
+        let correlation = CorrelationEngine::new(config.correlation.clone());
+        let service = RuntimeService::new(config, runtime);
+
+        Ok(Self {
+            service,
+            substrate,
+            replay_store,
+            investigation,
+            investigation_store,
+            correlation,
+            incident_store,
+        })
+    }
+
+    /// Build the runtime stack from policy, response, and investigation components.
+    pub fn from_components(
+        config: SwarmConfig,
+        policy: P,
+        response: E,
+        strategy: Strategy,
+    ) -> Result<Self, ServiceError> {
+        let mode = config.runtime.mode;
+        Self::from_runtime(config, SwarmRuntime::new(mode, policy, response), strategy)
+    }
+
+    /// Run the critical path, persist the replay bundle, and queue async investigation.
+    pub async fn process_event<D, F>(
+        &self,
+        detector: &D,
+        event: &TelemetryEvent,
+        execution: EventExecutionContext<'_>,
+        request_builder: F,
+    ) -> Result<Option<PersistedReplayBundleWithInvestigation>, ServiceError>
+    where
+        D: DetectionStrategy,
+        F: Fn(&DetectionFinding) -> Option<ResponseAction>,
+    {
+        self.service
+            .process_event_with_store_and_investigation(
+                detector,
+                &self.substrate,
+                &self.replay_store,
+                &self.investigation,
+                event,
+                execution,
+                request_builder,
+            )
+            .await
+    }
+
+    /// Assemble or reload one correlated incident from the configured stores.
+    pub fn correlate_hunt(
+        &self,
+        hunt_id: &str,
+    ) -> Result<Option<CorrelationOutcome>, ServiceError> {
+        self.service.correlate_hunt(
+            &self.correlation,
+            &self.investigation_store,
+            &self.incident_store,
+            hunt_id,
+        )
+    }
+
+    /// Produce the full operator review report from the configured stack.
+    pub async fn operator_review_status<D>(
+        &self,
+        detector: &D,
+    ) -> Result<OperatorStatusReport, ServiceError>
+    where
+        D: DetectionStrategy,
+    {
+        self.service
+            .operator_review_status(
+                detector,
+                &self.substrate,
+                &self.replay_store,
+                &self.investigation,
+                &self.incident_store,
+            )
+            .await
+    }
+}
+
 fn component_status_from_substrate(health: &SubstrateHealth) -> ComponentStatus {
     ComponentStatus {
         ready: health.ready,
@@ -790,7 +912,7 @@ fn component_status_from_incident_store(health: &IncidentStoreHealth) -> Compone
 
 #[cfg(test)]
 mod tests {
-    use super::{EventExecutionContext, RuntimeService};
+    use super::{ConfiguredRuntimeStack, EventExecutionContext, RuntimeService};
     use crate::correlation::CorrelationEngine;
     use crate::investigation::{InvestigationOutcome, InvestigationStrategy};
     use crate::{RuntimeMode, SwarmRuntime};
@@ -1567,5 +1689,116 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(replay_store_root);
+    }
+
+    #[tokio::test]
+    async fn configured_runtime_stack_builds_async_layers_from_config() {
+        let mut config = service_config(
+            RuntimeMode::LiveResponse,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        config.audit.bundle_store = BundleStoreConfig::Memory;
+        config.investigation = InvestigationConfig {
+            enabled: true,
+            worker_count: 1,
+            max_pending_jobs: 4,
+            time_budget_ms: 250,
+            bundle_store: BundleStoreConfig::Memory,
+        };
+        config.correlation = CorrelationConfig {
+            enabled: true,
+            time_window_ms: 10_000,
+            min_shared_keys: 1,
+            candidate_limit: 16,
+            incident_store: BundleStoreConfig::Memory,
+        };
+
+        let stack = ConfiguredRuntimeStack::from_components(
+            config,
+            StaticApprovalGate::default(),
+            SandboxExecutor,
+            SlowInvestigator { delay_ms: 50 },
+        )
+        .unwrap();
+        let detector = SuspiciousProcessTreeDetector::default();
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let make_event = |event_id: &str, command_line: &str| TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "winword".to_string(),
+                process_name: "powershell".to_string(),
+                command_line: command_line.to_string(),
+                user: Some("alice".to_string()),
+            }),
+        };
+        let make_context = |now_ms| ApprovalContext {
+            live_mode: true,
+            receipt_chain: vec![format!("receipt-upstream-{now_ms}")],
+            now_ms,
+        };
+
+        let first = stack
+            .process_event(
+                &detector,
+                &make_event("evt-stack-1", "powershell.exe -enc AAA="),
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &make_context(1_700_000_000_100),
+                },
+                |_finding| {
+                    Some(swarm_core::types::ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let second = stack
+            .process_event(
+                &detector,
+                &make_event("evt-stack-2", "powershell.exe -enc BBB="),
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &make_context(1_700_000_000_200),
+                },
+                |_finding| {
+                    Some(swarm_core::types::ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(first.investigation.is_some());
+        assert!(second.investigation.is_some());
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let incident = stack.correlate_hunt("evt-stack-1").unwrap().unwrap();
+        assert_eq!(incident.incident.included_members.len(), 2);
+
+        let report = stack.operator_review_status(&detector).await.unwrap();
+        let investigation_review = report.investigation_review.expect("investigation review");
+        let incident_review = report.incident_review.expect("incident review");
+        assert!(investigation_review.queue.completed_jobs >= 2);
+        assert_eq!(incident_review.recent.len(), 1);
+        assert_eq!(
+            incident_review.recent[0].incident_id,
+            incident.record.incident_id
+        );
+        assert_eq!(
+            report.freshness.latest_incident_at_ms,
+            Some(incident.record.created_at_ms)
+        );
     }
 }
