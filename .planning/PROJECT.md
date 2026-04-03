@@ -10,27 +10,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.6 Bounded Canary And Rollback` shipped on 2026-04-03.
+`v1.7 Controlled Production Promotion` shipped on 2026-04-03.
 
 **What is now real:**
-- verified candidate detectors can be attached to one repo-owned canary slot without mutating the production baseline detector
-- canary runs persist assignment lineage, verification and shadow evidence, observation metrics, threshold verdicts, and operator recommendations under stable run IDs
-- operators can drive canary start, live event ingestion, rollback, halt, and stable-ID reload through `swarmctl`
-- canary runs automatically block and roll back on configured threshold or budget failures, and manual rollback preserves explicit reason history
-- canary configuration is validated in the shared Rust config model and shipped in `rulesets/default.yaml`
-
-## Current Milestone: v1.7 Controlled Production Promotion
-
-**Goal:** Promote a canary-approved detector into production under explicit operator control, retain the previous baseline as the rollback target, and enforce a bounded post-promotion observation window before considering any governance work.
-
-**Target features:**
-- promote a ready canary artifact into the production detector role without hand-editing runtime config
-- observe promoted-detector behavior over a configurable production window with automatic rollback on divergence
-- persist production-promotion records, rollback history, and stable-ID reload through `swarmctl`
+- verified candidate detectors can now move from canary into a bounded production promotion without hand-editing detector config
+- production-promotion records persist embedded canary evidence, baseline rotation, observation metrics, threshold verdicts, and final recommendation under stable promotion IDs
+- operators can drive promotion start, production-window event ingestion, rollback, halt, and stable-ID reload through `swarmctl`
+- production promotions automatically block and roll back on configured divergence, latency, or budget failures, and manual rollback preserves restored-baseline history
+- promotion configuration is validated in the shared Rust config model and shipped in `rulesets/default.yaml`
 
 ## Next Planning Step
 
-Start Phase 23 with `$gsd-plan-phase 23`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -73,15 +64,15 @@ Start Phase 23 with `$gsd-plan-phase 23`.
 - ✓ Team can assemble a canary evaluation report that links verification, shadow, and canary evidence into one ready-for-promotion or blocked recommendation — v1.6
 - ✓ Operator CLI can inspect active or completed canary runs and rollback history by stable ID — v1.6
 
-### Active
+### Just Shipped
 
-- [ ] Team can promote a canary-approved detector to production while retaining the previous production detector as an explicit rollback target — v1.7
-- [ ] Operator can start a production promotion from a ready canary artifact and persist a stable promotion ID with baseline lineage — v1.7
-- [ ] Production promotion records detection, divergence, latency, and budget metrics over a configurable post-promotion observation window — v1.7
-- [ ] Production promotion automatically rolls back when observation-window metrics diverge beyond configured thresholds or resource budgets — v1.7
-- [ ] Operator can manually halt or roll back a production promotion and retrieve the reason, restored baseline, and affected observation window — v1.7
-- [ ] Promotion records persist canary evidence, promoted strategy lineage, rollback target, and final recommendation in one durable artifact — v1.7
-- [ ] Operator CLI can inspect active or completed production promotions and rollback history by stable ID — v1.7
+- ✓ Team can promote a canary-approved detector to production while retaining the previous production detector as an explicit rollback target — v1.7
+- ✓ Operator can start a production promotion from a ready canary artifact and persist a stable promotion ID with baseline lineage — v1.7
+- ✓ Production promotion records detection, divergence, latency, and budget metrics over a configurable post-promotion observation window — v1.7
+- ✓ Production promotion automatically rolls back when observation-window metrics diverge beyond configured thresholds or resource budgets — v1.7
+- ✓ Operator can manually halt or roll back a production promotion and retrieve the reason, restored baseline, and affected observation window — v1.7
+- ✓ Promotion records persist canary evidence, promoted strategy lineage, rollback target, and final recommendation in one durable artifact — v1.7
+- ✓ Operator CLI can inspect active or completed production promotions and rollback history by stable ID — v1.7
 
 ### Out of Scope
 
@@ -94,9 +85,9 @@ Start Phase 23 with `$gsd-plan-phase 23`.
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed the next staged-deployment step with bounded canary execution, persisted canary evidence, and explicit rollback workflows.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed the next staged-deployment step with controlled production promotion, bounded production observation, and rollback to the retained baseline detector.
 
-The project now has an end-to-end candidate promotion ladder up through canary: experiment -> verification -> shadow -> canary. `docs/EVOLUTION.md`, `docs/INTEGRATION.md`, and `docs/CONFIGURATION.md` all make the same next step explicit: production promotion with fallback retention and observation-window rollback. That makes `v1.7` the right place to add a controlled production promotion path before any quorum governance, MemRL-based selection, or multi-user control surface work.
+The project now has an end-to-end rollout ladder: experiment -> verification -> shadow -> canary -> production promotion. The next cycle can focus on governance, richer operator surfaces, or production memory only after the production-promotion path remains stable and inspectable.
 
 ## Constraints
 
@@ -131,6 +122,7 @@ The project now has an end-to-end candidate promotion ladder up through canary: 
 | Complete formal verification and shadow readiness before any live promotion work | `docs/EVOLUTION.md` places verification and shadow before canary or production, while governance remains explicitly deferred | ✓ Good |
 | Choose bounded canary and rollback as the next milestone | The canonical staged deployment path moves from shadow to canary, while consensus promotion remains deferred | ✓ Chosen |
 | Choose controlled production promotion as the next milestone | The canary artifact is now the documented handoff into production, and the roadmap still defers governance until after a real promotion path exists | ✓ Chosen |
+| Keep production promotion CLI-first and single-node | The runtime still lacks independent trust boundaries and multi-node rollout needs, so CLI plus durable artifacts is the smallest credible promotion surface | ✓ Good |
 
 ---
-*Last updated: 2026-04-03 after starting v1.7*
+*Last updated: 2026-04-03 after shipping v1.7*

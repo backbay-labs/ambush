@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.7 Controlled Production Promotion (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- canary-approved detectors can now be promoted into the production role with explicit fallback retention and stable production-promotion IDs
+- production observation windows now record divergence, latency, and detection-volume metrics and automatically roll back to the retained baseline on threshold failure
+- operators can start, inspect, halt, and roll back production promotions through `swarmctl`, and the promotion artifact persists embedded canary evidence plus rollback history
+
+---
+
 ## v1.6 Bounded Canary And Rollback (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

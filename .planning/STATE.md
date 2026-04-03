@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.7
 milestone_name: controlled-production-promotion
-status: roadmap-defined
-last_updated: "2026-04-03T20:15:34Z"
+status: milestone-complete
+last_updated: "2026-04-03T21:12:35Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 0
+  completed_plans: 3
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.7 Controlled Production Promotion` is defined and ready to begin at Phase 23.
+**Current focus:** `v1.7 Controlled Production Promotion` is shipped and archived. The next cycle has not been started yet.
 
 ## Memory
 
@@ -30,11 +30,11 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.4` is complete: named suites, candidate experiments, persisted reports, and offline gates all shipped.
 - `v1.5` is complete: repo-owned verification corpora, invariant verdicts, shadow comparisons, and promotion review packets now ship through `swarmctl`.
 - `v1.6` is complete: bounded canary assignment, live observation metrics, automatic rollback, manual halt or rollback, and durable canary review artifacts now ship through `swarmctl`.
+- `v1.7` is complete: production promotion start, bounded production observation, automatic rollback to the retained baseline, and durable promotion records now ship through `swarmctl`.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
-- The repo now has enough promotion-readiness infrastructure to promote from canary into the production detector role without inventing a new evidence model.
-- `v1.7` follows the staged deployment path documented in `docs/EVOLUTION.md` and `docs/INTEGRATION.md`: after shadow and canary, the next bounded step is production promotion with observation-window rollback.
+- The repo now has enough rollout infrastructure to support real production promotion records before it adds governance or adaptive strategy selection.
 - Consensus, MemRL-based automatic selection, and richer operator surfaces remain future work.
 
 ## Next Command
 
-`$gsd-plan-phase 23`
+`$gsd-new-milestone`
