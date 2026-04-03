@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: bounded-canary-and-rollback
-status: defining-requirements
+status: roadmap-defined
 last_updated: "2026-04-03T19:26:46Z"
 progress:
   total_phases: 3
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.6 Bounded Canary And Rollback` has started and the milestone scope is being finalized from the roadmap docs.
+**Current focus:** `v1.6 Bounded Canary And Rollback` is defined and ready to begin at Phase 20.
 
 ## Memory
 
@@ -36,4 +36,4 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 ## Next Command
 
-Continue requirements and roadmap definition for `v1.6`.
+`$gsd-plan-phase 20`
