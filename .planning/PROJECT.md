@@ -2,17 +2,17 @@
 
 ## What This Is
 
-Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, and surface the full chain in one operator review report. The next milestone turns those internal artifacts into practical operator workflows and offline replay-based evaluation loops.
+Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, surface the full chain in one operator review report, and now execute offline replay plus regression evaluation over a tracked scenario corpus.
 
 ## Core Value
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## Current Milestone: v1.3 Operator Control And Replay Evaluation
+## Current Milestone: v1.3 Operator Control And Replay Evaluation (Completed)
 
 **Goal:** Turn the shipped runtime artifacts into operator-facing control and deterministic replay workflows without widening live-response autonomy.
 
-**Target features:**
+**Delivered features:**
 - operator CLI commands for runtime review and artifact lookup
 - deterministic offline replay from persisted bundles or fixture corpora
 - regression reports and replay gates that protect detection quality and hot-path latency
@@ -33,13 +33,13 @@ Detect real threats quickly enough to take safe action before the window to resp
 - ✓ Operator can review hot-path decisions, async investigation state, incidents, and freshness markers from one serializable report — v1.2
 - ✓ Operator can bootstrap the async investigation and correlation stack from repository-owned config instead of test-only manual wiring — v1.2
 
-### Active
+### Recently Completed
 
-- [ ] Operator can inspect runtime status, recent decisions, investigations, and incidents through a repo-owned control surface — v1.3
-- [ ] Operator can retrieve replay bundles, investigation bundles, and incidents by stable IDs without reading raw storage files — v1.3
-- [ ] Team can run deterministic offline replay from persisted bundles or fixture corpora without executing live response actions — v1.3
-- [ ] Team can define replay scenarios with expected outcomes and reproduce them locally or in CI — v1.3
-- [ ] Team can generate regression reports and fail when replay behavior or hot-path latency drifts past configured limits — v1.3
+- ✓ Operator can inspect runtime status, recent decisions, investigations, and incidents through a repo-owned control surface — v1.3
+- ✓ Operator can retrieve replay bundles, investigation bundles, and incidents by stable IDs without reading raw storage files — v1.3
+- ✓ Team can run deterministic offline replay from persisted bundles or fixture corpora without executing live response actions — v1.3
+- ✓ Team can define replay scenarios with expected outcomes and reproduce them locally or in CI — v1.3
+- ✓ Team can generate regression reports and fail when replay behavior or hot-path latency drifts past configured limits — v1.3
 
 ### Out of Scope
 
@@ -53,7 +53,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path.
 
-The runtime remains intentionally single-node and deterministic. Async enrichment is durable and operator-visible, but it still does not mutate live-response policy automatically. The next useful step from the canonical docs is not distributed governance. It is converting the existing serialized reports and durable artifacts into operator CLI workflows, then adding deterministic replay and regression evaluation on top of the same data model.
+The runtime remains intentionally single-node and deterministic. Async enrichment is durable and operator-visible, but it still does not mutate live-response policy automatically. `v1.3` completed the operator CLI plus replay and regression loop. The next milestone should either deepen offline red-team or evolution work, or expand operator surfaces, but it no longer needs to reopen the replay contract itself.
 
 ## Constraints
 
@@ -86,4 +86,4 @@ The runtime remains intentionally single-node and deterministic. Async enrichmen
 | Keep replay offline and deterministic | Evaluation should strengthen trust in production behavior without widening the live-response blast radius | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after starting v1.3*
+*Last updated: 2026-04-03 after completing v1.3*
