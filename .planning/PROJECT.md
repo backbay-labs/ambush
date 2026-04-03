@@ -17,13 +17,14 @@ Detect real threats quickly enough to take safe action before the window to resp
 - repo-owned detector experiment manifests with baseline-vs-candidate evaluation
 - persisted experiment reports with lineage, corpus version, score summaries, and explicit offline gates
 
-## Next Milestone Seeds
+## Current Milestone: v1.5 Formal Verification And Shadow Readiness
 
-No new milestone is active yet. The strongest follow-on options from the current docs are:
+**Goal:** Add repo-owned detector verification and shadow-style promotion readiness on top of the offline bench, without moving into live canary or consensus yet.
 
-- richer operator control surfaces beyond the initial CLI
-- promotion-readiness work such as formal verification, shadow evaluation, or canary preparation
-- governance work once there are real trust boundaries and independent nodes
+**Target features:**
+- repo-owned verification corpora, invariants, and resource budgets for candidate detectors
+- offline verification gate with per-invariant pass or fail output plus inspectable failures
+- shadow comparison and promotion-review artifacts that stay outside the live runtime path
 
 ## Requirements
 
@@ -58,14 +59,20 @@ No new milestone is active yet. The strongest follow-on options from the current
 
 ### Active
 
-- None — the next milestone has not been opened yet
+- [ ] Team can run a repo-owned verification gate against a candidate detector and get per-invariant pass/fail results before any promotion workflow — v1.5
+- [ ] Verification failures preserve counterexamples or failing corpus references so operators can inspect exactly what broke — v1.5
+- [ ] Canonical known-bad indicators, benign controls, and resource budgets are stored in repo-owned manifests or config, not hardcoded in tests — v1.5
+- [ ] Team can run a candidate detector in shadow mode against recorded replay or runtime artifacts without emitting pheromones or response actions — v1.5
+- [ ] Shadow reports compare candidate and production baseline on detection deltas, false positives, and latency over the same artifact window — v1.5
+- [ ] Team can assemble a promotion review packet with lineage, verification verdicts, and shadow comparison summaries for manual approval — v1.5
+- [ ] Operator CLI can load the latest verification, shadow, or promotion-review artifacts by stable ID — v1.5
 
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
-- HTTP or multi-user operator control plane — still secondary to offline adversarial and experiment workflows
-- Live canary deployment or production promotion of evolved strategies — offline evaluation comes first
-- Automatic strategy mutation or self-evolution in the runtime hot path — this milestone is about bench tooling, not autonomous adaptation
+- HTTP or multi-user operator control plane — still secondary to verification and shadow-readiness work
+- Live canary deployment or production promotion of evolved strategies — this milestone stops at offline verification and review packets
+- Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
 
@@ -73,7 +80,7 @@ No new milestone is active yet. The strongest follow-on options from the current
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates.
 
-The codebase now has a credible offline evaluation story for future promotion or governance work, but it still intentionally stops short of live mutation, formal proof gates, or multi-node control. The next cycle should build from the new bench rather than bypass it.
+The docs now point to the next missing step: formal verification and shadow-style promotion readiness. `docs/EVOLUTION.md` explicitly sequences the Z3 gate before shadow, canary, and production, and the Rust roadmap still defers governance until reality demands it. That makes `v1.5` the right place to define repo-owned invariants, verification corpora, shadow comparison artifacts, and promotion review packets without introducing live canaries or quorum approvals yet.
 
 ## Constraints
 
@@ -105,6 +112,7 @@ The codebase now has a credible offline evaluation story for future promotion or
 | Start with a CLI-backed operator surface | The existing runtime already exposes serializable reports and stores; CLI is the smallest practical control seam | ✓ Chosen |
 | Keep replay offline and deterministic | Evaluation should strengthen trust in production behavior without widening the live-response blast radius | ✓ Chosen |
 | Choose adversarial replay and strategy evaluation as the next milestone | `docs/ROADMAP.md` and `docs/EVOLUTION.md` both place offline red-team and detector bench work ahead of live promotion workflows | ✓ Chosen |
+| Choose formal verification and shadow readiness as the next milestone | `docs/EVOLUTION.md` places verification and shadow before canary or production, while governance remains explicitly deferred | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after completing v1.4*
+*Last updated: 2026-04-03 after starting v1.5*
