@@ -10,26 +10,26 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.9 Verified Evolution Queue` shipped on 2026-04-03.
+`v1.10 Queue Handoff And Canary Launch` shipped on 2026-04-03.
 
 **What is now real:**
-- verified candidate detector updates can now be persisted as proof-backed evolution proposals with stable IDs, lineage, verification references, advisory summaries, and durable review state
-- proposal admission now fails closed against proof, verification, lineage, corpus, and digest mismatches while still preserving blocked artifacts for operator review
-- `swarmctl` now exposes proof creation plus queue create, list, reload, and decision workflows for accept, defer, or reject review
-- the rollout ladder now extends through proposal review: experiment -> verification -> proof -> proposal queue
+- accepted queue proposals can now be converted into durable handoff packets that preserve proposal, proof, verification, advisory, and shadow lineage
+- handoff creation now fails closed on pre-acceptance proposals or mismatched shadow evidence while still preserving blocked packets for operator review
+- operators can now launch the bounded canary lane from a stable handoff ID through `swarmctl`, and the handoff artifact keeps the resulting canary run reference
+- the rollout ladder now extends through operator-launched canary handoff: proposal -> handoff -> canary
 
-## Current Milestone: v1.10 Queue Handoff And Canary Launch
+## Current Milestone: v1.11 Proposal Drafting And Selection Pressure
 
-**Goal:** bridge accepted evolution proposals into the bounded canary lane without manual artifact translation and without widening live autonomy beyond operator-launched rollout.
+**Goal:** turn replay regressions, verification drift, and strategy-memory gaps into durable proposal drafts that operators can inspect and promote into the existing reviewed queue, without introducing automatic mutation or launch.
 
 **Target features:**
-- persist rollout handoff packets that bind an accepted proposal to the shadow evidence required for canary entry
-- fail handoff creation closed when proposal, proof, verification, or shadow evidence is missing or inconsistent
-- let operators launch canary from a stable handoff packet through `swarmctl` while preserving the queue-to-canary lineage
+- derive repo-owned selection-pressure signals from replay, verification, and strategy-memory evidence
+- persist draft proposal artifacts with stable IDs, rationale, and source evidence references
+- let operators review one draft and promote it into the existing evolution queue through `swarmctl`
 
 ## Next Planning Step
 
-Start execution with `$gsd-plan-phase 32`.
+Start execution with `$gsd-plan-phase 35`.
 
 ## Requirements
 
@@ -100,9 +100,9 @@ Start execution with `$gsd-plan-phase 32`.
 
 ### Active
 
-- [ ] Accepted queue proposals can feed the existing canary rollout path without manual artifact translation
-- [ ] Team can persist a durable queue-to-canary handoff artifact with stable IDs and linked evidence references
-- [ ] Operator can inspect and launch canary from one accepted handoff packet through `swarmctl`
+- [ ] Team can derive selection-pressure signals from replay regressions, verification drift, or strategy-memory gaps without touching live rollout state
+- [ ] Team can persist draft proposal artifacts with stable IDs, rationale, and source evidence references
+- [ ] Operator can inspect and promote one draft into the reviewed evolution queue through `swarmctl`
 
 ### Out of Scope
 
@@ -161,6 +161,8 @@ The project now has an end-to-end rollout ladder plus a first memory-backed revi
 | Keep the evolution queue operator-controlled and non-promoting | The runtime still lacks independent trust boundaries, so queued proposals must not advance to production automatically | ✓ Good |
 | Choose queue-to-canary handoff as the next milestone | The accepted queue state currently stops at review; the next missing bridge is a durable operator-launched handoff into the existing canary lane | ✓ Chosen |
 | Keep handoff launch operator-driven | The runtime still avoids automatic rollout mutation, so accepted proposals should prepare canary launch rather than start it implicitly | ✓ Chosen |
+| Choose proposal drafting and selection pressure as the next milestone | With queue-to-canary handoff now real, the next deferred gap is generating better proposal candidates from replay drift and live memory without widening autonomy | ✓ Chosen |
+| Keep draft promotion operator-reviewed | Proposal drafts should enrich operator choice, not auto-enqueue or auto-launch rollout | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after starting milestone v1.10*
+*Last updated: 2026-04-03 after starting milestone v1.11*

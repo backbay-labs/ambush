@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.10 Queue Handoff And Canary Launch (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- accepted evolution proposals can now be packaged into durable queue-to-canary handoff packets with stable IDs, proof references, verification references, and shadow evidence
+- handoff creation now fails closed on unaccepted proposal state, invalid proof status, missing experiment path, or inconsistent shadow evidence while still preserving blocked packets
+- operators can now launch bounded canary directly from a stable handoff packet through `swarmctl`, and the handoff artifact retains the resulting canary run ID
+
+---
+
 ## v1.9 Verified Evolution Queue (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks
