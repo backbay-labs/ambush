@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.4 Adversarial Replay And Strategy Bench (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- named replay suites now execute through `swarmctl`, and tracked scenarios carry campaign, technique, and benign-vs-adversarial metadata
+- repo-owned detector experiments now compare baseline and candidate profiles offline and persist reports by stable experiment ID
+- offline safety gates now fail on known-bad coverage or threshold regressions and attribute failures back to specific scenarios or technique groups
+
+---
+
 ## v1.3 Operator Control And Replay Evaluation (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

@@ -8,14 +8,22 @@ Swarm Team Six is a Rust-first threat detection and controlled live-response run
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## Current Milestone: v1.4 Adversarial Replay And Strategy Bench
+## Current State
 
-**Goal:** Turn the replay loop into an offline adversarial lab for Hellcat-inspired scenario suites and candidate detector evaluation, without widening live-runtime autonomy.
+`v1.4 Adversarial Replay And Strategy Bench` shipped on 2026-04-03.
 
-**Target features:**
-- adversarial replay suites with campaign and technique metadata
-- repo-owned candidate detector experiment manifests with baseline-vs-candidate evaluation
-- persisted experiment reports, lineage, and offline safety gates
+**What is now real:**
+- named adversarial replay suites with campaign, technique, and benign-vs-adversarial metadata
+- repo-owned detector experiment manifests with baseline-vs-candidate evaluation
+- persisted experiment reports with lineage, corpus version, score summaries, and explicit offline gates
+
+## Next Milestone Seeds
+
+No new milestone is active yet. The strongest follow-on options from the current docs are:
+
+- richer operator control surfaces beyond the initial CLI
+- promotion-readiness work such as formal verification, shadow evaluation, or canary preparation
+- governance work once there are real trust boundaries and independent nodes
 
 ## Requirements
 
@@ -40,16 +48,17 @@ Detect real threats quickly enough to take safe action before the window to resp
 - ✓ Team can run deterministic offline replay from persisted bundles or fixture corpora without executing live response actions — v1.3
 - ✓ Team can define replay scenarios with expected outcomes and reproduce them locally or in CI — v1.3
 - ✓ Team can generate regression reports and fail when replay behavior or hot-path latency drifts past configured limits — v1.3
+- ✓ Team can run Hellcat-inspired adversarial scenario corpora against the offline replay harness — v1.4
+- ✓ Team can organize adversarial scenarios into named suites with campaign and technique metadata for repeatable execution — v1.4
+- ✓ Evaluation reports can identify which adversarial scenarios, suites, or technique groups regressed — v1.4
+- ✓ Team can register a candidate detection strategy as a repo-owned experiment input without changing the production detector configuration — v1.4
+- ✓ Team can compare baseline and candidate strategies against the same replay corpus on detection quality, false positives, and latency — v1.4
+- ✓ Candidate strategy experiments persist lineage, corpus version, and score summaries for offline review — v1.4
+- ✓ Offline experiment gates fail when a candidate regresses known-bad coverage or misses configured comparison thresholds — v1.4
 
 ### Active
 
-- [ ] Team can run Hellcat-inspired adversarial scenario corpora against the offline replay harness — v1.4
-- [ ] Team can organize adversarial scenarios into named suites with campaign and technique metadata for repeatable execution — v1.4
-- [ ] Evaluation reports can identify which adversarial scenarios, suites, or technique groups regressed — v1.4
-- [ ] Team can register a candidate detection strategy as a repo-owned experiment input without changing the production detector configuration — v1.4
-- [ ] Team can compare baseline and candidate strategies against the same replay corpus on detection quality, false positives, and latency — v1.4
-- [ ] Candidate strategy experiments persist lineage, corpus version, and score summaries for offline review — v1.4
-- [ ] Offline experiment gates fail when a candidate regresses known-bad coverage or misses configured comparison thresholds — v1.4
+- None — the next milestone has not been opened yet
 
 ### Out of Scope
 
@@ -62,9 +71,9 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates.
 
-The next useful step from the canonical docs is the deferred Phase 7 track in `docs/ROADMAP.md`: offline replay, red-team pressure, and detector evolution experiments. `docs/EVOLUTION.md` and `docs/AGENTS.md` are explicit that candidate strategies should be exercised against deterministic replay corpora before any promotion workflow is considered. That makes `v1.4` the right place to build adversarial scenario suites and a candidate-strategy evaluation bench, while still deferring canary deployment, consensus promotion, and live mutation.
+The codebase now has a credible offline evaluation story for future promotion or governance work, but it still intentionally stops short of live mutation, formal proof gates, or multi-node control. The next cycle should build from the new bench rather than bypass it.
 
 ## Constraints
 
@@ -98,4 +107,4 @@ The next useful step from the canonical docs is the deferred Phase 7 track in `d
 | Choose adversarial replay and strategy evaluation as the next milestone | `docs/ROADMAP.md` and `docs/EVOLUTION.md` both place offline red-team and detector bench work ahead of live promotion workflows | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after starting v1.4*
+*Last updated: 2026-04-03 after completing v1.4*
