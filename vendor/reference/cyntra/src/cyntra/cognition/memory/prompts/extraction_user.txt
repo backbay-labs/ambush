@@ -1,0 +1,30 @@
+Analyze this agent run and extract discrete memories.
+
+## Run Context
+
+- **Run ID**: {run_id}
+- **Agent**: {agent_id}
+- **Status**: {status}
+- **Patch Applied**: {patch_applied}
+- **Gates Passed**: {gates_passed}
+- **Issue Tags**: {issue_tags}
+- **Files Changed**:
+{file_changes}
+
+## Run Transcript
+
+{transcript}
+
+---
+
+## Instructions
+
+Based on the run transcript above, extract memories following the system guidelines.
+
+Focus on:
+1. **Patterns** that led to success (if status is success)
+2. **Failures** and their root causes (if status is failed or if there were retries)
+3. **Dynamics** about how the codebase or agent behaved
+4. **Context** about files and architecture discovered
+
+Return a JSON array of 1-10 memories. Be selective - only extract genuinely useful learnings.

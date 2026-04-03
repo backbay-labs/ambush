@@ -1,0 +1,129 @@
+{
+  "version": "0.1.0",
+  "name": "aegis_incident",
+  "instructions": [
+    {
+      "name": "incidentReport",
+      "accounts": [
+        { "name": "incidentAccount", "isMut": true, "isSigner": false },
+        { "name": "reporter", "isMut": true, "isSigner": true },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "iocHashes", "type": { "vec": { "array": ["u8", 32] } } },
+        { "name": "severity", "type": { "defined": "IncidentSeverity" } },
+        { "name": "category", "type": { "defined": "IncidentCategory" } },
+        { "name": "policyHash", "type": { "array": ["u8", 32] } },
+        { "name": "bundleHash", "type": { "array": ["u8", 32] } },
+        { "name": "bundleUri", "type": "string" },
+        { "name": "bounty", "type": "u64" }
+      ]
+    },
+    {
+      "name": "incidentVerify",
+      "accounts": [
+        { "name": "incidentAccount", "isMut": true, "isSigner": false },
+        { "name": "verifier", "isMut": true, "isSigner": true }
+      ],
+      "args": [
+        { "name": "verdict", "type": { "defined": "IncidentVerdict" } }
+      ]
+    },
+    {
+      "name": "incidentFinalize",
+      "accounts": [
+        { "name": "incidentAccount", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true }
+      ],
+      "args": [
+        { "name": "status", "type": { "defined": "IncidentStatus" } }
+      ]
+    },
+    {
+      "name": "incidentGrantDecrypt",
+      "accounts": [
+        { "name": "incidentAccount", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true }
+      ],
+      "args": [
+        { "name": "recipient", "type": "string" },
+        { "name": "expiresAt", "type": "i64" }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "IncidentReportAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "incidentId", "type": "publicKey" },
+          { "name": "reporter", "type": "publicKey" },
+          { "name": "iocHashes", "type": { "vec": { "array": ["u8", 32] } } },
+          { "name": "severity", "type": { "defined": "IncidentSeverity" } },
+          { "name": "category", "type": { "defined": "IncidentCategory" } },
+          { "name": "policyHash", "type": { "array": ["u8", 32] } },
+          { "name": "bundleHash", "type": { "array": ["u8", 32] } },
+          { "name": "bundleUri", "type": "string" },
+          { "name": "bounty", "type": "u64" },
+          { "name": "status", "type": { "defined": "IncidentStatus" } },
+          { "name": "createdAt", "type": "i64" },
+          { "name": "updatedAt", "type": "i64" }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "IncidentStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Reported" },
+          { "name": "Triaged" },
+          { "name": "Verified" },
+          { "name": "Resolved" },
+          { "name": "Paid" }
+        ]
+      }
+    },
+    {
+      "name": "IncidentSeverity",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Low" },
+          { "name": "Medium" },
+          { "name": "High" },
+          { "name": "Critical" }
+        ]
+      }
+    },
+    {
+      "name": "IncidentCategory",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "DataExfil" },
+          { "name": "PolicyViolation" },
+          { "name": "MaliciousPatch" },
+          { "name": "SupplyChainCompromise" },
+          { "name": "JailbreakAttempt" }
+        ]
+      }
+    },
+    {
+      "name": "IncidentVerdict",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Reject" },
+          { "name": "Confirm" }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "address": "PdGnxDPJVz439bE7AUy4BL7v9snbgE7Mb958kJgXqeT"
+  }
+}

@@ -1,0 +1,88 @@
+#
+# Dockerfile.strikecell - Base image for Hellcat StrikeCells.
+#
+# Multi-stage build using Chainguard Wolfi for minimal attack surface.
+# Each StrikeCell container runs a single operator against an authorised target.
+#
+
+# ---------------------------------------------------------------------------
+# Builder stage
+# ---------------------------------------------------------------------------
+FROM cgr.dev/chainguard/wolfi-base:latest AS builder
+
+RUN apk update && apk add --no-cache \
+    build-base \
+    python3 \
+    py3-pip \
+    git \
+    curl \
+    ca-certificates \
+    bash
+
+# Install Python dependencies
+RUN pip3 install --no-cache-dir \
+    anthropic \
+    httpx \
+    structlog \
+    playwright
+
+# Install Playwright Chromium browser
+RUN python3 -m playwright install chromium
+
+# ---------------------------------------------------------------------------
+# Runtime stage
+# ---------------------------------------------------------------------------
+FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
+
+RUN apk update && apk add --no-cache \
+    python3 \
+    bash \
+    curl \
+    ca-certificates \
+    nmap \
+    git \
+    # Chromium and dependencies for Playwright
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    libx11 \
+    libxcomposite \
+    libxdamage \
+    libxext \
+    libxfixes \
+    libxrandr \
+    mesa-gbm \
+    fontconfig
+
+# Copy Python packages from builder
+COPY --from=builder /usr/lib/python3.*/site-packages /usr/lib/python3.12/site-packages
+
+# Copy Playwright browsers from builder
+COPY --from=builder /root/.cache/ms-playwright /home/striker/.cache/ms-playwright
+
+# Create non-root user
+RUN addgroup -g 1001 striker && \
+    adduser -u 1001 -G striker -s /bin/bash -D striker
+
+# Set up workspace directories
+RUN mkdir -p /workspace /artifacts /logs && \
+    chown -R striker:striker /workspace /artifacts /logs /home/striker
+
+# Copy Shannon prompts and Hellcat operator code into the image
+COPY shannon/ /opt/hellcat/shannon/
+COPY src/hellcat/ /opt/hellcat/src/hellcat/
+ENV HELLCAT_ROOT=/opt/hellcat
+ENV PYTHONPATH=/opt/hellcat/src
+
+WORKDIR /workspace
+
+USER striker
+
+# Environment
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PYTHONUNBUFFERED=1
+
+# The entrypoint reads /workspace/manifest.json and runs the operator.
+ENTRYPOINT ["python3", "-m", "hellcat.operators.run", "--manifest", "/workspace/manifest.json"]

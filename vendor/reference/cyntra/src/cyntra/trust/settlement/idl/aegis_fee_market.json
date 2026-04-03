@@ -1,0 +1,190 @@
+{
+  "version": "0.1.0",
+  "name": "aegis_fee_market",
+  "instructions": [
+    {
+      "name": "offerCreate",
+      "accounts": [
+        { "name": "offerAccount", "isMut": true, "isSigner": false },
+        { "name": "owner", "isMut": true, "isSigner": true },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "offerType", "type": { "defined": "OfferType" } },
+        { "name": "capabilitiesHash", "type": { "array": ["u8", 32] } },
+        { "name": "priceModel", "type": { "defined": "PriceModel" } },
+        { "name": "price", "type": "u64" },
+        { "name": "minStake", "type": "u64" },
+        { "name": "slaLatencySeconds", "type": "u64" },
+        { "name": "maxRuntimeSeconds", "type": "u64" },
+        { "name": "policyHashesAllowed", "type": { "vec": { "array": ["u8", 32] } } }
+      ]
+    },
+    {
+      "name": "offerUpdate",
+      "accounts": [
+        { "name": "offerAccount", "isMut": true, "isSigner": false },
+        { "name": "owner", "isMut": true, "isSigner": true }
+      ],
+      "args": [
+        { "name": "status", "type": { "defined": "OfferStatus" } },
+        { "name": "price", "type": "u64" },
+        { "name": "slaLatencySeconds", "type": "u64" },
+        { "name": "maxRuntimeSeconds", "type": "u64" }
+      ]
+    },
+    {
+      "name": "offerRetire",
+      "accounts": [
+        { "name": "offerAccount", "isMut": true, "isSigner": false },
+        { "name": "owner", "isMut": true, "isSigner": true }
+      ],
+      "args": []
+    },
+    {
+      "name": "taskCreate",
+      "accounts": [
+        { "name": "taskAccount", "isMut": true, "isSigner": false },
+        { "name": "offerAccount", "isMut": false, "isSigner": false },
+        { "name": "requester", "isMut": true, "isSigner": true },
+        { "name": "escrowVault", "isMut": true, "isSigner": false },
+        { "name": "escrowMint", "isMut": false, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "manifestHash", "type": { "array": ["u8", 32] } },
+        { "name": "policyHash", "type": { "array": ["u8", 32] } },
+        { "name": "bundleRequirementsHash", "type": { "array": ["u8", 32] } },
+        { "name": "deadlineTs", "type": "i64" },
+        { "name": "escrowAmount", "type": "u64" },
+        { "name": "verifierQuorum", "type": "u8" }
+      ]
+    },
+    {
+      "name": "taskClaim",
+      "accounts": [
+        { "name": "taskAccount", "isMut": true, "isSigner": false },
+        { "name": "claimer", "isMut": true, "isSigner": true }
+      ],
+      "args": []
+    },
+    {
+      "name": "taskComplete",
+      "accounts": [
+        { "name": "taskAccount", "isMut": true, "isSigner": false },
+        { "name": "claimer", "isMut": true, "isSigner": true }
+      ],
+      "args": [
+        { "name": "receiptHash", "type": { "array": ["u8", 32] } }
+      ]
+    },
+    {
+      "name": "taskFinalize",
+      "accounts": [
+        { "name": "taskAccount", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true }
+      ],
+      "args": [
+        { "name": "quorum", "type": "u8" }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "OfferAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "offerId", "type": "publicKey" },
+          { "name": "owner", "type": "publicKey" },
+          { "name": "offerType", "type": { "defined": "OfferType" } },
+          { "name": "capabilitiesHash", "type": { "array": ["u8", 32] } },
+          { "name": "priceModel", "type": { "defined": "PriceModel" } },
+          { "name": "price", "type": "u64" },
+          { "name": "minStake", "type": "u64" },
+          { "name": "slaLatencySeconds", "type": "u64" },
+          { "name": "maxRuntimeSeconds", "type": "u64" },
+          { "name": "policyHashesAllowed", "type": { "vec": { "array": ["u8", 32] } } },
+          { "name": "status", "type": { "defined": "OfferStatus" } },
+          { "name": "createdAt", "type": "i64" },
+          { "name": "updatedAt", "type": "i64" }
+        ]
+      }
+    },
+    {
+      "name": "TaskAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "taskId", "type": "publicKey" },
+          { "name": "offerId", "type": "publicKey" },
+          { "name": "requester", "type": "publicKey" },
+          { "name": "manifestHash", "type": { "array": ["u8", 32] } },
+          { "name": "policyHash", "type": { "array": ["u8", 32] } },
+          { "name": "bundleRequirementsHash", "type": { "array": ["u8", 32] } },
+          { "name": "deadlineTs", "type": "i64" },
+          { "name": "status", "type": { "defined": "TaskStatus" } },
+          { "name": "escrowMint", "type": "publicKey" },
+          { "name": "escrowAmount", "type": "u64" },
+          { "name": "receiptHash", "type": { "array": ["u8", 32] } },
+          { "name": "verifierQuorum", "type": "u8" },
+          { "name": "createdAt", "type": "i64" },
+          { "name": "updatedAt", "type": "i64" }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "OfferType",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Builder" },
+          { "name": "Verifier" },
+          { "name": "Responder" }
+        ]
+      }
+    },
+    {
+      "name": "PriceModel",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Fixed" },
+          { "name": "PerMinute" },
+          { "name": "PerArtifact" }
+        ]
+      }
+    },
+    {
+      "name": "OfferStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Active" },
+          { "name": "Paused" },
+          { "name": "Retired" }
+        ]
+      }
+    },
+    {
+      "name": "TaskStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Open" },
+          { "name": "Claimed" },
+          { "name": "Running" },
+          { "name": "Completed" },
+          { "name": "Verified" },
+          { "name": "Settled" }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "address": "HjgMjcD5HmcGft1UFGtarvgQun9NHN7NYaJjJYxFqaNd"
+  }
+}

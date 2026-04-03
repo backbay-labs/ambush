@@ -1,0 +1,216 @@
+# Full-Scale Ralph Dashboard Configuration
+#
+# This dashboard provides observability into the autonomous execution
+# features of the Cyntra kernel including circuit breaker, rate limiting,
+# exit detection, and memory/dynamics integration.
+#
+# Compatible with:
+# - Mission Control (desktop app)
+# - Grafana (via JSON export)
+# - Custom monitoring solutions
+
+name: "Full-Scale Ralph Dashboard"
+version: "1.0.0"
+refresh_interval_seconds: 5
+
+# Layout: 3-column grid
+layout:
+  columns: 3
+  row_height: 200
+
+# Widget definitions
+widgets:
+  # Row 1: High-level status
+  - id: ralph_status
+    type: status_indicator
+    title: "Ralph Status"
+    position: { row: 0, col: 0 }
+    data_source: ralph_metrics.summary.status
+    states:
+      healthy: { color: "green", icon: "check-circle" }
+      degraded: { color: "yellow", icon: "alert-triangle" }
+      error: { color: "red", icon: "x-circle" }
+
+  - id: circuit_breaker_state
+    type: state_machine
+    title: "Circuit Breaker"
+    position: { row: 0, col: 1 }
+    data_source: ralph_metrics.circuit_breaker.state
+    states:
+      closed: { color: "green", label: "CLOSED" }
+      open: { color: "red", label: "OPEN" }
+      half_open: { color: "yellow", label: "TESTING" }
+
+  - id: integrations_health
+    type: indicator_grid
+    title: "Integrations"
+    position: { row: 0, col: 2 }
+    data_source: ralph_metrics.integration_health
+    indicators:
+      - field: memory_bridge_available
+        label: "Memory"
+      - field: transition_db_available
+        label: "Dynamics"
+      - field: learned_context_available
+        label: "Patterns"
+
+  # Row 2: Key metrics
+  - id: api_calls
+    type: counter
+    title: "API Calls (hourly)"
+    position: { row: 1, col: 0 }
+    data_source: ralph_metrics.rate_limiter.total_calls
+    format: "number"
+    threshold_warning: 80
+    threshold_critical: 95
+
+  - id: tokens_used
+    type: counter
+    title: "Tokens Used (hourly)"
+    position: { row: 1, col: 1 }
+    data_source: ralph_metrics.rate_limiter.total_tokens
+    format: "number"
+    suffix: " tokens"
+
+  - id: active_sessions
+    type: counter
+    title: "Active Sessions"
+    position: { row: 1, col: 2 }
+    data_source: ralph_metrics.session.active_sessions
+    format: "number"
+
+  # Row 3: Circuit breaker details
+  - id: circuit_trips
+    type: time_series
+    title: "Circuit Breaker Trips"
+    position: { row: 2, col: 0, span: 2 }
+    data_source: ralph_metrics.circuit_breaker.trips_by_reason
+    chart_type: bar
+    stacked: true
+    colors:
+      no_progress_stagnation: "#f59e0b"
+      consecutive_failures: "#ef4444"
+      known_trap_revisited: "#8b5cf6"
+      repeated_error: "#ec4899"
+
+  - id: trap_states
+    type: counter
+    title: "Known Traps"
+    position: { row: 2, col: 2 }
+    data_source: ralph_metrics.integration_health.traps_loaded
+    format: "number"
+    description: "Loaded from dynamics report"
+
+  # Row 4: Response analyzer
+  - id: confidence_histogram
+    type: histogram
+    title: "Completion Confidence"
+    position: { row: 3, col: 0, span: 2 }
+    data_source: ralph_metrics.response_analyzer.confidence_histogram
+    chart_type: bar
+    x_label: "Confidence"
+    y_label: "Count"
+
+  - id: patterns_count
+    type: stat_group
+    title: "Pattern Detection"
+    position: { row: 3, col: 2 }
+    stats:
+      - field: ralph_metrics.response_analyzer.learned_patterns_count
+        label: "Loaded"
+      - field: ralph_metrics.response_analyzer.anti_patterns_detected
+        label: "Detected"
+      - field: ralph_metrics.response_analyzer.patterns_confirmed
+        label: "Confirmed"
+
+  # Row 5: Ensemble exit detection
+  - id: exit_confidence
+    type: gauge
+    title: "Last Exit Confidence"
+    position: { row: 4, col: 0 }
+    data_source: ralph_metrics.ensemble_exit.exit_confidence
+    min: 0
+    max: 1
+    thresholds:
+      - { value: 0.5, color: "yellow" }
+      - { value: 0.75, color: "green" }
+
+  - id: exit_rate
+    type: stat
+    title: "Exit Rate"
+    position: { row: 4, col: 1 }
+    data_source: ralph_metrics.ensemble_exit.exit_rate
+    format: "percent"
+    description: "Exit recommendations / Total evaluations"
+
+  - id: ensemble_signals
+    type: radar
+    title: "Signal Contributions"
+    position: { row: 4, col: 2 }
+    data_source: ralph_metrics.ensemble_exit.signal_contributions
+    fields:
+      - analyzer
+      - circuit_breaker
+      - memory
+      - dynamics
+
+  # Row 6: Rate limiter details
+  - id: rate_limit_timeline
+    type: time_series
+    title: "API Usage Over Time"
+    position: { row: 5, col: 0, span: 3 }
+    data_sources:
+      - field: ralph_metrics.rate_limiter.total_calls
+        label: "Calls"
+        color: "#3b82f6"
+      - field: ralph_metrics.rate_limiter.waits_triggered
+        label: "Rate Limit Waits"
+        color: "#ef4444"
+    time_range: "1h"
+    chart_type: line
+
+# Alert rules
+alerts:
+  - id: circuit_breaker_open
+    name: "Circuit Breaker Open"
+    condition: ralph_metrics.circuit_breaker.state == "open"
+    severity: warning
+    message: "Circuit breaker is OPEN - kernel may be stuck"
+    cooldown_minutes: 5
+
+  - id: high_trip_rate
+    name: "High Circuit Trip Rate"
+    condition: ralph_metrics.circuit_breaker.total_trips > 5
+    severity: warning
+    message: "Multiple circuit breaker trips detected"
+    cooldown_minutes: 15
+
+  - id: rate_limit_approaching
+    name: "Rate Limit Approaching"
+    condition: ralph_metrics.rate_limiter.total_calls > 90
+    severity: info
+    message: "Approaching hourly API call limit"
+    cooldown_minutes: 30
+
+  - id: no_integrations
+    name: "No Integrations Available"
+    condition: |
+      !ralph_metrics.integration_health.memory_bridge_available &&
+      !ralph_metrics.integration_health.transition_db_available
+    severity: warning
+    message: "Full-Scale Ralph integrations are unavailable"
+    cooldown_minutes: 60
+
+# Export formats
+exports:
+  grafana:
+    enabled: true
+    output_path: ".cyntra/dashboards/ralph_grafana.json"
+
+  prometheus:
+    enabled: true
+    scrape_endpoint: "/metrics/ralph"
+
+  mission_control:
+    enabled: true
+    widget_registry: "ralph"

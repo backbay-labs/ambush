@@ -1,0 +1,18 @@
+[package]
+name = "swarm-runtime"
+description = "Rust-first runtime wiring detection, substrate, policy, and response"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+swarm-policy.workspace = true
+swarm-response.workspace = true
+swarm-whisker.workspace = true
+swarm-pheromone.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

@@ -1,0 +1,342 @@
+//! Security guards for AI agent execution.
+//!
+//! Guards implement async checks that can allow, block, or log actions.
+//!
+//! # Example
+//!
+//! ```rust
+//! use clawdstrike::guards::{ForbiddenPathGuard, GuardAction, GuardContext, Guard};
+//!
+//! # tokio_test::block_on(async {
+//! let guard = ForbiddenPathGuard::new();
+//! let context = GuardContext::new();
+//!
+//! // Check a safe path
+//! let result = guard.check(&GuardAction::FileAccess("/app/main.rs"), &context).await;
+//! assert!(result.allowed);
+//!
+//! // Check a forbidden path
+//! let result = guard.check(&GuardAction::FileAccess("/home/user/.ssh/id_rsa"), &context).await;
+//! assert!(!result.allowed);
+//! # })
+//! ```
+
+mod computer_use;
+mod custom;
+mod egress_allowlist;
+mod forbidden_path;
+mod input_injection_capability;
+mod jailbreak;
+mod mcp_tool;
+mod patch_integrity;
+mod path_allowlist;
+mod path_normalization;
+mod prompt_injection;
+mod remote_desktop_side_channel;
+mod secret_leak;
+mod shell_command;
+
+pub use computer_use::{ComputerUseConfig, ComputerUseGuard, ComputerUseMode};
+pub use custom::{CustomGuardFactory, CustomGuardRegistry};
+pub use egress_allowlist::{EgressAllowlistConfig, EgressAllowlistGuard};
+pub use forbidden_path::{ForbiddenPathConfig, ForbiddenPathGuard};
+pub use input_injection_capability::{
+    InputInjectionCapabilityConfig, InputInjectionCapabilityGuard,
+};
+pub use jailbreak::{JailbreakConfig, JailbreakGuard};
+pub use mcp_tool::{McpDefaultAction, McpToolConfig, McpToolGuard};
+pub use patch_integrity::{PatchIntegrityConfig, PatchIntegrityGuard};
+pub use path_allowlist::{PathAllowlistConfig, PathAllowlistGuard};
+pub use path_normalization::normalize_path_for_policy;
+pub use prompt_injection::{PromptInjectionConfig, PromptInjectionGuard};
+pub use remote_desktop_side_channel::{
+    RemoteDesktopSideChannelConfig, RemoteDesktopSideChannelGuard,
+};
+pub use secret_leak::{SecretLeakConfig, SecretLeakGuard, SecretPattern};
+pub use shell_command::{ShellCommandConfig, ShellCommandGuard};
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+use crate::identity::{IdentityPrincipal, OrganizationContext, RequestContext, SessionContext};
+use crate::origin::OriginContext;
+
+#[cfg(feature = "full")]
+use crate::enclave::ResolvedEnclave;
+
+/// Severity level for violations
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// Informational, logged but allowed
+    #[serde(alias = "low")]
+    Info,
+    /// Warning, logged and may be flagged
+    #[serde(alias = "medium")]
+    Warning,
+    /// Error, action is blocked
+    #[serde(alias = "high")]
+    Error,
+    /// Critical, action is blocked and session may be terminated
+    Critical,
+}
+
+/// Result of a guard check
+#[must_use]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GuardResult {
+    /// Whether the action is allowed
+    pub allowed: bool,
+    /// Guard that produced this result
+    pub guard: String,
+    /// Severity of any violation
+    pub severity: Severity,
+    /// Human-readable message
+    pub message: String,
+    /// Optional details
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+impl GuardResult {
+    /// Create an allow result
+    pub fn allow(guard: impl Into<String>) -> Self {
+        Self {
+            allowed: true,
+            guard: guard.into(),
+            severity: Severity::Info,
+            message: "Allowed".to_string(),
+            details: None,
+        }
+    }
+
+    /// Create a block result
+    pub fn block(guard: impl Into<String>, severity: Severity, message: impl Into<String>) -> Self {
+        Self {
+            allowed: false,
+            guard: guard.into(),
+            severity,
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    /// Create a warning result (allowed but logged)
+    pub fn warn(guard: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            allowed: true,
+            guard: guard.into(),
+            severity: Severity::Warning,
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    /// Create a sanitize result (allowed but with modified content)
+    pub fn sanitize(
+        guard: impl Into<String>,
+        message: impl Into<String>,
+        original: impl Into<String>,
+        sanitized: impl Into<String>,
+    ) -> Self {
+        Self {
+            allowed: true,
+            guard: guard.into(),
+            severity: Severity::Warning,
+            message: message.into(),
+            details: Some(serde_json::json!({
+                "action": "sanitized",
+                "original": original.into(),
+                "sanitized": sanitized.into(),
+            })),
+        }
+    }
+
+    /// Returns true when the result represents a sanitize outcome.
+    pub fn is_sanitized(&self) -> bool {
+        if !self.allowed {
+            return false;
+        }
+        self.details
+            .as_ref()
+            .and_then(|value| value.get("action"))
+            .and_then(|value| value.as_str())
+            .is_some_and(|action| action == "sanitized")
+    }
+
+    /// Add details to the result
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+}
+
+/// Context passed to guards for evaluation
+#[derive(Clone, Debug, Default)]
+pub struct GuardContext {
+    /// Current working directory
+    pub cwd: Option<String>,
+    /// Session/run identifier
+    pub session_id: Option<String>,
+    /// User/agent identifier
+    pub agent_id: Option<String>,
+    /// Additional context
+    pub metadata: Option<serde_json::Value>,
+    /// Authenticated identity principal
+    pub identity: Option<IdentityPrincipal>,
+    /// Organization context
+    pub organization: Option<OrganizationContext>,
+    /// Request context
+    pub request: Option<RequestContext>,
+    /// Effective roles
+    pub roles: Option<Vec<String>>,
+    /// Effective permissions
+    pub permissions: Option<Vec<String>>,
+    /// Session context snapshot (control-plane view)
+    pub session: Option<SessionContext>,
+    /// Origin context (where this action was triggered from).
+    pub origin: Option<OriginContext>,
+    /// Resolved enclave profile (result of origin resolution).
+    #[cfg(feature = "full")]
+    pub enclave: Option<ResolvedEnclave>,
+}
+
+impl GuardContext {
+    /// Create a new context
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the working directory
+    pub fn with_cwd(mut self, cwd: impl Into<String>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    /// Set the session ID
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
+        self
+    }
+
+    /// Set the agent ID
+    pub fn with_agent_id(mut self, id: impl Into<String>) -> Self {
+        self.agent_id = Some(id.into());
+        self
+    }
+
+    /// Set the identity principal.
+    pub fn with_identity(mut self, identity: IdentityPrincipal) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+
+    /// Set the organization context.
+    pub fn with_organization(mut self, organization: OrganizationContext) -> Self {
+        self.organization = Some(organization);
+        self
+    }
+
+    /// Set the request context.
+    pub fn with_request(mut self, request: RequestContext) -> Self {
+        self.request = Some(request);
+        self
+    }
+
+    /// Set effective roles.
+    pub fn with_roles(mut self, roles: Vec<String>) -> Self {
+        self.roles = Some(roles);
+        self
+    }
+
+    /// Set effective permissions.
+    pub fn with_permissions(mut self, permissions: Vec<String>) -> Self {
+        self.permissions = Some(permissions);
+        self
+    }
+
+    /// Set the session context snapshot.
+    pub fn with_session(mut self, session: SessionContext) -> Self {
+        self.session = Some(session);
+        self
+    }
+
+    /// Set the origin context.
+    pub fn with_origin(mut self, origin: OriginContext) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+
+    /// Set the resolved enclave.
+    #[cfg(feature = "full")]
+    pub fn with_enclave(mut self, enclave: ResolvedEnclave) -> Self {
+        self.enclave = Some(enclave);
+        self
+    }
+}
+
+/// Action type for guard checks
+#[derive(Clone, Debug)]
+pub enum GuardAction<'a> {
+    /// File system access (path)
+    FileAccess(&'a str),
+    /// File write (path, content)
+    FileWrite(&'a str, &'a [u8]),
+    /// Network egress (host, port)
+    NetworkEgress(&'a str, u16),
+    /// Shell command execution
+    ShellCommand(&'a str),
+    /// MCP tool invocation (tool_name, args)
+    McpTool(&'a str, &'a serde_json::Value),
+    /// Patch application (file, diff)
+    Patch(&'a str, &'a str),
+    /// Generic action with custom type
+    Custom(&'a str, &'a serde_json::Value),
+}
+
+/// Trait for security guards
+#[async_trait]
+pub trait Guard: Send + Sync {
+    /// Name of the guard
+    fn name(&self) -> &str;
+
+    /// Check if this guard handles the given action type
+    fn handles(&self, action: &GuardAction<'_>) -> bool;
+
+    /// Evaluate the action
+    async fn check(&self, action: &GuardAction<'_>, context: &GuardContext) -> GuardResult;
+}
+
+#[cfg(test)]
+mod egress_allowlist_plugin_parity;
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::origin::{OriginContext, OriginProvider};
+
+    #[test]
+    fn test_guard_context_with_origin() {
+        let origin = OriginContext {
+            provider: OriginProvider::Slack,
+            space_id: Some("C123".to_string()),
+            ..Default::default()
+        };
+
+        let ctx = GuardContext::new().with_origin(origin);
+        assert!(ctx.origin.is_some());
+        let origin_ref = ctx.origin.as_ref().expect("origin should be set");
+        assert_eq!(origin_ref.provider, OriginProvider::Slack);
+        assert_eq!(origin_ref.space_id.as_deref(), Some("C123"));
+    }
+
+    #[test]
+    fn test_guard_context_default_origin_is_none() {
+        let ctx = GuardContext::new();
+        assert!(ctx.origin.is_none());
+    }
+}

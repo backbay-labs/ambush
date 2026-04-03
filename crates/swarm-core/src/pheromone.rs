@@ -1,0 +1,97 @@
+//! Pheromone types — signed threat indicators deposited into the shared substrate.
+//!
+//! Pheromones are the swarm's stigmergic communication primitive.
+//! Agents deposit them when they detect anomalies; other agents
+//! sense concentration and adjust behavior accordingly.
+
+use serde::{Deserialize, Serialize};
+
+use crate::types::{AgentId, Severity};
+
+/// Classification of threat indicators.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreatClass {
+    LateralMovement,
+    DataExfiltration,
+    PrivilegeEscalation,
+    CommandAndControl,
+    InitialAccess,
+    Persistence,
+    DefenseEvasion,
+    CredentialAccess,
+    Discovery,
+    Execution,
+    Impact,
+    /// Custom threat class not in the standard taxonomy.
+    Custom(String),
+}
+
+/// A pheromone deposit — a signed threat indicator in the substrate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PheromoneDeposit {
+    /// What was observed.
+    pub indicator: serde_json::Value,
+    /// Classification of the threat.
+    pub threat_class: ThreatClass,
+    /// Severity assessment.
+    pub severity: Severity,
+    /// Agent's confidence in this signal (0.0–1.0).
+    pub confidence: f64,
+    /// When deposited (unix timestamp seconds).
+    pub timestamp: i64,
+    /// Half-life in seconds — controls evaporation rate.
+    pub decay_half_life: f64,
+    /// Who deposited it.
+    pub agent_id: AgentId,
+    /// Ed25519 signature over the canonical deposit content.
+    pub signature: Vec<u8>,
+    /// Public key of the depositing agent.
+    pub agent_key: Vec<u8>,
+}
+
+/// A pheromone with computed effective strength (after decay).
+#[derive(Debug, Clone)]
+pub struct Pheromone {
+    pub deposit: PheromoneDeposit,
+    /// Effective strength at query time, accounting for decay.
+    pub effective_strength: f64,
+}
+
+impl PheromoneDeposit {
+    /// Compute effective strength at a given time, accounting for exponential decay.
+    ///
+    /// `strength(t) = confidence * 0.5^((t - timestamp) / half_life)`
+    pub fn strength_at(&self, now: i64) -> f64 {
+        if now <= self.timestamp {
+            return self.confidence;
+        }
+        let elapsed = (now - self.timestamp) as f64;
+        self.confidence * (0.5_f64).powf(elapsed / self.decay_half_life)
+    }
+
+    /// Check if this pheromone has effectively evaporated (strength < threshold).
+    pub fn is_evaporated(&self, now: i64, threshold: f64) -> bool {
+        self.strength_at(now) < threshold
+    }
+}
+
+/// Aggregated pheromone concentration for a threat class in a region.
+#[derive(Debug, Clone)]
+pub struct PheromoneConcentration {
+    pub threat_class: ThreatClass,
+    /// Sum of effective strengths from distinct agents.
+    pub total_strength: f64,
+    /// Number of distinct agents contributing.
+    pub distinct_sources: usize,
+    /// Highest individual confidence.
+    pub peak_confidence: f64,
+}
+
+impl PheromoneConcentration {
+    /// Whether concentration exceeds a threshold for escalation.
+    /// Requires both strength AND source diversity to prevent single-agent flooding.
+    pub fn exceeds_threshold(&self, strength_threshold: f64, min_sources: usize) -> bool {
+        self.total_strength >= strength_threshold && self.distinct_sources >= min_sources
+    }
+}
