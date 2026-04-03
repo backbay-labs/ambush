@@ -93,7 +93,7 @@ Start execution with `$gsd-plan-phase 26`.
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
 - HTTP or multi-user operator control plane — still secondary to verification and shadow-readiness work
-- Fleet-wide production promotion of evolved strategies — this milestone stops at bounded canary and rollback
+- Fleet-wide or partial-fleet rollout of evolved strategies — the runtime still supports only a bounded single-node promotion path
 - Automatic strategy promotion from memory scores — `v1.8` keeps memory-backed ranking advisory and operator-reviewed
 - Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled

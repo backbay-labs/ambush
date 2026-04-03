@@ -53,19 +53,19 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MEM-01 | — | Pending |
-| MEM-02 | — | Pending |
-| MEM-03 | — | Pending |
-| MEM-04 | — | Pending |
-| MEM-05 | — | Pending |
-| MEM-06 | — | Pending |
-| MEM-07 | — | Pending |
+| MEM-01 | Phase 26 | Pending |
+| MEM-02 | Phase 26 | Pending |
+| MEM-03 | Phase 27 | Pending |
+| MEM-04 | Phase 27 | Pending |
+| MEM-05 | Phase 27 | Pending |
+| MEM-06 | Phase 28 | Pending |
+| MEM-07 | Phase 28 | Pending |
 
 **Coverage:**
 - v1.8 requirements: 7 total
-- Mapped to phases: 0
-- Unmapped: 7
+- Mapped to phases: 7
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.8 definition*
+*Last updated: 2026-04-03 after milestone v1.8 roadmap creation*
