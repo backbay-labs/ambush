@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.5
-milestone_name: formal-verification-and-shadow-readiness
-status: milestone-complete
-last_updated: "2026-04-03T17:38:06Z"
+milestone: v1.6
+milestone_name: bounded-canary-and-rollback
+status: defining-requirements
+last_updated: "2026-04-03T19:26:46Z"
 progress:
   total_phases: 3
-  completed_phases: 3
+  completed_phases: 0
   total_plans: 3
-  completed_plans: 3
+  completed_plans: 0
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.5 Formal Verification And Shadow Readiness` is complete and archived; the project is ready for the next milestone.
+**Current focus:** `v1.6 Bounded Canary And Rollback` has started and the milestone scope is being finalized from the roadmap docs.
 
 ## Memory
 
@@ -29,10 +29,11 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.3` shipped the repo-owned operator CLI, deterministic offline replay, and replay regression gates over a tracked scenario corpus.
 - `v1.4` is complete: named suites, candidate experiments, persisted reports, and offline gates all shipped.
 - `v1.5` is complete: repo-owned verification corpora, invariant verdicts, shadow comparisons, and promotion review packets now ship through `swarmctl`.
-- The repo now has enough offline bench infrastructure to evaluate candidate detectors for promotion readiness without widening live autonomy.
+- The repo now has enough offline bench infrastructure to support a bounded live canary lane for verified candidate detectors.
 - The runtime remains single-node and self-contained; distributed governance and gossip remain deferred.
-- Additional milestone research can be deferred until the next cycle is chosen because the canonical docs already enumerate the remaining roadmap themes.
+- `v1.6` follows the staged deployment path already documented in `docs/EVOLUTION.md` and `docs/INTEGRATION.md`: shadow is complete, so canary is the next bounded step.
+- This milestone deliberately stops at canary, rollback, and canary review artifacts; fleet-wide promotion and consensus remain future work.
 
 ## Next Command
 
-`$gsd-new-milestone`
+Continue requirements and roadmap definition for `v1.6`.

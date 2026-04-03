@@ -19,9 +19,14 @@ Detect real threats quickly enough to take safe action before the window to resp
 - canonical verification corpus manifests with known-bad coverage, benign controls, threat templates, and resource budgets
 - persisted verification reports, shadow reports, and promotion-review packets addressable by stable IDs through `swarmctl`
 
-## Current Milestone
+## Current Milestone: v1.6 Bounded Canary And Rollback
 
-No active milestone. Start the next cycle with `$gsd-new-milestone`.
+**Goal:** Add a bounded live canary lane for verified candidate detectors, with observation metrics and rollback, without introducing fleet-wide promotion or quorum governance.
+
+**Target features:**
+- assign a verified candidate detector to a scoped canary slot without replacing the production baseline
+- observe live canary metrics and bounded live outputs over a configurable window
+- roll back automatically or manually and emit a canary decision artifact for later promotion review
 
 ## Requirements
 
@@ -64,11 +69,21 @@ No active milestone. Start the next cycle with `$gsd-new-milestone`.
 - ✓ Team can assemble a promotion review packet with lineage, verification verdicts, and shadow comparison summaries for manual approval — v1.5
 - ✓ Operator CLI can load the latest verification, shadow, or promotion-review artifacts by stable ID — v1.5
 
+### Active
+
+- [ ] Team can assign a verified candidate detector to a bounded canary slot without replacing the production baseline — v1.6
+- [ ] Canary execution emits live detections only within the scoped canary lane and cannot by itself trigger fleet-wide escalation semantics — v1.6
+- [ ] Canary observation records detection, false-positive, latency, and resource metrics over a configurable live window — v1.6
+- [ ] Canary runs automatically roll back when configured metrics diverge beyond thresholds or resource budgets — v1.6
+- [ ] Operator can manually halt or roll back a canary and retrieve the reason, affected slot, and reverted baseline — v1.6
+- [ ] Team can assemble a canary evaluation report that links verification, shadow, and canary evidence into one ready-for-promotion or blocked recommendation — v1.6
+- [ ] Operator CLI can inspect active or completed canary runs and rollback history by stable ID — v1.6
+
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
 - HTTP or multi-user operator control plane — still secondary to verification and shadow-readiness work
-- Live canary deployment or production promotion of evolved strategies — this milestone stops at offline verification and review packets
+- Fleet-wide production promotion of evolved strategies — this milestone stops at bounded canary and rollback
 - Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
@@ -77,7 +92,7 @@ No active milestone. Start the next cycle with `$gsd-new-milestone`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy.
 
-The docs now point beyond offline promotion readiness toward whatever next milestone is chosen from the archived roadmap themes: bounded live promotion mechanics, richer operator control surfaces, or stronger governance once real trust boundaries exist. The active planning files are intentionally clear that `v1.5` is complete and the next cycle has not been selected yet.
+The next milestone follows the staged deployment path that the docs already describe: shadow is complete, so the next bounded step is canary. `docs/EVOLUTION.md` and `docs/INTEGRATION.md` both sequence the rollout as `shadow -> canary -> production`, while the Rust-first roadmap still keeps quorum governance optional and deferred. That makes `v1.6` the right place to introduce a narrowly scoped live canary lane, observation metrics, and rollback without yet attempting consensus promotion or fleet-wide rollout.
 
 ## Constraints
 
@@ -110,6 +125,7 @@ The docs now point beyond offline promotion readiness toward whatever next miles
 | Keep replay offline and deterministic | Evaluation should strengthen trust in production behavior without widening the live-response blast radius | ✓ Chosen |
 | Choose adversarial replay and strategy evaluation as the next milestone | `docs/ROADMAP.md` and `docs/EVOLUTION.md` both place offline red-team and detector bench work ahead of live promotion workflows | ✓ Chosen |
 | Complete formal verification and shadow readiness before any live promotion work | `docs/EVOLUTION.md` places verification and shadow before canary or production, while governance remains explicitly deferred | ✓ Good |
+| Choose bounded canary and rollback as the next milestone | The canonical staged deployment path moves from shadow to canary, while consensus promotion remains deferred | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after shipping v1.5*
+*Last updated: 2026-04-03 after starting v1.6*
