@@ -563,6 +563,48 @@ Failure behavior:
 - `evolution-draft-promote` exits nonzero when the draft has already been promoted once
 - promoted queue entries remain blocked from canary admission until later proof-backed evidence is produced
 
+### Guided Mutation Specs
+
+The repo now ships a durable guided-mutation lane above reviewed drafts and materialized candidates. This keeps mutation design explicit and operator-authored while packaging several candidate variants under one repo-owned artifact.
+
+Current mutation-spec semantics:
+
+- mutation specs are durable repo-owned artifacts under `data/evolution-mutations/`
+- mutation specs can start from either one reviewed draft or one materialized candidate
+- mutation specs preserve source lineage, pressure references, and any existing reviewed queue proposal reference
+- variants are appended explicitly through `swarmctl`; the runtime does not invent or auto-enqueue them
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-create \
+  --draft-id YOUR_DRAFT_ID \
+  --base-experiment experiments/office-baseline-control.yaml \
+  --rationale "compare explicit parent and threshold variants"
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-add-variant \
+  --mutation-spec-id YOUR_MUTATION_SPEC_ID \
+  --variant-id tighter-thresholds \
+  --strategy-id office_mutation_threshold_v1 \
+  --strategy-description "raise confidence thresholds without changing parent set" \
+  --mutation raise_thresholds \
+  --rationale "test whether stricter gating reduces replay regressions" \
+  --high-confidence-threshold 0.98 \
+  --medium-confidence-threshold 0.92
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-result \
+  --mutation-spec-id YOUR_MUTATION_SPEC_ID
+```
+
+Each mutation spec preserves:
+
+- the source kind (`draft` or `materialization`) and stable source IDs
+- the source strategy, lineage, and source experiment reference
+- the operator rationale for widening the candidate bench
+- one or more explicit variants with mutation labels and structured profile dimensions
+
+This lane remains offline and advisory. Mutation specs do not auto-materialize manifests, refresh validation bundles, or change queue state by themselves.
+
 ### Draft Materialization And Validation Bundles
 
 The repo now ships the bridge from reviewed draft artifacts back into the verified rollout ladder. Operators can materialize a repo-owned experiment manifest from one draft, refresh validation artifacts from that manifest, then reconcile the original draft-backed queue entry in place instead of creating a duplicate proposal.

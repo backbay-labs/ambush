@@ -11,6 +11,7 @@ pub mod correlation;
 pub mod drafting;
 pub mod evolution;
 pub mod investigation;
+pub mod mutation;
 pub mod pipeline;
 pub mod promotion;
 pub mod replay;

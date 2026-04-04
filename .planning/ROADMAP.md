@@ -14,13 +14,15 @@ The next useful step is to widen that bench without widening autonomy. `v1.13` f
 
 ### Phase 41: Structured Mutation Specs
 
+**Status:** COMPLETE
+
 **Goal:** Derive durable mutation-spec artifacts from reviewed drafts or materialized candidates without hand-editing multiple manifests.
 
 **Requirements:** EVOL-10, EVOL-11
 
 **Depends on:** Phase 40
 
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - Operators can create one durable mutation spec from an existing draft or materialized candidate through `swarmctl`.
@@ -29,6 +31,8 @@ The next useful step is to widen that bench without widening autonomy. `v1.13` f
 - Mutation artifacts are reloadable later without reading raw storage files.
 
 ### Phase 42: Batch Candidate Materialization And Validation
+
+**Status:** READY
 
 **Goal:** Materialize and refresh multiple candidate variants from one mutation spec while preserving per-candidate evidence chains.
 
@@ -45,6 +49,8 @@ The next useful step is to widen that bench without widening autonomy. `v1.13` f
 - Blocked or drifted candidates fail closed while still persisting inspectable validation artifacts.
 
 ### Phase 43: Candidate Ranking And Review Packets
+
+**Status:** READY
 
 **Goal:** Rank or shortlist validated candidates using deterministic evidence and emit durable review packets for later operator decisions.
 

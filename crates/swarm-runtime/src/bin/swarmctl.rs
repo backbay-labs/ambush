@@ -16,6 +16,11 @@ use swarm_runtime::evolution::{
     render_evolution_handoff, render_evolution_proof, render_evolution_proposal,
     render_evolution_proposal_list,
 };
+use swarm_runtime::mutation::{
+    DefaultEvolutionMutationHarness, EvolutionMutationProfileOverrides,
+    EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
+    render_evolution_mutation_spec,
+};
 use swarm_runtime::promotion::{
     DefaultProductionPromotionHarness, ProductionPromotionStatus,
     render_production_promotion_report,
@@ -97,6 +102,9 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/evolution-reconciliations")]
     evolution_reconciliation_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evolution-mutations")]
+    evolution_mutation_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -149,6 +157,9 @@ enum Command {
     EvolutionDraftResult(EvolutionDraftResultArgs),
     EvolutionDraftPromote(EvolutionDraftPromoteArgs),
     EvolutionDraftPromotionResult(EvolutionDraftPromotionResultArgs),
+    EvolutionMutationCreate(EvolutionMutationCreateArgs),
+    EvolutionMutationAddVariant(EvolutionMutationAddVariantArgs),
+    EvolutionMutationResult(EvolutionMutationResultArgs),
     EvolutionMaterialize(EvolutionMaterializeArgs),
     EvolutionMaterializationResult(EvolutionMaterializationResultArgs),
     EvolutionValidationRefresh(EvolutionValidationRefreshArgs),
@@ -562,6 +573,71 @@ struct EvolutionDraftPromotionResultArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("selector")
+        .required(true)
+        .args(["draft_id", "materialization_id"]),
+))]
+struct EvolutionMutationCreateArgs {
+    #[arg(long)]
+    draft_id: Option<String>,
+
+    #[arg(long)]
+    materialization_id: Option<String>,
+
+    #[arg(long)]
+    base_experiment: Option<std::path::PathBuf>,
+
+    #[arg(long)]
+    rationale: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionMutationAddVariantArgs {
+    #[arg(long)]
+    mutation_spec_id: String,
+
+    #[arg(long)]
+    variant_id: Option<String>,
+
+    #[arg(long)]
+    strategy_id: String,
+
+    #[arg(long)]
+    strategy_description: String,
+
+    #[arg(long)]
+    mutation: String,
+
+    #[arg(long)]
+    rationale: String,
+
+    #[arg(long)]
+    add_suspicious_parent: Vec<String>,
+
+    #[arg(long)]
+    remove_suspicious_parent: Vec<String>,
+
+    #[arg(long)]
+    add_suspicious_child: Vec<String>,
+
+    #[arg(long)]
+    remove_suspicious_child: Vec<String>,
+
+    #[arg(long)]
+    high_confidence_threshold: Option<String>,
+
+    #[arg(long)]
+    medium_confidence_threshold: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionMutationResultArgs {
+    #[arg(long)]
+    mutation_spec_id: String,
+}
+
+#[derive(Debug, Args)]
 struct EvolutionMaterializeArgs {
     #[arg(long)]
     draft_id: String,
@@ -672,6 +748,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.evolution_validation_results_dir,
         &cli.evolution_reconciliation_results_dir,
     )?;
+    let evolution_mutation_harness =
+        DefaultEvolutionMutationHarness::from_path(&cli.evolution_mutation_results_dir)?;
 
     let output = match cli.command {
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
@@ -1291,6 +1369,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_evolution_draft_promotion(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionMutationCreate(args) => {
+            let lookup = evolution_mutation_harness.create_mutation_spec(
+                &evolution_drafting_harness,
+                EvolutionMutationSpecCreateRequest {
+                    draft_id: args.draft_id,
+                    materialization_id: args.materialization_id,
+                    base_experiment_path: args.base_experiment,
+                    rationale: args.rationale,
+                },
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_mutation_spec(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionMutationAddVariant(args) => {
+            let lookup = evolution_mutation_harness.append_variant(
+                &args.mutation_spec_id,
+                EvolutionMutationVariantCreateRequest {
+                    variant_id: args.variant_id,
+                    strategy_id: args.strategy_id,
+                    strategy_description: args.strategy_description,
+                    mutation: args.mutation,
+                    rationale: args.rationale,
+                    overrides: EvolutionMutationProfileOverrides {
+                        add_suspicious_parents: args.add_suspicious_parent,
+                        remove_suspicious_parents: args.remove_suspicious_parent,
+                        add_suspicious_children: args.add_suspicious_child,
+                        remove_suspicious_children: args.remove_suspicious_child,
+                        high_confidence_threshold: args.high_confidence_threshold,
+                        medium_confidence_threshold: args.medium_confidence_threshold,
+                    },
+                },
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_mutation_spec(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionMutationResult(args) => {
+            let lookup = evolution_mutation_harness
+                .load_mutation_spec(&args.mutation_spec_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution mutation spec was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_mutation_spec(&lookup.report));
             }
             return Ok(());
         }
