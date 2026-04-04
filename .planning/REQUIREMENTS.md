@@ -3,20 +3,17 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.16 Requirements
+## v1.17 Requirements
 
-### Packet Set Operations
+### Authenticated Control Surface
 
-- [x] **EVOL-30**: Operator can merge or split governance-ready review packets across portfolio groups without losing evidence traceability
-- [x] **EVOL-32**: Operator can reload packet-set artifacts by stable ID with preserved source packet, portfolio, cohort, and rollout-lineage context
+- [ ] **OPS-04**: Operator can use an authenticated HTTP control surface in addition to the initial repo-owned CLI
+- [ ] **OPS-06**: Operator can retrieve runtime status, stable-ID artifact views, and portfolio or governance-prep summaries through authenticated endpoints without reading raw storage files
 
-### Portfolio History
+### Maintenance Operations
 
-- [x] **EVOL-31**: Operator can measure cross-cohort survival, rollout outcomes, and review debt from durable portfolio history records over time
-
-### Review Surfaces
-
-- [x] **EVOL-33**: Operator can inspect packet-set and portfolio-history summaries through `swarmctl` without reading raw storage files
+- [ ] **OPS-05**: Operator can trigger approved maintenance operations from the control surface with explicit audit trails
+- [ ] **OPS-07**: Maintenance action records preserve actor identity, reason, target, and final result in durable audit artifacts that can be reloaded by stable ID
 
 ## Future Requirements
 
@@ -25,36 +22,31 @@
 - **GOV-01**: Strategy promotion to production requires quorum-based approval once independent trust boundaries exist
 - **GOV-02**: Promotion records include signed votes and durable consensus receipts
 
-### Rich Operator Surfaces
-
-- **OPS-04**: Operator can use an authenticated HTTP or TUI control surface in addition to the initial repo-owned CLI
-- **OPS-05**: Operator can trigger approved maintenance operations from the control surface with explicit audit trails
-
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
 | Actual quorum voting or distributed consensus for promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
-| Multi-node rollout execution | This cycle improves packet grouping and history only; it does not introduce distributed rollout machinery |
-| Automatic packet-set approval, curation, or promotion | Packet sets remain explicit and operator-controlled |
-| Automatic canary or production launch from packet-set or history artifacts | Existing rollout gates remain explicit and separate from offline review work |
-| Authenticated HTTP or TUI control plane | CLI-first remains the smallest practical operator surface for the current runtime |
-| Cross-organization or federated review exchange | This cycle stays repo-owned and single-node while preparing richer local evidence artifacts |
+| Multi-user RBAC or federated operator workflows | The next control surface stays local and single-node |
+| Internet-exposed operator service | This cycle introduces a narrow authenticated local surface, not a remotely exposed control plane |
+| Terminal UI implementation | HTTP is the smaller next step because the runtime already emits serializable reports and artifact views |
+| Fleet-wide rollout control | The runtime still supports only a bounded single-node promotion path |
+| Automatic maintenance actions or unattended control-plane workflows | Control-plane actions remain explicit, bounded, and operator-triggered |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVOL-30 | Phase 50 | Complete |
-| EVOL-32 | Phase 50 | Complete |
-| EVOL-31 | Phase 51 | Complete |
-| EVOL-33 | Phase 52 | Complete |
+| OPS-04 | Phase 53 | Planned |
+| OPS-06 | Phase 54 | Planned |
+| OPS-05 | Phase 55 | Planned |
+| OPS-07 | Phase 55 | Planned |
 
 **Coverage:**
-- v1.16 requirements: 4 total
+- v1.17 requirements: 4 total
 - Mapped to phases: 4
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after completing milestone v1.16*
+*Last updated: 2026-04-04 for milestone v1.17 planning*
