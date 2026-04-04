@@ -19,13 +19,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - curated portfolio entries can now produce governance-ready review packets using preserved evidence references instead of re-encoding artifacts
 - blocked or stale governance-prep candidates now fail closed with inspectable persisted packet artifacts instead of widening autonomy
 
-## No Active Milestone
+## Current Milestone: v1.16 Governance Packet Sets And Portfolio History
 
-`v1.15` is archived. Start the next cycle from the docs and roadmap when ready.
+**Goal:** turn individual governance-ready packets into durable review sets and historical outcome views without implementing quorum governance or multi-node rollout.
+
+**Target features:**
+- merge or split governance-ready packets into durable packet-set artifacts without losing traceability
+- persist portfolio history that measures cross-cohort survival, rollout outcomes, and review debt over time
+- expose packet-set and history review flows through the existing repo-owned CLI
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Start execution with `$gsd-plan-phase 50`.
 
 ## Requirements
 
@@ -100,6 +105,12 @@ Start the next cycle with `$gsd-new-milestone`.
 - ✓ Operators can curate portfolio candidates with explicit include, defer, or drop decisions without mutating rollout state — v1.15
 - ✓ Curated portfolio entries can produce governance-ready review packets using preserved evidence references while fail-closing on stale or incomplete artifacts — v1.15
 
+### Active
+
+- [ ] Operators can merge or split governance-ready review packets across portfolio groups without losing evidence traceability
+- [ ] Portfolio history can measure cross-cohort survival, rollout outcomes, and review debt over time
+- [ ] Operators can inspect packet-set and portfolio-history artifacts by stable ID through `swarmctl`
+
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
@@ -107,6 +118,7 @@ Start the next cycle with `$gsd-new-milestone`.
 - Fleet-wide or partial-fleet rollout of evolved strategies — the runtime still supports only a bounded single-node promotion path
 - Automatic ranked-candidate or portfolio promotion from batch scores — portfolio curation remains explicit and operator-reviewed
 - Automatic canary or production launch from portfolio entries — rollout gates remain explicit and separate from offline ranking
+- Automatic quorum voting or signed promotion receipts — governance is still deferred until independent trust boundaries become real
 - Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
@@ -115,7 +127,7 @@ Start the next cycle with `$gsd-new-milestone`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, and portfolio bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet. `v1.15` widened the review seam from one ranked candidate to a curated cross-batch portfolio without widening live autonomy. The next milestone should be chosen from the roadmap and docs now that governance prep is archived.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, and governance-prep bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet. `v1.15` widened the review seam from one ranked candidate to a curated cross-batch portfolio without widening live autonomy. The next missing seam is no longer governance packet creation itself; it is grouping those packets into durable review sets and measuring what happens to those cohorts over time.
 
 ## Constraints
 
@@ -167,6 +179,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Keep ranked-candidate re-entry operator-driven | Ranked batches should reduce artifact translation, not auto-mutate queue, canary, or production state | ✓ Chosen |
 | Choose cross-batch portfolio review and governance-prep packets as the next milestone | Future `EVOL-23` and `EVOL-24` were the remaining evolution requirements that advanced the roadmap without violating the deferred-governance constraint | ✓ Good |
 | Keep governance prep artifact-first | The runtime can prepare review packets and preserved evidence for a future quorum lane, but still should not implement distributed governance before independent trust boundaries exist | ✓ Good |
+| Choose governance packet sets and portfolio history as the next milestone | Governance is still explicitly deferred, while the next future evolution requirements are richer packet grouping and durable cohort history above the existing CLI lane | ✓ Chosen |
+| Keep the next cycle CLI-first and single-node | HTTP/TUI surfaces and quorum receipts remain secondary until packet sets and history workflows are proven in the repo-owned runtime | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after completing milestone v1.15*
+*Last updated: 2026-04-04 after starting milestone v1.16*

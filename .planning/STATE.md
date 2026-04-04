@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.15
-milestone_name: cross-batch-portfolio-and-governance-prep
-status: milestone-complete
+milestone: v1.16
+milestone_name: governance-packet-sets-and-portfolio-history
+status: ready-to-plan
 last_updated: "2026-04-04T05:09:49Z"
 progress:
   total_phases: 3
-  completed_phases: 3
+  completed_phases: 0
   total_plans: 3
-  completed_plans: 3
+  completed_plans: 0
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-04)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** No active milestone. `v1.15 Cross-Batch Portfolio And Governance Prep` is archived.
+**Current focus:** `v1.16 Governance Packet Sets And Portfolio History` is active. Phase 50 is next.
 
 ## Memory
 
@@ -26,8 +26,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-04)
 - Portfolio entries now preserve ranking, selection, mutation-batch, validation-batch, cohort, validation, proof, advisory, shadow, and parent-queue lineage in one operator review record.
 - Operators can now record include, defer, or drop decisions on portfolio entries without mutating queue, canary, or production state.
 - Governance-ready review packets now reuse preserved portfolio evidence and fail closed on stale, blocked, or drifted state while still persisting inspectable blocked packets.
-- The planner is idle until the next milestone is created from the docs and roadmap.
+- The next missing seam is durable packet grouping and outcome history above the governance-prep lane, not quorum voting or a richer HTTP/TUI operator surface yet.
 
 ## Next Command
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 50`
