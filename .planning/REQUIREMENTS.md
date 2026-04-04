@@ -3,21 +3,22 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.19 Requirements
+## v1.20 Requirements
 
-### Review Surface Foundation
+### Review Sessions
 
-- [x] **OPS-08**: Operator can use a richer local review client above the authenticated HTTP surface without widening into multi-user control
-- [x] **OPS-11**: Review client reuses the existing authenticated HTTP surface and stable IDs instead of reading raw store files or creating a second control-plane contract
+- [ ] **OPS-15**: Operator can assemble a multi-artifact review session from evidence bundle, verification, and promotion packet IDs and reload it by stable session ID
 
-### Evidence Inspection
+### Comparison And Export
 
-- [x] **OPS-09**: Operator can inspect signed evidence bundles and verification results in a dedicated local review flow instead of raw JSON-first tooling
-- [x] **OPS-12**: Operator can filter and navigate evidence artifacts by subject kind, verification status, and related rollout or investigation lineage from the local review flow
+- [ ] **OPS-14**: Operator can compare multiple evidence artifacts in one local review session
+- [ ] **OPS-16**: Operator can export a selected evidence session with preserved digests, signer metadata, verification state, and related stable refs
 
-### Promotion Review
+### Review-Driven Actions
 
-- [x] **OPS-10**: Operator can inspect promotion evidence packets, fallback lineage, and supporting evidence status in one dedicated local review flow
+- [ ] **OPS-13**: Operator can trigger bounded maintenance actions from the review client while preserving the existing authenticated audit trail
+- [ ] **OPS-17**: Review-driven maintenance requests preserve source review-session IDs, selected artifact refs, operator rationale, and resulting action IDs
+- [ ] **OPS-18**: Review-driven actions remain bounded to the existing maintenance scope and cannot bypass rollout or governance gates
 
 ## Future Requirements
 
@@ -28,8 +29,8 @@
 
 ### Operator Surfaces
 
-- **OPS-13**: Operator can trigger bounded maintenance actions from the review client while preserving the existing authenticated audit trail
-- **OPS-14**: Operator can compare or export multiple evidence artifacts in one local review session
+- **OPS-19**: Operator can compare governance-prep, canary, and production evidence lanes in one cross-lane review session
+- **OPS-20**: Operator can share or delegate signed review sessions across independent trust boundaries once multi-user governance exists
 
 ## Out of Scope
 
@@ -38,7 +39,7 @@
 | Actual quorum voting or distributed consensus for promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
 | Multi-user RBAC or federated operator workflows | The runtime still operates as a local single-node control surface |
 | Internet-exposed evidence or operator service | This cycle keeps the review surface local-only and loopback-oriented |
-| Direct write or maintenance actions from the review client | Mutating operations must stay on the existing authenticated maintenance path with durable audit records |
+| Direct rollout, promotion, or governance actions from the review client | Browser-triggered writes must stay bounded to the existing maintenance scope and durable audit trail |
 | Fleet-wide or partial-fleet promotion approvals | The rollout path remains bounded to one single-node production lane |
 | Replacing the authenticated JSON API with a separate UI-only protocol | The review client should layer above the existing operator surface instead of forking it |
 
@@ -46,17 +47,18 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-08 | Phase 59 | Complete |
-| OPS-11 | Phase 59 | Complete |
-| OPS-09 | Phase 60 | Complete |
-| OPS-12 | Phase 60 | Complete |
-| OPS-10 | Phase 61 | Complete |
+| OPS-15 | Phase 62 | Pending |
+| OPS-14 | Phase 63 | Pending |
+| OPS-16 | Phase 63 | Pending |
+| OPS-13 | Phase 64 | Pending |
+| OPS-17 | Phase 64 | Pending |
+| OPS-18 | Phase 64 | Pending |
 
 **Coverage:**
-- v1.19 requirements: 5 total
-- Mapped to phases: 5
+- v1.20 requirements: 6 total
+- Mapped to phases: 6
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after completing milestone v1.19*
+*Last updated: 2026-04-04 for milestone v1.20 planning*
