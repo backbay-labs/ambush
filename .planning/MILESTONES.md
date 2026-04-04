@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.12 Draft Materialization And Validation Bundles (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- reviewed draft proposals can now be materialized into repo-owned detector experiment manifests with preserved lineage, source experiment references, digests, and applied profile changes
+- materialized candidates can now refresh experiment, verification, proof, shadow, and advisory scorecard evidence through one fail-closed validation bundle
+- draft-backed queue proposals can now be reconciled in place and marked handoff-ready for the existing accepted-queue canary path without creating duplicate rollout state
+
+---
+
 ## v1.11 Proposal Drafting And Selection Pressure (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

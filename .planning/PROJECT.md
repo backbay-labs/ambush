@@ -10,26 +10,22 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.11 Proposal Drafting And Selection Pressure` shipped on 2026-04-03.
+`v1.12 Draft Materialization And Validation Bundles` shipped on 2026-04-03.
 
 **What is now real:**
-- replay regressions, verification drift, and strategy-memory gaps can now be turned into durable selection-pressure reports with stable IDs and rationale
-- operators can now package draft detector proposals with explicit strategy and lineage hints without auto-enqueuing them
-- draft promotion now writes a durable reviewed-queue entry plus a separate promotion record that preserves the originating pressure report and operator reason
-- the evolution ladder now extends through operator-driven draft packaging: evidence -> pressure report -> draft -> reviewed queue
+- operators can now materialize repo-owned detector experiment manifests from reviewed drafts through `swarmctl` without hand-editing YAML
+- materialization artifacts now preserve draft ID, pressure ID, source experiment, lineage, digests, and the concrete candidate profile in one durable record
+- validation refresh now reuses the existing experiment, verification, proof, shadow, and advisory scorecard lanes to create one fail-closed validation bundle per materialized draft
+- queue reconciliation now updates the original draft-backed proposal in place, preserves rollout lineage, and marks when the existing handoff path is ready after operator acceptance
+- the evolution ladder now extends through operator-driven draft continuity: evidence -> pressure report -> draft -> reviewed queue -> materialized experiment -> validation bundle -> reconciled reviewed queue
 
-## Current Milestone: v1.12 Draft Materialization And Validation Bundles
+## Current Milestone
 
-**Goal:** turn reviewed draft proposals into materialized candidate artifacts plus refreshed validation bundles, then reconnect them to the existing verified rollout ladder without hand-editing or duplicate queue state.
-
-**Target features:**
-- materialize repo-owned experiment manifests from stable draft artifacts through `swarmctl`
-- refresh verification, proof, and shadow evidence from one materialized candidate lane
-- reconcile draft-backed queue entries with validated evidence so they can feed the existing handoff and canary path
+No active milestone. `v1.12` is archived and the project is ready for the next roadmap cycle.
 
 ## Next Planning Step
 
-Start execution with `$gsd-plan-phase 38`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -98,11 +94,14 @@ Start execution with `$gsd-plan-phase 38`.
 - ✓ Team can attach proof-backed safety artifacts and fail-closed admission checks to queued detector proposals — v1.9
 - ✓ Operator can inspect and triage queued proposals with advisory review through `swarmctl` — v1.9
 
-### Active
+### Most Recently Shipped
 
-- [ ] Team can derive selection-pressure signals from replay regressions, verification drift, or strategy-memory gaps without touching live rollout state
-- [ ] Team can persist draft proposal artifacts with stable IDs, rationale, and source evidence references
-- [ ] Operator can inspect and promote one draft into the reviewed evolution queue through `swarmctl`
+- ✓ Team can materialize a repo-owned detector experiment manifest from one stable draft artifact through `swarmctl` without hand-editing YAML — v1.12
+- ✓ Materialized candidate artifacts preserve draft ID, pressure ID, parent strategy, mutation hint, rationale, and resulting experiment reference in one durable record — v1.12
+- ✓ Operator can refresh experiment evaluation, verification, proof, and shadow artifacts from one materialized candidate through a repo-owned CLI flow — v1.12
+- ✓ Validation refresh fails closed when draft lineage, manifest digests, or refreshed evidence drift or become inconsistent — v1.12
+- ✓ Operator can reconcile a draft-backed queue entry with its materialized experiment and refreshed evidence without creating ambiguous duplicate rollout state — v1.12
+- ✓ Reconciled queue entries preserve original draft-promotion lineage and become eligible for the existing handoff and canary path only when refreshed evidence passes — v1.12
 
 ### Out of Scope
 
@@ -119,7 +118,7 @@ Start execution with `$gsd-plan-phase 38`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards.
 
-The project now has an end-to-end rollout ladder plus a first memory-backed review layer: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard. The next missing documented step is a proof-backed proposal queue that can hold candidate detector updates for operator review before any governance or richer UI work.
+The project now has an end-to-end rollout ladder plus a continuous draft-evolution bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> materialized experiment -> validation bundle -> reconciled reviewed queue. The next milestone should be chosen from the deferred roadmap rather than from an obvious missing seam in the current operator workflow.
 
 ## Constraints
 
@@ -167,4 +166,4 @@ The project now has an end-to-end rollout ladder plus a first memory-backed revi
 | Keep the draft-to-rollout bridge artifact-first and operator-triggered | Materializing candidates and refreshing evidence should reduce manual translation, not introduce automatic mutation or rollout | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after starting milestone v1.12*
+*Last updated: 2026-04-03 after completing milestone v1.12*
