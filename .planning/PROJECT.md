@@ -10,26 +10,21 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.10 Queue Handoff And Canary Launch` shipped on 2026-04-03.
+`v1.11 Proposal Drafting And Selection Pressure` shipped on 2026-04-03.
 
 **What is now real:**
-- accepted queue proposals can now be converted into durable handoff packets that preserve proposal, proof, verification, advisory, and shadow lineage
-- handoff creation now fails closed on pre-acceptance proposals or mismatched shadow evidence while still preserving blocked packets for operator review
-- operators can now launch the bounded canary lane from a stable handoff ID through `swarmctl`, and the handoff artifact keeps the resulting canary run reference
-- the rollout ladder now extends through operator-launched canary handoff: proposal -> handoff -> canary
+- replay regressions, verification drift, and strategy-memory gaps can now be turned into durable selection-pressure reports with stable IDs and rationale
+- operators can now package draft detector proposals with explicit strategy and lineage hints without auto-enqueuing them
+- draft promotion now writes a durable reviewed-queue entry plus a separate promotion record that preserves the originating pressure report and operator reason
+- the evolution ladder now extends through operator-driven draft packaging: evidence -> pressure report -> draft -> reviewed queue
 
-## Current Milestone: v1.11 Proposal Drafting And Selection Pressure
+## Current Milestone
 
-**Goal:** turn replay regressions, verification drift, and strategy-memory gaps into durable proposal drafts that operators can inspect and promote into the existing reviewed queue, without introducing automatic mutation or launch.
-
-**Target features:**
-- derive repo-owned selection-pressure signals from replay, verification, and strategy-memory evidence
-- persist draft proposal artifacts with stable IDs, rationale, and source evidence references
-- let operators review one draft and promote it into the existing evolution queue through `swarmctl`
+No active milestone. `v1.11` is complete and archived.
 
 ## Next Planning Step
 
-Start execution with `$gsd-plan-phase 35`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -165,4 +160,4 @@ The project now has an end-to-end rollout ladder plus a first memory-backed revi
 | Keep draft promotion operator-reviewed | Proposal drafts should enrich operator choice, not auto-enqueue or auto-launch rollout | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after starting milestone v1.11*
+*Last updated: 2026-04-03 after completing milestone v1.11*

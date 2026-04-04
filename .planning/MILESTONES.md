@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.11 Proposal Drafting And Selection Pressure (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- replay regressions, verification drift, and strategy-memory gaps can now be materialized as durable selection-pressure reports with stable IDs, explicit rationale, and source-artifact references
+- operators can now persist proposal draft artifacts with explicit strategy and lineage hints through `swarmctl` without auto-enqueueing them into rollout
+- draft promotion now creates a durable reviewed-queue entry plus a separate promotion record that preserves the pressure source, draft, operator reason, and resulting queue proposal reference
+
+---
+
 ## v1.10 Queue Handoff And Canary Launch (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

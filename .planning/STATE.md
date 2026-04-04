@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.11
 milestone_name: proposal-drafting-and-selection-pressure
-status: ready-to-plan
-last_updated: "2026-04-03T22:42:24Z"
+status: milestone-complete
+last_updated: "2026-04-04T02:43:15Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 0
+  completed_plans: 3
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.11 Proposal Drafting And Selection Pressure` is active. Phase 35 is next.
+**Current focus:** `v1.11 Proposal Drafting And Selection Pressure` is complete. The next command is `$gsd-new-milestone`.
 
 ## Memory
 
@@ -36,11 +36,9 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - The repo now has a full evidence ladder from replay and verification through production promotion plus one advisory memory layer above it.
 - `v1.9` is complete: proof-backed detector proposal queue artifacts, fail-closed admission, and CLI-backed review decisions now ship through `swarmctl`.
 - `v1.10` is complete: accepted proposals can now be converted into handoff packets and launched into bounded canary through stable handoff IDs.
-- The runtime now has a full reviewed rollout ladder but still lacks repo-owned draft generation from replay drift, verification drift, and rollout memory evidence.
-- `v1.11` focuses on durable selection-pressure signals, draft proposal artifacts, and explicit operator promotion of drafts into the reviewed queue.
-- Phase 35 will establish stable pressure-report artifacts before draft packaging or queue promotion are added.
+- `v1.11` is complete: durable selection-pressure reports, proposal drafts, and explicit draft-to-queue promotion now ship through `swarmctl`.
 - Consensus, automatic strategy selection, and richer operator surfaces remain future work.
 
 ## Next Command
 
-`$gsd-plan-phase 35`
+`$gsd-new-milestone`
