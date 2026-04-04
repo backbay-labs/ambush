@@ -21,13 +21,13 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current Milestone
 
-No active milestone. `v1.16 Governance Packet Sets And Portfolio History` is archived.
+`v1.17 Authenticated Operator Surface` is now active.
 
-**Next step:** start the next cycle with `$gsd-new-milestone`.
+**Focus:** move the repo from a CLI-only operator seam to a narrowly scoped authenticated local control surface while keeping quorum governance deferred.
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Plan the first phase with `$gsd-plan-phase 53`.
 
 ## Requirements
 
@@ -102,15 +102,16 @@ Start the next cycle with `$gsd-new-milestone`.
 - ✓ Operators can split packet sets into child subsets without rewriting source packet evidence — v1.16
 - ✓ Portfolio history can now measure cross-cohort survival, rollout outcomes, and review debt from durable packet-set snapshots through `swarmctl` — v1.16
 
-### No Active Milestone
+### Current Milestone
 
-- Packet-set and portfolio-history workflows are shipped and archived.
-- Governance, quorum receipts, and richer multi-user surfaces remain deferred to a later milestone.
+- Packet-set and portfolio-history workflows are shipped and now provide the artifact base for a richer operator surface.
+- `v1.17` will add an authenticated local control surface for review and approved maintenance actions without widening into distributed governance.
+- Quorum approvals and signed promotion receipts remain deferred until independent trust boundaries exist.
 
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
-- HTTP or multi-user operator control plane — still secondary to the repo-owned CLI
+- Multi-user or internet-exposed operator control plane — the next surface stays local, authenticated, and narrowly scoped
 - Fleet-wide or partial-fleet rollout of evolved strategies — the runtime still supports only a bounded single-node promotion path
 - Automatic ranked-candidate or portfolio promotion from batch scores — portfolio curation remains explicit and operator-reviewed
 - Automatic canary or production launch from portfolio entries — rollout gates remain explicit and separate from offline ranking
@@ -123,7 +124,7 @@ Start the next cycle with `$gsd-new-milestone`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, and governance-prep bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet. `v1.15` widened the review seam from one ranked candidate to a curated cross-batch portfolio without widening live autonomy. The next missing seam is no longer governance packet creation itself; it is grouping those packets into durable review sets and measuring what happens to those cohorts over time.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, and governance-prep bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history. `v1.16` closed the packet-grouping and cohort-history gap without widening autonomy. The next missing seam is no longer governance-prep artifact coverage; it is turning the repo-owned CLI review lane into an authenticated local operator surface that can reuse the existing serializable runtime and artifact views.
 
 ## Constraints
 
@@ -179,6 +180,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Keep the next cycle CLI-first and single-node | HTTP/TUI surfaces and quorum receipts remain secondary until packet sets and history workflows are proven in the repo-owned runtime | ✓ Chosen |
 | Derive portfolio history from existing strategy memories | Strategy memories already encode the durable rollout outcomes needed for cohort survival and debt tracking, so history should not duplicate canary or promotion state | ✓ Good |
 | Keep packet-set operations non-mutating | Packet grouping and splitting should widen operator review context without changing queue, canary, or production artifacts | ✓ Good |
+| Choose an authenticated operator surface as the next milestone | Governance is still blocked on real trust boundaries, while the runtime already exposes serializable reports and stable-ID artifact views that can back a local authenticated surface now | ✓ Chosen |
+| Start with a local HTTP surface instead of TUI or multi-user control | The repo has no UI stack today, and an authenticated API layer is the smallest extension beyond `swarmctl` that preserves the existing single-node operating model | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after completing milestone v1.16*
+*Last updated: 2026-04-04 for milestone v1.17 planning*

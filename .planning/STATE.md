@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.16
-milestone_name: governance-packet-sets-and-portfolio-history
-status: milestone-complete
-last_updated: "2026-04-04T10:15:00Z"
+milestone: v1.17
+milestone_name: authenticated-operator-surface
+status: planning
+last_updated: "2026-04-04T14:14:33Z"
 progress:
   total_phases: 3
-  completed_phases: 3
-  total_plans: 3
-  completed_plans: 3
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-04)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** no active milestone. `v1.16 Governance Packet Sets And Portfolio History` is archived.
+**Current focus:** `v1.17 Authenticated Operator Surface` is active.
 
 ## Memory
 
@@ -27,7 +27,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-04)
 - Operators can now split packet sets into child subsets with preserved parent lineage and source packet-set entry references.
 - Portfolio history snapshots now derive cross-cohort survival, rollout outcomes, and review debt from existing strategy memories instead of duplicating rollout state.
 - Packet-set and portfolio-history review surfaces now ship through `swarmctl` with stable-ID reload and cohort filtering.
+- `v1.17` will extend those repo-owned review flows into an authenticated local operator surface instead of jumping early into quorum governance.
 
 ## Next Command
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 53`
