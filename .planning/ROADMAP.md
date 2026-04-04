@@ -1,86 +1,87 @@
-# Milestone v1.11: Proposal Drafting And Selection Pressure
+# Milestone v1.12: Draft Materialization And Validation Bundles
 
-**Status:** COMPLETE
+**Status:** NOT STARTED
 **Date:** 2026-04-03
-**Milestone Goal:** Derive proposal drafts from replay regressions, verification drift, and strategy-memory evidence, then let operators promote those drafts into the reviewed queue without introducing automatic enqueue or launch.
+**Milestone Goal:** Turn reviewed draft proposals into materialized candidate artifacts plus refreshed validation bundles, then reconnect them to the existing verified rollout ladder without hand-editing or duplicate queue state.
 
 ## Overview
 
-This milestone turns the now-complete queue and handoff ladder back upstream. The runtime already persists replay regressions, verification artifacts, rollout memories, reviewed proposals, handoff packets, and canary runs; the next useful step is to derive durable draft proposals from the evidence that currently only operators synthesize manually.
+This milestone closes the gap exposed by `v1.11`. The runtime can already derive pressure, package drafts, promote drafts into the reviewed queue, and run proof-backed rollout flows for verified candidates, but the draft-backed queue entries still stop short of materialized experiment and evidence artifacts. The next useful step is to make that bridge repo-owned and durable.
 
-The milestone stays deliberately narrow. It does not add automatic mutation, automatic queue promotion, automatic canary launch, quorum approval, or richer HTTP or TUI operator surfaces. The goal is to make proposal drafting evidence-driven while keeping enqueue and rollout decisions explicit and operator-controlled.
+The milestone stays deliberately narrow. It does not add automatic mutation, automatic validation refresh, automatic canary launch, quorum approval, or richer HTTP or TUI operator surfaces. The goal is to remove manual artifact translation between draft review and the verified rollout ladder while keeping every stage explicit and operator-controlled.
 
 ## Phase Plan
 
-### Phase 35: Selection Pressure Signals
+### Phase 38: Draft Candidate Materialization
 
-**Goal:** Derive durable selection-pressure reports from replay regressions, verification drift, and strategy-memory gaps.
+**Goal:** Materialize durable candidate experiment artifacts from one stable draft without hand-editing repo manifests.
 
-**Requirements:** DRAFT-01, DRAFT-02
+**Requirements:** MTRL-01, MTRL-02
 
-**Depends on:** Phase 34
+**Depends on:** Phase 37
 
-**Plans:** 1/1 plans complete
-
-**Success Criteria:**
-- Operators can materialize a durable pressure report from existing replay, verification, or memory artifacts.
-- Pressure reports preserve stable IDs, source evidence references, and explicit rationale for why new detector work is warranted.
-- Pressure analysis remains off the hot path and operator-inspectable.
-- The pressure lane stays repo-owned and CLI-first.
-
-### Phase 36: Proposal Draft Artifacts
-
-**Goal:** Persist draft proposal artifacts derived from selection-pressure reports without auto-enqueuing them.
-
-**Requirements:** DRAFT-03
-
-**Depends on:** Phase 35
-
-**Plans:** 1/1 plans complete
+**Plans:** 0/1 plans complete
 
 **Success Criteria:**
-- Draft proposal artifacts preserve stable IDs, pressure-report references, rationale, and candidate lineage hints.
-- Draft creation does not create a reviewed queue proposal automatically.
-- Operators can reload draft artifacts later without reading raw store files.
-- Draft packaging remains deterministic and auditable.
+- Operators can materialize a repo-owned detector experiment manifest from one draft artifact through `swarmctl`.
+- Materialized candidate artifacts preserve draft ID, pressure ID, lineage, strategy hint, and rationale in one durable record.
+- Operators can reload materialized candidate artifacts later without reading raw store files.
+- Candidate materialization remains off the hot path and CLI-first.
 
-### Phase 37: Draft Review And Queue Promotion
+### Phase 39: Validation Bundle Refresh
 
-**Goal:** Let operators inspect one draft and promote it into the reviewed evolution queue through `swarmctl`.
+**Goal:** Refresh experiment evaluation, verification, proof, and shadow artifacts from one materialized candidate.
 
-**Requirements:** DRAFT-04, DRAFT-05
+**Requirements:** VALD-01, VALD-02
 
-**Depends on:** Phase 36
+**Depends on:** Phase 38
 
-**Plans:** 1/1 plans complete
+**Plans:** 0/1 plans complete
 
 **Success Criteria:**
-- Operators can reload draft artifacts by stable ID and explicitly promote one into the reviewed queue.
-- Draft promotion preserves the originating pressure-report reference, operator reason, and resulting queue proposal reference in one durable record.
-- Draft promotion remains operator-triggered and does not auto-launch handoff or canary.
-- Documentation explains how draft generation fits ahead of reviewed queue entry.
+- Operators can run one repo-owned CLI flow that refreshes experiment, verification, proof, and shadow artifacts from a materialized candidate.
+- Validation refresh preserves stable IDs linking the materialized candidate to all refreshed evidence artifacts.
+- Refresh fails closed when lineage, manifest digests, or refreshed evidence become inconsistent.
+- Refreshed evidence remains auditable and separate from live rollout mutation.
+
+### Phase 40: Queue Reconciliation And Handoff Readiness
+
+**Goal:** Reconcile draft-backed queue entries with materialized candidate and refreshed evidence so the existing handoff and canary path can use them.
+
+**Requirements:** RECN-01, RECN-02
+
+**Depends on:** Phase 39
+
+**Plans:** 0/1 plans complete
+
+**Success Criteria:**
+- Operators can reconcile one draft-backed queue entry with its materialized experiment and refreshed evidence without ambiguous duplicate rollout state.
+- Reconciliation preserves draft-promotion lineage, operator intent, and refreshed evidence references in one durable record.
+- Reconciled queue entries become eligible for the existing handoff and canary path only when refreshed evidence passes.
+- Documentation explains how draft materialization reconnects to the verified queue and rollout ladder.
 
 ## Traceability
 
 | Requirement | Phase |
 |-------------|-------|
-| DRAFT-01 | Phase 35 |
-| DRAFT-02 | Phase 35 |
-| DRAFT-03 | Phase 36 |
-| DRAFT-04 | Phase 37 |
-| DRAFT-05 | Phase 37 |
+| MTRL-01 | Phase 38 |
+| MTRL-02 | Phase 38 |
+| VALD-01 | Phase 39 |
+| VALD-02 | Phase 39 |
+| RECN-01 | Phase 40 |
+| RECN-02 | Phase 40 |
 
 ## Deferred Work
 
 - Quorum-based approval and signed governance receipts remain deferred until independent trust boundaries exist.
-- Multi-node or partial-fleet rollout remains out of scope while the runtime is still single-node.
 - Authenticated HTTP or TUI operator surfaces remain secondary to the repo-owned CLI and durable artifact flow.
-- Automatic mutation, automatic draft enqueue, and automatic launch remain future work after draft generation proves useful.
+- Automatic detector mutation, automatic draft promotion, and automatic rollout remain future work after draft materialization proves useful.
+- Multi-node or partial-fleet rollout remains out of scope while the runtime is still single-node.
 
 ## Next Step
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 38`
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.11 completion*
+*Last updated: 2026-04-03 after milestone v1.12 creation*
