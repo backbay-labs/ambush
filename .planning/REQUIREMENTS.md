@@ -3,35 +3,31 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.21 Requirements
+## v1.22 Requirements
 
-### Cross-Lane Sessions
+### Portable Review Capsules
 
-- [x] **OPS-19**: Operator can compare governance-prep, canary, and production evidence lanes in one cross-lane review session
-- [x] **OPS-21**: Operator can reload a cross-lane review session by stable session ID and inspect lane-specific lineage, freshness, and evidence gaps without reading raw store files
+- [ ] **OPS-24**: Operator can package a signed review capsule for external review without granting direct store access
+- [ ] **OPS-25**: Operator can import and verify a foreign review capsule while preserving remote signer lineage, local trust status, and related stable refs
 
-### Comparison And Export
+### Delegation And Continuity
 
-- [x] **OPS-22**: Operator can export a cross-lane comparison snapshot over signed evidence with per-lane summaries, verification state, and unresolved evidence gaps
-
-### Promotion Review
-
-- [x] **OPS-23**: Operator can derive an advisory promotion-readiness review from governance-prep, canary, and production evidence without bypassing rollout or maintenance gates
+- [ ] **OPS-20**: Operator can share or delegate signed review sessions across independent trust boundaries once multi-user governance exists
 
 ## Future Requirements
 
-### Portable Review Exchange
+### Approval Ledger Readiness
 
-- **OPS-24**: Operator can package a signed review capsule for external review without granting direct store access
-- **OPS-25**: Operator can import and verify a foreign review capsule while preserving remote signer lineage, local trust status, and related stable refs
-- **OPS-20**: Operator can share or delegate signed review sessions across independent trust boundaries once multi-user governance exists
-
-### Governance
-
-- **GOV-01**: Strategy promotion to production requires quorum-based approval once independent trust boundaries exist
-- **GOV-02**: Promotion records include signed votes and durable consensus receipts
 - **GOV-03**: Operator can define an approval set with eligible voters, threshold rules, and supporting promotion evidence without executing distributed consensus
 - **GOV-04**: Signed approval ledgers preserve vote lineage, missing quorum state, and related promotion evidence refs for later independent verification
+- **GOV-01**: Strategy promotion to production requires quorum-based approval once independent trust boundaries exist
+
+### Receipt And Human Gate Prep
+
+- **GOV-05**: Operator can assemble a local approval verdict from signed approval-ledger entries and threshold rules without contacting distributed voters
+- **GOV-06**: Operator can export a signed approval receipt pack with approval lineage, final verdict, and audit references for later independent verification
+- **GOV-07**: Critical-severity promotion candidates can remain in an explicit human-approval-pending state with review packets and durable audit history
+- **GOV-02**: Promotion records include signed votes and durable consensus receipts
 
 ## Out of Scope
 
@@ -40,7 +36,7 @@
 | Actual quorum voting or distributed consensus for promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
 | Multi-user RBAC or federated operator workflows | The runtime still operates as a local single-node control surface |
 | Internet-exposed evidence or operator service | This cycle keeps the review surface local-only and loopback-oriented |
-| Direct rollout, promotion, or governance actions from the review client | Browser-triggered writes must stay bounded to the existing maintenance scope and durable audit trail |
+| Direct rollout, promotion, or governance actions from imported or delegated review artifacts | Portable review must remain advisory and cannot bypass the existing maintenance or rollout gates |
 | Fleet-wide or partial-fleet promotion approvals | The rollout path remains bounded to one single-node production lane |
 | Replacing the authenticated JSON API with a separate UI-only protocol | The review client should layer above the existing operator surface instead of forking it |
 
@@ -48,16 +44,15 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-19 | Phase 65 | Complete |
-| OPS-21 | Phase 65 | Complete |
-| OPS-22 | Phase 66 | Complete |
-| OPS-23 | Phase 67 | Complete |
+| OPS-24 | Phase 68 | Planned |
+| OPS-25 | Phase 69 | Planned |
+| OPS-20 | Phase 70 | Planned |
 
 **Coverage:**
-- v1.21 requirements: 4 total
-- Mapped to phases: 4
+- v1.22 requirements: 3 total
+- Mapped to phases: 3
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after completing milestone v1.21 implementation*
+*Last updated: 2026-04-04 for milestone v1.22 planning with queued v1.23-v1.24 future requirements*
