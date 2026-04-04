@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.22 Portable Review Capsules And External Handoff (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- operators can now export signed portable review capsules from cross-lane sessions and promotion-readiness artifacts through both `swarmctl` and the authenticated local review surface
+- imported review capsules now preserve remote signer lineage, local trust status, verification checks, and related stable refs as durable local artifacts
+- advisory-only delegation packets now preserve signed review continuity across trust boundaries without granting rollout, promotion, or governance authority
+
+---
+
 ## v1.21 Cross-Lane Promotion Review (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

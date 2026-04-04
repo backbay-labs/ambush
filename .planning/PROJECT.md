@@ -10,34 +10,27 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.21 Cross-Lane Promotion Review` shipped on 2026-04-04.
+`v1.22 Portable Review Capsules And External Handoff` shipped on 2026-04-04.
 
 **What is now real:**
-- operators can now assemble one lane-aware review session from `promotion_review`, `canary_run`, and `production_promotion` refs or direct evidence refs through both `swarmctl` and the authenticated local review surface
-- cross-lane session views and exports now preserve per-lane summaries, derived verification state, freshness markers, and unresolved evidence gaps without rereading raw store files
-- the local workbench can now derive durable promotion-readiness reviews from one cross-lane session while staying advisory-only above maintenance, canary, and production controls
-- the trust boundary remains single-node and bounded: cross-lane review improves operator judgment, but it still cannot bypass maintenance, rollout, promotion, or quorum governance gates
+- operators can now sign one portable review capsule from a cross-lane session or promotion-readiness artifact through both `swarmctl` and the authenticated local review surface
+- imported capsules now preserve remote signer lineage, local trust status, and related stable refs as durable stable-ID artifacts instead of requiring direct store access
+- advisory-only delegation packets can now preserve review continuity across trust boundaries without widening into rollout, promotion, or governance authority
+- the trust boundary remains single-node and bounded: portable review improves external verification and continuity, but it still cannot bypass maintenance, rollout, promotion, or quorum governance gates
 
 ## Current Milestone
 
-`v1.22 Portable Review Capsules And External Handoff`
-
-**Goal:** make cross-lane review portable and independently verifiable across trust boundaries without granting direct store access or widening into live multi-user control.
-
-**Target features:**
-- signed review capsule export from cross-lane sessions and promotion-readiness artifacts
-- imported capsule verification with remote signer lineage, local trust status, and related stable refs
-- delegation packets that preserve review continuity across external handoff boundaries
+No active milestone. `v1.22 Portable Review Capsules And External Handoff` is complete.
 
 **Queued after this:**
 - `v1.23 Approval Ledger And Quorum Readiness`
 - `v1.24 Approval Receipt Packs And Human Gate Prep`
 
-**Next step:** start planning with `$gsd-plan-phase 68`.
+**Next step:** start the next cycle with `$gsd-new-milestone`.
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-plan-phase 68`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -108,6 +101,9 @@ Start the next cycle with `$gsd-plan-phase 68`.
 
 ### Most Recently Shipped
 
+- ✓ Operators can now export one signed portable review capsule from a cross-lane session or a promotion-readiness artifact without granting direct store access — v1.22
+- ✓ Imported review capsules now preserve remote signer lineage, local trust status, and related stable refs as durable inspectable artifacts — v1.22
+- ✓ Advisory-only delegation packets now preserve signed review continuity across trust boundaries without widening rollout, promotion, or governance authority — v1.22
 - ✓ Operators can now assemble one lane-aware cross-lane review session from `promotion_review`, `canary_run`, and `production_promotion` refs or direct evidence refs and reload it by stable session ID — v1.21
 - ✓ Cross-lane session exports now preserve per-lane summaries, derived verification state, and unresolved evidence gaps above the existing signed evidence stores — v1.21
 - ✓ Operators can now derive durable promotion-readiness reviews from one cross-lane session while remaining advisory-only above maintenance, canary, and production controls — v1.21
@@ -120,8 +116,8 @@ Start the next cycle with `$gsd-plan-phase 68`.
 
 ### Current Milestone
 
-- `v1.22 Portable Review Capsules And External Handoff` is now active.
-- This cycle should keep the review lane portable and externally verifiable without opening direct store access or live multi-user control.
+- `v1.22 Portable Review Capsules And External Handoff` is complete.
+- There is no active milestone at the moment; the repo is ready for the next planning cycle.
 - `v1.23 Approval Ledger And Quorum Readiness` and `v1.24 Approval Receipt Packs And Human Gate Prep` are queued behind `v1.22`.
 - Quorum approvals, signed votes across independent nodes, multi-user control, and direct rollout or governance actions from the review client remain deferred until independent trust boundaries exist.
 
