@@ -19,9 +19,20 @@ Detect real threats quickly enough to take safe action before the window to resp
 - promotion evidence review now surfaces recommendation state, fallback lineage, and supporting evidence verification context in one advisory-only flow
 - the trust boundary remains single-node and advisory: browser review stays read-only, write paths still route through existing authenticated maintenance or rollout APIs, and quorum governance remains deferred
 
+## Current Milestone
+
+`v1.20 Evidence Workbench And Review Handoffs` is now active.
+
+**Goal:** turn the local evidence review surface into a practical operator workbench for multi-artifact comparison, export, and bounded action handoff without widening into quorum governance.
+
+**Target features:**
+- durable local review sessions assembled from existing evidence and promotion artifact stable IDs
+- side-by-side evidence comparison and reviewed export flows above the authenticated operator API
+- bounded review-driven maintenance handoffs that reuse the existing authenticated audit trail
+
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Plan the first phase with `$gsd-plan-phase 62`.
 
 ## Requirements
 
@@ -96,6 +107,12 @@ Start the next cycle with `$gsd-new-milestone`.
 - ✓ Evidence review now supports subject-kind and verification-status filtering, stable-ID drill-down, signer metadata, verification checks, and related lineage links — v1.19
 - ✓ Promotion evidence review now presents recommendation state, fallback lineage, and supporting evidence status in one advisory-only flow without bypassing audit trails — v1.19
 
+### Current Milestone
+
+- The local evidence review surface is now real, but operators still need raw API or CLI jumps to compare multiple artifacts, export a reviewed set, or hand evidence into bounded maintenance actions.
+- `v1.20` will add durable review sessions, side-by-side evidence comparison and export, and review-driven maintenance handoffs above the existing authenticated operator API.
+- Quorum approvals, signed votes, multi-user control, and direct rollout or governance actions from the review client remain deferred until independent trust boundaries exist.
+
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
@@ -105,7 +122,7 @@ Start the next cycle with `$gsd-new-milestone`.
 - Automatic ranked-candidate or portfolio promotion from batch scores — portfolio curation remains explicit and operator-reviewed
 - Automatic canary or production launch from portfolio entries — rollout gates remain explicit and separate from offline ranking
 - Automatic quorum voting or signed promotion receipts — governance is still deferred until independent trust boundaries become real
-- Direct write or maintenance actions from the review surface — bounded mutations must continue through the existing authenticated maintenance API and audit trail
+- Direct rollout, promotion, or governance actions from the review surface — any browser-triggered writes must stay bounded to the existing maintenance scope and audit trail
 - Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
@@ -114,7 +131,7 @@ Start the next cycle with `$gsd-new-milestone`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, and local review surface: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review. `v1.19` closed the remaining JSON-first inspection gap without widening autonomy into quorum governance or a second browser-write control plane. The next cycle has not been selected yet.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, and local review surface: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review. `v1.19` closed the remaining JSON-first inspection gap without widening autonomy into quorum governance or a second browser-write control plane. The next missing seam is a real evidence workbench: reviewed multi-artifact sessions, exportable comparison context, and bounded maintenance handoff from the review surface.
 
 ## Constraints
 
@@ -175,6 +192,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Choose signed evidence and external verification as the next milestone | The operator surface and durable artifact lanes are now real, while the docs still defer actual quorum governance until independent trust boundaries exist | ✓ Chosen |
 | Choose a local evidence review surface as the next milestone | Future requirements now point to a richer local review client, while quorum governance is still explicitly deferred until independent trust boundaries exist | ✓ Chosen |
 | Keep the next review layer read-only and local-first | The authenticated HTTP surface and signed evidence contracts already exist, so the next step should improve inspection without creating a second mutating control plane | ✓ Chosen |
+| Choose evidence workbench sessions and review handoffs as the next milestone | The next explicit unmet operator requirements are multi-artifact comparison/export and bounded review-driven actions, while quorum governance is still deferred | ✓ Chosen |
+| Keep review-driven actions bounded to existing maintenance scope | The browser surface can improve operator flow, but rollout and governance mutations must continue to pass through the existing narrow audited action lane | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after archiving milestone v1.19*
+*Last updated: 2026-04-04 for milestone v1.20 planning*
