@@ -19,13 +19,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - accepted ranked-candidate selections can now bridge back into the existing queue, handoff, and bounded canary path without re-materializing evidence
 - blocked or stale ranked candidates now fail closed with inspectable bridge artifacts instead of mutating queue, canary, or production state
 
-## No Active Milestone
+## Current Milestone: v1.15 Cross-Batch Portfolio And Governance Prep
 
-`v1.14` is archived. Start the next cycle from the docs and roadmap when ready.
+**Goal:** turn single-ranked-candidate bridging into cross-batch portfolio review and governance-ready packet preparation without implementing distributed governance.
+
+**Target features:**
+- assemble durable cross-batch portfolio artifacts from ranked selections and campaign cohorts
+- let operators curate portfolio entries with explicit include, defer, or drop decisions
+- generate governance-ready review packets that preserve existing evidence and fail closed on stale or incomplete lineage
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Start execution with `$gsd-plan-phase 47`.
 
 ## Requirements
 
@@ -103,6 +108,12 @@ Start the next cycle with `$gsd-new-milestone`.
 - ✓ Accepted ranked-candidate selections can feed the existing handoff and canary launch path using preserved experiment and validation artifacts — v1.14
 - ✓ Stale, blocked, or inconsistent ranked-candidate selections fail closed and persist inspectable blocked bridge records — v1.14
 
+### Active
+
+- [ ] Operators can assemble a durable cross-batch portfolio from ranked selections spanning multiple mutation batches or campaign cohorts
+- [ ] Operators can curate portfolio candidates with explicit include, defer, or drop decisions without mutating rollout state
+- [ ] Curated portfolio entries can produce governance-ready review packets using preserved evidence references while fail-closing on stale or incomplete artifacts
+
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
@@ -118,7 +129,7 @@ Start the next cycle with `$gsd-new-milestone`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation-and-ranking bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> ranked bridge -> handoff -> canary. `v1.14` closed the selected-ranked-candidate continuity gap without widening autonomy. The planner is now idle until the next milestone is defined.
+The project now has an end-to-end rollout ladder plus an offline mutation-and-ranking bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> ranked bridge -> handoff -> canary. `v1.14` closed the single-ranked-candidate continuity gap without widening autonomy. The next missing seam is portfolio-level review across multiple ranked batches and cohorts, plus governance-ready review packets that preserve evidence without actually enabling distributed governance yet.
 
 ## Constraints
 
@@ -168,6 +179,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation-and-ra
 | Keep multi-candidate evolution offline and operator-controlled | Batch mutation and ranking should expand review surface area without introducing automatic promotion or autonomous rollout | ✓ Good |
 | Choose ranked-candidate rollout bridging as the next milestone | `v1.13` now stops at shortlist packets; the next documented gap is turning selected ranked candidates back into rollout-ready review artifacts without re-materializing evidence | ✓ Chosen |
 | Keep ranked-candidate re-entry operator-driven | Ranked batches should reduce artifact translation, not auto-mutate queue, canary, or production state | ✓ Chosen |
+| Choose cross-batch portfolio review and governance-prep packets as the next milestone | Future `EVOL-23` and `EVOL-24` are the remaining evolution requirements that advance the roadmap without violating the deferred-governance constraint | ✓ Chosen |
+| Keep governance prep artifact-first | The runtime can prepare review packets and preserved evidence for a future quorum lane, but still should not implement distributed governance before independent trust boundaries exist | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after completing milestone v1.14*
+*Last updated: 2026-04-04 after starting milestone v1.15*
