@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 pub use swarm_core::config::{
     CanaryConfig, ConfigValidationError, CorrelationConfig, DetectionConfig, InvestigationConfig,
-    PheromoneConfig, PolicyConfig, PromotionConfig, RuntimeMode, RuntimeSettings, SwarmConfig,
-    TelemetrySourceConfig,
+    OperatorAuthConfig, OperatorSurfaceConfig, PheromoneConfig, PolicyConfig, PromotionConfig,
+    RuntimeMode, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
 };
 
 pub type RuntimeConfig = RuntimeSettings;
@@ -294,6 +294,86 @@ promotion:
   max_fallback_recovery_rate: 0.25
   max_detect_latency_us: 10000
   max_total_detections: 4
+"#;
+
+        let error = parse_config(yaml, "inline").unwrap_err();
+        match error {
+            RuntimeConfigError::Validation { source_name, .. } => assert_eq!(source_name, "inline"),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn operator_surface_requires_loopback_bind_address() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+operator_surface:
+  enabled: true
+  bind_addr: "0.0.0.0:7766"
+  max_list_results: 50
+  auth:
+    operator_id: local-operator
+    token_env: SWARM_OPERATOR_TOKEN
+"#;
+
+        let error = parse_config(yaml, "inline").unwrap_err();
+        match error {
+            RuntimeConfigError::Validation { source_name, .. } => assert_eq!(source_name, "inline"),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn operator_surface_requires_token_env_when_enabled() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+operator_surface:
+  enabled: true
+  bind_addr: "127.0.0.1:7766"
+  max_list_results: 50
+  auth:
+    operator_id: local-operator
+    token_env: ""
 "#;
 
         let error = parse_config(yaml, "inline").unwrap_err();

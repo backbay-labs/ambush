@@ -1403,6 +1403,7 @@ mod tests {
                 max_detect_latency_us: 10_000,
                 max_total_detections: 12,
             },
+            operator: swarm_core::config::OperatorSurfaceConfig::default(),
         }
     }
 

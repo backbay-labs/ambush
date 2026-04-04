@@ -35,6 +35,8 @@ swarm-crypto = { path = "crates/swarm-crypto" }
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

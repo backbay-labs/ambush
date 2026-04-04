@@ -1118,6 +1118,7 @@ mod tests {
                 max_total_detections: 4,
             },
             promotion: PromotionConfig::default(),
+            operator: swarm_core::config::OperatorSurfaceConfig::default(),
         }
     }
 

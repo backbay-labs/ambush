@@ -66,3 +66,11 @@ promotion:
   max_fallback_recovery_rate: 0.20
   max_detect_latency_us: 10000
   max_total_detections: 12
+
+operator_surface:
+  enabled: false
+  bind_addr: "127.0.0.1:7766"
+  max_list_results: 50
+  auth:
+    operator_id: local-operator
+    token_env: SWARM_OPERATOR_TOKEN

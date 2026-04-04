@@ -1091,6 +1091,7 @@ mod tests {
             correlation: CorrelationConfig::default(),
             canary: CanaryConfig::default(),
             promotion: PromotionConfig::default(),
+            operator: swarm_core::config::OperatorSurfaceConfig::default(),
         }
     }
 

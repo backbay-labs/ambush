@@ -27,6 +27,7 @@ use swarm_runtime::mutation::{
     render_evolution_mutation_materialization_batch, render_evolution_mutation_ranking,
     render_evolution_mutation_spec, render_evolution_mutation_validation_batch,
 };
+use swarm_runtime::operator_http::LocalOperatorSurface;
 use swarm_runtime::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction,
     EvolutionPortfolioEntryCreateRequest, EvolutionPortfolioEntryReviewState,
@@ -177,6 +178,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Serve,
     Status,
     Replay(ReplayArgs),
     Investigation(InvestigationArgs),
@@ -1110,6 +1112,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let output = match cli.command {
+        Command::Serve => {
+            let surface = LocalOperatorSurface::from_path(&cli.config)?;
+            eprintln!(
+                "serving authenticated operator surface on http://{}",
+                surface.bind_addr()
+            );
+            surface.serve().await?;
+            return Ok(());
+        }
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
         Command::Replay(args) => OperatorControlOutput::Replay(Box::new(plane.replay_lookup(
             if let Some(bundle_id) = args.bundle_id.as_deref() {

@@ -14,7 +14,7 @@
 
 ### Phase 53: Authenticated Control Plane Contracts
 
-**Status:** PLANNED
+**Status:** COMPLETE
 
 **Goal:** Define a local authenticated HTTP control-plane boundary that reuses existing runtime and artifact types instead of forking a second operator model.
 
@@ -22,7 +22,7 @@
 
 **Depends on:** Phase 52
 
-**Plans:** 0/0 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - The runtime can host a narrow local HTTP control surface in addition to `swarmctl`.
@@ -32,7 +32,7 @@
 
 ### Phase 54: Operator Review And Artifact Endpoints
 
-**Status:** PLANNED
+**Status:** ACTIVE
 
 **Goal:** Expose authenticated read surfaces for runtime state, stable-ID artifact lookup, and governance-prep review flows.
 
@@ -84,7 +84,7 @@
 
 ## Next Step
 
-`$gsd-plan-phase 53`
+`$gsd-plan-phase 54`
 
 ---
 *Roadmap created: 2026-04-04*

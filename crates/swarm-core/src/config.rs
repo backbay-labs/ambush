@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::net::SocketAddr;
 
 use crate::types::Severity;
 
@@ -36,6 +37,9 @@ pub struct SwarmConfig {
     /// Controlled production-promotion settings for canary-approved detectors.
     #[serde(default)]
     pub promotion: PromotionConfig,
+    /// Local authenticated operator-surface settings.
+    #[serde(default, rename = "operator_surface")]
+    pub operator: OperatorSurfaceConfig,
 }
 
 /// Whether the runtime simulates or executes live response actions.
@@ -224,6 +228,36 @@ pub struct PromotionConfig {
     /// Maximum allowed promoted detection volume across the observation window.
     #[serde(default = "default_promotion_max_total_detections")]
     pub max_total_detections: usize,
+}
+
+/// Local authenticated operator-surface settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorSurfaceConfig {
+    /// Whether the local HTTP operator surface is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Local socket address the surface listens on.
+    #[serde(default = "default_operator_bind_addr")]
+    pub bind_addr: String,
+    /// Maximum records returned from list endpoints.
+    #[serde(default = "default_operator_max_list_results")]
+    pub max_list_results: usize,
+    /// Bearer-token auth configuration for the local surface.
+    #[serde(default)]
+    pub auth: OperatorAuthConfig,
+}
+
+/// Authentication settings for the local operator surface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorAuthConfig {
+    /// Logical operator principal attached to authenticated requests.
+    #[serde(default = "default_operator_id")]
+    pub operator_id: String,
+    /// Environment variable name that carries the bearer token.
+    #[serde(default = "default_operator_token_env")]
+    pub token_env: String,
 }
 
 /// Replay bundle storage backend selection.
@@ -534,6 +568,43 @@ impl SwarmConfig {
             }
         }
 
+        if self.operator.enabled {
+            if self.operator.max_list_results == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.max_list_results",
+                    reason: "must be greater than zero when operator surface is enabled"
+                        .to_string(),
+                });
+            }
+
+            if self.operator.auth.operator_id.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.auth.operator_id",
+                    reason: "must not be empty when operator surface is enabled".to_string(),
+                });
+            }
+
+            if self.operator.auth.token_env.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.auth.token_env",
+                    reason: "must not be empty when operator surface is enabled".to_string(),
+                });
+            }
+
+            let bind_addr: SocketAddr = self.operator.bind_addr.parse().map_err(|_| {
+                ConfigValidationError::InvalidField {
+                    field: "operator_surface.bind_addr",
+                    reason: "must be a valid socket address".to_string(),
+                }
+            })?;
+            if !bind_addr.ip().is_loopback() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.bind_addr",
+                    reason: "must bind to a loopback address".to_string(),
+                });
+            }
+        }
+
         Ok(())
     }
 }
@@ -611,12 +682,48 @@ impl Default for PromotionConfig {
     }
 }
 
+impl Default for OperatorSurfaceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind_addr: default_operator_bind_addr(),
+            max_list_results: default_operator_max_list_results(),
+            auth: OperatorAuthConfig::default(),
+        }
+    }
+}
+
+impl Default for OperatorAuthConfig {
+    fn default() -> Self {
+        Self {
+            operator_id: default_operator_id(),
+            token_env: default_operator_token_env(),
+        }
+    }
+}
+
 const fn default_recent_decisions_limit() -> usize {
     20
 }
 
 const fn default_investigation_worker_count() -> usize {
     1
+}
+
+fn default_operator_bind_addr() -> String {
+    "127.0.0.1:7766".to_string()
+}
+
+const fn default_operator_max_list_results() -> usize {
+    50
+}
+
+fn default_operator_id() -> String {
+    "local-operator".to_string()
+}
+
+fn default_operator_token_env() -> String {
+    "SWARM_OPERATOR_TOKEN".to_string()
 }
 
 const fn default_investigation_max_pending_jobs() -> usize {
