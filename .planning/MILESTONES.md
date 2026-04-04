@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.17 Authenticated Operator Surface (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- operators can now run a local authenticated HTTP control surface in addition to `swarmctl`
+- runtime status, stable-ID runtime artifact lookup, and governance-prep review artifacts are now available through authenticated local endpoints
+- bounded maintenance actions now persist durable stable-ID audit trails for applied and blocked requests
+
+---
+
 ## v1.16 Governance Packet Sets And Portfolio History (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

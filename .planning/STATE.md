@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.17
 milestone_name: authenticated-operator-surface
-status: ready-for-audit
-last_updated: "2026-04-04T18:25:00Z"
+status: milestone-complete
+last_updated: "2026-04-04T14:55:42Z"
 progress:
   total_phases: 3
   completed_phases: 3
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-04)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.17 Authenticated Operator Surface` implementation is complete and ready for milestone audit.
+**Current focus:** no active milestone. `v1.17 Authenticated Operator Surface` is archived.
 
 ## Memory
 
@@ -27,11 +27,12 @@ See: `.planning/PROJECT.md` (updated 2026-04-04)
 - Operators can now split packet sets into child subsets with preserved parent lineage and source packet-set entry references.
 - Portfolio history snapshots now derive cross-cohort survival, rollout outcomes, and review debt from existing strategy memories instead of duplicating rollout state.
 - Packet-set and portfolio-history review surfaces now ship through `swarmctl` with stable-ID reload and cohort filtering.
-- `v1.17` will extend those repo-owned review flows into an authenticated local operator surface instead of jumping early into quorum governance.
+- `v1.17` extended those repo-owned review flows into an authenticated local operator surface instead of jumping early into quorum governance.
 - Phase 53 shipped the local operator-surface config contract, bearer-token auth boundary, and protected `/v1/operator/status` route through `swarmctl serve`.
 - Phase 54 extended that surface with authenticated runtime artifact, portfolio, governance-packet, packet-set, and portfolio-history read endpoints.
 - Phase 55 added bounded authenticated maintenance actions plus durable stable-ID audit records for applied and blocked attempts.
+- `v1.17` is now archived with a passing milestone audit and no active follow-on milestone yet.
 
 ## Next Command
 
-`$gsd-audit-milestone`
+`$gsd-new-milestone`
