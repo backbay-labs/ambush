@@ -19,9 +19,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - operators can now compute deterministic candidate rankings and shortlist review packets without mutating the queue, canary, or production lanes
 - the offline evolution ladder now extends through multi-candidate comparison: evidence -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet
 
+## Current Milestone: v1.14 Ranked Candidate Rollout Bridge
+
+**Goal:** turn shortlisted ranked candidates into operator-reviewed rollout candidates that can re-enter the existing handoff and canary path without re-materializing evidence.
+
+**Target features:**
+- create durable ranked-candidate selection artifacts from one ranking packet through `swarmctl`
+- record explicit operator review decisions over selected ranked candidates without rewriting underlying ranking evidence
+- bridge accepted selected candidates into the existing handoff and canary lane using preserved experiment and validation artifacts
+
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Start execution with `$gsd-plan-phase 44`.
 
 ## Requirements
 
@@ -100,22 +109,28 @@ Start the next cycle with `$gsd-new-milestone`.
 - ✓ Operator can rank or shortlist validated candidates using deterministic validation and advisory evidence — v1.13
 - ✓ Ranking packets preserve materialization, validation, and reviewed queue references so later review does not require rewriting evidence artifacts — v1.13
 
+### Active
+
+- [ ] Operator can create a durable ranked-candidate selection from one shortlist review packet without re-materializing the candidate manifest
+- [ ] Operator can review and decide accepted, deferred, or rejected state for ranked-candidate selections while preserving immutable ranking evidence
+- [ ] Accepted ranked-candidate selections can feed the existing handoff and canary path using existing experiment and validation artifacts
+
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
-- HTTP or multi-user operator control plane — still secondary to verification and shadow-readiness work
+- HTTP or multi-user operator control plane — still secondary to the repo-owned CLI
 - Fleet-wide or partial-fleet rollout of evolved strategies — the runtime still supports only a bounded single-node promotion path
-- Automatic strategy promotion from memory scores — `v1.8` keeps memory-backed ranking advisory and operator-reviewed
-- Automatic queue-to-production promotion — `v1.9` keeps proposal review explicit and operator-controlled
+- Automatic ranked-candidate selection or queue mutation from batch scores — `v1.14` keeps selection explicit and operator-reviewed
+- Automatic canary or production launch from ranked candidates — rollout gates remain explicit and separate from offline ranking
 - Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
 
 ## Context
 
-v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 now widens that lane into a multi-candidate offline mutation bench.
+v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation-and-ranking bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet. The next cycle has not been started yet.
+The project now has an end-to-end rollout ladder plus an offline mutation-and-ranking bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet. The next missing seam is selected ranked-candidate re-entry into the existing handoff and canary path without rebuilding evidence from scratch.
 
 ## Constraints
 
@@ -163,6 +178,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation-and-ra
 | Keep the draft-to-rollout bridge artifact-first and operator-triggered | Materializing candidates and refreshing evidence should reduce manual translation, not introduce automatic mutation or rollout | ✓ Chosen |
 | Choose guided mutation and candidate ranking as the next milestone | Governance remains deferred, while `docs/EVOLUTION.md` and deferred `EVOL-*` requirements now point to structured mutation, batch evaluation, and evidence-backed ranking as the next offline evolution step | ✓ Good |
 | Keep multi-candidate evolution offline and operator-controlled | Batch mutation and ranking should expand review surface area without introducing automatic promotion or autonomous rollout | ✓ Good |
+| Choose ranked-candidate rollout bridging as the next milestone | `v1.13` now stops at shortlist packets; the next documented gap is turning selected ranked candidates back into rollout-ready review artifacts without re-materializing evidence | ✓ Chosen |
+| Keep ranked-candidate re-entry operator-driven | Ranked batches should reduce artifact translation, not auto-mutate queue, canary, or production state | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after shipping v1.13*
+*Last updated: 2026-04-04 after starting milestone v1.14*
