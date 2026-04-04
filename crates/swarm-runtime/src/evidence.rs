@@ -103,6 +103,12 @@ impl OperatorEvidenceReadService {
             .load(packet_id)
             .map_err(Into::into)
     }
+
+    pub fn list_promotion_evidence_packets(
+        &self,
+    ) -> Result<PromotionEvidencePacketList, EvidenceError> {
+        self.promotion_evidence_store.list().map_err(Into::into)
+    }
 }
 
 /// Persisted subject kinds supported by signed evidence export.
@@ -133,6 +139,12 @@ impl EvidenceSubjectKind {
             Self::StrategyShadow => "strategy_shadow",
             Self::PromotionReview => "promotion_review",
         }
+    }
+}
+
+impl std::fmt::Display for EvidenceSubjectKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -279,6 +291,21 @@ pub enum EvidenceVerificationStatus {
     Failed,
 }
 
+impl EvidenceVerificationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl std::fmt::Display for EvidenceVerificationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One explicit verification check result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceVerificationCheck {
@@ -363,6 +390,21 @@ pub enum PromotionEvidenceRecommendation {
     Blocked,
 }
 
+impl PromotionEvidenceRecommendation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadyForExternalReview => "ready_for_external_review",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+impl std::fmt::Display for PromotionEvidenceRecommendation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Durable packet joining rollout outcome with signed supporting evidence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromotionEvidencePacket {
@@ -410,6 +452,13 @@ impl PromotionEvidencePacketRecord {
 pub struct PromotionEvidencePacketLookup {
     pub record: PromotionEvidencePacketRecord,
     pub packet: PromotionEvidencePacket,
+}
+
+/// Operator-facing promotion evidence packet listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionEvidencePacketList {
+    pub total_count: usize,
+    pub packets: Vec<PromotionEvidencePacketRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -914,6 +963,14 @@ impl FilePromotionEvidencePacketStore {
             }
         })?;
         Ok(Some(PromotionEvidencePacketLookup { record, packet }))
+    }
+
+    pub fn list(&self) -> Result<PromotionEvidencePacketList, PromotionEvidencePacketStoreError> {
+        let packets = self.read_index()?.entries;
+        Ok(PromotionEvidencePacketList {
+            total_count: packets.len(),
+            packets,
+        })
     }
 }
 

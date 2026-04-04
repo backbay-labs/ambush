@@ -6,7 +6,8 @@ use crate::control::{
 };
 use crate::evidence::{
     EvidenceBundle, EvidenceBundleList, EvidenceSubjectKind, EvidenceVerificationReport,
-    OperatorEvidenceReadService, PromotionEvidencePacket,
+    EvidenceVerificationStatus, OperatorEvidenceReadService, PromotionEvidencePacket,
+    PromotionEvidencePacketList, PromotionEvidenceRecommendation,
 };
 use crate::governance_prep::{
     DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePacketSetList,
@@ -24,7 +25,7 @@ use crate::service::OperatorStatusReport;
 use axum::extract::{Path as RoutePath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -161,9 +162,28 @@ struct EvidenceListQuery {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReviewEvidenceListQuery {
+    subject_kind: Option<String>,
+    verification_status: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewPromotionPacketListQuery {
+    recommendation: Option<String>,
+    limit: Option<usize>,
+}
+
 struct OperatorApiError {
     status: StatusCode,
     error: &'static str,
+    message: String,
+}
+
+struct OperatorReviewError {
+    status: StatusCode,
+    title: &'static str,
     message: String,
 }
 
@@ -209,6 +229,49 @@ impl IntoResponse for OperatorApiError {
                 error: self.error,
                 message: self.message,
             }),
+        )
+            .into_response()
+    }
+}
+
+impl OperatorReviewError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            title: "Bad Request",
+            message: message.into(),
+        }
+    }
+
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            title: "Not Found",
+            message: message.into(),
+        }
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            title: "Review Surface Error",
+            message: message.into(),
+        }
+    }
+}
+
+impl IntoResponse for OperatorReviewError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Html(render_review_layout(
+                self.title,
+                "",
+                &format!(
+                    "<section class=\"card\"><p>{}</p></section>",
+                    escape_html(&self.message)
+                ),
+            )),
         )
             .into_response()
     }
@@ -345,6 +408,27 @@ impl LocalOperatorSurface {
             .route("/v1/operator/replay", get(replay_handler))
             .route("/v1/operator/investigation", get(investigation_handler))
             .route("/v1/operator/incident", get(incident_handler))
+            .route("/v1/operator/review", get(review_home_handler))
+            .route(
+                "/v1/operator/review/evidence",
+                get(review_evidence_list_handler),
+            )
+            .route(
+                "/v1/operator/review/evidence/{bundle_id}",
+                get(review_evidence_bundle_handler),
+            )
+            .route(
+                "/v1/operator/review/verifications/{verification_id}",
+                get(review_evidence_verification_handler),
+            )
+            .route(
+                "/v1/operator/review/promotion-packets",
+                get(review_promotion_packet_list_handler),
+            )
+            .route(
+                "/v1/operator/review/promotion-packets/{packet_id}",
+                get(review_promotion_packet_handler),
+            )
             .route(
                 "/v1/operator/evidence/bundles",
                 get(evidence_bundle_list_handler),
@@ -480,6 +564,134 @@ async fn incident_handler(
         .incident_lookup(selector)
         .map_err(map_control_error)?;
     Ok(Json(incident))
+}
+
+async fn review_home_handler(
+    State(state): State<OperatorHttpState>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_evidence_service(&state)?;
+    let bundles = limit_evidence_bundle_list(
+        service
+            .list_bundles(None)
+            .map_err(|error| OperatorReviewError::internal(error.to_string()))?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    let packets = limit_promotion_packet_list(
+        service
+            .list_promotion_evidence_packets()
+            .map_err(|error| OperatorReviewError::internal(error.to_string()))?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    Ok(Html(render_review_home_page(&bundles, &packets)))
+}
+
+async fn review_evidence_list_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<ReviewEvidenceListQuery>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_evidence_service(&state)?;
+    let subject_kind = query
+        .subject_kind
+        .as_deref()
+        .map(parse_review_evidence_subject_kind)
+        .transpose()?;
+    let verification_status = query
+        .verification_status
+        .as_deref()
+        .map(parse_review_evidence_verification_status)
+        .transpose()?;
+    let list = service
+        .list_bundles(subject_kind)
+        .map_err(|error| OperatorReviewError::internal(error.to_string()))?;
+    let list = filter_review_evidence_list(list, verification_status);
+    let list = limit_evidence_bundle_list(list, query.limit, state.max_list_results);
+    Ok(Html(render_review_evidence_list_page(
+        &list,
+        verification_status,
+    )))
+}
+
+async fn review_evidence_bundle_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(bundle_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_evidence_service(&state)?;
+    let lookup = service
+        .load_bundle(&bundle_id)
+        .map_err(|error| OperatorReviewError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!("evidence bundle `{bundle_id}` was not found"))
+        })?;
+    let latest_verification =
+        if let Some(verification_id) = lookup.record.latest_verification_id.as_deref() {
+            service
+                .load_verification(verification_id)
+                .map_err(|error| OperatorReviewError::internal(error.to_string()))?
+        } else {
+            None
+        };
+    Ok(Html(render_review_evidence_bundle_page(
+        &lookup.bundle,
+        lookup.record.latest_verification_status,
+        latest_verification.as_ref().map(|lookup| &lookup.report),
+    )))
+}
+
+async fn review_evidence_verification_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(verification_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_evidence_service(&state)?;
+    let lookup = service
+        .load_verification(&verification_id)
+        .map_err(|error| OperatorReviewError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!(
+                "evidence verification `{verification_id}` was not found"
+            ))
+        })?;
+    Ok(Html(render_review_evidence_verification_page(
+        &lookup.report,
+    )))
+}
+
+async fn review_promotion_packet_list_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<ReviewPromotionPacketListQuery>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_evidence_service(&state)?;
+    let recommendation = query
+        .recommendation
+        .as_deref()
+        .map(parse_review_promotion_recommendation)
+        .transpose()?;
+    let list = service
+        .list_promotion_evidence_packets()
+        .map_err(|error| OperatorReviewError::internal(error.to_string()))?;
+    let list = filter_review_promotion_packet_list(list, recommendation);
+    let list = limit_promotion_packet_list(list, query.limit, state.max_list_results);
+    Ok(Html(render_review_promotion_packet_list_page(
+        &list,
+        recommendation,
+    )))
+}
+
+async fn review_promotion_packet_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(packet_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_evidence_service(&state)?;
+    let lookup = service
+        .load_promotion_evidence_packet(&packet_id)
+        .map_err(|error| OperatorReviewError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!(
+                "promotion evidence packet `{packet_id}` was not found"
+            ))
+        })?;
+    Ok(Html(render_review_promotion_packet_page(&lookup.packet)))
 }
 
 async fn evidence_bundle_handler(
@@ -941,6 +1153,715 @@ fn limit_maintenance_list(
     list
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewEvidenceVerificationFilter {
+    Passed,
+    Failed,
+    Unverified,
+}
+
+impl ReviewEvidenceVerificationFilter {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Unverified => "unverified",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Passed => "Passed",
+            Self::Failed => "Failed",
+            Self::Unverified => "Unverified",
+        }
+    }
+}
+
+fn parse_review_evidence_subject_kind(
+    value: &str,
+) -> Result<EvidenceSubjectKind, OperatorReviewError> {
+    value.parse::<EvidenceSubjectKind>().map_err(|_| {
+        OperatorReviewError::bad_request(format!("unsupported review subject_kind `{value}`"))
+    })
+}
+
+fn parse_review_evidence_verification_status(
+    value: &str,
+) -> Result<ReviewEvidenceVerificationFilter, OperatorReviewError> {
+    match value {
+        "passed" => Ok(ReviewEvidenceVerificationFilter::Passed),
+        "failed" => Ok(ReviewEvidenceVerificationFilter::Failed),
+        "unverified" => Ok(ReviewEvidenceVerificationFilter::Unverified),
+        other => Err(OperatorReviewError::bad_request(format!(
+            "unsupported review verification_status `{other}`"
+        ))),
+    }
+}
+
+fn parse_review_promotion_recommendation(
+    value: &str,
+) -> Result<PromotionEvidenceRecommendation, OperatorReviewError> {
+    match value {
+        "ready_for_external_review" | "ready" => {
+            Ok(PromotionEvidenceRecommendation::ReadyForExternalReview)
+        }
+        "blocked" => Ok(PromotionEvidenceRecommendation::Blocked),
+        other => Err(OperatorReviewError::bad_request(format!(
+            "unsupported promotion recommendation `{other}`"
+        ))),
+    }
+}
+
+fn review_evidence_service(
+    state: &OperatorHttpState,
+) -> Result<&OperatorEvidenceReadService, OperatorReviewError> {
+    state
+        .evidence
+        .as_deref()
+        .ok_or_else(|| OperatorReviewError::internal("evidence stores are not configured"))
+}
+
+fn filter_review_evidence_list(
+    mut list: EvidenceBundleList,
+    verification_status: Option<ReviewEvidenceVerificationFilter>,
+) -> EvidenceBundleList {
+    if let Some(filter) = verification_status {
+        list.bundles.retain(|entry| match filter {
+            ReviewEvidenceVerificationFilter::Passed => {
+                entry.latest_verification_status == Some(EvidenceVerificationStatus::Passed)
+            }
+            ReviewEvidenceVerificationFilter::Failed => {
+                entry.latest_verification_status == Some(EvidenceVerificationStatus::Failed)
+            }
+            ReviewEvidenceVerificationFilter::Unverified => {
+                entry.latest_verification_status.is_none()
+            }
+        });
+        list.total_count = list.bundles.len();
+    }
+    list
+}
+
+fn filter_review_promotion_packet_list(
+    mut list: PromotionEvidencePacketList,
+    recommendation: Option<PromotionEvidenceRecommendation>,
+) -> PromotionEvidencePacketList {
+    if let Some(recommendation) = recommendation {
+        let ready = recommendation == PromotionEvidenceRecommendation::ReadyForExternalReview;
+        list.packets
+            .retain(|entry| entry.ready_for_external_review == ready);
+        list.total_count = list.packets.len();
+    }
+    list
+}
+
+fn limit_promotion_packet_list(
+    mut list: PromotionEvidencePacketList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> PromotionEvidencePacketList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.packets = list.packets.into_iter().take(limit).collect();
+    list.total_count = list.packets.len();
+    list
+}
+
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn review_link(path: &str, label: &str) -> String {
+    format!(
+        "<a class=\"review-link\" href=\"{}\">{}</a>",
+        escape_html(path),
+        escape_html(label)
+    )
+}
+
+fn render_review_layout(title: &str, subtitle: &str, body: &str) -> String {
+    let subtitle_html = if subtitle.is_empty() {
+        String::new()
+    } else {
+        format!("<p class=\"subtitle\">{}</p>", escape_html(subtitle))
+    };
+    format!(
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title}</title><style>{style}</style></head><body><main class=\"page\"><header class=\"hero\"><div><p class=\"eyebrow\">Swarm Team Six</p><h1>{heading}</h1>{subtitle}</div><nav class=\"nav\"><a href=\"/v1/operator/review\">Home</a><a href=\"/v1/operator/review/evidence\">Evidence</a><a href=\"/v1/operator/review/promotion-packets\">Promotion Packets</a></nav></header>{body}</main></body></html>",
+        title = escape_html(title),
+        heading = escape_html(title),
+        subtitle = subtitle_html,
+        body = body,
+        style = concat!(
+            ":root{color-scheme:light;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;}",
+            "body{margin:0;background:#f4efe5;color:#1d2433;}",
+            ".page{max-width:1120px;margin:0 auto;padding:24px 20px 56px;}",
+            ".hero{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;margin-bottom:24px;padding:20px 24px;border-radius:20px;background:linear-gradient(135deg,#fef7e5,#e7f1ff);border:1px solid #d7deeb;}",
+            ".eyebrow{margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#805b10;}",
+            "h1{margin:0;font-size:32px;line-height:1.1;}",
+            ".subtitle{margin:10px 0 0;max-width:70ch;color:#465066;}",
+            ".nav{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;}",
+            ".nav a,.review-link{color:#0f4f8a;text-decoration:none;font-weight:600;}",
+            ".nav a{padding:10px 12px;border-radius:999px;background:#ffffffbf;border:1px solid #d3dceb;}",
+            ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;}",
+            ".card{background:#fff;border:1px solid #d7deeb;border-radius:18px;padding:18px;box-shadow:0 10px 25px rgba(29,36,51,.06);}",
+            ".card h2,.card h3{margin-top:0;}",
+            ".meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:16px 0;}",
+            ".meta div{padding:12px 14px;border-radius:14px;background:#f7f9fc;border:1px solid #e0e6f0;}",
+            ".meta dt{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#6a7282;font-weight:700;}",
+            ".meta dd{margin:6px 0 0;font-weight:600;word-break:break-word;}",
+            ".pill{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;}",
+            ".pill.passed,.pill.ready{background:#ddf8e8;color:#15643a;}",
+            ".pill.failed,.pill.blocked{background:#fde1e1;color:#9c2331;}",
+            ".pill.unverified{background:#eceff5;color:#495164;}",
+            "table{width:100%;border-collapse:collapse;margin-top:10px;}",
+            "th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #e7ebf3;vertical-align:top;}",
+            "th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#6a7282;}",
+            ".toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:18px 0;}",
+            ".toolbar label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600;color:#344054;}",
+            ".toolbar input,.toolbar select{min-width:180px;padding:10px 12px;border-radius:12px;border:1px solid #ccd5e3;background:#fff;}",
+            ".toolbar button{padding:10px 16px;border-radius:12px;border:0;background:#0f4f8a;color:#fff;font-weight:700;cursor:pointer;}",
+            "code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;}",
+            "pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#141923;color:#eef3ff;padding:14px;border-radius:14px;}",
+            "details{margin-top:14px;}",
+            "ul{padding-left:20px;}",
+            ".muted{color:#667085;}",
+            "@media (max-width:760px){.hero{flex-direction:column;}.nav{justify-content:flex-start;}}"
+        )
+    )
+}
+
+fn render_status_pill(label: &str, class_name: &str) -> String {
+    format!(
+        "<span class=\"pill {class_name}\">{label}</span>",
+        class_name = escape_html(class_name),
+        label = escape_html(label)
+    )
+}
+
+fn render_subject_kind_options(selected: Option<EvidenceSubjectKind>) -> String {
+    let mut options = vec!["<option value=\"\">All subject kinds</option>".to_string()];
+    for kind in [
+        EvidenceSubjectKind::ReplayBundle,
+        EvidenceSubjectKind::InvestigationBundle,
+        EvidenceSubjectKind::CorrelatedIncident,
+        EvidenceSubjectKind::CanaryRun,
+        EvidenceSubjectKind::ProductionPromotion,
+        EvidenceSubjectKind::OperatorMaintenanceAction,
+        EvidenceSubjectKind::DetectorVerification,
+        EvidenceSubjectKind::StrategyShadow,
+        EvidenceSubjectKind::PromotionReview,
+    ] {
+        let selected_attr = if selected == Some(kind) {
+            " selected"
+        } else {
+            ""
+        };
+        options.push(format!(
+            "<option value=\"{value}\"{selected}>{value}</option>",
+            value = kind.as_str(),
+            selected = selected_attr
+        ));
+    }
+    options.join("")
+}
+
+fn render_verification_filter_options(
+    selected: Option<ReviewEvidenceVerificationFilter>,
+) -> String {
+    let mut options = vec!["<option value=\"\">Any verification state</option>".to_string()];
+    for filter in [
+        ReviewEvidenceVerificationFilter::Passed,
+        ReviewEvidenceVerificationFilter::Failed,
+        ReviewEvidenceVerificationFilter::Unverified,
+    ] {
+        let selected_attr = if selected == Some(filter) {
+            " selected"
+        } else {
+            ""
+        };
+        options.push(format!(
+            "<option value=\"{value}\"{selected}>{label}</option>",
+            value = filter.as_str(),
+            selected = selected_attr,
+            label = filter.label()
+        ));
+    }
+    options.join("")
+}
+
+fn render_promotion_recommendation_options(
+    selected: Option<PromotionEvidenceRecommendation>,
+) -> String {
+    let mut options = vec!["<option value=\"\">Any recommendation</option>".to_string()];
+    for recommendation in [
+        PromotionEvidenceRecommendation::ReadyForExternalReview,
+        PromotionEvidenceRecommendation::Blocked,
+    ] {
+        let selected_attr = if selected == Some(recommendation) {
+            " selected"
+        } else {
+            ""
+        };
+        options.push(format!(
+            "<option value=\"{value}\"{selected}>{value}</option>",
+            value = recommendation.as_str(),
+            selected = selected_attr
+        ));
+    }
+    options.join("")
+}
+
+fn render_review_home_page(
+    bundles: &EvidenceBundleList,
+    packets: &PromotionEvidencePacketList,
+) -> String {
+    let mut bundle_rows = String::new();
+    for bundle in &bundles.bundles {
+        let verification = bundle
+            .latest_verification_status
+            .map(|status| render_status_pill(status.as_str(), status.as_str()))
+            .unwrap_or_else(|| render_status_pill("unverified", "unverified"));
+        bundle_rows.push_str(&format!(
+            "<tr><td>{bundle_link}</td><td>{kind}</td><td>{subject}</td><td>{verification}</td></tr>",
+            bundle_link = review_link(
+                &format!("/v1/operator/review/evidence/{}", bundle.bundle_id),
+                &bundle.bundle_id
+            ),
+            kind = escape_html(bundle.subject_kind.as_str()),
+            subject = escape_html(&bundle.subject_id),
+            verification = verification
+        ));
+    }
+
+    let mut packet_rows = String::new();
+    for packet in &packets.packets {
+        let recommendation = if packet.ready_for_external_review {
+            render_status_pill("ready_for_external_review", "ready")
+        } else {
+            render_status_pill("blocked", "blocked")
+        };
+        packet_rows.push_str(&format!(
+            "<tr><td>{packet_link}</td><td>{promotion}</td><td>{recommendation}</td></tr>",
+            packet_link = review_link(
+                &format!("/v1/operator/review/promotion-packets/{}", packet.packet_id),
+                &packet.packet_id
+            ),
+            promotion = escape_html(&packet.promotion_id),
+            recommendation = recommendation
+        ));
+    }
+
+    render_review_layout(
+        "Local Evidence Review",
+        "Read-only review pages layered on the authenticated operator API. This surface does not approve, deploy, or mutate rollout state.",
+        &format!(
+            "<section class=\"grid\">\
+                <article class=\"card\"><h2>Review Scope</h2><p>Use this surface to inspect signed evidence bundles, verification reports, and promotion evidence packets without reading store files directly.</p><p class=\"muted\">Authentication stays on the existing bearer-token boundary, and follow-on write actions remain on the existing maintenance or rollout paths.</p></article>\
+                <article class=\"card\"><h2>Quick Links</h2><ul>\
+                    <li>{evidence}</li><li>{packets}</li><li>{json}</li>\
+                </ul></article>\
+            </section>\
+            <section class=\"grid\" style=\"margin-top:18px;\">\
+                <article class=\"card\"><h2>Recent Evidence Bundles</h2><table><thead><tr><th>Bundle</th><th>Kind</th><th>Subject</th><th>Verification</th></tr></thead><tbody>{bundle_rows}</tbody></table></article>\
+                <article class=\"card\"><h2>Recent Promotion Packets</h2><table><thead><tr><th>Packet</th><th>Promotion</th><th>Recommendation</th></tr></thead><tbody>{packet_rows}</tbody></table></article>\
+            </section>",
+            evidence = review_link("/v1/operator/review/evidence", "Browse signed evidence"),
+            packets = review_link(
+                "/v1/operator/review/promotion-packets",
+                "Browse promotion evidence packets"
+            ),
+            json = review_link(
+                "/v1/operator/evidence/bundles",
+                "Open raw evidence JSON API"
+            ),
+            bundle_rows = bundle_rows,
+            packet_rows = packet_rows
+        ),
+    )
+}
+
+fn render_review_evidence_list_page(
+    list: &EvidenceBundleList,
+    verification_status: Option<ReviewEvidenceVerificationFilter>,
+) -> String {
+    let mut rows = String::new();
+    for bundle in &list.bundles {
+        let verification = bundle
+            .latest_verification_status
+            .map(|status| render_status_pill(status.as_str(), status.as_str()))
+            .unwrap_or_else(|| render_status_pill("unverified", "unverified"));
+        let verification_link = bundle
+            .latest_verification_id
+            .as_ref()
+            .map(|id| review_link(&format!("/v1/operator/review/verifications/{id}"), id))
+            .unwrap_or_else(|| "<span class=\"muted\">none</span>".to_string());
+        rows.push_str(&format!(
+            "<tr><td>{bundle_link}</td><td>{kind}</td><td>{subject}</td><td>{verification}</td><td>{verification_link}</td></tr>",
+            bundle_link = review_link(
+                &format!("/v1/operator/review/evidence/{}", bundle.bundle_id),
+                &bundle.bundle_id
+            ),
+            kind = escape_html(bundle.subject_kind.as_str()),
+            subject = escape_html(&bundle.subject_id),
+            verification = verification,
+            verification_link = verification_link
+        ));
+    }
+
+    render_review_layout(
+        "Evidence Inspection",
+        "Browse signed evidence bundles by subject kind and latest verification state.",
+        &format!(
+            "<section class=\"card\">\
+                <form class=\"toolbar\" method=\"get\" action=\"/v1/operator/review/evidence\">\
+                    <label>Subject kind<select name=\"subject_kind\">{subject_options}</select></label>\
+                    <label>Verification<select name=\"verification_status\">{verification_options}</select></label>\
+                    <label>Limit<input type=\"number\" min=\"1\" name=\"limit\" value=\"{limit}\"></label>\
+                    <button type=\"submit\">Apply Filters</button>\
+                </form>\
+                <p class=\"muted\">Showing {count} evidence bundles from the authenticated evidence store.</p>\
+                <table><thead><tr><th>Bundle</th><th>Subject Kind</th><th>Subject ID</th><th>Latest Verification</th><th>Verification Page</th></tr></thead><tbody>{rows}</tbody></table>\
+            </section>",
+            subject_options = render_subject_kind_options(list.subject_kind),
+            verification_options = render_verification_filter_options(verification_status),
+            limit = list.total_count.max(1),
+            count = list.total_count,
+            rows = rows
+        ),
+    )
+}
+
+fn render_review_evidence_bundle_page(
+    bundle: &EvidenceBundle,
+    latest_verification_status: Option<EvidenceVerificationStatus>,
+    latest_verification: Option<&EvidenceVerificationReport>,
+) -> String {
+    let verification_badge = latest_verification_status
+        .map(|status| render_status_pill(status.as_str(), status.as_str()))
+        .unwrap_or_else(|| render_status_pill("unverified", "unverified"));
+    let verification_link = latest_verification
+        .map(|report| {
+            review_link(
+                &format!(
+                    "/v1/operator/review/verifications/{}",
+                    report.verification_id
+                ),
+                &report.verification_id,
+            )
+        })
+        .unwrap_or_else(|| "<span class=\"muted\">none</span>".to_string());
+
+    let subject_target = subject_api_path(bundle.subject.kind, &bundle.subject.stable_id)
+        .map(|href| review_link(&href, "Open related raw API artifact"))
+        .unwrap_or_else(|| {
+            "<span class=\"muted\">No raw API route for this subject kind yet</span>".to_string()
+        });
+
+    let mut related_refs = String::new();
+    for related in &bundle.subject.related_refs {
+        related_refs.push_str(&format!(
+            "<li>{kind}: {link}</li>",
+            kind = escape_html(&related.kind),
+            link = render_related_ref_link(&related.kind, &related.id)
+        ));
+    }
+    if related_refs.is_empty() {
+        related_refs.push_str("<li class=\"muted\">No related references recorded.</li>");
+    }
+
+    let mut receipt_refs = String::new();
+    for reference in &bundle.subject.receipt_chain_refs {
+        receipt_refs.push_str(&format!("<li><code>{}</code></li>", escape_html(reference)));
+    }
+    if receipt_refs.is_empty() {
+        receipt_refs.push_str("<li class=\"muted\">No receipt references recorded.</li>");
+    }
+
+    render_review_layout(
+        "Evidence Bundle Detail",
+        "Signed artifact metadata first, canonical payload second. This page stays read-only and points back to the authenticated JSON API when needed.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Bundle ID</dt><dd><code>{bundle_id}</code></dd></div>\
+                    <div><dt>Subject</dt><dd>{kind} <code>{subject_id}</code></dd></div>\
+                    <div><dt>Latest Verification</dt><dd>{verification_badge}</dd></div>\
+                    <div><dt>Signer</dt><dd>{signer} (<code>{key_id}</code>)</dd></div>\
+                    <div><dt>Payload SHA-256</dt><dd><code>{payload_sha}</code></dd></div>\
+                    <div><dt>Related Artifact</dt><dd>{subject_target}</dd></div>\
+                </div>\
+                <p><strong>Verification page:</strong> {verification_link}</p>\
+                <h3>Related References</h3><ul>{related_refs}</ul>\
+                <h3>Receipt Chain References</h3><ul>{receipt_refs}</ul>\
+                <details><summary>Canonical payload JSON</summary><pre>{payload}</pre></details>\
+                <details><summary>Raw JSON API</summary><p>{raw_link}</p></details>\
+            </section>",
+            bundle_id = escape_html(&bundle.bundle_id),
+            kind = escape_html(bundle.subject.kind.as_str()),
+            subject_id = escape_html(&bundle.subject.stable_id),
+            verification_badge = verification_badge,
+            signer = escape_html(&bundle.signature.signer_id),
+            key_id = escape_html(&bundle.signature.key_id),
+            payload_sha = escape_html(&bundle.payload_sha256),
+            subject_target = subject_target,
+            verification_link = verification_link,
+            related_refs = related_refs,
+            receipt_refs = receipt_refs,
+            payload = escape_html(&bundle.canonical_payload),
+            raw_link = review_link(
+                &format!("/v1/operator/evidence/bundles/{}", bundle.bundle_id),
+                "Open the raw JSON bundle response"
+            )
+        ),
+    )
+}
+
+fn render_review_evidence_verification_page(report: &EvidenceVerificationReport) -> String {
+    let mut checks = String::new();
+    for check in &report.checks {
+        checks.push_str(&format!(
+            "<tr><td>{name}</td><td>{status}</td><td>{details}</td></tr>",
+            name = escape_html(&check.name),
+            status = if check.passed {
+                render_status_pill("passed", "passed")
+            } else {
+                render_status_pill("failed", "failed")
+            },
+            details = escape_html(&check.details)
+        ));
+    }
+    if checks.is_empty() {
+        checks.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No verification checks recorded.</td></tr>",
+        );
+    }
+
+    render_review_layout(
+        "Evidence Verification Detail",
+        "Verification reports show the exact integrity checks applied to one signed evidence bundle.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Verification ID</dt><dd><code>{verification_id}</code></dd></div>\
+                    <div><dt>Bundle</dt><dd>{bundle_link}</dd></div>\
+                    <div><dt>Status</dt><dd>{status}</dd></div>\
+                    <div><dt>Signer</dt><dd>{signer} (<code>{key_id}</code>)</dd></div>\
+                    <div><dt>Expected Key</dt><dd>{expected_key}</dd></div>\
+                </div>\
+                <table><thead><tr><th>Check</th><th>Status</th><th>Details</th></tr></thead><tbody>{checks}</tbody></table>\
+                <details><summary>Raw JSON API</summary><p>{raw_link}</p></details>\
+            </section>",
+            verification_id = escape_html(&report.verification_id),
+            bundle_link = review_link(
+                &format!("/v1/operator/review/evidence/{}", report.bundle_id),
+                &report.bundle_id
+            ),
+            status = render_status_pill(report.status.as_str(), report.status.as_str()),
+            signer = escape_html(&report.signer_id),
+            key_id = escape_html(&report.signer_key_id),
+            expected_key = report
+                .expected_key_id
+                .as_deref()
+                .map(escape_html)
+                .unwrap_or_else(|| "none".to_string()),
+            checks = checks,
+            raw_link = review_link(
+                &format!(
+                    "/v1/operator/evidence/verifications/{}",
+                    report.verification_id
+                ),
+                "Open the raw JSON verification response"
+            )
+        ),
+    )
+}
+
+fn render_review_promotion_packet_list_page(
+    list: &PromotionEvidencePacketList,
+    recommendation: Option<PromotionEvidenceRecommendation>,
+) -> String {
+    let mut rows = String::new();
+    for packet in &list.packets {
+        let pill = if packet.ready_for_external_review {
+            render_status_pill("ready_for_external_review", "ready")
+        } else {
+            render_status_pill("blocked", "blocked")
+        };
+        rows.push_str(&format!(
+            "<tr><td>{packet_link}</td><td>{promotion_id}</td><td>{recommendation}</td></tr>",
+            packet_link = review_link(
+                &format!("/v1/operator/review/promotion-packets/{}", packet.packet_id),
+                &packet.packet_id
+            ),
+            promotion_id = escape_html(&packet.promotion_id),
+            recommendation = pill
+        ));
+    }
+
+    render_review_layout(
+        "Promotion Evidence Review",
+        "Promotion evidence packets stay advisory. This review flow is for operator understanding, not approval or deployment.",
+        &format!(
+            "<section class=\"card\">\
+                <form class=\"toolbar\" method=\"get\" action=\"/v1/operator/review/promotion-packets\">\
+                    <label>Recommendation<select name=\"recommendation\">{recommendation_options}</select></label>\
+                    <label>Limit<input type=\"number\" min=\"1\" name=\"limit\" value=\"{limit}\"></label>\
+                    <button type=\"submit\">Apply Filters</button>\
+                </form>\
+                <table><thead><tr><th>Packet</th><th>Promotion ID</th><th>Recommendation</th></tr></thead><tbody>{rows}</tbody></table>\
+            </section>",
+            recommendation_options = render_promotion_recommendation_options(recommendation),
+            limit = list.total_count.max(1),
+            rows = rows
+        ),
+    )
+}
+
+fn render_review_promotion_packet_page(packet: &PromotionEvidencePacket) -> String {
+    let mut attachment_rows = String::new();
+    for attachment in &packet.supporting_evidence {
+        let bundle_link = attachment
+            .bundle_id
+            .as_ref()
+            .map(|id| review_link(&format!("/v1/operator/review/evidence/{id}"), id))
+            .unwrap_or_else(|| "<span class=\"muted\">none</span>".to_string());
+        let verification_link = attachment
+            .verification_id
+            .as_ref()
+            .map(|id| review_link(&format!("/v1/operator/review/verifications/{id}"), id))
+            .unwrap_or_else(|| "<span class=\"muted\">none</span>".to_string());
+        let status = attachment
+            .verification_status
+            .map(|status| render_status_pill(status.as_str(), status.as_str()))
+            .unwrap_or_else(|| render_status_pill("unverified", "unverified"));
+        attachment_rows.push_str(&format!(
+            "<tr><td>{kind}</td><td><code>{subject_id}</code></td><td>{bundle_link}</td><td>{verification_link}</td><td>{status}</td><td>{details}</td></tr>",
+            kind = escape_html(attachment.subject_kind.as_str()),
+            subject_id = escape_html(&attachment.subject_id),
+            bundle_link = bundle_link,
+            verification_link = verification_link,
+            status = status,
+            details = escape_html(&attachment.details)
+        ));
+    }
+    if attachment_rows.is_empty() {
+        attachment_rows.push_str(
+            "<tr><td colspan=\"6\" class=\"muted\">No supporting evidence attached.</td></tr>",
+        );
+    }
+
+    let mut blocking_reasons = String::new();
+    for reason in &packet.blocking_reasons {
+        blocking_reasons.push_str(&format!(
+            "<li><strong>{name}</strong>: {details}</li>",
+            name = escape_html(&reason.name),
+            details = escape_html(&reason.details)
+        ));
+    }
+    if blocking_reasons.is_empty() {
+        blocking_reasons.push_str("<li class=\"muted\">No blocking reasons recorded.</li>");
+    }
+
+    let recommendation = render_status_pill(
+        packet.recommendation.as_str(),
+        match packet.recommendation {
+            PromotionEvidenceRecommendation::ReadyForExternalReview => "ready",
+            PromotionEvidenceRecommendation::Blocked => "blocked",
+        },
+    );
+
+    render_review_layout(
+        "Promotion Evidence Packet Detail",
+        "Promotion evidence packets summarize rollout outcome and supporting signed evidence. They remain advisory and do not authorize rollout.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Packet ID</dt><dd><code>{packet_id}</code></dd></div>\
+                    <div><dt>Promotion ID</dt><dd><code>{promotion_id}</code></dd></div>\
+                    <div><dt>Recommendation</dt><dd>{recommendation}</dd></div>\
+                    <div><dt>Promotion Status</dt><dd>{promotion_status}</dd></div>\
+                    <div><dt>Promoted Strategy</dt><dd><code>{promoted_strategy}</code></dd></div>\
+                    <div><dt>Fallback Strategy</dt><dd><code>{fallback_strategy}</code></dd></div>\
+                    <div><dt>Canary Run</dt><dd><code>{canary_run}</code></dd></div>\
+                    <div><dt>Verification ID</dt><dd><code>{verification_id}</code></dd></div>\
+                    <div><dt>Shadow ID</dt><dd><code>{shadow_id}</code></dd></div>\
+                    <div><dt>Advisory Only</dt><dd>{advisory_only}</dd></div>\
+                </div>\
+                <p class=\"muted\">Follow-on rollout or maintenance actions still go through the existing authenticated APIs and audit trails. This page is read-only by design.</p>\
+                <h3>Blocking Reasons</h3><ul>{blocking_reasons}</ul>\
+                <h3>Supporting Evidence</h3><table><thead><tr><th>Kind</th><th>Subject ID</th><th>Bundle</th><th>Verification</th><th>Status</th><th>Details</th></tr></thead><tbody>{attachment_rows}</tbody></table>\
+                <details><summary>Raw JSON API</summary><p>{raw_link}</p></details>\
+            </section>",
+            packet_id = escape_html(&packet.packet_id),
+            promotion_id = escape_html(&packet.promotion_id),
+            recommendation = recommendation,
+            promotion_status =
+                escape_html(&format!("{:?}", packet.promotion_status).to_lowercase()),
+            promoted_strategy = escape_html(&packet.promoted_strategy_id),
+            fallback_strategy = escape_html(&packet.fallback_strategy_id),
+            canary_run = escape_html(&packet.canary_run_id),
+            verification_id = escape_html(&packet.verification_id),
+            shadow_id = escape_html(&packet.shadow_id),
+            advisory_only = if packet.advisory_only { "yes" } else { "no" },
+            blocking_reasons = blocking_reasons,
+            attachment_rows = attachment_rows,
+            raw_link = review_link(
+                &format!(
+                    "/v1/operator/evidence/promotion-packets/{}",
+                    packet.packet_id
+                ),
+                "Open the raw JSON promotion evidence packet"
+            )
+        ),
+    )
+}
+
+fn subject_api_path(kind: EvidenceSubjectKind, id: &str) -> Option<String> {
+    match kind {
+        EvidenceSubjectKind::ReplayBundle => Some(format!("/v1/operator/replay?bundle_id={id}")),
+        EvidenceSubjectKind::InvestigationBundle => {
+            Some(format!("/v1/operator/investigation?investigation_id={id}"))
+        }
+        EvidenceSubjectKind::CorrelatedIncident => {
+            Some(format!("/v1/operator/incident?incident_id={id}"))
+        }
+        EvidenceSubjectKind::OperatorMaintenanceAction => {
+            Some(format!("/v1/operator/maintenance/actions/{id}"))
+        }
+        EvidenceSubjectKind::ProductionPromotion
+        | EvidenceSubjectKind::CanaryRun
+        | EvidenceSubjectKind::DetectorVerification
+        | EvidenceSubjectKind::StrategyShadow
+        | EvidenceSubjectKind::PromotionReview => None,
+    }
+}
+
+fn render_related_ref_link(kind: &str, id: &str) -> String {
+    if let Some(href) = related_ref_path(kind, id) {
+        review_link(&href, id)
+    } else {
+        format!("<code>{}</code>", escape_html(id))
+    }
+}
+
+fn related_ref_path(kind: &str, id: &str) -> Option<String> {
+    match kind {
+        "replay_bundle" => Some(format!("/v1/operator/replay?bundle_id={id}")),
+        "investigation_bundle" => Some(format!("/v1/operator/investigation?investigation_id={id}")),
+        "correlated_incident" => Some(format!("/v1/operator/incident?incident_id={id}")),
+        "operator_maintenance_action" => Some(format!("/v1/operator/maintenance/actions/{id}")),
+        "evidence_bundle" => Some(format!("/v1/operator/review/evidence/{id}")),
+        "evidence_verification" => Some(format!("/v1/operator/review/verifications/{id}")),
+        "promotion_evidence_packet" => Some(format!("/v1/operator/review/promotion-packets/{id}")),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{LocalOperatorSurface, OperatorSurfacePaths};
@@ -1385,7 +2306,18 @@ mod tests {
             signer_id: "local-evidence-signer".to_string(),
             signer_key_id: "key:red".to_string(),
             expected_key_id: Some("key:red".to_string()),
-            checks: vec![],
+            checks: vec![
+                crate::evidence::EvidenceVerificationCheck {
+                    name: "canonical_payload".to_string(),
+                    passed: true,
+                    details: "canonical payload bytes normalized cleanly".to_string(),
+                },
+                crate::evidence::EvidenceVerificationCheck {
+                    name: "payload_sha256".to_string(),
+                    passed: true,
+                    details: "payload hash matches canonical payload bytes".to_string(),
+                },
+            ],
         }
     }
 
@@ -1772,6 +2704,172 @@ mod tests {
             .unwrap();
         let packet_json: Value = serde_json::from_slice(&packet_body).unwrap();
         assert_eq!(packet_json["recommendation"], "ready_for_external_review");
+    }
+
+    #[tokio::test]
+    async fn review_surface_renders_html_shell_and_evidence_pages() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+
+        let root = unique_temp_dir("review-html-evidence");
+        seed_evolution_artifacts(&root);
+        seed_evidence_artifacts(&root);
+        let surface = LocalOperatorSurface::from_config_and_paths(
+            "inline",
+            operator_config(),
+            surface_paths(&root),
+        )
+        .unwrap();
+        let app = surface.router("secret-token".to_string());
+        let auth = ("authorization", "Bearer secret-token");
+
+        let home_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/review")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(home_response.status(), StatusCode::OK);
+        assert_eq!(
+            home_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "text/html; charset=utf-8"
+        );
+        let home_body = to_bytes(home_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let home_html = String::from_utf8(home_body.to_vec()).unwrap();
+        assert!(home_html.contains("Local Evidence Review"));
+        assert!(home_html.contains("/v1/operator/review/evidence"));
+        assert!(home_html.contains("promotion_evidence:promotion:red"));
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/review/evidence?subject_kind=production_promotion&verification_status=passed&limit=5")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_html = String::from_utf8(list_body.to_vec()).unwrap();
+        assert!(list_html.contains("Evidence Inspection"));
+        assert!(list_html.contains("production_promotion"));
+        assert!(
+            list_html.contains("evidence:production_promotion:promotion:red:local-evidence-signer")
+        );
+
+        let bundle_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/review/evidence/evidence:production_promotion:promotion:red:local-evidence-signer")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bundle_response.status(), StatusCode::OK);
+        let bundle_body = to_bytes(bundle_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let bundle_html = String::from_utf8(bundle_body.to_vec()).unwrap();
+        assert!(bundle_html.contains("Evidence Bundle Detail"));
+        assert!(bundle_html.contains("promotion:red"));
+        assert!(bundle_html.contains("canonical payload"));
+
+        let verification_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/review/verifications/evidence_verification:evidence:production_promotion:promotion:red:local-evidence-signer")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(verification_response.status(), StatusCode::OK);
+        let verification_body = to_bytes(verification_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let verification_html = String::from_utf8(verification_body.to_vec()).unwrap();
+        assert!(verification_html.contains("Evidence Verification Detail"));
+        assert!(verification_html.contains("canonical_payload"));
+        assert!(verification_html.contains("payload_sha256"));
+    }
+
+    #[tokio::test]
+    async fn review_surface_renders_promotion_packet_pages() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+
+        let root = unique_temp_dir("review-html-packets");
+        seed_evolution_artifacts(&root);
+        seed_evidence_artifacts(&root);
+        let surface = LocalOperatorSurface::from_config_and_paths(
+            "inline",
+            operator_config(),
+            surface_paths(&root),
+        )
+        .unwrap();
+        let app = surface.router("secret-token".to_string());
+        let auth = ("authorization", "Bearer secret-token");
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/review/promotion-packets?recommendation=ready&limit=5")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_html = String::from_utf8(list_body.to_vec()).unwrap();
+        assert!(list_html.contains("Promotion Evidence Review"));
+        assert!(list_html.contains("promotion_evidence:promotion:red"));
+        assert!(list_html.contains("ready_for_external_review"));
+
+        let detail_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/review/promotion-packets/promotion_evidence:promotion:red")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail_response.status(), StatusCode::OK);
+        let detail_body = to_bytes(detail_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let detail_html = String::from_utf8(detail_body.to_vec()).unwrap();
+        assert!(detail_html.contains("Promotion Evidence Packet Detail"));
+        assert!(detail_html.contains("office_red_ready_v1"));
+        assert!(detail_html.contains("office_control_v1"));
+        assert!(detail_html.contains("advisory"));
     }
 
     #[tokio::test]

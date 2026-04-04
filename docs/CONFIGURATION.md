@@ -179,6 +179,9 @@ curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
 
 curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evidence/verifications/EVIDENCE_VERIFICATION_ID"
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  http://127.0.0.1:7766/v1/operator/review
 ```
 
 Example authenticated maintenance flow:
@@ -202,6 +205,12 @@ Maintenance actions inherit the authenticated local operator identity from `oper
 
 Current authenticated surface:
 
+- `/v1/operator/review`
+- `/v1/operator/review/evidence?subject_kind=&verification_status=&limit=`
+- `/v1/operator/review/evidence/{bundle_id}`
+- `/v1/operator/review/verifications/{verification_id}`
+- `/v1/operator/review/promotion-packets?recommendation=&limit=`
+- `/v1/operator/review/promotion-packets/{packet_id}`
 - `/v1/operator/status`
 - `/v1/operator/replay`
 - `/v1/operator/investigation`
@@ -219,6 +228,29 @@ Current authenticated surface:
 - `/v1/operator/evidence/promotion-packets/{packet_id}`
 - `/v1/operator/maintenance/actions` `GET`, `POST`
 - `/v1/operator/maintenance/actions/{action_id}` `GET`
+
+### Local Evidence Review Surface
+
+`v1.19` adds a read-only local review surface above the authenticated operator API. It is intentionally thin:
+
+- the review pages stay behind the same bearer-token middleware as the JSON API
+- the surface reuses the existing stable IDs and artifact stores instead of reading raw files directly
+- the review pages remain advisory and read-only; rollout or maintenance mutations still go through the existing authenticated APIs
+
+Example review pages:
+
+```bash
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  http://127.0.0.1:7766/v1/operator/review
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/review/evidence?subject_kind=production_promotion&verification_status=passed&limit=10"
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/review/promotion-packets?recommendation=ready&limit=10"
+```
+
+The review surface is meant for local clients that can send the same bearer token already used by the authenticated JSON API. It does not introduce a new session model, cookies, RBAC layer, or browser-only control path.
 
 ### Signed Evidence Export And Verification
 
