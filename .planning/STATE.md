@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.16
 milestone_name: governance-packet-sets-and-portfolio-history
-status: ready-to-plan
-last_updated: "2026-04-04T05:21:04Z"
+status: milestone-complete
+last_updated: "2026-04-04T10:15:00Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 0
+  completed_plans: 3
 ---
 
 # State
@@ -18,16 +18,16 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-04)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.16 Governance Packet Sets And Portfolio History` is active. Phase 50 is next.
+**Current focus:** no active milestone. `v1.16 Governance Packet Sets And Portfolio History` is archived.
 
 ## Memory
 
-- `v1.15` widened the offline evolution lane from one ranked selection to a durable cross-batch portfolio artifact.
-- Portfolio entries now preserve ranking, selection, mutation-batch, validation-batch, cohort, validation, proof, advisory, shadow, and parent-queue lineage in one operator review record.
-- Operators can now record include, defer, or drop decisions on portfolio entries without mutating queue, canary, or production state.
-- Governance-ready review packets now reuse preserved portfolio evidence and fail closed on stale, blocked, or drifted state while still persisting inspectable blocked packets.
-- The next missing seam is durable packet grouping and outcome history above the governance-prep lane, not quorum voting or a richer HTTP/TUI operator surface yet.
+- `v1.16` added durable packet-set artifacts above governance-ready review packets.
+- Packet sets now preserve source packet, portfolio, cohort, ranking, validation, proof, advisory, and rollout-lineage references in one stable record.
+- Operators can now split packet sets into child subsets with preserved parent lineage and source packet-set entry references.
+- Portfolio history snapshots now derive cross-cohort survival, rollout outcomes, and review debt from existing strategy memories instead of duplicating rollout state.
+- Packet-set and portfolio-history review surfaces now ship through `swarmctl` with stable-ID reload and cohort filtering.
 
 ## Next Command
 
-`$gsd-plan-phase 50`
+`$gsd-new-milestone`

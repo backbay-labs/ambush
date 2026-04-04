@@ -1,90 +1,19 @@
-# Milestone v1.16: Governance Packet Sets And Portfolio History
+# Roadmap
 
-**Status:** READY FOR PLANNING
-**Date:** 2026-04-04
-**Milestone Goal:** Turn individual governance-ready packets into durable review sets and historical outcome views without implementing quorum governance or multi-node rollout.
+No active milestone.
 
-## Overview
+## Last Completed Milestone
 
-`v1.15` closed the continuity gap from curated portfolio entries into durable governance-ready review packets. The runtime can now preserve packet-level evidence for later trust-boundary work, but each packet still stands alone and there is no durable way to group related packets or measure what happens to those cohorts over time.
+`v1.16 Governance Packet Sets And Portfolio History` shipped on 2026-04-04.
 
-The next useful step is to enrich the governance-prep lane without widening autonomy. `v1.16` focuses on durable packet-set artifacts above governance-ready packets, historical portfolio and cohort outcome tracking, and CLI review surfaces for those new artifacts. This milestone stays repo-owned, CLI-first, and fail-closed.
-
-## Phase Plan
-
-### Phase 50: Governance Packet Set Operations
-
-**Status:** READY
-
-**Goal:** Create durable packet-set artifacts that can merge or split governance-ready review packets without losing evidence traceability.
-
-**Requirements:** EVOL-30, EVOL-32
-
-**Depends on:** Phase 49
-
-**Plans:** 0/1 plans complete
-
-**Success Criteria:**
-- Operators can create one packet-set artifact from multiple governance-ready packet IDs through `swarmctl`.
-- Operators can split a packet set into smaller durable review sets without rewriting source packet evidence.
-- Packet-set artifacts preserve source packet, portfolio, cohort, and rollout-lineage references in one stable record.
-- Packet-set operations remain operator-triggered and do not mutate queue, canary, or production state.
-
-### Phase 51: Portfolio History And Outcome Ledger
-
-**Status:** READY
-
-**Goal:** Persist portfolio history that measures cross-cohort survival, rollout outcomes, and review debt over time.
-
-**Requirements:** EVOL-31
-
-**Depends on:** Phase 50
-
-**Plans:** 0/1 plans complete
-
-**Success Criteria:**
-- The runtime can persist history records that link portfolio entries or packet sets to later rollout outcomes.
-- History artifacts expose cross-cohort survival markers, review debt, and outcome summaries by stable ID.
-- Outcome history remains derived from existing durable artifacts instead of duplicating rollout state.
-- Historical summaries fail closed when required evidence is missing or inconsistent.
-
-### Phase 52: Packet Set And History Review Surfaces
-
-**Status:** READY
-
-**Goal:** Expose packet-set and portfolio-history review flows through the existing repo-owned CLI.
-
-**Requirements:** EVOL-33
-
-**Depends on:** Phase 51
-
-**Plans:** 0/1 plans complete
-
-**Success Criteria:**
-- Operators can inspect packet-set artifacts and portfolio-history summaries by stable ID through `swarmctl`.
-- Operators can list or filter packet sets and history summaries without reading raw store files.
-- Documentation explains how packet sets and history extend the governance-prep lane without introducing quorum voting.
-
-## Traceability
-
-| Requirement | Phase |
-|-------------|-------|
-| EVOL-30 | Phase 50 |
-| EVOL-32 | Phase 50 |
-| EVOL-31 | Phase 51 |
-| EVOL-33 | Phase 52 |
-
-## Deferred Work
-
-- Quorum-based approval, signed votes, and durable consensus receipts remain deferred until independent trust boundaries exist.
-- Multi-node rollout execution remains out of scope while the runtime stays single-node and repo-owned.
-- Authenticated HTTP or TUI operator surfaces remain secondary to the repo-owned CLI and durable artifact flow.
-- Automatic packet-set approval, automatic promotion, and automatic rollout remain out of scope for this cycle.
+Completed phases:
+- `50` Governance Packet Set Operations
+- `51` Portfolio History And Outcome Ledger
+- `52` Packet Set And History Review Surfaces
 
 ## Next Step
 
-`$gsd-plan-phase 50`
+`$gsd-new-milestone`
 
 ---
-*Roadmap created: 2026-04-04*
-*Last updated: 2026-04-04 after milestone v1.16 definition*
+*Roadmap cleared: 2026-04-04 after completing milestone v1.16*

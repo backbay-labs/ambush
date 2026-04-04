@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.16 Governance Packet Sets And Portfolio History (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- operators can now group multiple governance-ready review packets into durable packet-set artifacts and split child subsets while preserving source evidence lineage
+- portfolio history snapshots now derive cross-cohort survival, rollout outcomes, and review debt from existing strategy memories instead of duplicating canary or promotion state
+- packet-set and portfolio-history review surfaces are now available through `swarmctl` with stable-ID reload and cohort filtering
+
+---
+
 ## v1.15 Cross-Batch Portfolio And Governance Prep (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

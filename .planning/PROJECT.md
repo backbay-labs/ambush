@@ -10,27 +10,24 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.15 Cross-Batch Portfolio And Governance Prep` shipped on 2026-04-04.
+`v1.16 Governance Packet Sets And Portfolio History` shipped on 2026-04-04.
 
 **What is now real:**
-- operators can now assemble durable cross-batch portfolio artifacts from multiple ranked selections and campaign cohorts through `swarmctl`
-- portfolio entries now preserve ranking, selection, mutation-batch, validation-batch, cohort, validation, proof, advisory, shadow, and parent queue lineage in one stable record
-- operators can now list portfolio artifacts and record explicit include, defer, or drop decisions for portfolio entries without mutating rollout state
-- curated portfolio entries can now produce governance-ready review packets using preserved evidence references instead of re-encoding artifacts
-- blocked or stale governance-prep candidates now fail closed with inspectable persisted packet artifacts instead of widening autonomy
+- operators can now group multiple governance-ready review packets into one durable packet-set artifact through `swarmctl`
+- packet sets now preserve source packet, portfolio, cohort, ranking, validation, proof, advisory, and rollout-lineage references in one stable record
+- operators can now split packet sets into child subsets with preserved parent lineage and source packet-set entry references
+- portfolio history snapshots now derive cross-cohort survival, rollout outcomes, and review debt from existing strategy-memory artifacts instead of duplicating rollout state
+- packet-set and portfolio-history review surfaces are now available through stable-ID reload and cohort filtering without reading raw storage files
 
-## Current Milestone: v1.16 Governance Packet Sets And Portfolio History
+## Current Milestone
 
-**Goal:** turn individual governance-ready packets into durable review sets and historical outcome views without implementing quorum governance or multi-node rollout.
+No active milestone. `v1.16 Governance Packet Sets And Portfolio History` is archived.
 
-**Target features:**
-- merge or split governance-ready packets into durable packet-set artifacts without losing traceability
-- persist portfolio history that measures cross-cohort survival, rollout outcomes, and review debt over time
-- expose packet-set and history review flows through the existing repo-owned CLI
+**Next step:** start the next cycle with `$gsd-new-milestone`.
 
 ## Next Planning Step
 
-Start execution with `$gsd-plan-phase 50`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -101,15 +98,14 @@ Start execution with `$gsd-plan-phase 50`.
 
 ### Most Recently Shipped
 
-- ✓ Operators can assemble a durable cross-batch portfolio from ranked selections spanning multiple mutation batches or campaign cohorts — v1.15
-- ✓ Operators can curate portfolio candidates with explicit include, defer, or drop decisions without mutating rollout state — v1.15
-- ✓ Curated portfolio entries can produce governance-ready review packets using preserved evidence references while fail-closing on stale or incomplete artifacts — v1.15
+- ✓ Operators can merge multiple governance-ready review packets into one durable packet-set artifact while preserving source packet, portfolio, cohort, and rollout-lineage context — v1.16
+- ✓ Operators can split packet sets into child subsets without rewriting source packet evidence — v1.16
+- ✓ Portfolio history can now measure cross-cohort survival, rollout outcomes, and review debt from durable packet-set snapshots through `swarmctl` — v1.16
 
-### Active
+### No Active Milestone
 
-- [ ] Operators can merge or split governance-ready review packets across portfolio groups without losing evidence traceability
-- [ ] Portfolio history can measure cross-cohort survival, rollout outcomes, and review debt over time
-- [ ] Operators can inspect packet-set and portfolio-history artifacts by stable ID through `swarmctl`
+- Packet-set and portfolio-history workflows are shipped and archived.
+- Governance, quorum receipts, and richer multi-user surfaces remain deferred to a later milestone.
 
 ### Out of Scope
 
@@ -181,6 +177,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Keep governance prep artifact-first | The runtime can prepare review packets and preserved evidence for a future quorum lane, but still should not implement distributed governance before independent trust boundaries exist | ✓ Good |
 | Choose governance packet sets and portfolio history as the next milestone | Governance is still explicitly deferred, while the next future evolution requirements are richer packet grouping and durable cohort history above the existing CLI lane | ✓ Chosen |
 | Keep the next cycle CLI-first and single-node | HTTP/TUI surfaces and quorum receipts remain secondary until packet sets and history workflows are proven in the repo-owned runtime | ✓ Chosen |
+| Derive portfolio history from existing strategy memories | Strategy memories already encode the durable rollout outcomes needed for cohort survival and debt tracking, so history should not duplicate canary or promotion state | ✓ Good |
+| Keep packet-set operations non-mutating | Packet grouping and splitting should widen operator review context without changing queue, canary, or production artifacts | ✓ Good |
 
 ---
-*Last updated: 2026-04-04 after starting milestone v1.16*
+*Last updated: 2026-04-04 after completing milestone v1.16*
