@@ -20,17 +20,24 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current Milestone
 
-No active milestone is open.
+`v1.22 Portable Review Capsules And External Handoff`
 
-**Queued follow-on cycles:**
-- `v1.22 Portable Review Capsules And External Handoff`
+**Goal:** make cross-lane review portable and independently verifiable across trust boundaries without granting direct store access or widening into live multi-user control.
+
+**Target features:**
+- signed review capsule export from cross-lane sessions and promotion-readiness artifacts
+- imported capsule verification with remote signer lineage, local trust status, and related stable refs
+- delegation packets that preserve review continuity across external handoff boundaries
+
+**Queued after this:**
 - `v1.23 Approval Ledger And Quorum Readiness`
+- `v1.24 Approval Receipt Packs And Human Gate Prep`
 
-**Next step:** start the next cycle with `$gsd-new-milestone`.
+**Next step:** start planning with `$gsd-plan-phase 68`.
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Start the next cycle with `$gsd-plan-phase 68`.
 
 ## Requirements
 
@@ -113,8 +120,9 @@ Start the next cycle with `$gsd-new-milestone`.
 
 ### Current Milestone
 
-- No active milestone is open.
-- `v1.22 Portable Review Capsules And External Handoff` and `v1.23 Approval Ledger And Quorum Readiness` remain queued follow-on cycles, but they are not active work yet.
+- `v1.22 Portable Review Capsules And External Handoff` is now active.
+- This cycle should keep the review lane portable and externally verifiable without opening direct store access or live multi-user control.
+- `v1.23 Approval Ledger And Quorum Readiness` and `v1.24 Approval Receipt Packs And Human Gate Prep` are queued behind `v1.22`.
 - Quorum approvals, signed votes across independent nodes, multi-user control, and direct rollout or governance actions from the review client remain deferred until independent trust boundaries exist.
 
 ### Out of Scope
@@ -135,7 +143,7 @@ Start the next cycle with `$gsd-new-milestone`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, and local review surface: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review. `v1.21` closed the lane-fragmentation gap without widening autonomy into quorum governance or direct rollout writes from the browser. The next missing seam is portable review continuity: package cross-lane review state for external verification and later approval-ledger work without pretending distributed trust already exists.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, and local review surface: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review. `v1.21` closed the lane-fragmentation gap without widening autonomy into quorum governance or direct rollout writes from the browser. The next missing seam is portable review continuity: package cross-lane review state for external verification, then prepare approval ledgers and receipt-ready human gate artifacts without pretending distributed trust already exists.
 
 ## Constraints
 
@@ -201,6 +209,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Choose cross-lane promotion review as the next milestone | The remaining operator gap is no longer basic evidence inspection; it is comparing governance-prep, canary, and production evidence in one advisory session before any quorum work starts | ✓ Chosen |
 | Queue portable review capsules after cross-lane review | External trust boundaries are not real yet, but the evidence and session model can still be made portable and independently verifiable ahead of multi-user governance | ✓ Chosen |
 | Queue approval ledgers before real quorum governance | Signed approval sets and threshold math can be prepared locally first so later quorum work reuses stable evidence and receipt shapes instead of changing the promotion model again | ✓ Chosen |
+| Choose portable review capsules as the next milestone | Cross-lane review is now local-only; the next documented gap is packaging that evidence for external verification without granting direct store access | ✓ Chosen |
+| Queue approval receipt packs and human-gate prep after ledgers | The consensus docs require signed receipts and critical-action human approval, but those contracts can be prepared locally before any distributed quorum exists | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after completing milestone v1.21 implementation*
+*Last updated: 2026-04-04 after starting milestone v1.22 planning and queuing v1.23-v1.24*
