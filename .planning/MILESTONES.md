@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.20 Evidence Workbench And Review Handoffs (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- operators can now assemble durable review sessions from signed evidence bundles, verification reports, and promotion evidence packets through both `swarmctl` and the authenticated local review surface
+- review sessions now support side-by-side evidence comparison plus stable export snapshots that preserve digests, signer metadata, verification status, and related stable references
+- review-driven maintenance handoffs can now re-verify selected evidence bundles while preserving session lineage, operator rationale, resulting maintenance action IDs, and the existing bounded audit trail
+
+---
+
 ## v1.19 Local Evidence Review Surface (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

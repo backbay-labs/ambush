@@ -10,29 +10,23 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.19 Local Evidence Review Surface` shipped on 2026-04-04.
+`v1.20 Evidence Workbench And Review Handoffs` shipped on 2026-04-04.
 
 **What is now real:**
-- operators can now inspect signed evidence, verification reports, and promotion evidence packets through a local authenticated HTML review surface above the existing operator API
-- review pages reuse the same bearer-auth boundary, stable IDs, and authenticated JSON contracts instead of introducing a second control plane or reading raw store files
-- evidence review now supports subject-kind and verification-status filtering, stable-ID drill-down, signer metadata, verification checks, and related lineage navigation
-- promotion evidence review now surfaces recommendation state, fallback lineage, and supporting evidence verification context in one advisory-only flow
-- the trust boundary remains single-node and advisory: browser review stays read-only, write paths still route through existing authenticated maintenance or rollout APIs, and quorum governance remains deferred
+- operators can now assemble durable review sessions from `evidence_bundle`, `evidence_verification`, and `promotion_evidence_packet` stable IDs through both `swarmctl` and the authenticated local review surface
+- one review session now supports side-by-side comparison, reviewed export snapshots, and stable reload by session ID without rereading raw store files
+- the local workbench can now launch bounded evidence re-verification handoffs that preserve session lineage, selected refs, operator rationale, resulting action IDs, and the existing maintenance audit trail
+- the trust boundary remains single-node and bounded: review-driven writes stay inside maintenance scope, while rollout, promotion, and quorum governance remain deferred
 
 ## Current Milestone
 
-`v1.20 Evidence Workbench And Review Handoffs` is now active.
+No active milestone is open.
 
-**Goal:** turn the local evidence review surface into a practical operator workbench for multi-artifact comparison, export, and bounded action handoff without widening into quorum governance.
-
-**Target features:**
-- durable local review sessions assembled from existing evidence and promotion artifact stable IDs
-- side-by-side evidence comparison and reviewed export flows above the authenticated operator API
-- bounded review-driven maintenance handoffs that reuse the existing authenticated audit trail
+**Next step:** start the next cycle with `$gsd-new-milestone`.
 
 ## Next Planning Step
 
-Plan the first phase with `$gsd-plan-phase 62`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -103,14 +97,17 @@ Plan the first phase with `$gsd-plan-phase 62`.
 
 ### Most Recently Shipped
 
+- ✓ Operators can now assemble durable multi-artifact review sessions from signed evidence and promotion artifact stable IDs and reload them by stable session ID — v1.20
+- ✓ Review sessions now support side-by-side evidence comparison plus stable reviewed export snapshots with digests, signer metadata, verification state, and related refs — v1.20
+- ✓ The local review surface and `swarmctl` can now launch bounded evidence re-verification handoffs that preserve session lineage, selected refs, operator rationale, and maintenance action IDs — v1.20
 - ✓ Operators can now open a local authenticated HTML review shell above the existing operator API for signed evidence, verification results, and promotion evidence packets — v1.19
 - ✓ Evidence review now supports subject-kind and verification-status filtering, stable-ID drill-down, signer metadata, verification checks, and related lineage links — v1.19
 - ✓ Promotion evidence review now presents recommendation state, fallback lineage, and supporting evidence status in one advisory-only flow without bypassing audit trails — v1.19
 
 ### Current Milestone
 
-- The local evidence review surface is now real, but operators still need raw API or CLI jumps to compare multiple artifacts, export a reviewed set, or hand evidence into bounded maintenance actions.
-- `v1.20` will add durable review sessions, side-by-side evidence comparison and export, and review-driven maintenance handoffs above the existing authenticated operator API.
+- No active milestone is open.
+- The next cycle should be created from the shipped docs and deferred roadmap with `$gsd-new-milestone`.
 - Quorum approvals, signed votes, multi-user control, and direct rollout or governance actions from the review client remain deferred until independent trust boundaries exist.
 
 ### Out of Scope
@@ -196,4 +193,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Keep review-driven actions bounded to existing maintenance scope | The browser surface can improve operator flow, but rollout and governance mutations must continue to pass through the existing narrow audited action lane | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 for milestone v1.20 planning*
+*Last updated: 2026-04-04 after completing milestone v1.20 implementation*
