@@ -19,7 +19,8 @@ use swarm_runtime::evolution::{
 use swarm_runtime::mutation::{
     DefaultEvolutionMutationHarness, EvolutionMutationProfileOverrides,
     EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
-    render_evolution_mutation_spec,
+    render_evolution_mutation_materialization_batch, render_evolution_mutation_spec,
+    render_evolution_mutation_validation_batch,
 };
 use swarm_runtime::promotion::{
     DefaultProductionPromotionHarness, ProductionPromotionStatus,
@@ -105,6 +106,20 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/evolution-mutations")]
     evolution_mutation_results_dir: std::path::PathBuf,
 
+    #[arg(
+        long,
+        global = true,
+        default_value = "data/evolution-mutation-materialization-batches"
+    )]
+    evolution_mutation_materialization_batch_results_dir: std::path::PathBuf,
+
+    #[arg(
+        long,
+        global = true,
+        default_value = "data/evolution-mutation-validation-batches"
+    )]
+    evolution_mutation_validation_batch_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -160,6 +175,10 @@ enum Command {
     EvolutionMutationCreate(EvolutionMutationCreateArgs),
     EvolutionMutationAddVariant(EvolutionMutationAddVariantArgs),
     EvolutionMutationResult(EvolutionMutationResultArgs),
+    EvolutionMutationMaterializeBatch(EvolutionMutationMaterializeBatchArgs),
+    EvolutionMutationMaterializationBatchResult(EvolutionMutationMaterializationBatchResultArgs),
+    EvolutionMutationValidateBatch(EvolutionMutationValidateBatchArgs),
+    EvolutionMutationValidationBatchResult(EvolutionMutationValidationBatchResultArgs),
     EvolutionMaterialize(EvolutionMaterializeArgs),
     EvolutionMaterializationResult(EvolutionMaterializationResultArgs),
     EvolutionValidationRefresh(EvolutionValidationRefreshArgs),
@@ -638,6 +657,30 @@ struct EvolutionMutationResultArgs {
 }
 
 #[derive(Debug, Args)]
+struct EvolutionMutationMaterializeBatchArgs {
+    #[arg(long)]
+    mutation_spec_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionMutationMaterializationBatchResultArgs {
+    #[arg(long)]
+    batch_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionMutationValidateBatchArgs {
+    #[arg(long)]
+    batch_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionMutationValidationBatchResultArgs {
+    #[arg(long)]
+    validation_batch_id: String,
+}
+
+#[derive(Debug, Args)]
 struct EvolutionMaterializeArgs {
     #[arg(long)]
     draft_id: String,
@@ -748,8 +791,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.evolution_validation_results_dir,
         &cli.evolution_reconciliation_results_dir,
     )?;
-    let evolution_mutation_harness =
-        DefaultEvolutionMutationHarness::from_path(&cli.evolution_mutation_results_dir)?;
+    let evolution_mutation_harness = DefaultEvolutionMutationHarness::from_path(
+        &cli.evolution_mutation_results_dir,
+        &cli.evolution_mutation_materialization_batch_results_dir,
+        &cli.evolution_mutation_validation_batch_results_dir,
+    )?;
 
     let output = match cli.command {
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
@@ -1428,6 +1474,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_evolution_mutation_spec(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionMutationMaterializeBatch(args) => {
+            let lookup = evolution_mutation_harness
+                .materialize_batch(&evolution_drafting_harness, &args.mutation_spec_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_mutation_materialization_batch(&lookup.report)
+                );
+            }
+            return Ok(());
+        }
+        Command::EvolutionMutationMaterializationBatchResult(args) => {
+            let lookup = evolution_mutation_harness
+                .load_materialization_batch(&args.batch_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution mutation materialization batch was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_mutation_materialization_batch(&lookup.report)
+                );
+            }
+            return Ok(());
+        }
+        Command::EvolutionMutationValidateBatch(args) => {
+            let lookup = evolution_mutation_harness
+                .refresh_validation_batch(
+                    &evolution_drafting_harness,
+                    &replay_harness,
+                    &evolution_proof_harness,
+                    &strategy_scorecard_harness,
+                    &cli.experiment_results_dir,
+                    &cli.verification_results_dir,
+                    &cli.shadow_results_dir,
+                    &args.batch_id,
+                )
+                .await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_mutation_validation_batch(&lookup.report)
+                );
+            }
+            if lookup.report.blocked_count > 0 {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvolutionMutationValidationBatchResult(args) => {
+            let lookup = evolution_mutation_harness
+                .load_validation_batch(&args.validation_batch_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution mutation validation batch was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_mutation_validation_batch(&lookup.report)
+                );
             }
             return Ok(());
         }

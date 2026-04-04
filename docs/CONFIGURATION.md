@@ -605,6 +605,42 @@ Each mutation spec preserves:
 
 This lane remains offline and advisory. Mutation specs do not auto-materialize manifests, refresh validation bundles, or change queue state by themselves.
 
+### Batch Candidate Materialization And Validation
+
+The repo now ships a batch layer on top of guided mutation specs. Operators can materialize every variant in one mutation spec, then refresh validation evidence across that batch without merging candidate state together.
+
+Current batch semantics:
+
+- materialization batches are durable repo-owned artifacts under `data/evolution-mutation-materialization-batches/`
+- validation batches are durable repo-owned artifacts under `data/evolution-mutation-validation-batches/`
+- each batch entry preserves the per-candidate link back to the source mutation spec and any reviewed queue proposal reference
+- blocked candidates remain persisted and visible; validation batches fail closed but do not discard evidence
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-materialize-batch \
+  --mutation-spec-id YOUR_MUTATION_SPEC_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-materialization-batch-result \
+  --batch-id YOUR_BATCH_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-validate-batch \
+  --batch-id YOUR_BATCH_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-validation-batch-result \
+  --validation-batch-id YOUR_VALIDATION_BATCH_ID
+```
+
+Batch artifacts preserve:
+
+- one stable batch ID plus per-candidate materialization or validation IDs
+- the strategy ID and mutation dimensions for each variant
+- any existing reviewed queue proposal reference for later review
+- blocked versus ready counts across the candidate set
+
+This lane still stops short of queue mutation or rollout. Batch validation produces evidence only.
+
 ### Draft Materialization And Validation Bundles
 
 The repo now ships the bridge from reviewed draft artifacts back into the verified rollout ladder. Operators can materialize a repo-owned experiment manifest from one draft, refresh validation artifacts from that manifest, then reconcile the original draft-backed queue entry in place instead of creating a duplicate proposal.

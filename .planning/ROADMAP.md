@@ -32,7 +32,7 @@ The next useful step is to widen that bench without widening autonomy. `v1.13` f
 
 ### Phase 42: Batch Candidate Materialization And Validation
 
-**Status:** READY
+**Status:** COMPLETE
 
 **Goal:** Materialize and refresh multiple candidate variants from one mutation spec while preserving per-candidate evidence chains.
 
@@ -40,7 +40,7 @@ The next useful step is to widen that bench without widening autonomy. `v1.13` f
 
 **Depends on:** Phase 41
 
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - Teams can materialize a deterministic batch of candidate manifests from one mutation spec through a repo-owned CLI flow.

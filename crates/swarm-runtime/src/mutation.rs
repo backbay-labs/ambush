@@ -1,13 +1,21 @@
 use crate::drafting::{
     DefaultEvolutionDraftingHarness, EvolutionDraftMaterializationRequest,
     EvolutionDraftPromotionStoreError, EvolutionDraftingError, EvolutionMaterializationLookup,
-    EvolutionPressureReport, EvolutionPressureSourceKind,
+    EvolutionMaterializationReport, EvolutionMaterializationStoreError, EvolutionPressureReport,
+    EvolutionPressureSourceKind, EvolutionValidationBundleStatus,
 };
-use crate::replay::{ExperimentLineage, ReplayHarnessError, load_detector_experiment_manifest};
+use crate::evolution::{EvolutionProposalAdvisorySummary, EvolutionProposalProofStatus};
+use crate::replay::{
+    DefaultReplayHarness, DetectorCandidateManifest, DetectorExperimentManifest, ExperimentLineage,
+    ReplayHarnessError, load_detector_experiment_manifest,
+};
+use crate::strategy::{DefaultStrategyScorecardHarness, StrategyAdvisorError};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use swarm_whisker::SuspiciousProcessTreeProfile;
 
 /// Errors surfaced by the guided mutation workflow.
 #[derive(Debug, thiserror::Error)]
@@ -22,7 +30,19 @@ pub enum EvolutionMutationError {
     PromotionStore(#[from] EvolutionDraftPromotionStoreError),
 
     #[error(transparent)]
+    MaterializationStore(#[from] EvolutionMaterializationStoreError),
+
+    #[error(transparent)]
+    Strategy(#[from] StrategyAdvisorError),
+
+    #[error(transparent)]
     MutationStore(#[from] EvolutionMutationStoreError),
+
+    #[error(transparent)]
+    MutationMaterializationBatchStore(#[from] EvolutionMutationMaterializationBatchStoreError),
+
+    #[error(transparent)]
+    MutationValidationBatchStore(#[from] EvolutionMutationValidationBatchStoreError),
 
     #[error(transparent)]
     Serialization(#[from] serde_json::Error),
@@ -45,8 +65,31 @@ pub enum EvolutionMutationError {
         strategy_id: String,
     },
 
+    #[error("mutation spec `{mutation_spec_id}` does not define any variants yet")]
+    MutationSpecHasNoVariants { mutation_spec_id: String },
+
+    #[error("materialization batch `{batch_id}` was not found")]
+    MaterializationBatchNotFound { batch_id: String },
+
+    #[error("validation batch `{validation_batch_id}` was not found")]
+    ValidationBatchNotFound { validation_batch_id: String },
+
     #[error("failed to read experiment search path `{path}`: {source}")]
     ManifestReadDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to serialize materialized experiment manifest `{path}`: {source}")]
+    ManifestSerialize {
+        path: PathBuf,
+        #[source]
+        source: serde_yaml::Error,
+    },
+
+    #[error("failed to write materialized experiment manifest `{path}`: {source}")]
+    ManifestWrite {
         path: PathBuf,
         #[source]
         source: std::io::Error,
@@ -220,6 +263,122 @@ pub struct EvolutionMutationSpecLookup {
     pub report: EvolutionMutationSpecReport,
 }
 
+/// One candidate materialized from a mutation spec variant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvolutionMutationMaterializationEntry {
+    pub variant_id: String,
+    pub strategy_id: String,
+    pub materialization_id: String,
+    pub experiment_id: String,
+    pub experiment_path: String,
+    pub mutation_dimensions: Vec<String>,
+    pub promotion_id: Option<String>,
+    pub queue_proposal_id: Option<String>,
+}
+
+/// Durable batch artifact linking a mutation spec to several materialized candidates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvolutionMutationMaterializationBatchReport {
+    pub batch_id: String,
+    pub mutation_spec_id: String,
+    pub created_at_ms: i64,
+    pub source_strategy_id: String,
+    pub candidate_count: usize,
+    pub entries: Vec<EvolutionMutationMaterializationEntry>,
+}
+
+/// Metadata surfaced for one persisted materialization batch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvolutionMutationMaterializationBatchRecord {
+    pub batch_id: String,
+    pub mutation_spec_id: String,
+    pub candidate_count: usize,
+    pub created_at_ms: i64,
+    pub bundle_path: String,
+}
+
+impl EvolutionMutationMaterializationBatchRecord {
+    fn from_report(
+        report: &EvolutionMutationMaterializationBatchReport,
+        bundle_path: String,
+    ) -> Self {
+        Self {
+            batch_id: report.batch_id.clone(),
+            mutation_spec_id: report.mutation_spec_id.clone(),
+            candidate_count: report.candidate_count,
+            created_at_ms: report.created_at_ms,
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted materialization batch loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct EvolutionMutationMaterializationBatchLookup {
+    pub record: EvolutionMutationMaterializationBatchRecord,
+    pub report: EvolutionMutationMaterializationBatchReport,
+}
+
+/// One validation result attached to one mutation-spec candidate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvolutionMutationValidationEntry {
+    pub variant_id: String,
+    pub strategy_id: String,
+    pub materialization_id: String,
+    pub validation_bundle_id: String,
+    pub status: EvolutionValidationBundleStatus,
+    pub proof_status: EvolutionProposalProofStatus,
+    pub advisory: Option<EvolutionProposalAdvisorySummary>,
+    pub promotion_id: Option<String>,
+    pub queue_proposal_id: Option<String>,
+    pub blocking_reason_names: Vec<String>,
+}
+
+/// Durable batch artifact linking a mutation-spec candidate set to validation results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvolutionMutationValidationBatchReport {
+    pub validation_batch_id: String,
+    pub mutation_spec_id: String,
+    pub materialization_batch_id: String,
+    pub created_at_ms: i64,
+    pub ready_count: usize,
+    pub blocked_count: usize,
+    pub entries: Vec<EvolutionMutationValidationEntry>,
+}
+
+/// Metadata surfaced for one persisted validation batch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvolutionMutationValidationBatchRecord {
+    pub validation_batch_id: String,
+    pub mutation_spec_id: String,
+    pub materialization_batch_id: String,
+    pub ready_count: usize,
+    pub blocked_count: usize,
+    pub created_at_ms: i64,
+    pub bundle_path: String,
+}
+
+impl EvolutionMutationValidationBatchRecord {
+    fn from_report(report: &EvolutionMutationValidationBatchReport, bundle_path: String) -> Self {
+        Self {
+            validation_batch_id: report.validation_batch_id.clone(),
+            mutation_spec_id: report.mutation_spec_id.clone(),
+            materialization_batch_id: report.materialization_batch_id.clone(),
+            ready_count: report.ready_count,
+            blocked_count: report.blocked_count,
+            created_at_ms: report.created_at_ms,
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted validation batch loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct EvolutionMutationValidationBatchLookup {
+    pub record: EvolutionMutationValidationBatchRecord,
+    pub report: EvolutionMutationValidationBatchReport,
+}
+
 /// Errors raised by the persisted mutation-spec store.
 #[derive(Debug, thiserror::Error)]
 pub enum EvolutionMutationStoreError {
@@ -238,6 +397,62 @@ pub enum EvolutionMutationStoreError {
     },
 
     #[error("failed to parse evolution mutation store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Errors raised by the persisted materialization-batch store.
+#[derive(Debug, thiserror::Error)]
+pub enum EvolutionMutationMaterializationBatchStoreError {
+    #[error(
+        "failed to read evolution mutation materialization batch store file `{path}`: {source}"
+    )]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "failed to write evolution mutation materialization batch store file `{path}`: {source}"
+    )]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "failed to parse evolution mutation materialization batch store file `{path}`: {source}"
+    )]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Errors raised by the persisted validation-batch store.
+#[derive(Debug, thiserror::Error)]
+pub enum EvolutionMutationValidationBatchStoreError {
+    #[error("failed to read evolution mutation validation batch store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write evolution mutation validation batch store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse evolution mutation validation batch store file `{path}`: {source}")]
     Parse {
         path: PathBuf,
         #[source]
@@ -356,15 +571,292 @@ impl FileEvolutionMutationStore {
     }
 }
 
+/// File-backed store for durable materialization batches.
+#[derive(Debug, Clone)]
+pub struct FileEvolutionMutationMaterializationBatchStore {
+    root: PathBuf,
+}
+
+impl FileEvolutionMutationMaterializationBatchStore {
+    pub fn open(
+        path: impl AsRef<Path>,
+    ) -> Result<Self, EvolutionMutationMaterializationBatchStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, batch_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(batch_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(
+        &self,
+    ) -> Result<
+        EvolutionMutationMaterializationBatchIndex,
+        EvolutionMutationMaterializationBatchStoreError,
+    > {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(EvolutionMutationMaterializationBatchIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        serde_json::from_str(&raw).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Parse { path, source }
+        })
+    }
+
+    fn write_index(
+        &self,
+        index: &EvolutionMutationMaterializationBatchIndex,
+    ) -> Result<(), EvolutionMutationMaterializationBatchStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Write { path, source }
+        })
+    }
+
+    pub fn persist(
+        &self,
+        report: &EvolutionMutationMaterializationBatchReport,
+    ) -> Result<
+        EvolutionMutationMaterializationBatchRecord,
+        EvolutionMutationMaterializationBatchStoreError,
+    > {
+        let path = self.report_path(&report.batch_id);
+        let raw = serde_json::to_string_pretty(report).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Write {
+                path: path.clone(),
+                source,
+            }
+        })?;
+
+        let mut index = self.read_index()?;
+        let record = EvolutionMutationMaterializationBatchRecord::from_report(
+            report,
+            path.display().to_string(),
+        );
+        index
+            .entries
+            .retain(|entry| entry.batch_id != record.batch_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(record)
+    }
+
+    pub fn load(
+        &self,
+        batch_id: &str,
+    ) -> Result<
+        Option<EvolutionMutationMaterializationBatchLookup>,
+        EvolutionMutationMaterializationBatchStoreError,
+    > {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.batch_id == batch_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        let report = serde_json::from_str(&raw).map_err(|source| {
+            EvolutionMutationMaterializationBatchStoreError::Parse { path, source }
+        })?;
+        Ok(Some(EvolutionMutationMaterializationBatchLookup {
+            record,
+            report,
+        }))
+    }
+}
+
+/// File-backed store for durable validation batches.
+#[derive(Debug, Clone)]
+pub struct FileEvolutionMutationValidationBatchStore {
+    root: PathBuf,
+}
+
+impl FileEvolutionMutationValidationBatchStore {
+    pub fn open(
+        path: impl AsRef<Path>,
+    ) -> Result<Self, EvolutionMutationValidationBatchStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            EvolutionMutationValidationBatchStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, validation_batch_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(validation_batch_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(
+        &self,
+    ) -> Result<EvolutionMutationValidationBatchIndex, EvolutionMutationValidationBatchStoreError>
+    {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(EvolutionMutationValidationBatchIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| {
+            EvolutionMutationValidationBatchStoreError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        serde_json::from_str(&raw)
+            .map_err(|source| EvolutionMutationValidationBatchStoreError::Parse { path, source })
+    }
+
+    fn write_index(
+        &self,
+        index: &EvolutionMutationValidationBatchIndex,
+    ) -> Result<(), EvolutionMutationValidationBatchStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            EvolutionMutationValidationBatchStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw)
+            .map_err(|source| EvolutionMutationValidationBatchStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        report: &EvolutionMutationValidationBatchReport,
+    ) -> Result<EvolutionMutationValidationBatchRecord, EvolutionMutationValidationBatchStoreError>
+    {
+        let path = self.report_path(&report.validation_batch_id);
+        let raw = serde_json::to_string_pretty(report).map_err(|source| {
+            EvolutionMutationValidationBatchStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| {
+            EvolutionMutationValidationBatchStoreError::Write {
+                path: path.clone(),
+                source,
+            }
+        })?;
+
+        let mut index = self.read_index()?;
+        let record =
+            EvolutionMutationValidationBatchRecord::from_report(report, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.validation_batch_id != record.validation_batch_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(record)
+    }
+
+    pub fn load(
+        &self,
+        validation_batch_id: &str,
+    ) -> Result<
+        Option<EvolutionMutationValidationBatchLookup>,
+        EvolutionMutationValidationBatchStoreError,
+    > {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.validation_batch_id == validation_batch_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| {
+            EvolutionMutationValidationBatchStoreError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        let report = serde_json::from_str(&raw)
+            .map_err(|source| EvolutionMutationValidationBatchStoreError::Parse { path, source })?;
+        Ok(Some(EvolutionMutationValidationBatchLookup {
+            record,
+            report,
+        }))
+    }
+}
+
 /// Harness for operator-authored mutation specs.
 pub struct DefaultEvolutionMutationHarness {
     pub mutation_store: FileEvolutionMutationStore,
+    pub materialization_batch_store: FileEvolutionMutationMaterializationBatchStore,
+    pub validation_batch_store: FileEvolutionMutationValidationBatchStore,
 }
 
 impl DefaultEvolutionMutationHarness {
-    pub fn from_path(results_dir: impl AsRef<Path>) -> Result<Self, EvolutionMutationError> {
+    pub fn from_path(
+        mutation_results_dir: impl AsRef<Path>,
+        materialization_batch_results_dir: impl AsRef<Path>,
+        validation_batch_results_dir: impl AsRef<Path>,
+    ) -> Result<Self, EvolutionMutationError> {
         Ok(Self {
-            mutation_store: FileEvolutionMutationStore::open(results_dir)?,
+            mutation_store: FileEvolutionMutationStore::open(mutation_results_dir)?,
+            materialization_batch_store: FileEvolutionMutationMaterializationBatchStore::open(
+                materialization_batch_results_dir,
+            )?,
+            validation_batch_store: FileEvolutionMutationValidationBatchStore::open(
+                validation_batch_results_dir,
+            )?,
         })
     }
 
@@ -556,6 +1048,152 @@ impl DefaultEvolutionMutationHarness {
     ) -> Result<Option<EvolutionMutationSpecLookup>, EvolutionMutationError> {
         Ok(self.mutation_store.load(mutation_spec_id)?)
     }
+
+    pub fn materialize_batch(
+        &self,
+        drafting: &DefaultEvolutionDraftingHarness,
+        mutation_spec_id: &str,
+    ) -> Result<EvolutionMutationMaterializationBatchLookup, EvolutionMutationError> {
+        let spec = self.mutation_store.load(mutation_spec_id)?.ok_or_else(|| {
+            EvolutionMutationError::MutationSpecNotFound {
+                mutation_spec_id: mutation_spec_id.to_string(),
+            }
+        })?;
+        if spec.report.variants.is_empty() {
+            return Err(EvolutionMutationError::MutationSpecHasNoVariants {
+                mutation_spec_id: mutation_spec_id.to_string(),
+            });
+        }
+
+        let base_experiment_path = PathBuf::from(&spec.report.base_experiment_path);
+        let created_at_ms = now_ms();
+        let mut entries = Vec::new();
+
+        for (index, variant) in spec.report.variants.iter().enumerate() {
+            let request = variant.overrides.to_materialization_request(
+                spec.report.draft_id.clone(),
+                base_experiment_path.clone(),
+            )?;
+            let report = materialize_variant_report(
+                &spec.report,
+                variant,
+                &request,
+                created_at_ms + index as i64,
+            )?;
+            drafting.materialization_store.persist(&report)?;
+            entries.push(EvolutionMutationMaterializationEntry {
+                variant_id: variant.variant_id.clone(),
+                strategy_id: variant.strategy_id.clone(),
+                materialization_id: report.materialization_id,
+                experiment_id: report.experiment_id,
+                experiment_path: report.experiment_path,
+                mutation_dimensions: variant.mutation_dimensions.clone(),
+                promotion_id: spec.report.promotion_id.clone(),
+                queue_proposal_id: spec.report.queue_proposal_id.clone(),
+            });
+        }
+
+        let report = EvolutionMutationMaterializationBatchReport {
+            batch_id: mutation_materialization_batch_id(
+                &spec.report.mutation_spec_id,
+                created_at_ms,
+            ),
+            mutation_spec_id: spec.report.mutation_spec_id.clone(),
+            created_at_ms,
+            source_strategy_id: spec.report.source_strategy_id.clone(),
+            candidate_count: entries.len(),
+            entries,
+        };
+        let record = self.materialization_batch_store.persist(&report)?;
+        Ok(EvolutionMutationMaterializationBatchLookup { record, report })
+    }
+
+    pub fn load_materialization_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<Option<EvolutionMutationMaterializationBatchLookup>, EvolutionMutationError> {
+        Ok(self.materialization_batch_store.load(batch_id)?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn refresh_validation_batch(
+        &self,
+        drafting: &DefaultEvolutionDraftingHarness,
+        replay_harness: &DefaultReplayHarness,
+        proof_harness: &crate::evolution::DefaultEvolutionProofHarness,
+        scorecard_harness: &DefaultStrategyScorecardHarness,
+        experiment_results_dir: impl AsRef<Path>,
+        verification_results_dir: impl AsRef<Path>,
+        shadow_results_dir: impl AsRef<Path>,
+        batch_id: &str,
+    ) -> Result<EvolutionMutationValidationBatchLookup, EvolutionMutationError> {
+        let batch = self
+            .materialization_batch_store
+            .load(batch_id)?
+            .ok_or_else(|| EvolutionMutationError::MaterializationBatchNotFound {
+                batch_id: batch_id.to_string(),
+            })?;
+        let created_at_ms = now_ms();
+        let mut entries = Vec::new();
+
+        for item in &batch.report.entries {
+            let validation = drafting
+                .refresh_validation_bundle(
+                    replay_harness,
+                    proof_harness,
+                    scorecard_harness,
+                    experiment_results_dir.as_ref(),
+                    verification_results_dir.as_ref(),
+                    shadow_results_dir.as_ref(),
+                    &item.materialization_id,
+                )
+                .await?;
+            entries.push(EvolutionMutationValidationEntry {
+                variant_id: item.variant_id.clone(),
+                strategy_id: item.strategy_id.clone(),
+                materialization_id: item.materialization_id.clone(),
+                validation_bundle_id: validation.report.validation_bundle_id.clone(),
+                status: validation.report.status,
+                proof_status: validation.report.proof_status,
+                advisory: validation.report.advisory.clone(),
+                promotion_id: item.promotion_id.clone(),
+                queue_proposal_id: item.queue_proposal_id.clone(),
+                blocking_reason_names: validation
+                    .report
+                    .blocking_reasons
+                    .iter()
+                    .map(|reason| reason.name.clone())
+                    .collect(),
+            });
+        }
+
+        let ready_count = entries
+            .iter()
+            .filter(|entry| entry.status == EvolutionValidationBundleStatus::ReadyForQueue)
+            .count();
+        let blocked_count = entries.len() - ready_count;
+        let report = EvolutionMutationValidationBatchReport {
+            validation_batch_id: mutation_validation_batch_id(
+                &batch.report.mutation_spec_id,
+                created_at_ms,
+            ),
+            mutation_spec_id: batch.report.mutation_spec_id.clone(),
+            materialization_batch_id: batch.report.batch_id.clone(),
+            created_at_ms,
+            ready_count,
+            blocked_count,
+            entries,
+        };
+        let record = self.validation_batch_store.persist(&report)?;
+        Ok(EvolutionMutationValidationBatchLookup { record, report })
+    }
+
+    pub fn load_validation_batch(
+        &self,
+        validation_batch_id: &str,
+    ) -> Result<Option<EvolutionMutationValidationBatchLookup>, EvolutionMutationError> {
+        Ok(self.validation_batch_store.load(validation_batch_id)?)
+    }
 }
 
 /// Render one durable mutation spec.
@@ -602,6 +1240,142 @@ pub fn render_evolution_mutation_spec(report: &EvolutionMutationSpecReport) -> S
     lines.join("\n")
 }
 
+/// Render one mutation materialization batch.
+pub fn render_evolution_mutation_materialization_batch(
+    report: &EvolutionMutationMaterializationBatchReport,
+) -> String {
+    let mut lines = vec![
+        "Evolution Mutation Materialization Batch".to_string(),
+        format!("Batch ID: {}", report.batch_id),
+        format!("Mutation spec ID: {}", report.mutation_spec_id),
+        format!("Source strategy: {}", report.source_strategy_id),
+        format!("Candidate count: {}", report.candidate_count),
+        "Entries:".to_string(),
+    ];
+    for entry in &report.entries {
+        lines.push(format!(
+            "- {} | strategy={} | materialization={} | dims={}",
+            entry.variant_id,
+            entry.strategy_id,
+            entry.materialization_id,
+            entry.mutation_dimensions.join(",")
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Render one mutation validation batch.
+pub fn render_evolution_mutation_validation_batch(
+    report: &EvolutionMutationValidationBatchReport,
+) -> String {
+    let mut lines = vec![
+        "Evolution Mutation Validation Batch".to_string(),
+        format!("Validation batch ID: {}", report.validation_batch_id),
+        format!("Mutation spec ID: {}", report.mutation_spec_id),
+        format!(
+            "Materialization batch ID: {}",
+            report.materialization_batch_id
+        ),
+        format!(
+            "Ready: {} | Blocked: {}",
+            report.ready_count, report.blocked_count
+        ),
+        "Entries:".to_string(),
+    ];
+    for entry in &report.entries {
+        lines.push(format!(
+            "- {} | strategy={} | validation={} | status={} | proof={}",
+            entry.variant_id,
+            entry.strategy_id,
+            entry.validation_bundle_id,
+            validation_bundle_status_label(entry.status),
+            proof_status_label(entry.proof_status)
+        ));
+    }
+    lines.join("\n")
+}
+
+fn materialize_variant_report(
+    spec: &EvolutionMutationSpecReport,
+    variant: &EvolutionMutationVariantSpec,
+    request: &EvolutionDraftMaterializationRequest,
+    created_at_ms: i64,
+) -> Result<EvolutionMaterializationReport, EvolutionMutationError> {
+    let base_experiment_path = request
+        .base_experiment_path
+        .as_ref()
+        .expect("validated base experiment path");
+    let base_manifest = load_detector_experiment_manifest(base_experiment_path)?;
+    let mut profile = match &base_manifest.candidate {
+        DetectorCandidateManifest::SuspiciousProcessTree { profile, .. } => profile.clone(),
+    };
+    let applied_changes = apply_profile_overrides(&mut profile, request)?;
+    let experiment_name = materialized_experiment_name(&variant.strategy_id, created_at_ms);
+    let experiment_path =
+        materialized_experiment_path(base_experiment_path, &variant.strategy_id, created_at_ms);
+    let manifest = DetectorExperimentManifest {
+        name: experiment_name.clone(),
+        description: format!(
+            "Materialized from mutation spec `{}` variant `{}` using base experiment `{}`",
+            spec.mutation_spec_id, variant.variant_id, base_manifest.name
+        ),
+        corpus: base_manifest.corpus.clone(),
+        verification: base_manifest.verification.clone(),
+        candidate: DetectorCandidateManifest::SuspiciousProcessTree {
+            strategy_id: variant.strategy_id.clone(),
+            description: variant.strategy_description.clone(),
+            profile: profile.clone(),
+        },
+        lineage: ExperimentLineage {
+            parent_strategy_id: spec.source_strategy_id.clone(),
+            mutation: variant.mutation.clone(),
+            rationale: format!("{} | {}", spec.operator_rationale, variant.rationale),
+        },
+        gates: base_manifest.gates.clone(),
+    };
+
+    if let Some(parent) = experiment_path.parent() {
+        fs::create_dir_all(parent).map_err(|source| EvolutionMutationError::ManifestWrite {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let raw = serde_yaml::to_string(&manifest).map_err(|source| {
+        EvolutionMutationError::ManifestSerialize {
+            path: experiment_path.clone(),
+            source,
+        }
+    })?;
+    fs::write(&experiment_path, raw).map_err(|source| EvolutionMutationError::ManifestWrite {
+        path: experiment_path.clone(),
+        source,
+    })?;
+
+    Ok(EvolutionMaterializationReport {
+        materialization_id: mutation_materialization_id(
+            &spec.mutation_spec_id,
+            &variant.variant_id,
+            created_at_ms,
+        ),
+        created_at_ms,
+        draft_id: spec.draft_id.clone(),
+        pressure_id: spec.pressure_id.clone(),
+        source_experiment_id: spec.source_experiment_id.clone(),
+        source_experiment_name: spec.source_experiment_name.clone(),
+        base_experiment_path: spec.base_experiment_path.clone(),
+        experiment_id: experiment_id_for_manifest(&manifest),
+        experiment_name,
+        experiment_path: experiment_path.display().to_string(),
+        strategy_id: variant.strategy_id.clone(),
+        strategy_description: variant.strategy_description.clone(),
+        lineage: manifest.lineage.clone(),
+        profile,
+        manifest_sha256: sha256_hex(&manifest)?,
+        lineage_sha256: sha256_hex(&manifest.lineage)?,
+        applied_changes,
+    })
+}
+
 fn mutation_source_label(kind: EvolutionMutationSourceKind) -> &'static str {
     match kind {
         EvolutionMutationSourceKind::Draft => "draft",
@@ -626,6 +1400,86 @@ fn validate_create_request(
         });
     }
     Ok(())
+}
+
+fn apply_profile_overrides(
+    profile: &mut SuspiciousProcessTreeProfile,
+    request: &EvolutionDraftMaterializationRequest,
+) -> Result<Vec<String>, EvolutionMutationError> {
+    let mut changes = Vec::new();
+
+    for parent in &request.add_suspicious_parents {
+        let parent = parent.to_ascii_lowercase();
+        if !profile
+            .suspicious_parents
+            .iter()
+            .any(|entry| entry.eq_ignore_ascii_case(&parent))
+        {
+            profile.suspicious_parents.push(parent.clone());
+            changes.push(format!("add suspicious parent `{parent}`"));
+        }
+    }
+    for parent in &request.remove_suspicious_parents {
+        let parent = parent.to_ascii_lowercase();
+        let before = profile.suspicious_parents.len();
+        profile
+            .suspicious_parents
+            .retain(|entry| !entry.eq_ignore_ascii_case(&parent));
+        if before != profile.suspicious_parents.len() {
+            changes.push(format!("remove suspicious parent `{parent}`"));
+        }
+    }
+    for child in &request.add_suspicious_children {
+        let child = child.to_ascii_lowercase();
+        if !profile
+            .suspicious_children
+            .iter()
+            .any(|entry| entry.eq_ignore_ascii_case(&child))
+        {
+            profile.suspicious_children.push(child.clone());
+            changes.push(format!("add suspicious child `{child}`"));
+        }
+    }
+    for child in &request.remove_suspicious_children {
+        let child = child.to_ascii_lowercase();
+        let before = profile.suspicious_children.len();
+        profile
+            .suspicious_children
+            .retain(|entry| !entry.eq_ignore_ascii_case(&child));
+        if before != profile.suspicious_children.len() {
+            changes.push(format!("remove suspicious child `{child}`"));
+        }
+    }
+
+    if let Some(value) = request.high_confidence_threshold {
+        if profile.high_confidence_threshold != value {
+            changes.push(format!("set high confidence threshold to {:.3}", value));
+        }
+        profile.high_confidence_threshold = value;
+    }
+    if let Some(value) = request.medium_confidence_threshold {
+        if profile.medium_confidence_threshold != value {
+            changes.push(format!("set medium confidence threshold to {:.3}", value));
+        }
+        profile.medium_confidence_threshold = value;
+    }
+    if profile.medium_confidence_threshold > profile.high_confidence_threshold {
+        return Err(EvolutionMutationError::InvalidMutationSpecRequest {
+            reason: format!(
+                "medium confidence threshold {:.3} cannot exceed high confidence threshold {:.3}",
+                profile.medium_confidence_threshold, profile.high_confidence_threshold
+            ),
+        });
+    }
+
+    normalize_profile_entries(&mut profile.suspicious_parents);
+    normalize_profile_entries(&mut profile.suspicious_children);
+
+    if changes.is_empty() {
+        changes.push("profile copied from base experiment without profile overrides".to_string());
+    }
+
+    Ok(changes)
 }
 
 fn resolve_materialization_pressure_kind(
@@ -750,6 +1604,20 @@ fn normalize_entries(values: &[String]) -> Vec<String> {
     normalized
 }
 
+fn normalize_profile_entries(values: &mut Vec<String>) {
+    let mut normalized = Vec::new();
+    for value in values.drain(..) {
+        let lowered = value.to_ascii_lowercase();
+        if !normalized
+            .iter()
+            .any(|entry: &String| entry.eq_ignore_ascii_case(&lowered))
+        {
+            normalized.push(lowered);
+        }
+    }
+    *values = normalized;
+}
+
 fn mutation_spec_id(
     source_kind: EvolutionMutationSourceKind,
     strategy_id: &str,
@@ -761,6 +1629,87 @@ fn mutation_spec_id(
         strategy_id,
         created_at_ms
     )
+}
+
+fn mutation_materialization_batch_id(mutation_spec_id: &str, created_at_ms: i64) -> String {
+    format!(
+        "evolution_mutation_materialization_batch:{}:{}",
+        sanitize_id(mutation_spec_id),
+        created_at_ms
+    )
+}
+
+fn mutation_validation_batch_id(mutation_spec_id: &str, created_at_ms: i64) -> String {
+    format!(
+        "evolution_mutation_validation_batch:{}:{}",
+        sanitize_id(mutation_spec_id),
+        created_at_ms
+    )
+}
+
+fn mutation_materialization_id(
+    mutation_spec_id: &str,
+    variant_id: &str,
+    created_at_ms: i64,
+) -> String {
+    format!(
+        "evolution_mutation_materialization:{}:{}:{}",
+        sanitize_id(mutation_spec_id),
+        sanitize_id(variant_id),
+        created_at_ms
+    )
+}
+
+fn materialized_experiment_name(strategy_id: &str, created_at_ms: i64) -> String {
+    format!(
+        "mutation_materialized_{}_{}",
+        sanitize_id(strategy_id),
+        created_at_ms
+    )
+}
+
+fn materialized_experiment_path(
+    base_experiment_path: &Path,
+    strategy_id: &str,
+    created_at_ms: i64,
+) -> PathBuf {
+    let parent = base_experiment_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    parent.join(format!(
+        "mutation-{}-{}.yaml",
+        sanitize_id(strategy_id),
+        created_at_ms
+    ))
+}
+
+fn experiment_id_for_manifest(manifest: &DetectorExperimentManifest) -> String {
+    format!(
+        "experiment:{}:{}",
+        manifest.name,
+        manifest.candidate.strategy_id()
+    )
+}
+
+fn validation_bundle_status_label(value: EvolutionValidationBundleStatus) -> &'static str {
+    match value {
+        EvolutionValidationBundleStatus::ReadyForQueue => "ready_for_queue",
+        EvolutionValidationBundleStatus::Blocked => "blocked",
+    }
+}
+
+fn proof_status_label(value: EvolutionProposalProofStatus) -> &'static str {
+    match value {
+        EvolutionProposalProofStatus::Proved => "proved",
+        EvolutionProposalProofStatus::Missing => "missing",
+        EvolutionProposalProofStatus::Inconsistent => "inconsistent",
+    }
+}
+
+fn sha256_hex<T: Serialize>(value: &T) -> Result<String, EvolutionMutationError> {
+    let bytes = serde_json::to_vec(value)?;
+    let digest = Sha256::digest(bytes);
+    Ok(format!("{digest:x}"))
 }
 
 fn sanitize_id(value: &str) -> String {
@@ -788,15 +1737,27 @@ struct EvolutionMutationIndex {
     entries: Vec<EvolutionMutationSpecRecord>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct EvolutionMutationMaterializationBatchIndex {
+    entries: Vec<EvolutionMutationMaterializationBatchRecord>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct EvolutionMutationValidationBatchIndex {
+    entries: Vec<EvolutionMutationValidationBatchRecord>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         DefaultEvolutionMutationHarness, EvolutionDraftMaterializationRequest,
         EvolutionMutationProfileOverrides, EvolutionMutationSourceKind,
         EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
-        render_evolution_mutation_spec,
+        EvolutionValidationBundleStatus, render_evolution_mutation_materialization_batch,
+        render_evolution_mutation_spec, render_evolution_mutation_validation_batch,
     };
     use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
+    use crate::evolution::DefaultEvolutionProofHarness;
     use crate::replay::DefaultReplayHarness;
     use crate::strategy::DefaultStrategyScorecardHarness;
     use std::fs;
@@ -854,6 +1815,8 @@ mod tests {
         let reconciliation_dir = root.join("reconciliations");
         let queue_dir = root.join("queue");
         let mutation_dir = root.join("mutations");
+        let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
+        let mutation_validation_batch_dir = root.join("mutation-validation-batches");
         let base_experiment = copy_experiment_fixture(&root, "office-control-copy");
 
         let replay = DefaultReplayHarness::from_path(ruleset_path(), &replay_dir).unwrap();
@@ -904,7 +1867,12 @@ mod tests {
             )
             .unwrap();
 
-        let mutation = DefaultEvolutionMutationHarness::from_path(&mutation_dir).unwrap();
+        let mutation = DefaultEvolutionMutationHarness::from_path(
+            &mutation_dir,
+            &mutation_materialization_batch_dir,
+            &mutation_validation_batch_dir,
+        )
+        .unwrap();
         let spec = mutation
             .create_mutation_spec(
                 &drafting,
@@ -973,6 +1941,8 @@ mod tests {
         let validation_dir = root.join("validation");
         let reconciliation_dir = root.join("reconciliations");
         let mutation_dir = root.join("mutations");
+        let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
+        let mutation_validation_batch_dir = root.join("mutation-validation-batches");
         let queue_dir = root.join("queue");
         let base_experiment = copy_experiment_fixture(&root, "office-control-seed");
 
@@ -1031,7 +2001,12 @@ mod tests {
             })
             .unwrap();
 
-        let mutation = DefaultEvolutionMutationHarness::from_path(&mutation_dir).unwrap();
+        let mutation = DefaultEvolutionMutationHarness::from_path(
+            &mutation_dir,
+            &mutation_materialization_batch_dir,
+            &mutation_validation_batch_dir,
+        )
+        .unwrap();
         let spec = mutation
             .create_mutation_spec(
                 &drafting,
@@ -1075,5 +2050,296 @@ mod tests {
             materialization.report.experiment_path
         );
         assert_eq!(spec.report.variants.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn mutation_batch_materializes_variants() {
+        let root = unique_temp_dir("mutation-batch-materialize");
+        let replay_dir = root.join("replay");
+        let experiment_dir = root.join("experiments");
+        let verification_dir = root.join("verifications");
+        let memory_dir = root.join("memory");
+        let scorecard_dir = root.join("scorecards");
+        let pressure_dir = root.join("pressures");
+        let draft_dir = root.join("drafts");
+        let promotion_dir = root.join("promotions");
+        let materialization_dir = root.join("materializations");
+        let validation_dir = root.join("validation");
+        let reconciliation_dir = root.join("reconciliations");
+        let mutation_dir = root.join("mutations");
+        let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
+        let mutation_validation_batch_dir = root.join("mutation-validation-batches");
+        let queue_dir = root.join("queue");
+        let base_experiment = copy_experiment_fixture(&root, "office-control-batch");
+
+        let replay = DefaultReplayHarness::from_path(ruleset_path(), &replay_dir).unwrap();
+        let verification = replay
+            .evaluate_verification_path(office_control_experiment(), &verification_dir)
+            .await
+            .unwrap();
+        let scorecards =
+            DefaultStrategyScorecardHarness::from_path(ruleset_path(), &memory_dir, &scorecard_dir)
+                .unwrap();
+        let scorecard = scorecards
+            .create_scorecard(
+                &replay,
+                office_control_experiment(),
+                &experiment_dir,
+                &verification_dir,
+                &verification.report.verification_id,
+            )
+            .await
+            .unwrap();
+        let drafting = DefaultEvolutionDraftingHarness::from_path(
+            ruleset_path(),
+            &pressure_dir,
+            &draft_dir,
+            &promotion_dir,
+            &materialization_dir,
+            &validation_dir,
+            &reconciliation_dir,
+        )
+        .unwrap();
+        let pressure = drafting
+            .create_pressure_from_scorecard(&scorecards, &scorecard.report.scorecard_id)
+            .unwrap();
+        let draft = drafting
+            .create_draft(EvolutionDraftCreateRequest {
+                pressure_id: pressure.report.pressure_id.clone(),
+                strategy_id: "office_batch_parent_v1".to_string(),
+                strategy_description: "batch mutation parent".to_string(),
+                mutation: "guided_batch_seed".to_string(),
+                rationale: "materialize two explicit variants from one spec".to_string(),
+            })
+            .unwrap();
+        let promotion = drafting
+            .promote_draft(
+                &queue_dir,
+                &draft.report.draft_id,
+                "hold a reviewed parent queue ref",
+            )
+            .unwrap();
+        let mutation = DefaultEvolutionMutationHarness::from_path(
+            &mutation_dir,
+            &mutation_materialization_batch_dir,
+            &mutation_validation_batch_dir,
+        )
+        .unwrap();
+        let spec = mutation
+            .create_mutation_spec(
+                &drafting,
+                EvolutionMutationSpecCreateRequest {
+                    draft_id: Some(draft.report.draft_id.clone()),
+                    materialization_id: None,
+                    base_experiment_path: Some(base_experiment),
+                    rationale: "compare a control-preserving variant with a broader parent match"
+                        .to_string(),
+                },
+            )
+            .unwrap();
+        let spec = mutation
+            .append_variant(
+                &spec.report.mutation_spec_id,
+                EvolutionMutationVariantCreateRequest {
+                    variant_id: Some("control-copy".to_string()),
+                    strategy_id: "office_batch_control_v1".to_string(),
+                    strategy_description: "preserve the control profile".to_string(),
+                    mutation: "copy_control_profile".to_string(),
+                    rationale: "keep one no-op control branch for comparison".to_string(),
+                    overrides: EvolutionMutationProfileOverrides::default(),
+                },
+            )
+            .unwrap();
+        let _spec = mutation
+            .append_variant(
+                &spec.report.mutation_spec_id,
+                EvolutionMutationVariantCreateRequest {
+                    variant_id: Some("python-parent".to_string()),
+                    strategy_id: "office_batch_python_parent_v1".to_string(),
+                    strategy_description: "broaden suspicious parent matching to python"
+                        .to_string(),
+                    mutation: "broaden_parent_set".to_string(),
+                    rationale: "explicitly compare a broader parent signal".to_string(),
+                    overrides: EvolutionMutationProfileOverrides {
+                        add_suspicious_parents: vec!["python".to_string()],
+                        ..EvolutionMutationProfileOverrides::default()
+                    },
+                },
+            )
+            .unwrap();
+
+        let batch = mutation
+            .materialize_batch(&drafting, &spec.report.mutation_spec_id)
+            .unwrap();
+        assert_eq!(batch.report.candidate_count, 2);
+        assert!(
+            batch
+                .report
+                .entries
+                .iter()
+                .all(|entry| entry.queue_proposal_id.as_deref()
+                    == Some(promotion.report.queue_proposal_id.as_str()))
+        );
+        assert!(
+            render_evolution_mutation_materialization_batch(&batch.report)
+                .contains("Evolution Mutation Materialization Batch")
+        );
+    }
+
+    #[tokio::test]
+    async fn mutation_batch_refreshes_ready_and_blocked_validation() {
+        let root = unique_temp_dir("mutation-batch-validation");
+        let replay_dir = root.join("replay");
+        let experiment_dir = root.join("experiments");
+        let verification_dir = root.join("verifications");
+        let shadow_dir = root.join("shadows");
+        let proof_dir = root.join("proofs");
+        let memory_dir = root.join("memory");
+        let scorecard_dir = root.join("scorecards");
+        let pressure_dir = root.join("pressures");
+        let draft_dir = root.join("drafts");
+        let promotion_dir = root.join("promotions");
+        let materialization_dir = root.join("materializations");
+        let validation_dir = root.join("validation");
+        let reconciliation_dir = root.join("reconciliations");
+        let mutation_dir = root.join("mutations");
+        let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
+        let mutation_validation_batch_dir = root.join("mutation-validation-batches");
+        let queue_dir = root.join("queue");
+        let base_experiment = office_control_experiment();
+
+        let replay = DefaultReplayHarness::from_path(ruleset_path(), &replay_dir).unwrap();
+        let verification = replay
+            .evaluate_verification_path(office_control_experiment(), &verification_dir)
+            .await
+            .unwrap();
+        let proofs = DefaultEvolutionProofHarness::from_path(ruleset_path(), &proof_dir).unwrap();
+        let scorecards =
+            DefaultStrategyScorecardHarness::from_path(ruleset_path(), &memory_dir, &scorecard_dir)
+                .unwrap();
+        let scorecard = scorecards
+            .create_scorecard(
+                &replay,
+                office_control_experiment(),
+                &experiment_dir,
+                &verification_dir,
+                &verification.report.verification_id,
+            )
+            .await
+            .unwrap();
+        let drafting = DefaultEvolutionDraftingHarness::from_path(
+            ruleset_path(),
+            &pressure_dir,
+            &draft_dir,
+            &promotion_dir,
+            &materialization_dir,
+            &validation_dir,
+            &reconciliation_dir,
+        )
+        .unwrap();
+        let pressure = drafting
+            .create_pressure_from_scorecard(&scorecards, &scorecard.report.scorecard_id)
+            .unwrap();
+        let draft = drafting
+            .create_draft(EvolutionDraftCreateRequest {
+                pressure_id: pressure.report.pressure_id.clone(),
+                strategy_id: "office_validation_parent_v1".to_string(),
+                strategy_description: "validation parent".to_string(),
+                mutation: "guided_validation_seed".to_string(),
+                rationale: "refresh two variants through the existing validation lane".to_string(),
+            })
+            .unwrap();
+        drafting
+            .promote_draft(
+                &queue_dir,
+                &draft.report.draft_id,
+                "hold the reviewed queue ref while validating variants",
+            )
+            .unwrap();
+        let mutation = DefaultEvolutionMutationHarness::from_path(
+            &mutation_dir,
+            &mutation_materialization_batch_dir,
+            &mutation_validation_batch_dir,
+        )
+        .unwrap();
+        let spec = mutation
+            .create_mutation_spec(
+                &drafting,
+                EvolutionMutationSpecCreateRequest {
+                    draft_id: Some(draft.report.draft_id.clone()),
+                    materialization_id: None,
+                    base_experiment_path: Some(base_experiment),
+                    rationale: "compare one ready variant and one blocked variant".to_string(),
+                },
+            )
+            .unwrap();
+        let spec = mutation
+            .append_variant(
+                &spec.report.mutation_spec_id,
+                EvolutionMutationVariantCreateRequest {
+                    variant_id: Some("control-copy".to_string()),
+                    strategy_id: "office_validation_control_v1".to_string(),
+                    strategy_description: "keep the control profile".to_string(),
+                    mutation: "copy_control_profile".to_string(),
+                    rationale: "preserve a ready branch".to_string(),
+                    overrides: EvolutionMutationProfileOverrides::default(),
+                },
+            )
+            .unwrap();
+        let spec = mutation
+            .append_variant(
+                &spec.report.mutation_spec_id,
+                EvolutionMutationVariantCreateRequest {
+                    variant_id: Some("python-parent".to_string()),
+                    strategy_id: "office_validation_python_parent_v1".to_string(),
+                    strategy_description: "broaden suspicious parent matching to python"
+                        .to_string(),
+                    mutation: "broaden_parent_set".to_string(),
+                    rationale: "preserve one explicitly blocked branch".to_string(),
+                    overrides: EvolutionMutationProfileOverrides {
+                        add_suspicious_parents: vec!["python".to_string()],
+                        ..EvolutionMutationProfileOverrides::default()
+                    },
+                },
+            )
+            .unwrap();
+
+        let batch = mutation
+            .materialize_batch(&drafting, &spec.report.mutation_spec_id)
+            .unwrap();
+        let validation_batch = mutation
+            .refresh_validation_batch(
+                &drafting,
+                &replay,
+                &proofs,
+                &scorecards,
+                &experiment_dir,
+                &verification_dir,
+                &shadow_dir,
+                &batch.report.batch_id,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(validation_batch.report.ready_count, 1);
+        assert_eq!(validation_batch.report.blocked_count, 1);
+        assert!(
+            validation_batch
+                .report
+                .entries
+                .iter()
+                .any(|entry| entry.status == EvolutionValidationBundleStatus::Blocked)
+        );
+        assert!(
+            render_evolution_mutation_validation_batch(&validation_batch.report)
+                .contains("Evolution Mutation Validation Batch")
+        );
+
+        for entry in &batch.report.entries {
+            let path = PathBuf::from(&entry.experiment_path);
+            if path.exists() {
+                fs::remove_file(path).unwrap();
+            }
+        }
     }
 }
