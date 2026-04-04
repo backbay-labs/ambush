@@ -4,6 +4,10 @@ use swarm_runtime::control::{
     DefaultControlPlane, IncidentLookupSelector, InvestigationLookupSelector,
     OperatorControlOutput, ReplayLookupSelector, render_output,
 };
+use swarm_runtime::drafting::{
+    DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest, render_evolution_draft,
+    render_evolution_draft_promotion, render_evolution_pressure,
+};
 use swarm_runtime::evolution::{
     DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness,
     EvolutionProposalCreateRequest, EvolutionProposalDecisionAction, EvolutionProposalReviewState,
@@ -69,6 +73,15 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/evolution-handoffs")]
     evolution_handoff_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evolution-pressures")]
+    evolution_pressure_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/evolution-drafts")]
+    evolution_draft_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/evolution-draft-promotions")]
+    evolution_draft_promotion_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -109,12 +122,18 @@ enum Command {
     StrategyMemoryHistory(StrategyMemoryHistoryArgs),
     StrategyScorecardCreate(StrategyScorecardCreateArgs),
     StrategyScorecardResult(StrategyScorecardResultArgs),
+    EvolutionPressureCreate(EvolutionPressureCreateArgs),
+    EvolutionPressureResult(EvolutionPressureResultArgs),
     EvolutionProofCreate(EvolutionProofCreateArgs),
     EvolutionProofResult(EvolutionProofResultArgs),
     EvolutionQueueCreate(EvolutionQueueCreateArgs),
     EvolutionQueueResult(EvolutionQueueResultArgs),
     EvolutionQueueList(EvolutionQueueListArgs),
     EvolutionQueueDecision(EvolutionQueueDecisionArgs),
+    EvolutionDraftCreate(EvolutionDraftCreateArgs),
+    EvolutionDraftResult(EvolutionDraftResultArgs),
+    EvolutionDraftPromote(EvolutionDraftPromoteArgs),
+    EvolutionDraftPromotionResult(EvolutionDraftPromotionResultArgs),
     EvolutionHandoffCreate(EvolutionHandoffCreateArgs),
     EvolutionHandoffResult(EvolutionHandoffResultArgs),
     EvolutionHandoffLaunchCanary(EvolutionHandoffLaunchCanaryArgs),
@@ -367,6 +386,29 @@ struct StrategyScorecardResultArgs {
     scorecard_id: String,
 }
 
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("selector")
+        .required(true)
+        .args(["experiment_id", "verification_id", "scorecard_id"]),
+))]
+struct EvolutionPressureCreateArgs {
+    #[arg(long)]
+    experiment_id: Option<String>,
+
+    #[arg(long)]
+    verification_id: Option<String>,
+
+    #[arg(long)]
+    scorecard_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionPressureResultArgs {
+    #[arg(long)]
+    pressure_id: String,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum EvolutionQueueReviewStateArg {
     PendingReview,
@@ -460,6 +502,45 @@ struct EvolutionQueueDecisionArgs {
 }
 
 #[derive(Debug, Args)]
+struct EvolutionDraftCreateArgs {
+    #[arg(long)]
+    pressure_id: String,
+
+    #[arg(long)]
+    strategy_id: String,
+
+    #[arg(long)]
+    strategy_description: String,
+
+    #[arg(long)]
+    mutation: String,
+
+    #[arg(long)]
+    rationale: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionDraftResultArgs {
+    #[arg(long)]
+    draft_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionDraftPromoteArgs {
+    #[arg(long)]
+    draft_id: String,
+
+    #[arg(long)]
+    reason: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionDraftPromotionResultArgs {
+    #[arg(long)]
+    promotion_id: String,
+}
+
+#[derive(Debug, Args)]
 struct EvolutionHandoffCreateArgs {
     #[arg(long)]
     proposal_id: String,
@@ -501,6 +582,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         DefaultEvolutionQueueHarness::from_path(&cli.config, &cli.evolution_queue_results_dir)?;
     let evolution_handoff_harness =
         DefaultEvolutionHandoffHarness::from_path(&cli.config, &cli.evolution_handoff_results_dir)?;
+    let evolution_drafting_harness = DefaultEvolutionDraftingHarness::from_path(
+        &cli.config,
+        &cli.evolution_pressure_results_dir,
+        &cli.evolution_draft_results_dir,
+        &cli.evolution_draft_promotion_results_dir,
+    )?;
 
     let output = match cli.command {
         Command::Status => OperatorControlOutput::Status(Box::new(plane.status().await?)),
@@ -926,6 +1013,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return Ok(());
         }
+        Command::EvolutionPressureCreate(args) => {
+            let lookup = if let Some(experiment_id) = args.experiment_id.as_deref() {
+                evolution_drafting_harness.create_pressure_from_experiment(
+                    &replay_harness,
+                    &cli.experiment_results_dir,
+                    experiment_id,
+                )?
+            } else if let Some(verification_id) = args.verification_id.as_deref() {
+                evolution_drafting_harness.create_pressure_from_verification(
+                    &replay_harness,
+                    &cli.verification_results_dir,
+                    verification_id,
+                )?
+            } else {
+                evolution_drafting_harness.create_pressure_from_scorecard(
+                    &strategy_scorecard_harness,
+                    args.scorecard_id.as_deref().expect("scorecard id"),
+                )?
+            };
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_pressure(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionPressureResult(args) => {
+            let lookup = evolution_drafting_harness
+                .load_pressure(&args.pressure_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution selection pressure report was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_pressure(&lookup.report));
+            }
+            return Ok(());
+        }
         Command::EvolutionProofCreate(args) => {
             let lookup = evolution_proof_harness.create_proof(
                 args.experiment,
@@ -1018,6 +1147,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_evolution_proposal(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionDraftCreate(args) => {
+            let lookup = evolution_drafting_harness.create_draft(EvolutionDraftCreateRequest {
+                pressure_id: args.pressure_id,
+                strategy_id: args.strategy_id,
+                strategy_description: args.strategy_description,
+                mutation: args.mutation,
+                rationale: args.rationale,
+            })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_draft(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionDraftResult(args) => {
+            let lookup = evolution_drafting_harness
+                .load_draft(&args.draft_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution proposal draft was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_draft(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionDraftPromote(args) => {
+            let lookup = evolution_drafting_harness.promote_draft(
+                &cli.evolution_queue_results_dir,
+                &args.draft_id,
+                &args.reason,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_draft_promotion(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionDraftPromotionResult(args) => {
+            let lookup = evolution_drafting_harness
+                .load_draft_promotion(&args.promotion_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution draft promotion record was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_draft_promotion(&lookup.report));
             }
             return Ok(());
         }

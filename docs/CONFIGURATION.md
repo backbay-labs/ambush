@@ -505,6 +505,64 @@ Scorecards compare the current production baseline and the verified candidate us
 
 This lane is advisory only. The scorecard does not approve, deploy, or promote a detector by itself.
 
+### Selection Pressure And Proposal Drafts
+
+The repo now ships an explicit off-hot-path drafting lane ahead of the verified queue. This turns replay regressions, verification drift, and strategy-memory gaps into durable pressure reports, then lets operators package one draft and promote it into the reviewed queue without auto-enqueueing rollout or bypassing proof gates.
+
+The current slice stays narrow:
+
+- pressure reports are repo-owned durable artifacts under `data/evolution-pressures/`
+- draft artifacts are repo-owned durable artifacts under `data/evolution-drafts/`
+- draft-promotion records are durable links under `data/evolution-draft-promotions/`
+- draft promotion creates a reviewed queue entry only; it does not create proof, verification, shadow, handoff, or canary artifacts
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- strategy-scorecard-create \
+  --experiment experiments/office-baseline-control.yaml \
+  --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-pressure-create \
+  --scorecard-id YOUR_SCORECARD_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-pressure-result \
+  --pressure-id YOUR_PRESSURE_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-draft-create \
+  --pressure-id YOUR_PRESSURE_ID \
+  --strategy-id office_memory_followup_v1 \
+  --strategy-description "tighten process ancestry while keeping office controls" \
+  --mutation memory_gap_followup \
+  --rationale "scorecard fell back to replay because live evidence is sparse"
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-draft-promote \
+  --draft-id YOUR_DRAFT_ID \
+  --reason "queue this draft for explicit operator review"
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-draft-promotion-result \
+  --promotion-id YOUR_PROMOTION_ID
+```
+
+Pressure sources currently supported:
+
+- `evolution-pressure-create --experiment-id ...` for replay regressions and failed offline experiment gates
+- `evolution-pressure-create --verification-id ...` for failing invariants and preserved counterexamples
+- `evolution-pressure-create --scorecard-id ...` for sparse or unfavorable live rollout memory
+
+Pressure and draft artifacts preserve:
+
+- stable IDs plus source-artifact references
+- candidate and parent-strategy lineage hints
+- explicit rationale for why additional detector work is warranted
+- explicit operator-supplied mutation and rationale hints on each draft
+
+Failure behavior:
+
+- `evolution-pressure-create` exits nonzero when the selected artifact shows no drafting pressure
+- `evolution-draft-promote` exits nonzero when the draft has already been promoted once
+- promoted queue entries remain blocked from canary admission until later proof-backed evidence is produced
+
 ### Evolution Proofs And Verified Proposal Queue
 
 The repo now ships a proof-backed evolution queue for detector proposals. This sits above the advisory scorecard lane and below any future governance-backed rollout system.
