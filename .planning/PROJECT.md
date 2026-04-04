@@ -10,29 +10,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.18 Signed Evidence And External Verification` shipped on 2026-04-04.
+`v1.19 Local Evidence Review Surface` shipped on 2026-04-04.
 
 **What is now real:**
-- operators can now export signed evidence bundles for stable-ID replay, investigation, incident, maintenance, canary, promotion, verification, shadow, and promotion-review artifacts
-- evidence bundles preserve canonical payload bytes, SHA-256 digests, detached Ed25519 signatures, signer metadata, timestamps, related refs, and receipt-chain context for offline verification
-- local verification now persists explicit pass or fail reports and the authenticated operator surface can reload evidence bundles, verifications, and promotion evidence packets without raw file inspection
-- promotion evidence packets now tie rollout outcome, fallback lineage, and verified supporting evidence into one advisory packet while still failing closed when evidence is missing or invalid
-- the trust boundary remains single-node and advisory: quorum approvals, signed votes, and distributed promotion governance are still deferred
-
-## Current Milestone
-
-`v1.19 Local Evidence Review Surface` is now active.
-
-**Goal:** add a richer local review surface above the authenticated operator API so signed evidence, verification results, and promotion evidence packets are inspectable without raw JSON-first workflows.
-
-**Target features:**
-- read-only local review surface above the authenticated HTTP operator API
-- dedicated signed evidence and verification inspection flows
-- promotion evidence packet and rollout-lineage review without bypassing existing audit trails
+- operators can now inspect signed evidence, verification reports, and promotion evidence packets through a local authenticated HTML review surface above the existing operator API
+- review pages reuse the same bearer-auth boundary, stable IDs, and authenticated JSON contracts instead of introducing a second control plane or reading raw store files
+- evidence review now supports subject-kind and verification-status filtering, stable-ID drill-down, signer metadata, verification checks, and related lineage navigation
+- promotion evidence review now surfaces recommendation state, fallback lineage, and supporting evidence verification context in one advisory-only flow
+- the trust boundary remains single-node and advisory: browser review stays read-only, write paths still route through existing authenticated maintenance or rollout APIs, and quorum governance remains deferred
 
 ## Next Planning Step
 
-Plan the first phase with `$gsd-plan-phase 59`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -103,21 +92,15 @@ Plan the first phase with `$gsd-plan-phase 59`.
 
 ### Most Recently Shipped
 
-- ✓ Operators can now export signed evidence bundles for stable-ID runtime and rollout artifacts through `swarmctl` — v1.18
-- ✓ Local verification records now detect canonical payload, digest, signature, and signer drift and can be reloaded through the authenticated operator surface — v1.18
-- ✓ Promotion evidence packets now preserve rollout lineage plus verified supporting evidence while staying advisory and single-node — v1.18
-
-### Current Milestone
-
-- Signed evidence and external verification are now shipped and form the data contract for a richer local review surface.
-- `v1.19` will add a read-only local review client above the authenticated HTTP surface for evidence bundles, verification results, and promotion evidence packets.
-- Quorum approvals, signed votes, and multi-user or federated operator workflows remain deferred until independent trust boundaries exist.
+- ✓ Operators can now open a local authenticated HTML review shell above the existing operator API for signed evidence, verification results, and promotion evidence packets — v1.19
+- ✓ Evidence review now supports subject-kind and verification-status filtering, stable-ID drill-down, signer metadata, verification checks, and related lineage links — v1.19
+- ✓ Promotion evidence review now presents recommendation state, fallback lineage, and supporting evidence status in one advisory-only flow without bypassing audit trails — v1.19
 
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
-- Multi-user or internet-exposed operator control plane — this cycle stays local, authenticated, and single-node while improving review ergonomics
-- Actual quorum voting or distributed consensus for promotion — independent trust boundaries still do not exist, so this cycle remains review-only
+- Multi-user or internet-exposed operator control plane — the operator surface remains local, authenticated, and single-node
+- Actual quorum voting or distributed consensus for promotion — independent trust boundaries still do not exist, so the review surface remains advisory-only
 - Fleet-wide or partial-fleet rollout of evolved strategies — the runtime still supports only a bounded single-node promotion path
 - Automatic ranked-candidate or portfolio promotion from batch scores — portfolio curation remains explicit and operator-reviewed
 - Automatic canary or production launch from portfolio entries — rollout gates remain explicit and separate from offline ranking
@@ -131,7 +114,7 @@ Plan the first phase with `$gsd-plan-phase 59`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, and signed evidence lane: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets. `v1.18` closed the gap between internal runtime artifacts and externally checkable evidence without widening autonomy into quorum governance or a multi-user control plane. The next missing seam is a richer local review surface so operators can inspect that evidence and rollout lineage without raw JSON-first workflows.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, and local review surface: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review. `v1.19` closed the remaining JSON-first inspection gap without widening autonomy into quorum governance or a second browser-write control plane. The next cycle has not been selected yet.
 
 ## Constraints
 
@@ -194,4 +177,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Keep the next review layer read-only and local-first | The authenticated HTTP surface and signed evidence contracts already exist, so the next step should improve inspection without creating a second mutating control plane | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 for milestone v1.19 planning*
+*Last updated: 2026-04-04 after archiving milestone v1.19*

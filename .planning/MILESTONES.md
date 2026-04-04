@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.19 Local Evidence Review Surface (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- operators can now open a local authenticated HTML review shell above the existing operator API instead of relying on raw JSON-first inspection
+- signed evidence and verification review now support filtering, stable-ID drill-down, signer metadata, verification checks, and related-lineage navigation
+- promotion evidence packets can now be reviewed with recommendation, fallback lineage, and supporting evidence status in one advisory-only flow
+
+---
+
 ## v1.18 Signed Evidence And External Verification (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks
