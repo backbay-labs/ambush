@@ -52,18 +52,18 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVOL-17 | Pending roadmap | Pending |
-| EVOL-18 | Pending roadmap | Pending |
-| EVOL-19 | Pending roadmap | Pending |
-| EVOL-20 | Pending roadmap | Pending |
-| EVOL-21 | Pending roadmap | Pending |
-| EVOL-22 | Pending roadmap | Pending |
+| EVOL-17 | Phase 44 | Pending |
+| EVOL-18 | Phase 44 | Pending |
+| EVOL-19 | Phase 45 | Pending |
+| EVOL-20 | Phase 45 | Pending |
+| EVOL-21 | Phase 46 | Pending |
+| EVOL-22 | Phase 46 | Pending |
 
 **Coverage:**
 - v1.14 requirements: 6 total
-- Mapped to phases: 0
-- Unmapped: 6 ⚠️
+- Mapped to phases: 6
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after milestone v1.14 requirements definition*
+*Last updated: 2026-04-04 after milestone v1.14 roadmap creation*
