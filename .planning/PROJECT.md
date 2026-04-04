@@ -21,15 +21,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current Milestone
 
-No active milestone. `v1.18 Signed Evidence And External Verification` is archived.
+`v1.19 Local Evidence Review Surface` is now active.
 
-**Next step:** start the next cycle with `$gsd-new-milestone`.
+**Goal:** add a richer local review surface above the authenticated operator API so signed evidence, verification results, and promotion evidence packets are inspectable without raw JSON-first workflows.
 
-**Last completed goal:** turn the runtime's internal audit trail into exportable, locally verifiable signed evidence without jumping early into distributed governance.
+**Target features:**
+- read-only local review surface above the authenticated HTTP operator API
+- dedicated signed evidence and verification inspection flows
+- promotion evidence packet and rollout-lineage review without bypassing existing audit trails
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Plan the first phase with `$gsd-plan-phase 59`.
 
 ## Requirements
 
@@ -104,21 +107,22 @@ Start the next cycle with `$gsd-new-milestone`.
 - ✓ Local verification records now detect canonical payload, digest, signature, and signer drift and can be reloaded through the authenticated operator surface — v1.18
 - ✓ Promotion evidence packets now preserve rollout lineage plus verified supporting evidence while staying advisory and single-node — v1.18
 
-### No Active Milestone
+### Current Milestone
 
-- Signed evidence and external verification are now shipped and archived.
+- Signed evidence and external verification are now shipped and form the data contract for a richer local review surface.
+- `v1.19` will add a read-only local review client above the authenticated HTTP surface for evidence bundles, verification results, and promotion evidence packets.
 - Quorum approvals, signed votes, and multi-user or federated operator workflows remain deferred until independent trust boundaries exist.
-- The next milestone has not been selected yet.
 
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
-- Multi-user or internet-exposed operator control plane — this cycle stays local, authenticated, and single-node while hardening evidence exchange
-- Actual quorum voting or distributed consensus for promotion — independent trust boundaries still do not exist, so this cycle prepares evidence instead of implementing BFT
+- Multi-user or internet-exposed operator control plane — this cycle stays local, authenticated, and single-node while improving review ergonomics
+- Actual quorum voting or distributed consensus for promotion — independent trust boundaries still do not exist, so this cycle remains review-only
 - Fleet-wide or partial-fleet rollout of evolved strategies — the runtime still supports only a bounded single-node promotion path
 - Automatic ranked-candidate or portfolio promotion from batch scores — portfolio curation remains explicit and operator-reviewed
 - Automatic canary or production launch from portfolio entries — rollout gates remain explicit and separate from offline ranking
 - Automatic quorum voting or signed promotion receipts — governance is still deferred until independent trust boundaries become real
+- Direct write or maintenance actions from the review surface — bounded mutations must continue through the existing authenticated maintenance API and audit trail
 - Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled
 - Python runtime resurrection or PyO3 expansion — conflicts with the Rust-first critical lane
@@ -127,7 +131,7 @@ Start the next cycle with `$gsd-new-milestone`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, and signed evidence lane: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets. `v1.18` closed the gap between internal runtime artifacts and externally checkable evidence without widening autonomy into quorum governance or a multi-user control plane. No next milestone has been selected yet.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, and signed evidence lane: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets. `v1.18` closed the gap between internal runtime artifacts and externally checkable evidence without widening autonomy into quorum governance or a multi-user control plane. The next missing seam is a richer local review surface so operators can inspect that evidence and rollout lineage without raw JSON-first workflows.
 
 ## Constraints
 
@@ -186,6 +190,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Choose an authenticated operator surface as the next milestone | Governance is still blocked on real trust boundaries, while the runtime already exposes serializable reports and stable-ID artifact views that can back a local authenticated surface now | ✓ Chosen |
 | Start with a local HTTP surface instead of TUI or multi-user control | The repo has no UI stack today, and an authenticated API layer is the smallest extension beyond `swarmctl` that preserves the existing single-node operating model | ✓ Chosen |
 | Choose signed evidence and external verification as the next milestone | The operator surface and durable artifact lanes are now real, while the docs still defer actual quorum governance until independent trust boundaries exist | ✓ Chosen |
+| Choose a local evidence review surface as the next milestone | Future requirements now point to a richer local review client, while quorum governance is still explicitly deferred until independent trust boundaries exist | ✓ Chosen |
+| Keep the next review layer read-only and local-first | The authenticated HTTP surface and signed evidence contracts already exist, so the next step should improve inspection without creating a second mutating control plane | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after archiving milestone v1.18*
+*Last updated: 2026-04-04 for milestone v1.19 planning*

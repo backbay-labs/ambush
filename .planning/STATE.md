@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.18
-milestone_name: signed-evidence-and-external-verification
-status: milestone-complete
-last_updated: "2026-04-04T21:21:29Z"
+milestone: v1.19
+milestone_name: local-evidence-review-surface
+status: planning
+last_updated: "2026-04-04T21:34:07Z"
 progress:
   total_phases: 3
-  completed_phases: 3
+  completed_phases: 0
   total_plans: 3
-  completed_plans: 3
+  completed_plans: 0
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-04)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** no active milestone. `v1.18 Signed Evidence And External Verification` is archived.
+**Current focus:** `v1.19 Local Evidence Review Surface` is active and Phase 59 is next.
 
 ## Memory
 
@@ -34,8 +34,9 @@ See: `.planning/PROJECT.md` (updated 2026-04-04)
 - `v1.17` is archived with a passing milestone audit and a clean worktree.
 - `v1.18` added signed evidence bundle export, local verification records, authenticated evidence read endpoints, and advisory promotion evidence packets.
 - Signed evidence now covers replay, investigation, incident, maintenance, canary, promotion, verification, shadow, and promotion-review artifacts through one repo-owned contract.
-- `v1.18` is now archived with a passing milestone audit and no active follow-on milestone yet.
+- `v1.18` is now archived with a passing milestone audit and a clean worktree for the milestone-managed files.
+- `v1.19` will focus on a richer local evidence review surface above the authenticated HTTP API instead of jumping early into quorum governance or multi-user tooling.
 
 ## Next Command
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 59`
