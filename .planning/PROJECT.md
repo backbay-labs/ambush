@@ -18,13 +18,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - draft promotion now writes a durable reviewed-queue entry plus a separate promotion record that preserves the originating pressure report and operator reason
 - the evolution ladder now extends through operator-driven draft packaging: evidence -> pressure report -> draft -> reviewed queue
 
-## Current Milestone
+## Current Milestone: v1.12 Draft Materialization And Validation Bundles
 
-No active milestone. `v1.11` is complete and archived.
+**Goal:** turn reviewed draft proposals into materialized candidate artifacts plus refreshed validation bundles, then reconnect them to the existing verified rollout ladder without hand-editing or duplicate queue state.
+
+**Target features:**
+- materialize repo-owned experiment manifests from stable draft artifacts through `swarmctl`
+- refresh verification, proof, and shadow evidence from one materialized candidate lane
+- reconcile draft-backed queue entries with validated evidence so they can feed the existing handoff and canary path
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Start execution with `$gsd-plan-phase 38`.
 
 ## Requirements
 
@@ -158,6 +163,8 @@ The project now has an end-to-end rollout ladder plus a first memory-backed revi
 | Keep handoff launch operator-driven | The runtime still avoids automatic rollout mutation, so accepted proposals should prepare canary launch rather than start it implicitly | ✓ Chosen |
 | Choose proposal drafting and selection pressure as the next milestone | With queue-to-canary handoff now real, the next deferred gap is generating better proposal candidates from replay drift and live memory without widening autonomy | ✓ Chosen |
 | Keep draft promotion operator-reviewed | Proposal drafts should enrich operator choice, not auto-enqueue or auto-launch rollout | ✓ Chosen |
+| Choose draft materialization and validation bundles as the next milestone | `docs/EVOLUTION.md` still expects evaluate and verify artifacts before proposal deployment, and `v1.11` currently stops at draft-backed queue entries with missing proof and experiment linkage | ✓ Chosen |
+| Keep the draft-to-rollout bridge artifact-first and operator-triggered | Materializing candidates and refreshing evidence should reduce manual translation, not introduce automatic mutation or rollout | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after completing milestone v1.11*
+*Last updated: 2026-04-03 after starting milestone v1.12*

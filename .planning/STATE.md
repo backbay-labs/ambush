@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.11
-milestone_name: proposal-drafting-and-selection-pressure
-status: milestone-complete
-last_updated: "2026-04-04T02:43:15Z"
+milestone: v1.12
+milestone_name: draft-materialization-and-validation-bundles
+status: ready-to-plan
+last_updated: "2026-04-04T02:53:32Z"
 progress:
   total_phases: 3
-  completed_phases: 3
+  completed_phases: 0
   total_plans: 3
-  completed_plans: 3
+  completed_plans: 0
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-03)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.11 Proposal Drafting And Selection Pressure` is complete. The next command is `$gsd-new-milestone`.
+**Current focus:** `v1.12 Draft Materialization And Validation Bundles` is active. Phase 38 is next.
 
 ## Memory
 
@@ -37,8 +37,10 @@ See: `.planning/PROJECT.md` (updated 2026-04-03)
 - `v1.9` is complete: proof-backed detector proposal queue artifacts, fail-closed admission, and CLI-backed review decisions now ship through `swarmctl`.
 - `v1.10` is complete: accepted proposals can now be converted into handoff packets and launched into bounded canary through stable handoff IDs.
 - `v1.11` is complete: durable selection-pressure reports, proposal drafts, and explicit draft-to-queue promotion now ship through `swarmctl`.
+- The runtime now has reviewed draft proposals, but those draft-backed queue entries still require manual experiment materialization and evidence refresh before they can re-enter the verified rollout ladder.
+- `v1.12` focuses on materializing candidate experiment artifacts from drafts, refreshing validation bundles, and reconciling the resulting evidence back into the existing queue and handoff path.
 - Consensus, automatic strategy selection, and richer operator surfaces remain future work.
 
 ## Next Command
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 38`
