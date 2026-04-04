@@ -154,7 +154,10 @@ cargo run -p swarm-runtime --bin swarmctl -- serve \
   --review-session-results-dir data/review-sessions \
   --review-session-export-results-dir data/review-session-exports \
   --review-session-readiness-results-dir data/review-session-readiness \
-  --review-session-handoff-results-dir data/review-session-handoffs
+  --review-session-handoff-results-dir data/review-session-handoffs \
+  --review-capsule-results-dir data/review-capsules \
+  --review-capsule-import-results-dir data/review-capsule-imports \
+  --review-delegation-results-dir data/review-delegations
 ```
 
 Example authenticated reads:
@@ -213,10 +216,18 @@ Current authenticated surface:
 - `/v1/operator/review/sessions` `GET`, `POST`
 - `/v1/operator/review/sessions/{session_id}`
 - `/v1/operator/review/sessions/{session_id}/export` `POST`
+- `/v1/operator/review/sessions/{session_id}/capsules` `POST`
 - `/v1/operator/review/sessions/{session_id}/promotion-readiness` `POST`
 - `/v1/operator/review/sessions/{session_id}/handoffs/reverify` `POST`
 - `/v1/operator/review/exports/{export_id}`
+- `/v1/operator/review/capsules/{capsule_id}`
+- `/v1/operator/review/capsules/{capsule_id}/delegations` `POST`
+- `/v1/operator/review/capsule-imports` `POST`
+- `/v1/operator/review/capsule-imports/{import_id}`
+- `/v1/operator/review/capsule-imports/{import_id}/delegations` `POST`
+- `/v1/operator/review/delegations/{delegation_id}`
 - `/v1/operator/review/promotion-readiness/{readiness_id}`
+- `/v1/operator/review/promotion-readiness/{readiness_id}/capsules` `POST`
 - `/v1/operator/review/handoffs/{handoff_id}`
 - `/v1/operator/review/evidence?subject_kind=&verification_status=&limit=`
 - `/v1/operator/review/evidence/{bundle_id}`
@@ -250,6 +261,12 @@ Current authenticated surface:
 - review-driven writes stay narrow: the workbench can re-verify evidence bundles through the existing maintenance audit trail, but it still cannot bypass rollout, promotion, or governance
 - the surface stays on the same bearer-token middleware and does not introduce cookies, browser-only auth, or multi-user control
 
+`v1.22` makes that review lane portable and continuity-aware:
+
+- one cross-lane session or promotion-readiness artifact can now produce a signed portable review capsule
+- foreign review capsules can be imported back into the local workbench with explicit local trust status, remote signer lineage, and preserved related stable refs
+- advisory-only delegation packets can preserve review continuity across trust boundaries without granting rollout, promotion, or governance authority
+
 Example review pages and bounded handoff routes:
 
 ```bash
@@ -273,6 +290,17 @@ curl -X POST \
 curl -X POST \
   -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
   -H "Content-Type: application/x-www-form-urlencoded" \
+  http://127.0.0.1:7766/v1/operator/review/sessions/REVIEW_SESSION_ID/capsules
+
+curl -X POST \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  http://127.0.0.1:7766/v1/operator/review/capsule-imports \
+  -d "source_path=/tmp/review_capsule.json"
+
+curl -X POST \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
   http://127.0.0.1:7766/v1/operator/review/sessions/REVIEW_SESSION_ID/handoffs/reverify \
   -d "reason=re-verify+selected+evidence&selected_artifact_refs=evidence_bundle%3AEVIDENCE_BUNDLE_ID"
 ```
@@ -290,6 +318,19 @@ cargo run -p swarm-runtime --bin swarmctl -- review-session-list
 
 cargo run -p swarm-runtime --bin swarmctl -- review-session-export \
   --session-id REVIEW_SESSION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- review-capsule-create \
+  --session-id REVIEW_SESSION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- review-capsule-create \
+  --readiness-id REVIEW_SESSION_READINESS_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- review-capsule-import \
+  --source-path /tmp/review_capsule.json
+
+cargo run -p swarm-runtime --bin swarmctl -- review-delegation-create \
+  --import-id REVIEW_CAPSULE_IMPORT_ID \
+  --reason "preserve signed review continuity for external inspection"
 
 cargo run -p swarm-runtime --bin swarmctl -- review-session-promotion-readiness \
   --session-id REVIEW_SESSION_ID
@@ -309,6 +350,9 @@ Review-session artifacts now default to:
 - exports: `data/review-session-exports/`
 - promotion-readiness reviews: `data/review-session-readiness/`
 - handoffs: `data/review-session-handoffs/`
+- capsules: `data/review-capsules/`
+- capsule imports: `data/review-capsule-imports/`
+- delegations: `data/review-delegations/`
 
 ### Signed Evidence Export And Verification
 

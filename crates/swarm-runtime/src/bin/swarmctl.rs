@@ -51,8 +51,10 @@ use swarm_runtime::replay::{
 };
 use swarm_runtime::review_workbench::{
     DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind,
-    ReviewSessionCreateRequest, ReviewSessionReverifyRequest, render_review_session,
-    render_review_session_export, render_review_session_handoff, render_review_session_list,
+    ReviewCapsuleImportRequest, ReviewDelegationCreateRequest, ReviewSessionCreateRequest,
+    ReviewSessionReverifyRequest, render_review_capsule, render_review_capsule_import,
+    render_review_delegation_packet, render_review_session, render_review_session_export,
+    render_review_session_handoff, render_review_session_list,
     render_review_session_promotion_readiness,
 };
 use swarm_runtime::selection::{
@@ -209,6 +211,15 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/review-session-handoffs")]
     review_session_handoff_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/review-capsules")]
+    review_capsule_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/review-capsule-imports")]
+    review_capsule_import_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/review-delegations")]
+    review_delegation_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true, default_value = "local-evidence-signer")]
     evidence_signer_id: String,
 
@@ -243,6 +254,12 @@ enum Command {
     ReviewSessionList,
     ReviewSessionExport(ReviewSessionExportArgs),
     ReviewSessionExportResult(ReviewSessionExportResultArgs),
+    ReviewCapsuleCreate(ReviewCapsuleCreateArgs),
+    ReviewCapsuleResult(ReviewCapsuleResultArgs),
+    ReviewCapsuleImport(ReviewCapsuleImportArgs),
+    ReviewCapsuleImportResult(ReviewCapsuleImportResultArgs),
+    ReviewDelegationCreate(ReviewDelegationCreateArgs),
+    ReviewDelegationResult(ReviewDelegationResultArgs),
     ReviewSessionPromotionReadiness(ReviewSessionPromotionReadinessArgs),
     ReviewSessionPromotionReadinessResult(ReviewSessionPromotionReadinessResultArgs),
     ReviewSessionHandoffReverify(ReviewSessionHandoffReverifyArgs),
@@ -494,6 +511,67 @@ struct ReviewSessionExportArgs {
 struct ReviewSessionExportResultArgs {
     #[arg(long)]
     export_id: String,
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("selector")
+        .required(true)
+        .args(["session_id", "readiness_id"])
+))]
+struct ReviewCapsuleCreateArgs {
+    #[arg(long)]
+    session_id: Option<String>,
+
+    #[arg(long)]
+    readiness_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ReviewCapsuleResultArgs {
+    #[arg(long)]
+    capsule_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ReviewCapsuleImportArgs {
+    #[arg(long)]
+    source_path: std::path::PathBuf,
+
+    #[arg(long)]
+    expected_key_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ReviewCapsuleImportResultArgs {
+    #[arg(long)]
+    import_id: String,
+}
+
+#[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("selector")
+        .required(true)
+        .args(["capsule_id", "import_id"])
+))]
+struct ReviewDelegationCreateArgs {
+    #[arg(long)]
+    capsule_id: Option<String>,
+
+    #[arg(long)]
+    import_id: Option<String>,
+
+    #[arg(long)]
+    reason: String,
+
+    #[arg(long)]
+    delegate_label: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ReviewDelegationResultArgs {
+    #[arg(long)]
+    delegation_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -1346,6 +1424,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let review_workbench_harness = DefaultReviewWorkbenchHarness::from_paths(
         repo_config.operator.auth.operator_id.clone(),
         &OperatorSurfacePaths {
+            evidence_signer_id: cli.evidence_signer_id.clone(),
+            evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
             evolution_ranking_results_dir: cli.evolution_ranking_results_dir.clone(),
             evolution_selection_results_dir: cli.evolution_selection_results_dir.clone(),
             evolution_portfolio_results_dir: cli.evolution_portfolio_results_dir.clone(),
@@ -1365,6 +1445,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             review_session_export_results_dir: cli.review_session_export_results_dir.clone(),
             review_session_readiness_results_dir: cli.review_session_readiness_results_dir.clone(),
             review_session_handoff_results_dir: cli.review_session_handoff_results_dir.clone(),
+            review_capsule_results_dir: cli.review_capsule_results_dir.clone(),
+            review_capsule_import_results_dir: cli.review_capsule_import_results_dir.clone(),
+            review_delegation_results_dir: cli.review_delegation_results_dir.clone(),
         },
     )?;
 
@@ -1373,6 +1456,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let surface = LocalOperatorSurface::from_paths(
                 &cli.config,
                 OperatorSurfacePaths {
+                    evidence_signer_id: cli.evidence_signer_id.clone(),
+                    evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
                     evolution_ranking_results_dir: cli.evolution_ranking_results_dir.clone(),
                     evolution_selection_results_dir: cli.evolution_selection_results_dir.clone(),
                     evolution_portfolio_results_dir: cli.evolution_portfolio_results_dir.clone(),
@@ -1400,6 +1485,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     review_session_handoff_results_dir: cli
                         .review_session_handoff_results_dir
                         .clone(),
+                    review_capsule_results_dir: cli.review_capsule_results_dir.clone(),
+                    review_capsule_import_results_dir: cli
+                        .review_capsule_import_results_dir
+                        .clone(),
+                    review_delegation_results_dir: cli.review_delegation_results_dir.clone(),
                 },
             )?;
             eprintln!(
@@ -1636,6 +1726,102 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.export)?);
             } else {
                 println!("{}", render_review_session_export(&lookup.export));
+            }
+            return Ok(());
+        }
+        Command::ReviewCapsuleCreate(args) => {
+            let lookup = if let Some(session_id) = args.session_id.as_deref() {
+                review_workbench_harness.create_capsule_from_session(session_id)?
+            } else {
+                review_workbench_harness.create_capsule_from_readiness(
+                    args.readiness_id.as_deref().expect("readiness id"),
+                )?
+            };
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.capsule)?);
+            } else {
+                println!("{}", render_review_capsule(&lookup.capsule));
+            }
+            return Ok(());
+        }
+        Command::ReviewCapsuleResult(args) => {
+            let lookup = review_workbench_harness
+                .load_capsule(&args.capsule_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "review capsule was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.capsule)?);
+            } else {
+                println!("{}", render_review_capsule(&lookup.capsule));
+            }
+            return Ok(());
+        }
+        Command::ReviewCapsuleImport(args) => {
+            let lookup = review_workbench_harness.import_capsule(ReviewCapsuleImportRequest {
+                source_path: args.source_path.display().to_string(),
+                expected_key_id: args.expected_key_id,
+            })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.import)?);
+            } else {
+                println!("{}", render_review_capsule_import(&lookup.import));
+            }
+            if lookup.import.trust_status
+                == swarm_runtime::review_workbench::ReviewCapsuleImportTrustStatus::Invalid
+            {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::ReviewCapsuleImportResult(args) => {
+            let lookup = review_workbench_harness
+                .load_capsule_import(&args.import_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "review capsule import was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.import)?);
+            } else {
+                println!("{}", render_review_capsule_import(&lookup.import));
+            }
+            return Ok(());
+        }
+        Command::ReviewDelegationCreate(args) => {
+            let lookup = review_workbench_harness.create_delegation_packet(
+                ReviewDelegationCreateRequest {
+                    capsule_id: args.capsule_id,
+                    import_id: args.import_id,
+                    reason: args.reason,
+                    delegate_label: args.delegate_label,
+                },
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.packet)?);
+            } else {
+                println!("{}", render_review_delegation_packet(&lookup.packet));
+            }
+            return Ok(());
+        }
+        Command::ReviewDelegationResult(args) => {
+            let lookup = review_workbench_harness
+                .load_delegation(&args.delegation_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "review delegation was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.packet)?);
+            } else {
+                println!("{}", render_review_delegation_packet(&lookup.packet));
             }
             return Ok(());
         }

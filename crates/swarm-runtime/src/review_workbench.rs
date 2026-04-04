@@ -1,8 +1,8 @@
 use crate::evidence::{
-    EvidenceBundleLookup, EvidenceRelatedRef, EvidenceSubjectKind, EvidenceVerificationCheck,
-    EvidenceVerificationLookup, EvidenceVerificationStatus, OperatorEvidenceReadService,
-    PromotionEvidenceAttachment, PromotionEvidenceBlockingReason, PromotionEvidencePacketLookup,
-    PromotionEvidenceRecommendation,
+    EvidenceBundleLookup, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
+    EvidenceVerificationCheck, EvidenceVerificationLookup, EvidenceVerificationStatus,
+    OperatorEvidenceReadService, PromotionEvidenceAttachment, PromotionEvidenceBlockingReason,
+    PromotionEvidencePacketLookup, PromotionEvidenceRecommendation,
 };
 use crate::operator_http::OperatorSurfacePaths;
 use crate::operator_maintenance::{
@@ -14,6 +14,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use swarm_crypto::{
+    CryptoError, Ed25519Signer, canonical_json_bytes, canonical_json_string,
+    normalize_canonical_json, sha256_hex, verify_detached_signature,
+};
 
 /// Artifact kinds that can participate in one local review session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -377,6 +381,328 @@ struct ReviewSessionPromotionReadinessIndex {
     entries: Vec<ReviewSessionPromotionReadinessRecord>,
 }
 
+/// Persisted source kinds supported by signed portable review capsules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewCapsuleSourceKind {
+    SessionExport,
+    PromotionReadiness,
+}
+
+impl ReviewCapsuleSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SessionExport => "session_export",
+            Self::PromotionReadiness => "promotion_readiness",
+        }
+    }
+}
+
+impl std::fmt::Display for ReviewCapsuleSourceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ReviewCapsulePayload {
+    SessionExport(ReviewSessionExport),
+    PromotionReadiness(ReviewCapsuleReadinessPayload),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReviewCapsuleReadinessPayload {
+    readiness: ReviewSessionPromotionReadiness,
+    title: Option<String>,
+    notes: Option<String>,
+    artifact_refs: Vec<ReviewArtifactRef>,
+    related_refs: Vec<EvidenceRelatedRef>,
+}
+
+#[derive(Debug, Clone)]
+struct ReviewCapsuleBuildRequest {
+    session_id: String,
+    title: Option<String>,
+    notes: Option<String>,
+    source_kind: ReviewCapsuleSourceKind,
+    source_id: String,
+    artifact_refs: Vec<ReviewArtifactRef>,
+    lane_summaries: Vec<ReviewLaneSummary>,
+    unresolved_gaps: Vec<ReviewLaneGap>,
+    related_refs: Vec<EvidenceRelatedRef>,
+    payload: ReviewCapsulePayload,
+}
+
+/// Signed portable review capsule for external inspection across trust boundaries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCapsule {
+    pub capsule_id: String,
+    pub schema_version: String,
+    pub created_at_ms: i64,
+    pub session_id: String,
+    pub title: Option<String>,
+    pub notes: Option<String>,
+    pub source_kind: ReviewCapsuleSourceKind,
+    pub source_id: String,
+    pub artifact_refs: Vec<ReviewArtifactRef>,
+    pub lane_summaries: Vec<ReviewLaneSummary>,
+    pub unresolved_gaps: Vec<ReviewLaneGap>,
+    pub related_refs: Vec<EvidenceRelatedRef>,
+    pub advisory_only: bool,
+    pub payload_sha256: String,
+    pub canonical_payload: String,
+    pub signature: EvidenceSignature,
+}
+
+/// Summary metadata for one portable review capsule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewCapsuleRecord {
+    pub capsule_id: String,
+    pub session_id: String,
+    pub source_kind: ReviewCapsuleSourceKind,
+    pub source_id: String,
+    pub created_at_ms: i64,
+    pub signer_id: String,
+    pub signer_key_id: String,
+    pub gap_count: usize,
+    pub bundle_path: String,
+}
+
+impl ReviewCapsuleRecord {
+    fn from_capsule(capsule: &ReviewCapsule, bundle_path: String) -> Self {
+        Self {
+            capsule_id: capsule.capsule_id.clone(),
+            session_id: capsule.session_id.clone(),
+            source_kind: capsule.source_kind,
+            source_id: capsule.source_id.clone(),
+            created_at_ms: capsule.created_at_ms,
+            signer_id: capsule.signature.signer_id.clone(),
+            signer_key_id: capsule.signature.key_id.clone(),
+            gap_count: capsule.unresolved_gaps.len(),
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted capsule loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct ReviewCapsuleLookup {
+    pub record: ReviewCapsuleRecord,
+    pub capsule: ReviewCapsule,
+}
+
+/// Operator-facing portable review capsule listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewCapsuleList {
+    pub total_count: usize,
+    pub session_id: Option<String>,
+    pub capsules: Vec<ReviewCapsuleRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ReviewCapsuleIndex {
+    entries: Vec<ReviewCapsuleRecord>,
+}
+
+/// Local trust status assigned to one imported portable review capsule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewCapsuleImportTrustStatus {
+    Trusted,
+    SignatureValidUntrusted,
+    Invalid,
+}
+
+impl ReviewCapsuleImportTrustStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Trusted => "trusted",
+            Self::SignatureValidUntrusted => "signature_valid_untrusted",
+            Self::Invalid => "invalid",
+        }
+    }
+}
+
+/// Persisted result of importing a foreign portable review capsule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCapsuleImport {
+    pub import_id: String,
+    pub imported_at_ms: i64,
+    pub source_path: String,
+    pub source_capsule_id: Option<String>,
+    pub source_kind: Option<ReviewCapsuleSourceKind>,
+    pub source_id: Option<String>,
+    pub session_id: Option<String>,
+    pub remote_signer_id: Option<String>,
+    pub remote_signer_key_id: Option<String>,
+    pub trusted_key_id: Option<String>,
+    pub trust_status: ReviewCapsuleImportTrustStatus,
+    pub checks: Vec<EvidenceVerificationCheck>,
+    pub raw_document: String,
+    pub capsule: Option<ReviewCapsule>,
+}
+
+/// Summary metadata for one imported portable review capsule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewCapsuleImportRecord {
+    pub import_id: String,
+    pub source_capsule_id: Option<String>,
+    pub session_id: Option<String>,
+    pub imported_at_ms: i64,
+    pub trust_status: ReviewCapsuleImportTrustStatus,
+    pub remote_signer_key_id: Option<String>,
+    pub bundle_path: String,
+}
+
+impl ReviewCapsuleImportRecord {
+    fn from_import(import: &ReviewCapsuleImport, bundle_path: String) -> Self {
+        Self {
+            import_id: import.import_id.clone(),
+            source_capsule_id: import.source_capsule_id.clone(),
+            session_id: import.session_id.clone(),
+            imported_at_ms: import.imported_at_ms,
+            trust_status: import.trust_status,
+            remote_signer_key_id: import.remote_signer_key_id.clone(),
+            bundle_path,
+        }
+    }
+}
+
+/// Imported capsule loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct ReviewCapsuleImportLookup {
+    pub record: ReviewCapsuleImportRecord,
+    pub import: ReviewCapsuleImport,
+}
+
+/// Operator-facing imported-capsule listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewCapsuleImportList {
+    pub total_count: usize,
+    pub imports: Vec<ReviewCapsuleImportRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ReviewCapsuleImportIndex {
+    entries: Vec<ReviewCapsuleImportRecord>,
+}
+
+/// Source kinds supported by review delegation packets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDelegationSourceKind {
+    LocalCapsule,
+    ImportedCapsule,
+}
+
+impl ReviewDelegationSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalCapsule => "local_capsule",
+            Self::ImportedCapsule => "imported_capsule",
+        }
+    }
+}
+
+impl std::fmt::Display for ReviewDelegationSourceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReviewDelegationPayload {
+    session_id: String,
+    source_capsule_id: String,
+    source_import_id: Option<String>,
+    reason: String,
+    delegate_label: Option<String>,
+    imported_trust_status: Option<ReviewCapsuleImportTrustStatus>,
+    advisory_only: bool,
+    artifact_refs: Vec<ReviewArtifactRef>,
+    lane_summaries: Vec<ReviewLaneSummary>,
+    unresolved_gaps: Vec<ReviewLaneGap>,
+    related_refs: Vec<EvidenceRelatedRef>,
+}
+
+/// Signed advisory-only continuity packet derived from a portable review capsule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewDelegationPacket {
+    pub delegation_id: String,
+    pub schema_version: String,
+    pub created_at_ms: i64,
+    pub session_id: String,
+    pub source_kind: ReviewDelegationSourceKind,
+    pub source_capsule_id: String,
+    pub source_import_id: Option<String>,
+    pub source_signer_id: String,
+    pub source_signer_key_id: String,
+    pub imported_trust_status: Option<ReviewCapsuleImportTrustStatus>,
+    pub reason: String,
+    pub delegate_label: Option<String>,
+    pub advisory_only: bool,
+    pub artifact_refs: Vec<ReviewArtifactRef>,
+    pub lane_summaries: Vec<ReviewLaneSummary>,
+    pub unresolved_gaps: Vec<ReviewLaneGap>,
+    pub related_refs: Vec<EvidenceRelatedRef>,
+    pub payload_sha256: String,
+    pub canonical_payload: String,
+    pub signature: EvidenceSignature,
+}
+
+/// Summary metadata for one review delegation packet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewDelegationPacketRecord {
+    pub delegation_id: String,
+    pub session_id: String,
+    pub source_kind: ReviewDelegationSourceKind,
+    pub source_capsule_id: String,
+    pub source_import_id: Option<String>,
+    pub created_at_ms: i64,
+    pub signer_id: String,
+    pub signer_key_id: String,
+    pub gap_count: usize,
+    pub bundle_path: String,
+}
+
+impl ReviewDelegationPacketRecord {
+    fn from_packet(packet: &ReviewDelegationPacket, bundle_path: String) -> Self {
+        Self {
+            delegation_id: packet.delegation_id.clone(),
+            session_id: packet.session_id.clone(),
+            source_kind: packet.source_kind,
+            source_capsule_id: packet.source_capsule_id.clone(),
+            source_import_id: packet.source_import_id.clone(),
+            created_at_ms: packet.created_at_ms,
+            signer_id: packet.signature.signer_id.clone(),
+            signer_key_id: packet.signature.key_id.clone(),
+            gap_count: packet.unresolved_gaps.len(),
+            bundle_path,
+        }
+    }
+}
+
+/// Delegation packet loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct ReviewDelegationPacketLookup {
+    pub record: ReviewDelegationPacketRecord,
+    pub packet: ReviewDelegationPacket,
+}
+
+/// Operator-facing delegation packet listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewDelegationPacketList {
+    pub total_count: usize,
+    pub session_id: Option<String>,
+    pub delegations: Vec<ReviewDelegationPacketRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ReviewDelegationPacketIndex {
+    entries: Vec<ReviewDelegationPacketRecord>,
+}
+
 /// One underlying maintenance action launched from a review-session handoff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewSessionMaintenanceActionResult {
@@ -454,6 +780,22 @@ pub struct ReviewSessionReverifyRequest {
     pub reason: String,
 }
 
+/// Request to import a portable review capsule from disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewCapsuleImportRequest {
+    pub source_path: String,
+    pub expected_key_id: Option<String>,
+}
+
+/// Request to create one advisory-only delegation packet from a review capsule or import.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewDelegationCreateRequest {
+    pub capsule_id: Option<String>,
+    pub import_id: Option<String>,
+    pub reason: String,
+    pub delegate_label: Option<String>,
+}
+
 /// Resolved session view used by the HTML workbench.
 #[derive(Debug, Clone)]
 pub struct ReviewSessionResolved {
@@ -508,6 +850,81 @@ pub enum ReviewSessionExportStoreError {
     },
 
     #[error("failed to parse review-session export store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Errors raised while persisting portable review capsules.
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewCapsuleStoreError {
+    #[error("failed to read review capsule store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write review capsule store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse review capsule store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Errors raised while persisting imported review capsules.
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewCapsuleImportStoreError {
+    #[error("failed to read imported review capsule store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write imported review capsule store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse imported review capsule store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Errors raised while persisting review delegation packets.
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewDelegationPacketStoreError {
+    #[error("failed to read review delegation store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write review delegation store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse review delegation store file `{path}`: {source}")]
     Parse {
         path: PathBuf,
         #[source]
@@ -575,10 +992,22 @@ pub enum ReviewWorkbenchError {
     Maintenance(#[from] OperatorMaintenanceError),
 
     #[error(transparent)]
+    Crypto(#[from] CryptoError),
+
+    #[error(transparent)]
     SessionStore(#[from] ReviewSessionStoreError),
 
     #[error(transparent)]
     ExportStore(#[from] ReviewSessionExportStoreError),
+
+    #[error(transparent)]
+    CapsuleStore(#[from] ReviewCapsuleStoreError),
+
+    #[error(transparent)]
+    CapsuleImportStore(#[from] ReviewCapsuleImportStoreError),
+
+    #[error(transparent)]
+    DelegationStore(#[from] ReviewDelegationPacketStoreError),
 
     #[error(transparent)]
     HandoffStore(#[from] ReviewSessionMaintenanceHandoffStoreError),
@@ -589,11 +1018,30 @@ pub enum ReviewWorkbenchError {
     #[error("invalid review session request: {0}")]
     InvalidRequest(String),
 
+    #[error("failed to read portable review capsule source `{path}`: {source}")]
+    ReadSource {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("review signing key env `{env_name}` is missing or empty")]
+    MissingSigningKey { env_name: String },
+
     #[error("review session `{session_id}` was not found")]
     SessionNotFound { session_id: String },
 
     #[error("review session export `{export_id}` was not found")]
     ExportNotFound { export_id: String },
+
+    #[error("review capsule `{capsule_id}` was not found")]
+    CapsuleNotFound { capsule_id: String },
+
+    #[error("review capsule import `{import_id}` was not found")]
+    CapsuleImportNotFound { import_id: String },
+
+    #[error("review delegation `{delegation_id}` was not found")]
+    DelegationNotFound { delegation_id: String },
 
     #[error("review session handoff `{handoff_id}` was not found")]
     HandoffNotFound { handoff_id: String },
@@ -1152,13 +1600,401 @@ impl FileReviewSessionMaintenanceHandoffStore {
     }
 }
 
+/// File-backed store for signed portable review capsules.
+#[derive(Debug, Clone)]
+pub struct FileReviewCapsuleStore {
+    root: PathBuf,
+}
+
+impl FileReviewCapsuleStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, ReviewCapsuleStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            ReviewCapsuleStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, capsule_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(capsule_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(&self) -> Result<ReviewCapsuleIndex, ReviewCapsuleStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(ReviewCapsuleIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| ReviewCapsuleStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&raw).map_err(|source| ReviewCapsuleStoreError::Parse { path, source })
+    }
+
+    fn write_index(&self, index: &ReviewCapsuleIndex) -> Result<(), ReviewCapsuleStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            ReviewCapsuleStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| ReviewCapsuleStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        capsule: &ReviewCapsule,
+    ) -> Result<ReviewCapsuleLookup, ReviewCapsuleStoreError> {
+        let path = self.report_path(&capsule.capsule_id);
+        let raw = serde_json::to_string_pretty(capsule).map_err(|source| {
+            ReviewCapsuleStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| ReviewCapsuleStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let record = ReviewCapsuleRecord::from_capsule(capsule, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.capsule_id != record.capsule_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(ReviewCapsuleLookup {
+            record,
+            capsule: capsule.clone(),
+        })
+    }
+
+    pub fn load(
+        &self,
+        capsule_id: &str,
+    ) -> Result<Option<ReviewCapsuleLookup>, ReviewCapsuleStoreError> {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.capsule_id == capsule_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| ReviewCapsuleStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let capsule =
+            serde_json::from_str(&raw).map_err(|source| ReviewCapsuleStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        Ok(Some(ReviewCapsuleLookup { record, capsule }))
+    }
+
+    pub fn list(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<ReviewCapsuleList, ReviewCapsuleStoreError> {
+        let mut capsules = self.read_index()?.entries;
+        if let Some(session_id) = session_id {
+            capsules.retain(|entry| entry.session_id == session_id);
+        }
+        Ok(ReviewCapsuleList {
+            total_count: capsules.len(),
+            session_id: session_id.map(ToString::to_string),
+            capsules,
+        })
+    }
+}
+
+/// File-backed store for imported review capsules.
+#[derive(Debug, Clone)]
+pub struct FileReviewCapsuleImportStore {
+    root: PathBuf,
+}
+
+impl FileReviewCapsuleImportStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, ReviewCapsuleImportStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            ReviewCapsuleImportStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, import_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(import_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(&self) -> Result<ReviewCapsuleImportIndex, ReviewCapsuleImportStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(ReviewCapsuleImportIndex::default());
+        }
+        let raw =
+            fs::read_to_string(&path).map_err(|source| ReviewCapsuleImportStoreError::Read {
+                path: path.clone(),
+                source,
+            })?;
+        serde_json::from_str(&raw)
+            .map_err(|source| ReviewCapsuleImportStoreError::Parse { path, source })
+    }
+
+    fn write_index(
+        &self,
+        index: &ReviewCapsuleImportIndex,
+    ) -> Result<(), ReviewCapsuleImportStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            ReviewCapsuleImportStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw)
+            .map_err(|source| ReviewCapsuleImportStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        import: &ReviewCapsuleImport,
+    ) -> Result<ReviewCapsuleImportLookup, ReviewCapsuleImportStoreError> {
+        let path = self.report_path(&import.import_id);
+        let raw = serde_json::to_string_pretty(import).map_err(|source| {
+            ReviewCapsuleImportStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| ReviewCapsuleImportStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let record = ReviewCapsuleImportRecord::from_import(import, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.import_id != record.import_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.imported_at_ms));
+        self.write_index(&index)?;
+        Ok(ReviewCapsuleImportLookup {
+            record,
+            import: import.clone(),
+        })
+    }
+
+    pub fn load(
+        &self,
+        import_id: &str,
+    ) -> Result<Option<ReviewCapsuleImportLookup>, ReviewCapsuleImportStoreError> {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.import_id == import_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw =
+            fs::read_to_string(&path).map_err(|source| ReviewCapsuleImportStoreError::Read {
+                path: path.clone(),
+                source,
+            })?;
+        let import =
+            serde_json::from_str(&raw).map_err(|source| ReviewCapsuleImportStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        Ok(Some(ReviewCapsuleImportLookup { record, import }))
+    }
+
+    pub fn list(&self) -> Result<ReviewCapsuleImportList, ReviewCapsuleImportStoreError> {
+        let imports = self.read_index()?.entries;
+        Ok(ReviewCapsuleImportList {
+            total_count: imports.len(),
+            imports,
+        })
+    }
+}
+
+/// File-backed store for review delegation packets.
+#[derive(Debug, Clone)]
+pub struct FileReviewDelegationPacketStore {
+    root: PathBuf,
+}
+
+impl FileReviewDelegationPacketStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, ReviewDelegationPacketStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            ReviewDelegationPacketStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, delegation_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(delegation_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(&self) -> Result<ReviewDelegationPacketIndex, ReviewDelegationPacketStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(ReviewDelegationPacketIndex::default());
+        }
+        let raw =
+            fs::read_to_string(&path).map_err(|source| ReviewDelegationPacketStoreError::Read {
+                path: path.clone(),
+                source,
+            })?;
+        serde_json::from_str(&raw)
+            .map_err(|source| ReviewDelegationPacketStoreError::Parse { path, source })
+    }
+
+    fn write_index(
+        &self,
+        index: &ReviewDelegationPacketIndex,
+    ) -> Result<(), ReviewDelegationPacketStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            ReviewDelegationPacketStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw)
+            .map_err(|source| ReviewDelegationPacketStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        packet: &ReviewDelegationPacket,
+    ) -> Result<ReviewDelegationPacketLookup, ReviewDelegationPacketStoreError> {
+        let path = self.report_path(&packet.delegation_id);
+        let raw = serde_json::to_string_pretty(packet).map_err(|source| {
+            ReviewDelegationPacketStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| ReviewDelegationPacketStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let record = ReviewDelegationPacketRecord::from_packet(packet, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.delegation_id != record.delegation_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(ReviewDelegationPacketLookup {
+            record,
+            packet: packet.clone(),
+        })
+    }
+
+    pub fn load(
+        &self,
+        delegation_id: &str,
+    ) -> Result<Option<ReviewDelegationPacketLookup>, ReviewDelegationPacketStoreError> {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.delegation_id == delegation_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw =
+            fs::read_to_string(&path).map_err(|source| ReviewDelegationPacketStoreError::Read {
+                path: path.clone(),
+                source,
+            })?;
+        let packet = serde_json::from_str(&raw).map_err(|source| {
+            ReviewDelegationPacketStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        Ok(Some(ReviewDelegationPacketLookup { record, packet }))
+    }
+
+    pub fn list(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<ReviewDelegationPacketList, ReviewDelegationPacketStoreError> {
+        let mut delegations = self.read_index()?.entries;
+        if let Some(session_id) = session_id {
+            delegations.retain(|entry| entry.session_id == session_id);
+        }
+        Ok(ReviewDelegationPacketList {
+            total_count: delegations.len(),
+            session_id: session_id.map(ToString::to_string),
+            delegations,
+        })
+    }
+}
+
 /// Repo-owned workbench harness above signed evidence and maintenance audit flows.
 #[derive(Debug, Clone)]
 pub struct DefaultReviewWorkbenchHarness {
     evidence: OperatorEvidenceReadService,
     maintenance: OperatorMaintenanceService,
+    signer_id: String,
+    signing_key_env: String,
     session_store: FileReviewSessionStore,
     export_store: FileReviewSessionExportStore,
+    capsule_store: FileReviewCapsuleStore,
+    capsule_import_store: FileReviewCapsuleImportStore,
+    delegation_store: FileReviewDelegationPacketStore,
     readiness_store: FileReviewSessionPromotionReadinessStore,
     handoff_store: FileReviewSessionMaintenanceHandoffStore,
 }
@@ -1169,6 +2005,8 @@ impl DefaultReviewWorkbenchHarness {
         paths: &OperatorSurfacePaths,
     ) -> Result<Self, ReviewWorkbenchError> {
         Ok(Self {
+            signer_id: paths.evidence_signer_id.clone(),
+            signing_key_env: paths.evidence_signing_key_env.clone(),
             evidence: OperatorEvidenceReadService::from_store_paths(
                 &paths.evidence_results_dir,
                 &paths.evidence_verification_results_dir,
@@ -1178,6 +2016,13 @@ impl DefaultReviewWorkbenchHarness {
             session_store: FileReviewSessionStore::open(&paths.review_session_results_dir)?,
             export_store: FileReviewSessionExportStore::open(
                 &paths.review_session_export_results_dir,
+            )?,
+            capsule_store: FileReviewCapsuleStore::open(&paths.review_capsule_results_dir)?,
+            capsule_import_store: FileReviewCapsuleImportStore::open(
+                &paths.review_capsule_import_results_dir,
+            )?,
+            delegation_store: FileReviewDelegationPacketStore::open(
+                &paths.review_delegation_results_dir,
             )?,
             readiness_store: FileReviewSessionPromotionReadinessStore::open(
                 &paths.review_session_readiness_results_dir,
@@ -1309,6 +2154,425 @@ impl DefaultReviewWorkbenchHarness {
         session_id: Option<&str>,
     ) -> Result<ReviewSessionExportList, ReviewWorkbenchError> {
         self.export_store.list(session_id).map_err(Into::into)
+    }
+
+    pub fn create_capsule_from_session(
+        &self,
+        session_id: &str,
+    ) -> Result<ReviewCapsuleLookup, ReviewWorkbenchError> {
+        let export_lookup = self.export_session(session_id)?;
+        let related_refs = collect_related_refs_from_export(&export_lookup.export);
+        let payload = ReviewCapsulePayload::SessionExport(export_lookup.export.clone());
+        let capsule = self.build_capsule(ReviewCapsuleBuildRequest {
+            session_id: export_lookup.export.session_id.clone(),
+            title: export_lookup.export.title.clone(),
+            notes: export_lookup.export.notes.clone(),
+            source_kind: ReviewCapsuleSourceKind::SessionExport,
+            source_id: export_lookup.export.export_id.clone(),
+            artifact_refs: export_lookup.export.artifact_refs.clone(),
+            lane_summaries: export_lookup.export.lane_summaries.clone(),
+            unresolved_gaps: export_lookup.export.unresolved_gaps.clone(),
+            related_refs,
+            payload,
+        })?;
+        self.capsule_store.persist(&capsule).map_err(Into::into)
+    }
+
+    pub fn create_capsule_from_readiness(
+        &self,
+        readiness_id: &str,
+    ) -> Result<ReviewCapsuleLookup, ReviewWorkbenchError> {
+        let readiness = self
+            .load_promotion_readiness(readiness_id)?
+            .ok_or_else(|| ReviewWorkbenchError::ReadinessNotFound {
+                readiness_id: readiness_id.to_string(),
+            })?;
+        let session = self
+            .load_session(&readiness.report.session_id)?
+            .ok_or_else(|| ReviewWorkbenchError::SessionNotFound {
+                session_id: readiness.report.session_id.clone(),
+            })?;
+        let resolved = self.resolve_lookup(session.clone())?;
+        let related_refs = collect_related_refs_from_resolved(&resolved);
+        let payload = ReviewCapsulePayload::PromotionReadiness(ReviewCapsuleReadinessPayload {
+            readiness: readiness.report.clone(),
+            title: session.report.title.clone(),
+            notes: session.report.notes.clone(),
+            artifact_refs: session.report.artifact_refs.clone(),
+            related_refs: related_refs.clone(),
+        });
+        let capsule = self.build_capsule(ReviewCapsuleBuildRequest {
+            session_id: readiness.report.session_id.clone(),
+            title: session.report.title.clone(),
+            notes: session.report.notes.clone(),
+            source_kind: ReviewCapsuleSourceKind::PromotionReadiness,
+            source_id: readiness.report.readiness_id.clone(),
+            artifact_refs: session.report.artifact_refs.clone(),
+            lane_summaries: readiness.report.lane_summaries.clone(),
+            unresolved_gaps: readiness.report.unresolved_gaps.clone(),
+            related_refs,
+            payload,
+        })?;
+        self.capsule_store.persist(&capsule).map_err(Into::into)
+    }
+
+    pub fn load_capsule(
+        &self,
+        capsule_id: &str,
+    ) -> Result<Option<ReviewCapsuleLookup>, ReviewWorkbenchError> {
+        self.capsule_store.load(capsule_id).map_err(Into::into)
+    }
+
+    pub fn list_capsules(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<ReviewCapsuleList, ReviewWorkbenchError> {
+        self.capsule_store.list(session_id).map_err(Into::into)
+    }
+
+    pub fn import_capsule(
+        &self,
+        request: ReviewCapsuleImportRequest,
+    ) -> Result<ReviewCapsuleImportLookup, ReviewWorkbenchError> {
+        let source_path = PathBuf::from(request.source_path.trim());
+        if source_path.as_os_str().is_empty() {
+            return Err(ReviewWorkbenchError::InvalidRequest(
+                "review capsule import requires a non-empty source path".to_string(),
+            ));
+        }
+        let raw_document = fs::read_to_string(&source_path).map_err(|source| {
+            ReviewWorkbenchError::ReadSource {
+                path: source_path.clone(),
+                source,
+            }
+        })?;
+        let imported_at_ms = now_ms();
+        let import_id = format!("review_capsule_import:{}", now_unix_nanos());
+        let mut checks = Vec::new();
+
+        let normalized_document = match normalize_canonical_json(&raw_document) {
+            Ok(normalized) => {
+                checks.push(EvidenceVerificationCheck {
+                    name: "document_parse".to_string(),
+                    passed: true,
+                    details: "review capsule JSON parsed and normalized cleanly".to_string(),
+                });
+                Some(normalized)
+            }
+            Err(error) => {
+                checks.push(EvidenceVerificationCheck {
+                    name: "document_parse".to_string(),
+                    passed: false,
+                    details: error.to_string(),
+                });
+                None
+            }
+        };
+
+        let capsule = normalized_document
+            .as_deref()
+            .and_then(|normalized| serde_json::from_str::<ReviewCapsule>(normalized).ok());
+        if capsule.is_none() {
+            checks.push(EvidenceVerificationCheck {
+                name: "capsule_decode".to_string(),
+                passed: false,
+                details: "normalized JSON did not decode into a portable review capsule"
+                    .to_string(),
+            });
+        }
+
+        let mut trust_status = ReviewCapsuleImportTrustStatus::Invalid;
+        let mut source_capsule_id = None;
+        let mut source_kind = None;
+        let mut source_id = None;
+        let mut session_id = None;
+        let mut remote_signer_id = None;
+        let mut remote_signer_key_id = None;
+        let trusted_key_id =
+            resolve_trusted_key_id(&self.signing_key_env, request.expected_key_id.as_deref());
+
+        if let Some(capsule) = capsule.as_ref() {
+            source_capsule_id = Some(capsule.capsule_id.clone());
+            source_kind = Some(capsule.source_kind);
+            source_id = Some(capsule.source_id.clone());
+            session_id = Some(capsule.session_id.clone());
+            remote_signer_id = Some(capsule.signature.signer_id.clone());
+            remote_signer_key_id = Some(capsule.signature.key_id.clone());
+
+            let normalized_payload = normalize_canonical_json(&capsule.canonical_payload);
+            let normalized_payload = match normalized_payload {
+                Ok(payload) => {
+                    let passed = payload == capsule.canonical_payload;
+                    checks.push(EvidenceVerificationCheck {
+                        name: "canonical_payload".to_string(),
+                        passed,
+                        details: if passed {
+                            "capsule payload bytes normalized cleanly".to_string()
+                        } else {
+                            "capsule payload bytes changed after normalization".to_string()
+                        },
+                    });
+                    Some(payload)
+                }
+                Err(error) => {
+                    checks.push(EvidenceVerificationCheck {
+                        name: "canonical_payload".to_string(),
+                        passed: false,
+                        details: error.to_string(),
+                    });
+                    None
+                }
+            };
+
+            let payload_hash = normalized_payload
+                .as_deref()
+                .map(|payload| sha256_hex(payload.as_bytes()));
+            let hash_passed = payload_hash
+                .as_deref()
+                .map(|value| value == capsule.payload_sha256)
+                .unwrap_or(false);
+            checks.push(EvidenceVerificationCheck {
+                name: "payload_sha256".to_string(),
+                passed: hash_passed,
+                details: if hash_passed {
+                    "payload hash matches canonical payload bytes".to_string()
+                } else {
+                    format!(
+                        "expected `{}`, recalculated `{}`",
+                        capsule.payload_sha256,
+                        payload_hash.unwrap_or_else(|| "unavailable".to_string())
+                    )
+                },
+            });
+
+            let signature_passed = review_capsule_signature_statement_bytes(capsule)
+                .ok()
+                .and_then(|statement| {
+                    verify_detached_signature(
+                        &statement,
+                        &signature_to_detached(&capsule.signature),
+                    )
+                    .ok()
+                })
+                .is_some();
+            checks.push(EvidenceVerificationCheck {
+                name: "detached_signature".to_string(),
+                passed: signature_passed,
+                details: if signature_passed {
+                    "signature verified against signed review capsule statement".to_string()
+                } else {
+                    "signature verification failed".to_string()
+                },
+            });
+
+            let trust_match = trusted_key_id
+                .as_deref()
+                .map(|trusted_key| capsule.signature.key_id == trusted_key)
+                .unwrap_or(false);
+            checks.push(EvidenceVerificationCheck {
+                name: "local_trust".to_string(),
+                passed: trust_match,
+                details: if let Some(trusted_key_id) = trusted_key_id.as_deref() {
+                    if trust_match {
+                        format!("matched trusted local signer key id `{trusted_key_id}`")
+                    } else {
+                        format!(
+                            "trusted local signer key id `{trusted_key_id}` does not match remote `{}`",
+                            capsule.signature.key_id
+                        )
+                    }
+                } else {
+                    "no local trusted signer key configured; capsule remains untrusted".to_string()
+                },
+            });
+
+            trust_status = if signature_passed && hash_passed && normalized_payload.is_some() {
+                if trust_match {
+                    ReviewCapsuleImportTrustStatus::Trusted
+                } else {
+                    ReviewCapsuleImportTrustStatus::SignatureValidUntrusted
+                }
+            } else {
+                ReviewCapsuleImportTrustStatus::Invalid
+            };
+        }
+
+        let import = ReviewCapsuleImport {
+            import_id,
+            imported_at_ms,
+            source_path: source_path.display().to_string(),
+            source_capsule_id,
+            source_kind,
+            source_id,
+            session_id,
+            remote_signer_id,
+            remote_signer_key_id,
+            trusted_key_id,
+            trust_status,
+            checks,
+            raw_document,
+            capsule,
+        };
+        self.capsule_import_store
+            .persist(&import)
+            .map_err(Into::into)
+    }
+
+    pub fn load_capsule_import(
+        &self,
+        import_id: &str,
+    ) -> Result<Option<ReviewCapsuleImportLookup>, ReviewWorkbenchError> {
+        self.capsule_import_store
+            .load(import_id)
+            .map_err(Into::into)
+    }
+
+    pub fn list_capsule_imports(&self) -> Result<ReviewCapsuleImportList, ReviewWorkbenchError> {
+        self.capsule_import_store.list().map_err(Into::into)
+    }
+
+    pub fn create_delegation_packet(
+        &self,
+        request: ReviewDelegationCreateRequest,
+    ) -> Result<ReviewDelegationPacketLookup, ReviewWorkbenchError> {
+        let reason = normalize_optional_text(Some(request.reason.clone())).ok_or_else(|| {
+            ReviewWorkbenchError::InvalidRequest(
+                "review delegation packets require a non-empty reason".to_string(),
+            )
+        })?;
+        let delegate_label = normalize_optional_text(request.delegate_label);
+        let source_count =
+            usize::from(request.capsule_id.is_some()) + usize::from(request.import_id.is_some());
+        if source_count != 1 {
+            return Err(ReviewWorkbenchError::InvalidRequest(
+                "review delegation packets require exactly one of capsule_id or import_id"
+                    .to_string(),
+            ));
+        }
+
+        let (
+            source_kind,
+            source_capsule_id,
+            source_import_id,
+            source_signer_id,
+            source_signer_key_id,
+            imported_trust_status,
+            session_id,
+            artifact_refs,
+            lane_summaries,
+            unresolved_gaps,
+            related_refs,
+        ) = if let Some(capsule_id) = request.capsule_id.as_deref() {
+            let capsule = self.load_capsule(capsule_id)?.ok_or_else(|| {
+                ReviewWorkbenchError::CapsuleNotFound {
+                    capsule_id: capsule_id.to_string(),
+                }
+            })?;
+            (
+                ReviewDelegationSourceKind::LocalCapsule,
+                capsule.capsule.capsule_id.clone(),
+                None,
+                capsule.capsule.signature.signer_id.clone(),
+                capsule.capsule.signature.key_id.clone(),
+                None,
+                capsule.capsule.session_id.clone(),
+                capsule.capsule.artifact_refs.clone(),
+                capsule.capsule.lane_summaries.clone(),
+                capsule.capsule.unresolved_gaps.clone(),
+                capsule.capsule.related_refs.clone(),
+            )
+        } else {
+            let import_id = request.import_id.as_deref().expect("checked");
+            let imported = self.load_capsule_import(import_id)?.ok_or_else(|| {
+                ReviewWorkbenchError::CapsuleImportNotFound {
+                    import_id: import_id.to_string(),
+                }
+            })?;
+            if imported.import.trust_status == ReviewCapsuleImportTrustStatus::Invalid {
+                return Err(ReviewWorkbenchError::InvalidRequest(format!(
+                    "imported review capsule `{import_id}` is invalid and cannot be delegated"
+                )));
+            }
+            let capsule = imported.import.capsule.as_ref().ok_or_else(|| {
+                ReviewWorkbenchError::InvalidRequest(format!(
+                    "imported review capsule `{import_id}` does not contain a decoded capsule"
+                ))
+            })?;
+            (
+                ReviewDelegationSourceKind::ImportedCapsule,
+                capsule.capsule_id.clone(),
+                Some(imported.import.import_id.clone()),
+                capsule.signature.signer_id.clone(),
+                capsule.signature.key_id.clone(),
+                Some(imported.import.trust_status),
+                capsule.session_id.clone(),
+                capsule.artifact_refs.clone(),
+                capsule.lane_summaries.clone(),
+                capsule.unresolved_gaps.clone(),
+                capsule.related_refs.clone(),
+            )
+        };
+
+        let payload = ReviewDelegationPayload {
+            session_id: session_id.clone(),
+            source_capsule_id: source_capsule_id.clone(),
+            source_import_id: source_import_id.clone(),
+            reason: reason.clone(),
+            delegate_label: delegate_label.clone(),
+            imported_trust_status,
+            advisory_only: true,
+            artifact_refs: artifact_refs.clone(),
+            lane_summaries: lane_summaries.clone(),
+            unresolved_gaps: unresolved_gaps.clone(),
+            related_refs: related_refs.clone(),
+        };
+        let canonical_payload = canonical_json_string(&payload)?;
+        let payload_sha256 = sha256_hex(canonical_payload.as_bytes());
+        let signer = self.load_signer()?;
+        let packet = ReviewDelegationPacket {
+            delegation_id: format!("review_delegation:{}", now_unix_nanos()),
+            schema_version: "v1".to_string(),
+            created_at_ms: now_ms(),
+            session_id,
+            source_kind,
+            source_capsule_id,
+            source_import_id,
+            source_signer_id,
+            source_signer_key_id,
+            imported_trust_status,
+            reason,
+            delegate_label,
+            advisory_only: true,
+            artifact_refs,
+            lane_summaries,
+            unresolved_gaps,
+            related_refs,
+            payload_sha256,
+            canonical_payload,
+            signature: empty_signature_placeholder(),
+        };
+        let signature = signer.sign(&review_delegation_signature_statement_bytes(&packet)?);
+        let packet = ReviewDelegationPacket {
+            signature: signature_from_detached(self.signer_id.clone(), signature),
+            ..packet
+        };
+        self.delegation_store.persist(&packet).map_err(Into::into)
+    }
+
+    pub fn load_delegation(
+        &self,
+        delegation_id: &str,
+    ) -> Result<Option<ReviewDelegationPacketLookup>, ReviewWorkbenchError> {
+        self.delegation_store
+            .load(delegation_id)
+            .map_err(Into::into)
+    }
+
+    pub fn list_delegations(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<ReviewDelegationPacketList, ReviewWorkbenchError> {
+        self.delegation_store.list(session_id).map_err(Into::into)
     }
 
     pub fn create_promotion_readiness_review(
@@ -1446,6 +2710,49 @@ impl DefaultReviewWorkbenchHarness {
         session_id: Option<&str>,
     ) -> Result<ReviewSessionMaintenanceHandoffList, ReviewWorkbenchError> {
         self.handoff_store.list(session_id).map_err(Into::into)
+    }
+
+    fn build_capsule(
+        &self,
+        request: ReviewCapsuleBuildRequest,
+    ) -> Result<ReviewCapsule, ReviewWorkbenchError> {
+        let canonical_payload = canonical_json_string(&request.payload)?;
+        let payload_sha256 = sha256_hex(canonical_payload.as_bytes());
+        let signer = self.load_signer()?;
+        let capsule = ReviewCapsule {
+            capsule_id: format!("review_capsule:{}", now_unix_nanos()),
+            schema_version: "v1".to_string(),
+            created_at_ms: now_ms(),
+            session_id: request.session_id,
+            title: request.title,
+            notes: request.notes,
+            source_kind: request.source_kind,
+            source_id: request.source_id,
+            artifact_refs: request.artifact_refs,
+            lane_summaries: request.lane_summaries,
+            unresolved_gaps: request.unresolved_gaps,
+            related_refs: request.related_refs,
+            advisory_only: true,
+            payload_sha256,
+            canonical_payload,
+            signature: empty_signature_placeholder(),
+        };
+        let signature = signer.sign(&review_capsule_signature_statement_bytes(&capsule)?);
+        Ok(ReviewCapsule {
+            signature: signature_from_detached(self.signer_id.clone(), signature),
+            ..capsule
+        })
+    }
+
+    fn load_signer(&self) -> Result<Ed25519Signer, ReviewWorkbenchError> {
+        let secret_material = std::env::var(&self.signing_key_env)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ReviewWorkbenchError::MissingSigningKey {
+                env_name: self.signing_key_env.clone(),
+            })?;
+        Ok(Ed25519Signer::from_secret_material(&secret_material))
     }
 
     fn resolve_lookup(
@@ -1704,6 +3011,109 @@ pub fn render_review_session_export(export: &ReviewSessionExport) -> String {
         format!("Unresolved gaps: {}", export.unresolved_gaps.len()),
     ];
     for summary in &export.lane_summaries {
+        lines.push(format!(
+            "- {} | artifacts={} | bundles={} | verifications={} | packets={}",
+            summary.lane.title(),
+            summary.artifact_count,
+            summary.evidence_bundle_count,
+            summary.verification_count,
+            summary.promotion_packet_count
+        ));
+    }
+    lines.join("\n")
+}
+
+pub fn render_review_capsule(capsule: &ReviewCapsule) -> String {
+    let mut lines = vec![
+        "Swarm Team Six Portable Review Capsule".to_string(),
+        format!("Capsule ID: {}", capsule.capsule_id),
+        format!("Session ID: {}", capsule.session_id),
+        format!(
+            "Source: {} ({})",
+            capsule.source_kind.as_str(),
+            capsule.source_id
+        ),
+        format!("Artifacts: {}", capsule.artifact_refs.len()),
+        format!("Lane summaries: {}", capsule.lane_summaries.len()),
+        format!("Unresolved gaps: {}", capsule.unresolved_gaps.len()),
+        format!("Related refs: {}", capsule.related_refs.len()),
+        format!(
+            "Signer: {} ({})",
+            capsule.signature.signer_id, capsule.signature.key_id
+        ),
+        format!("Advisory only: {}", capsule.advisory_only),
+    ];
+    if let Some(title) = capsule.title.as_deref() {
+        lines.push(format!("Title: {}", title));
+    }
+    if let Some(notes) = capsule.notes.as_deref() {
+        lines.push(format!("Notes: {}", notes));
+    }
+    for summary in &capsule.lane_summaries {
+        lines.push(format!(
+            "- {} | artifacts={} | bundles={} | verifications={} | packets={}",
+            summary.lane.title(),
+            summary.artifact_count,
+            summary.evidence_bundle_count,
+            summary.verification_count,
+            summary.promotion_packet_count
+        ));
+    }
+    lines.join("\n")
+}
+
+pub fn render_review_capsule_import(import: &ReviewCapsuleImport) -> String {
+    let mut lines = vec![
+        "Swarm Team Six Review Capsule Import".to_string(),
+        format!("Import ID: {}", import.import_id),
+        format!("Source path: {}", import.source_path),
+        format!("Trust status: {}", import.trust_status.as_str()),
+        format!("Checks: {}", import.checks.len()),
+    ];
+    if let Some(capsule_id) = import.source_capsule_id.as_deref() {
+        lines.push(format!("Capsule ID: {}", capsule_id));
+    }
+    if let Some(session_id) = import.session_id.as_deref() {
+        lines.push(format!("Session ID: {}", session_id));
+    }
+    if let Some(signer_id) = import.remote_signer_id.as_deref() {
+        lines.push(format!("Remote signer: {}", signer_id));
+    }
+    if let Some(key_id) = import.remote_signer_key_id.as_deref() {
+        lines.push(format!("Remote key: {}", key_id));
+    }
+    for check in &import.checks {
+        lines.push(format!(
+            "- {} | passed={} | {}",
+            check.name, check.passed, check.details
+        ));
+    }
+    lines.join("\n")
+}
+
+pub fn render_review_delegation_packet(packet: &ReviewDelegationPacket) -> String {
+    let mut lines = vec![
+        "Swarm Team Six Review Delegation Packet".to_string(),
+        format!("Delegation ID: {}", packet.delegation_id),
+        format!("Session ID: {}", packet.session_id),
+        format!("Source kind: {}", packet.source_kind.as_str()),
+        format!("Source capsule: {}", packet.source_capsule_id),
+        format!("Reason: {}", packet.reason),
+        format!("Advisory only: {}", packet.advisory_only),
+    ];
+    if let Some(import_id) = packet.source_import_id.as_deref() {
+        lines.push(format!("Source import: {}", import_id));
+    }
+    if let Some(delegate_label) = packet.delegate_label.as_deref() {
+        lines.push(format!("Delegate label: {}", delegate_label));
+    }
+    if let Some(imported_trust_status) = packet.imported_trust_status {
+        lines.push(format!(
+            "Imported trust status: {}",
+            imported_trust_status.as_str()
+        ));
+    }
+    for summary in &packet.lane_summaries {
         lines.push(format!(
             "- {} | artifacts={} | bundles={} | verifications={} | packets={}",
             summary.lane.title(),
@@ -2149,6 +3559,196 @@ fn promotion_readiness_recommendation(
         ReviewPromotionReadinessRecommendation::ReadyForAdvisoryPromotionReview
     } else {
         ReviewPromotionReadinessRecommendation::Blocked
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ReviewCapsuleSignatureStatement<'a> {
+    capsule_id: &'a str,
+    schema_version: &'a str,
+    created_at_ms: i64,
+    session_id: &'a str,
+    source_kind: &'a str,
+    source_id: &'a str,
+    payload_sha256: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct ReviewDelegationSignatureStatement<'a> {
+    delegation_id: &'a str,
+    schema_version: &'a str,
+    created_at_ms: i64,
+    session_id: &'a str,
+    source_kind: &'a str,
+    source_capsule_id: &'a str,
+    source_import_id: Option<&'a str>,
+    payload_sha256: &'a str,
+}
+
+fn collect_related_refs_from_export(export: &ReviewSessionExport) -> Vec<EvidenceRelatedRef> {
+    let mut refs = Vec::new();
+    for bundle in &export.evidence_bundles {
+        push_unique_related_ref(
+            &mut refs,
+            bundle.subject_kind.as_str(),
+            bundle.subject_id.clone(),
+        );
+        push_unique_related_ref(&mut refs, "evidence_bundle", bundle.bundle_id.clone());
+        if let Some(verification_id) = bundle.latest_verification_id.as_ref() {
+            push_unique_related_ref(&mut refs, "evidence_verification", verification_id.clone());
+        }
+        for related in &bundle.related_refs {
+            push_unique_related_ref(&mut refs, &related.kind, related.id.clone());
+        }
+    }
+    for packet in &export.promotion_packets {
+        push_unique_related_ref(
+            &mut refs,
+            "promotion_evidence_packet",
+            packet.packet_id.clone(),
+        );
+        push_unique_related_ref(
+            &mut refs,
+            "production_promotion",
+            packet.promotion_id.clone(),
+        );
+        push_unique_related_ref(&mut refs, "canary_run", packet.canary_run_id.clone());
+        push_unique_related_ref(
+            &mut refs,
+            "evidence_verification",
+            packet.verification_id.clone(),
+        );
+        push_unique_related_ref(&mut refs, "strategy_shadow", packet.shadow_id.clone());
+    }
+    refs
+}
+
+fn collect_related_refs_from_resolved(resolved: &ReviewSessionResolved) -> Vec<EvidenceRelatedRef> {
+    let mut refs = Vec::new();
+    for bundle in &resolved.evidence_bundles {
+        push_unique_related_ref(
+            &mut refs,
+            bundle.record.subject_kind.as_str(),
+            bundle.record.subject_id.clone(),
+        );
+        push_unique_related_ref(
+            &mut refs,
+            "evidence_bundle",
+            bundle.record.bundle_id.clone(),
+        );
+        if let Some(verification_id) = bundle.record.latest_verification_id.as_ref() {
+            push_unique_related_ref(&mut refs, "evidence_verification", verification_id.clone());
+        }
+        for related in &bundle.bundle.subject.related_refs {
+            push_unique_related_ref(&mut refs, &related.kind, related.id.clone());
+        }
+    }
+    for packet in &resolved.promotion_packets {
+        push_unique_related_ref(
+            &mut refs,
+            "promotion_evidence_packet",
+            packet.packet.packet_id.clone(),
+        );
+        push_unique_related_ref(
+            &mut refs,
+            "production_promotion",
+            packet.packet.promotion_id.clone(),
+        );
+    }
+    refs
+}
+
+fn push_unique_related_ref(
+    target: &mut Vec<EvidenceRelatedRef>,
+    kind: impl Into<String>,
+    id: impl Into<String>,
+) {
+    let kind = kind.into();
+    let id = id.into();
+    if kind.trim().is_empty() || id.trim().is_empty() {
+        return;
+    }
+    if !target
+        .iter()
+        .any(|existing| existing.kind == kind && existing.id == id)
+    {
+        target.push(EvidenceRelatedRef { kind, id });
+    }
+}
+
+fn review_capsule_signature_statement_bytes(
+    capsule: &ReviewCapsule,
+) -> Result<Vec<u8>, CryptoError> {
+    canonical_json_bytes(&ReviewCapsuleSignatureStatement {
+        capsule_id: &capsule.capsule_id,
+        schema_version: &capsule.schema_version,
+        created_at_ms: capsule.created_at_ms,
+        session_id: &capsule.session_id,
+        source_kind: capsule.source_kind.as_str(),
+        source_id: &capsule.source_id,
+        payload_sha256: &capsule.payload_sha256,
+    })
+}
+
+fn review_delegation_signature_statement_bytes(
+    packet: &ReviewDelegationPacket,
+) -> Result<Vec<u8>, CryptoError> {
+    canonical_json_bytes(&ReviewDelegationSignatureStatement {
+        delegation_id: &packet.delegation_id,
+        schema_version: &packet.schema_version,
+        created_at_ms: packet.created_at_ms,
+        session_id: &packet.session_id,
+        source_kind: packet.source_kind.as_str(),
+        source_capsule_id: &packet.source_capsule_id,
+        source_import_id: packet.source_import_id.as_deref(),
+        payload_sha256: &packet.payload_sha256,
+    })
+}
+
+fn signature_from_detached(
+    signer_id: String,
+    detached: swarm_crypto::DetachedSignature,
+) -> EvidenceSignature {
+    EvidenceSignature {
+        signer_id,
+        algorithm: detached.algorithm,
+        key_id: detached.key_id,
+        public_key_hex: detached.public_key_hex,
+        signature_hex: detached.signature_hex,
+    }
+}
+
+fn signature_to_detached(signature: &EvidenceSignature) -> swarm_crypto::DetachedSignature {
+    swarm_crypto::DetachedSignature {
+        algorithm: signature.algorithm.clone(),
+        key_id: signature.key_id.clone(),
+        public_key_hex: signature.public_key_hex.clone(),
+        signature_hex: signature.signature_hex.clone(),
+    }
+}
+
+fn resolve_trusted_key_id(signing_key_env: &str, expected_key_id: Option<&str>) -> Option<String> {
+    if let Some(expected_key_id) = expected_key_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(expected_key_id.to_string());
+    }
+    std::env::var(signing_key_env)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(|secret_material| Ed25519Signer::from_secret_material(&secret_material))
+        .map(|signer| signer.key_id().to_string())
+}
+
+fn empty_signature_placeholder() -> EvidenceSignature {
+    EvidenceSignature {
+        signer_id: String::new(),
+        algorithm: String::new(),
+        key_id: String::new(),
+        public_key_hex: String::new(),
+        signature_hex: String::new(),
     }
 }
 

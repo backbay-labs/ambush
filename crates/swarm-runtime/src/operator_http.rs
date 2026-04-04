@@ -22,7 +22,9 @@ use crate::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioList,
 };
 use crate::review_workbench::{
-    DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind,
+    DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind, ReviewCapsule,
+    ReviewCapsuleImport, ReviewCapsuleImportList, ReviewCapsuleImportRequest, ReviewCapsuleList,
+    ReviewDelegationCreateRequest, ReviewDelegationPacket, ReviewDelegationPacketList,
     ReviewSessionCreateRequest, ReviewSessionExport, ReviewSessionList,
     ReviewSessionMaintenanceHandoff, ReviewSessionMaintenanceHandoffList,
     ReviewSessionPromotionReadiness, ReviewSessionPromotionReadinessList, ReviewSessionResolved,
@@ -44,6 +46,8 @@ use swarm_core::config::SwarmConfig;
 /// Result directories required to expose evolution review artifacts through HTTP.
 #[derive(Debug, Clone)]
 pub struct OperatorSurfacePaths {
+    pub evidence_signer_id: String,
+    pub evidence_signing_key_env: String,
     pub evolution_ranking_results_dir: PathBuf,
     pub evolution_selection_results_dir: PathBuf,
     pub evolution_portfolio_results_dir: PathBuf,
@@ -59,6 +63,9 @@ pub struct OperatorSurfacePaths {
     pub review_session_export_results_dir: PathBuf,
     pub review_session_readiness_results_dir: PathBuf,
     pub review_session_handoff_results_dir: PathBuf,
+    pub review_capsule_results_dir: PathBuf,
+    pub review_capsule_import_results_dir: PathBuf,
+    pub review_delegation_results_dir: PathBuf,
 }
 
 /// Errors raised while building or serving the authenticated operator surface.
@@ -207,6 +214,18 @@ struct ReviewSessionHandoffForm {
     selected_artifact_refs: Option<String>,
     expected_key_id: Option<String>,
     reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewCapsuleImportForm {
+    source_path: String,
+    expected_key_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewDelegationForm {
+    reason: String,
+    delegate_label: Option<String>,
 }
 
 struct OperatorApiError {
@@ -463,6 +482,10 @@ impl LocalOperatorSurface {
                 post(review_session_export_handler),
             )
             .route(
+                "/v1/operator/review/sessions/{session_id}/capsules",
+                post(review_session_capsule_handler),
+            )
+            .route(
                 "/v1/operator/review/sessions/{session_id}/promotion-readiness",
                 post(review_session_promotion_readiness_handler),
             )
@@ -475,8 +498,36 @@ impl LocalOperatorSurface {
                 get(review_session_export_page_handler),
             )
             .route(
+                "/v1/operator/review/capsules/{capsule_id}",
+                get(review_capsule_page_handler),
+            )
+            .route(
+                "/v1/operator/review/capsules/{capsule_id}/delegations",
+                post(review_capsule_delegation_handler),
+            )
+            .route(
+                "/v1/operator/review/capsule-imports",
+                post(review_capsule_import_handler),
+            )
+            .route(
+                "/v1/operator/review/capsule-imports/{import_id}",
+                get(review_capsule_import_page_handler),
+            )
+            .route(
+                "/v1/operator/review/capsule-imports/{import_id}/delegations",
+                post(review_capsule_import_delegation_handler),
+            )
+            .route(
+                "/v1/operator/review/delegations/{delegation_id}",
+                get(review_delegation_page_handler),
+            )
+            .route(
                 "/v1/operator/review/promotion-readiness/{readiness_id}",
                 get(review_session_promotion_readiness_page_handler),
+            )
+            .route(
+                "/v1/operator/review/promotion-readiness/{readiness_id}/capsules",
+                post(review_session_readiness_capsule_handler),
             )
             .route(
                 "/v1/operator/review/handoffs/{handoff_id}",
@@ -665,7 +716,35 @@ async fn review_home_handler(
         Some(state.max_list_results),
         state.max_list_results,
     );
-    Ok(Html(render_review_home_page(&bundles, &packets, &sessions)))
+    let capsules = limit_review_capsule_list(
+        workbench
+            .list_capsules(None)
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    let imports = limit_review_capsule_import_list(
+        workbench
+            .list_capsule_imports()
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    let delegations = limit_review_delegation_list(
+        workbench
+            .list_delegations(None)
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    Ok(Html(render_review_home_page(
+        &bundles,
+        &packets,
+        &sessions,
+        &capsules,
+        &imports,
+        &delegations,
+    )))
 }
 
 async fn review_session_list_handler(
@@ -728,11 +807,27 @@ async fn review_session_handler(
         Some(state.max_list_results),
         state.max_list_results,
     );
+    let capsules = limit_review_capsule_list(
+        service
+            .list_capsules(Some(&session_id))
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    let delegations = limit_review_delegation_list(
+        service
+            .list_delegations(Some(&session_id))
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
     Ok(Html(render_review_session_page(
         &resolved,
         &exports.exports,
         &readiness_reports.readiness_reports,
         &handoffs.handoffs,
+        &capsules.capsules,
+        &delegations.delegations,
     )))
 }
 
@@ -750,6 +845,20 @@ async fn review_session_export_handler(
     )))
 }
 
+async fn review_session_capsule_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(session_id): RoutePath<String>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .create_capsule_from_session(&session_id)
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/capsules/{}",
+        lookup.capsule.capsule_id
+    )))
+}
+
 async fn review_session_export_page_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(export_id): RoutePath<String>,
@@ -764,6 +873,53 @@ async fn review_session_export_page_handler(
             ))
         })?;
     Ok(Html(render_review_session_export_page(&lookup.export)))
+}
+
+async fn review_capsule_page_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(capsule_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .load_capsule(&capsule_id)
+        .map_err(map_review_workbench_error)?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!("review capsule `{capsule_id}` was not found"))
+        })?;
+    Ok(Html(render_review_capsule_page(&lookup.capsule)))
+}
+
+async fn review_capsule_import_handler(
+    State(state): State<OperatorHttpState>,
+    Form(form): Form<ReviewCapsuleImportForm>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .import_capsule(ReviewCapsuleImportRequest {
+            source_path: form.source_path,
+            expected_key_id: normalize_form_optional_text(form.expected_key_id),
+        })
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/capsule-imports/{}",
+        lookup.import.import_id
+    )))
+}
+
+async fn review_capsule_import_page_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(import_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .load_capsule_import(&import_id)
+        .map_err(map_review_workbench_error)?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!(
+                "review capsule import `{import_id}` was not found"
+            ))
+        })?;
+    Ok(Html(render_review_capsule_import_page(&lookup.import)))
 }
 
 async fn review_session_promotion_readiness_handler(
@@ -798,6 +954,20 @@ async fn review_session_promotion_readiness_page_handler(
     )))
 }
 
+async fn review_session_readiness_capsule_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(readiness_id): RoutePath<String>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .create_capsule_from_readiness(&readiness_id)
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/capsules/{}",
+        lookup.capsule.capsule_id
+    )))
+}
+
 async fn review_session_handoff_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(session_id): RoutePath<String>,
@@ -824,6 +994,46 @@ async fn review_session_handoff_handler(
     )))
 }
 
+async fn review_capsule_delegation_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(capsule_id): RoutePath<String>,
+    Form(form): Form<ReviewDelegationForm>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .create_delegation_packet(ReviewDelegationCreateRequest {
+            capsule_id: Some(capsule_id),
+            import_id: None,
+            reason: form.reason,
+            delegate_label: normalize_form_optional_text(form.delegate_label),
+        })
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/delegations/{}",
+        lookup.packet.delegation_id
+    )))
+}
+
+async fn review_capsule_import_delegation_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(import_id): RoutePath<String>,
+    Form(form): Form<ReviewDelegationForm>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .create_delegation_packet(ReviewDelegationCreateRequest {
+            capsule_id: None,
+            import_id: Some(import_id),
+            reason: form.reason,
+            delegate_label: normalize_form_optional_text(form.delegate_label),
+        })
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/delegations/{}",
+        lookup.packet.delegation_id
+    )))
+}
+
 async fn review_session_handoff_page_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(handoff_id): RoutePath<String>,
@@ -838,6 +1048,22 @@ async fn review_session_handoff_page_handler(
             ))
         })?;
     Ok(Html(render_review_session_handoff_page(&lookup.handoff)))
+}
+
+async fn review_delegation_page_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(delegation_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .load_delegation(&delegation_id)
+        .map_err(map_review_workbench_error)?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!(
+                "review delegation `{delegation_id}` was not found"
+            ))
+        })?;
+    Ok(Html(render_review_delegation_page(&lookup.packet)))
 }
 
 async fn review_evidence_list_handler(
@@ -1361,6 +1587,19 @@ fn map_review_workbench_error(error: ReviewWorkbenchError) -> OperatorReviewErro
         ReviewWorkbenchError::ExportNotFound { export_id } => OperatorReviewError::not_found(
             format!("review session export `{export_id}` was not found"),
         ),
+        ReviewWorkbenchError::CapsuleNotFound { capsule_id } => {
+            OperatorReviewError::not_found(format!("review capsule `{capsule_id}` was not found"))
+        }
+        ReviewWorkbenchError::CapsuleImportNotFound { import_id } => {
+            OperatorReviewError::not_found(format!(
+                "review capsule import `{import_id}` was not found"
+            ))
+        }
+        ReviewWorkbenchError::DelegationNotFound { delegation_id } => {
+            OperatorReviewError::not_found(format!(
+                "review delegation `{delegation_id}` was not found"
+            ))
+        }
         ReviewWorkbenchError::HandoffNotFound { handoff_id } => OperatorReviewError::not_found(
             format!("review session handoff `{handoff_id}` was not found"),
         ),
@@ -1456,6 +1695,28 @@ fn limit_review_session_export_list(
     list
 }
 
+fn limit_review_capsule_list(
+    mut list: ReviewCapsuleList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> ReviewCapsuleList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.capsules = list.capsules.into_iter().take(limit).collect();
+    list.total_count = list.capsules.len();
+    list
+}
+
+fn limit_review_capsule_import_list(
+    mut list: ReviewCapsuleImportList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> ReviewCapsuleImportList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.imports = list.imports.into_iter().take(limit).collect();
+    list.total_count = list.imports.len();
+    list
+}
+
 fn limit_review_session_handoff_list(
     mut list: ReviewSessionMaintenanceHandoffList,
     requested_limit: Option<usize>,
@@ -1464,6 +1725,17 @@ fn limit_review_session_handoff_list(
     let limit = effective_limit(requested_limit, max_limit);
     list.handoffs = list.handoffs.into_iter().take(limit).collect();
     list.total_count = list.handoffs.len();
+    list
+}
+
+fn limit_review_delegation_list(
+    mut list: ReviewDelegationPacketList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> ReviewDelegationPacketList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.delegations = list.delegations.into_iter().take(limit).collect();
+    list.total_count = list.delegations.len();
     list
 }
 
@@ -1835,6 +2107,8 @@ fn render_review_session_page(
     exports: &[crate::review_workbench::ReviewSessionExportRecord],
     readiness_reports: &[crate::review_workbench::ReviewSessionPromotionReadinessRecord],
     handoffs: &[crate::review_workbench::ReviewSessionMaintenanceHandoffRecord],
+    capsules: &[crate::review_workbench::ReviewCapsuleRecord],
+    delegations: &[crate::review_workbench::ReviewDelegationPacketRecord],
 ) -> String {
     let mut lane_rows = String::new();
     for summary in &resolved.lane_summaries {
@@ -2009,9 +2283,47 @@ fn render_review_session_page(
         );
     }
 
+    let mut capsule_rows = String::new();
+    for capsule in capsules {
+        capsule_rows.push_str(&format!(
+            "<tr><td>{capsule_link}</td><td><code>{source_kind}</code></td><td><code>{key_id}</code></td><td>{gaps}</td></tr>",
+            capsule_link = review_link(
+                &format!("/v1/operator/review/capsules/{}", capsule.capsule_id),
+                &capsule.capsule_id
+            ),
+            source_kind = escape_html(capsule.source_kind.as_str()),
+            key_id = escape_html(&capsule.signer_key_id),
+            gaps = capsule.gap_count
+        ));
+    }
+    if capsule_rows.is_empty() {
+        capsule_rows.push_str(
+            "<tr><td colspan=\"4\" class=\"muted\">No portable review capsules created yet.</td></tr>",
+        );
+    }
+
+    let mut delegation_rows = String::new();
+    for delegation in delegations {
+        delegation_rows.push_str(&format!(
+            "<tr><td>{delegation_link}</td><td><code>{source_kind}</code></td><td><code>{capsule_id}</code></td><td>{gaps}</td></tr>",
+            delegation_link = review_link(
+                &format!("/v1/operator/review/delegations/{}", delegation.delegation_id),
+                &delegation.delegation_id
+            ),
+            source_kind = escape_html(delegation.source_kind.as_str()),
+            capsule_id = escape_html(&delegation.source_capsule_id),
+            gaps = delegation.gap_count
+        ));
+    }
+    if delegation_rows.is_empty() {
+        delegation_rows.push_str(
+            "<tr><td colspan=\"4\" class=\"muted\">No delegation packets created yet.</td></tr>",
+        );
+    }
+
     render_review_layout(
         "Review Session Detail",
-        "Compare the reviewed evidence set across governance-prep, canary, and production lanes, export a stable snapshot, or launch one bounded evidence re-verification handoff.",
+        "Compare the reviewed evidence set across governance-prep, canary, and production lanes, export a stable snapshot, sign a portable capsule, or launch one bounded evidence re-verification handoff.",
         &format!(
             "<section class=\"card\">\
                 <div class=\"meta\">\
@@ -2028,6 +2340,13 @@ fn render_review_session_page(
                             <button type=\"submit\">Create Export</button>\
                         </form>\
                         <p class=\"muted\">Exports preserve digests, signer metadata, verification state, and related stable references for this session.</p>\
+                    </article>\
+                    <article class=\"card\">\
+                        <h3>Portable Review Capsule</h3>\
+                        <form method=\"post\" action=\"/v1/operator/review/sessions/{session_id}/capsules\">\
+                            <button type=\"submit\">Create Signed Capsule</button>\
+                        </form>\
+                        <p class=\"muted\">Portable capsules package the cross-lane session into one signed review artifact for external verification without direct store access.</p>\
                     </article>\
                     <article class=\"card\">\
                         <h3>Promotion Readiness Review</h3>\
@@ -2058,7 +2377,9 @@ fn render_review_session_page(
             <section class=\"grid\" style=\"margin-top:18px;\">\
                 <article class=\"card\"><h2>Promotion Evidence Packets</h2><table><thead><tr><th>Packet</th><th>Promotion</th><th>Recommendation</th><th>Attachments</th></tr></thead><tbody>{packet_rows}</tbody></table></article>\
                 <article class=\"card\"><h2>Recent Exports</h2><table><thead><tr><th>Export</th><th>Artifacts</th></tr></thead><tbody>{export_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Portable Capsules</h2><table><thead><tr><th>Capsule</th><th>Source</th><th>Signer Key</th><th>Gaps</th></tr></thead><tbody>{capsule_rows}</tbody></table>\
                 <h2 style=\"margin-top:20px;\">Promotion Readiness Reviews</h2><table><thead><tr><th>Review</th><th>Recommendation</th><th>Gaps</th></tr></thead><tbody>{readiness_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Delegation Packets</h2><table><thead><tr><th>Delegation</th><th>Source</th><th>Capsule</th><th>Gaps</th></tr></thead><tbody>{delegation_rows}</tbody></table>\
                 <h2 style=\"margin-top:20px;\">Recent Handoffs</h2><table><thead><tr><th>Handoff</th><th>Status</th><th>Actions</th></tr></thead><tbody>{handoff_rows}</tbody></table></article>\
             </section>",
             session_id = escape_html(&resolved.session.report.session_id),
@@ -2079,7 +2400,9 @@ fn render_review_session_page(
             verification_rows = verification_rows,
             packet_rows = packet_rows,
             export_rows = export_rows,
+            capsule_rows = capsule_rows,
             readiness_rows = readiness_rows,
+            delegation_rows = delegation_rows,
             handoff_rows = handoff_rows
         ),
     )
@@ -2216,6 +2539,166 @@ fn render_review_session_export_page(export: &ReviewSessionExport) -> String {
     )
 }
 
+fn render_review_capsule_page(capsule: &ReviewCapsule) -> String {
+    let mut lane_rows = String::new();
+    for summary in &capsule.lane_summaries {
+        lane_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td>{artifacts}</td><td>{bundles}</td><td>{verifications}</td><td>{packets}</td></tr>",
+            lane = escape_html(summary.lane.title()),
+            artifacts = summary.artifact_count,
+            bundles = summary.evidence_bundle_count,
+            verifications = summary.verification_count,
+            packets = summary.promotion_packet_count
+        ));
+    }
+    if lane_rows.is_empty() {
+        lane_rows.push_str(
+            "<tr><td colspan=\"5\" class=\"muted\">No lane summaries captured.</td></tr>",
+        );
+    }
+
+    let mut gap_rows = String::new();
+    for gap in &capsule.unresolved_gaps {
+        gap_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td><code>{code}</code></td><td>{details}</td></tr>",
+            lane = escape_html(
+                gap.lane
+                    .map(|lane| lane.title().to_string())
+                    .unwrap_or_else(|| "Cross-Lane".to_string())
+                    .as_str()
+            ),
+            code = escape_html(&gap.code),
+            details = escape_html(&gap.details)
+        ));
+    }
+    if gap_rows.is_empty() {
+        gap_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No unresolved gaps captured.</td></tr>",
+        );
+    }
+
+    let mut related_ref_rows = String::new();
+    for related in &capsule.related_refs {
+        related_ref_rows.push_str(&format!(
+            "<tr><td><code>{kind}</code></td><td><code>{id}</code></td></tr>",
+            kind = escape_html(&related.kind),
+            id = escape_html(&related.id)
+        ));
+    }
+    if related_ref_rows.is_empty() {
+        related_ref_rows.push_str(
+            "<tr><td colspan=\"2\" class=\"muted\">No related stable refs preserved.</td></tr>",
+        );
+    }
+
+    render_review_layout(
+        "Portable Review Capsule",
+        "Signed cross-lane review capsule suitable for external verification without direct store access.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Capsule ID</dt><dd><code>{capsule_id}</code></dd></div>\
+                    <div><dt>Session ID</dt><dd>{session_link}</dd></div>\
+                    <div><dt>Source</dt><dd><code>{source_kind}</code> / <code>{source_id}</code></dd></div>\
+                    <div><dt>Signer</dt><dd><code>{signer_id}</code></dd></div>\
+                    <div><dt>Signer Key</dt><dd><code>{signer_key_id}</code></dd></div>\
+                    <div><dt>Advisory Only</dt><dd>{advisory_only}</dd></div>\
+                </div>\
+                <p class=\"muted\">This capsule is signed and portable. It preserves lane summaries, unresolved gaps, and stable evidence references without exposing the local store.</p>\
+                <form class=\"toolbar\" method=\"post\" action=\"/v1/operator/review/capsules/{capsule_id}/delegations\">\
+                    <label>Reason<input type=\"text\" name=\"reason\" placeholder=\"handoff this signed review to a separate trust boundary\"></label>\
+                    <label>Delegate label<input type=\"text\" name=\"delegate_label\" placeholder=\"optional external review group\"></label>\
+                    <button type=\"submit\">Create Delegation Packet</button>\
+                </form>\
+                <h2>Lane Summary</h2><table><thead><tr><th>Lane</th><th>Artifacts</th><th>Bundles</th><th>Verifications</th><th>Packets</th></tr></thead><tbody>{lane_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Unresolved Gaps</h2><table><thead><tr><th>Lane</th><th>Code</th><th>Details</th></tr></thead><tbody>{gap_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Related Stable Refs</h2><table><thead><tr><th>Kind</th><th>ID</th></tr></thead><tbody>{related_ref_rows}</tbody></table>\
+            </section>",
+            capsule_id = escape_html(&capsule.capsule_id),
+            session_link = review_link(
+                &format!("/v1/operator/review/sessions/{}", capsule.session_id),
+                &capsule.session_id
+            ),
+            source_kind = escape_html(capsule.source_kind.as_str()),
+            source_id = escape_html(&capsule.source_id),
+            signer_id = escape_html(&capsule.signature.signer_id),
+            signer_key_id = escape_html(&capsule.signature.key_id),
+            advisory_only = capsule.advisory_only,
+            lane_rows = lane_rows,
+            gap_rows = gap_rows,
+            related_ref_rows = related_ref_rows
+        ),
+    )
+}
+
+fn render_review_capsule_import_page(import: &ReviewCapsuleImport) -> String {
+    let mut check_rows = String::new();
+    for check in &import.checks {
+        check_rows.push_str(&format!(
+            "<tr><td><code>{name}</code></td><td>{status}</td><td>{details}</td></tr>",
+            name = escape_html(&check.name),
+            status = if check.passed {
+                render_status_pill("passed", "passed")
+            } else {
+                render_status_pill("failed", "failed")
+            },
+            details = escape_html(&check.details)
+        ));
+    }
+    if check_rows.is_empty() {
+        check_rows.push_str("<tr><td colspan=\"3\" class=\"muted\">No checks recorded.</td></tr>");
+    }
+
+    let continuation_form = if import.capsule.is_some() {
+        format!(
+            "<form class=\"toolbar\" method=\"post\" action=\"/v1/operator/review/capsule-imports/{import_id}/delegations\">\
+                <label>Reason<input type=\"text\" name=\"reason\" placeholder=\"preserve signed review continuity after import\"></label>\
+                <label>Delegate label<input type=\"text\" name=\"delegate_label\" placeholder=\"optional receiving trust boundary\"></label>\
+                <button type=\"submit\">Create Delegation Packet</button>\
+            </form>",
+            import_id = escape_html(&import.import_id)
+        )
+    } else {
+        "<p class=\"muted\">This import did not decode into a valid review capsule, so delegation is unavailable.</p>".to_string()
+    };
+
+    render_review_layout(
+        "Imported Review Capsule",
+        "Local inspection result for one foreign signed review capsule with explicit local trust status.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Import ID</dt><dd><code>{import_id}</code></dd></div>\
+                    <div><dt>Source Path</dt><dd><code>{source_path}</code></dd></div>\
+                    <div><dt>Trust Status</dt><dd>{trust_status}</dd></div>\
+                    <div><dt>Capsule ID</dt><dd><code>{capsule_id}</code></dd></div>\
+                    <div><dt>Remote Signer</dt><dd><code>{remote_signer}</code></dd></div>\
+                    <div><dt>Remote Key</dt><dd><code>{remote_key}</code></dd></div>\
+                    <div><dt>Trusted Key</dt><dd><code>{trusted_key}</code></dd></div>\
+                </div>\
+                {continuation_form}\
+                <h2>Verification Checks</h2><table><thead><tr><th>Check</th><th>Status</th><th>Details</th></tr></thead><tbody>{check_rows}</tbody></table>\
+            </section>",
+            import_id = escape_html(&import.import_id),
+            source_path = escape_html(&import.source_path),
+            trust_status =
+                render_status_pill(import.trust_status.as_str(), import.trust_status.as_str()),
+            capsule_id = escape_html(import.source_capsule_id.as_deref().unwrap_or("unavailable")),
+            remote_signer =
+                escape_html(import.remote_signer_id.as_deref().unwrap_or("unavailable")),
+            remote_key = escape_html(
+                import
+                    .remote_signer_key_id
+                    .as_deref()
+                    .unwrap_or("unavailable")
+            ),
+            trusted_key = escape_html(import.trusted_key_id.as_deref().unwrap_or("none")),
+            continuation_form = continuation_form,
+            check_rows = check_rows
+        ),
+    )
+}
+
 fn render_review_session_promotion_readiness_page(
     readiness: &ReviewSessionPromotionReadiness,
 ) -> String {
@@ -2266,6 +2749,9 @@ fn render_review_session_promotion_readiness_page(
                     <div><dt>Recommendation</dt><dd>{recommendation}</dd></div>\
                     <div><dt>Advisory Only</dt><dd>{advisory_only}</dd></div>\
                 </div>\
+                <form method=\"post\" action=\"/v1/operator/review/promotion-readiness/{readiness_id}/capsules\">\
+                    <button type=\"submit\">Create Signed Capsule</button>\
+                </form>\
                 <h2>Lane Summary</h2><table><thead><tr><th>Lane</th><th>Artifacts</th><th>Bundles</th><th>Verifications</th><th>Packets</th></tr></thead><tbody>{lane_rows}</tbody></table>\
                 <h2 style=\"margin-top:20px;\">Blocking Gaps</h2><table><thead><tr><th>Lane</th><th>Code</th><th>Details</th></tr></thead><tbody>{gap_rows}</tbody></table>\
             </section>",
@@ -2361,6 +2847,63 @@ fn render_review_session_handoff_page(handoff: &ReviewSessionMaintenanceHandoff)
     )
 }
 
+fn render_review_delegation_page(packet: &ReviewDelegationPacket) -> String {
+    let mut lane_rows = String::new();
+    for summary in &packet.lane_summaries {
+        lane_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td>{artifacts}</td><td>{bundles}</td><td>{verifications}</td><td>{packets}</td></tr>",
+            lane = escape_html(summary.lane.title()),
+            artifacts = summary.artifact_count,
+            bundles = summary.evidence_bundle_count,
+            verifications = summary.verification_count,
+            packets = summary.promotion_packet_count
+        ));
+    }
+    if lane_rows.is_empty() {
+        lane_rows.push_str(
+            "<tr><td colspan=\"5\" class=\"muted\">No lane summaries preserved.</td></tr>",
+        );
+    }
+
+    render_review_layout(
+        "Review Delegation Packet",
+        "Signed advisory-only continuity artifact preserving one review handoff across trust boundaries.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Delegation ID</dt><dd><code>{delegation_id}</code></dd></div>\
+                    <div><dt>Session ID</dt><dd>{session_link}</dd></div>\
+                    <div><dt>Source Capsule</dt><dd>{capsule_link}</dd></div>\
+                    <div><dt>Source Kind</dt><dd><code>{source_kind}</code></dd></div>\
+                    <div><dt>Imported Trust</dt><dd>{imported_trust}</dd></div>\
+                    <div><dt>Signer Key</dt><dd><code>{signer_key}</code></dd></div>\
+                    <div><dt>Delegate Label</dt><dd>{delegate_label}</dd></div>\
+                </div>\
+                <p>{reason}</p>\
+                <h2>Lane Summary</h2><table><thead><tr><th>Lane</th><th>Artifacts</th><th>Bundles</th><th>Verifications</th><th>Packets</th></tr></thead><tbody>{lane_rows}</tbody></table>\
+            </section>",
+            delegation_id = escape_html(&packet.delegation_id),
+            session_link = review_link(
+                &format!("/v1/operator/review/sessions/{}", packet.session_id),
+                &packet.session_id
+            ),
+            capsule_link = review_link(
+                &format!("/v1/operator/review/capsules/{}", packet.source_capsule_id),
+                &packet.source_capsule_id
+            ),
+            source_kind = escape_html(packet.source_kind.as_str()),
+            imported_trust = packet
+                .imported_trust_status
+                .map(|status| render_status_pill(status.as_str(), status.as_str()))
+                .unwrap_or_else(|| "<span class=\"muted\">local capsule</span>".to_string()),
+            signer_key = escape_html(&packet.signature.key_id),
+            delegate_label = escape_html(packet.delegate_label.as_deref().unwrap_or("none")),
+            reason = escape_html(&packet.reason),
+            lane_rows = lane_rows
+        ),
+    )
+}
+
 fn render_maintenance_status_pill(status: OperatorMaintenanceStatus) -> String {
     let (label, class_name) = match status {
         OperatorMaintenanceStatus::Applied => ("applied", "passed"),
@@ -2374,6 +2917,9 @@ fn render_review_home_page(
     bundles: &EvidenceBundleList,
     packets: &PromotionEvidencePacketList,
     sessions: &ReviewSessionList,
+    capsules: &ReviewCapsuleList,
+    imports: &ReviewCapsuleImportList,
+    delegations: &ReviewDelegationPacketList,
 ) -> String {
     let mut bundle_rows = String::new();
     for bundle in &bundles.bundles {
@@ -2429,12 +2975,79 @@ fn render_review_home_page(
         );
     }
 
+    let mut capsule_rows = String::new();
+    for capsule in &capsules.capsules {
+        capsule_rows.push_str(&format!(
+            "<tr><td>{capsule_link}</td><td><code>{source_kind}</code></td><td><code>{key_id}</code></td></tr>",
+            capsule_link = review_link(
+                &format!("/v1/operator/review/capsules/{}", capsule.capsule_id),
+                &capsule.capsule_id
+            ),
+            source_kind = escape_html(capsule.source_kind.as_str()),
+            key_id = escape_html(&capsule.signer_key_id)
+        ));
+    }
+    if capsule_rows.is_empty() {
+        capsule_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No review capsules created yet.</td></tr>",
+        );
+    }
+
+    let mut import_rows = String::new();
+    for import in &imports.imports {
+        import_rows.push_str(&format!(
+            "<tr><td>{import_link}</td><td>{status}</td><td><code>{remote_key}</code></td></tr>",
+            import_link = review_link(
+                &format!("/v1/operator/review/capsule-imports/{}", import.import_id),
+                &import.import_id
+            ),
+            status = render_status_pill(import.trust_status.as_str(), import.trust_status.as_str()),
+            remote_key = escape_html(
+                import
+                    .remote_signer_key_id
+                    .as_deref()
+                    .unwrap_or("unavailable")
+            )
+        ));
+    }
+    if import_rows.is_empty() {
+        import_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No foreign review capsules imported yet.</td></tr>",
+        );
+    }
+
+    let mut delegation_rows = String::new();
+    for delegation in &delegations.delegations {
+        delegation_rows.push_str(&format!(
+            "<tr><td>{delegation_link}</td><td><code>{source_kind}</code></td><td><code>{capsule_id}</code></td></tr>",
+            delegation_link = review_link(
+                &format!("/v1/operator/review/delegations/{}", delegation.delegation_id),
+                &delegation.delegation_id
+            ),
+            source_kind = escape_html(delegation.source_kind.as_str()),
+            capsule_id = escape_html(&delegation.source_capsule_id)
+        ));
+    }
+    if delegation_rows.is_empty() {
+        delegation_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No delegation packets created yet.</td></tr>",
+        );
+    }
+
     render_review_layout(
         "Local Evidence Review",
-        "Authenticated local evidence workbench layered on the operator API. Session export and bounded maintenance handoff are available, but rollout and governance remain out of scope.",
+        "Authenticated local evidence workbench layered on the operator API. Portable signed review capsules and imported continuity are available, but rollout and governance remain out of scope.",
         &format!(
             "<section class=\"grid\">\
                 <article class=\"card\"><h2>Review Scope</h2><p>Use this surface to inspect signed evidence bundles, verification reports, and promotion evidence packets without reading store files directly.</p><p class=\"muted\">Authentication stays on the existing bearer-token boundary, and follow-on write actions remain on the existing maintenance or rollout paths.</p></article>\
+                <article class=\"card\"><h2>Import Foreign Capsule</h2>\
+                    <form class=\"toolbar\" method=\"post\" action=\"/v1/operator/review/capsule-imports\">\
+                        <label>Source path<input type=\"text\" name=\"source_path\" placeholder=\"/tmp/review_capsule.json\"></label>\
+                        <label>Expected key ID<input type=\"text\" name=\"expected_key_id\" placeholder=\"optional local trust anchor\"></label>\
+                        <button type=\"submit\">Import Capsule</button>\
+                    </form>\
+                    <p class=\"muted\">Imported capsules stay advisory-only and preserve remote signer lineage, local trust status, and related stable refs.</p>\
+                </article>\
                 <article class=\"card\"><h2>Quick Links</h2><ul>\
                     <li>{sessions_link}</li><li>{evidence}</li><li>{packets}</li><li>{json}</li>\
                 </ul></article>\
@@ -2443,7 +3056,14 @@ fn render_review_home_page(
                 <article class=\"card\"><h2>Recent Evidence Bundles</h2><table><thead><tr><th>Bundle</th><th>Kind</th><th>Subject</th><th>Verification</th></tr></thead><tbody>{bundle_rows}</tbody></table></article>\
                 <article class=\"card\"><h2>Recent Promotion Packets</h2><table><thead><tr><th>Packet</th><th>Promotion</th><th>Recommendation</th></tr></thead><tbody>{packet_rows}</tbody></table></article>\
             </section>\
-            <section class=\"card\" style=\"margin-top:18px;\"><h2>Recent Review Sessions</h2><table><thead><tr><th>Session</th><th>Title</th><th>Artifacts</th></tr></thead><tbody>{session_rows}</tbody></table></section>",
+            <section class=\"grid\" style=\"margin-top:18px;\">\
+                <article class=\"card\"><h2>Recent Review Sessions</h2><table><thead><tr><th>Session</th><th>Title</th><th>Artifacts</th></tr></thead><tbody>{session_rows}</tbody></table></article>\
+                <article class=\"card\"><h2>Portable Capsules</h2><table><thead><tr><th>Capsule</th><th>Source</th><th>Signer Key</th></tr></thead><tbody>{capsule_rows}</tbody></table></article>\
+            </section>\
+            <section class=\"grid\" style=\"margin-top:18px;\">\
+                <article class=\"card\"><h2>Imported Capsules</h2><table><thead><tr><th>Import</th><th>Trust</th><th>Remote Key</th></tr></thead><tbody>{import_rows}</tbody></table></article>\
+                <article class=\"card\"><h2>Delegation Packets</h2><table><thead><tr><th>Delegation</th><th>Source</th><th>Capsule</th></tr></thead><tbody>{delegation_rows}</tbody></table></article>\
+            </section>",
             sessions_link = review_link("/v1/operator/review/sessions", "Open review sessions"),
             evidence = review_link("/v1/operator/review/evidence", "Browse signed evidence"),
             packets = review_link(
@@ -2456,7 +3076,10 @@ fn render_review_home_page(
             ),
             bundle_rows = bundle_rows,
             packet_rows = packet_rows,
-            session_rows = session_rows
+            session_rows = session_rows,
+            capsule_rows = capsule_rows,
+            import_rows = import_rows,
+            delegation_rows = delegation_rows
         ),
     )
 }
@@ -2884,6 +3507,7 @@ mod tests {
         FileEvolutionPortfolioStore,
     };
     use crate::replay::ExperimentLineage;
+    use crate::review_workbench::DefaultReviewWorkbenchHarness;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -3377,6 +4001,8 @@ mod tests {
 
     fn surface_paths(root: &PathBuf) -> OperatorSurfacePaths {
         OperatorSurfacePaths {
+            evidence_signer_id: "local-evidence-signer".to_string(),
+            evidence_signing_key_env: "SWARM_EVIDENCE_SIGNING_KEY".to_string(),
             evolution_ranking_results_dir: root.join("rankings"),
             evolution_selection_results_dir: root.join("selections"),
             evolution_portfolio_results_dir: root.join("portfolios"),
@@ -3392,6 +4018,9 @@ mod tests {
             review_session_export_results_dir: root.join("review-session-exports"),
             review_session_readiness_results_dir: root.join("review-session-readiness"),
             review_session_handoff_results_dir: root.join("review-session-handoffs"),
+            review_capsule_results_dir: root.join("review-capsules"),
+            review_capsule_import_results_dir: root.join("review-capsule-imports"),
+            review_delegation_results_dir: root.join("review-delegations"),
         }
     }
 
@@ -4060,6 +4689,7 @@ mod tests {
     async fn review_workbench_routes_create_export_and_handoff_sessions() {
         unsafe {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+            std::env::set_var("SWARM_EVIDENCE_SIGNING_KEY", "review-workbench-test-key");
         }
 
         let root = unique_temp_dir("review-workbench");
@@ -4123,6 +4753,7 @@ mod tests {
         let session_html = String::from_utf8(session_body.to_vec()).unwrap();
         assert!(session_html.contains("Review Session Detail"));
         assert!(session_html.contains("Cross-Lane Summary"));
+        assert!(session_html.contains("Portable Capsules"));
         assert!(session_html.contains("Governance Prep"));
         assert!(session_html.contains("Canary"));
         assert!(session_html.contains("Production"));
@@ -4169,6 +4800,51 @@ mod tests {
         assert!(export_html.contains("abcd1234"));
         assert!(export_html.contains("Cross-Lane Summary"));
 
+        let capsule_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/operator/review/sessions/{session_id}/capsules"
+                    ))
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(capsule_response.status(), StatusCode::SEE_OTHER);
+        let capsule_location = capsule_response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(capsule_location.starts_with("/v1/operator/review/capsules/review_capsule:"));
+        let capsule_id = capsule_location
+            .trim_start_matches("/v1/operator/review/capsules/")
+            .to_string();
+        let capsule_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&capsule_location)
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(capsule_page.status(), StatusCode::OK);
+        let capsule_body = to_bytes(capsule_page.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let capsule_html = String::from_utf8(capsule_body.to_vec()).unwrap();
+        assert!(capsule_html.contains("Portable Review Capsule"));
+        assert!(capsule_html.contains("Create Delegation Packet"));
+
         let readiness_response = app
             .clone()
             .oneshot(
@@ -4213,6 +4889,128 @@ mod tests {
         let readiness_html = String::from_utf8(readiness_body.to_vec()).unwrap();
         assert!(readiness_html.contains("Promotion Readiness Review"));
         assert!(readiness_html.contains("ready_for_advisory_promotion_review"));
+
+        let readiness_capsule_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/operator/review/promotion-readiness/{}/capsules",
+                        readiness_location
+                            .trim_start_matches("/v1/operator/review/promotion-readiness/")
+                    ))
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(readiness_capsule_response.status(), StatusCode::SEE_OTHER);
+
+        let workbench = DefaultReviewWorkbenchHarness::from_paths(
+            "operator-http:test".to_string(),
+            &surface_paths(&root),
+        )
+        .unwrap();
+        let capsule_lookup = workbench.load_capsule(&capsule_id).unwrap().unwrap();
+        let import_body = format!("source_path={}", capsule_lookup.record.bundle_path);
+        let import_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/review/capsule-imports")
+                    .header(auth.0, auth.1)
+                    .header(
+                        axum::http::header::CONTENT_TYPE,
+                        "application/x-www-form-urlencoded",
+                    )
+                    .body(Body::from(import_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(import_response.status(), StatusCode::SEE_OTHER);
+        let import_location = import_response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            import_location
+                .starts_with("/v1/operator/review/capsule-imports/review_capsule_import:")
+        );
+        let import_id = import_location
+            .trim_start_matches("/v1/operator/review/capsule-imports/")
+            .to_string();
+        let import_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&import_location)
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(import_page.status(), StatusCode::OK);
+        let import_body = to_bytes(import_page.into_body(), usize::MAX).await.unwrap();
+        let import_html = String::from_utf8(import_body.to_vec()).unwrap();
+        assert!(import_html.contains("Imported Review Capsule"));
+        assert!(import_html.contains("trusted"));
+
+        let delegation_body = "reason=preserve+review+continuity+for+external+inspection&delegate_label=remote+review+board";
+        let delegation_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/operator/review/capsule-imports/{import_id}/delegations"
+                    ))
+                    .header(auth.0, auth.1)
+                    .header(
+                        axum::http::header::CONTENT_TYPE,
+                        "application/x-www-form-urlencoded",
+                    )
+                    .body(Body::from(delegation_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delegation_response.status(), StatusCode::SEE_OTHER);
+        let delegation_location = delegation_response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            delegation_location.starts_with("/v1/operator/review/delegations/review_delegation:")
+        );
+        let delegation_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&delegation_location)
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delegation_page.status(), StatusCode::OK);
+        let delegation_body = to_bytes(delegation_page.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let delegation_html = String::from_utf8(delegation_body.to_vec()).unwrap();
+        assert!(delegation_html.contains("Review Delegation Packet"));
+        assert!(delegation_html.contains("remote review board"));
 
         let handoff_body = format!(
             "reason=re-verify+selected+evidence+from+review&selected_artifact_refs=production_promotion%3Apromotion%3Ared",
