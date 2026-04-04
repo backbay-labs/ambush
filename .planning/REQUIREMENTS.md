@@ -3,23 +3,20 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.15 Requirements
+## v1.16 Requirements
 
-### Portfolio Assembly
+### Packet Set Operations
 
-- [x] **EVOL-24**: Operators can compare and curate shortlisted candidates across multiple mutation batches or campaign cohorts
-- [x] **EVOL-25**: Team can assemble a durable portfolio artifact from ranked selections across multiple batches or cohorts through `swarmctl`
+- [ ] **EVOL-30**: Operator can merge or split governance-ready review packets across portfolio groups without losing evidence traceability
+- [ ] **EVOL-32**: Operator can reload packet-set artifacts by stable ID with preserved source packet, portfolio, cohort, and rollout-lineage context
 
-### Portfolio Review
+### Portfolio History
 
-- [x] **EVOL-26**: Operator can record include, defer, or drop decisions for portfolio candidates without mutating queue, canary, or production state
-- [x] **EVOL-27**: Portfolio review artifacts preserve source ranking, selection, cohort, and rollout-lineage context in one durable record
+- [ ] **EVOL-31**: Operator can measure cross-cohort survival, rollout outcomes, and review debt from durable portfolio history records over time
 
-### Governance Prep
+### Review Surfaces
 
-- [x] **EVOL-23**: Ranked-candidate selections can feed a later governance-backed or multi-node rollout review path without re-encoding existing evidence
-- [x] **EVOL-28**: Operator can generate governance-ready review packets from curated portfolio entries using preserved evidence references
-- [x] **EVOL-29**: Governance-prep review packets fail closed and persist blocked records when evidence is stale, inconsistent, or incomplete
+- [ ] **EVOL-33**: Operator can inspect packet-set and portfolio-history summaries through `swarmctl` without reading raw storage files
 
 ## Future Requirements
 
@@ -33,39 +30,31 @@
 - **OPS-04**: Operator can use an authenticated HTTP or TUI control surface in addition to the initial repo-owned CLI
 - **OPS-05**: Operator can trigger approved maintenance operations from the control surface with explicit audit trails
 
-### Advanced Evolution
-
-- **EVOL-30**: Operators can merge or split governance-ready review packets across portfolio groups without losing evidence traceability
-- **EVOL-31**: Portfolio history can measure cross-cohort survival, rollout outcomes, and review debt over time
-
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
 | Actual quorum voting or distributed consensus for promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
-| Multi-node rollout execution | This cycle prepares governance-ready packets only; it does not introduce distributed rollout machinery |
-| Automatic portfolio inclusion, curation, or promotion | Portfolio review remains explicit and operator-controlled |
-| Automatic canary or production launch from portfolio entries | Existing rollout gates remain explicit and separate from portfolio work |
+| Multi-node rollout execution | This cycle improves packet grouping and history only; it does not introduce distributed rollout machinery |
+| Automatic packet-set approval, curation, or promotion | Packet sets remain explicit and operator-controlled |
+| Automatic canary or production launch from packet-set or history artifacts | Existing rollout gates remain explicit and separate from offline review work |
 | Authenticated HTTP or TUI control plane | CLI-first remains the smallest practical operator surface for the current runtime |
-| Cross-organization or federated review exchange | This cycle stays repo-owned and single-node while preparing packet formats and durable artifacts |
+| Cross-organization or federated review exchange | This cycle stays repo-owned and single-node while preparing richer local evidence artifacts |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVOL-24 | Phase 47 | Complete |
-| EVOL-25 | Phase 47 | Complete |
-| EVOL-26 | Phase 48 | Complete |
-| EVOL-27 | Phase 48 | Complete |
-| EVOL-23 | Phase 49 | Complete |
-| EVOL-28 | Phase 49 | Complete |
-| EVOL-29 | Phase 49 | Complete |
+| EVOL-30 | Phase 50 | Pending |
+| EVOL-32 | Phase 50 | Pending |
+| EVOL-31 | Phase 51 | Pending |
+| EVOL-33 | Phase 52 | Pending |
 
 **Coverage:**
-- v1.15 requirements: 7 total
-- Mapped to phases: 7
+- v1.16 requirements: 4 total
+- Mapped to phases: 4
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after completing milestone v1.15*
+*Last updated: 2026-04-04 after starting milestone v1.16*
