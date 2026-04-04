@@ -5,8 +5,10 @@ use swarm_runtime::control::{
     OperatorControlOutput, ReplayLookupSelector, render_output,
 };
 use swarm_runtime::drafting::{
-    DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest, render_evolution_draft,
-    render_evolution_draft_promotion, render_evolution_pressure,
+    DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest,
+    EvolutionDraftMaterializationRequest, render_evolution_draft, render_evolution_draft_promotion,
+    render_evolution_materialization, render_evolution_pressure,
+    render_evolution_queue_reconciliation, render_evolution_validation_bundle,
 };
 use swarm_runtime::evolution::{
     DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness,
@@ -82,6 +84,19 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/evolution-draft-promotions")]
     evolution_draft_promotion_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evolution-materializations")]
+    evolution_materialization_results_dir: std::path::PathBuf,
+
+    #[arg(
+        long,
+        global = true,
+        default_value = "data/evolution-validation-bundles"
+    )]
+    evolution_validation_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/evolution-reconciliations")]
+    evolution_reconciliation_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -134,6 +149,12 @@ enum Command {
     EvolutionDraftResult(EvolutionDraftResultArgs),
     EvolutionDraftPromote(EvolutionDraftPromoteArgs),
     EvolutionDraftPromotionResult(EvolutionDraftPromotionResultArgs),
+    EvolutionMaterialize(EvolutionMaterializeArgs),
+    EvolutionMaterializationResult(EvolutionMaterializationResultArgs),
+    EvolutionValidationRefresh(EvolutionValidationRefreshArgs),
+    EvolutionValidationResult(EvolutionValidationResultArgs),
+    EvolutionQueueReconcile(EvolutionQueueReconcileArgs),
+    EvolutionQueueReconciliationResult(EvolutionQueueReconciliationResultArgs),
     EvolutionHandoffCreate(EvolutionHandoffCreateArgs),
     EvolutionHandoffResult(EvolutionHandoffResultArgs),
     EvolutionHandoffLaunchCanary(EvolutionHandoffLaunchCanaryArgs),
@@ -541,6 +562,66 @@ struct EvolutionDraftPromotionResultArgs {
 }
 
 #[derive(Debug, Args)]
+struct EvolutionMaterializeArgs {
+    #[arg(long)]
+    draft_id: String,
+
+    #[arg(long)]
+    base_experiment: Option<std::path::PathBuf>,
+
+    #[arg(long)]
+    add_suspicious_parent: Vec<String>,
+
+    #[arg(long)]
+    remove_suspicious_parent: Vec<String>,
+
+    #[arg(long)]
+    add_suspicious_child: Vec<String>,
+
+    #[arg(long)]
+    remove_suspicious_child: Vec<String>,
+
+    #[arg(long)]
+    high_confidence_threshold: Option<f64>,
+
+    #[arg(long)]
+    medium_confidence_threshold: Option<f64>,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionMaterializationResultArgs {
+    #[arg(long)]
+    materialization_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionValidationRefreshArgs {
+    #[arg(long)]
+    materialization_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionValidationResultArgs {
+    #[arg(long)]
+    validation_bundle_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionQueueReconcileArgs {
+    #[arg(long)]
+    promotion_id: String,
+
+    #[arg(long)]
+    validation_bundle_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionQueueReconciliationResultArgs {
+    #[arg(long)]
+    reconciliation_id: String,
+}
+
+#[derive(Debug, Args)]
 struct EvolutionHandoffCreateArgs {
     #[arg(long)]
     proposal_id: String,
@@ -587,6 +668,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.evolution_pressure_results_dir,
         &cli.evolution_draft_results_dir,
         &cli.evolution_draft_promotion_results_dir,
+        &cli.evolution_materialization_results_dir,
+        &cli.evolution_validation_results_dir,
+        &cli.evolution_reconciliation_results_dir,
     )?;
 
     let output = match cli.command {
@@ -1207,6 +1291,114 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_evolution_draft_promotion(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionMaterialize(args) => {
+            let lookup = evolution_drafting_harness.materialize_draft(
+                EvolutionDraftMaterializationRequest {
+                    draft_id: args.draft_id,
+                    base_experiment_path: args.base_experiment,
+                    add_suspicious_parents: args.add_suspicious_parent,
+                    remove_suspicious_parents: args.remove_suspicious_parent,
+                    add_suspicious_children: args.add_suspicious_child,
+                    remove_suspicious_children: args.remove_suspicious_child,
+                    high_confidence_threshold: args.high_confidence_threshold,
+                    medium_confidence_threshold: args.medium_confidence_threshold,
+                },
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_materialization(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionMaterializationResult(args) => {
+            let lookup = evolution_drafting_harness
+                .load_materialization(&args.materialization_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution draft materialization was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_materialization(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionValidationRefresh(args) => {
+            let lookup = evolution_drafting_harness
+                .refresh_validation_bundle(
+                    &replay_harness,
+                    &evolution_proof_harness,
+                    &strategy_scorecard_harness,
+                    &cli.experiment_results_dir,
+                    &cli.verification_results_dir,
+                    &cli.shadow_results_dir,
+                    &args.materialization_id,
+                )
+                .await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_validation_bundle(&lookup.report));
+            }
+            if lookup.report.status
+                == swarm_runtime::drafting::EvolutionValidationBundleStatus::Blocked
+            {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvolutionValidationResult(args) => {
+            let lookup = evolution_drafting_harness
+                .load_validation_bundle(&args.validation_bundle_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution validation bundle was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_validation_bundle(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionQueueReconcile(args) => {
+            let lookup = evolution_drafting_harness.reconcile_queue_proposal(
+                &cli.evolution_queue_results_dir,
+                &args.promotion_id,
+                &args.validation_bundle_id,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_queue_reconciliation(&lookup.report));
+            }
+            if lookup.report.resulting_review_state == EvolutionProposalReviewState::Blocked {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvolutionQueueReconciliationResult(args) => {
+            let lookup = evolution_drafting_harness
+                .load_queue_reconciliation(&args.reconciliation_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution queue reconciliation was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_queue_reconciliation(&lookup.report));
             }
             return Ok(());
         }

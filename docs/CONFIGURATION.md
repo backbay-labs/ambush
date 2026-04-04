@@ -563,6 +563,83 @@ Failure behavior:
 - `evolution-draft-promote` exits nonzero when the draft has already been promoted once
 - promoted queue entries remain blocked from canary admission until later proof-backed evidence is produced
 
+### Draft Materialization And Validation Bundles
+
+The repo now ships the bridge from reviewed draft artifacts back into the verified rollout ladder. Operators can materialize a repo-owned experiment manifest from one draft, refresh validation artifacts from that manifest, then reconcile the original draft-backed queue entry in place instead of creating a duplicate proposal.
+
+This bridge stays explicit and operator-triggered:
+
+- materialization artifacts are durable repo-owned records under `data/evolution-materializations/`
+- validation bundles are durable repo-owned records under `data/evolution-validation-bundles/`
+- reconciliation records are durable repo-owned records under `data/evolution-reconciliations/`
+- materialization writes one concrete experiment manifest next to the chosen base experiment manifest
+- validation refresh reuses the existing experiment, verification, proof, shadow, and scorecard lanes instead of inventing a second evaluation path
+- reconciliation updates the reviewed queue entry created by `evolution-draft-promote`; it does not mint a second queue proposal
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-materialize \
+  --draft-id YOUR_DRAFT_ID \
+  --base-experiment experiments/office-baseline-control.yaml
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-materialization-result \
+  --materialization-id YOUR_MATERIALIZATION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-validation-refresh \
+  --materialization-id YOUR_MATERIALIZATION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-validation-result \
+  --validation-bundle-id YOUR_VALIDATION_BUNDLE_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-reconcile \
+  --promotion-id YOUR_PROMOTION_ID \
+  --validation-bundle-id YOUR_VALIDATION_BUNDLE_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-reconciliation-result \
+  --reconciliation-id YOUR_RECONCILIATION_ID
+```
+
+Materialization supports explicit profile overrides for the current suspicious process-tree candidate type:
+
+- `--add-suspicious-parent VALUE`
+- `--remove-suspicious-parent VALUE`
+- `--add-suspicious-child VALUE`
+- `--remove-suspicious-child VALUE`
+- `--high-confidence-threshold FLOAT`
+- `--medium-confidence-threshold FLOAT`
+
+Each persisted materialization preserves:
+
+- draft ID, pressure ID, and source experiment reference
+- materialized experiment name, path, lineage, and digests
+- the concrete suspicious process-tree profile used for the candidate
+- a normalized list of applied profile changes
+
+Each persisted validation bundle preserves:
+
+- stable links from one materialization to experiment, verification, proof, shadow, and advisory scorecard artifacts
+- manifest and lineage digests used to detect materialization drift
+- fail-closed blocking reasons when experiment gates, verification, proof, or shadow evidence fail
+- one `ready_for_queue` or `blocked` status for later reconciliation
+
+Each persisted reconciliation preserves:
+
+- the original draft-promotion record and queue proposal ID
+- the refreshed validation bundle reference
+- the resulting queue review state after the placeholder draft block is replaced with refreshed evidence
+- a `handoff_ready` verdict showing whether the existing handoff path can be used after operator acceptance
+
+Failure behavior:
+
+- `evolution-materialize` exits nonzero when threshold overrides are invalid or the base experiment cannot be resolved
+- `evolution-validation-refresh` exits nonzero when the refreshed bundle is blocked; the blocked bundle is still persisted for review
+- `evolution-queue-reconcile` exits nonzero when the refreshed queue entry remains blocked; the reconciliation record is still persisted
+- validation fails closed when materialized manifest or lineage digests drift, when refreshed proof digests do not match the current artifacts, or when verification or shadow evidence fails
+- reconciled proposals only become handoff-ready when refreshed verification, proof, and shadow evidence all pass
+
+This bridge keeps the lifecycle explicit: pressure -> draft -> reviewed queue -> materialized experiment -> refreshed validation bundle -> reconciled reviewed queue -> accepted handoff -> canary.
+
 ### Evolution Proofs And Verified Proposal Queue
 
 The repo now ships a proof-backed evolution queue for detector proposals. This sits above the advisory scorecard lane and below any future governance-backed rollout system.

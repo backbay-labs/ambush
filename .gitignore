@@ -38,3 +38,6 @@ data/evolution-handoffs/
 data/evolution-pressures/
 data/evolution-drafts/
 data/evolution-draft-promotions/
+data/evolution-materializations/
+data/evolution-validation-bundles/
+data/evolution-reconciliations/
