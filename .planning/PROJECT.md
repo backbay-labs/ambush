@@ -10,34 +10,27 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.20 Evidence Workbench And Review Handoffs` shipped on 2026-04-04.
+`v1.21 Cross-Lane Promotion Review` shipped on 2026-04-04.
 
 **What is now real:**
-- operators can now assemble durable review sessions from `evidence_bundle`, `evidence_verification`, and `promotion_evidence_packet` stable IDs through both `swarmctl` and the authenticated local review surface
-- one review session now supports side-by-side comparison, reviewed export snapshots, and stable reload by session ID without rereading raw store files
-- the local workbench can now launch bounded evidence re-verification handoffs that preserve session lineage, selected refs, operator rationale, resulting action IDs, and the existing maintenance audit trail
-- the trust boundary remains single-node and bounded: review-driven writes stay inside maintenance scope, while rollout, promotion, and quorum governance remain deferred
+- operators can now assemble one lane-aware review session from `promotion_review`, `canary_run`, and `production_promotion` refs or direct evidence refs through both `swarmctl` and the authenticated local review surface
+- cross-lane session views and exports now preserve per-lane summaries, derived verification state, freshness markers, and unresolved evidence gaps without rereading raw store files
+- the local workbench can now derive durable promotion-readiness reviews from one cross-lane session while staying advisory-only above maintenance, canary, and production controls
+- the trust boundary remains single-node and bounded: cross-lane review improves operator judgment, but it still cannot bypass maintenance, rollout, promotion, or quorum governance gates
 
 ## Current Milestone
 
-`v1.21 Cross-Lane Promotion Review`
+No active milestone is open.
 
-**Goal:** unify governance-prep, canary, and production evidence into one advisory cross-lane review flow without widening into quorum control.
-
-**Target features:**
-- lane-aware review sessions that combine governance-prep, canary, and production evidence by stable ID
-- signed comparison snapshots that preserve per-lane summaries, freshness, and unresolved evidence gaps
-- promotion-readiness review artifacts that stay advisory-only and do not bypass rollout or maintenance gates
-
-**Queued after this:**
+**Queued follow-on cycles:**
 - `v1.22 Portable Review Capsules And External Handoff`
 - `v1.23 Approval Ledger And Quorum Readiness`
 
-**Next step:** start planning with `$gsd-plan-phase 65`.
+**Next step:** start the next cycle with `$gsd-new-milestone`.
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-plan-phase 65`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -108,6 +101,9 @@ Start the next cycle with `$gsd-plan-phase 65`.
 
 ### Most Recently Shipped
 
+- ✓ Operators can now assemble one lane-aware cross-lane review session from `promotion_review`, `canary_run`, and `production_promotion` refs or direct evidence refs and reload it by stable session ID — v1.21
+- ✓ Cross-lane session exports now preserve per-lane summaries, derived verification state, and unresolved evidence gaps above the existing signed evidence stores — v1.21
+- ✓ Operators can now derive durable promotion-readiness reviews from one cross-lane session while remaining advisory-only above maintenance, canary, and production controls — v1.21
 - ✓ Operators can now assemble durable multi-artifact review sessions from signed evidence and promotion artifact stable IDs and reload them by stable session ID — v1.20
 - ✓ Review sessions now support side-by-side evidence comparison plus stable reviewed export snapshots with digests, signer metadata, verification state, and related refs — v1.20
 - ✓ The local review surface and `swarmctl` can now launch bounded evidence re-verification handoffs that preserve session lineage, selected refs, operator rationale, and maintenance action IDs — v1.20
@@ -117,9 +113,8 @@ Start the next cycle with `$gsd-plan-phase 65`.
 
 ### Current Milestone
 
-- `v1.21 Cross-Lane Promotion Review` is now active.
-- This cycle should stay inside the existing local, authenticated review boundary while unifying governance-prep, canary, and production evidence lanes.
-- `v1.22 Portable Review Capsules And External Handoff` and `v1.23 Approval Ledger And Quorum Readiness` are queued behind `v1.21` so the roadmap stays ahead without opening multiple active milestones.
+- No active milestone is open.
+- `v1.22 Portable Review Capsules And External Handoff` and `v1.23 Approval Ledger And Quorum Readiness` remain queued follow-on cycles, but they are not active work yet.
 - Quorum approvals, signed votes across independent nodes, multi-user control, and direct rollout or governance actions from the review client remain deferred until independent trust boundaries exist.
 
 ### Out of Scope
@@ -140,7 +135,7 @@ Start the next cycle with `$gsd-plan-phase 65`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, and local review surface: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions. `v1.20` closed the single-session evidence workbench gap without widening autonomy into quorum governance or direct rollout writes from the browser. The next missing seam is cross-lane promotion review: unify governance-prep, canary, and production evidence in one lane-aware advisory workflow, then make that workflow portable and quorum-ready without pretending distributed trust already exists.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, and local review surface: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review. `v1.21` closed the lane-fragmentation gap without widening autonomy into quorum governance or direct rollout writes from the browser. The next missing seam is portable review continuity: package cross-lane review state for external verification and later approval-ledger work without pretending distributed trust already exists.
 
 ## Constraints
 
@@ -208,4 +203,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Queue approval ledgers before real quorum governance | Signed approval sets and threshold math can be prepared locally first so later quorum work reuses stable evidence and receipt shapes instead of changing the promotion model again | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after starting milestone v1.21 planning and queuing v1.22-v1.23*
+*Last updated: 2026-04-04 after completing milestone v1.21 implementation*

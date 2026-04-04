@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.21 Cross-Lane Promotion Review (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- operators can now assemble lane-aware review sessions from governance-prep, canary, and production stable refs through both `swarmctl` and the authenticated local review surface
+- cross-lane comparison exports now preserve per-lane summaries, derived verification state, and unresolved evidence gaps above the existing signed evidence stores
+- promotion-readiness reviews now persist advisory recommendations and fail-closed gaps without bypassing maintenance, canary, or production controls
+
+---
+
 ## v1.20 Evidence Workbench And Review Handoffs (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks
