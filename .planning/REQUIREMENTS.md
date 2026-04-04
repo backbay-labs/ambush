@@ -3,21 +3,22 @@
 **Defined:** 2026-04-03
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.11 Requirements
+## v1.12 Requirements
 
-### Selection Pressure
+### Candidate Materialization
 
-- [x] **DRAFT-01**: Team can derive selection-pressure signals from replay regressions, verification drift, or strategy-memory gaps without mutating live rollout state
-- [x] **DRAFT-02**: Selection-pressure reports preserve stable IDs, source evidence references, and rationale for why a new detector proposal draft should exist
+- [ ] **MTRL-01**: Operator can materialize a repo-owned detector experiment manifest from one stable draft artifact through `swarmctl` without hand-editing YAML
+- [ ] **MTRL-02**: Materialized candidate artifacts preserve draft ID, pressure ID, parent strategy, mutation hint, rationale, and resulting experiment reference in one durable record
 
-### Proposal Drafts
+### Validation Refresh
 
-- [x] **DRAFT-03**: Team can persist draft proposal artifacts with stable IDs, rationale, and source evidence references without auto-enqueuing them
-- [x] **DRAFT-04**: Operator can inspect one draft artifact and promote it into the reviewed evolution queue through `swarmctl`
+- [ ] **VALD-01**: Operator can refresh experiment evaluation, verification, proof, and shadow artifacts from one materialized candidate through a repo-owned CLI flow
+- [ ] **VALD-02**: Validation refresh fails closed when draft lineage, manifest digests, or refreshed evidence drift or become inconsistent
 
-### Operator Control
+### Queue Reconciliation
 
-- [x] **DRAFT-05**: Draft promotion preserves the originating pressure signal, operator reason, and resulting queue proposal reference in one durable artifact
+- [ ] **RECN-01**: Operator can reconcile a draft-backed queue entry with its materialized experiment and refreshed evidence without creating ambiguous duplicate rollout state
+- [ ] **RECN-02**: Reconciled queue entries preserve original draft-promotion lineage and become eligible for the existing handoff and canary path only when refreshed evidence passes
 
 ## Future Requirements
 
@@ -34,34 +35,37 @@
 ### Advanced Evolution
 
 - **EVOL-08**: Queue-approved detector proposals can feed a later governance-backed rollout path without manual artifact translation
-- **EVOL-09**: Selection pressure from replay regressions or production memory can seed candidate proposal drafts before operator review
+- **EVOL-10**: Materialized draft candidates can be mutated automatically from structured operator hints once safety and review guards exist
+- **EVOL-11**: Multiple materialized and validated candidates can be ranked or batched for later operator review without rewriting evidence artifacts
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Quorum or BFT approval for queued proposal promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
-| Multi-node or partial-fleet production rollout | The runtime is still single-node and self-contained; this cycle focuses on draft generation and queue promotion, not distributed traffic management |
-| Automatic draft enqueue or canary launch | `v1.11` keeps draft promotion explicit and operator-triggered |
-| Hot-path selection-pressure scoring on live events | Fast detection remains the core value, so pressure analysis and draft assembly stay off the critical lane |
+| Automatic detector mutation from pressure signals | `v1.12` materializes operator-reviewed drafts only; it does not auto-write candidate genomes |
+| Automatic validation refresh on draft promotion | Materialization and evidence refresh stay operator-triggered and auditable |
+| Automatic handoff or canary launch after queue reconciliation | Existing rollout gates remain explicit and separate from draft materialization |
+| Quorum or BFT approval for reconciled proposals | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
+| Multi-node or partial-fleet rollout | The runtime is still single-node and self-contained; this cycle focuses on artifact continuity, not distributed traffic management |
 | Authenticated HTTP or TUI control plane | CLI-first remains the smallest practical operator surface for the current runtime |
-| Autonomous strategy mutation in the live hot path | Production detection remains deterministic and operator-controlled |
+| Hot-path experiment or proof refresh | Fast detection remains the core value, so candidate materialization and evidence refresh stay off the critical lane |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DRAFT-01 | Phase 35 | Satisfied |
-| DRAFT-02 | Phase 35 | Satisfied |
-| DRAFT-03 | Phase 36 | Satisfied |
-| DRAFT-04 | Phase 37 | Satisfied |
-| DRAFT-05 | Phase 37 | Satisfied |
+| MTRL-01 | Phase 38 | Pending |
+| MTRL-02 | Phase 38 | Pending |
+| VALD-01 | Phase 39 | Pending |
+| VALD-02 | Phase 39 | Pending |
+| RECN-01 | Phase 40 | Pending |
+| RECN-02 | Phase 40 | Pending |
 
 **Coverage:**
-- v1.11 requirements: 5 total
-- Mapped to phases: 5
+- v1.12 requirements: 6 total
+- Mapped to phases: 6
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.11 completion*
+*Last updated: 2026-04-03 after milestone v1.12 definition*
