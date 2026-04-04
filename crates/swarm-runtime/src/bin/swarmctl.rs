@@ -1,5 +1,6 @@
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use swarm_runtime::canary::{DefaultCanaryHarness, render_canary_run_report};
+use swarm_runtime::config::load_config;
 use swarm_runtime::control::{
     DefaultControlPlane, IncidentLookupSelector, InvestigationLookupSelector,
     OperatorControlOutput, ReplayLookupSelector, render_output,
@@ -47,6 +48,11 @@ use swarm_runtime::replay::{
     DefaultReplayHarness, render_evaluation_report, render_experiment_report,
     render_promotion_review_packet, render_replay_run, render_shadow_report, render_suite_report,
     render_verification_report,
+};
+use swarm_runtime::review_workbench::{
+    DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind,
+    ReviewSessionCreateRequest, ReviewSessionReverifyRequest, render_review_session,
+    render_review_session_export, render_review_session_handoff, render_review_session_list,
 };
 use swarm_runtime::selection::{
     DefaultEvolutionSelectionHarness, render_evolution_ranked_candidate_bridge,
@@ -190,6 +196,15 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/promotion-evidence-packets")]
     promotion_evidence_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/review-sessions")]
+    review_session_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/review-session-exports")]
+    review_session_export_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/review-session-handoffs")]
+    review_session_handoff_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true, default_value = "local-evidence-signer")]
     evidence_signer_id: String,
 
@@ -219,6 +234,13 @@ enum Command {
     EvidenceVerificationResult(EvidenceVerificationResultArgs),
     PromotionEvidenceCreate(PromotionEvidenceCreateArgs),
     PromotionEvidenceResult(PromotionEvidenceResultArgs),
+    ReviewSessionCreate(ReviewSessionCreateArgs),
+    ReviewSessionResult(ReviewSessionResultArgs),
+    ReviewSessionList,
+    ReviewSessionExport(ReviewSessionExportArgs),
+    ReviewSessionExportResult(ReviewSessionExportResultArgs),
+    ReviewSessionHandoffReverify(ReviewSessionHandoffReverifyArgs),
+    ReviewSessionHandoffResult(ReviewSessionHandoffResultArgs),
     ReplayEvaluate(ReplayEvaluateArgs),
     ExperimentEvaluate(ExperimentEvaluateArgs),
     ExperimentResult(ExperimentResultArgs),
@@ -372,6 +394,24 @@ impl From<EvidenceSubjectKindArg> for EvidenceSubjectKind {
     }
 }
 
+fn parse_review_artifact_ref_arg(value: &str) -> Result<ReviewArtifactRef, String> {
+    let trimmed = value.trim();
+    let (kind, id) = trimmed
+        .split_once(':')
+        .ok_or_else(|| format!("invalid artifact ref `{trimmed}`; expected kind:id"))?;
+    let kind = kind
+        .parse::<ReviewArtifactRefKind>()
+        .map_err(|_| format!("unsupported review artifact kind `{kind}`"))?;
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(format!("invalid artifact ref `{trimmed}`; missing id"));
+    }
+    Ok(ReviewArtifactRef {
+        kind,
+        id: id.to_string(),
+    })
+}
+
 #[derive(Debug, Args)]
 struct EvidenceExportArgs {
     #[arg(long, value_enum)]
@@ -418,6 +458,57 @@ struct PromotionEvidenceCreateArgs {
 struct PromotionEvidenceResultArgs {
     #[arg(long)]
     packet_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ReviewSessionCreateArgs {
+    #[arg(long)]
+    title: Option<String>,
+
+    #[arg(long)]
+    notes: Option<String>,
+
+    #[arg(long = "artifact-ref", required = true, value_parser = parse_review_artifact_ref_arg)]
+    artifact_refs: Vec<ReviewArtifactRef>,
+}
+
+#[derive(Debug, Args)]
+struct ReviewSessionResultArgs {
+    #[arg(long)]
+    session_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ReviewSessionExportArgs {
+    #[arg(long)]
+    session_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ReviewSessionExportResultArgs {
+    #[arg(long)]
+    export_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ReviewSessionHandoffReverifyArgs {
+    #[arg(long)]
+    session_id: String,
+
+    #[arg(long)]
+    reason: String,
+
+    #[arg(long)]
+    expected_key_id: Option<String>,
+
+    #[arg(long = "artifact-ref", value_parser = parse_review_artifact_ref_arg)]
+    artifact_refs: Vec<ReviewArtifactRef>,
+}
+
+#[derive(Debug, Args)]
+struct ReviewSessionHandoffResultArgs {
+    #[arg(long)]
+    handoff_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -1170,6 +1261,7 @@ struct EvolutionHandoffLaunchCanaryArgs {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let repo_config = load_config(&cli.config)?;
     let plane = DefaultControlPlane::from_path(&cli.config)?;
     let replay_harness = DefaultReplayHarness::from_path(&cli.config, &cli.replay_results_dir)?;
     let canary_harness = DefaultCanaryHarness::from_path(&cli.config, &cli.canary_results_dir)?;
@@ -1233,6 +1325,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         promotion_evidence_results_dir: cli.promotion_evidence_results_dir.clone(),
     };
     let evidence_harness = DefaultEvidenceHarness::from_path(&cli.config, evidence_paths.clone())?;
+    let review_workbench_harness = DefaultReviewWorkbenchHarness::from_paths(
+        repo_config.operator.auth.operator_id.clone(),
+        &OperatorSurfacePaths {
+            evolution_ranking_results_dir: cli.evolution_ranking_results_dir.clone(),
+            evolution_selection_results_dir: cli.evolution_selection_results_dir.clone(),
+            evolution_portfolio_results_dir: cli.evolution_portfolio_results_dir.clone(),
+            evolution_governance_review_packet_results_dir: cli
+                .evolution_governance_review_packet_results_dir
+                .clone(),
+            evolution_packet_set_results_dir: cli.evolution_packet_set_results_dir.clone(),
+            strategy_memory_results_dir: cli.strategy_memory_results_dir.clone(),
+            evolution_portfolio_history_results_dir: cli
+                .evolution_portfolio_history_results_dir
+                .clone(),
+            operator_maintenance_results_dir: cli.operator_maintenance_results_dir.clone(),
+            evidence_results_dir: cli.evidence_results_dir.clone(),
+            evidence_verification_results_dir: cli.evidence_verification_results_dir.clone(),
+            promotion_evidence_results_dir: cli.promotion_evidence_results_dir.clone(),
+            review_session_results_dir: cli.review_session_results_dir.clone(),
+            review_session_export_results_dir: cli.review_session_export_results_dir.clone(),
+            review_session_handoff_results_dir: cli.review_session_handoff_results_dir.clone(),
+        },
+    )?;
 
     let output = match cli.command {
         Command::Serve => {
@@ -1256,6 +1371,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .evidence_verification_results_dir
                         .clone(),
                     promotion_evidence_results_dir: cli.promotion_evidence_results_dir.clone(),
+                    review_session_results_dir: cli.review_session_results_dir.clone(),
+                    review_session_export_results_dir: cli
+                        .review_session_export_results_dir
+                        .clone(),
+                    review_session_handoff_results_dir: cli
+                        .review_session_handoff_results_dir
+                        .clone(),
                 },
             )?;
             eprintln!(
@@ -1431,6 +1553,103 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.packet)?);
             } else {
                 println!("{}", render_promotion_evidence_packet(&lookup.packet));
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionCreate(args) => {
+            let lookup = review_workbench_harness.create_session(ReviewSessionCreateRequest {
+                title: args.title,
+                notes: args.notes,
+                artifact_refs: args.artifact_refs,
+            })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                let resolved =
+                    review_workbench_harness.resolve_session(&lookup.report.session_id)?;
+                println!("{}", render_review_session(&resolved));
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionResult(args) => {
+            let resolved = review_workbench_harness.resolve_session(&args.session_id)?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&resolved.session.report)?
+                );
+            } else {
+                println!("{}", render_review_session(&resolved));
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionList => {
+            let list = review_workbench_harness.list_sessions()?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                println!("{}", render_review_session_list(&list));
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionExport(args) => {
+            let lookup = review_workbench_harness.export_session(&args.session_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.export)?);
+            } else {
+                println!("{}", render_review_session_export(&lookup.export));
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionExportResult(args) => {
+            let lookup = review_workbench_harness
+                .load_export(&args.export_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "review session export was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.export)?);
+            } else {
+                println!("{}", render_review_session_export(&lookup.export));
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionHandoffReverify(args) => {
+            let lookup =
+                review_workbench_harness.create_reverify_handoff(ReviewSessionReverifyRequest {
+                    session_id: args.session_id,
+                    selected_artifact_refs: args.artifact_refs,
+                    expected_key_id: args.expected_key_id,
+                    reason: args.reason,
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.handoff)?);
+            } else {
+                println!("{}", render_review_session_handoff(&lookup.handoff));
+            }
+            if lookup.handoff.status
+                != swarm_runtime::operator_maintenance::OperatorMaintenanceStatus::Applied
+            {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionHandoffResult(args) => {
+            let lookup = review_workbench_harness
+                .load_handoff(&args.handoff_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "review session handoff was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.handoff)?);
+            } else {
+                println!("{}", render_review_session_handoff(&lookup.handoff));
             }
             return Ok(());
         }

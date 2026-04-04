@@ -1118,125 +1118,12 @@ impl DefaultEvidenceHarness {
         bundle_id: &str,
         expected_key_id: Option<&str>,
     ) -> Result<EvidenceVerificationLookup, EvidenceError> {
-        let lookup = self.evidence_store.load(bundle_id)?.ok_or_else(|| {
-            EvidenceError::ArtifactNotFound {
-                kind: "evidence bundle",
-                id: bundle_id.to_string(),
-            }
-        })?;
-        let verified_at_ms = now_ms();
-        let mut checks = Vec::new();
-
-        let normalized_payload = normalize_canonical_json(&lookup.bundle.canonical_payload);
-        let normalized_payload = match normalized_payload {
-            Ok(payload) => {
-                let passed = payload == lookup.bundle.canonical_payload;
-                checks.push(EvidenceVerificationCheck {
-                    name: "canonical_payload".to_string(),
-                    passed,
-                    details: if passed {
-                        "canonical payload bytes normalized cleanly".to_string()
-                    } else {
-                        "canonical payload bytes changed after normalization".to_string()
-                    },
-                });
-                payload
-            }
-            Err(error) => {
-                checks.push(EvidenceVerificationCheck {
-                    name: "canonical_payload".to_string(),
-                    passed: false,
-                    details: error.to_string(),
-                });
-                String::new()
-            }
-        };
-
-        let payload_hash = if normalized_payload.is_empty() {
-            None
-        } else {
-            Some(sha256_hex(normalized_payload.as_bytes()))
-        };
-        let hash_passed = payload_hash
-            .as_deref()
-            .map(|value| value == lookup.bundle.payload_sha256)
-            .unwrap_or(false);
-        checks.push(EvidenceVerificationCheck {
-            name: "payload_sha256".to_string(),
-            passed: hash_passed,
-            details: if hash_passed {
-                "payload hash matches canonical payload bytes".to_string()
-            } else {
-                format!(
-                    "expected `{}`, recalculated `{}`",
-                    lookup.bundle.payload_sha256,
-                    payload_hash.unwrap_or_else(|| "unavailable".to_string())
-                )
-            },
-        });
-
-        let statement_bytes = signature_statement_bytes(
-            &lookup.bundle.bundle_id,
-            &lookup.bundle.schema_version,
-            &lookup.bundle.config_name,
-            lookup.bundle.exported_at_ms,
-            &lookup.bundle.payload_sha256,
-            &lookup.bundle.subject,
-        )?;
-        let signature_passed =
-            verify_detached_signature(&statement_bytes, &lookup.bundle.signature.detached())
-                .is_ok();
-        checks.push(EvidenceVerificationCheck {
-            name: "detached_signature".to_string(),
-            passed: signature_passed,
-            details: if signature_passed {
-                "signature verified against signed statement".to_string()
-            } else {
-                "signature verification failed".to_string()
-            },
-        });
-
-        let key_id_passed = expected_key_id
-            .map(|expected| expected == lookup.bundle.signature.key_id)
-            .unwrap_or(true);
-        checks.push(EvidenceVerificationCheck {
-            name: "expected_key_id".to_string(),
-            passed: key_id_passed,
-            details: if let Some(expected_key_id) = expected_key_id {
-                if key_id_passed {
-                    format!("matched expected signer key id `{expected_key_id}`")
-                } else {
-                    format!(
-                        "expected signer key id `{expected_key_id}`, found `{}`",
-                        lookup.bundle.signature.key_id
-                    )
-                }
-            } else {
-                "no expected key id supplied".to_string()
-            },
-        });
-
-        let status = if checks.iter().all(|check| check.passed) {
-            EvidenceVerificationStatus::Passed
-        } else {
-            EvidenceVerificationStatus::Failed
-        };
-        let report = EvidenceVerificationReport {
-            verification_id: format!("evidence_verification:{}", lookup.bundle.bundle_id),
-            bundle_id: lookup.bundle.bundle_id.clone(),
-            subject_kind: lookup.bundle.subject.kind,
-            subject_id: lookup.bundle.subject.stable_id.clone(),
-            verified_at_ms,
-            status,
-            signer_id: lookup.bundle.signature.signer_id.clone(),
-            signer_key_id: lookup.bundle.signature.key_id.clone(),
-            expected_key_id: expected_key_id.map(ToString::to_string),
-            checks,
-        };
-        let verification = self.evidence_verification_store.persist(&report)?;
-        self.evidence_store
-            .attach_verification(&verification.record, &lookup.bundle.bundle_id)?;
-        Ok(verification)
+        verify_bundle_with_stores(
+            &self.evidence_store,
+            &self.evidence_verification_store,
+            bundle_id,
+            expected_key_id,
+        )
     }
 
     pub fn load_verification(
@@ -1812,7 +1699,133 @@ fn evidence_bundle_id(kind: EvidenceSubjectKind, stable_id: &str, signer_id: &st
     format!("evidence:{}:{}:{}", kind.as_str(), stable_id, signer_id)
 }
 
-fn signature_statement_bytes(
+pub(crate) fn verify_bundle_with_stores(
+    evidence_store: &FileEvidenceBundleStore,
+    evidence_verification_store: &FileEvidenceVerificationStore,
+    bundle_id: &str,
+    expected_key_id: Option<&str>,
+) -> Result<EvidenceVerificationLookup, EvidenceError> {
+    let lookup =
+        evidence_store
+            .load(bundle_id)?
+            .ok_or_else(|| EvidenceError::ArtifactNotFound {
+                kind: "evidence bundle",
+                id: bundle_id.to_string(),
+            })?;
+    let verified_at_ms = now_ms();
+    let mut checks = Vec::new();
+
+    let normalized_payload = normalize_canonical_json(&lookup.bundle.canonical_payload);
+    let normalized_payload = match normalized_payload {
+        Ok(payload) => {
+            let passed = payload == lookup.bundle.canonical_payload;
+            checks.push(EvidenceVerificationCheck {
+                name: "canonical_payload".to_string(),
+                passed,
+                details: if passed {
+                    "canonical payload bytes normalized cleanly".to_string()
+                } else {
+                    "canonical payload bytes changed after normalization".to_string()
+                },
+            });
+            payload
+        }
+        Err(error) => {
+            checks.push(EvidenceVerificationCheck {
+                name: "canonical_payload".to_string(),
+                passed: false,
+                details: error.to_string(),
+            });
+            String::new()
+        }
+    };
+
+    let payload_hash = if normalized_payload.is_empty() {
+        None
+    } else {
+        Some(sha256_hex(normalized_payload.as_bytes()))
+    };
+    let hash_passed = payload_hash
+        .as_deref()
+        .map(|value| value == lookup.bundle.payload_sha256)
+        .unwrap_or(false);
+    checks.push(EvidenceVerificationCheck {
+        name: "payload_sha256".to_string(),
+        passed: hash_passed,
+        details: if hash_passed {
+            "payload hash matches canonical payload bytes".to_string()
+        } else {
+            format!(
+                "expected `{}`, recalculated `{}`",
+                lookup.bundle.payload_sha256,
+                payload_hash.unwrap_or_else(|| "unavailable".to_string())
+            )
+        },
+    });
+
+    let statement_bytes = signature_statement_bytes(
+        &lookup.bundle.bundle_id,
+        &lookup.bundle.schema_version,
+        &lookup.bundle.config_name,
+        lookup.bundle.exported_at_ms,
+        &lookup.bundle.payload_sha256,
+        &lookup.bundle.subject,
+    )?;
+    let signature_passed =
+        verify_detached_signature(&statement_bytes, &lookup.bundle.signature.detached()).is_ok();
+    checks.push(EvidenceVerificationCheck {
+        name: "detached_signature".to_string(),
+        passed: signature_passed,
+        details: if signature_passed {
+            "signature verified against signed statement".to_string()
+        } else {
+            "signature verification failed".to_string()
+        },
+    });
+
+    let key_id_passed = expected_key_id
+        .map(|expected| expected == lookup.bundle.signature.key_id)
+        .unwrap_or(true);
+    checks.push(EvidenceVerificationCheck {
+        name: "expected_key_id".to_string(),
+        passed: key_id_passed,
+        details: if let Some(expected_key_id) = expected_key_id {
+            if key_id_passed {
+                format!("matched expected signer key id `{expected_key_id}`")
+            } else {
+                format!(
+                    "expected signer key id `{expected_key_id}`, found `{}`",
+                    lookup.bundle.signature.key_id
+                )
+            }
+        } else {
+            "no expected key id supplied".to_string()
+        },
+    });
+
+    let status = if checks.iter().all(|check| check.passed) {
+        EvidenceVerificationStatus::Passed
+    } else {
+        EvidenceVerificationStatus::Failed
+    };
+    let report = EvidenceVerificationReport {
+        verification_id: format!("evidence_verification:{}", lookup.bundle.bundle_id),
+        bundle_id: lookup.bundle.bundle_id.clone(),
+        subject_kind: lookup.bundle.subject.kind,
+        subject_id: lookup.bundle.subject.stable_id.clone(),
+        verified_at_ms,
+        status,
+        signer_id: lookup.bundle.signature.signer_id.clone(),
+        signer_key_id: lookup.bundle.signature.key_id.clone(),
+        expected_key_id: expected_key_id.map(ToString::to_string),
+        checks,
+    };
+    let verification = evidence_verification_store.persist(&report)?;
+    evidence_store.attach_verification(&verification.record, &lookup.bundle.bundle_id)?;
+    Ok(verification)
+}
+
+pub(crate) fn signature_statement_bytes(
     bundle_id: &str,
     schema_version: &str,
     config_name: &str,

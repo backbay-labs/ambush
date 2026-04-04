@@ -20,6 +20,7 @@ pub mod pipeline;
 pub mod portfolio;
 pub mod promotion;
 pub mod replay;
+pub mod review_workbench;
 pub mod selection;
 pub mod service;
 pub mod strategy;

@@ -1,3 +1,7 @@
+use crate::evidence::{
+    EvidenceError, FileEvidenceBundleStore, FileEvidenceVerificationStore,
+    verify_bundle_with_stores,
+};
 use crate::governance_prep::{DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePrepError};
 use crate::operator_http::OperatorSurfacePaths;
 use crate::portfolio::{
@@ -26,6 +30,11 @@ pub enum OperatorMaintenanceRequest {
     },
     RefreshPortfolioHistory {
         packet_set_id: String,
+        reason: String,
+    },
+    ReverifyEvidenceBundle {
+        bundle_id: String,
+        expected_key_id: Option<String>,
         reason: String,
     },
 }
@@ -145,6 +154,9 @@ pub enum OperatorMaintenanceError {
 
     #[error(transparent)]
     GovernancePrep(#[from] EvolutionGovernancePrepError),
+
+    #[error(transparent)]
+    Evidence(#[from] EvidenceError),
 }
 
 /// File-backed store for maintenance action audit records.
@@ -300,6 +312,8 @@ pub struct OperatorMaintenanceService {
     actor: String,
     portfolio: DefaultEvolutionPortfolioHarness,
     governance_prep: DefaultEvolutionGovernancePrepHarness,
+    evidence_store: FileEvidenceBundleStore,
+    evidence_verification_store: FileEvidenceVerificationStore,
     store: FileOperatorMaintenanceStore,
 }
 
@@ -322,6 +336,12 @@ impl OperatorMaintenanceService {
                 &paths.strategy_memory_results_dir,
                 &paths.evolution_portfolio_history_results_dir,
             )?,
+            evidence_store: FileEvidenceBundleStore::open(&paths.evidence_results_dir)
+                .map_err(EvidenceError::from)?,
+            evidence_verification_store: FileEvidenceVerificationStore::open(
+                &paths.evidence_verification_results_dir,
+            )
+            .map_err(EvidenceError::from)?,
             store: FileOperatorMaintenanceStore::open(&paths.operator_maintenance_results_dir)?,
         })
     }
@@ -493,6 +513,67 @@ impl OperatorMaintenanceService {
                     error.to_string(),
                 ),
             },
+            OperatorMaintenanceRequest::ReverifyEvidenceBundle {
+                bundle_id,
+                expected_key_id,
+                reason,
+            } => match verify_bundle_with_stores(
+                &self.evidence_store,
+                &self.evidence_verification_store,
+                bundle_id,
+                expected_key_id.as_deref(),
+            ) {
+                Ok(lookup) => {
+                    let status = match lookup.report.status {
+                        crate::evidence::EvidenceVerificationStatus::Passed => {
+                            OperatorMaintenanceStatus::Applied
+                        }
+                        crate::evidence::EvidenceVerificationStatus::Failed => {
+                            OperatorMaintenanceStatus::Blocked
+                        }
+                    };
+                    let summary = match lookup.report.status {
+                        crate::evidence::EvidenceVerificationStatus::Passed => {
+                            format!("re-verified evidence bundle `{}` successfully", bundle_id)
+                        }
+                        crate::evidence::EvidenceVerificationStatus::Failed => format!(
+                            "re-verified evidence bundle `{}` but verification failed",
+                            bundle_id
+                        ),
+                    };
+                    self.persist_execution_record(
+                        base_record(
+                            "reverify_evidence_bundle",
+                            &actor,
+                            requested_at_ms,
+                            "evidence_bundle",
+                            bundle_id.clone(),
+                            reason,
+                            request.clone(),
+                        ),
+                        status,
+                        summary,
+                        vec![OperatorMaintenanceArtifactRef {
+                            kind: "evidence_verification".to_string(),
+                            id: lookup.report.verification_id,
+                        }],
+                        Some(bundle_id.clone()),
+                    )
+                }
+                Err(error) => self.persist_error_record(
+                    base_record(
+                        "reverify_evidence_bundle",
+                        &self.actor,
+                        requested_at_ms,
+                        "evidence_bundle",
+                        bundle_id.clone(),
+                        reason,
+                        request.clone(),
+                    ),
+                    classify_evidence_error(&error),
+                    error.to_string(),
+                ),
+            },
         }
     }
 
@@ -523,7 +604,18 @@ impl OperatorMaintenanceService {
         status: OperatorMaintenanceStatus,
         summary: String,
     ) -> Result<OperatorMaintenanceExecution, OperatorMaintenanceError> {
-        let record = record.with_status(status, summary, Vec::new(), None);
+        self.persist_execution_record(record, status, summary, Vec::new(), None)
+    }
+
+    fn persist_execution_record(
+        &self,
+        record: OperatorMaintenanceRecordBuilder,
+        status: OperatorMaintenanceStatus,
+        summary: String,
+        artifacts: Vec<OperatorMaintenanceArtifactRef>,
+        native_history_ref: Option<String>,
+    ) -> Result<OperatorMaintenanceExecution, OperatorMaintenanceError> {
+        let record = record.with_status(status, summary, artifacts, native_history_ref);
         let lookup = self.store.persist(&record)?;
         Ok(match status {
             OperatorMaintenanceStatus::Blocked => OperatorMaintenanceExecution::Blocked(lookup),
@@ -621,6 +713,13 @@ fn classify_governance_error(error: &EvolutionGovernancePrepError) -> OperatorMa
     }
 }
 
+fn classify_evidence_error(error: &EvidenceError) -> OperatorMaintenanceStatus {
+    match error {
+        EvidenceError::ArtifactNotFound { .. } => OperatorMaintenanceStatus::Blocked,
+        _ => OperatorMaintenanceStatus::Failed,
+    }
+}
+
 fn validate_request(request: &OperatorMaintenanceRequest) -> Result<(), String> {
     if request_reason(request).trim().is_empty() {
         return Err("maintenance reason cannot be empty".to_string());
@@ -632,7 +731,8 @@ fn request_reason(request: &OperatorMaintenanceRequest) -> &str {
     match request {
         OperatorMaintenanceRequest::PortfolioEntryDecision { reason, .. }
         | OperatorMaintenanceRequest::PacketSetSplit { reason, .. }
-        | OperatorMaintenanceRequest::RefreshPortfolioHistory { reason, .. } => reason,
+        | OperatorMaintenanceRequest::RefreshPortfolioHistory { reason, .. }
+        | OperatorMaintenanceRequest::ReverifyEvidenceBundle { reason, .. } => reason,
     }
 }
 
@@ -668,6 +768,14 @@ fn request_metadata(
             "refresh_portfolio_history",
             "packet_set",
             packet_set_id.clone(),
+            reason,
+        ),
+        OperatorMaintenanceRequest::ReverifyEvidenceBundle {
+            bundle_id, reason, ..
+        } => (
+            "reverify_evidence_bundle",
+            "evidence_bundle",
+            bundle_id.clone(),
             reason,
         ),
     }

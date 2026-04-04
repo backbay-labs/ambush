@@ -21,12 +21,18 @@ use crate::operator_maintenance::{
 use crate::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioList,
 };
+use crate::review_workbench::{
+    DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind,
+    ReviewSessionCreateRequest, ReviewSessionExport, ReviewSessionList,
+    ReviewSessionMaintenanceHandoff, ReviewSessionMaintenanceHandoffList, ReviewSessionResolved,
+    ReviewSessionReverifyRequest, ReviewWorkbenchError,
+};
 use crate::service::OperatorStatusReport;
-use axum::extract::{Path as RoutePath, Query, State};
+use axum::extract::{Form, Path as RoutePath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -48,6 +54,9 @@ pub struct OperatorSurfacePaths {
     pub evidence_results_dir: PathBuf,
     pub evidence_verification_results_dir: PathBuf,
     pub promotion_evidence_results_dir: PathBuf,
+    pub review_session_results_dir: PathBuf,
+    pub review_session_export_results_dir: PathBuf,
+    pub review_session_handoff_results_dir: PathBuf,
 }
 
 /// Errors raised while building or serving the authenticated operator surface.
@@ -70,6 +79,9 @@ pub enum OperatorHttpError {
 
     #[error(transparent)]
     Maintenance(#[from] OperatorMaintenanceError),
+
+    #[error(transparent)]
+    ReviewWorkbench(#[from] ReviewWorkbenchError),
 
     #[error("operator surface is disabled in repo config")]
     Disabled,
@@ -103,6 +115,7 @@ struct OperatorHttpState {
     governance_prep: Option<Arc<DefaultEvolutionGovernancePrepHarness>>,
     maintenance: Option<Arc<OperatorMaintenanceService>>,
     evidence: Option<Arc<OperatorEvidenceReadService>>,
+    workbench: Option<Arc<DefaultReviewWorkbenchHarness>>,
     max_list_results: usize,
 }
 
@@ -173,6 +186,25 @@ struct ReviewEvidenceListQuery {
 struct ReviewPromotionPacketListQuery {
     recommendation: Option<String>,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewSessionListQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewSessionCreateForm {
+    title: Option<String>,
+    notes: Option<String>,
+    artifact_refs: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewSessionHandoffForm {
+    selected_artifact_refs: Option<String>,
+    expected_key_id: Option<String>,
+    reason: String,
 }
 
 struct OperatorApiError {
@@ -337,37 +369,43 @@ impl LocalOperatorSurface {
 
         let config_path = config_path.into();
         let control = DefaultControlPlane::from_config(config_path.clone(), config.clone())?;
-        let (portfolio, governance_prep, maintenance, evidence) = if let Some(paths) = paths {
-            let portfolio = DefaultEvolutionPortfolioHarness::from_path(
-                &paths.evolution_ranking_results_dir,
-                &paths.evolution_selection_results_dir,
-                &paths.evolution_portfolio_results_dir,
-                &paths.evolution_governance_review_packet_results_dir,
-            )?;
-            let governance_prep = DefaultEvolutionGovernancePrepHarness::from_path(
-                &paths.evolution_governance_review_packet_results_dir,
-                &paths.evolution_packet_set_results_dir,
-                &paths.strategy_memory_results_dir,
-                &paths.evolution_portfolio_history_results_dir,
-            )?;
-            let maintenance = OperatorMaintenanceService::from_paths(
-                config.operator.auth.operator_id.clone(),
-                &paths,
-            )?;
-            let evidence = OperatorEvidenceReadService::from_store_paths(
-                &paths.evidence_results_dir,
-                &paths.evidence_verification_results_dir,
-                &paths.promotion_evidence_results_dir,
-            )?;
-            (
-                Some(Arc::new(portfolio)),
-                Some(Arc::new(governance_prep)),
-                Some(Arc::new(maintenance)),
-                Some(Arc::new(evidence)),
-            )
-        } else {
-            (None, None, None, None)
-        };
+        let (portfolio, governance_prep, maintenance, evidence, workbench) =
+            if let Some(paths) = paths {
+                let portfolio = DefaultEvolutionPortfolioHarness::from_path(
+                    &paths.evolution_ranking_results_dir,
+                    &paths.evolution_selection_results_dir,
+                    &paths.evolution_portfolio_results_dir,
+                    &paths.evolution_governance_review_packet_results_dir,
+                )?;
+                let governance_prep = DefaultEvolutionGovernancePrepHarness::from_path(
+                    &paths.evolution_governance_review_packet_results_dir,
+                    &paths.evolution_packet_set_results_dir,
+                    &paths.strategy_memory_results_dir,
+                    &paths.evolution_portfolio_history_results_dir,
+                )?;
+                let maintenance = OperatorMaintenanceService::from_paths(
+                    config.operator.auth.operator_id.clone(),
+                    &paths,
+                )?;
+                let evidence = OperatorEvidenceReadService::from_store_paths(
+                    &paths.evidence_results_dir,
+                    &paths.evidence_verification_results_dir,
+                    &paths.promotion_evidence_results_dir,
+                )?;
+                let workbench = DefaultReviewWorkbenchHarness::from_paths(
+                    config.operator.auth.operator_id.clone(),
+                    &paths,
+                )?;
+                (
+                    Some(Arc::new(portfolio)),
+                    Some(Arc::new(governance_prep)),
+                    Some(Arc::new(maintenance)),
+                    Some(Arc::new(evidence)),
+                    Some(Arc::new(workbench)),
+                )
+            } else {
+                (None, None, None, None, None)
+            };
 
         Ok(Self {
             bind_addr,
@@ -377,6 +415,7 @@ impl LocalOperatorSurface {
                 governance_prep,
                 maintenance,
                 evidence,
+                workbench,
                 max_list_results: config.operator.max_list_results,
             },
         })
@@ -409,6 +448,30 @@ impl LocalOperatorSurface {
             .route("/v1/operator/investigation", get(investigation_handler))
             .route("/v1/operator/incident", get(incident_handler))
             .route("/v1/operator/review", get(review_home_handler))
+            .route(
+                "/v1/operator/review/sessions",
+                get(review_session_list_handler).post(review_session_create_handler),
+            )
+            .route(
+                "/v1/operator/review/sessions/{session_id}",
+                get(review_session_handler),
+            )
+            .route(
+                "/v1/operator/review/sessions/{session_id}/export",
+                post(review_session_export_handler),
+            )
+            .route(
+                "/v1/operator/review/sessions/{session_id}/handoffs/reverify",
+                post(review_session_handoff_handler),
+            )
+            .route(
+                "/v1/operator/review/exports/{export_id}",
+                get(review_session_export_page_handler),
+            )
+            .route(
+                "/v1/operator/review/handoffs/{handoff_id}",
+                get(review_session_handoff_page_handler),
+            )
             .route(
                 "/v1/operator/review/evidence",
                 get(review_evidence_list_handler),
@@ -570,6 +633,7 @@ async fn review_home_handler(
     State(state): State<OperatorHttpState>,
 ) -> Result<Html<String>, OperatorReviewError> {
     let service = review_evidence_service(&state)?;
+    let workbench = review_workbench_service(&state)?;
     let bundles = limit_evidence_bundle_list(
         service
             .list_bundles(None)
@@ -584,7 +648,146 @@ async fn review_home_handler(
         Some(state.max_list_results),
         state.max_list_results,
     );
-    Ok(Html(render_review_home_page(&bundles, &packets)))
+    let sessions = limit_review_session_list(
+        workbench
+            .list_sessions()
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    Ok(Html(render_review_home_page(&bundles, &packets, &sessions)))
+}
+
+async fn review_session_list_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<ReviewSessionListQuery>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let list = service
+        .list_sessions()
+        .map_err(map_review_workbench_error)?;
+    let list = limit_review_session_list(list, query.limit, state.max_list_results);
+    Ok(Html(render_review_session_list_page(&list)))
+}
+
+async fn review_session_create_handler(
+    State(state): State<OperatorHttpState>,
+    Form(form): Form<ReviewSessionCreateForm>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let artifact_refs = parse_review_artifact_refs_text(&form.artifact_refs)?;
+    let lookup = service
+        .create_session(ReviewSessionCreateRequest {
+            title: form.title,
+            notes: form.notes,
+            artifact_refs,
+        })
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/sessions/{}",
+        lookup.report.session_id
+    )))
+}
+
+async fn review_session_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(session_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let resolved = service
+        .resolve_session(&session_id)
+        .map_err(map_review_workbench_error)?;
+    let exports = limit_review_session_export_list(
+        service
+            .list_exports(Some(&session_id))
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    let handoffs = limit_review_session_handoff_list(
+        service
+            .list_handoffs(Some(&session_id))
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
+    Ok(Html(render_review_session_page(
+        &resolved,
+        &exports.exports,
+        &handoffs.handoffs,
+    )))
+}
+
+async fn review_session_export_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(session_id): RoutePath<String>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .export_session(&session_id)
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/exports/{}",
+        lookup.export.export_id
+    )))
+}
+
+async fn review_session_export_page_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(export_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .load_export(&export_id)
+        .map_err(map_review_workbench_error)?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!(
+                "review session export `{export_id}` was not found"
+            ))
+        })?;
+    Ok(Html(render_review_session_export_page(&lookup.export)))
+}
+
+async fn review_session_handoff_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(session_id): RoutePath<String>,
+    Form(form): Form<ReviewSessionHandoffForm>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let selected_artifact_refs = form
+        .selected_artifact_refs
+        .as_deref()
+        .map(parse_review_artifact_refs_text)
+        .transpose()?
+        .unwrap_or_default();
+    let lookup = service
+        .create_reverify_handoff(ReviewSessionReverifyRequest {
+            session_id,
+            selected_artifact_refs,
+            expected_key_id: normalize_form_optional_text(form.expected_key_id),
+            reason: form.reason,
+        })
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/handoffs/{}",
+        lookup.handoff.handoff_id
+    )))
+}
+
+async fn review_session_handoff_page_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(handoff_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .load_handoff(&handoff_id)
+        .map_err(map_review_workbench_error)?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!(
+                "review session handoff `{handoff_id}` was not found"
+            ))
+        })?;
+    Ok(Html(render_review_session_handoff_page(&lookup.handoff)))
 }
 
 async fn review_evidence_list_handler(
@@ -1090,6 +1293,31 @@ fn evidence_service(
         .ok_or_else(|| OperatorApiError::internal("evidence stores are not configured"))
 }
 
+fn review_workbench_service(
+    state: &OperatorHttpState,
+) -> Result<&DefaultReviewWorkbenchHarness, OperatorReviewError> {
+    state
+        .workbench
+        .as_deref()
+        .ok_or_else(|| OperatorReviewError::internal("review workbench stores are not configured"))
+}
+
+fn map_review_workbench_error(error: ReviewWorkbenchError) -> OperatorReviewError {
+    match error {
+        ReviewWorkbenchError::InvalidRequest(message) => OperatorReviewError::bad_request(message),
+        ReviewWorkbenchError::SessionNotFound { session_id } => {
+            OperatorReviewError::not_found(format!("review session `{session_id}` was not found"))
+        }
+        ReviewWorkbenchError::ExportNotFound { export_id } => OperatorReviewError::not_found(
+            format!("review session export `{export_id}` was not found"),
+        ),
+        ReviewWorkbenchError::HandoffNotFound { handoff_id } => OperatorReviewError::not_found(
+            format!("review session handoff `{handoff_id}` was not found"),
+        ),
+        other => OperatorReviewError::internal(other.to_string()),
+    }
+}
+
 fn count_set(values: &[Option<&str>]) -> usize {
     values.iter().filter(|value| value.is_some()).count()
 }
@@ -1151,6 +1379,81 @@ fn limit_maintenance_list(
     list.actions = list.actions.into_iter().take(limit).collect();
     list.total_count = list.actions.len();
     list
+}
+
+fn limit_review_session_list(
+    mut list: ReviewSessionList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> ReviewSessionList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.sessions = list.sessions.into_iter().take(limit).collect();
+    list.total_count = list.sessions.len();
+    list
+}
+
+fn limit_review_session_export_list(
+    mut list: crate::review_workbench::ReviewSessionExportList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> crate::review_workbench::ReviewSessionExportList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.exports = list.exports.into_iter().take(limit).collect();
+    list.total_count = list.exports.len();
+    list
+}
+
+fn limit_review_session_handoff_list(
+    mut list: ReviewSessionMaintenanceHandoffList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> ReviewSessionMaintenanceHandoffList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.handoffs = list.handoffs.into_iter().take(limit).collect();
+    list.total_count = list.handoffs.len();
+    list
+}
+
+fn parse_review_artifact_refs_text(
+    raw: &str,
+) -> Result<Vec<ReviewArtifactRef>, OperatorReviewError> {
+    let mut refs = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let (kind, id) = trimmed.split_once(':').ok_or_else(|| {
+            OperatorReviewError::bad_request(format!(
+                "invalid artifact ref `{trimmed}`; expected kind:id"
+            ))
+        })?;
+        let kind = kind.parse::<ReviewArtifactRefKind>().map_err(|_| {
+            OperatorReviewError::bad_request(format!("unsupported review artifact kind `{kind}`"))
+        })?;
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(OperatorReviewError::bad_request(format!(
+                "invalid artifact ref `{trimmed}`; missing id"
+            )));
+        }
+        refs.push(ReviewArtifactRef {
+            kind,
+            id: id.to_string(),
+        });
+    }
+    Ok(refs)
+}
+
+fn normalize_form_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1291,7 +1594,7 @@ fn render_review_layout(title: &str, subtitle: &str, body: &str) -> String {
         format!("<p class=\"subtitle\">{}</p>", escape_html(subtitle))
     };
     format!(
-        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title}</title><style>{style}</style></head><body><main class=\"page\"><header class=\"hero\"><div><p class=\"eyebrow\">Swarm Team Six</p><h1>{heading}</h1>{subtitle}</div><nav class=\"nav\"><a href=\"/v1/operator/review\">Home</a><a href=\"/v1/operator/review/evidence\">Evidence</a><a href=\"/v1/operator/review/promotion-packets\">Promotion Packets</a></nav></header>{body}</main></body></html>",
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title}</title><style>{style}</style></head><body><main class=\"page\"><header class=\"hero\"><div><p class=\"eyebrow\">Swarm Team Six</p><h1>{heading}</h1>{subtitle}</div><nav class=\"nav\"><a href=\"/v1/operator/review\">Home</a><a href=\"/v1/operator/review/sessions\">Sessions</a><a href=\"/v1/operator/review/evidence\">Evidence</a><a href=\"/v1/operator/review/promotion-packets\">Promotion Packets</a></nav></header>{body}</main></body></html>",
         title = escape_html(title),
         heading = escape_html(title),
         subtitle = subtitle_html,
@@ -1323,7 +1626,7 @@ fn render_review_layout(title: &str, subtitle: &str, body: &str) -> String {
             "th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#6a7282;}",
             ".toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:18px 0;}",
             ".toolbar label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600;color:#344054;}",
-            ".toolbar input,.toolbar select{min-width:180px;padding:10px 12px;border-radius:12px;border:1px solid #ccd5e3;background:#fff;}",
+            ".toolbar input,.toolbar select,.toolbar textarea{min-width:180px;padding:10px 12px;border-radius:12px;border:1px solid #ccd5e3;background:#fff;}",
             ".toolbar button{padding:10px 16px;border-radius:12px;border:0;background:#0f4f8a;color:#fff;font-weight:700;cursor:pointer;}",
             "code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;}",
             "pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#141923;color:#eef3ff;padding:14px;border-radius:14px;}",
@@ -1416,9 +1719,403 @@ fn render_promotion_recommendation_options(
     options.join("")
 }
 
+fn render_review_session_list_page(list: &ReviewSessionList) -> String {
+    let mut rows = String::new();
+    for session in &list.sessions {
+        rows.push_str(&format!(
+            "<tr><td>{session_link}</td><td>{title}</td><td>{artifacts}</td><td>{bundles}</td><td>{verifications}</td><td>{packets}</td></tr>",
+            session_link = review_link(
+                &format!("/v1/operator/review/sessions/{}", session.session_id),
+                &session.session_id
+            ),
+            title = escape_html(session.title.as_deref().unwrap_or("untitled")),
+            artifacts = session.artifact_count,
+            bundles = session.evidence_bundle_count,
+            verifications = session.verification_count,
+            packets = session.promotion_packet_count
+        ));
+    }
+    if rows.is_empty() {
+        rows.push_str(
+            "<tr><td colspan=\"6\" class=\"muted\">No review sessions created yet.</td></tr>",
+        );
+    }
+
+    render_review_layout(
+        "Review Sessions",
+        "Assemble durable multi-artifact evidence sessions from existing stable IDs, then export or hand them into bounded maintenance actions.",
+        &format!(
+            "<section class=\"grid\">\
+                <article class=\"card\">\
+                    <h2>Create Session</h2>\
+                    <form class=\"toolbar\" method=\"post\" action=\"/v1/operator/review/sessions\">\
+                        <label>Title<input type=\"text\" name=\"title\" placeholder=\"red evidence workbench\"></label>\
+                        <label>Notes<input type=\"text\" name=\"notes\" placeholder=\"optional operator context\"></label>\
+                        <label style=\"min-width:100%;\">Artifact refs<textarea name=\"artifact_refs\" rows=\"6\" placeholder=\"evidence_bundle:...&#10;evidence_verification:...&#10;promotion_evidence_packet:...\"></textarea></label>\
+                        <button type=\"submit\">Create Review Session</button>\
+                    </form>\
+                    <p class=\"muted\">One artifact ref per line. Supported kinds: <code>evidence_bundle</code>, <code>evidence_verification</code>, <code>promotion_evidence_packet</code>.</p>\
+                </article>\
+                <article class=\"card\">\
+                    <h2>Recent Sessions</h2>\
+                    <table><thead><tr><th>Session</th><th>Title</th><th>Artifacts</th><th>Bundles</th><th>Verifications</th><th>Packets</th></tr></thead><tbody>{rows}</tbody></table>\
+                </article>\
+            </section>",
+            rows = rows
+        ),
+    )
+}
+
+fn render_review_session_page(
+    resolved: &ReviewSessionResolved,
+    exports: &[crate::review_workbench::ReviewSessionExportRecord],
+    handoffs: &[crate::review_workbench::ReviewSessionMaintenanceHandoffRecord],
+) -> String {
+    let mut bundle_rows = String::new();
+    for bundle in &resolved.evidence_bundles {
+        let verification = bundle
+            .record
+            .latest_verification_status
+            .map(|status| render_status_pill(status.as_str(), status.as_str()))
+            .unwrap_or_else(|| render_status_pill("unverified", "unverified"));
+        bundle_rows.push_str(&format!(
+            "<tr><td>{bundle_link}</td><td>{subject_kind}</td><td><code>{subject_id}</code></td><td>{verification}</td></tr>",
+            bundle_link = review_link(
+                &format!("/v1/operator/review/evidence/{}", bundle.record.bundle_id),
+                &bundle.record.bundle_id
+            ),
+            subject_kind = escape_html(bundle.record.subject_kind.as_str()),
+            subject_id = escape_html(&bundle.record.subject_id),
+            verification = verification
+        ));
+    }
+    if bundle_rows.is_empty() {
+        bundle_rows.push_str(
+            "<tr><td colspan=\"4\" class=\"muted\">No evidence bundles in this session.</td></tr>",
+        );
+    }
+
+    let mut verification_rows = String::new();
+    for verification in &resolved.evidence_verifications {
+        verification_rows.push_str(&format!(
+            "<tr><td>{verification_link}</td><td>{bundle_link}</td><td>{status}</td><td><code>{key_id}</code></td></tr>",
+            verification_link = review_link(
+                &format!(
+                    "/v1/operator/review/verifications/{}",
+                    verification.report.verification_id
+                ),
+                &verification.report.verification_id
+            ),
+            bundle_link = review_link(
+                &format!("/v1/operator/review/evidence/{}", verification.report.bundle_id),
+                &verification.report.bundle_id
+            ),
+            status = render_status_pill(
+                verification.report.status.as_str(),
+                verification.report.status.as_str()
+            ),
+            key_id = escape_html(&verification.report.signer_key_id)
+        ));
+    }
+    if verification_rows.is_empty() {
+        verification_rows.push_str(
+            "<tr><td colspan=\"4\" class=\"muted\">No evidence verifications in this session.</td></tr>",
+        );
+    }
+
+    let mut packet_rows = String::new();
+    for packet in &resolved.promotion_packets {
+        let recommendation = match packet.packet.recommendation {
+            PromotionEvidenceRecommendation::ReadyForExternalReview => {
+                render_status_pill("ready_for_external_review", "ready")
+            }
+            PromotionEvidenceRecommendation::Blocked => render_status_pill("blocked", "blocked"),
+        };
+        packet_rows.push_str(&format!(
+            "<tr><td>{packet_link}</td><td><code>{promotion_id}</code></td><td>{recommendation}</td><td>{attachments}</td></tr>",
+            packet_link = review_link(
+                &format!("/v1/operator/review/promotion-packets/{}", packet.packet.packet_id),
+                &packet.packet.packet_id
+            ),
+            promotion_id = escape_html(&packet.packet.promotion_id),
+            recommendation = recommendation,
+            attachments = packet.packet.supporting_evidence.len()
+        ));
+    }
+    if packet_rows.is_empty() {
+        packet_rows.push_str(
+            "<tr><td colspan=\"4\" class=\"muted\">No promotion evidence packets in this session.</td></tr>",
+        );
+    }
+
+    let mut export_rows = String::new();
+    for export in exports {
+        export_rows.push_str(&format!(
+            "<tr><td>{export_link}</td><td>{artifacts}</td></tr>",
+            export_link = review_link(
+                &format!("/v1/operator/review/exports/{}", export.export_id),
+                &export.export_id
+            ),
+            artifacts = export.artifact_count
+        ));
+    }
+    if export_rows.is_empty() {
+        export_rows
+            .push_str("<tr><td colspan=\"2\" class=\"muted\">No exports created yet.</td></tr>");
+    }
+
+    let mut handoff_rows = String::new();
+    for handoff in handoffs {
+        handoff_rows.push_str(&format!(
+            "<tr><td>{handoff_link}</td><td>{status}</td><td>{actions}</td></tr>",
+            handoff_link = review_link(
+                &format!("/v1/operator/review/handoffs/{}", handoff.handoff_id),
+                &handoff.handoff_id
+            ),
+            status = render_maintenance_status_pill(handoff.status),
+            actions = handoff.action_count
+        ));
+    }
+    if handoff_rows.is_empty() {
+        handoff_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No maintenance handoffs created yet.</td></tr>",
+        );
+    }
+
+    render_review_layout(
+        "Review Session Detail",
+        "Compare the reviewed evidence set, export a stable snapshot, or launch one bounded evidence re-verification handoff.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Session ID</dt><dd><code>{session_id}</code></dd></div>\
+                    <div><dt>Title</dt><dd>{title}</dd></div>\
+                    <div><dt>Artifacts</dt><dd>{artifact_count}</dd></div>\
+                    <div><dt>Notes</dt><dd>{notes}</dd></div>\
+                </div>\
+                <div class=\"grid\">\
+                    <article class=\"card\">\
+                        <h3>Export Snapshot</h3>\
+                        <form method=\"post\" action=\"/v1/operator/review/sessions/{session_id}/export\">\
+                            <button type=\"submit\">Create Export</button>\
+                        </form>\
+                        <p class=\"muted\">Exports preserve digests, signer metadata, verification state, and related stable references for this session.</p>\
+                    </article>\
+                    <article class=\"card\">\
+                        <h3>Re-Verification Handoff</h3>\
+                        <form class=\"toolbar\" method=\"post\" action=\"/v1/operator/review/sessions/{session_id}/handoffs/reverify\">\
+                            <label>Reason<input type=\"text\" name=\"reason\" placeholder=\"recheck signer integrity before maintenance review\"></label>\
+                            <label>Expected key ID<input type=\"text\" name=\"expected_key_id\" placeholder=\"optional signer fingerprint\"></label>\
+                            <label style=\"min-width:100%;\">Selected refs<textarea name=\"selected_artifact_refs\" rows=\"4\" placeholder=\"optional; leave empty to use all session refs\"></textarea></label>\
+                            <button type=\"submit\">Launch Bounded Handoff</button>\
+                        </form>\
+                    </article>\
+                </div>\
+            </section>\
+            <section class=\"grid\" style=\"margin-top:18px;\">\
+                <article class=\"card\"><h2>Evidence Bundles</h2><table><thead><tr><th>Bundle</th><th>Kind</th><th>Subject</th><th>Verification</th></tr></thead><tbody>{bundle_rows}</tbody></table></article>\
+                <article class=\"card\"><h2>Verification Reports</h2><table><thead><tr><th>Verification</th><th>Bundle</th><th>Status</th><th>Signer Key</th></tr></thead><tbody>{verification_rows}</tbody></table></article>\
+            </section>\
+            <section class=\"grid\" style=\"margin-top:18px;\">\
+                <article class=\"card\"><h2>Promotion Evidence Packets</h2><table><thead><tr><th>Packet</th><th>Promotion</th><th>Recommendation</th><th>Attachments</th></tr></thead><tbody>{packet_rows}</tbody></table></article>\
+                <article class=\"card\"><h2>Recent Exports</h2><table><thead><tr><th>Export</th><th>Artifacts</th></tr></thead><tbody>{export_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Recent Handoffs</h2><table><thead><tr><th>Handoff</th><th>Status</th><th>Actions</th></tr></thead><tbody>{handoff_rows}</tbody></table></article>\
+            </section>",
+            session_id = escape_html(&resolved.session.report.session_id),
+            title = escape_html(
+                resolved
+                    .session
+                    .report
+                    .title
+                    .as_deref()
+                    .unwrap_or("untitled")
+            ),
+            artifact_count = resolved.session.report.artifact_refs.len(),
+            notes = escape_html(resolved.session.report.notes.as_deref().unwrap_or("none")),
+            bundle_rows = bundle_rows,
+            verification_rows = verification_rows,
+            packet_rows = packet_rows,
+            export_rows = export_rows,
+            handoff_rows = handoff_rows
+        ),
+    )
+}
+
+fn render_review_session_export_page(export: &ReviewSessionExport) -> String {
+    let mut bundle_rows = String::new();
+    for bundle in &export.evidence_bundles {
+        let verification = bundle
+            .latest_verification_status
+            .map(|status| render_status_pill(status.as_str(), status.as_str()))
+            .unwrap_or_else(|| render_status_pill("unverified", "unverified"));
+        bundle_rows.push_str(&format!(
+            "<tr><td><code>{bundle_id}</code></td><td>{subject_kind}</td><td><code>{subject_id}</code></td><td><code>{digest}</code></td><td>{verification}</td></tr>",
+            bundle_id = escape_html(&bundle.bundle_id),
+            subject_kind = escape_html(bundle.subject_kind.as_str()),
+            subject_id = escape_html(&bundle.subject_id),
+            digest = escape_html(&bundle.payload_sha256),
+            verification = verification
+        ));
+    }
+    if bundle_rows.is_empty() {
+        bundle_rows
+            .push_str("<tr><td colspan=\"5\" class=\"muted\">No bundles exported.</td></tr>");
+    }
+
+    let mut verification_rows = String::new();
+    for verification in &export.evidence_verifications {
+        verification_rows.push_str(&format!(
+            "<tr><td><code>{verification_id}</code></td><td><code>{bundle_id}</code></td><td>{status}</td><td><code>{key_id}</code></td></tr>",
+            verification_id = escape_html(&verification.verification_id),
+            bundle_id = escape_html(&verification.bundle_id),
+            status = render_status_pill(verification.status.as_str(), verification.status.as_str()),
+            key_id = escape_html(&verification.signer_key_id)
+        ));
+    }
+    if verification_rows.is_empty() {
+        verification_rows.push_str(
+            "<tr><td colspan=\"4\" class=\"muted\">No verification reports exported.</td></tr>",
+        );
+    }
+
+    let mut packet_rows = String::new();
+    for packet in &export.promotion_packets {
+        packet_rows.push_str(&format!(
+            "<tr><td><code>{packet_id}</code></td><td><code>{promotion_id}</code></td><td>{recommendation}</td><td>{attachments}</td></tr>",
+            packet_id = escape_html(&packet.packet_id),
+            promotion_id = escape_html(&packet.promotion_id),
+            recommendation = match packet.recommendation {
+                PromotionEvidenceRecommendation::ReadyForExternalReview => render_status_pill("ready_for_external_review", "ready"),
+                PromotionEvidenceRecommendation::Blocked => render_status_pill("blocked", "blocked"),
+            },
+            attachments = packet.supporting_evidence.len()
+        ));
+    }
+    if packet_rows.is_empty() {
+        packet_rows.push_str(
+            "<tr><td colspan=\"4\" class=\"muted\">No promotion packets exported.</td></tr>",
+        );
+    }
+
+    render_review_layout(
+        "Review Session Export",
+        "Stable export snapshot preserving the current review set and its trust metadata.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Export ID</dt><dd><code>{export_id}</code></dd></div>\
+                    <div><dt>Session ID</dt><dd>{session_link}</dd></div>\
+                    <div><dt>Artifacts</dt><dd>{artifacts}</dd></div>\
+                    <div><dt>Title</dt><dd>{title}</dd></div>\
+                </div>\
+                <p class=\"muted\">This export preserves digests, signer metadata, verification state, and related stable references without rereading raw store files.</p>\
+                <h2>Bundles</h2><table><thead><tr><th>Bundle</th><th>Kind</th><th>Subject</th><th>Payload SHA-256</th><th>Verification</th></tr></thead><tbody>{bundle_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Verification Reports</h2><table><thead><tr><th>Verification</th><th>Bundle</th><th>Status</th><th>Signer Key</th></tr></thead><tbody>{verification_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Promotion Packets</h2><table><thead><tr><th>Packet</th><th>Promotion</th><th>Recommendation</th><th>Attachments</th></tr></thead><tbody>{packet_rows}</tbody></table>\
+            </section>",
+            export_id = escape_html(&export.export_id),
+            session_link = review_link(
+                &format!("/v1/operator/review/sessions/{}", export.session_id),
+                &export.session_id
+            ),
+            artifacts = export.artifact_refs.len(),
+            title = escape_html(export.title.as_deref().unwrap_or("untitled")),
+            bundle_rows = bundle_rows,
+            verification_rows = verification_rows,
+            packet_rows = packet_rows
+        ),
+    )
+}
+
+fn render_review_session_handoff_page(handoff: &ReviewSessionMaintenanceHandoff) -> String {
+    let mut action_rows = String::new();
+    for result in &handoff.action_results {
+        action_rows.push_str(&format!(
+            "<tr><td><code>{bundle_id}</code></td><td>{action_link}</td><td>{status}</td><td>{verification}</td></tr>",
+            bundle_id = escape_html(&result.bundle_id),
+            action_link = review_link(
+                &format!("/v1/operator/maintenance/actions/{}", result.action_id),
+                &result.action_id
+            ),
+            status = render_maintenance_status_pill(result.status),
+            verification = result
+                .verification_id
+                .as_ref()
+                .map(|id| review_link(&format!("/v1/operator/review/verifications/{id}"), id))
+                .unwrap_or_else(|| "<span class=\"muted\">none</span>".to_string())
+        ));
+    }
+    if action_rows.is_empty() {
+        action_rows.push_str(
+            "<tr><td colspan=\"4\" class=\"muted\">No maintenance actions were recorded.</td></tr>",
+        );
+    }
+
+    let selected_refs = if handoff.selected_artifact_refs.is_empty() {
+        "<li class=\"muted\">No selected refs recorded.</li>".to_string()
+    } else {
+        handoff
+            .selected_artifact_refs
+            .iter()
+            .map(|artifact| {
+                format!(
+                    "<li><code>{}:{}</code></li>",
+                    artifact.kind.as_str(),
+                    escape_html(&artifact.id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    render_review_layout(
+        "Review Session Handoff",
+        "Bounded maintenance handoff launched from the evidence workbench. This flow can re-verify evidence bundles but cannot bypass rollout or governance lanes.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Handoff ID</dt><dd><code>{handoff_id}</code></dd></div>\
+                    <div><dt>Session ID</dt><dd>{session_link}</dd></div>\
+                    <div><dt>Status</dt><dd>{status}</dd></div>\
+                    <div><dt>Reason</dt><dd>{reason}</dd></div>\
+                    <div><dt>Expected Key</dt><dd>{expected_key}</dd></div>\
+                    <div><dt>Derived Bundles</dt><dd>{bundle_count}</dd></div>\
+                </div>\
+                <h3>Selected Artifact Refs</h3><ul>{selected_refs}</ul>\
+                <h3>Maintenance Actions</h3><table><thead><tr><th>Bundle</th><th>Action</th><th>Status</th><th>Verification</th></tr></thead><tbody>{action_rows}</tbody></table>\
+            </section>",
+            handoff_id = escape_html(&handoff.handoff_id),
+            session_link = review_link(
+                &format!("/v1/operator/review/sessions/{}", handoff.session_id),
+                &handoff.session_id
+            ),
+            status = render_maintenance_status_pill(handoff.status),
+            reason = escape_html(&handoff.reason),
+            expected_key = handoff
+                .expected_key_id
+                .as_deref()
+                .map(escape_html)
+                .unwrap_or_else(|| "none".to_string()),
+            bundle_count = handoff.derived_bundle_ids.len(),
+            selected_refs = selected_refs,
+            action_rows = action_rows
+        ),
+    )
+}
+
+fn render_maintenance_status_pill(status: OperatorMaintenanceStatus) -> String {
+    let (label, class_name) = match status {
+        OperatorMaintenanceStatus::Applied => ("applied", "passed"),
+        OperatorMaintenanceStatus::Blocked => ("blocked", "blocked"),
+        OperatorMaintenanceStatus::Failed => ("failed", "failed"),
+    };
+    render_status_pill(label, class_name)
+}
+
 fn render_review_home_page(
     bundles: &EvidenceBundleList,
     packets: &PromotionEvidencePacketList,
+    sessions: &ReviewSessionList,
 ) -> String {
     let mut bundle_rows = String::new();
     for bundle in &bundles.bundles {
@@ -1456,20 +2153,40 @@ fn render_review_home_page(
         ));
     }
 
+    let mut session_rows = String::new();
+    for session in &sessions.sessions {
+        session_rows.push_str(&format!(
+            "<tr><td>{session_link}</td><td>{title}</td><td>{artifacts}</td></tr>",
+            session_link = review_link(
+                &format!("/v1/operator/review/sessions/{}", session.session_id),
+                &session.session_id
+            ),
+            title = escape_html(session.title.as_deref().unwrap_or("untitled")),
+            artifacts = session.artifact_count
+        ));
+    }
+    if session_rows.is_empty() {
+        session_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No review sessions created yet.</td></tr>",
+        );
+    }
+
     render_review_layout(
         "Local Evidence Review",
-        "Read-only review pages layered on the authenticated operator API. This surface does not approve, deploy, or mutate rollout state.",
+        "Authenticated local evidence workbench layered on the operator API. Session export and bounded maintenance handoff are available, but rollout and governance remain out of scope.",
         &format!(
             "<section class=\"grid\">\
                 <article class=\"card\"><h2>Review Scope</h2><p>Use this surface to inspect signed evidence bundles, verification reports, and promotion evidence packets without reading store files directly.</p><p class=\"muted\">Authentication stays on the existing bearer-token boundary, and follow-on write actions remain on the existing maintenance or rollout paths.</p></article>\
                 <article class=\"card\"><h2>Quick Links</h2><ul>\
-                    <li>{evidence}</li><li>{packets}</li><li>{json}</li>\
+                    <li>{sessions_link}</li><li>{evidence}</li><li>{packets}</li><li>{json}</li>\
                 </ul></article>\
             </section>\
             <section class=\"grid\" style=\"margin-top:18px;\">\
                 <article class=\"card\"><h2>Recent Evidence Bundles</h2><table><thead><tr><th>Bundle</th><th>Kind</th><th>Subject</th><th>Verification</th></tr></thead><tbody>{bundle_rows}</tbody></table></article>\
                 <article class=\"card\"><h2>Recent Promotion Packets</h2><table><thead><tr><th>Packet</th><th>Promotion</th><th>Recommendation</th></tr></thead><tbody>{packet_rows}</tbody></table></article>\
-            </section>",
+            </section>\
+            <section class=\"card\" style=\"margin-top:18px;\"><h2>Recent Review Sessions</h2><table><thead><tr><th>Session</th><th>Title</th><th>Artifacts</th></tr></thead><tbody>{session_rows}</tbody></table></section>",
+            sessions_link = review_link("/v1/operator/review/sessions", "Open review sessions"),
             evidence = review_link("/v1/operator/review/evidence", "Browse signed evidence"),
             packets = review_link(
                 "/v1/operator/review/promotion-packets",
@@ -1480,7 +2197,8 @@ fn render_review_home_page(
                 "Open raw evidence JSON API"
             ),
             bundle_rows = bundle_rows,
-            packet_rows = packet_rows
+            packet_rows = packet_rows,
+            session_rows = session_rows
         ),
     )
 }
@@ -2368,6 +3086,9 @@ mod tests {
             evidence_results_dir: root.join("evidence-bundles"),
             evidence_verification_results_dir: root.join("evidence-verifications"),
             promotion_evidence_results_dir: root.join("promotion-evidence-packets"),
+            review_session_results_dir: root.join("review-sessions"),
+            review_session_export_results_dir: root.join("review-session-exports"),
+            review_session_handoff_results_dir: root.join("review-session-handoffs"),
         }
     }
 
@@ -3022,5 +3743,191 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(action_ids.contains(&applied_action_id));
         assert!(action_ids.contains(&blocked_action_id));
+    }
+
+    #[tokio::test]
+    async fn review_workbench_routes_create_export_and_handoff_sessions() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+
+        let root = unique_temp_dir("review-workbench");
+        seed_evolution_artifacts(&root);
+        seed_evidence_artifacts(&root);
+        let surface = LocalOperatorSurface::from_config_and_paths(
+            "inline",
+            operator_config(),
+            surface_paths(&root),
+        )
+        .unwrap();
+        let app = surface.router("secret-token".to_string());
+        let auth = ("authorization", "Bearer secret-token");
+        let bundle_id = "evidence:production_promotion:promotion:red:local-evidence-signer";
+        let verification_id = "evidence_verification:evidence:production_promotion:promotion:red:local-evidence-signer";
+        let packet_id = "promotion_evidence:promotion:red";
+        let create_body = format!(
+            "title=red+evidence+review&notes=compare+promotion+evidence&artifact_refs=evidence_bundle%3A{bundle}%0Aevidence_verification%3A{verification}%0Apromotion_evidence_packet%3A{packet}",
+            bundle = bundle_id.replace(':', "%3A"),
+            verification = verification_id.replace(':', "%3A"),
+            packet = packet_id.replace(':', "%3A"),
+        );
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/review/sessions")
+                    .header(auth.0, auth.1)
+                    .header(
+                        axum::http::header::CONTENT_TYPE,
+                        "application/x-www-form-urlencoded",
+                    )
+                    .body(Body::from(create_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::SEE_OTHER);
+        let session_location = create_response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(session_location.starts_with("/v1/operator/review/sessions/review_session:"));
+        let session_id = session_location
+            .trim_start_matches("/v1/operator/review/sessions/")
+            .to_string();
+
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&session_location)
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session_response.status(), StatusCode::OK);
+        let session_body = to_bytes(session_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let session_html = String::from_utf8(session_body.to_vec()).unwrap();
+        assert!(session_html.contains("Review Session Detail"));
+        assert!(session_html.contains(bundle_id));
+        assert!(session_html.contains(packet_id));
+
+        let export_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/operator/review/sessions/{session_id}/export"))
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(export_response.status(), StatusCode::SEE_OTHER);
+        let export_location = export_response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(export_location.starts_with("/v1/operator/review/exports/review_session_export:"));
+        let export_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&export_location)
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(export_page.status(), StatusCode::OK);
+        let export_body = to_bytes(export_page.into_body(), usize::MAX).await.unwrap();
+        let export_html = String::from_utf8(export_body.to_vec()).unwrap();
+        assert!(export_html.contains("Review Session Export"));
+        assert!(export_html.contains("abcd1234"));
+
+        let handoff_body = format!(
+            "reason=re-verify+selected+evidence+from+review&selected_artifact_refs=evidence_bundle%3A{}",
+            bundle_id.replace(':', "%3A"),
+        );
+        let handoff_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/operator/review/sessions/{session_id}/handoffs/reverify"
+                    ))
+                    .header(auth.0, auth.1)
+                    .header(
+                        axum::http::header::CONTENT_TYPE,
+                        "application/x-www-form-urlencoded",
+                    )
+                    .body(Body::from(handoff_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(handoff_response.status(), StatusCode::SEE_OTHER);
+        let handoff_location = handoff_response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(handoff_location.starts_with("/v1/operator/review/handoffs/review_handoff:"));
+        let handoff_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&handoff_location)
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(handoff_page.status(), StatusCode::OK);
+        let handoff_body = to_bytes(handoff_page.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let handoff_html = String::from_utf8(handoff_body.to_vec()).unwrap();
+        assert!(handoff_html.contains("Review Session Handoff"));
+        assert!(handoff_html.contains("blocked"));
+        assert!(handoff_html.contains("/v1/operator/maintenance/actions/"));
+
+        let maintenance_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/maintenance/actions?status=blocked&limit=10")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(maintenance_response.status(), StatusCode::OK);
+        let maintenance_body = to_bytes(maintenance_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let maintenance_json: Value = serde_json::from_slice(&maintenance_body).unwrap();
+        assert_eq!(maintenance_json["total_count"], 1);
+        assert_eq!(
+            maintenance_json["actions"][0]["target_kind"],
+            "evidence_bundle"
+        );
     }
 }

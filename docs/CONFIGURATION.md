@@ -150,7 +150,10 @@ cargo run -p swarm-runtime --bin swarmctl -- serve \
   --operator-maintenance-results-dir data/operator-maintenance-actions \
   --evidence-results-dir data/evidence-bundles \
   --evidence-verification-results-dir data/evidence-verifications \
-  --promotion-evidence-results-dir data/promotion-evidence-packets
+  --promotion-evidence-results-dir data/promotion-evidence-packets \
+  --review-session-results-dir data/review-sessions \
+  --review-session-export-results-dir data/review-session-exports \
+  --review-session-handoff-results-dir data/review-session-handoffs
 ```
 
 Example authenticated reads:
@@ -206,6 +209,12 @@ Maintenance actions inherit the authenticated local operator identity from `oper
 Current authenticated surface:
 
 - `/v1/operator/review`
+- `/v1/operator/review/sessions` `GET`, `POST`
+- `/v1/operator/review/sessions/{session_id}`
+- `/v1/operator/review/sessions/{session_id}/export` `POST`
+- `/v1/operator/review/sessions/{session_id}/handoffs/reverify` `POST`
+- `/v1/operator/review/exports/{export_id}`
+- `/v1/operator/review/handoffs/{handoff_id}`
 - `/v1/operator/review/evidence?subject_kind=&verification_status=&limit=`
 - `/v1/operator/review/evidence/{bundle_id}`
 - `/v1/operator/review/verifications/{verification_id}`
@@ -229,28 +238,62 @@ Current authenticated surface:
 - `/v1/operator/maintenance/actions` `GET`, `POST`
 - `/v1/operator/maintenance/actions/{action_id}` `GET`
 
-### Local Evidence Review Surface
+### Evidence Workbench And Review Handoffs
 
-`v1.19` adds a read-only local review surface above the authenticated operator API. It is intentionally thin:
+`v1.20` turns the local review shell into a bounded evidence workbench above the authenticated operator API:
 
-- the review pages stay behind the same bearer-token middleware as the JSON API
-- the surface reuses the existing stable IDs and artifact stores instead of reading raw files directly
-- the review pages remain advisory and read-only; rollout or maintenance mutations still go through the existing authenticated APIs
+- review sessions are durable repo-owned artifacts assembled from existing `evidence_bundle`, `evidence_verification`, and `promotion_evidence_packet` stable IDs
+- one session can compare multiple evidence artifacts, export the reviewed set, and launch a bounded maintenance handoff without reading raw files
+- review-driven writes stay narrow: the workbench can re-verify evidence bundles through the existing maintenance audit trail, but it still cannot bypass rollout, promotion, or governance
+- the surface stays on the same bearer-token middleware and does not introduce cookies, browser-only auth, or multi-user control
 
-Example review pages:
+Example review pages and bounded handoff routes:
 
 ```bash
 curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
   http://127.0.0.1:7766/v1/operator/review
 
 curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
-  "http://127.0.0.1:7766/v1/operator/review/evidence?subject_kind=production_promotion&verification_status=passed&limit=10"
+  http://127.0.0.1:7766/v1/operator/review/sessions
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
-  "http://127.0.0.1:7766/v1/operator/review/promotion-packets?recommendation=ready&limit=10"
+curl -X POST \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  http://127.0.0.1:7766/v1/operator/review/sessions \
+  -d "title=red+evidence+review&artifact_refs=evidence_bundle%3AEVIDENCE_BUNDLE_ID%0Apromotion_evidence_packet%3APROMOTION_EVIDENCE_PACKET_ID"
+
+curl -X POST \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  http://127.0.0.1:7766/v1/operator/review/sessions/REVIEW_SESSION_ID/handoffs/reverify \
+  -d "reason=re-verify+selected+evidence&selected_artifact_refs=evidence_bundle%3AEVIDENCE_BUNDLE_ID"
 ```
 
-The review surface is meant for local clients that can send the same bearer token already used by the authenticated JSON API. It does not introduce a new session model, cookies, RBAC layer, or browser-only control path.
+`swarmctl` exposes the same repo-owned artifacts directly:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- review-session-create \
+  --title "red evidence review" \
+  --artifact-ref "evidence_bundle:EVIDENCE_BUNDLE_ID" \
+  --artifact-ref "evidence_verification:EVIDENCE_VERIFICATION_ID" \
+  --artifact-ref "promotion_evidence_packet:PROMOTION_EVIDENCE_PACKET_ID"
+
+cargo run -p swarm-runtime --bin swarmctl -- review-session-list
+
+cargo run -p swarm-runtime --bin swarmctl -- review-session-export \
+  --session-id REVIEW_SESSION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- review-session-handoff-reverify \
+  --session-id REVIEW_SESSION_ID \
+  --reason "re-verify selected evidence before maintenance review" \
+  --artifact-ref "evidence_bundle:EVIDENCE_BUNDLE_ID"
+```
+
+Review-session artifacts now default to:
+
+- sessions: `data/review-sessions/`
+- exports: `data/review-session-exports/`
+- handoffs: `data/review-session-handoffs/`
 
 ### Signed Evidence Export And Verification
 
