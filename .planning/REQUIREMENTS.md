@@ -3,22 +3,21 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.18 Requirements
+## v1.19 Requirements
 
-### Signed Evidence Export
+### Review Surface Foundation
 
-- [x] **EVID-01**: Operator can export a signed evidence bundle for a stable-ID replay, investigation, incident, maintenance, canary, or promotion artifact
-- [x] **EVID-02**: Exported evidence bundles preserve canonical payload bytes, signatures, timestamps, and receipt-chain references needed for later offline verification
+- [ ] **OPS-08**: Operator can use a richer local review client above the authenticated HTTP surface without widening into multi-user control
+- [ ] **OPS-11**: Review client reuses the existing authenticated HTTP surface and stable IDs instead of reading raw store files or creating a second control-plane contract
 
-### Local Verification
+### Evidence Inspection
 
-- [x] **VERF-01**: Operator can verify an exported evidence bundle locally and get explicit integrity failures when signatures, canonical payloads, or linkage drift
-- [x] **VERF-02**: Authenticated operator endpoints can expose signed evidence summaries and verification results without requiring raw file inspection
+- [ ] **OPS-09**: Operator can inspect signed evidence bundles and verification results in a dedicated local review flow instead of raw JSON-first tooling
+- [ ] **OPS-12**: Operator can filter and navigate evidence artifacts by subject kind, verification status, and related rollout or investigation lineage from the local review flow
 
-### Trust-Boundary Prep
+### Promotion Review
 
-- [x] **TRST-01**: Operator can assemble a governance-ready promotion evidence packet that links rollout outcome, fallback lineage, and signed supporting evidence
-- [x] **TRST-02**: Promotion evidence packets remain advisory and single-node; they do not implement quorum approval, signed votes, or distributed promotion
+- [ ] **OPS-10**: Operator can inspect promotion evidence packets, fallback lineage, and supporting evidence status in one dedicated local review flow
 
 ## Future Requirements
 
@@ -29,8 +28,8 @@
 
 ### Operator Surfaces
 
-- **OPS-08**: Operator can use a richer local review client above the authenticated HTTP surface without widening into multi-user control
-- **OPS-09**: Operator can inspect signed evidence and promotion packets in a dedicated review flow instead of raw JSON-first tooling
+- **OPS-13**: Operator can trigger bounded maintenance actions from the review client while preserving the existing authenticated audit trail
+- **OPS-14**: Operator can compare or export multiple evidence artifacts in one local review session
 
 ## Out of Scope
 
@@ -38,26 +37,26 @@
 |---------|--------|
 | Actual quorum voting or distributed consensus for promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
 | Multi-user RBAC or federated operator workflows | The runtime still operates as a local single-node control surface |
-| Internet-exposed evidence or operator service | This cycle keeps evidence export and verification local-first |
+| Internet-exposed evidence or operator service | This cycle keeps the review surface local-only and loopback-oriented |
+| Direct write or maintenance actions from the review client | Mutating operations must stay on the existing authenticated maintenance path with durable audit records |
 | Fleet-wide or partial-fleet promotion approvals | The rollout path remains bounded to one single-node production lane |
-| UI-first operator console work | The authenticated HTTP surface now exists, but signed evidence and verification are the more urgent trust-boundary seam |
+| Replacing the authenticated JSON API with a separate UI-only protocol | The review client should layer above the existing operator surface instead of forking it |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVID-01 | Phase 56 | Complete |
-| EVID-02 | Phase 56 | Complete |
-| VERF-01 | Phase 57 | Complete |
-| VERF-02 | Phase 57 | Complete |
-| TRST-01 | Phase 58 | Complete |
-| TRST-02 | Phase 58 | Complete |
+| OPS-08 | Phase 59 | Planned |
+| OPS-11 | Phase 59 | Planned |
+| OPS-09 | Phase 60 | Planned |
+| OPS-12 | Phase 60 | Planned |
+| OPS-10 | Phase 61 | Planned |
 
 **Coverage:**
-- v1.18 requirements: 6 total
-- Mapped to phases: 6
+- v1.19 requirements: 5 total
+- Mapped to phases: 5
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after completing milestone v1.18*
+*Last updated: 2026-04-04 for milestone v1.19 planning*
