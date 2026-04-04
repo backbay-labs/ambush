@@ -19,13 +19,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - queue reconciliation now updates the original draft-backed proposal in place, preserves rollout lineage, and marks when the existing handoff path is ready after operator acceptance
 - the evolution ladder now extends through operator-driven draft continuity: evidence -> pressure report -> draft -> reviewed queue -> materialized experiment -> validation bundle -> reconciled reviewed queue
 
-## Current Milestone
+## Current Milestone: v1.13 Guided Mutation And Candidate Ranking
 
-No active milestone. `v1.12` is archived and the project is ready for the next roadmap cycle.
+**Goal:** turn the single-candidate draft bridge into an operator-controlled multi-candidate evolution bench with structured mutation specs, batch validation, and deterministic ranking.
+
+**Target features:**
+- derive structured mutation specs from reviewed drafts or materialized candidates without hand-editing multiple manifests
+- materialize and validate batches of candidate variants while preserving per-candidate evidence chains
+- rank or shortlist validated candidates for later operator review without rewriting queue evidence
 
 ## Next Planning Step
 
-Start the next cycle with `$gsd-new-milestone`.
+Start execution with `$gsd-plan-phase 41`.
 
 ## Requirements
 
@@ -103,6 +108,12 @@ Start the next cycle with `$gsd-new-milestone`.
 - ✓ Operator can reconcile a draft-backed queue entry with its materialized experiment and refreshed evidence without creating ambiguous duplicate rollout state — v1.12
 - ✓ Reconciled queue entries preserve original draft-promotion lineage and become eligible for the existing handoff and canary path only when refreshed evidence passes — v1.12
 
+### Active
+
+- [ ] Operator can derive structured mutation specs from reviewed drafts or materialized candidates without hand-editing candidate manifests
+- [ ] Team can materialize and validate multiple candidate variants from one mutation spec while preserving per-candidate evidence artifacts
+- [ ] Operator can rank or shortlist validated candidates for later review using deterministic evidence-backed criteria
+
 ### Out of Scope
 
 - Distributed governance / quorum approvals — still premature without independent nodes and trust boundaries
@@ -118,7 +129,7 @@ Start the next cycle with `$gsd-new-milestone`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards.
 
-The project now has an end-to-end rollout ladder plus a continuous draft-evolution bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> materialized experiment -> validation bundle -> reconciled reviewed queue. The next milestone should be chosen from the deferred roadmap rather than from an obvious missing seam in the current operator workflow.
+The project now has an end-to-end rollout ladder plus a continuous draft-evolution bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> materialized experiment -> validation bundle -> reconciled reviewed queue. The next missing step in the deferred evolution track is to move from one reviewed candidate at a time to structured mutation plus multi-candidate evaluation and ranking, while keeping the lane offline and operator-controlled.
 
 ## Constraints
 
@@ -164,6 +175,8 @@ The project now has an end-to-end rollout ladder plus a continuous draft-evoluti
 | Keep draft promotion operator-reviewed | Proposal drafts should enrich operator choice, not auto-enqueue or auto-launch rollout | ✓ Chosen |
 | Choose draft materialization and validation bundles as the next milestone | `docs/EVOLUTION.md` still expects evaluate and verify artifacts before proposal deployment, and `v1.11` currently stops at draft-backed queue entries with missing proof and experiment linkage | ✓ Chosen |
 | Keep the draft-to-rollout bridge artifact-first and operator-triggered | Materializing candidates and refreshing evidence should reduce manual translation, not introduce automatic mutation or rollout | ✓ Chosen |
+| Choose guided mutation and candidate ranking as the next milestone | Governance remains deferred, while `docs/EVOLUTION.md` and deferred `EVOL-*` requirements now point to structured mutation, batch evaluation, and evidence-backed ranking as the next offline evolution step | ✓ Chosen |
+| Keep multi-candidate evolution offline and operator-controlled | Batch mutation and ranking should expand review surface area without introducing automatic promotion or autonomous rollout | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-03 after completing milestone v1.12*
+*Last updated: 2026-04-03 after starting milestone v1.13*
