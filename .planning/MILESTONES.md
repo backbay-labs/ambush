@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.13 Guided Mutation And Candidate Ranking (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- operators can now derive durable mutation specs from reviewed drafts or materialized candidates without hand-editing multiple manifests
+- one mutation spec can now materialize and validate a deterministic batch of candidate variants while preserving per-candidate lineage, proof, advisory, and validation evidence
+- deterministic candidate rankings and shortlist review packets now preserve materialization, validation, and reviewed queue references without mutating the later rollout lanes
+
+---
+
 ## v1.12 Draft Materialization And Validation Bundles (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks
