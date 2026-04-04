@@ -3,22 +3,23 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.14 Requirements
+## v1.15 Requirements
 
-### Ranked Candidate Selection
+### Portfolio Assembly
 
-- [x] **EVOL-17**: Operator can create a durable ranked-candidate selection from one shortlist review packet through `swarmctl` without re-materializing the candidate manifest
-- [x] **EVOL-18**: Ranked-candidate selection artifacts preserve ranking, review packet, materialization, validation, advisory, and parent queue lineage in one durable record
+- [ ] **EVOL-24**: Operators can compare and curate shortlisted candidates across multiple mutation batches or campaign cohorts
+- [ ] **EVOL-25**: Team can assemble a durable portfolio artifact from ranked selections across multiple batches or cohorts through `swarmctl`
 
-### Review Decisions
+### Portfolio Review
 
-- [x] **EVOL-19**: Operator can list and inspect ranked-candidate selections by stable ID through `swarmctl`
-- [x] **EVOL-20**: Operator can record accepted, deferred, or rejected review state for ranked-candidate selections without rewriting underlying ranking evidence
+- [ ] **EVOL-26**: Operator can record include, defer, or drop decisions for portfolio candidates without mutating queue, canary, or production state
+- [ ] **EVOL-27**: Portfolio review artifacts preserve source ranking, selection, cohort, and rollout-lineage context in one durable record
 
-### Rollout Bridge
+### Governance Prep
 
-- [x] **EVOL-21**: Accepted ranked-candidate selections can feed the existing handoff and canary launch path using the preserved experiment and validation artifacts
-- [x] **EVOL-22**: Stale, blocked, or inconsistent ranked-candidate selections fail closed and persist inspectable blocked records instead of mutating queue, canary, or production state
+- [ ] **EVOL-23**: Ranked-candidate selections can feed a later governance-backed or multi-node rollout review path without re-encoding existing evidence
+- [ ] **EVOL-28**: Operator can generate governance-ready review packets from curated portfolio entries using preserved evidence references
+- [ ] **EVOL-29**: Governance-prep review packets fail closed and persist blocked records when evidence is stale, inconsistent, or incomplete
 
 ## Future Requirements
 
@@ -34,36 +35,37 @@
 
 ### Advanced Evolution
 
-- **EVOL-23**: Ranked-candidate selections can feed a later governance-backed or multi-node rollout review path without re-encoding existing evidence
-- **EVOL-24**: Operators can compare and curate shortlisted candidates across multiple mutation batches or campaign cohorts
+- **EVOL-30**: Operators can merge or split governance-ready review packets across portfolio groups without losing evidence traceability
+- **EVOL-31**: Portfolio history can measure cross-cohort survival, rollout outcomes, and review debt over time
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Automatic ranked-candidate selection from batch scores | `v1.14` keeps selection explicit and operator-reviewed |
-| Automatic canary or production launch from ranked candidates | Existing rollout gates remain explicit and separate from offline ranking |
-| Quorum or BFT approval for ranked candidates | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
-| Cross-batch tournament ranking | This cycle bridges one ranked batch back into rollout review before building broader portfolio workflows |
-| Hot-path mutation, selection, or rollout bridging | Fast detection remains the core value, so all ranked-candidate work stays off the critical lane |
+| Actual quorum voting or distributed consensus for promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
+| Multi-node rollout execution | This cycle prepares governance-ready packets only; it does not introduce distributed rollout machinery |
+| Automatic portfolio inclusion, curation, or promotion | Portfolio review remains explicit and operator-controlled |
+| Automatic canary or production launch from portfolio entries | Existing rollout gates remain explicit and separate from portfolio work |
 | Authenticated HTTP or TUI control plane | CLI-first remains the smallest practical operator surface for the current runtime |
+| Cross-organization or federated review exchange | This cycle stays repo-owned and single-node while preparing packet formats and durable artifacts |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVOL-17 | Phase 44 | Satisfied |
-| EVOL-18 | Phase 44 | Satisfied |
-| EVOL-19 | Phase 45 | Satisfied |
-| EVOL-20 | Phase 45 | Satisfied |
-| EVOL-21 | Phase 46 | Satisfied |
-| EVOL-22 | Phase 46 | Satisfied |
+| EVOL-24 | Phase 47 | Pending |
+| EVOL-25 | Phase 47 | Pending |
+| EVOL-26 | Phase 48 | Pending |
+| EVOL-27 | Phase 48 | Pending |
+| EVOL-23 | Phase 49 | Pending |
+| EVOL-28 | Phase 49 | Pending |
+| EVOL-29 | Phase 49 | Pending |
 
 **Coverage:**
-- v1.14 requirements: 6 total
-- Mapped to phases: 6
+- v1.15 requirements: 7 total
+- Mapped to phases: 7
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after milestone v1.14 completion*
+*Last updated: 2026-04-04 after starting milestone v1.15*
