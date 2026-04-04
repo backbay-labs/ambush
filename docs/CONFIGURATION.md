@@ -641,6 +641,35 @@ Batch artifacts preserve:
 
 This lane still stops short of queue mutation or rollout. Batch validation produces evidence only.
 
+### Candidate Ranking And Review Packets
+
+The repo now ships a deterministic ranking pass above mutation validation batches. Operators can score candidate variants from persisted validation evidence, retain the existing reviewed-queue reference when present, and emit durable review packets for later queue work.
+
+Current ranking semantics:
+
+- ranking artifacts are durable repo-owned records under `data/evolution-rankings/`
+- ranking uses validation status, proof status, advisory score deltas, blocking reasons, and reviewed queue state when present
+- ranking remains advisory; it does not enqueue, reconcile, canary, or promote candidates automatically
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-rank-candidates \
+  --validation-batch-id YOUR_VALIDATION_BATCH_ID \
+  --shortlist-count 2
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-ranking-result \
+  --ranking-id YOUR_RANKING_ID
+```
+
+Each ranking report preserves:
+
+- a full ordered candidate list with deterministic scores
+- one or more review packets containing materialization, validation, and reviewed-queue references
+- advisory recommendation and score-delta context when it exists
+
+This lane is the final offline comparison seam. Human review still decides whether any ranked candidate should re-enter the later queue or rollout path.
+
 ### Draft Materialization And Validation Bundles
 
 The repo now ships the bridge from reviewed draft artifacts back into the verified rollout ladder. Operators can materialize a repo-owned experiment manifest from one draft, refresh validation artifacts from that manifest, then reconcile the original draft-backed queue entry in place instead of creating a duplicate proposal.

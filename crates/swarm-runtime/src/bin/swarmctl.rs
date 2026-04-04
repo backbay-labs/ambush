@@ -19,8 +19,8 @@ use swarm_runtime::evolution::{
 use swarm_runtime::mutation::{
     DefaultEvolutionMutationHarness, EvolutionMutationProfileOverrides,
     EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
-    render_evolution_mutation_materialization_batch, render_evolution_mutation_spec,
-    render_evolution_mutation_validation_batch,
+    render_evolution_mutation_materialization_batch, render_evolution_mutation_ranking,
+    render_evolution_mutation_spec, render_evolution_mutation_validation_batch,
 };
 use swarm_runtime::promotion::{
     DefaultProductionPromotionHarness, ProductionPromotionStatus,
@@ -120,6 +120,9 @@ struct Cli {
     )]
     evolution_mutation_validation_batch_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evolution-rankings")]
+    evolution_ranking_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -179,6 +182,8 @@ enum Command {
     EvolutionMutationMaterializationBatchResult(EvolutionMutationMaterializationBatchResultArgs),
     EvolutionMutationValidateBatch(EvolutionMutationValidateBatchArgs),
     EvolutionMutationValidationBatchResult(EvolutionMutationValidationBatchResultArgs),
+    EvolutionRankCandidates(EvolutionRankCandidatesArgs),
+    EvolutionRankingResult(EvolutionRankingResultArgs),
     EvolutionMaterialize(EvolutionMaterializeArgs),
     EvolutionMaterializationResult(EvolutionMaterializationResultArgs),
     EvolutionValidationRefresh(EvolutionValidationRefreshArgs),
@@ -681,6 +686,21 @@ struct EvolutionMutationValidationBatchResultArgs {
 }
 
 #[derive(Debug, Args)]
+struct EvolutionRankCandidatesArgs {
+    #[arg(long)]
+    validation_batch_id: String,
+
+    #[arg(long, default_value_t = 3)]
+    shortlist_count: usize,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionRankingResultArgs {
+    #[arg(long)]
+    ranking_id: String,
+}
+
+#[derive(Debug, Args)]
 struct EvolutionMaterializeArgs {
     #[arg(long)]
     draft_id: String,
@@ -795,6 +815,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.evolution_mutation_results_dir,
         &cli.evolution_mutation_materialization_batch_results_dir,
         &cli.evolution_mutation_validation_batch_results_dir,
+        &cli.evolution_ranking_results_dir,
     )?;
 
     let output = match cli.command {
@@ -1551,6 +1572,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "{}",
                     render_evolution_mutation_validation_batch(&lookup.report)
                 );
+            }
+            return Ok(());
+        }
+        Command::EvolutionRankCandidates(args) => {
+            let lookup = evolution_mutation_harness.rank_candidates(
+                &cli.evolution_queue_results_dir,
+                &args.validation_batch_id,
+                args.shortlist_count,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_mutation_ranking(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionRankingResult(args) => {
+            let lookup = evolution_mutation_harness
+                .load_ranking(&args.ranking_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution mutation ranking was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_mutation_ranking(&lookup.report));
             }
             return Ok(());
         }

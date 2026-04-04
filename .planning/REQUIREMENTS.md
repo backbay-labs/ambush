@@ -7,19 +7,19 @@
 
 ### Structured Mutation
 
-- [ ] **EVOL-10**: Operator can derive a structured mutation spec from a reviewed draft or materialized candidate through `swarmctl` without hand-editing multiple manifests
-- [ ] **EVOL-11**: Mutation specs preserve parent candidate references, intended mutation dimensions, and operator rationale in one durable artifact
+- [x] **EVOL-10**: Operator can derive a structured mutation spec from a reviewed draft or materialized candidate through `swarmctl` without hand-editing multiple manifests
+- [x] **EVOL-11**: Mutation specs preserve parent candidate references, intended mutation dimensions, and operator rationale in one durable artifact
 
 ### Batch Candidate Generation
 
-- [ ] **EVOL-12**: Team can materialize a batch of candidate variants from one mutation spec through a repo-owned CLI flow
-- [ ] **EVOL-13**: Batch candidate generation preserves stable per-candidate links back to the source mutation spec and parent draft lineage
+- [x] **EVOL-12**: Team can materialize a batch of candidate variants from one mutation spec through a repo-owned CLI flow
+- [x] **EVOL-13**: Batch candidate generation preserves stable per-candidate links back to the source mutation spec and parent draft lineage
 
 ### Batch Validation And Ranking
 
-- [ ] **EVOL-14**: Team can refresh validation bundles for multiple materialized candidates in one batch without overwriting per-candidate evidence artifacts
-- [ ] **EVOL-15**: Operator can rank or shortlist validated candidates for later review using deterministic criteria derived from validation and advisory evidence
-- [ ] **EVOL-16**: Ranking packets preserve references to each candidate's materialization, validation bundle, and reviewed queue state so later review does not require rewriting evidence artifacts
+- [x] **EVOL-14**: Team can refresh validation bundles for multiple materialized candidates in one batch without overwriting per-candidate evidence artifacts
+- [x] **EVOL-15**: Operator can rank or shortlist validated candidates for later review using deterministic criteria derived from validation and advisory evidence
+- [x] **EVOL-16**: Ranking packets preserve references to each candidate's materialization, validation bundle, and reviewed queue state so later review does not require rewriting evidence artifacts
 
 ## Future Requirements
 
@@ -54,13 +54,13 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVOL-10 | Phase 41 | Pending |
-| EVOL-11 | Phase 41 | Pending |
-| EVOL-12 | Phase 42 | Pending |
-| EVOL-13 | Phase 42 | Pending |
-| EVOL-14 | Phase 42 | Pending |
-| EVOL-15 | Phase 43 | Pending |
-| EVOL-16 | Phase 43 | Pending |
+| EVOL-10 | Phase 41 | Satisfied |
+| EVOL-11 | Phase 41 | Satisfied |
+| EVOL-12 | Phase 42 | Satisfied |
+| EVOL-13 | Phase 42 | Satisfied |
+| EVOL-14 | Phase 42 | Satisfied |
+| EVOL-15 | Phase 43 | Satisfied |
+| EVOL-16 | Phase 43 | Satisfied |
 
 **Coverage:**
 - v1.13 requirements: 7 total
@@ -69,4 +69,4 @@
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.13 requirements definition*
+*Last updated: 2026-04-03 after milestone v1.13 completion*

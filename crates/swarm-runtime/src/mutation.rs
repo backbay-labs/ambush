@@ -5,11 +5,16 @@ use crate::drafting::{
     EvolutionPressureSourceKind, EvolutionValidationBundleStatus,
 };
 use crate::evolution::{EvolutionProposalAdvisorySummary, EvolutionProposalProofStatus};
+use crate::evolution::{
+    EvolutionProposalReviewState, EvolutionProposalStoreError, FileEvolutionProposalStore,
+};
 use crate::replay::{
     DefaultReplayHarness, DetectorCandidateManifest, DetectorExperimentManifest, ExperimentLineage,
     ReplayHarnessError, load_detector_experiment_manifest,
 };
-use crate::strategy::{DefaultStrategyScorecardHarness, StrategyAdvisorError};
+use crate::strategy::{
+    DefaultStrategyScorecardHarness, StrategyAdvisorError, StrategyAdvisoryRecommendation,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -30,6 +35,9 @@ pub enum EvolutionMutationError {
     PromotionStore(#[from] EvolutionDraftPromotionStoreError),
 
     #[error(transparent)]
+    ProposalStore(#[from] EvolutionProposalStoreError),
+
+    #[error(transparent)]
     MaterializationStore(#[from] EvolutionMaterializationStoreError),
 
     #[error(transparent)]
@@ -43,6 +51,9 @@ pub enum EvolutionMutationError {
 
     #[error(transparent)]
     MutationValidationBatchStore(#[from] EvolutionMutationValidationBatchStoreError),
+
+    #[error(transparent)]
+    MutationRankingStore(#[from] EvolutionMutationRankingStoreError),
 
     #[error(transparent)]
     Serialization(#[from] serde_json::Error),
@@ -73,6 +84,9 @@ pub enum EvolutionMutationError {
 
     #[error("validation batch `{validation_batch_id}` was not found")]
     ValidationBatchNotFound { validation_batch_id: String },
+
+    #[error("candidate ranking `{ranking_id}` was not found")]
+    RankingNotFound { ranking_id: String },
 
     #[error("failed to read experiment search path `{path}`: {source}")]
     ManifestReadDir {
@@ -379,6 +393,85 @@ pub struct EvolutionMutationValidationBatchLookup {
     pub report: EvolutionMutationValidationBatchReport,
 }
 
+/// One deterministic ranking entry derived from a validated mutation candidate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvolutionCandidateRankingEntry {
+    pub rank: usize,
+    pub variant_id: String,
+    pub strategy_id: String,
+    pub materialization_id: String,
+    pub validation_bundle_id: String,
+    pub queue_proposal_id: Option<String>,
+    pub queue_review_state: Option<EvolutionProposalReviewState>,
+    pub score: f64,
+    pub status: EvolutionValidationBundleStatus,
+    pub proof_status: EvolutionProposalProofStatus,
+    pub advisory_recommendation: Option<StrategyAdvisoryRecommendation>,
+    pub advisory_score_delta: Option<f64>,
+    pub blocking_reason_names: Vec<String>,
+    pub ready_for_review: bool,
+    pub summary: String,
+}
+
+/// One durable review packet extracted from the top-ranked candidates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvolutionCandidateReviewPacket {
+    pub packet_id: String,
+    pub rank: usize,
+    pub variant_id: String,
+    pub strategy_id: String,
+    pub materialization_id: String,
+    pub validation_bundle_id: String,
+    pub queue_proposal_id: Option<String>,
+    pub queue_review_state: Option<EvolutionProposalReviewState>,
+    pub advisory_scorecard_id: Option<String>,
+    pub score: f64,
+    pub summary: String,
+}
+
+/// Durable ranking report for one validated mutation batch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvolutionMutationRankingReport {
+    pub ranking_id: String,
+    pub mutation_spec_id: String,
+    pub validation_batch_id: String,
+    pub created_at_ms: i64,
+    pub shortlist_count: usize,
+    pub ranked_candidates: Vec<EvolutionCandidateRankingEntry>,
+    pub review_packets: Vec<EvolutionCandidateReviewPacket>,
+}
+
+/// Metadata surfaced for one persisted ranking report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvolutionMutationRankingRecord {
+    pub ranking_id: String,
+    pub mutation_spec_id: String,
+    pub validation_batch_id: String,
+    pub shortlist_count: usize,
+    pub created_at_ms: i64,
+    pub bundle_path: String,
+}
+
+impl EvolutionMutationRankingRecord {
+    fn from_report(report: &EvolutionMutationRankingReport, bundle_path: String) -> Self {
+        Self {
+            ranking_id: report.ranking_id.clone(),
+            mutation_spec_id: report.mutation_spec_id.clone(),
+            validation_batch_id: report.validation_batch_id.clone(),
+            shortlist_count: report.shortlist_count,
+            created_at_ms: report.created_at_ms,
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted ranking report loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct EvolutionMutationRankingLookup {
+    pub record: EvolutionMutationRankingRecord,
+    pub report: EvolutionMutationRankingReport,
+}
+
 /// Errors raised by the persisted mutation-spec store.
 #[derive(Debug, thiserror::Error)]
 pub enum EvolutionMutationStoreError {
@@ -453,6 +546,31 @@ pub enum EvolutionMutationValidationBatchStoreError {
     },
 
     #[error("failed to parse evolution mutation validation batch store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Errors raised by the persisted ranking store.
+#[derive(Debug, thiserror::Error)]
+pub enum EvolutionMutationRankingStoreError {
+    #[error("failed to read evolution mutation ranking store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write evolution mutation ranking store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse evolution mutation ranking store file `{path}`: {source}")]
     Parse {
         path: PathBuf,
         #[source]
@@ -836,11 +954,128 @@ impl FileEvolutionMutationValidationBatchStore {
     }
 }
 
+/// File-backed store for durable candidate rankings.
+#[derive(Debug, Clone)]
+pub struct FileEvolutionMutationRankingStore {
+    root: PathBuf,
+}
+
+impl FileEvolutionMutationRankingStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, EvolutionMutationRankingStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            EvolutionMutationRankingStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, ranking_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(ranking_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(
+        &self,
+    ) -> Result<EvolutionMutationRankingIndex, EvolutionMutationRankingStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(EvolutionMutationRankingIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| {
+            EvolutionMutationRankingStoreError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        serde_json::from_str(&raw)
+            .map_err(|source| EvolutionMutationRankingStoreError::Parse { path, source })
+    }
+
+    fn write_index(
+        &self,
+        index: &EvolutionMutationRankingIndex,
+    ) -> Result<(), EvolutionMutationRankingStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            EvolutionMutationRankingStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw)
+            .map_err(|source| EvolutionMutationRankingStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        report: &EvolutionMutationRankingReport,
+    ) -> Result<EvolutionMutationRankingRecord, EvolutionMutationRankingStoreError> {
+        let path = self.report_path(&report.ranking_id);
+        let raw = serde_json::to_string_pretty(report).map_err(|source| {
+            EvolutionMutationRankingStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| EvolutionMutationRankingStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let record =
+            EvolutionMutationRankingRecord::from_report(report, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.ranking_id != record.ranking_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(record)
+    }
+
+    pub fn load(
+        &self,
+        ranking_id: &str,
+    ) -> Result<Option<EvolutionMutationRankingLookup>, EvolutionMutationRankingStoreError> {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.ranking_id == ranking_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| {
+            EvolutionMutationRankingStoreError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        let report = serde_json::from_str(&raw)
+            .map_err(|source| EvolutionMutationRankingStoreError::Parse { path, source })?;
+        Ok(Some(EvolutionMutationRankingLookup { record, report }))
+    }
+}
+
 /// Harness for operator-authored mutation specs.
 pub struct DefaultEvolutionMutationHarness {
     pub mutation_store: FileEvolutionMutationStore,
     pub materialization_batch_store: FileEvolutionMutationMaterializationBatchStore,
     pub validation_batch_store: FileEvolutionMutationValidationBatchStore,
+    pub ranking_store: FileEvolutionMutationRankingStore,
 }
 
 impl DefaultEvolutionMutationHarness {
@@ -848,6 +1083,7 @@ impl DefaultEvolutionMutationHarness {
         mutation_results_dir: impl AsRef<Path>,
         materialization_batch_results_dir: impl AsRef<Path>,
         validation_batch_results_dir: impl AsRef<Path>,
+        ranking_results_dir: impl AsRef<Path>,
     ) -> Result<Self, EvolutionMutationError> {
         Ok(Self {
             mutation_store: FileEvolutionMutationStore::open(mutation_results_dir)?,
@@ -857,6 +1093,7 @@ impl DefaultEvolutionMutationHarness {
             validation_batch_store: FileEvolutionMutationValidationBatchStore::open(
                 validation_batch_results_dir,
             )?,
+            ranking_store: FileEvolutionMutationRankingStore::open(ranking_results_dir)?,
         })
     }
 
@@ -1194,6 +1431,117 @@ impl DefaultEvolutionMutationHarness {
     ) -> Result<Option<EvolutionMutationValidationBatchLookup>, EvolutionMutationError> {
         Ok(self.validation_batch_store.load(validation_batch_id)?)
     }
+
+    pub fn rank_candidates(
+        &self,
+        queue_results_dir: impl AsRef<Path>,
+        validation_batch_id: &str,
+        shortlist_count: usize,
+    ) -> Result<EvolutionMutationRankingLookup, EvolutionMutationError> {
+        let validation_batch = self
+            .validation_batch_store
+            .load(validation_batch_id)?
+            .ok_or_else(|| EvolutionMutationError::ValidationBatchNotFound {
+                validation_batch_id: validation_batch_id.to_string(),
+            })?;
+        let queue_store = FileEvolutionProposalStore::open(queue_results_dir)?;
+        let created_at_ms = now_ms();
+        let mut ranked_candidates = validation_batch
+            .report
+            .entries
+            .iter()
+            .map(|entry| {
+                let queue_review_state = match entry.queue_proposal_id.as_deref() {
+                    Some(proposal_id) => queue_store
+                        .load(proposal_id)?
+                        .map(|lookup| lookup.report.review_state),
+                    None => None,
+                };
+                let score = candidate_score(entry, queue_review_state);
+                let summary = candidate_summary(entry, queue_review_state, score);
+                Ok::<_, EvolutionMutationError>(EvolutionCandidateRankingEntry {
+                    rank: 0,
+                    variant_id: entry.variant_id.clone(),
+                    strategy_id: entry.strategy_id.clone(),
+                    materialization_id: entry.materialization_id.clone(),
+                    validation_bundle_id: entry.validation_bundle_id.clone(),
+                    queue_proposal_id: entry.queue_proposal_id.clone(),
+                    queue_review_state,
+                    score,
+                    status: entry.status,
+                    proof_status: entry.proof_status,
+                    advisory_recommendation: entry.advisory.as_ref().map(|a| a.recommendation),
+                    advisory_score_delta: entry.advisory.as_ref().map(|a| a.score_delta),
+                    blocking_reason_names: entry.blocking_reason_names.clone(),
+                    ready_for_review: entry.status
+                        == EvolutionValidationBundleStatus::ReadyForQueue,
+                    summary,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        ranked_candidates.sort_by(|left, right| {
+            right
+                .score
+                .partial_cmp(&left.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.strategy_id.cmp(&right.strategy_id))
+        });
+        for (index, candidate) in ranked_candidates.iter_mut().enumerate() {
+            candidate.rank = index + 1;
+        }
+
+        let shortlist_count = shortlist_count.max(1).min(ranked_candidates.len());
+        let review_packets = ranked_candidates
+            .iter()
+            .take(shortlist_count)
+            .map(|candidate| EvolutionCandidateReviewPacket {
+                packet_id: review_packet_id(
+                    &validation_batch.report.validation_batch_id,
+                    candidate.rank,
+                    &candidate.variant_id,
+                ),
+                rank: candidate.rank,
+                variant_id: candidate.variant_id.clone(),
+                strategy_id: candidate.strategy_id.clone(),
+                materialization_id: candidate.materialization_id.clone(),
+                validation_bundle_id: candidate.validation_bundle_id.clone(),
+                queue_proposal_id: candidate.queue_proposal_id.clone(),
+                queue_review_state: candidate.queue_review_state,
+                advisory_scorecard_id: validation_batch
+                    .report
+                    .entries
+                    .iter()
+                    .find(|entry| entry.variant_id == candidate.variant_id)
+                    .and_then(|entry| entry.advisory.as_ref().map(|a| a.scorecard_id.clone())),
+                score: candidate.score,
+                summary: candidate.summary.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let report = EvolutionMutationRankingReport {
+            ranking_id: mutation_ranking_id(
+                &validation_batch.report.mutation_spec_id,
+                &validation_batch.report.validation_batch_id,
+                created_at_ms,
+            ),
+            mutation_spec_id: validation_batch.report.mutation_spec_id.clone(),
+            validation_batch_id: validation_batch.report.validation_batch_id.clone(),
+            created_at_ms,
+            shortlist_count,
+            ranked_candidates,
+            review_packets,
+        };
+        let record = self.ranking_store.persist(&report)?;
+        Ok(EvolutionMutationRankingLookup { record, report })
+    }
+
+    pub fn load_ranking(
+        &self,
+        ranking_id: &str,
+    ) -> Result<Option<EvolutionMutationRankingLookup>, EvolutionMutationError> {
+        Ok(self.ranking_store.load(ranking_id)?)
+    }
 }
 
 /// Render one durable mutation spec.
@@ -1295,6 +1643,40 @@ pub fn render_evolution_mutation_validation_batch(
     lines.join("\n")
 }
 
+/// Render one candidate ranking report.
+pub fn render_evolution_mutation_ranking(report: &EvolutionMutationRankingReport) -> String {
+    let mut lines = vec![
+        "Evolution Mutation Candidate Ranking".to_string(),
+        format!("Ranking ID: {}", report.ranking_id),
+        format!("Mutation spec ID: {}", report.mutation_spec_id),
+        format!("Validation batch ID: {}", report.validation_batch_id),
+        format!("Shortlist count: {}", report.shortlist_count),
+        "Ranked candidates:".to_string(),
+    ];
+    for candidate in &report.ranked_candidates {
+        lines.push(format!(
+            "- #{} {} | strategy={} | score={:.3} | status={} | queue={}",
+            candidate.rank,
+            candidate.variant_id,
+            candidate.strategy_id,
+            candidate.score,
+            validation_bundle_status_label(candidate.status),
+            candidate
+                .queue_review_state
+                .map(review_state_label)
+                .unwrap_or("none")
+        ));
+    }
+    lines.push("Review packets:".to_string());
+    for packet in &report.review_packets {
+        lines.push(format!(
+            "- {} | rank={} | strategy={} | validation={}",
+            packet.packet_id, packet.rank, packet.strategy_id, packet.validation_bundle_id
+        ));
+    }
+    lines.join("\n")
+}
+
 fn materialize_variant_report(
     spec: &EvolutionMutationSpecReport,
     variant: &EvolutionMutationVariantSpec,
@@ -1376,10 +1758,80 @@ fn materialize_variant_report(
     })
 }
 
+fn candidate_score(
+    entry: &EvolutionMutationValidationEntry,
+    queue_review_state: Option<EvolutionProposalReviewState>,
+) -> f64 {
+    let mut score = 0.0;
+    score += match entry.status {
+        EvolutionValidationBundleStatus::ReadyForQueue => 100.0,
+        EvolutionValidationBundleStatus::Blocked => 0.0,
+    };
+    score += match entry.proof_status {
+        EvolutionProposalProofStatus::Proved => 15.0,
+        EvolutionProposalProofStatus::Inconsistent => -10.0,
+        EvolutionProposalProofStatus::Missing => -20.0,
+    };
+    if let Some(advisory) = &entry.advisory {
+        score += advisory.score_delta * 25.0;
+        score += advisory.candidate_matching_memory_count as f64;
+        score += match advisory.recommendation {
+            StrategyAdvisoryRecommendation::CandidatePreferred => 6.0,
+            StrategyAdvisoryRecommendation::CandidateAlreadyStableInProduction => 2.0,
+            StrategyAdvisoryRecommendation::RetainBaseline => 0.0,
+        };
+    }
+    score -= (entry.blocking_reason_names.len() as f64) * 5.0;
+    score += match queue_review_state {
+        Some(EvolutionProposalReviewState::PendingReview) => 1.0,
+        Some(EvolutionProposalReviewState::AcceptedForCanary) => 2.0,
+        Some(EvolutionProposalReviewState::Deferred) => 0.0,
+        Some(EvolutionProposalReviewState::Rejected) => -20.0,
+        Some(EvolutionProposalReviewState::Blocked) => -20.0,
+        None => 0.0,
+    };
+    score
+}
+
+fn candidate_summary(
+    entry: &EvolutionMutationValidationEntry,
+    queue_review_state: Option<EvolutionProposalReviewState>,
+    score: f64,
+) -> String {
+    format!(
+        "status={} proof={} recommendation={} queue_state={} score={score:.3}",
+        validation_bundle_status_label(entry.status),
+        proof_status_label(entry.proof_status),
+        advisory_recommendation_label(entry.advisory.as_ref().map(|a| a.recommendation)),
+        queue_review_state.map(review_state_label).unwrap_or("none"),
+    )
+}
+
 fn mutation_source_label(kind: EvolutionMutationSourceKind) -> &'static str {
     match kind {
         EvolutionMutationSourceKind::Draft => "draft",
         EvolutionMutationSourceKind::Materialization => "materialization",
+    }
+}
+
+fn review_state_label(value: EvolutionProposalReviewState) -> &'static str {
+    match value {
+        EvolutionProposalReviewState::PendingReview => "pending_review",
+        EvolutionProposalReviewState::AcceptedForCanary => "accepted_for_canary",
+        EvolutionProposalReviewState::Deferred => "deferred",
+        EvolutionProposalReviewState::Rejected => "rejected",
+        EvolutionProposalReviewState::Blocked => "blocked",
+    }
+}
+
+fn advisory_recommendation_label(value: Option<StrategyAdvisoryRecommendation>) -> &'static str {
+    match value {
+        Some(StrategyAdvisoryRecommendation::RetainBaseline) => "retain_baseline",
+        Some(StrategyAdvisoryRecommendation::CandidatePreferred) => "candidate_preferred",
+        Some(StrategyAdvisoryRecommendation::CandidateAlreadyStableInProduction) => {
+            "candidate_already_stable_in_production"
+        }
+        None => "none",
     }
 }
 
@@ -1647,6 +2099,28 @@ fn mutation_validation_batch_id(mutation_spec_id: &str, created_at_ms: i64) -> S
     )
 }
 
+fn mutation_ranking_id(
+    mutation_spec_id: &str,
+    validation_batch_id: &str,
+    created_at_ms: i64,
+) -> String {
+    format!(
+        "evolution_mutation_ranking:{}:{}:{}",
+        sanitize_id(mutation_spec_id),
+        sanitize_id(validation_batch_id),
+        created_at_ms
+    )
+}
+
+fn review_packet_id(validation_batch_id: &str, rank: usize, variant_id: &str) -> String {
+    format!(
+        "evolution_review_packet:{}:{}:{}",
+        sanitize_id(validation_batch_id),
+        rank,
+        sanitize_id(variant_id)
+    )
+}
+
 fn mutation_materialization_id(
     mutation_spec_id: &str,
     variant_id: &str,
@@ -1747,6 +2221,11 @@ struct EvolutionMutationValidationBatchIndex {
     entries: Vec<EvolutionMutationValidationBatchRecord>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct EvolutionMutationRankingIndex {
+    entries: Vec<EvolutionMutationRankingRecord>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1754,7 +2233,8 @@ mod tests {
         EvolutionMutationProfileOverrides, EvolutionMutationSourceKind,
         EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
         EvolutionValidationBundleStatus, render_evolution_mutation_materialization_batch,
-        render_evolution_mutation_spec, render_evolution_mutation_validation_batch,
+        render_evolution_mutation_ranking, render_evolution_mutation_spec,
+        render_evolution_mutation_validation_batch,
     };
     use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
     use crate::evolution::DefaultEvolutionProofHarness;
@@ -1817,6 +2297,7 @@ mod tests {
         let mutation_dir = root.join("mutations");
         let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
         let mutation_validation_batch_dir = root.join("mutation-validation-batches");
+        let mutation_ranking_dir = root.join("mutation-rankings");
         let base_experiment = copy_experiment_fixture(&root, "office-control-copy");
 
         let replay = DefaultReplayHarness::from_path(ruleset_path(), &replay_dir).unwrap();
@@ -1871,6 +2352,7 @@ mod tests {
             &mutation_dir,
             &mutation_materialization_batch_dir,
             &mutation_validation_batch_dir,
+            &mutation_ranking_dir,
         )
         .unwrap();
         let spec = mutation
@@ -1943,6 +2425,7 @@ mod tests {
         let mutation_dir = root.join("mutations");
         let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
         let mutation_validation_batch_dir = root.join("mutation-validation-batches");
+        let mutation_ranking_dir = root.join("mutation-rankings");
         let queue_dir = root.join("queue");
         let base_experiment = copy_experiment_fixture(&root, "office-control-seed");
 
@@ -2005,6 +2488,7 @@ mod tests {
             &mutation_dir,
             &mutation_materialization_batch_dir,
             &mutation_validation_batch_dir,
+            &mutation_ranking_dir,
         )
         .unwrap();
         let spec = mutation
@@ -2069,6 +2553,7 @@ mod tests {
         let mutation_dir = root.join("mutations");
         let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
         let mutation_validation_batch_dir = root.join("mutation-validation-batches");
+        let mutation_ranking_dir = root.join("mutation-rankings");
         let queue_dir = root.join("queue");
         let base_experiment = copy_experiment_fixture(&root, "office-control-batch");
 
@@ -2123,6 +2608,7 @@ mod tests {
             &mutation_dir,
             &mutation_materialization_batch_dir,
             &mutation_validation_batch_dir,
+            &mutation_ranking_dir,
         )
         .unwrap();
         let spec = mutation
@@ -2205,6 +2691,7 @@ mod tests {
         let mutation_dir = root.join("mutations");
         let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
         let mutation_validation_batch_dir = root.join("mutation-validation-batches");
+        let mutation_ranking_dir = root.join("mutation-rankings");
         let queue_dir = root.join("queue");
         let base_experiment = office_control_experiment();
 
@@ -2260,6 +2747,7 @@ mod tests {
             &mutation_dir,
             &mutation_materialization_batch_dir,
             &mutation_validation_batch_dir,
+            &mutation_ranking_dir,
         )
         .unwrap();
         let spec = mutation
@@ -2333,6 +2821,172 @@ mod tests {
         assert!(
             render_evolution_mutation_validation_batch(&validation_batch.report)
                 .contains("Evolution Mutation Validation Batch")
+        );
+
+        for entry in &batch.report.entries {
+            let path = PathBuf::from(&entry.experiment_path);
+            if path.exists() {
+                fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mutation_ranking_orders_ready_candidate_first() {
+        let root = unique_temp_dir("mutation-ranking");
+        let replay_dir = root.join("replay");
+        let experiment_dir = root.join("experiments");
+        let verification_dir = root.join("verifications");
+        let shadow_dir = root.join("shadows");
+        let proof_dir = root.join("proofs");
+        let memory_dir = root.join("memory");
+        let scorecard_dir = root.join("scorecards");
+        let pressure_dir = root.join("pressures");
+        let draft_dir = root.join("drafts");
+        let promotion_dir = root.join("promotions");
+        let materialization_dir = root.join("materializations");
+        let validation_dir = root.join("validation");
+        let reconciliation_dir = root.join("reconciliations");
+        let mutation_dir = root.join("mutations");
+        let mutation_materialization_batch_dir = root.join("mutation-materialization-batches");
+        let mutation_validation_batch_dir = root.join("mutation-validation-batches");
+        let mutation_ranking_dir = root.join("mutation-rankings");
+        let queue_dir = root.join("queue");
+        let base_experiment = office_control_experiment();
+
+        let replay = DefaultReplayHarness::from_path(ruleset_path(), &replay_dir).unwrap();
+        let verification = replay
+            .evaluate_verification_path(office_control_experiment(), &verification_dir)
+            .await
+            .unwrap();
+        let proofs = DefaultEvolutionProofHarness::from_path(ruleset_path(), &proof_dir).unwrap();
+        let scorecards =
+            DefaultStrategyScorecardHarness::from_path(ruleset_path(), &memory_dir, &scorecard_dir)
+                .unwrap();
+        let scorecard = scorecards
+            .create_scorecard(
+                &replay,
+                office_control_experiment(),
+                &experiment_dir,
+                &verification_dir,
+                &verification.report.verification_id,
+            )
+            .await
+            .unwrap();
+        let drafting = DefaultEvolutionDraftingHarness::from_path(
+            ruleset_path(),
+            &pressure_dir,
+            &draft_dir,
+            &promotion_dir,
+            &materialization_dir,
+            &validation_dir,
+            &reconciliation_dir,
+        )
+        .unwrap();
+        let pressure = drafting
+            .create_pressure_from_scorecard(&scorecards, &scorecard.report.scorecard_id)
+            .unwrap();
+        let draft = drafting
+            .create_draft(EvolutionDraftCreateRequest {
+                pressure_id: pressure.report.pressure_id.clone(),
+                strategy_id: "office_ranking_parent_v1".to_string(),
+                strategy_description: "ranking parent".to_string(),
+                mutation: "guided_ranking_seed".to_string(),
+                rationale: "rank a ready branch against a blocked branch".to_string(),
+            })
+            .unwrap();
+        let promotion = drafting
+            .promote_draft(
+                &queue_dir,
+                &draft.report.draft_id,
+                "keep the reviewed queue reference attached",
+            )
+            .unwrap();
+        let mutation = DefaultEvolutionMutationHarness::from_path(
+            &mutation_dir,
+            &mutation_materialization_batch_dir,
+            &mutation_validation_batch_dir,
+            &mutation_ranking_dir,
+        )
+        .unwrap();
+        let spec = mutation
+            .create_mutation_spec(
+                &drafting,
+                EvolutionMutationSpecCreateRequest {
+                    draft_id: Some(draft.report.draft_id.clone()),
+                    materialization_id: None,
+                    base_experiment_path: Some(base_experiment),
+                    rationale: "preserve one ready branch and one blocked branch".to_string(),
+                },
+            )
+            .unwrap();
+        let spec = mutation
+            .append_variant(
+                &spec.report.mutation_spec_id,
+                EvolutionMutationVariantCreateRequest {
+                    variant_id: Some("control-copy".to_string()),
+                    strategy_id: "office_ranking_control_v1".to_string(),
+                    strategy_description: "keep the control profile".to_string(),
+                    mutation: "copy_control_profile".to_string(),
+                    rationale: "ready branch".to_string(),
+                    overrides: EvolutionMutationProfileOverrides::default(),
+                },
+            )
+            .unwrap();
+        let spec = mutation
+            .append_variant(
+                &spec.report.mutation_spec_id,
+                EvolutionMutationVariantCreateRequest {
+                    variant_id: Some("python-parent".to_string()),
+                    strategy_id: "office_ranking_python_parent_v1".to_string(),
+                    strategy_description: "broaden suspicious parent matching to python"
+                        .to_string(),
+                    mutation: "broaden_parent_set".to_string(),
+                    rationale: "blocked branch".to_string(),
+                    overrides: EvolutionMutationProfileOverrides {
+                        add_suspicious_parents: vec!["python".to_string()],
+                        ..EvolutionMutationProfileOverrides::default()
+                    },
+                },
+            )
+            .unwrap();
+
+        let batch = mutation
+            .materialize_batch(&drafting, &spec.report.mutation_spec_id)
+            .unwrap();
+        let validation_batch = mutation
+            .refresh_validation_batch(
+                &drafting,
+                &replay,
+                &proofs,
+                &scorecards,
+                &experiment_dir,
+                &verification_dir,
+                &shadow_dir,
+                &batch.report.batch_id,
+            )
+            .await
+            .unwrap();
+        let ranking = mutation
+            .rank_candidates(&queue_dir, &validation_batch.report.validation_batch_id, 1)
+            .unwrap();
+
+        assert_eq!(ranking.report.ranked_candidates.len(), 2);
+        assert_eq!(ranking.report.ranked_candidates[0].rank, 1);
+        assert_eq!(
+            ranking.report.ranked_candidates[0].strategy_id,
+            "office_ranking_control_v1"
+        );
+        assert_eq!(ranking.report.review_packets.len(), 1);
+        assert_eq!(
+            ranking.report.review_packets[0]
+                .queue_proposal_id
+                .as_deref(),
+            Some(promotion.report.queue_proposal_id.as_str())
+        );
+        assert!(
+            render_evolution_mutation_ranking(&ranking.report)
+                .contains("Evolution Mutation Candidate Ranking")
         );
 
         for entry in &batch.report.entries {

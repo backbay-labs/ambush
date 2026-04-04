@@ -50,7 +50,7 @@ The next useful step is to widen that bench without widening autonomy. `v1.13` f
 
 ### Phase 43: Candidate Ranking And Review Packets
 
-**Status:** READY
+**Status:** COMPLETE
 
 **Goal:** Rank or shortlist validated candidates using deterministic evidence and emit durable review packets for later operator decisions.
 
@@ -58,7 +58,7 @@ The next useful step is to widen that bench without widening autonomy. `v1.13` f
 
 **Depends on:** Phase 42
 
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - Operators can compute a deterministic ranking or shortlist from validated candidate batches through `swarmctl`.
