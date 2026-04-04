@@ -1,7 +1,7 @@
 # Swarm Team Six: Configuration Reference
 
 > Hunt mission YAML format, tuning parameters, and environment variables.  
-> Last updated: 2026-04-02
+> Last updated: 2026-04-04
 
 ---
 
@@ -800,6 +800,70 @@ Failure behavior:
 - blocked governance-ready packets are still persisted so operators can inspect why the entry failed closed
 
 This lane is prep work for later governance, not governance itself. It widens comparison and curation across ranked batches while keeping rollout mutation pinned to the existing reviewed queue, handoff, canary, and promotion paths.
+
+### Governance Packet Sets And Portfolio History
+
+The repo now ships one layer above individual governance-ready packets. Operators can merge several packet artifacts into one durable packet set, split subsets back out without rewriting source evidence, and snapshot portfolio history from those packet sets using the existing strategy-memory lane.
+
+Current packet-set and history semantics:
+
+- governance packet-set artifacts are durable repo-owned records under `data/evolution-packet-sets/`
+- portfolio history snapshots are durable repo-owned records under `data/evolution-portfolio-history/`
+- packet sets preserve source packet, portfolio, cohort, ranking, selection, validation, proof, advisory, and rollout-lineage references in one stable record
+- splitting a packet set creates a new child set with a `parent_packet_set_id` and preserved source packet-set entry references
+- portfolio history derives rollout outcomes from existing strategy-memory artifacts instead of duplicating canary or promotion state
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-packet-set-create \
+  --name "office governance cohort set" \
+  --rationale "group ready and blocked governance packets for one operator review pass" \
+  --packet-id PACKET_ID_ONE \
+  --packet-id PACKET_ID_TWO
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-packet-set-result \
+  --packet-set-id YOUR_PACKET_SET_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-packet-set-list \
+  --cohort hellcat.office_loader
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-packet-set-split \
+  --packet-set-id YOUR_PACKET_SET_ID \
+  --name "office red subset" \
+  --rationale "review the red cohort separately" \
+  --packet-id PACKET_ID_ONE
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-history-create \
+  --packet-set-id YOUR_PACKET_SET_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-history-result \
+  --history-id YOUR_HISTORY_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-history-list \
+  --cohort hellcat.office_loader
+```
+
+Each packet set preserves:
+
+- one stable packet-set ID plus operator rationale and optional parent packet-set reference
+- one stable entry per included governance packet with the source `packet_id` and any upstream `source_packet_set_entry_id`
+- source portfolio, cohort, ranking, selection, validation-bundle, experiment, verification, proof, advisory, shadow, and queue-lineage references
+- the original packet `ready_for_governance` verdict and fail-closed blocking reasons when a packet already failed upstream
+
+Each portfolio history snapshot preserves:
+
+- the source packet-set ID and packet-set name
+- one derived outcome per packet-set entry: `no_observed_rollout`, `ready_for_promotion_review`, `stable_in_production`, `blocked`, or `halted`
+- cross-cohort summaries for survival, stable outcomes, blocked or halted outcomes, unobserved entries, and review debt
+- review debt classifications derived from existing artifacts: `pending_governance_follow_up` and `awaiting_stable_outcome`
+
+Failure behavior:
+
+- `evolution-packet-set-create` rejects empty packet lists or packet IDs that do not resolve to persisted governance-ready packet artifacts
+- packet-set creation and splitting remain advisory; they do not mutate queue, canary, or production state
+- `evolution-portfolio-history-create` fails closed when a supposedly ready governance packet carries inconsistent proof, validation, shadow, or blocking state
+- history snapshots can show blocked or unobserved entries without discarding them, so cross-cohort review debt remains inspectable over time
 
 ### Draft Materialization And Validation Bundles
 

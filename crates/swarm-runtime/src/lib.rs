@@ -10,6 +10,7 @@ pub mod control;
 pub mod correlation;
 pub mod drafting;
 pub mod evolution;
+pub mod governance_prep;
 pub mod investigation;
 pub mod mutation;
 pub mod pipeline;
