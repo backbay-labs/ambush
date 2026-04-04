@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.15 Cross-Batch Portfolio And Governance Prep (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- operators can now assemble durable cross-batch portfolio artifacts from multiple ranked selections and campaign cohorts through `swarmctl`
+- portfolio entries now preserve ranking, selection, mutation-batch, validation-batch, cohort, and rollout-lineage context while supporting explicit include, defer, or drop decisions
+- curated portfolio entries can now produce governance-ready review packets that reuse existing evidence and fail closed with persisted blocked artifacts instead of implementing distributed governance
+
+---
+
 ## v1.14 Ranked Candidate Rollout Bridge (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks
