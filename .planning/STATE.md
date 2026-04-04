@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.16
 milestone_name: governance-packet-sets-and-portfolio-history
 status: ready-to-plan
-last_updated: "2026-04-04T05:09:49Z"
+last_updated: "2026-04-04T05:21:04Z"
 progress:
   total_phases: 3
   completed_phases: 0
