@@ -22,6 +22,9 @@ pub enum ReviewArtifactRefKind {
     EvidenceBundle,
     EvidenceVerification,
     PromotionEvidencePacket,
+    PromotionReview,
+    CanaryRun,
+    ProductionPromotion,
 }
 
 impl ReviewArtifactRefKind {
@@ -30,6 +33,9 @@ impl ReviewArtifactRefKind {
             Self::EvidenceBundle => "evidence_bundle",
             Self::EvidenceVerification => "evidence_verification",
             Self::PromotionEvidencePacket => "promotion_evidence_packet",
+            Self::PromotionReview => "promotion_review",
+            Self::CanaryRun => "canary_run",
+            Self::ProductionPromotion => "production_promotion",
         }
     }
 }
@@ -48,9 +54,67 @@ impl std::str::FromStr for ReviewArtifactRefKind {
             "evidence_bundle" => Ok(Self::EvidenceBundle),
             "evidence_verification" => Ok(Self::EvidenceVerification),
             "promotion_evidence_packet" => Ok(Self::PromotionEvidencePacket),
+            "promotion_review" => Ok(Self::PromotionReview),
+            "canary_run" => Ok(Self::CanaryRun),
+            "production_promotion" => Ok(Self::ProductionPromotion),
             _ => Err(()),
         }
     }
+}
+
+/// Stable evidence lanes compared in one cross-lane review session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewLane {
+    GovernancePrep,
+    Canary,
+    Production,
+}
+
+impl ReviewLane {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::GovernancePrep => "governance_prep",
+            Self::Canary => "canary",
+            Self::Production => "production",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::GovernancePrep => "Governance Prep",
+            Self::Canary => "Canary",
+            Self::Production => "Production",
+        }
+    }
+}
+
+impl std::fmt::Display for ReviewLane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Aggregate view of one lane inside a resolved review session or export.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewLaneSummary {
+    pub lane: ReviewLane,
+    pub artifact_count: usize,
+    pub evidence_bundle_count: usize,
+    pub verification_count: usize,
+    pub promotion_packet_count: usize,
+    pub latest_source_created_at_ms: Option<i64>,
+    pub latest_verified_at_ms: Option<i64>,
+    pub subject_refs: Vec<String>,
+}
+
+/// One unresolved cross-lane evidence or consistency gap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewLaneGap {
+    pub lane: Option<ReviewLane>,
+    pub code: String,
+    pub details: String,
+    pub references: Vec<String>,
 }
 
 /// One stable artifact reference selected into a review session.
@@ -101,6 +165,9 @@ impl ReviewSessionRecord {
                 ReviewArtifactRefKind::EvidenceBundle => evidence_bundle_count += 1,
                 ReviewArtifactRefKind::EvidenceVerification => verification_count += 1,
                 ReviewArtifactRefKind::PromotionEvidencePacket => promotion_packet_count += 1,
+                ReviewArtifactRefKind::PromotionReview
+                | ReviewArtifactRefKind::CanaryRun
+                | ReviewArtifactRefKind::ProductionPromotion => {}
             }
         }
         Self {
@@ -186,6 +253,10 @@ pub struct ReviewSessionExport {
     pub title: Option<String>,
     pub notes: Option<String>,
     pub artifact_refs: Vec<ReviewArtifactRef>,
+    #[serde(default)]
+    pub lane_summaries: Vec<ReviewLaneSummary>,
+    #[serde(default)]
+    pub unresolved_gaps: Vec<ReviewLaneGap>,
     pub evidence_bundles: Vec<ReviewSessionExportBundle>,
     pub evidence_verifications: Vec<ReviewSessionExportVerification>,
     pub promotion_packets: Vec<ReviewSessionExportPromotionPacket>,
@@ -231,6 +302,79 @@ pub struct ReviewSessionExportList {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct ReviewSessionExportIndex {
     entries: Vec<ReviewSessionExportRecord>,
+}
+
+/// Final advisory state derived from one cross-lane review session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewPromotionReadinessRecommendation {
+    ReadyForAdvisoryPromotionReview,
+    Blocked,
+}
+
+impl ReviewPromotionReadinessRecommendation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadyForAdvisoryPromotionReview => "ready_for_advisory_promotion_review",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+/// Persisted promotion-readiness artifact derived from one review session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewSessionPromotionReadiness {
+    pub readiness_id: String,
+    pub session_id: String,
+    pub created_at_ms: i64,
+    pub lane_summaries: Vec<ReviewLaneSummary>,
+    pub unresolved_gaps: Vec<ReviewLaneGap>,
+    pub recommendation: ReviewPromotionReadinessRecommendation,
+    pub advisory_only: bool,
+}
+
+/// Metadata surfaced for one persisted promotion-readiness artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewSessionPromotionReadinessRecord {
+    pub readiness_id: String,
+    pub session_id: String,
+    pub created_at_ms: i64,
+    pub recommendation: ReviewPromotionReadinessRecommendation,
+    pub gap_count: usize,
+    pub bundle_path: String,
+}
+
+impl ReviewSessionPromotionReadinessRecord {
+    fn from_report(report: &ReviewSessionPromotionReadiness, bundle_path: String) -> Self {
+        Self {
+            readiness_id: report.readiness_id.clone(),
+            session_id: report.session_id.clone(),
+            created_at_ms: report.created_at_ms,
+            recommendation: report.recommendation,
+            gap_count: report.unresolved_gaps.len(),
+            bundle_path,
+        }
+    }
+}
+
+/// Persisted promotion-readiness artifact loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct ReviewSessionPromotionReadinessLookup {
+    pub record: ReviewSessionPromotionReadinessRecord,
+    pub report: ReviewSessionPromotionReadiness,
+}
+
+/// Operator-facing readiness listing for one session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewSessionPromotionReadinessList {
+    pub total_count: usize,
+    pub session_id: Option<String>,
+    pub readiness_reports: Vec<ReviewSessionPromotionReadinessRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ReviewSessionPromotionReadinessIndex {
+    entries: Vec<ReviewSessionPromotionReadinessRecord>,
 }
 
 /// One underlying maintenance action launched from a review-session handoff.
@@ -317,6 +461,8 @@ pub struct ReviewSessionResolved {
     pub evidence_bundles: Vec<EvidenceBundleLookup>,
     pub evidence_verifications: Vec<EvidenceVerificationLookup>,
     pub promotion_packets: Vec<PromotionEvidencePacketLookup>,
+    pub lane_summaries: Vec<ReviewLaneSummary>,
+    pub unresolved_gaps: Vec<ReviewLaneGap>,
 }
 
 /// Errors raised while persisting review sessions.
@@ -394,6 +540,31 @@ pub enum ReviewSessionMaintenanceHandoffStoreError {
     },
 }
 
+/// Errors raised while persisting review-session promotion-readiness artifacts.
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewSessionPromotionReadinessStoreError {
+    #[error("failed to read review-session readiness store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write review-session readiness store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse review-session readiness store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
 /// Errors raised while assembling workbench sessions and handoffs.
 #[derive(Debug, thiserror::Error)]
 pub enum ReviewWorkbenchError {
@@ -412,6 +583,9 @@ pub enum ReviewWorkbenchError {
     #[error(transparent)]
     HandoffStore(#[from] ReviewSessionMaintenanceHandoffStoreError),
 
+    #[error(transparent)]
+    ReadinessStore(#[from] ReviewSessionPromotionReadinessStoreError),
+
     #[error("invalid review session request: {0}")]
     InvalidRequest(String),
 
@@ -423,6 +597,9 @@ pub enum ReviewWorkbenchError {
 
     #[error("review session handoff `{handoff_id}` was not found")]
     HandoffNotFound { handoff_id: String },
+
+    #[error("review session readiness `{readiness_id}` was not found")]
+    ReadinessNotFound { readiness_id: String },
 }
 
 /// File-backed review-session store.
@@ -675,6 +852,155 @@ impl FileReviewSessionExportStore {
     }
 }
 
+/// File-backed promotion-readiness store for review sessions.
+#[derive(Debug, Clone)]
+pub struct FileReviewSessionPromotionReadinessStore {
+    root: PathBuf,
+}
+
+impl FileReviewSessionPromotionReadinessStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, ReviewSessionPromotionReadinessStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            ReviewSessionPromotionReadinessStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, readiness_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(readiness_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(
+        &self,
+    ) -> Result<ReviewSessionPromotionReadinessIndex, ReviewSessionPromotionReadinessStoreError>
+    {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(ReviewSessionPromotionReadinessIndex::default());
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| {
+            ReviewSessionPromotionReadinessStoreError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        serde_json::from_str(&raw)
+            .map_err(|source| ReviewSessionPromotionReadinessStoreError::Parse { path, source })
+    }
+
+    fn write_index(
+        &self,
+        index: &ReviewSessionPromotionReadinessIndex,
+    ) -> Result<(), ReviewSessionPromotionReadinessStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            ReviewSessionPromotionReadinessStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw)
+            .map_err(|source| ReviewSessionPromotionReadinessStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        report: &ReviewSessionPromotionReadiness,
+    ) -> Result<ReviewSessionPromotionReadinessLookup, ReviewSessionPromotionReadinessStoreError>
+    {
+        let path = self.report_path(&report.readiness_id);
+        let raw = serde_json::to_string_pretty(report).map_err(|source| {
+            ReviewSessionPromotionReadinessStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| {
+            ReviewSessionPromotionReadinessStoreError::Write {
+                path: path.clone(),
+                source,
+            }
+        })?;
+
+        let mut index = self.read_index()?;
+        let record =
+            ReviewSessionPromotionReadinessRecord::from_report(report, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.readiness_id != record.readiness_id);
+        index.entries.push(record.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        self.write_index(&index)?;
+        Ok(ReviewSessionPromotionReadinessLookup {
+            record,
+            report: report.clone(),
+        })
+    }
+
+    pub fn load(
+        &self,
+        readiness_id: &str,
+    ) -> Result<
+        Option<ReviewSessionPromotionReadinessLookup>,
+        ReviewSessionPromotionReadinessStoreError,
+    > {
+        let index = self.read_index()?;
+        let Some(record) = index
+            .entries
+            .iter()
+            .find(|entry| entry.readiness_id == readiness_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = PathBuf::from(&record.bundle_path);
+        let raw = fs::read_to_string(&path).map_err(|source| {
+            ReviewSessionPromotionReadinessStoreError::Read {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        let report = serde_json::from_str(&raw).map_err(|source| {
+            ReviewSessionPromotionReadinessStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        Ok(Some(ReviewSessionPromotionReadinessLookup {
+            record,
+            report,
+        }))
+    }
+
+    pub fn list(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<ReviewSessionPromotionReadinessList, ReviewSessionPromotionReadinessStoreError>
+    {
+        let mut readiness_reports = self.read_index()?.entries;
+        if let Some(session_id) = session_id {
+            readiness_reports.retain(|entry| entry.session_id == session_id);
+        }
+        Ok(ReviewSessionPromotionReadinessList {
+            total_count: readiness_reports.len(),
+            session_id: session_id.map(ToString::to_string),
+            readiness_reports,
+        })
+    }
+}
+
 /// File-backed maintenance-handoff store for review sessions.
 #[derive(Debug, Clone)]
 pub struct FileReviewSessionMaintenanceHandoffStore {
@@ -833,6 +1159,7 @@ pub struct DefaultReviewWorkbenchHarness {
     maintenance: OperatorMaintenanceService,
     session_store: FileReviewSessionStore,
     export_store: FileReviewSessionExportStore,
+    readiness_store: FileReviewSessionPromotionReadinessStore,
     handoff_store: FileReviewSessionMaintenanceHandoffStore,
 }
 
@@ -851,6 +1178,9 @@ impl DefaultReviewWorkbenchHarness {
             session_store: FileReviewSessionStore::open(&paths.review_session_results_dir)?,
             export_store: FileReviewSessionExportStore::open(
                 &paths.review_session_export_results_dir,
+            )?,
+            readiness_store: FileReviewSessionPromotionReadinessStore::open(
+                &paths.review_session_readiness_results_dir,
             )?,
             handoff_store: FileReviewSessionMaintenanceHandoffStore::open(
                 &paths.review_session_handoff_results_dir,
@@ -916,6 +1246,8 @@ impl DefaultReviewWorkbenchHarness {
             title: resolved.session.report.title.clone(),
             notes: resolved.session.report.notes.clone(),
             artifact_refs: resolved.session.report.artifact_refs.clone(),
+            lane_summaries: resolved.lane_summaries.clone(),
+            unresolved_gaps: resolved.unresolved_gaps.clone(),
             evidence_bundles: resolved
                 .evidence_bundles
                 .iter()
@@ -977,6 +1309,37 @@ impl DefaultReviewWorkbenchHarness {
         session_id: Option<&str>,
     ) -> Result<ReviewSessionExportList, ReviewWorkbenchError> {
         self.export_store.list(session_id).map_err(Into::into)
+    }
+
+    pub fn create_promotion_readiness_review(
+        &self,
+        session_id: &str,
+    ) -> Result<ReviewSessionPromotionReadinessLookup, ReviewWorkbenchError> {
+        let resolved = self.resolve_session(session_id)?;
+        let report = ReviewSessionPromotionReadiness {
+            readiness_id: format!("review_session_readiness:{}", now_unix_nanos()),
+            session_id: resolved.session.report.session_id.clone(),
+            created_at_ms: now_ms(),
+            lane_summaries: resolved.lane_summaries.clone(),
+            unresolved_gaps: resolved.unresolved_gaps.clone(),
+            recommendation: promotion_readiness_recommendation(&resolved),
+            advisory_only: true,
+        };
+        self.readiness_store.persist(&report).map_err(Into::into)
+    }
+
+    pub fn load_promotion_readiness(
+        &self,
+        readiness_id: &str,
+    ) -> Result<Option<ReviewSessionPromotionReadinessLookup>, ReviewWorkbenchError> {
+        self.readiness_store.load(readiness_id).map_err(Into::into)
+    }
+
+    pub fn list_promotion_readiness(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<ReviewSessionPromotionReadinessList, ReviewWorkbenchError> {
+        self.readiness_store.list(session_id).map_err(Into::into)
     }
 
     pub fn create_reverify_handoff(
@@ -1102,7 +1465,7 @@ impl DefaultReviewWorkbenchHarness {
                             artifact.id
                         ))
                     })?;
-                    evidence_bundles.push(lookup);
+                    push_unique_bundle(&mut evidence_bundles, lookup);
                 }
                 ReviewArtifactRefKind::EvidenceVerification => {
                     let lookup =
@@ -1114,7 +1477,12 @@ impl DefaultReviewWorkbenchHarness {
                                     artifact.id
                                 ))
                             })?;
-                    evidence_verifications.push(lookup);
+                    if let Some(bundle_lookup) =
+                        self.evidence.load_bundle(&lookup.report.bundle_id)?
+                    {
+                        push_unique_bundle(&mut evidence_bundles, bundle_lookup);
+                    }
+                    push_unique_verification(&mut evidence_verifications, lookup);
                 }
                 ReviewArtifactRefKind::PromotionEvidencePacket => {
                     let lookup = self
@@ -1126,16 +1494,85 @@ impl DefaultReviewWorkbenchHarness {
                                 artifact.id
                             ))
                         })?;
-                    promotion_packets.push(lookup);
+                    push_unique_packet(&mut promotion_packets, lookup);
+                }
+                ReviewArtifactRefKind::PromotionReview => {
+                    let bundle_lookup = self
+                        .evidence
+                        .find_bundle_by_subject(EvidenceSubjectKind::PromotionReview, &artifact.id)?
+                        .ok_or_else(|| {
+                            ReviewWorkbenchError::InvalidRequest(format!(
+                                "promotion review `{}` does not have exported evidence",
+                                artifact.id
+                            ))
+                        })?;
+                    attach_bundle_dependencies(
+                        &self.evidence,
+                        &bundle_lookup,
+                        &mut evidence_bundles,
+                        &mut evidence_verifications,
+                    )?;
+                }
+                ReviewArtifactRefKind::CanaryRun => {
+                    let bundle_lookup = self
+                        .evidence
+                        .find_bundle_by_subject(EvidenceSubjectKind::CanaryRun, &artifact.id)?
+                        .ok_or_else(|| {
+                            ReviewWorkbenchError::InvalidRequest(format!(
+                                "canary run `{}` does not have exported evidence",
+                                artifact.id
+                            ))
+                        })?;
+                    attach_bundle_dependencies(
+                        &self.evidence,
+                        &bundle_lookup,
+                        &mut evidence_bundles,
+                        &mut evidence_verifications,
+                    )?;
+                }
+                ReviewArtifactRefKind::ProductionPromotion => {
+                    let bundle_lookup = self
+                        .evidence
+                        .find_bundle_by_subject(
+                            EvidenceSubjectKind::ProductionPromotion,
+                            &artifact.id,
+                        )?
+                        .ok_or_else(|| {
+                            ReviewWorkbenchError::InvalidRequest(format!(
+                                "production promotion `{}` does not have exported evidence",
+                                artifact.id
+                            ))
+                        })?;
+                    attach_bundle_dependencies(
+                        &self.evidence,
+                        &bundle_lookup,
+                        &mut evidence_bundles,
+                        &mut evidence_verifications,
+                    )?;
+                    if let Some(packet_lookup) = self.evidence.load_promotion_evidence_packet(
+                        &format!("promotion_evidence:{}", artifact.id),
+                    )? {
+                        push_unique_packet(&mut promotion_packets, packet_lookup);
+                    }
                 }
             }
         }
+
+        let lane_summaries = build_lane_summaries(
+            &evidence_bundles,
+            &evidence_verifications,
+            &promotion_packets,
+        );
+        let unresolved_gaps =
+            collect_lane_gaps(&lane_summaries, &evidence_bundles, &promotion_packets);
 
         Ok(ReviewSessionResolved {
             session,
             evidence_bundles,
             evidence_verifications,
             promotion_packets,
+            lane_summaries,
+            unresolved_gaps,
         })
     }
 
@@ -1153,6 +1590,18 @@ impl DefaultReviewWorkbenchHarness {
             ReviewArtifactRefKind::PromotionEvidencePacket => self
                 .evidence
                 .load_promotion_evidence_packet(&artifact.id)?
+                .is_some(),
+            ReviewArtifactRefKind::PromotionReview => self
+                .evidence
+                .find_bundle_by_subject(EvidenceSubjectKind::PromotionReview, &artifact.id)?
+                .is_some(),
+            ReviewArtifactRefKind::CanaryRun => self
+                .evidence
+                .find_bundle_by_subject(EvidenceSubjectKind::CanaryRun, &artifact.id)?
+                .is_some(),
+            ReviewArtifactRefKind::ProductionPromotion => self
+                .evidence
+                .find_bundle_by_subject(EvidenceSubjectKind::ProductionPromotion, &artifact.id)?
                 .is_some(),
         };
         if exists {
@@ -1205,15 +1654,42 @@ pub fn render_review_session(resolved: &ReviewSessionResolved) -> String {
             resolved.evidence_verifications.len()
         ),
         format!("Promotion packets: {}", resolved.promotion_packets.len()),
+        format!("Cross-lane summaries: {}", resolved.lane_summaries.len()),
+        format!("Unresolved gaps: {}", resolved.unresolved_gaps.len()),
     ];
     if let Some(notes) = resolved.session.report.notes.as_deref() {
         lines.push(format!("Notes: {}", notes));
+    }
+    if !resolved.lane_summaries.is_empty() {
+        lines.push("Lane summaries:".to_string());
+        for summary in &resolved.lane_summaries {
+            lines.push(format!(
+                "- {} | artifacts={} | bundles={} | verifications={} | packets={} | refs={}",
+                summary.lane.title(),
+                summary.artifact_count,
+                summary.evidence_bundle_count,
+                summary.verification_count,
+                summary.promotion_packet_count,
+                summary.subject_refs.len()
+            ));
+        }
+    }
+    if !resolved.unresolved_gaps.is_empty() {
+        lines.push("Gaps:".to_string());
+        for gap in &resolved.unresolved_gaps {
+            lines.push(format!(
+                "- {}:{} | {}",
+                gap.lane.map(ReviewLane::as_str).unwrap_or("cross_lane"),
+                gap.code,
+                gap.details
+            ));
+        }
     }
     lines.join("\n")
 }
 
 pub fn render_review_session_export(export: &ReviewSessionExport) -> String {
-    [
+    let mut lines = vec![
         "Swarm Team Six Review Session Export".to_string(),
         format!("Export ID: {}", export.export_id),
         format!("Session ID: {}", export.session_id),
@@ -1224,8 +1700,20 @@ pub fn render_review_session_export(export: &ReviewSessionExport) -> String {
             export.evidence_verifications.len()
         ),
         format!("Promotion packets: {}", export.promotion_packets.len()),
-    ]
-    .join("\n")
+        format!("Lane summaries: {}", export.lane_summaries.len()),
+        format!("Unresolved gaps: {}", export.unresolved_gaps.len()),
+    ];
+    for summary in &export.lane_summaries {
+        lines.push(format!(
+            "- {} | artifacts={} | bundles={} | verifications={} | packets={}",
+            summary.lane.title(),
+            summary.artifact_count,
+            summary.evidence_bundle_count,
+            summary.verification_count,
+            summary.promotion_packet_count
+        ));
+    }
+    lines.join("\n")
 }
 
 pub fn render_review_session_handoff(handoff: &ReviewSessionMaintenanceHandoff) -> String {
@@ -1245,6 +1733,42 @@ pub fn render_review_session_handoff(handoff: &ReviewSessionMaintenanceHandoff) 
             maintenance_status_label(result.status),
             result.verification_id.as_deref().unwrap_or("none")
         ));
+    }
+    lines.join("\n")
+}
+
+pub fn render_review_session_promotion_readiness(
+    readiness: &ReviewSessionPromotionReadiness,
+) -> String {
+    let mut lines = vec![
+        "Swarm Team Six Promotion Readiness Review".to_string(),
+        format!("Readiness ID: {}", readiness.readiness_id),
+        format!("Session ID: {}", readiness.session_id),
+        format!("Recommendation: {}", readiness.recommendation.as_str()),
+        format!("Lane summaries: {}", readiness.lane_summaries.len()),
+        format!("Unresolved gaps: {}", readiness.unresolved_gaps.len()),
+        format!("Advisory only: {}", readiness.advisory_only),
+    ];
+    for summary in &readiness.lane_summaries {
+        lines.push(format!(
+            "- {} | artifacts={} | bundles={} | verifications={} | packets={}",
+            summary.lane.title(),
+            summary.artifact_count,
+            summary.evidence_bundle_count,
+            summary.verification_count,
+            summary.promotion_packet_count
+        ));
+    }
+    if !readiness.unresolved_gaps.is_empty() {
+        lines.push("Blocking gaps:".to_string());
+        for gap in &readiness.unresolved_gaps {
+            lines.push(format!(
+                "- {}:{} | {}",
+                gap.lane.map(ReviewLane::as_str).unwrap_or("cross_lane"),
+                gap.code,
+                gap.details
+            ));
+        }
     }
     lines.join("\n")
 }
@@ -1339,9 +1863,293 @@ fn derive_bundle_ids(
                     }
                 }
             }
+            ReviewArtifactRefKind::PromotionReview => {
+                let bundle_lookup = resolved
+                    .evidence_bundles
+                    .iter()
+                    .find(|lookup| {
+                        lookup.record.subject_kind == EvidenceSubjectKind::PromotionReview
+                            && lookup.record.subject_id == artifact.id
+                    })
+                    .ok_or_else(|| {
+                        ReviewWorkbenchError::InvalidRequest(format!(
+                            "promotion review `{}` is not available in the review session",
+                            artifact.id
+                        ))
+                    })?;
+                bundle_ids.insert(bundle_lookup.record.bundle_id.clone());
+            }
+            ReviewArtifactRefKind::CanaryRun => {
+                let bundle_lookup = resolved
+                    .evidence_bundles
+                    .iter()
+                    .find(|lookup| {
+                        lookup.record.subject_kind == EvidenceSubjectKind::CanaryRun
+                            && lookup.record.subject_id == artifact.id
+                    })
+                    .ok_or_else(|| {
+                        ReviewWorkbenchError::InvalidRequest(format!(
+                            "canary run `{}` is not available in the review session",
+                            artifact.id
+                        ))
+                    })?;
+                bundle_ids.insert(bundle_lookup.record.bundle_id.clone());
+            }
+            ReviewArtifactRefKind::ProductionPromotion => {
+                let bundle_lookup = resolved
+                    .evidence_bundles
+                    .iter()
+                    .find(|lookup| {
+                        lookup.record.subject_kind == EvidenceSubjectKind::ProductionPromotion
+                            && lookup.record.subject_id == artifact.id
+                    })
+                    .ok_or_else(|| {
+                        ReviewWorkbenchError::InvalidRequest(format!(
+                            "production promotion `{}` is not available in the review session",
+                            artifact.id
+                        ))
+                    })?;
+                bundle_ids.insert(bundle_lookup.record.bundle_id.clone());
+            }
         }
     }
     Ok(bundle_ids.into_iter().collect())
+}
+
+fn push_unique_bundle(target: &mut Vec<EvidenceBundleLookup>, lookup: EvidenceBundleLookup) {
+    if !target
+        .iter()
+        .any(|existing| existing.record.bundle_id == lookup.record.bundle_id)
+    {
+        target.push(lookup);
+    }
+}
+
+fn push_unique_verification(
+    target: &mut Vec<EvidenceVerificationLookup>,
+    lookup: EvidenceVerificationLookup,
+) {
+    if !target
+        .iter()
+        .any(|existing| existing.report.verification_id == lookup.report.verification_id)
+    {
+        target.push(lookup);
+    }
+}
+
+fn push_unique_packet(
+    target: &mut Vec<PromotionEvidencePacketLookup>,
+    lookup: PromotionEvidencePacketLookup,
+) {
+    if !target
+        .iter()
+        .any(|existing| existing.packet.packet_id == lookup.packet.packet_id)
+    {
+        target.push(lookup);
+    }
+}
+
+fn attach_bundle_dependencies(
+    evidence: &OperatorEvidenceReadService,
+    bundle_lookup: &EvidenceBundleLookup,
+    evidence_bundles: &mut Vec<EvidenceBundleLookup>,
+    evidence_verifications: &mut Vec<EvidenceVerificationLookup>,
+) -> Result<(), ReviewWorkbenchError> {
+    push_unique_bundle(evidence_bundles, bundle_lookup.clone());
+    if let Some(verification_id) = bundle_lookup.record.latest_verification_id.as_deref()
+        && let Some(verification_lookup) = evidence.load_verification(verification_id)?
+    {
+        push_unique_verification(evidence_verifications, verification_lookup);
+    }
+    Ok(())
+}
+
+fn classify_subject_lane(subject_kind: EvidenceSubjectKind) -> Option<ReviewLane> {
+    match subject_kind {
+        EvidenceSubjectKind::PromotionReview
+        | EvidenceSubjectKind::DetectorVerification
+        | EvidenceSubjectKind::StrategyShadow => Some(ReviewLane::GovernancePrep),
+        EvidenceSubjectKind::CanaryRun => Some(ReviewLane::Canary),
+        EvidenceSubjectKind::ProductionPromotion => Some(ReviewLane::Production),
+        _ => None,
+    }
+}
+
+fn build_lane_summaries(
+    evidence_bundles: &[EvidenceBundleLookup],
+    evidence_verifications: &[EvidenceVerificationLookup],
+    promotion_packets: &[PromotionEvidencePacketLookup],
+) -> Vec<ReviewLaneSummary> {
+    let mut by_lane = std::collections::BTreeMap::new();
+    for lane in [
+        ReviewLane::GovernancePrep,
+        ReviewLane::Canary,
+        ReviewLane::Production,
+    ] {
+        by_lane.insert(
+            lane,
+            ReviewLaneSummary {
+                lane,
+                artifact_count: 0,
+                evidence_bundle_count: 0,
+                verification_count: 0,
+                promotion_packet_count: 0,
+                latest_source_created_at_ms: None,
+                latest_verified_at_ms: None,
+                subject_refs: Vec::new(),
+            },
+        );
+    }
+
+    for bundle in evidence_bundles {
+        if let Some(lane) = classify_subject_lane(bundle.record.subject_kind) {
+            let summary = by_lane.get_mut(&lane).expect("lane summary exists");
+            summary.artifact_count += 1;
+            summary.evidence_bundle_count += 1;
+            summary.latest_source_created_at_ms = Some(
+                summary
+                    .latest_source_created_at_ms
+                    .map_or(bundle.record.source_created_at_ms, |current| {
+                        current.max(bundle.record.source_created_at_ms)
+                    }),
+            );
+            let subject_ref = format!(
+                "{}:{}",
+                bundle.record.subject_kind.as_str(),
+                bundle.record.subject_id
+            );
+            if !summary.subject_refs.contains(&subject_ref) {
+                summary.subject_refs.push(subject_ref);
+            }
+        }
+    }
+
+    for verification in evidence_verifications {
+        if let Some(lane) = classify_subject_lane(verification.report.subject_kind) {
+            let summary = by_lane.get_mut(&lane).expect("lane summary exists");
+            summary.artifact_count += 1;
+            summary.verification_count += 1;
+            summary.latest_verified_at_ms = Some(
+                summary
+                    .latest_verified_at_ms
+                    .map_or(verification.report.verified_at_ms, |current| {
+                        current.max(verification.report.verified_at_ms)
+                    }),
+            );
+        }
+    }
+
+    for packet in promotion_packets {
+        let summary = by_lane
+            .get_mut(&ReviewLane::Production)
+            .expect("production summary exists");
+        summary.artifact_count += 1;
+        summary.promotion_packet_count += 1;
+        let subject_ref = format!("promotion_evidence_packet:{}", packet.packet.promotion_id);
+        if !summary.subject_refs.contains(&subject_ref) {
+            summary.subject_refs.push(subject_ref);
+        }
+    }
+
+    by_lane.into_values().collect()
+}
+
+fn collect_lane_gaps(
+    lane_summaries: &[ReviewLaneSummary],
+    evidence_bundles: &[EvidenceBundleLookup],
+    promotion_packets: &[PromotionEvidencePacketLookup],
+) -> Vec<ReviewLaneGap> {
+    let mut gaps = Vec::new();
+    for lane in [
+        ReviewLane::GovernancePrep,
+        ReviewLane::Canary,
+        ReviewLane::Production,
+    ] {
+        let summary = lane_summaries
+            .iter()
+            .find(|summary| summary.lane == lane)
+            .expect("lane summary exists");
+        if summary.artifact_count == 0 {
+            gaps.push(ReviewLaneGap {
+                lane: Some(lane),
+                code: "lane_missing".to_string(),
+                details: format!(
+                    "{} lane evidence is missing from the review session",
+                    lane.title()
+                ),
+                references: Vec::new(),
+            });
+        }
+    }
+
+    for bundle in evidence_bundles {
+        if let Some(lane) = classify_subject_lane(bundle.record.subject_kind)
+            && bundle.record.latest_verification_status != Some(EvidenceVerificationStatus::Passed)
+        {
+            gaps.push(ReviewLaneGap {
+                lane: Some(lane),
+                code: "bundle_unverified".to_string(),
+                details: format!(
+                    "{} evidence `{}` is missing a passing verification result",
+                    lane.title(),
+                    bundle.record.bundle_id
+                ),
+                references: vec![bundle.record.bundle_id.clone()],
+            });
+        }
+    }
+
+    for packet in promotion_packets {
+        for reason in &packet.packet.blocking_reasons {
+            gaps.push(ReviewLaneGap {
+                lane: Some(ReviewLane::Production),
+                code: reason.name.clone(),
+                details: reason.details.clone(),
+                references: reason.references.clone(),
+            });
+        }
+    }
+
+    if promotion_packets.is_empty()
+        && evidence_bundles
+            .iter()
+            .any(|bundle| bundle.record.subject_kind == EvidenceSubjectKind::ProductionPromotion)
+    {
+        gaps.push(ReviewLaneGap {
+            lane: Some(ReviewLane::Production),
+            code: "promotion_evidence_packet_missing".to_string(),
+            details:
+                "production lane is present but no promotion evidence packet was included or derived"
+                    .to_string(),
+            references: Vec::new(),
+        });
+    }
+
+    gaps
+}
+
+fn promotion_readiness_recommendation(
+    resolved: &ReviewSessionResolved,
+) -> ReviewPromotionReadinessRecommendation {
+    let has_all_lanes = [
+        ReviewLane::GovernancePrep,
+        ReviewLane::Canary,
+        ReviewLane::Production,
+    ]
+    .iter()
+    .all(|lane| {
+        resolved
+            .lane_summaries
+            .iter()
+            .find(|summary| &summary.lane == lane)
+            .map(|summary| summary.artifact_count > 0)
+            .unwrap_or(false)
+    });
+    if has_all_lanes && resolved.unresolved_gaps.is_empty() {
+        ReviewPromotionReadinessRecommendation::ReadyForAdvisoryPromotionReview
+    } else {
+        ReviewPromotionReadinessRecommendation::Blocked
+    }
 }
 
 fn maintenance_status_label(status: OperatorMaintenanceStatus) -> &'static str {

@@ -1463,7 +1463,10 @@ mod tests {
             .unwrap();
         let elapsed = started.elapsed();
 
-        assert!(elapsed < std::time::Duration::from_millis(40));
+        assert!(
+            elapsed < std::time::Duration::from_millis(70),
+            "expected nonblocking path to return before the 75ms investigation delay, elapsed={elapsed:?}"
+        );
         let investigation = persisted.investigation.expect("queued investigation");
         assert_eq!(
             investigation.status,

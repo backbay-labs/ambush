@@ -79,6 +79,16 @@ impl OperatorEvidenceReadService {
         self.bundle_store.load(bundle_id).map_err(Into::into)
     }
 
+    pub fn find_bundle_by_subject(
+        &self,
+        subject_kind: EvidenceSubjectKind,
+        subject_id: &str,
+    ) -> Result<Option<EvidenceBundleLookup>, EvidenceError> {
+        self.bundle_store
+            .find_by_subject(subject_kind, subject_id)
+            .map_err(Into::into)
+    }
+
     pub fn list_bundles(
         &self,
         subject_kind: Option<EvidenceSubjectKind>,

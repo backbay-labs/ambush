@@ -153,6 +153,7 @@ cargo run -p swarm-runtime --bin swarmctl -- serve \
   --promotion-evidence-results-dir data/promotion-evidence-packets \
   --review-session-results-dir data/review-sessions \
   --review-session-export-results-dir data/review-session-exports \
+  --review-session-readiness-results-dir data/review-session-readiness \
   --review-session-handoff-results-dir data/review-session-handoffs
 ```
 
@@ -212,8 +213,10 @@ Current authenticated surface:
 - `/v1/operator/review/sessions` `GET`, `POST`
 - `/v1/operator/review/sessions/{session_id}`
 - `/v1/operator/review/sessions/{session_id}/export` `POST`
+- `/v1/operator/review/sessions/{session_id}/promotion-readiness` `POST`
 - `/v1/operator/review/sessions/{session_id}/handoffs/reverify` `POST`
 - `/v1/operator/review/exports/{export_id}`
+- `/v1/operator/review/promotion-readiness/{readiness_id}`
 - `/v1/operator/review/handoffs/{handoff_id}`
 - `/v1/operator/review/evidence?subject_kind=&verification_status=&limit=`
 - `/v1/operator/review/evidence/{bundle_id}`
@@ -238,12 +241,12 @@ Current authenticated surface:
 - `/v1/operator/maintenance/actions` `GET`, `POST`
 - `/v1/operator/maintenance/actions/{action_id}` `GET`
 
-### Evidence Workbench And Review Handoffs
+### Cross-Lane Evidence Workbench
 
-`v1.20` turns the local review shell into a bounded evidence workbench above the authenticated operator API:
+`v1.21` extends the local review shell into a cross-lane evidence workbench above the authenticated operator API:
 
-- review sessions are durable repo-owned artifacts assembled from existing `evidence_bundle`, `evidence_verification`, and `promotion_evidence_packet` stable IDs
-- one session can compare multiple evidence artifacts, export the reviewed set, and launch a bounded maintenance handoff without reading raw files
+- review sessions are durable repo-owned artifacts assembled from existing `evidence_bundle`, `evidence_verification`, and `promotion_evidence_packet` stable IDs plus lane refs for `promotion_review`, `canary_run`, and `production_promotion`
+- one session can now compare governance-prep, canary, and production evidence lanes, export the reviewed state with lane summaries and unresolved gaps, derive an advisory promotion-readiness review, and still launch a bounded maintenance handoff without reading raw files
 - review-driven writes stay narrow: the workbench can re-verify evidence bundles through the existing maintenance audit trail, but it still cannot bypass rollout, promotion, or governance
 - the surface stays on the same bearer-token middleware and does not introduce cookies, browser-only auth, or multi-user control
 
@@ -260,7 +263,12 @@ curl -X POST \
   -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   http://127.0.0.1:7766/v1/operator/review/sessions \
-  -d "title=red+evidence+review&artifact_refs=evidence_bundle%3AEVIDENCE_BUNDLE_ID%0Apromotion_evidence_packet%3APROMOTION_EVIDENCE_PACKET_ID"
+  -d "title=red+cross-lane+review&artifact_refs=promotion_review%3APROMOTION_REVIEW_ID%0Acanary_run%3ACANARY_RUN_ID%0Aproduction_promotion%3APRODUCTION_PROMOTION_ID"
+
+curl -X POST \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  http://127.0.0.1:7766/v1/operator/review/sessions/REVIEW_SESSION_ID/promotion-readiness
 
 curl -X POST \
   -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
@@ -273,15 +281,21 @@ curl -X POST \
 
 ```bash
 cargo run -p swarm-runtime --bin swarmctl -- review-session-create \
-  --title "red evidence review" \
-  --artifact-ref "evidence_bundle:EVIDENCE_BUNDLE_ID" \
-  --artifact-ref "evidence_verification:EVIDENCE_VERIFICATION_ID" \
-  --artifact-ref "promotion_evidence_packet:PROMOTION_EVIDENCE_PACKET_ID"
+  --title "red cross-lane review" \
+  --artifact-ref "promotion_review:PROMOTION_REVIEW_ID" \
+  --artifact-ref "canary_run:CANARY_RUN_ID" \
+  --artifact-ref "production_promotion:PRODUCTION_PROMOTION_ID"
 
 cargo run -p swarm-runtime --bin swarmctl -- review-session-list
 
 cargo run -p swarm-runtime --bin swarmctl -- review-session-export \
   --session-id REVIEW_SESSION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- review-session-promotion-readiness \
+  --session-id REVIEW_SESSION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- review-session-promotion-readiness-result \
+  --readiness-id REVIEW_SESSION_READINESS_ID
 
 cargo run -p swarm-runtime --bin swarmctl -- review-session-handoff-reverify \
   --session-id REVIEW_SESSION_ID \
@@ -293,6 +307,7 @@ Review-session artifacts now default to:
 
 - sessions: `data/review-sessions/`
 - exports: `data/review-session-exports/`
+- promotion-readiness reviews: `data/review-session-readiness/`
 - handoffs: `data/review-session-handoffs/`
 
 ### Signed Evidence Export And Verification

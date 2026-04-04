@@ -53,6 +53,7 @@ use swarm_runtime::review_workbench::{
     DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind,
     ReviewSessionCreateRequest, ReviewSessionReverifyRequest, render_review_session,
     render_review_session_export, render_review_session_handoff, render_review_session_list,
+    render_review_session_promotion_readiness,
 };
 use swarm_runtime::selection::{
     DefaultEvolutionSelectionHarness, render_evolution_ranked_candidate_bridge,
@@ -202,6 +203,9 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/review-session-exports")]
     review_session_export_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/review-session-readiness")]
+    review_session_readiness_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true, default_value = "data/review-session-handoffs")]
     review_session_handoff_results_dir: std::path::PathBuf,
 
@@ -239,6 +243,8 @@ enum Command {
     ReviewSessionList,
     ReviewSessionExport(ReviewSessionExportArgs),
     ReviewSessionExportResult(ReviewSessionExportResultArgs),
+    ReviewSessionPromotionReadiness(ReviewSessionPromotionReadinessArgs),
+    ReviewSessionPromotionReadinessResult(ReviewSessionPromotionReadinessResultArgs),
     ReviewSessionHandoffReverify(ReviewSessionHandoffReverifyArgs),
     ReviewSessionHandoffResult(ReviewSessionHandoffResultArgs),
     ReplayEvaluate(ReplayEvaluateArgs),
@@ -488,6 +494,18 @@ struct ReviewSessionExportArgs {
 struct ReviewSessionExportResultArgs {
     #[arg(long)]
     export_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ReviewSessionPromotionReadinessArgs {
+    #[arg(long)]
+    session_id: String,
+}
+
+#[derive(Debug, Args)]
+struct ReviewSessionPromotionReadinessResultArgs {
+    #[arg(long)]
+    readiness_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -1345,6 +1363,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             promotion_evidence_results_dir: cli.promotion_evidence_results_dir.clone(),
             review_session_results_dir: cli.review_session_results_dir.clone(),
             review_session_export_results_dir: cli.review_session_export_results_dir.clone(),
+            review_session_readiness_results_dir: cli.review_session_readiness_results_dir.clone(),
             review_session_handoff_results_dir: cli.review_session_handoff_results_dir.clone(),
         },
     )?;
@@ -1374,6 +1393,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     review_session_results_dir: cli.review_session_results_dir.clone(),
                     review_session_export_results_dir: cli
                         .review_session_export_results_dir
+                        .clone(),
+                    review_session_readiness_results_dir: cli
+                        .review_session_readiness_results_dir
                         .clone(),
                     review_session_handoff_results_dir: cli
                         .review_session_handoff_results_dir
@@ -1614,6 +1636,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.export)?);
             } else {
                 println!("{}", render_review_session_export(&lookup.export));
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionPromotionReadiness(args) => {
+            let lookup =
+                review_workbench_harness.create_promotion_readiness_review(&args.session_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_review_session_promotion_readiness(&lookup.report)
+                );
+            }
+            return Ok(());
+        }
+        Command::ReviewSessionPromotionReadinessResult(args) => {
+            let lookup = review_workbench_harness
+                .load_promotion_readiness(&args.readiness_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "review session readiness was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_review_session_promotion_readiness(&lookup.report)
+                );
             }
             return Ok(());
         }

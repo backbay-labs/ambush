@@ -24,7 +24,8 @@ use crate::portfolio::{
 use crate::review_workbench::{
     DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind,
     ReviewSessionCreateRequest, ReviewSessionExport, ReviewSessionList,
-    ReviewSessionMaintenanceHandoff, ReviewSessionMaintenanceHandoffList, ReviewSessionResolved,
+    ReviewSessionMaintenanceHandoff, ReviewSessionMaintenanceHandoffList,
+    ReviewSessionPromotionReadiness, ReviewSessionPromotionReadinessList, ReviewSessionResolved,
     ReviewSessionReverifyRequest, ReviewWorkbenchError,
 };
 use crate::service::OperatorStatusReport;
@@ -56,6 +57,7 @@ pub struct OperatorSurfacePaths {
     pub promotion_evidence_results_dir: PathBuf,
     pub review_session_results_dir: PathBuf,
     pub review_session_export_results_dir: PathBuf,
+    pub review_session_readiness_results_dir: PathBuf,
     pub review_session_handoff_results_dir: PathBuf,
 }
 
@@ -461,12 +463,20 @@ impl LocalOperatorSurface {
                 post(review_session_export_handler),
             )
             .route(
+                "/v1/operator/review/sessions/{session_id}/promotion-readiness",
+                post(review_session_promotion_readiness_handler),
+            )
+            .route(
                 "/v1/operator/review/sessions/{session_id}/handoffs/reverify",
                 post(review_session_handoff_handler),
             )
             .route(
                 "/v1/operator/review/exports/{export_id}",
                 get(review_session_export_page_handler),
+            )
+            .route(
+                "/v1/operator/review/promotion-readiness/{readiness_id}",
+                get(review_session_promotion_readiness_page_handler),
             )
             .route(
                 "/v1/operator/review/handoffs/{handoff_id}",
@@ -711,9 +721,17 @@ async fn review_session_handler(
         Some(state.max_list_results),
         state.max_list_results,
     );
+    let readiness_reports = limit_review_session_promotion_readiness_list(
+        service
+            .list_promotion_readiness(Some(&session_id))
+            .map_err(map_review_workbench_error)?,
+        Some(state.max_list_results),
+        state.max_list_results,
+    );
     Ok(Html(render_review_session_page(
         &resolved,
         &exports.exports,
+        &readiness_reports.readiness_reports,
         &handoffs.handoffs,
     )))
 }
@@ -746,6 +764,38 @@ async fn review_session_export_page_handler(
             ))
         })?;
     Ok(Html(render_review_session_export_page(&lookup.export)))
+}
+
+async fn review_session_promotion_readiness_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(session_id): RoutePath<String>,
+) -> Result<Redirect, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .create_promotion_readiness_review(&session_id)
+        .map_err(map_review_workbench_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/promotion-readiness/{}",
+        lookup.report.readiness_id
+    )))
+}
+
+async fn review_session_promotion_readiness_page_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(readiness_id): RoutePath<String>,
+) -> Result<Html<String>, OperatorReviewError> {
+    let service = review_workbench_service(&state)?;
+    let lookup = service
+        .load_promotion_readiness(&readiness_id)
+        .map_err(map_review_workbench_error)?
+        .ok_or_else(|| {
+            OperatorReviewError::not_found(format!(
+                "review session readiness `{readiness_id}` was not found"
+            ))
+        })?;
+    Ok(Html(render_review_session_promotion_readiness_page(
+        &lookup.report,
+    )))
 }
 
 async fn review_session_handoff_handler(
@@ -1314,6 +1364,9 @@ fn map_review_workbench_error(error: ReviewWorkbenchError) -> OperatorReviewErro
         ReviewWorkbenchError::HandoffNotFound { handoff_id } => OperatorReviewError::not_found(
             format!("review session handoff `{handoff_id}` was not found"),
         ),
+        ReviewWorkbenchError::ReadinessNotFound { readiness_id } => OperatorReviewError::not_found(
+            format!("review session readiness `{readiness_id}` was not found"),
+        ),
         other => OperatorReviewError::internal(other.to_string()),
     }
 }
@@ -1411,6 +1464,17 @@ fn limit_review_session_handoff_list(
     let limit = effective_limit(requested_limit, max_limit);
     list.handoffs = list.handoffs.into_iter().take(limit).collect();
     list.total_count = list.handoffs.len();
+    list
+}
+
+fn limit_review_session_promotion_readiness_list(
+    mut list: ReviewSessionPromotionReadinessList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> ReviewSessionPromotionReadinessList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.readiness_reports = list.readiness_reports.into_iter().take(limit).collect();
+    list.total_count = list.readiness_reports.len();
     list
 }
 
@@ -1751,10 +1815,10 @@ fn render_review_session_list_page(list: &ReviewSessionList) -> String {
                     <form class=\"toolbar\" method=\"post\" action=\"/v1/operator/review/sessions\">\
                         <label>Title<input type=\"text\" name=\"title\" placeholder=\"red evidence workbench\"></label>\
                         <label>Notes<input type=\"text\" name=\"notes\" placeholder=\"optional operator context\"></label>\
-                        <label style=\"min-width:100%;\">Artifact refs<textarea name=\"artifact_refs\" rows=\"6\" placeholder=\"evidence_bundle:...&#10;evidence_verification:...&#10;promotion_evidence_packet:...\"></textarea></label>\
+                        <label style=\"min-width:100%;\">Artifact refs<textarea name=\"artifact_refs\" rows=\"6\" placeholder=\"promotion_review:review:red&#10;canary_run:canary:red&#10;production_promotion:promotion:red\"></textarea></label>\
                         <button type=\"submit\">Create Review Session</button>\
                     </form>\
-                    <p class=\"muted\">One artifact ref per line. Supported kinds: <code>evidence_bundle</code>, <code>evidence_verification</code>, <code>promotion_evidence_packet</code>.</p>\
+                    <p class=\"muted\">One artifact ref per line. Supported kinds: <code>evidence_bundle</code>, <code>evidence_verification</code>, <code>promotion_evidence_packet</code>, <code>promotion_review</code>, <code>canary_run</code>, <code>production_promotion</code>.</p>\
                 </article>\
                 <article class=\"card\">\
                     <h2>Recent Sessions</h2>\
@@ -1769,8 +1833,47 @@ fn render_review_session_list_page(list: &ReviewSessionList) -> String {
 fn render_review_session_page(
     resolved: &ReviewSessionResolved,
     exports: &[crate::review_workbench::ReviewSessionExportRecord],
+    readiness_reports: &[crate::review_workbench::ReviewSessionPromotionReadinessRecord],
     handoffs: &[crate::review_workbench::ReviewSessionMaintenanceHandoffRecord],
 ) -> String {
+    let mut lane_rows = String::new();
+    for summary in &resolved.lane_summaries {
+        lane_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td>{artifacts}</td><td>{bundles}</td><td>{verifications}</td><td>{packets}</td><td>{refs}</td></tr>",
+            lane = escape_html(summary.lane.title()),
+            artifacts = summary.artifact_count,
+            bundles = summary.evidence_bundle_count,
+            verifications = summary.verification_count,
+            packets = summary.promotion_packet_count,
+            refs = summary.subject_refs.len()
+        ));
+    }
+    if lane_rows.is_empty() {
+        lane_rows.push_str(
+            "<tr><td colspan=\"6\" class=\"muted\">No cross-lane summary available.</td></tr>",
+        );
+    }
+
+    let mut gap_rows = String::new();
+    for gap in &resolved.unresolved_gaps {
+        gap_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td><code>{code}</code></td><td>{details}</td></tr>",
+            lane = escape_html(
+                gap.lane
+                    .map(|lane| lane.title().to_string())
+                    .unwrap_or_else(|| "Cross-Lane".to_string())
+                    .as_str()
+            ),
+            code = escape_html(&gap.code),
+            details = escape_html(&gap.details)
+        ));
+    }
+    if gap_rows.is_empty() {
+        gap_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No unresolved evidence gaps.</td></tr>",
+        );
+    }
+
     let mut bundle_rows = String::new();
     for bundle in &resolved.evidence_bundles {
         let verification = bundle
@@ -1864,6 +1967,30 @@ fn render_review_session_page(
             .push_str("<tr><td colspan=\"2\" class=\"muted\">No exports created yet.</td></tr>");
     }
 
+    let mut readiness_rows = String::new();
+    for readiness in readiness_reports {
+        readiness_rows.push_str(&format!(
+            "<tr><td>{readiness_link}</td><td>{recommendation}</td><td>{gaps}</td></tr>",
+            readiness_link = review_link(
+                &format!(
+                    "/v1/operator/review/promotion-readiness/{}",
+                    readiness.readiness_id
+                ),
+                &readiness.readiness_id
+            ),
+            recommendation = render_status_pill(
+                readiness.recommendation.as_str(),
+                readiness.recommendation.as_str()
+            ),
+            gaps = readiness.gap_count
+        ));
+    }
+    if readiness_rows.is_empty() {
+        readiness_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No promotion readiness reviews created yet.</td></tr>",
+        );
+    }
+
     let mut handoff_rows = String::new();
     for handoff in handoffs {
         handoff_rows.push_str(&format!(
@@ -1884,13 +2011,14 @@ fn render_review_session_page(
 
     render_review_layout(
         "Review Session Detail",
-        "Compare the reviewed evidence set, export a stable snapshot, or launch one bounded evidence re-verification handoff.",
+        "Compare the reviewed evidence set across governance-prep, canary, and production lanes, export a stable snapshot, or launch one bounded evidence re-verification handoff.",
         &format!(
             "<section class=\"card\">\
                 <div class=\"meta\">\
                     <div><dt>Session ID</dt><dd><code>{session_id}</code></dd></div>\
                     <div><dt>Title</dt><dd>{title}</dd></div>\
                     <div><dt>Artifacts</dt><dd>{artifact_count}</dd></div>\
+                    <div><dt>Cross-Lane Gaps</dt><dd>{gap_count}</dd></div>\
                     <div><dt>Notes</dt><dd>{notes}</dd></div>\
                 </div>\
                 <div class=\"grid\">\
@@ -1900,6 +2028,13 @@ fn render_review_session_page(
                             <button type=\"submit\">Create Export</button>\
                         </form>\
                         <p class=\"muted\">Exports preserve digests, signer metadata, verification state, and related stable references for this session.</p>\
+                    </article>\
+                    <article class=\"card\">\
+                        <h3>Promotion Readiness Review</h3>\
+                        <form method=\"post\" action=\"/v1/operator/review/sessions/{session_id}/promotion-readiness\">\
+                            <button type=\"submit\">Create Promotion Readiness Review</button>\
+                        </form>\
+                        <p class=\"muted\">This remains advisory-only. It summarizes whether governance-prep, canary, and production evidence are all present and free of unresolved gaps.</p>\
                     </article>\
                     <article class=\"card\">\
                         <h3>Re-Verification Handoff</h3>\
@@ -1913,12 +2048,17 @@ fn render_review_session_page(
                 </div>\
             </section>\
             <section class=\"grid\" style=\"margin-top:18px;\">\
+                <article class=\"card\"><h2>Cross-Lane Summary</h2><table><thead><tr><th>Lane</th><th>Artifacts</th><th>Bundles</th><th>Verifications</th><th>Packets</th><th>Refs</th></tr></thead><tbody>{lane_rows}</tbody></table></article>\
+                <article class=\"card\"><h2>Evidence Gaps</h2><table><thead><tr><th>Lane</th><th>Code</th><th>Details</th></tr></thead><tbody>{gap_rows}</tbody></table></article>\
+            </section>\
+            <section class=\"grid\" style=\"margin-top:18px;\">\
                 <article class=\"card\"><h2>Evidence Bundles</h2><table><thead><tr><th>Bundle</th><th>Kind</th><th>Subject</th><th>Verification</th></tr></thead><tbody>{bundle_rows}</tbody></table></article>\
                 <article class=\"card\"><h2>Verification Reports</h2><table><thead><tr><th>Verification</th><th>Bundle</th><th>Status</th><th>Signer Key</th></tr></thead><tbody>{verification_rows}</tbody></table></article>\
             </section>\
             <section class=\"grid\" style=\"margin-top:18px;\">\
                 <article class=\"card\"><h2>Promotion Evidence Packets</h2><table><thead><tr><th>Packet</th><th>Promotion</th><th>Recommendation</th><th>Attachments</th></tr></thead><tbody>{packet_rows}</tbody></table></article>\
                 <article class=\"card\"><h2>Recent Exports</h2><table><thead><tr><th>Export</th><th>Artifacts</th></tr></thead><tbody>{export_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Promotion Readiness Reviews</h2><table><thead><tr><th>Review</th><th>Recommendation</th><th>Gaps</th></tr></thead><tbody>{readiness_rows}</tbody></table>\
                 <h2 style=\"margin-top:20px;\">Recent Handoffs</h2><table><thead><tr><th>Handoff</th><th>Status</th><th>Actions</th></tr></thead><tbody>{handoff_rows}</tbody></table></article>\
             </section>",
             session_id = escape_html(&resolved.session.report.session_id),
@@ -1931,17 +2071,58 @@ fn render_review_session_page(
                     .unwrap_or("untitled")
             ),
             artifact_count = resolved.session.report.artifact_refs.len(),
+            gap_count = resolved.unresolved_gaps.len(),
             notes = escape_html(resolved.session.report.notes.as_deref().unwrap_or("none")),
+            lane_rows = lane_rows,
+            gap_rows = gap_rows,
             bundle_rows = bundle_rows,
             verification_rows = verification_rows,
             packet_rows = packet_rows,
             export_rows = export_rows,
+            readiness_rows = readiness_rows,
             handoff_rows = handoff_rows
         ),
     )
 }
 
 fn render_review_session_export_page(export: &ReviewSessionExport) -> String {
+    let mut lane_rows = String::new();
+    for summary in &export.lane_summaries {
+        lane_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td>{artifacts}</td><td>{bundles}</td><td>{verifications}</td><td>{packets}</td></tr>",
+            lane = escape_html(summary.lane.title()),
+            artifacts = summary.artifact_count,
+            bundles = summary.evidence_bundle_count,
+            verifications = summary.verification_count,
+            packets = summary.promotion_packet_count
+        ));
+    }
+    if lane_rows.is_empty() {
+        lane_rows.push_str(
+            "<tr><td colspan=\"5\" class=\"muted\">No lane summaries exported.</td></tr>",
+        );
+    }
+
+    let mut gap_rows = String::new();
+    for gap in &export.unresolved_gaps {
+        gap_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td><code>{code}</code></td><td>{details}</td></tr>",
+            lane = escape_html(
+                gap.lane
+                    .map(|lane| lane.title().to_string())
+                    .unwrap_or_else(|| "Cross-Lane".to_string())
+                    .as_str()
+            ),
+            code = escape_html(&gap.code),
+            details = escape_html(&gap.details)
+        ));
+    }
+    if gap_rows.is_empty() {
+        gap_rows.push_str(
+            "<tr><td colspan=\"3\" class=\"muted\">No unresolved gaps exported.</td></tr>",
+        );
+    }
+
     let mut bundle_rows = String::new();
     for bundle in &export.evidence_bundles {
         let verification = bundle
@@ -2006,9 +2187,13 @@ fn render_review_session_export_page(export: &ReviewSessionExport) -> String {
                     <div><dt>Export ID</dt><dd><code>{export_id}</code></dd></div>\
                     <div><dt>Session ID</dt><dd>{session_link}</dd></div>\
                     <div><dt>Artifacts</dt><dd>{artifacts}</dd></div>\
+                    <div><dt>Lane Summaries</dt><dd>{lane_count}</dd></div>\
+                    <div><dt>Gaps</dt><dd>{gap_count}</dd></div>\
                     <div><dt>Title</dt><dd>{title}</dd></div>\
                 </div>\
                 <p class=\"muted\">This export preserves digests, signer metadata, verification state, and related stable references without rereading raw store files.</p>\
+                <h2>Cross-Lane Summary</h2><table><thead><tr><th>Lane</th><th>Artifacts</th><th>Bundles</th><th>Verifications</th><th>Packets</th></tr></thead><tbody>{lane_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Unresolved Gaps</h2><table><thead><tr><th>Lane</th><th>Code</th><th>Details</th></tr></thead><tbody>{gap_rows}</tbody></table>\
                 <h2>Bundles</h2><table><thead><tr><th>Bundle</th><th>Kind</th><th>Subject</th><th>Payload SHA-256</th><th>Verification</th></tr></thead><tbody>{bundle_rows}</tbody></table>\
                 <h2 style=\"margin-top:20px;\">Verification Reports</h2><table><thead><tr><th>Verification</th><th>Bundle</th><th>Status</th><th>Signer Key</th></tr></thead><tbody>{verification_rows}</tbody></table>\
                 <h2 style=\"margin-top:20px;\">Promotion Packets</h2><table><thead><tr><th>Packet</th><th>Promotion</th><th>Recommendation</th><th>Attachments</th></tr></thead><tbody>{packet_rows}</tbody></table>\
@@ -2019,10 +2204,83 @@ fn render_review_session_export_page(export: &ReviewSessionExport) -> String {
                 &export.session_id
             ),
             artifacts = export.artifact_refs.len(),
+            lane_count = export.lane_summaries.len(),
+            gap_count = export.unresolved_gaps.len(),
             title = escape_html(export.title.as_deref().unwrap_or("untitled")),
+            lane_rows = lane_rows,
+            gap_rows = gap_rows,
             bundle_rows = bundle_rows,
             verification_rows = verification_rows,
             packet_rows = packet_rows
+        ),
+    )
+}
+
+fn render_review_session_promotion_readiness_page(
+    readiness: &ReviewSessionPromotionReadiness,
+) -> String {
+    let mut lane_rows = String::new();
+    for summary in &readiness.lane_summaries {
+        lane_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td>{artifacts}</td><td>{bundles}</td><td>{verifications}</td><td>{packets}</td></tr>",
+            lane = escape_html(summary.lane.title()),
+            artifacts = summary.artifact_count,
+            bundles = summary.evidence_bundle_count,
+            verifications = summary.verification_count,
+            packets = summary.promotion_packet_count
+        ));
+    }
+    if lane_rows.is_empty() {
+        lane_rows.push_str(
+            "<tr><td colspan=\"5\" class=\"muted\">No lane summaries recorded.</td></tr>",
+        );
+    }
+
+    let mut gap_rows = String::new();
+    for gap in &readiness.unresolved_gaps {
+        gap_rows.push_str(&format!(
+            "<tr><td>{lane}</td><td><code>{code}</code></td><td>{details}</td></tr>",
+            lane = escape_html(
+                gap.lane
+                    .map(|lane| lane.title().to_string())
+                    .unwrap_or_else(|| "Cross-Lane".to_string())
+                    .as_str()
+            ),
+            code = escape_html(&gap.code),
+            details = escape_html(&gap.details)
+        ));
+    }
+    if gap_rows.is_empty() {
+        gap_rows
+            .push_str("<tr><td colspan=\"3\" class=\"muted\">No blocking gaps recorded.</td></tr>");
+    }
+
+    render_review_layout(
+        "Promotion Readiness Review",
+        "Advisory-only cross-lane review summarizing whether governance-prep, canary, and production evidence are all present and free of unresolved gaps.",
+        &format!(
+            "<section class=\"card\">\
+                <div class=\"meta\">\
+                    <div><dt>Readiness ID</dt><dd><code>{readiness_id}</code></dd></div>\
+                    <div><dt>Session ID</dt><dd>{session_link}</dd></div>\
+                    <div><dt>Recommendation</dt><dd>{recommendation}</dd></div>\
+                    <div><dt>Advisory Only</dt><dd>{advisory_only}</dd></div>\
+                </div>\
+                <h2>Lane Summary</h2><table><thead><tr><th>Lane</th><th>Artifacts</th><th>Bundles</th><th>Verifications</th><th>Packets</th></tr></thead><tbody>{lane_rows}</tbody></table>\
+                <h2 style=\"margin-top:20px;\">Blocking Gaps</h2><table><thead><tr><th>Lane</th><th>Code</th><th>Details</th></tr></thead><tbody>{gap_rows}</tbody></table>\
+            </section>",
+            readiness_id = escape_html(&readiness.readiness_id),
+            session_link = review_link(
+                &format!("/v1/operator/review/sessions/{}", readiness.session_id),
+                &readiness.session_id
+            ),
+            recommendation = render_status_pill(
+                readiness.recommendation.as_str(),
+                readiness.recommendation.as_str()
+            ),
+            advisory_only = readiness.advisory_only,
+            lane_rows = lane_rows,
+            gap_rows = gap_rows
         ),
     )
 }
@@ -2979,27 +3237,32 @@ mod tests {
         }
     }
 
-    fn sample_evidence_bundle() -> EvidenceBundle {
+    fn sample_subject_evidence_bundle(
+        kind: EvidenceSubjectKind,
+        stable_id: &str,
+        payload_sha256: &str,
+        canonical_payload: &str,
+        related_refs: Vec<EvidenceRelatedRef>,
+    ) -> EvidenceBundle {
         EvidenceBundle {
-            bundle_id: "evidence:production_promotion:promotion:red:local-evidence-signer"
-                .to_string(),
+            bundle_id: format!(
+                "evidence:{}:{}:local-evidence-signer",
+                kind.as_str(),
+                stable_id
+            ),
             schema_version: "v1".to_string(),
             config_name: "operator-http".to_string(),
             exported_at_ms: 1_710_000_000_500,
             subject: EvidenceSubjectMetadata {
-                kind: EvidenceSubjectKind::ProductionPromotion,
-                stable_id: "promotion:red".to_string(),
-                display_name: "production promotion promotion:red".to_string(),
+                kind,
+                stable_id: stable_id.to_string(),
+                display_name: format!("{} {stable_id}", kind.as_str()),
                 source_created_at_ms: 1_710_000_000_000,
                 receipt_chain_refs: vec![],
-                related_refs: vec![EvidenceRelatedRef {
-                    kind: "canary_run".to_string(),
-                    id: "canary:red".to_string(),
-                }],
+                related_refs,
             },
-            payload_sha256: "abcd1234".to_string(),
-            canonical_payload: r#"{"promotion_id":"promotion:red","status":"completed"}"#
-                .to_string(),
+            payload_sha256: payload_sha256.to_string(),
+            canonical_payload: canonical_payload.to_string(),
             signature: EvidenceSignature {
                 signer_id: "local-evidence-signer".to_string(),
                 algorithm: "ed25519".to_string(),
@@ -3010,32 +3273,71 @@ mod tests {
         }
     }
 
-    fn sample_evidence_verification_report() -> EvidenceVerificationReport {
+    fn sample_evidence_bundle() -> EvidenceBundle {
+        sample_subject_evidence_bundle(
+            EvidenceSubjectKind::ProductionPromotion,
+            "promotion:red",
+            "abcd1234",
+            r#"{"promotion_id":"promotion:red","status":"completed"}"#,
+            vec![EvidenceRelatedRef {
+                kind: "canary_run".to_string(),
+                id: "canary:red".to_string(),
+            }],
+        )
+    }
+
+    fn sample_canary_evidence_bundle() -> EvidenceBundle {
+        sample_subject_evidence_bundle(
+            EvidenceSubjectKind::CanaryRun,
+            "canary:red",
+            "beefcafe",
+            r#"{"run_id":"canary:red","status":"completed"}"#,
+            vec![EvidenceRelatedRef {
+                kind: "promotion_review".to_string(),
+                id: "review:red".to_string(),
+            }],
+        )
+    }
+
+    fn sample_promotion_review_evidence_bundle() -> EvidenceBundle {
+        sample_subject_evidence_bundle(
+            EvidenceSubjectKind::PromotionReview,
+            "review:red",
+            "facefeed",
+            r#"{"review_id":"review:red","recommendation":"ready_for_manual_review"}"#,
+            vec![
+                EvidenceRelatedRef {
+                    kind: "verification".to_string(),
+                    id: "verification:red".to_string(),
+                },
+                EvidenceRelatedRef {
+                    kind: "shadow".to_string(),
+                    id: "shadow:red".to_string(),
+                },
+            ],
+        )
+    }
+
+    fn sample_subject_verification_report(
+        kind: EvidenceSubjectKind,
+        stable_id: &str,
+        bundle_id: &str,
+    ) -> EvidenceVerificationReport {
         EvidenceVerificationReport {
-            verification_id:
-                "evidence_verification:evidence:production_promotion:promotion:red:local-evidence-signer"
-                    .to_string(),
-            bundle_id: "evidence:production_promotion:promotion:red:local-evidence-signer"
-                .to_string(),
-            subject_kind: EvidenceSubjectKind::ProductionPromotion,
-            subject_id: "promotion:red".to_string(),
+            verification_id: format!("evidence_verification:{bundle_id}"),
+            bundle_id: bundle_id.to_string(),
+            subject_kind: kind,
+            subject_id: stable_id.to_string(),
             verified_at_ms: 1_710_000_000_800,
             status: EvidenceVerificationStatus::Passed,
             signer_id: "local-evidence-signer".to_string(),
             signer_key_id: "key:red".to_string(),
             expected_key_id: Some("key:red".to_string()),
-            checks: vec![
-                crate::evidence::EvidenceVerificationCheck {
-                    name: "canonical_payload".to_string(),
-                    passed: true,
-                    details: "canonical payload bytes normalized cleanly".to_string(),
-                },
-                crate::evidence::EvidenceVerificationCheck {
-                    name: "payload_sha256".to_string(),
-                    passed: true,
-                    details: "payload hash matches canonical payload bytes".to_string(),
-                },
-            ],
+            checks: vec![crate::evidence::EvidenceVerificationCheck {
+                name: "canonical_payload".to_string(),
+                passed: true,
+                details: "canonical payload bytes normalized cleanly".to_string(),
+            }],
         }
     }
 
@@ -3088,6 +3390,7 @@ mod tests {
             promotion_evidence_results_dir: root.join("promotion-evidence-packets"),
             review_session_results_dir: root.join("review-sessions"),
             review_session_export_results_dir: root.join("review-session-exports"),
+            review_session_readiness_results_dir: root.join("review-session-readiness"),
             review_session_handoff_results_dir: root.join("review-session-handoffs"),
         }
     }
@@ -3121,20 +3424,28 @@ mod tests {
 
     fn seed_evidence_artifacts(root: &PathBuf) {
         let paths = surface_paths(root);
-        let bundle = sample_evidence_bundle();
-        let verification = sample_evidence_verification_report();
         let packet = sample_promotion_evidence_packet();
 
         let bundle_store = FileEvidenceBundleStore::open(&paths.evidence_results_dir).unwrap();
-        let bundle_lookup = bundle_store.persist(&bundle).unwrap();
-        let verification_lookup =
-            FileEvidenceVerificationStore::open(&paths.evidence_verification_results_dir)
-                .unwrap()
-                .persist(&verification)
+        let verification_store =
+            FileEvidenceVerificationStore::open(&paths.evidence_verification_results_dir).unwrap();
+        for bundle in [
+            sample_evidence_bundle(),
+            sample_canary_evidence_bundle(),
+            sample_promotion_review_evidence_bundle(),
+        ] {
+            let bundle_lookup = bundle_store.persist(&bundle).unwrap();
+            let verification_lookup = verification_store
+                .persist(&sample_subject_verification_report(
+                    bundle.subject.kind,
+                    &bundle.subject.stable_id,
+                    &bundle_lookup.record.bundle_id,
+                ))
                 .unwrap();
-        bundle_store
-            .attach_verification(&verification_lookup.record, &bundle_lookup.record.bundle_id)
-            .unwrap();
+            bundle_store
+                .attach_verification(&verification_lookup.record, &bundle_lookup.record.bundle_id)
+                .unwrap();
+        }
         FilePromotionEvidencePacketStore::open(&paths.promotion_evidence_results_dir)
             .unwrap()
             .persist(&packet)
@@ -3531,7 +3842,7 @@ mod tests {
         let verification_html = String::from_utf8(verification_body.to_vec()).unwrap();
         assert!(verification_html.contains("Evidence Verification Detail"));
         assert!(verification_html.contains("canonical_payload"));
-        assert!(verification_html.contains("payload_sha256"));
+        assert!(verification_html.contains("canonical payload bytes normalized cleanly"));
     }
 
     #[tokio::test]
@@ -3762,14 +4073,8 @@ mod tests {
         .unwrap();
         let app = surface.router("secret-token".to_string());
         let auth = ("authorization", "Bearer secret-token");
-        let bundle_id = "evidence:production_promotion:promotion:red:local-evidence-signer";
-        let verification_id = "evidence_verification:evidence:production_promotion:promotion:red:local-evidence-signer";
-        let packet_id = "promotion_evidence:promotion:red";
         let create_body = format!(
-            "title=red+evidence+review&notes=compare+promotion+evidence&artifact_refs=evidence_bundle%3A{bundle}%0Aevidence_verification%3A{verification}%0Apromotion_evidence_packet%3A{packet}",
-            bundle = bundle_id.replace(':', "%3A"),
-            verification = verification_id.replace(':', "%3A"),
-            packet = packet_id.replace(':', "%3A"),
+            "title=red+lane+review&notes=compare+promotion+lanes&artifact_refs=promotion_review%3Areview%3Ared%0Acanary_run%3Acanary%3Ared%0Aproduction_promotion%3Apromotion%3Ared",
         );
         let create_response = app
             .clone()
@@ -3817,8 +4122,13 @@ mod tests {
             .unwrap();
         let session_html = String::from_utf8(session_body.to_vec()).unwrap();
         assert!(session_html.contains("Review Session Detail"));
-        assert!(session_html.contains(bundle_id));
-        assert!(session_html.contains(packet_id));
+        assert!(session_html.contains("Cross-Lane Summary"));
+        assert!(session_html.contains("Governance Prep"));
+        assert!(session_html.contains("Canary"));
+        assert!(session_html.contains("Production"));
+        assert!(session_html.contains("review:red"));
+        assert!(session_html.contains("canary:red"));
+        assert!(session_html.contains("promotion:red"));
 
         let export_response = app
             .clone()
@@ -3857,10 +4167,55 @@ mod tests {
         let export_html = String::from_utf8(export_body.to_vec()).unwrap();
         assert!(export_html.contains("Review Session Export"));
         assert!(export_html.contains("abcd1234"));
+        assert!(export_html.contains("Cross-Lane Summary"));
+
+        let readiness_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/operator/review/sessions/{session_id}/promotion-readiness"
+                    ))
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(readiness_response.status(), StatusCode::SEE_OTHER);
+        let readiness_location = readiness_response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            readiness_location
+                .starts_with("/v1/operator/review/promotion-readiness/review_session_readiness:")
+        );
+        let readiness_page = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&readiness_location)
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(readiness_page.status(), StatusCode::OK);
+        let readiness_body = to_bytes(readiness_page.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let readiness_html = String::from_utf8(readiness_body.to_vec()).unwrap();
+        assert!(readiness_html.contains("Promotion Readiness Review"));
+        assert!(readiness_html.contains("ready_for_advisory_promotion_review"));
 
         let handoff_body = format!(
-            "reason=re-verify+selected+evidence+from+review&selected_artifact_refs=evidence_bundle%3A{}",
-            bundle_id.replace(':', "%3A"),
+            "reason=re-verify+selected+evidence+from+review&selected_artifact_refs=production_promotion%3Apromotion%3Ared",
         );
         let handoff_response = app
             .clone()
