@@ -23,6 +23,7 @@ Thumbs.db
 # Runtime
 *.log
 .ephemeral_state.json
+experiments/materialized-*.yaml
 data/replay-runs/
 data/experiments/
 data/verifications/
@@ -47,3 +48,5 @@ data/evolution-mutation-validation-batches/
 data/evolution-rankings/
 data/evolution-selections/
 data/evolution-selection-bridges/
+data/evolution-portfolios/
+data/evolution-governance-review-packets/

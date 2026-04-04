@@ -22,6 +22,12 @@ use swarm_runtime::mutation::{
     render_evolution_mutation_materialization_batch, render_evolution_mutation_ranking,
     render_evolution_mutation_spec, render_evolution_mutation_validation_batch,
 };
+use swarm_runtime::portfolio::{
+    DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction,
+    EvolutionPortfolioEntryCreateRequest, EvolutionPortfolioEntryReviewState,
+    render_evolution_governance_review_packet, render_evolution_portfolio,
+    render_evolution_portfolio_list,
+};
 use swarm_runtime::promotion::{
     DefaultProductionPromotionHarness, ProductionPromotionStatus,
     render_production_promotion_report,
@@ -137,6 +143,16 @@ struct Cli {
     )]
     evolution_selection_bridge_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evolution-portfolios")]
+    evolution_portfolio_results_dir: std::path::PathBuf,
+
+    #[arg(
+        long,
+        global = true,
+        default_value = "data/evolution-governance-review-packets"
+    )]
+    evolution_governance_review_packet_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -204,6 +220,12 @@ enum Command {
     EvolutionSelectionDecision(EvolutionSelectionDecisionArgs),
     EvolutionSelectionBridge(EvolutionSelectionBridgeArgs),
     EvolutionSelectionBridgeResult(EvolutionSelectionBridgeResultArgs),
+    EvolutionPortfolioCreate(EvolutionPortfolioCreateArgs),
+    EvolutionPortfolioResult(EvolutionPortfolioResultArgs),
+    EvolutionPortfolioList(EvolutionPortfolioListArgs),
+    EvolutionPortfolioDecision(EvolutionPortfolioDecisionArgs),
+    EvolutionGovernancePacketCreate(EvolutionGovernancePacketCreateArgs),
+    EvolutionGovernancePacketResult(EvolutionGovernancePacketResultArgs),
     EvolutionMaterialize(EvolutionMaterializeArgs),
     EvolutionMaterializationResult(EvolutionMaterializationResultArgs),
     EvolutionValidationRefresh(EvolutionValidationRefreshArgs),
@@ -523,6 +545,44 @@ impl From<EvolutionQueueDecisionArg> for EvolutionProposalDecisionAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum EvolutionPortfolioReviewStateArg {
+    PendingReview,
+    Included,
+    Deferred,
+    Dropped,
+    Blocked,
+}
+
+impl From<EvolutionPortfolioReviewStateArg> for EvolutionPortfolioEntryReviewState {
+    fn from(value: EvolutionPortfolioReviewStateArg) -> Self {
+        match value {
+            EvolutionPortfolioReviewStateArg::PendingReview => Self::PendingReview,
+            EvolutionPortfolioReviewStateArg::Included => Self::Included,
+            EvolutionPortfolioReviewStateArg::Deferred => Self::Deferred,
+            EvolutionPortfolioReviewStateArg::Dropped => Self::Dropped,
+            EvolutionPortfolioReviewStateArg::Blocked => Self::Blocked,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum EvolutionPortfolioDecisionArg {
+    Include,
+    Defer,
+    Drop,
+}
+
+impl From<EvolutionPortfolioDecisionArg> for EvolutionPortfolioDecisionAction {
+    fn from(value: EvolutionPortfolioDecisionArg) -> Self {
+        match value {
+            EvolutionPortfolioDecisionArg::Include => Self::Include,
+            EvolutionPortfolioDecisionArg::Defer => Self::Defer,
+            EvolutionPortfolioDecisionArg::Drop => Self::Drop,
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 struct EvolutionProofCreateArgs {
     #[arg(long)]
@@ -772,6 +832,69 @@ struct EvolutionSelectionBridgeResultArgs {
 }
 
 #[derive(Debug, Args)]
+struct EvolutionPortfolioCreateArgs {
+    #[arg(long)]
+    name: String,
+
+    #[arg(long)]
+    rationale: String,
+
+    #[arg(long, required = true)]
+    selection_id: Vec<String>,
+
+    #[arg(long)]
+    cohort: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionPortfolioResultArgs {
+    #[arg(long)]
+    portfolio_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionPortfolioListArgs {
+    #[arg(long)]
+    cohort: Option<String>,
+
+    #[arg(long, value_enum)]
+    review_state: Option<EvolutionPortfolioReviewStateArg>,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionPortfolioDecisionArgs {
+    #[arg(long)]
+    portfolio_id: String,
+
+    #[arg(long)]
+    entry_id: String,
+
+    #[arg(long, value_enum)]
+    decision: EvolutionPortfolioDecisionArg,
+
+    #[arg(long)]
+    reason: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionGovernancePacketCreateArgs {
+    #[arg(long)]
+    portfolio_id: String,
+
+    #[arg(long)]
+    entry_id: String,
+
+    #[arg(long)]
+    reason: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionGovernancePacketResultArgs {
+    #[arg(long)]
+    packet_id: String,
+}
+
+#[derive(Debug, Args)]
 struct EvolutionMaterializeArgs {
     #[arg(long)]
     draft_id: String,
@@ -893,6 +1016,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.evolution_validation_results_dir,
         &cli.evolution_selection_results_dir,
         &cli.evolution_selection_bridge_results_dir,
+    )?;
+    let evolution_portfolio_harness = DefaultEvolutionPortfolioHarness::from_path(
+        &cli.evolution_ranking_results_dir,
+        &cli.evolution_selection_results_dir,
+        &cli.evolution_portfolio_results_dir,
+        &cli.evolution_governance_review_packet_results_dir,
     )?;
 
     let output = match cli.command {
@@ -1781,6 +1910,119 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "{}",
                     render_evolution_ranked_candidate_bridge(&lookup.report)
+                );
+            }
+            return Ok(());
+        }
+        Command::EvolutionPortfolioCreate(args) => {
+            if !args.cohort.is_empty() && args.cohort.len() != args.selection_id.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "--cohort count ({}) must match --selection-id count ({}) when cohorts are supplied",
+                        args.cohort.len(),
+                        args.selection_id.len()
+                    ),
+                )
+                .into());
+            }
+            let entries = args
+                .selection_id
+                .into_iter()
+                .enumerate()
+                .map(
+                    |(index, selection_id)| EvolutionPortfolioEntryCreateRequest {
+                        selection_id,
+                        cohort: args.cohort.get(index).cloned(),
+                    },
+                )
+                .collect::<Vec<_>>();
+            let lookup = evolution_portfolio_harness.create_portfolio(
+                &args.name,
+                &args.rationale,
+                entries,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_portfolio(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionPortfolioResult(args) => {
+            let lookup = evolution_portfolio_harness
+                .load_portfolio(&args.portfolio_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution portfolio was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_portfolio(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionPortfolioList(args) => {
+            let list = evolution_portfolio_harness
+                .list_portfolios(args.cohort.as_deref(), args.review_state.map(Into::into))?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                println!("{}", render_evolution_portfolio_list(&list));
+            }
+            return Ok(());
+        }
+        Command::EvolutionPortfolioDecision(args) => {
+            let lookup = evolution_portfolio_harness.record_decision(
+                &args.portfolio_id,
+                &args.entry_id,
+                args.decision.into(),
+                &args.reason,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evolution_portfolio(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionGovernancePacketCreate(args) => {
+            let lookup = evolution_portfolio_harness.create_governance_review_packet(
+                &args.portfolio_id,
+                &args.entry_id,
+                &args.reason,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_governance_review_packet(&lookup.report)
+                );
+            }
+            if !lookup.report.ready_for_governance || !lookup.report.blocking_reasons.is_empty() {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvolutionGovernancePacketResult(args) => {
+            let lookup = evolution_portfolio_harness
+                .load_governance_review_packet(&args.packet_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution governance review packet was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_governance_review_packet(&lookup.report)
                 );
             }
             return Ok(());

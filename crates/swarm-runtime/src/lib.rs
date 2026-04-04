@@ -13,6 +13,7 @@ pub mod evolution;
 pub mod investigation;
 pub mod mutation;
 pub mod pipeline;
+pub mod portfolio;
 pub mod promotion;
 pub mod replay;
 pub mod selection;

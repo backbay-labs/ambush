@@ -732,6 +732,75 @@ Failure behavior:
 
 This lane stays operator-triggered and conservative. It only re-enters the existing rollout ladder; the resulting queue proposal still flows through the existing handoff and bounded canary gates.
 
+### Cross-Batch Portfolio Review And Governance-Ready Packets
+
+The repo now ships a portfolio lane above single ranked-candidate selection. Operators can assemble one durable portfolio from multiple ranked selections spanning different mutation batches or campaign cohorts, record explicit curation decisions on each entry, and then export governance-ready review packets for later trust-boundary work without re-encoding the underlying evidence.
+
+Current portfolio semantics:
+
+- cross-batch portfolio artifacts are durable repo-owned records under `data/evolution-portfolios/`
+- governance-ready packet artifacts are durable repo-owned records under `data/evolution-governance-review-packets/`
+- portfolio assembly preserves ranking, selection, mutation-batch, validation-batch, cohort, validation, proof, advisory, and queue-lineage context in one stable record
+- portfolio decisions remain advisory and do not mutate queue, canary, or production state
+- governance-ready packet creation reuses preserved portfolio evidence instead of regenerating verification, proof, or shadow artifacts
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-create \
+  --name "office cross cohort shortlist" \
+  --rationale "compare ready candidates across two cohorts before governance prep" \
+  --selection-id SELECTION_ID_ONE \
+  --selection-id SELECTION_ID_TWO \
+  --cohort hellcat.office_loader \
+  --cohort operator.maintenance
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-result \
+  --portfolio-id YOUR_PORTFOLIO_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-list \
+  --review-state pending-review
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-decision \
+  --portfolio-id YOUR_PORTFOLIO_ID \
+  --entry-id YOUR_ENTRY_ID \
+  --decision include \
+  --reason "keep this shortlisted candidate in the curated portfolio"
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-governance-packet-create \
+  --portfolio-id YOUR_PORTFOLIO_ID \
+  --entry-id YOUR_ENTRY_ID \
+  --reason "prepare this curated entry for later governance-backed review"
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-governance-packet-result \
+  --packet-id YOUR_PACKET_ID
+```
+
+Each portfolio artifact preserves:
+
+- one stable portfolio ID plus operator rationale and cohort labels
+- per-entry ranking ID, selection ID, mutation-spec ID, validation-batch ID, and validation-bundle ID
+- experiment manifest path, manifest digest, lineage digest, verification reference, proof summary, advisory summary, and shadow reference
+- current selection review state plus an independent portfolio review state and explicit portfolio decision history
+- fail-closed blocking reasons copied forward when a ranked selection was already blocked or otherwise inconsistent
+
+Each governance-ready packet preserves:
+
+- the portfolio ID, entry ID, selection ID, and source ranking ID
+- experiment, validation, verification, proof, advisory, shadow, and parent-queue references copied from the curated portfolio entry
+- current selection and portfolio review states so later governance work can reuse the exact operator-reviewed context
+- an explicit `ready_for_governance` verdict plus durable blocking reasons when the packet fails closed
+
+Failure behavior:
+
+- `evolution-portfolio-create` rejects empty portfolios and mismatched `--selection-id` / `--cohort` counts
+- blocked or previously rejected selections can still appear in a portfolio, but they carry forward blocking reasons and start in the `blocked` portfolio state
+- `evolution-portfolio-decision --decision include` is allowed only for unblocked entries
+- `evolution-governance-packet-create` exits nonzero when the entry is not `included`, when preserved blocking reasons remain, or when the current experiment manifest drifts from the stored manifest or lineage digests
+- blocked governance-ready packets are still persisted so operators can inspect why the entry failed closed
+
+This lane is prep work for later governance, not governance itself. It widens comparison and curation across ranked batches while keeping rollout mutation pinned to the existing reviewed queue, handoff, canary, and promotion paths.
+
 ### Draft Materialization And Validation Bundles
 
 The repo now ships the bridge from reviewed draft artifacts back into the verified rollout ladder. Operators can materialize a repo-owned experiment manifest from one draft, refresh validation artifacts from that manifest, then reconcile the original draft-backed queue entry in place instead of creating a duplicate proposal.
