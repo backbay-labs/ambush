@@ -3,17 +3,22 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.17 Requirements
+## v1.18 Requirements
 
-### Authenticated Control Surface
+### Signed Evidence Export
 
-- [x] **OPS-04**: Operator can use an authenticated HTTP control surface in addition to the initial repo-owned CLI
-- [x] **OPS-06**: Operator can retrieve runtime status, stable-ID artifact views, and portfolio or governance-prep summaries through authenticated endpoints without reading raw storage files
+- [ ] **EVID-01**: Operator can export a signed evidence bundle for a stable-ID replay, investigation, incident, maintenance, canary, or promotion artifact
+- [ ] **EVID-02**: Exported evidence bundles preserve canonical payload bytes, signatures, timestamps, and receipt-chain references needed for later offline verification
 
-### Maintenance Operations
+### Local Verification
 
-- [x] **OPS-05**: Operator can trigger approved maintenance operations from the control surface with explicit audit trails
-- [x] **OPS-07**: Maintenance action records preserve actor identity, reason, target, and final result in durable audit artifacts that can be reloaded by stable ID
+- [ ] **VERF-01**: Operator can verify an exported evidence bundle locally and get explicit integrity failures when signatures, canonical payloads, or linkage drift
+- [ ] **VERF-02**: Authenticated operator endpoints can expose signed evidence summaries and verification results without requiring raw file inspection
+
+### Trust-Boundary Prep
+
+- [ ] **TRST-01**: Operator can assemble a governance-ready promotion evidence packet that links rollout outcome, fallback lineage, and signed supporting evidence
+- [ ] **TRST-02**: Promotion evidence packets remain advisory and single-node; they do not implement quorum approval, signed votes, or distributed promotion
 
 ## Future Requirements
 
@@ -22,31 +27,37 @@
 - **GOV-01**: Strategy promotion to production requires quorum-based approval once independent trust boundaries exist
 - **GOV-02**: Promotion records include signed votes and durable consensus receipts
 
+### Operator Surfaces
+
+- **OPS-08**: Operator can use a richer local review client above the authenticated HTTP surface without widening into multi-user control
+- **OPS-09**: Operator can inspect signed evidence and promotion packets in a dedicated review flow instead of raw JSON-first tooling
+
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
 | Actual quorum voting or distributed consensus for promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
-| Multi-user RBAC or federated operator workflows | The next control surface stays local and single-node |
-| Internet-exposed operator service | This cycle introduces a narrow authenticated local surface, not a remotely exposed control plane |
-| Terminal UI implementation | HTTP is the smaller next step because the runtime already emits serializable reports and artifact views |
-| Fleet-wide rollout control | The runtime still supports only a bounded single-node promotion path |
-| Automatic maintenance actions or unattended control-plane workflows | Control-plane actions remain explicit, bounded, and operator-triggered |
+| Multi-user RBAC or federated operator workflows | The runtime still operates as a local single-node control surface |
+| Internet-exposed evidence or operator service | This cycle keeps evidence export and verification local-first |
+| Fleet-wide or partial-fleet promotion approvals | The rollout path remains bounded to one single-node production lane |
+| UI-first operator console work | The authenticated HTTP surface now exists, but signed evidence and verification are the more urgent trust-boundary seam |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-04 | Phase 53 | Complete |
-| OPS-06 | Phase 54 | Complete |
-| OPS-05 | Phase 55 | Complete |
-| OPS-07 | Phase 55 | Complete |
+| EVID-01 | Phase 56 | Pending |
+| EVID-02 | Phase 56 | Pending |
+| VERF-01 | Phase 57 | Pending |
+| VERF-02 | Phase 57 | Pending |
+| TRST-01 | Phase 58 | Pending |
+| TRST-02 | Phase 58 | Pending |
 
 **Coverage:**
-- v1.17 requirements: 4 total
-- Mapped to phases: 4
+- v1.18 requirements: 6 total
+- Mapped to phases: 6
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after completing milestone v1.17*
+*Last updated: 2026-04-04 for milestone v1.18 planning*
