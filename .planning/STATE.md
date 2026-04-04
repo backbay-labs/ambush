@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.17
-milestone_name: authenticated-operator-surface
-status: milestone-complete
-last_updated: "2026-04-04T14:55:42Z"
+milestone: v1.18
+milestone_name: signed-evidence-and-external-verification
+status: planning
+last_updated: "2026-04-04T15:10:00Z"
 progress:
   total_phases: 3
-  completed_phases: 3
+  completed_phases: 0
   total_plans: 3
-  completed_plans: 3
+  completed_plans: 0
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-04)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** no active milestone. `v1.17 Authenticated Operator Surface` is archived.
+**Current focus:** `v1.18 Signed Evidence And External Verification` is active and Phase 56 is next.
 
 ## Memory
 
@@ -31,8 +31,9 @@ See: `.planning/PROJECT.md` (updated 2026-04-04)
 - Phase 53 shipped the local operator-surface config contract, bearer-token auth boundary, and protected `/v1/operator/status` route through `swarmctl serve`.
 - Phase 54 extended that surface with authenticated runtime artifact, portfolio, governance-packet, packet-set, and portfolio-history read endpoints.
 - Phase 55 added bounded authenticated maintenance actions plus durable stable-ID audit records for applied and blocked attempts.
-- `v1.17` is now archived with a passing milestone audit and no active follow-on milestone yet.
+- `v1.17` is archived with a passing milestone audit and a clean worktree.
+- `v1.18` will focus on signed evidence bundle export, local verification, and advisory promotion evidence packets instead of jumping directly to quorum governance.
 
 ## Next Command
 
-`$gsd-new-milestone`
+`$gsd-plan-phase 56`
