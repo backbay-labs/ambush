@@ -670,6 +670,68 @@ Each ranking report preserves:
 
 This lane is the final offline comparison seam. Human review still decides whether any ranked candidate should re-enter the later queue or rollout path.
 
+### Ranked Candidate Selection And Rollout Bridge
+
+The repo now ships an operator-controlled bridge from ranked review packets back into the existing rollout ladder. Operators can select one shortlisted ranked candidate, record an explicit review decision, and then create one bridge artifact that feeds the existing handoff and canary path without re-materializing experiment evidence.
+
+Current selection and bridge semantics:
+
+- ranked-candidate selections are durable repo-owned artifacts under `data/evolution-selections/`
+- ranked-candidate bridge artifacts are durable repo-owned artifacts under `data/evolution-selection-bridges/`
+- selection creation preserves ranking, validation, advisory, and parent-queue lineage in one stable record
+- selection review decisions remain advisory until an operator creates a bridge artifact
+- bridge creation reuses the preserved experiment, verification, proof, shadow, and advisory references; it does not restate or regenerate them
+
+Example operator flow:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-create \
+  --ranking-id YOUR_RANKING_ID \
+  --packet-id YOUR_PACKET_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-result \
+  --selection-id YOUR_SELECTION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-list \
+  --review-state pending-review
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-decision \
+  --selection-id YOUR_SELECTION_ID \
+  --decision accept-for-canary \
+  --reason "accept the selected ranked candidate for rollout bridging"
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-bridge \
+  --selection-id YOUR_SELECTION_ID \
+  --reason "bridge the accepted selection into the existing queue and handoff lane"
+
+cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-bridge-result \
+  --bridge-id YOUR_BRIDGE_ID
+```
+
+Each selection artifact preserves:
+
+- the source ranking ID and review-packet ID
+- the selected strategy, materialization ID, validation bundle ID, and experiment path
+- verification, proof, advisory, and shadow references copied from the preserved validation bundle
+- the current review state plus explicit operator decision history
+- fail-closed blocking reasons when the selected packet is inconsistent, blocked, or no longer queue-ready
+
+Each bridge artifact preserves:
+
+- the selection ID plus any resulting queue proposal ID
+- the resulting review state and `handoff_ready` verdict
+- proof, verification, shadow, and advisory references reused by the later handoff path
+- fail-closed blocking reasons when the selection is not accepted, carries blocking reasons, or drifts from the preserved experiment manifest
+
+Failure behavior:
+
+- `evolution-selection-create` exits nonzero when the selected review packet produces a blocked selection; the blocked selection is still persisted
+- `evolution-selection-decision --decision accept-for-canary` is allowed only for unblocked, proved, queue-ready selections
+- `evolution-selection-bridge` exits nonzero when the selection is not accepted, remains blocked, or no longer matches the preserved manifest and lineage digests
+- blocked bridge artifacts are still persisted so operators can inspect why the ranked candidate failed closed
+
+This lane stays operator-triggered and conservative. It only re-enters the existing rollout ladder; the resulting queue proposal still flows through the existing handoff and bounded canary gates.
+
 ### Draft Materialization And Validation Bundles
 
 The repo now ships the bridge from reviewed draft artifacts back into the verified rollout ladder. Operators can materialize a repo-owned experiment manifest from one draft, refresh validation artifacts from that manifest, then reconcile the original draft-backed queue entry in place instead of creating a duplicate proposal.

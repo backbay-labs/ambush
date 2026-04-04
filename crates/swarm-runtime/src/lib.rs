@@ -15,6 +15,7 @@ pub mod mutation;
 pub mod pipeline;
 pub mod promotion;
 pub mod replay;
+pub mod selection;
 pub mod service;
 pub mod strategy;
 

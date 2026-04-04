@@ -10,27 +10,22 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.13 Guided Mutation And Candidate Ranking` shipped on 2026-04-03.
+`v1.14 Ranked Candidate Rollout Bridge` shipped on 2026-04-04.
 
 **What is now real:**
-- operators can now derive durable mutation specs from reviewed drafts or materialized candidates through `swarmctl` without hand-editing multiple manifests
-- mutation specs now preserve parent queue lineage, intended mutation dimensions, and operator rationale in one stable artifact
-- one mutation spec can now materialize and validate a batch of candidate variants while preserving per-candidate materialization, proof, advisory, and validation evidence
-- operators can now compute deterministic candidate rankings and shortlist review packets without mutating the queue, canary, or production lanes
-- the offline evolution ladder now extends through multi-candidate comparison: evidence -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet
+- operators can now create durable ranked-candidate selection artifacts from shortlist review packets through `swarmctl`
+- ranked-candidate selections now preserve ranking, validation, advisory, shadow, and parent queue lineage in one stable record
+- operators can now inspect, list, and record explicit review decisions for ranked-candidate selections without rewriting ranking evidence
+- accepted ranked-candidate selections can now bridge back into the existing queue, handoff, and bounded canary path without re-materializing evidence
+- blocked or stale ranked candidates now fail closed with inspectable bridge artifacts instead of mutating queue, canary, or production state
 
-## Current Milestone: v1.14 Ranked Candidate Rollout Bridge
+## No Active Milestone
 
-**Goal:** turn shortlisted ranked candidates into operator-reviewed rollout candidates that can re-enter the existing handoff and canary path without re-materializing evidence.
-
-**Target features:**
-- create durable ranked-candidate selection artifacts from one ranking packet through `swarmctl`
-- record explicit operator review decisions over selected ranked candidates without rewriting underlying ranking evidence
-- bridge accepted selected candidates into the existing handoff and canary lane using preserved experiment and validation artifacts
+`v1.14` is archived. Start the next cycle from the docs and roadmap when ready.
 
 ## Next Planning Step
 
-Start execution with `$gsd-plan-phase 44`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -101,19 +96,12 @@ Start execution with `$gsd-plan-phase 44`.
 
 ### Most Recently Shipped
 
-- ✓ Operator can derive structured mutation specs from reviewed drafts or materialized candidates without hand-editing candidate manifests — v1.13
-- ✓ Mutation specs preserve parent candidate references, mutation dimensions, and operator rationale in one durable artifact — v1.13
-- ✓ Team can materialize multiple candidate variants from one mutation spec through a repo-owned CLI flow — v1.13
-- ✓ Batch candidate generation preserves stable links back to the source mutation spec, reviewed draft, and queue lineage — v1.13
-- ✓ Team can refresh validation bundles for multiple materialized candidates in one batch without overwriting per-candidate evidence — v1.13
-- ✓ Operator can rank or shortlist validated candidates using deterministic validation and advisory evidence — v1.13
-- ✓ Ranking packets preserve materialization, validation, and reviewed queue references so later review does not require rewriting evidence artifacts — v1.13
-
-### Active
-
-- [ ] Operator can create a durable ranked-candidate selection from one shortlist review packet without re-materializing the candidate manifest
-- [ ] Operator can review and decide accepted, deferred, or rejected state for ranked-candidate selections while preserving immutable ranking evidence
-- [ ] Accepted ranked-candidate selections can feed the existing handoff and canary path using existing experiment and validation artifacts
+- ✓ Operator can create a durable ranked-candidate selection from one shortlist review packet without re-materializing the candidate manifest — v1.14
+- ✓ Ranked-candidate selection artifacts preserve ranking, review packet, materialization, validation, advisory, and parent queue lineage in one durable record — v1.14
+- ✓ Operator can list and inspect ranked-candidate selections by stable ID through `swarmctl` — v1.14
+- ✓ Operator can record accepted, deferred, or rejected review state for ranked-candidate selections without rewriting underlying ranking evidence — v1.14
+- ✓ Accepted ranked-candidate selections can feed the existing handoff and canary launch path using preserved experiment and validation artifacts — v1.14
+- ✓ Stale, blocked, or inconsistent ranked-candidate selections fail closed and persist inspectable blocked bridge records — v1.14
 
 ### Out of Scope
 
@@ -130,7 +118,7 @@ Start execution with `$gsd-plan-phase 44`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation-and-ranking bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet. The next missing seam is selected ranked-candidate re-entry into the existing handoff and canary path without rebuilding evidence from scratch.
+The project now has an end-to-end rollout ladder plus an offline mutation-and-ranking bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> ranked bridge -> handoff -> canary. `v1.14` closed the selected-ranked-candidate continuity gap without widening autonomy. The planner is now idle until the next milestone is defined.
 
 ## Constraints
 
@@ -182,4 +170,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation-and-ra
 | Keep ranked-candidate re-entry operator-driven | Ranked batches should reduce artifact translation, not auto-mutate queue, canary, or production state | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after starting milestone v1.14*
+*Last updated: 2026-04-04 after completing milestone v1.14*

@@ -31,6 +31,10 @@ use swarm_runtime::replay::{
     render_promotion_review_packet, render_replay_run, render_shadow_report, render_suite_report,
     render_verification_report,
 };
+use swarm_runtime::selection::{
+    DefaultEvolutionSelectionHarness, render_evolution_ranked_candidate_bridge,
+    render_evolution_ranked_candidate_selection, render_evolution_ranked_candidate_selection_list,
+};
 use swarm_runtime::strategy::{
     DefaultStrategyMemoryHarness, DefaultStrategyScorecardHarness, render_strategy_memory,
     render_strategy_memory_history, render_strategy_scorecard,
@@ -123,6 +127,16 @@ struct Cli {
     #[arg(long, global = true, default_value = "data/evolution-rankings")]
     evolution_ranking_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evolution-selections")]
+    evolution_selection_results_dir: std::path::PathBuf,
+
+    #[arg(
+        long,
+        global = true,
+        default_value = "data/evolution-selection-bridges"
+    )]
+    evolution_selection_bridge_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -184,6 +198,12 @@ enum Command {
     EvolutionMutationValidationBatchResult(EvolutionMutationValidationBatchResultArgs),
     EvolutionRankCandidates(EvolutionRankCandidatesArgs),
     EvolutionRankingResult(EvolutionRankingResultArgs),
+    EvolutionSelectionCreate(EvolutionSelectionCreateArgs),
+    EvolutionSelectionResult(EvolutionSelectionResultArgs),
+    EvolutionSelectionList(EvolutionSelectionListArgs),
+    EvolutionSelectionDecision(EvolutionSelectionDecisionArgs),
+    EvolutionSelectionBridge(EvolutionSelectionBridgeArgs),
+    EvolutionSelectionBridgeResult(EvolutionSelectionBridgeResultArgs),
     EvolutionMaterialize(EvolutionMaterializeArgs),
     EvolutionMaterializationResult(EvolutionMaterializationResultArgs),
     EvolutionValidationRefresh(EvolutionValidationRefreshArgs),
@@ -701,6 +721,57 @@ struct EvolutionRankingResultArgs {
 }
 
 #[derive(Debug, Args)]
+struct EvolutionSelectionCreateArgs {
+    #[arg(long)]
+    ranking_id: String,
+
+    #[arg(long)]
+    packet_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionSelectionResultArgs {
+    #[arg(long)]
+    selection_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionSelectionListArgs {
+    #[arg(long)]
+    strategy_id: Option<String>,
+
+    #[arg(long, value_enum)]
+    review_state: Option<EvolutionQueueReviewStateArg>,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionSelectionDecisionArgs {
+    #[arg(long)]
+    selection_id: String,
+
+    #[arg(long, value_enum)]
+    decision: EvolutionQueueDecisionArg,
+
+    #[arg(long)]
+    reason: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionSelectionBridgeArgs {
+    #[arg(long)]
+    selection_id: String,
+
+    #[arg(long)]
+    reason: String,
+}
+
+#[derive(Debug, Args)]
+struct EvolutionSelectionBridgeResultArgs {
+    #[arg(long)]
+    bridge_id: String,
+}
+
+#[derive(Debug, Args)]
 struct EvolutionMaterializeArgs {
     #[arg(long)]
     draft_id: String,
@@ -816,6 +887,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.evolution_mutation_materialization_batch_results_dir,
         &cli.evolution_mutation_validation_batch_results_dir,
         &cli.evolution_ranking_results_dir,
+    )?;
+    let evolution_selection_harness = DefaultEvolutionSelectionHarness::from_path(
+        &cli.evolution_ranking_results_dir,
+        &cli.evolution_validation_results_dir,
+        &cli.evolution_selection_results_dir,
+        &cli.evolution_selection_bridge_results_dir,
     )?;
 
     let output = match cli.command {
@@ -1601,6 +1678,110 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
             } else {
                 println!("{}", render_evolution_mutation_ranking(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::EvolutionSelectionCreate(args) => {
+            let lookup =
+                evolution_selection_harness.create_selection(&args.ranking_id, &args.packet_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_ranked_candidate_selection(&lookup.report)
+                );
+            }
+            if lookup.report.review_state == EvolutionProposalReviewState::Blocked {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvolutionSelectionResult(args) => {
+            let lookup = evolution_selection_harness
+                .load_selection(&args.selection_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution ranked-candidate selection was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_ranked_candidate_selection(&lookup.report)
+                );
+            }
+            return Ok(());
+        }
+        Command::EvolutionSelectionList(args) => {
+            let list = evolution_selection_harness.list_selections(
+                args.strategy_id.as_deref(),
+                args.review_state.map(Into::into),
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_ranked_candidate_selection_list(&list)
+                );
+            }
+            return Ok(());
+        }
+        Command::EvolutionSelectionDecision(args) => {
+            let lookup = evolution_selection_harness.record_decision(
+                &args.selection_id,
+                args.decision.into(),
+                &args.reason,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_ranked_candidate_selection(&lookup.report)
+                );
+            }
+            return Ok(());
+        }
+        Command::EvolutionSelectionBridge(args) => {
+            let lookup = evolution_selection_harness.bridge_selection(
+                &cli.evolution_queue_results_dir,
+                &args.selection_id,
+                &args.reason,
+            )?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_ranked_candidate_bridge(&lookup.report)
+                );
+            }
+            if !lookup.report.blocking_reasons.is_empty() || !lookup.report.handoff_ready {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvolutionSelectionBridgeResult(args) => {
+            let lookup = evolution_selection_harness
+                .load_bridge(&args.bridge_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evolution ranked-candidate bridge was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!(
+                    "{}",
+                    render_evolution_ranked_candidate_bridge(&lookup.report)
+                );
             }
             return Ok(());
         }

@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.14 Ranked Candidate Rollout Bridge (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- ranked shortlist packets can now be turned into durable ranked-candidate selections without re-materializing experiment manifests
+- operators can now inspect, list, and explicitly accept, defer, or reject ranked-candidate selections through `swarmctl`
+- accepted ranked-candidate selections can now bridge back into the existing queue, handoff, and bounded canary path while blocked or stale selections fail closed with persisted bridge artifacts
+
+---
+
 ## v1.13 Guided Mutation And Candidate Ranking (Shipped: 2026-04-03)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks
