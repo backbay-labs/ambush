@@ -147,7 +147,10 @@ cargo run -p swarm-runtime --bin swarmctl -- serve \
   --evolution-packet-set-results-dir data/evolution-packet-sets \
   --evolution-portfolio-history-results-dir data/evolution-portfolio-history \
   --strategy-memory-results-dir data/strategy-memory \
-  --operator-maintenance-results-dir data/operator-maintenance-actions
+  --operator-maintenance-results-dir data/operator-maintenance-actions \
+  --evidence-results-dir data/evidence-bundles \
+  --evidence-verification-results-dir data/evidence-verifications \
+  --promotion-evidence-results-dir data/promotion-evidence-packets
 ```
 
 Example authenticated reads:
@@ -170,6 +173,12 @@ curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
 
 curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evolution/portfolio-histories?cohort=red&limit=10"
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/evidence/bundles?subject_kind=production_promotion&limit=10"
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/evidence/verifications/EVIDENCE_VERIFICATION_ID"
 ```
 
 Example authenticated maintenance flow:
@@ -204,8 +213,83 @@ Current authenticated surface:
 - `/v1/operator/evolution/packet-sets?cohort=&limit=`
 - `/v1/operator/evolution/portfolio-histories/{history_id}`
 - `/v1/operator/evolution/portfolio-histories?cohort=&limit=`
+- `/v1/operator/evidence/bundles/{bundle_id}`
+- `/v1/operator/evidence/bundles?subject_kind=&limit=`
+- `/v1/operator/evidence/verifications/{verification_id}`
+- `/v1/operator/evidence/promotion-packets/{packet_id}`
 - `/v1/operator/maintenance/actions` `GET`, `POST`
 - `/v1/operator/maintenance/actions/{action_id}` `GET`
+
+### Signed Evidence Export And Verification
+
+`v1.18` adds repo-owned signed evidence bundles above the existing runtime and rollout artifacts. The runtime stays single-node and advisory: these signatures make artifacts portable and locally verifiable, but they do not introduce distributed trust or quorum voting.
+
+Signed evidence uses one local signing secret loaded from env:
+
+```bash
+export SWARM_EVIDENCE_SIGNING_KEY=replace-me-with-a-local-secret
+```
+
+Current defaults:
+
+- signed bundles: `data/evidence-bundles/`
+- verification results: `data/evidence-verifications/`
+- promotion evidence packets: `data/promotion-evidence-packets/`
+- signer label: `local-evidence-signer`
+- signer env: `SWARM_EVIDENCE_SIGNING_KEY`
+
+Current supported signed subject kinds:
+
+- `replay_bundle`
+- `investigation_bundle`
+- `correlated_incident`
+- `canary_run`
+- `production_promotion`
+- `operator_maintenance_action`
+- `detector_verification`
+- `strategy_shadow`
+- `promotion_review`
+
+Examples:
+
+```bash
+export SWARM_EVIDENCE_SIGNING_KEY=replace-me-with-a-local-secret
+
+cargo run -p swarm-runtime --bin swarmctl -- evidence-export \
+  --kind production-promotion \
+  --id YOUR_PROMOTION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- evidence-result \
+  --bundle-id evidence:production_promotion:YOUR_PROMOTION_ID:local-evidence-signer
+
+cargo run -p swarm-runtime --bin swarmctl -- evidence-list \
+  --kind production-promotion
+
+cargo run -p swarm-runtime --bin swarmctl -- evidence-verify \
+  --bundle-id evidence:production_promotion:YOUR_PROMOTION_ID:local-evidence-signer
+
+cargo run -p swarm-runtime --bin swarmctl -- evidence-verification-result \
+  --verification-id evidence_verification:evidence:production_promotion:YOUR_PROMOTION_ID:local-evidence-signer
+```
+
+Verification stays fail-closed:
+
+- canonical payload bytes are normalized and rechecked
+- payload SHA-256 is recalculated from the stored canonical payload
+- detached signature verification must pass against the signed statement
+- `--expected-key-id` can pin verification to a known signer fingerprint
+
+Promotion evidence packets reuse existing rollout state and signed evidence instead of regenerating artifacts:
+
+```bash
+cargo run -p swarm-runtime --bin swarmctl -- promotion-evidence-create \
+  --promotion-id YOUR_PROMOTION_ID
+
+cargo run -p swarm-runtime --bin swarmctl -- promotion-evidence-result \
+  --packet-id promotion_evidence:YOUR_PROMOTION_ID
+```
+
+Promotion evidence packets are advisory only. They package the finalized promotion outcome, fallback lineage, and supporting signed evidence references for later trust-boundary work, but they do not approve or execute rollout on their own.
 
 ### Offline Replay Harness
 

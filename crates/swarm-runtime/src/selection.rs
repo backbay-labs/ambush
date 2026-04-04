@@ -1598,9 +1598,6 @@ mod tests {
             )
             .await
             .unwrap();
-        let ready_ranking = mutation
-            .rank_candidates(&queue_dir, &validation_batch.report.validation_batch_id, 1)
-            .unwrap();
         let blocked_ranking = mutation
             .rank_candidates(&queue_dir, &validation_batch.report.validation_batch_id, 2)
             .unwrap();
@@ -1621,6 +1618,18 @@ mod tests {
                 .as_deref(),
             Some(promotion.report.queue_proposal_id.as_str())
         );
+        let ready_packet = blocked_ranking
+            .report
+            .review_packets
+            .iter()
+            .find(|packet| packet.strategy_id == "office_selection_control_v1")
+            .expect("expected one ready packet in the ranking");
+        let blocked_packet = blocked_ranking
+            .report
+            .review_packets
+            .iter()
+            .find(|packet| packet.strategy_id == "office_selection_python_parent_v1")
+            .expect("expected one blocked packet in the ranking");
 
         SelectionFixture {
             _root: root,
@@ -1630,10 +1639,10 @@ mod tests {
             selection_harness,
             handoff_harness,
             canary_harness,
-            ready_ranking_id: ready_ranking.report.ranking_id.clone(),
-            ready_packet_id: ready_ranking.report.review_packets[0].packet_id.clone(),
+            ready_ranking_id: blocked_ranking.report.ranking_id.clone(),
+            ready_packet_id: ready_packet.packet_id.clone(),
             blocked_ranking_id: blocked_ranking.report.ranking_id.clone(),
-            blocked_packet_id: blocked_ranking.report.review_packets[1].packet_id.clone(),
+            blocked_packet_id: blocked_packet.packet_id.clone(),
         }
     }
 

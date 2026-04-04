@@ -9,6 +9,7 @@ pub mod config;
 pub mod control;
 pub mod correlation;
 pub mod drafting;
+pub mod evidence;
 pub mod evolution;
 pub mod governance_prep;
 pub mod investigation;

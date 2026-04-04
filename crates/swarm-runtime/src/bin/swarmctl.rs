@@ -10,6 +10,11 @@ use swarm_runtime::drafting::{
     render_evolution_materialization, render_evolution_pressure,
     render_evolution_queue_reconciliation, render_evolution_validation_bundle,
 };
+use swarm_runtime::evidence::{
+    DefaultEvidenceHarness, EvidenceExportRequest, EvidenceHarnessPaths, EvidenceSubjectKind,
+    render_evidence_bundle, render_evidence_bundle_list, render_evidence_verification,
+    render_promotion_evidence_packet,
+};
 use swarm_runtime::evolution::{
     DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness,
     EvolutionProposalCreateRequest, EvolutionProposalDecisionAction, EvolutionProposalReviewState,
@@ -176,6 +181,21 @@ struct Cli {
     )]
     operator_maintenance_results_dir: std::path::PathBuf,
 
+    #[arg(long, global = true, default_value = "data/evidence-bundles")]
+    evidence_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/evidence-verifications")]
+    evidence_verification_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "data/promotion-evidence-packets")]
+    promotion_evidence_results_dir: std::path::PathBuf,
+
+    #[arg(long, global = true, default_value = "local-evidence-signer")]
+    evidence_signer_id: String,
+
+    #[arg(long, global = true, default_value = "SWARM_EVIDENCE_SIGNING_KEY")]
+    evidence_signing_key_env: String,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -192,6 +212,13 @@ enum Command {
     Incident(IncidentArgs),
     ReplayRun(ReplayRunArgs),
     ReplayResult(ReplayResultArgs),
+    EvidenceExport(EvidenceExportArgs),
+    EvidenceResult(EvidenceResultArgs),
+    EvidenceList(EvidenceListArgs),
+    EvidenceVerify(EvidenceVerifyArgs),
+    EvidenceVerificationResult(EvidenceVerificationResultArgs),
+    PromotionEvidenceCreate(PromotionEvidenceCreateArgs),
+    PromotionEvidenceResult(PromotionEvidenceResultArgs),
     ReplayEvaluate(ReplayEvaluateArgs),
     ExperimentEvaluate(ExperimentEvaluateArgs),
     ExperimentResult(ExperimentResultArgs),
@@ -314,6 +341,83 @@ struct IncidentArgs {
 
     #[arg(long)]
     hunt_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum EvidenceSubjectKindArg {
+    ReplayBundle,
+    InvestigationBundle,
+    CorrelatedIncident,
+    CanaryRun,
+    ProductionPromotion,
+    OperatorMaintenanceAction,
+    DetectorVerification,
+    StrategyShadow,
+    PromotionReview,
+}
+
+impl From<EvidenceSubjectKindArg> for EvidenceSubjectKind {
+    fn from(value: EvidenceSubjectKindArg) -> Self {
+        match value {
+            EvidenceSubjectKindArg::ReplayBundle => Self::ReplayBundle,
+            EvidenceSubjectKindArg::InvestigationBundle => Self::InvestigationBundle,
+            EvidenceSubjectKindArg::CorrelatedIncident => Self::CorrelatedIncident,
+            EvidenceSubjectKindArg::CanaryRun => Self::CanaryRun,
+            EvidenceSubjectKindArg::ProductionPromotion => Self::ProductionPromotion,
+            EvidenceSubjectKindArg::OperatorMaintenanceAction => Self::OperatorMaintenanceAction,
+            EvidenceSubjectKindArg::DetectorVerification => Self::DetectorVerification,
+            EvidenceSubjectKindArg::StrategyShadow => Self::StrategyShadow,
+            EvidenceSubjectKindArg::PromotionReview => Self::PromotionReview,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct EvidenceExportArgs {
+    #[arg(long, value_enum)]
+    kind: EvidenceSubjectKindArg,
+
+    #[arg(long)]
+    id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvidenceResultArgs {
+    #[arg(long)]
+    bundle_id: String,
+}
+
+#[derive(Debug, Args)]
+struct EvidenceListArgs {
+    #[arg(long, value_enum)]
+    kind: Option<EvidenceSubjectKindArg>,
+}
+
+#[derive(Debug, Args)]
+struct EvidenceVerifyArgs {
+    #[arg(long)]
+    bundle_id: String,
+
+    #[arg(long)]
+    expected_key_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct EvidenceVerificationResultArgs {
+    #[arg(long)]
+    verification_id: String,
+}
+
+#[derive(Debug, Args)]
+struct PromotionEvidenceCreateArgs {
+    #[arg(long)]
+    promotion_id: String,
+}
+
+#[derive(Debug, Args)]
+struct PromotionEvidenceResultArgs {
+    #[arg(long)]
+    packet_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -1117,6 +1221,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.strategy_memory_results_dir,
         &cli.evolution_portfolio_history_results_dir,
     )?;
+    let evidence_paths = EvidenceHarnessPaths {
+        verification_results_dir: cli.verification_results_dir.clone(),
+        shadow_results_dir: cli.shadow_results_dir.clone(),
+        promotion_review_results_dir: cli.promotion_review_results_dir.clone(),
+        canary_results_dir: cli.canary_results_dir.clone(),
+        promotion_results_dir: cli.promotion_results_dir.clone(),
+        operator_maintenance_results_dir: cli.operator_maintenance_results_dir.clone(),
+        evidence_results_dir: cli.evidence_results_dir.clone(),
+        evidence_verification_results_dir: cli.evidence_verification_results_dir.clone(),
+        promotion_evidence_results_dir: cli.promotion_evidence_results_dir.clone(),
+    };
+    let evidence_harness = DefaultEvidenceHarness::from_path(&cli.config, evidence_paths.clone())?;
 
     let output = match cli.command {
         Command::Serve => {
@@ -1135,6 +1251,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .evolution_portfolio_history_results_dir
                         .clone(),
                     operator_maintenance_results_dir: cli.operator_maintenance_results_dir.clone(),
+                    evidence_results_dir: cli.evidence_results_dir.clone(),
+                    evidence_verification_results_dir: cli
+                        .evidence_verification_results_dir
+                        .clone(),
+                    promotion_evidence_results_dir: cli.promotion_evidence_results_dir.clone(),
                 },
             )?;
             eprintln!(
@@ -1199,6 +1320,117 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&run.bundle)?);
             } else {
                 println!("{}", render_replay_run(&run.bundle));
+            }
+            return Ok(());
+        }
+        Command::EvidenceExport(args) => {
+            let secret_material = std::env::var(&cli.evidence_signing_key_env)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "evidence signing key env `{}` is missing or empty",
+                            cli.evidence_signing_key_env
+                        ),
+                    )
+                })?;
+            let lookup = evidence_harness.export_bundle(EvidenceExportRequest {
+                subject_kind: args.kind.into(),
+                stable_id: args.id,
+                signer_id: cli.evidence_signer_id.clone(),
+                secret_material,
+            })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.bundle)?);
+            } else {
+                println!("{}", render_evidence_bundle(&lookup.bundle));
+            }
+            return Ok(());
+        }
+        Command::EvidenceResult(args) => {
+            let lookup = evidence_harness
+                .load_bundle(&args.bundle_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "signed evidence bundle was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.bundle)?);
+            } else {
+                println!("{}", render_evidence_bundle(&lookup.bundle));
+            }
+            return Ok(());
+        }
+        Command::EvidenceList(args) => {
+            let list = evidence_harness.list_bundles(args.kind.map(Into::into))?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                println!("{}", render_evidence_bundle_list(&list));
+            }
+            return Ok(());
+        }
+        Command::EvidenceVerify(args) => {
+            let lookup =
+                evidence_harness.verify_bundle(&args.bundle_id, args.expected_key_id.as_deref())?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evidence_verification(&lookup.report));
+            }
+            if lookup.report.status == swarm_runtime::evidence::EvidenceVerificationStatus::Failed {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::EvidenceVerificationResult(args) => {
+            let lookup = evidence_harness
+                .load_verification(&args.verification_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "evidence verification result was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.report)?);
+            } else {
+                println!("{}", render_evidence_verification(&lookup.report));
+            }
+            return Ok(());
+        }
+        Command::PromotionEvidenceCreate(args) => {
+            let lookup = evidence_harness.create_promotion_evidence_packet(&args.promotion_id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.packet)?);
+            } else {
+                println!("{}", render_promotion_evidence_packet(&lookup.packet));
+            }
+            if lookup.packet.recommendation
+                == swarm_runtime::evidence::PromotionEvidenceRecommendation::Blocked
+            {
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        Command::PromotionEvidenceResult(args) => {
+            let lookup = evidence_harness
+                .load_promotion_evidence_packet(&args.packet_id)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "promotion evidence packet was not found",
+                    )
+                })?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&lookup.packet)?);
+            } else {
+                println!("{}", render_promotion_evidence_packet(&lookup.packet));
             }
             return Ok(());
         }

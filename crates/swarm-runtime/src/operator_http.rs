@@ -4,6 +4,10 @@ use crate::control::{
     IncidentLookupSelector, InvestigationArtifactView, InvestigationLookupSelector,
     ReplayArtifactView, ReplayLookupSelector,
 };
+use crate::evidence::{
+    EvidenceBundle, EvidenceBundleList, EvidenceSubjectKind, EvidenceVerificationReport,
+    OperatorEvidenceReadService, PromotionEvidencePacket,
+};
 use crate::governance_prep::{
     DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePacketSetList,
     EvolutionPortfolioHistoryList,
@@ -40,6 +44,9 @@ pub struct OperatorSurfacePaths {
     pub strategy_memory_results_dir: PathBuf,
     pub evolution_portfolio_history_results_dir: PathBuf,
     pub operator_maintenance_results_dir: PathBuf,
+    pub evidence_results_dir: PathBuf,
+    pub evidence_verification_results_dir: PathBuf,
+    pub promotion_evidence_results_dir: PathBuf,
 }
 
 /// Errors raised while building or serving the authenticated operator surface.
@@ -50,6 +57,9 @@ pub enum OperatorHttpError {
 
     #[error(transparent)]
     Control(#[from] ControlError),
+
+    #[error(transparent)]
+    Evidence(#[from] crate::evidence::EvidenceError),
 
     #[error(transparent)]
     Portfolio(#[from] crate::portfolio::EvolutionPortfolioError),
@@ -91,6 +101,7 @@ struct OperatorHttpState {
     portfolio: Option<Arc<DefaultEvolutionPortfolioHarness>>,
     governance_prep: Option<Arc<DefaultEvolutionGovernancePrepHarness>>,
     maintenance: Option<Arc<OperatorMaintenanceService>>,
+    evidence: Option<Arc<OperatorEvidenceReadService>>,
     max_list_results: usize,
 }
 
@@ -141,6 +152,12 @@ struct CohortListQuery {
 #[derive(Debug, Deserialize)]
 struct MaintenanceActionListQuery {
     status: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EvidenceListQuery {
+    subject_kind: Option<String>,
     limit: Option<usize>,
 }
 
@@ -257,7 +274,7 @@ impl LocalOperatorSurface {
 
         let config_path = config_path.into();
         let control = DefaultControlPlane::from_config(config_path.clone(), config.clone())?;
-        let (portfolio, governance_prep, maintenance) = if let Some(paths) = paths {
+        let (portfolio, governance_prep, maintenance, evidence) = if let Some(paths) = paths {
             let portfolio = DefaultEvolutionPortfolioHarness::from_path(
                 &paths.evolution_ranking_results_dir,
                 &paths.evolution_selection_results_dir,
@@ -274,13 +291,19 @@ impl LocalOperatorSurface {
                 config.operator.auth.operator_id.clone(),
                 &paths,
             )?;
+            let evidence = OperatorEvidenceReadService::from_store_paths(
+                &paths.evidence_results_dir,
+                &paths.evidence_verification_results_dir,
+                &paths.promotion_evidence_results_dir,
+            )?;
             (
                 Some(Arc::new(portfolio)),
                 Some(Arc::new(governance_prep)),
                 Some(Arc::new(maintenance)),
+                Some(Arc::new(evidence)),
             )
         } else {
-            (None, None, None)
+            (None, None, None, None)
         };
 
         Ok(Self {
@@ -290,6 +313,7 @@ impl LocalOperatorSurface {
                 portfolio,
                 governance_prep,
                 maintenance,
+                evidence,
                 max_list_results: config.operator.max_list_results,
             },
         })
@@ -321,6 +345,22 @@ impl LocalOperatorSurface {
             .route("/v1/operator/replay", get(replay_handler))
             .route("/v1/operator/investigation", get(investigation_handler))
             .route("/v1/operator/incident", get(incident_handler))
+            .route(
+                "/v1/operator/evidence/bundles",
+                get(evidence_bundle_list_handler),
+            )
+            .route(
+                "/v1/operator/evidence/bundles/{bundle_id}",
+                get(evidence_bundle_handler),
+            )
+            .route(
+                "/v1/operator/evidence/verifications/{verification_id}",
+                get(evidence_verification_handler),
+            )
+            .route(
+                "/v1/operator/evidence/promotion-packets/{packet_id}",
+                get(promotion_evidence_packet_handler),
+            )
             .route(
                 "/v1/operator/evolution/portfolios",
                 get(portfolio_list_handler),
@@ -440,6 +480,72 @@ async fn incident_handler(
         .incident_lookup(selector)
         .map_err(map_control_error)?;
     Ok(Json(incident))
+}
+
+async fn evidence_bundle_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(bundle_id): RoutePath<String>,
+) -> Result<Json<EvidenceBundle>, OperatorApiError> {
+    let service = evidence_service(&state)?;
+    let lookup = service
+        .load_bundle(&bundle_id)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorApiError::not_found(format!("evidence bundle `{bundle_id}` was not found"))
+        })?;
+    Ok(Json(lookup.bundle))
+}
+
+async fn evidence_bundle_list_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<EvidenceListQuery>,
+) -> Result<Json<EvidenceBundleList>, OperatorApiError> {
+    let service = evidence_service(&state)?;
+    let subject_kind = query
+        .subject_kind
+        .as_deref()
+        .map(parse_evidence_subject_kind)
+        .transpose()?;
+    let list = service
+        .list_bundles(subject_kind)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+    Ok(Json(limit_evidence_bundle_list(
+        list,
+        query.limit,
+        state.max_list_results,
+    )))
+}
+
+async fn evidence_verification_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(verification_id): RoutePath<String>,
+) -> Result<Json<EvidenceVerificationReport>, OperatorApiError> {
+    let service = evidence_service(&state)?;
+    let lookup = service
+        .load_verification(&verification_id)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorApiError::not_found(format!(
+                "evidence verification `{verification_id}` was not found"
+            ))
+        })?;
+    Ok(Json(lookup.report))
+}
+
+async fn promotion_evidence_packet_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(packet_id): RoutePath<String>,
+) -> Result<Json<PromotionEvidencePacket>, OperatorApiError> {
+    let service = evidence_service(&state)?;
+    let lookup = service
+        .load_promotion_evidence_packet(&packet_id)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorApiError::not_found(format!(
+                "promotion evidence packet `{packet_id}` was not found"
+            ))
+        })?;
+    Ok(Json(lookup.packet))
 }
 
 async fn portfolio_handler(
@@ -721,6 +827,12 @@ fn parse_maintenance_status(value: &str) -> Result<OperatorMaintenanceStatus, Op
     }
 }
 
+fn parse_evidence_subject_kind(value: &str) -> Result<EvidenceSubjectKind, OperatorApiError> {
+    value.parse::<EvidenceSubjectKind>().map_err(|_| {
+        OperatorApiError::bad_request(format!("unsupported evidence subject_kind `{value}`"))
+    })
+}
+
 fn map_control_error(error: ControlError) -> OperatorApiError {
     match error {
         ControlError::NotFound { entity, lookup } => {
@@ -755,6 +867,15 @@ fn maintenance_service(
         .maintenance
         .as_deref()
         .ok_or_else(|| OperatorApiError::internal("maintenance stores are not configured"))
+}
+
+fn evidence_service(
+    state: &OperatorHttpState,
+) -> Result<&OperatorEvidenceReadService, OperatorApiError> {
+    state
+        .evidence
+        .as_deref()
+        .ok_or_else(|| OperatorApiError::internal("evidence stores are not configured"))
 }
 
 fn count_set(values: &[Option<&str>]) -> usize {
@@ -798,6 +919,17 @@ fn limit_portfolio_history_list(
     list
 }
 
+fn limit_evidence_bundle_list(
+    mut list: EvidenceBundleList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> EvidenceBundleList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.bundles = list.bundles.into_iter().take(limit).collect();
+    list.total_count = list.bundles.len();
+    list
+}
+
 fn limit_maintenance_list(
     mut list: OperatorMaintenanceList,
     requested_limit: Option<usize>,
@@ -812,6 +944,12 @@ fn limit_maintenance_list(
 #[cfg(test)]
 mod tests {
     use super::{LocalOperatorSurface, OperatorSurfacePaths};
+    use crate::evidence::{
+        EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
+        EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
+        FileEvidenceBundleStore, FileEvidenceVerificationStore, FilePromotionEvidencePacketStore,
+        PromotionEvidenceAttachment, PromotionEvidencePacket, PromotionEvidenceRecommendation,
+    };
     use crate::service::EventExecutionContext;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
@@ -1202,6 +1340,89 @@ mod tests {
         }
     }
 
+    fn sample_evidence_bundle() -> EvidenceBundle {
+        EvidenceBundle {
+            bundle_id: "evidence:production_promotion:promotion:red:local-evidence-signer"
+                .to_string(),
+            schema_version: "v1".to_string(),
+            config_name: "operator-http".to_string(),
+            exported_at_ms: 1_710_000_000_500,
+            subject: EvidenceSubjectMetadata {
+                kind: EvidenceSubjectKind::ProductionPromotion,
+                stable_id: "promotion:red".to_string(),
+                display_name: "production promotion promotion:red".to_string(),
+                source_created_at_ms: 1_710_000_000_000,
+                receipt_chain_refs: vec![],
+                related_refs: vec![EvidenceRelatedRef {
+                    kind: "canary_run".to_string(),
+                    id: "canary:red".to_string(),
+                }],
+            },
+            payload_sha256: "abcd1234".to_string(),
+            canonical_payload: r#"{"promotion_id":"promotion:red","status":"completed"}"#
+                .to_string(),
+            signature: EvidenceSignature {
+                signer_id: "local-evidence-signer".to_string(),
+                algorithm: "ed25519".to_string(),
+                key_id: "key:red".to_string(),
+                public_key_hex: "11".repeat(32),
+                signature_hex: "22".repeat(64),
+            },
+        }
+    }
+
+    fn sample_evidence_verification_report() -> EvidenceVerificationReport {
+        EvidenceVerificationReport {
+            verification_id:
+                "evidence_verification:evidence:production_promotion:promotion:red:local-evidence-signer"
+                    .to_string(),
+            bundle_id: "evidence:production_promotion:promotion:red:local-evidence-signer"
+                .to_string(),
+            subject_kind: EvidenceSubjectKind::ProductionPromotion,
+            subject_id: "promotion:red".to_string(),
+            verified_at_ms: 1_710_000_000_800,
+            status: EvidenceVerificationStatus::Passed,
+            signer_id: "local-evidence-signer".to_string(),
+            signer_key_id: "key:red".to_string(),
+            expected_key_id: Some("key:red".to_string()),
+            checks: vec![],
+        }
+    }
+
+    fn sample_promotion_evidence_packet() -> PromotionEvidencePacket {
+        PromotionEvidencePacket {
+            packet_id: "promotion_evidence:promotion:red".to_string(),
+            promotion_id: "promotion:red".to_string(),
+            created_at_ms: 1_710_000_000_900,
+            window_id: "production-primary".to_string(),
+            promotion_status: crate::promotion::ProductionPromotionStatus::Completed,
+            promoted_strategy_id: "office_red_ready_v1".to_string(),
+            fallback_strategy_id: "office_control_v1".to_string(),
+            canary_run_id: "canary:red".to_string(),
+            verification_id:
+                "evidence_verification:evidence:production_promotion:promotion:red:local-evidence-signer"
+                    .to_string(),
+            shadow_id: "shadow:red".to_string(),
+            supporting_evidence: vec![PromotionEvidenceAttachment {
+                subject_kind: EvidenceSubjectKind::ProductionPromotion,
+                subject_id: "promotion:red".to_string(),
+                bundle_id: Some(
+                    "evidence:production_promotion:promotion:red:local-evidence-signer"
+                        .to_string(),
+                ),
+                verification_id: Some(
+                    "evidence_verification:evidence:production_promotion:promotion:red:local-evidence-signer"
+                        .to_string(),
+                ),
+                verification_status: Some(EvidenceVerificationStatus::Passed),
+                details: "production promotion evidence".to_string(),
+            }],
+            blocking_reasons: vec![],
+            recommendation: PromotionEvidenceRecommendation::ReadyForExternalReview,
+            advisory_only: true,
+        }
+    }
+
     fn surface_paths(root: &PathBuf) -> OperatorSurfacePaths {
         OperatorSurfacePaths {
             evolution_ranking_results_dir: root.join("rankings"),
@@ -1212,6 +1433,9 @@ mod tests {
             strategy_memory_results_dir: root.join("strategy-memory"),
             evolution_portfolio_history_results_dir: root.join("portfolio-history"),
             operator_maintenance_results_dir: root.join("operator-maintenance-actions"),
+            evidence_results_dir: root.join("evidence-bundles"),
+            evidence_verification_results_dir: root.join("evidence-verifications"),
+            promotion_evidence_results_dir: root.join("promotion-evidence-packets"),
         }
     }
 
@@ -1239,6 +1463,28 @@ mod tests {
         FileEvolutionPortfolioHistoryStore::open(&paths.evolution_portfolio_history_results_dir)
             .unwrap()
             .persist(&sample_portfolio_history_report())
+            .unwrap();
+    }
+
+    fn seed_evidence_artifacts(root: &PathBuf) {
+        let paths = surface_paths(root);
+        let bundle = sample_evidence_bundle();
+        let verification = sample_evidence_verification_report();
+        let packet = sample_promotion_evidence_packet();
+
+        let bundle_store = FileEvidenceBundleStore::open(&paths.evidence_results_dir).unwrap();
+        let bundle_lookup = bundle_store.persist(&bundle).unwrap();
+        let verification_lookup =
+            FileEvidenceVerificationStore::open(&paths.evidence_verification_results_dir)
+                .unwrap()
+                .persist(&verification)
+                .unwrap();
+        bundle_store
+            .attach_verification(&verification_lookup.record, &bundle_lookup.record.bundle_id)
+            .unwrap();
+        FilePromotionEvidencePacketStore::open(&paths.promotion_evidence_results_dir)
+            .unwrap()
+            .persist(&packet)
             .unwrap();
     }
 
@@ -1430,6 +1676,102 @@ mod tests {
             .unwrap();
         let history_json: Value = serde_json::from_slice(&history_body).unwrap();
         assert_eq!(history_json["history_id"], "portfolio_history:red:1");
+    }
+
+    #[tokio::test]
+    async fn evidence_endpoints_return_signed_bundle_views() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+
+        let root = unique_temp_dir("evidence-endpoints");
+        seed_evolution_artifacts(&root);
+        seed_evidence_artifacts(&root);
+        let paths = surface_paths(&root);
+        let surface =
+            LocalOperatorSurface::from_config_and_paths("inline", operator_config(), paths)
+                .unwrap();
+        let app = surface.router("secret-token".to_string());
+        let auth = ("authorization", "Bearer secret-token");
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/evidence/bundles?subject_kind=production_promotion&limit=5")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_json: Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list_json["total_count"], 1);
+        assert_eq!(
+            list_json["bundles"][0]["latest_verification_status"],
+            "passed"
+        );
+
+        let bundle_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/v1/operator/evidence/bundles/evidence:production_promotion:promotion:red:local-evidence-signer",
+                    )
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bundle_response.status(), StatusCode::OK);
+        let bundle_body = to_bytes(bundle_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let bundle_json: Value = serde_json::from_slice(&bundle_body).unwrap();
+        assert_eq!(bundle_json["subject"]["stable_id"], "promotion:red");
+
+        let verification_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/v1/operator/evidence/verifications/evidence_verification:evidence:production_promotion:promotion:red:local-evidence-signer",
+                    )
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(verification_response.status(), StatusCode::OK);
+        let verification_body = to_bytes(verification_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let verification_json: Value = serde_json::from_slice(&verification_body).unwrap();
+        assert_eq!(verification_json["status"], "passed");
+
+        let packet_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/evidence/promotion-packets/promotion_evidence:promotion:red")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(packet_response.status(), StatusCode::OK);
+        let packet_body = to_bytes(packet_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let packet_json: Value = serde_json::from_slice(&packet_body).unwrap();
+        assert_eq!(packet_json["recommendation"], "ready_for_external_review");
     }
 
     #[tokio::test]
