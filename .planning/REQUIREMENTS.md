@@ -3,34 +3,35 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.20 Requirements
+## v1.21 Requirements
 
-### Review Sessions
+### Cross-Lane Sessions
 
-- [x] **OPS-15**: Operator can assemble a multi-artifact review session from evidence bundle, verification, and promotion packet IDs and reload it by stable session ID
+- [ ] **OPS-19**: Operator can compare governance-prep, canary, and production evidence lanes in one cross-lane review session
+- [ ] **OPS-21**: Operator can reload a cross-lane review session by stable session ID and inspect lane-specific lineage, freshness, and evidence gaps without reading raw store files
 
 ### Comparison And Export
 
-- [x] **OPS-14**: Operator can compare multiple evidence artifacts in one local review session
-- [x] **OPS-16**: Operator can export a selected evidence session with preserved digests, signer metadata, verification state, and related stable refs
+- [ ] **OPS-22**: Operator can export a signed cross-lane comparison snapshot with per-lane summaries, verification state, and unresolved evidence gaps
 
-### Review-Driven Actions
+### Promotion Review
 
-- [x] **OPS-13**: Operator can trigger bounded maintenance actions from the review client while preserving the existing authenticated audit trail
-- [x] **OPS-17**: Review-driven maintenance requests preserve source review-session IDs, selected artifact refs, operator rationale, and resulting action IDs
-- [x] **OPS-18**: Review-driven actions remain bounded to the existing maintenance scope and cannot bypass rollout or governance gates
+- [ ] **OPS-23**: Operator can derive an advisory promotion-readiness review from governance-prep, canary, and production evidence without bypassing rollout or maintenance gates
 
 ## Future Requirements
+
+### Portable Review Exchange
+
+- **OPS-24**: Operator can package a signed review capsule for external review without granting direct store access
+- **OPS-25**: Operator can import and verify a foreign review capsule while preserving remote signer lineage, local trust status, and related stable refs
+- **OPS-20**: Operator can share or delegate signed review sessions across independent trust boundaries once multi-user governance exists
 
 ### Governance
 
 - **GOV-01**: Strategy promotion to production requires quorum-based approval once independent trust boundaries exist
 - **GOV-02**: Promotion records include signed votes and durable consensus receipts
-
-### Operator Surfaces
-
-- **OPS-19**: Operator can compare governance-prep, canary, and production evidence lanes in one cross-lane review session
-- **OPS-20**: Operator can share or delegate signed review sessions across independent trust boundaries once multi-user governance exists
+- **GOV-03**: Operator can define an approval set with eligible voters, threshold rules, and supporting promotion evidence without executing distributed consensus
+- **GOV-04**: Signed approval ledgers preserve vote lineage, missing quorum state, and related promotion evidence refs for later independent verification
 
 ## Out of Scope
 
@@ -47,18 +48,16 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-15 | Phase 62 | Complete |
-| OPS-14 | Phase 63 | Complete |
-| OPS-16 | Phase 63 | Complete |
-| OPS-13 | Phase 64 | Complete |
-| OPS-17 | Phase 64 | Complete |
-| OPS-18 | Phase 64 | Complete |
+| OPS-19 | Phase 65 | Planned |
+| OPS-21 | Phase 65 | Planned |
+| OPS-22 | Phase 66 | Planned |
+| OPS-23 | Phase 67 | Planned |
 
 **Coverage:**
-- v1.20 requirements: 6 total
-- Mapped to phases: 6
+- v1.21 requirements: 4 total
+- Mapped to phases: 4
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after completing milestone v1.20 implementation*
+*Last updated: 2026-04-04 for milestone v1.21 planning with queued v1.22-v1.23 future requirements*
