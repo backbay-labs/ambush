@@ -1,6 +1,6 @@
 # Milestone v1.17: Authenticated Operator Surface
 
-**Status:** ACTIVE
+**Status:** COMPLETE
 **Date:** 2026-04-04
 **Milestone Goal:** Extend the repo-owned operator lane from `swarmctl` into a narrowly scoped authenticated local HTTP surface for review and bounded maintenance, without widening into quorum governance or a multi-user control plane.
 
@@ -50,7 +50,7 @@
 
 ### Phase 55: Maintenance Actions And Audit Trails
 
-**Status:** ACTIVE
+**Status:** COMPLETE
 
 **Goal:** Allow a bounded set of approved maintenance operations through the control surface while preserving durable audit records.
 
@@ -58,7 +58,7 @@
 
 **Depends on:** Phase 54
 
-**Plans:** 0/0 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - Operators can invoke a small approved set of maintenance actions through the authenticated control surface.
@@ -70,10 +70,10 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-04 | Phase 53 | Planned |
-| OPS-06 | Phase 54 | Planned |
-| OPS-05 | Phase 55 | Planned |
-| OPS-07 | Phase 55 | Planned |
+| OPS-04 | Phase 53 | Complete |
+| OPS-06 | Phase 54 | Complete |
+| OPS-05 | Phase 55 | Complete |
+| OPS-07 | Phase 55 | Complete |
 
 ## Deferred Work
 
@@ -84,8 +84,8 @@
 
 ## Next Step
 
-`$gsd-plan-phase 55`
+`$gsd-audit-milestone`
 
 ---
 *Roadmap created: 2026-04-04*
-*Last updated: 2026-04-04 for milestone v1.17 planning*
+*Last updated: 2026-04-04 after completing milestone v1.17 implementation*

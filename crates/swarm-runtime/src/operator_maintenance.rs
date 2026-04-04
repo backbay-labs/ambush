@@ -1,0 +1,749 @@
+use crate::governance_prep::{DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePrepError};
+use crate::operator_http::OperatorSurfacePaths;
+use crate::portfolio::{
+    DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction, EvolutionPortfolioError,
+};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Approved operator maintenance actions for the local authenticated surface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum OperatorMaintenanceRequest {
+    PortfolioEntryDecision {
+        portfolio_id: String,
+        entry_id: String,
+        decision: EvolutionPortfolioDecisionAction,
+        reason: String,
+    },
+    PacketSetSplit {
+        parent_packet_set_id: String,
+        name: String,
+        packet_ids: Vec<String>,
+        reason: String,
+    },
+    RefreshPortfolioHistory {
+        packet_set_id: String,
+        reason: String,
+    },
+}
+
+/// Final execution state for one persisted maintenance action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatorMaintenanceStatus {
+    Applied,
+    Blocked,
+    Failed,
+}
+
+/// One artifact produced or updated by a maintenance action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorMaintenanceArtifactRef {
+    pub kind: String,
+    pub id: String,
+}
+
+/// One durable maintenance action audit record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperatorMaintenanceRecord {
+    pub action_id: String,
+    pub actor: String,
+    pub requested_at_ms: i64,
+    pub completed_at_ms: i64,
+    pub action: OperatorMaintenanceRequest,
+    pub target_kind: String,
+    pub target_id: String,
+    pub reason: String,
+    pub status: OperatorMaintenanceStatus,
+    pub summary: String,
+    pub artifacts: Vec<OperatorMaintenanceArtifactRef>,
+    pub native_history_ref: Option<String>,
+}
+
+/// Index metadata for one persisted maintenance action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorMaintenanceRecordSummary {
+    pub action_id: String,
+    pub actor: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub status: OperatorMaintenanceStatus,
+    pub completed_at_ms: i64,
+    pub bundle_path: String,
+}
+
+impl OperatorMaintenanceRecordSummary {
+    fn from_record(record: &OperatorMaintenanceRecord, bundle_path: String) -> Self {
+        Self {
+            action_id: record.action_id.clone(),
+            actor: record.actor.clone(),
+            target_kind: record.target_kind.clone(),
+            target_id: record.target_id.clone(),
+            status: record.status,
+            completed_at_ms: record.completed_at_ms,
+            bundle_path,
+        }
+    }
+}
+
+/// Operator-facing maintenance action listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorMaintenanceList {
+    pub total_count: usize,
+    pub status: Option<OperatorMaintenanceStatus>,
+    pub actions: Vec<OperatorMaintenanceRecordSummary>,
+}
+
+/// Persisted maintenance action loaded with metadata.
+#[derive(Debug, Clone)]
+pub struct OperatorMaintenanceLookup {
+    pub summary: OperatorMaintenanceRecordSummary,
+    pub record: OperatorMaintenanceRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct OperatorMaintenanceIndex {
+    entries: Vec<OperatorMaintenanceRecordSummary>,
+}
+
+/// Errors raised by the file-backed maintenance action store.
+#[derive(Debug, thiserror::Error)]
+pub enum OperatorMaintenanceStoreError {
+    #[error("failed to read maintenance store file `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write maintenance store file `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse maintenance store file `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+/// Errors raised while building the maintenance service.
+#[derive(Debug, thiserror::Error)]
+pub enum OperatorMaintenanceError {
+    #[error(transparent)]
+    Store(#[from] OperatorMaintenanceStoreError),
+
+    #[error(transparent)]
+    Portfolio(#[from] EvolutionPortfolioError),
+
+    #[error(transparent)]
+    GovernancePrep(#[from] EvolutionGovernancePrepError),
+}
+
+/// File-backed store for maintenance action audit records.
+#[derive(Debug, Clone)]
+pub struct FileOperatorMaintenanceStore {
+    root: PathBuf,
+}
+
+impl FileOperatorMaintenanceStore {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, OperatorMaintenanceStoreError> {
+        let root = path.as_ref().to_path_buf();
+        fs::create_dir_all(root.join("reports")).map_err(|source| {
+            OperatorMaintenanceStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
+        Ok(Self { root })
+    }
+
+    fn report_path(&self, action_id: &str) -> PathBuf {
+        self.root
+            .join("reports")
+            .join(format!("{}.json", sanitize_id(action_id)))
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    fn read_index(&self) -> Result<OperatorMaintenanceIndex, OperatorMaintenanceStoreError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(OperatorMaintenanceIndex::default());
+        }
+        let raw =
+            fs::read_to_string(&path).map_err(|source| OperatorMaintenanceStoreError::Read {
+                path: path.clone(),
+                source,
+            })?;
+        serde_json::from_str(&raw)
+            .map_err(|source| OperatorMaintenanceStoreError::Parse { path, source })
+    }
+
+    fn write_index(
+        &self,
+        index: &OperatorMaintenanceIndex,
+    ) -> Result<(), OperatorMaintenanceStoreError> {
+        let path = self.index_path();
+        let raw = serde_json::to_string_pretty(index).map_err(|source| {
+            OperatorMaintenanceStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw)
+            .map_err(|source| OperatorMaintenanceStoreError::Write { path, source })
+    }
+
+    pub fn persist(
+        &self,
+        record: &OperatorMaintenanceRecord,
+    ) -> Result<OperatorMaintenanceLookup, OperatorMaintenanceStoreError> {
+        let path = self.report_path(&record.action_id);
+        let raw = serde_json::to_string_pretty(record).map_err(|source| {
+            OperatorMaintenanceStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| OperatorMaintenanceStoreError::Write {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut index = self.read_index()?;
+        let summary =
+            OperatorMaintenanceRecordSummary::from_record(record, path.display().to_string());
+        index
+            .entries
+            .retain(|entry| entry.action_id != summary.action_id);
+        index.entries.push(summary.clone());
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.completed_at_ms));
+        self.write_index(&index)?;
+        Ok(OperatorMaintenanceLookup {
+            summary,
+            record: record.clone(),
+        })
+    }
+
+    pub fn load(
+        &self,
+        action_id: &str,
+    ) -> Result<Option<OperatorMaintenanceLookup>, OperatorMaintenanceStoreError> {
+        let index = self.read_index()?;
+        let Some(summary) = index
+            .entries
+            .iter()
+            .find(|entry| entry.action_id == action_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+
+        let path = PathBuf::from(&summary.bundle_path);
+        let raw =
+            fs::read_to_string(&path).map_err(|source| OperatorMaintenanceStoreError::Read {
+                path: path.clone(),
+                source,
+            })?;
+        let record = serde_json::from_str(&raw)
+            .map_err(|source| OperatorMaintenanceStoreError::Parse { path, source })?;
+        Ok(Some(OperatorMaintenanceLookup { summary, record }))
+    }
+
+    pub fn list(
+        &self,
+        status: Option<OperatorMaintenanceStatus>,
+    ) -> Result<OperatorMaintenanceList, OperatorMaintenanceStoreError> {
+        let mut actions = self.read_index()?.entries;
+        if let Some(status) = status {
+            actions.retain(|entry| entry.status == status);
+        }
+        Ok(OperatorMaintenanceList {
+            total_count: actions.len(),
+            status,
+            actions,
+        })
+    }
+}
+
+/// Outcome of executing one operator maintenance action.
+#[derive(Debug, Clone)]
+pub enum OperatorMaintenanceExecution {
+    Applied(OperatorMaintenanceLookup),
+    Blocked(OperatorMaintenanceLookup),
+    Failed(OperatorMaintenanceLookup),
+}
+
+impl OperatorMaintenanceExecution {
+    pub fn lookup(&self) -> &OperatorMaintenanceLookup {
+        match self {
+            Self::Applied(lookup) | Self::Blocked(lookup) | Self::Failed(lookup) => lookup,
+        }
+    }
+}
+
+/// Bounded maintenance service for the local operator surface.
+#[derive(Debug, Clone)]
+pub struct OperatorMaintenanceService {
+    actor: String,
+    portfolio: DefaultEvolutionPortfolioHarness,
+    governance_prep: DefaultEvolutionGovernancePrepHarness,
+    store: FileOperatorMaintenanceStore,
+}
+
+impl OperatorMaintenanceService {
+    pub fn from_paths(
+        actor: impl Into<String>,
+        paths: &OperatorSurfacePaths,
+    ) -> Result<Self, OperatorMaintenanceError> {
+        Ok(Self {
+            actor: actor.into(),
+            portfolio: DefaultEvolutionPortfolioHarness::from_path(
+                &paths.evolution_ranking_results_dir,
+                &paths.evolution_selection_results_dir,
+                &paths.evolution_portfolio_results_dir,
+                &paths.evolution_governance_review_packet_results_dir,
+            )?,
+            governance_prep: DefaultEvolutionGovernancePrepHarness::from_path(
+                &paths.evolution_governance_review_packet_results_dir,
+                &paths.evolution_packet_set_results_dir,
+                &paths.strategy_memory_results_dir,
+                &paths.evolution_portfolio_history_results_dir,
+            )?,
+            store: FileOperatorMaintenanceStore::open(&paths.operator_maintenance_results_dir)?,
+        })
+    }
+
+    pub fn execute(
+        &self,
+        request: OperatorMaintenanceRequest,
+    ) -> Result<OperatorMaintenanceExecution, OperatorMaintenanceError> {
+        let requested_at_ms = now_ms();
+        let (action_kind, target_kind, target_id, reason) = request_metadata(&request);
+        let reason = reason.to_string();
+        if let Err(summary) = validate_request(&request) {
+            return self.persist_error_record(
+                base_record(
+                    action_kind,
+                    &self.actor,
+                    requested_at_ms,
+                    target_kind,
+                    target_id,
+                    &reason,
+                    request,
+                ),
+                OperatorMaintenanceStatus::Blocked,
+                summary,
+            );
+        }
+
+        let actor = self.actor.clone();
+        match &request {
+            OperatorMaintenanceRequest::PortfolioEntryDecision {
+                portfolio_id,
+                entry_id,
+                decision,
+                reason,
+            } => match self
+                .portfolio
+                .record_decision(portfolio_id, entry_id, *decision, reason)
+            {
+                Ok(lookup) => Ok(OperatorMaintenanceExecution::Applied(
+                    self.persist_record(
+                        base_record(
+                            "portfolio_entry_decision",
+                            &actor,
+                            requested_at_ms,
+                            "portfolio_entry",
+                            format!("{portfolio_id}:{entry_id}"),
+                            reason,
+                            request.clone(),
+                        )
+                        .with_status(
+                            OperatorMaintenanceStatus::Applied,
+                            format!(
+                                "recorded portfolio decision `{}` for entry `{}`",
+                                decision_label(*decision),
+                                entry_id
+                            ),
+                            vec![OperatorMaintenanceArtifactRef {
+                                kind: "portfolio".to_string(),
+                                id: lookup.report.portfolio_id,
+                            }],
+                            Some(format!("portfolio:{portfolio_id}/entry:{entry_id}")),
+                        ),
+                    )?,
+                )),
+                Err(error) => self.persist_error_record(
+                    base_record(
+                        "portfolio_entry_decision",
+                        &self.actor,
+                        requested_at_ms,
+                        "portfolio_entry",
+                        format!("{portfolio_id}:{entry_id}"),
+                        reason,
+                        request.clone(),
+                    ),
+                    classify_portfolio_error(&error),
+                    error.to_string(),
+                ),
+            },
+            OperatorMaintenanceRequest::PacketSetSplit {
+                parent_packet_set_id,
+                name,
+                packet_ids,
+                reason,
+            } => match self.governance_prep.split_packet_set(
+                parent_packet_set_id,
+                name,
+                reason,
+                packet_ids.clone(),
+            ) {
+                Ok(lookup) => Ok(OperatorMaintenanceExecution::Applied(
+                    self.persist_record(
+                        base_record(
+                            "packet_set_split",
+                            &actor,
+                            requested_at_ms,
+                            "packet_set",
+                            parent_packet_set_id.clone(),
+                            reason,
+                            request.clone(),
+                        )
+                        .with_status(
+                            OperatorMaintenanceStatus::Applied,
+                            format!(
+                                "split packet set `{}` into child `{}`",
+                                parent_packet_set_id, lookup.report.packet_set_id
+                            ),
+                            vec![OperatorMaintenanceArtifactRef {
+                                kind: "packet_set".to_string(),
+                                id: lookup.report.packet_set_id,
+                            }],
+                            Some(parent_packet_set_id.clone()),
+                        ),
+                    )?,
+                )),
+                Err(error) => self.persist_error_record(
+                    base_record(
+                        "packet_set_split",
+                        &self.actor,
+                        requested_at_ms,
+                        "packet_set",
+                        parent_packet_set_id.clone(),
+                        reason,
+                        request.clone(),
+                    ),
+                    classify_governance_error(&error),
+                    error.to_string(),
+                ),
+            },
+            OperatorMaintenanceRequest::RefreshPortfolioHistory {
+                packet_set_id,
+                reason,
+            } => match self.governance_prep.create_portfolio_history(packet_set_id) {
+                Ok(lookup) => Ok(OperatorMaintenanceExecution::Applied(
+                    self.persist_record(
+                        base_record(
+                            "refresh_portfolio_history",
+                            &actor,
+                            requested_at_ms,
+                            "packet_set",
+                            packet_set_id.clone(),
+                            reason,
+                            request.clone(),
+                        )
+                        .with_status(
+                            OperatorMaintenanceStatus::Applied,
+                            format!(
+                                "created refreshed portfolio history `{}` from packet set `{}`",
+                                lookup.report.history_id, packet_set_id
+                            ),
+                            vec![OperatorMaintenanceArtifactRef {
+                                kind: "portfolio_history".to_string(),
+                                id: lookup.report.history_id,
+                            }],
+                            Some(packet_set_id.clone()),
+                        ),
+                    )?,
+                )),
+                Err(error) => self.persist_error_record(
+                    base_record(
+                        "refresh_portfolio_history",
+                        &self.actor,
+                        requested_at_ms,
+                        "packet_set",
+                        packet_set_id.clone(),
+                        reason,
+                        request.clone(),
+                    ),
+                    classify_governance_error(&error),
+                    error.to_string(),
+                ),
+            },
+        }
+    }
+
+    pub fn load(
+        &self,
+        action_id: &str,
+    ) -> Result<Option<OperatorMaintenanceLookup>, OperatorMaintenanceError> {
+        Ok(self.store.load(action_id)?)
+    }
+
+    pub fn list(
+        &self,
+        status: Option<OperatorMaintenanceStatus>,
+    ) -> Result<OperatorMaintenanceList, OperatorMaintenanceError> {
+        Ok(self.store.list(status)?)
+    }
+
+    fn persist_record(
+        &self,
+        record: OperatorMaintenanceRecord,
+    ) -> Result<OperatorMaintenanceLookup, OperatorMaintenanceError> {
+        Ok(self.store.persist(&record)?)
+    }
+
+    fn persist_error_record(
+        &self,
+        record: OperatorMaintenanceRecordBuilder,
+        status: OperatorMaintenanceStatus,
+        summary: String,
+    ) -> Result<OperatorMaintenanceExecution, OperatorMaintenanceError> {
+        let record = record.with_status(status, summary, Vec::new(), None);
+        let lookup = self.store.persist(&record)?;
+        Ok(match status {
+            OperatorMaintenanceStatus::Blocked => OperatorMaintenanceExecution::Blocked(lookup),
+            OperatorMaintenanceStatus::Failed => OperatorMaintenanceExecution::Failed(lookup),
+            OperatorMaintenanceStatus::Applied => OperatorMaintenanceExecution::Applied(lookup),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct OperatorMaintenanceRecordBuilder {
+    action_id: String,
+    actor: String,
+    requested_at_ms: i64,
+    completed_at_ms: i64,
+    action: OperatorMaintenanceRequest,
+    target_kind: String,
+    target_id: String,
+    reason: String,
+}
+
+impl OperatorMaintenanceRecordBuilder {
+    fn with_status(
+        self,
+        status: OperatorMaintenanceStatus,
+        summary: String,
+        artifacts: Vec<OperatorMaintenanceArtifactRef>,
+        native_history_ref: Option<String>,
+    ) -> OperatorMaintenanceRecord {
+        OperatorMaintenanceRecord {
+            action_id: self.action_id,
+            actor: self.actor,
+            requested_at_ms: self.requested_at_ms,
+            completed_at_ms: self.completed_at_ms,
+            action: self.action,
+            target_kind: self.target_kind,
+            target_id: self.target_id,
+            reason: self.reason,
+            status,
+            summary,
+            artifacts,
+            native_history_ref,
+        }
+    }
+}
+
+fn base_record(
+    action_kind: &str,
+    actor: &str,
+    requested_at_ms: i64,
+    target_kind: &str,
+    target_id: String,
+    reason: &str,
+    action: OperatorMaintenanceRequest,
+) -> OperatorMaintenanceRecordBuilder {
+    OperatorMaintenanceRecordBuilder {
+        action_id: format!(
+            "maintenance:{}:{}",
+            sanitize_id(action_kind),
+            now_unix_nanos()
+        ),
+        actor: actor.to_string(),
+        requested_at_ms,
+        completed_at_ms: now_ms(),
+        action,
+        target_kind: target_kind.to_string(),
+        target_id,
+        reason: reason.to_string(),
+    }
+}
+
+fn classify_portfolio_error(error: &EvolutionPortfolioError) -> OperatorMaintenanceStatus {
+    match error {
+        EvolutionPortfolioError::PortfolioNotFound { .. }
+        | EvolutionPortfolioError::PortfolioEntryNotFound { .. }
+        | EvolutionPortfolioError::InvalidDecision { .. }
+        | EvolutionPortfolioError::InvalidPortfolioRequest { .. } => {
+            OperatorMaintenanceStatus::Blocked
+        }
+        _ => OperatorMaintenanceStatus::Failed,
+    }
+}
+
+fn classify_governance_error(error: &EvolutionGovernancePrepError) -> OperatorMaintenanceStatus {
+    match error {
+        EvolutionGovernancePrepError::PacketSetNotFound { .. }
+        | EvolutionGovernancePrepError::InvalidPacketSetRequest { .. }
+        | EvolutionGovernancePrepError::PacketNotInSet { .. }
+        | EvolutionGovernancePrepError::InconsistentPacketEvidence { .. }
+        | EvolutionGovernancePrepError::PortfolioHistoryNotFound { .. }
+        | EvolutionGovernancePrepError::GovernancePacketNotFound { .. } => {
+            OperatorMaintenanceStatus::Blocked
+        }
+        _ => OperatorMaintenanceStatus::Failed,
+    }
+}
+
+fn validate_request(request: &OperatorMaintenanceRequest) -> Result<(), String> {
+    if request_reason(request).trim().is_empty() {
+        return Err("maintenance reason cannot be empty".to_string());
+    }
+    Ok(())
+}
+
+fn request_reason(request: &OperatorMaintenanceRequest) -> &str {
+    match request {
+        OperatorMaintenanceRequest::PortfolioEntryDecision { reason, .. }
+        | OperatorMaintenanceRequest::PacketSetSplit { reason, .. }
+        | OperatorMaintenanceRequest::RefreshPortfolioHistory { reason, .. } => reason,
+    }
+}
+
+fn request_metadata(
+    request: &OperatorMaintenanceRequest,
+) -> (&'static str, &'static str, String, &str) {
+    match request {
+        OperatorMaintenanceRequest::PortfolioEntryDecision {
+            portfolio_id,
+            entry_id,
+            reason,
+            ..
+        } => (
+            "portfolio_entry_decision",
+            "portfolio_entry",
+            format!("{portfolio_id}:{entry_id}"),
+            reason,
+        ),
+        OperatorMaintenanceRequest::PacketSetSplit {
+            parent_packet_set_id,
+            reason,
+            ..
+        } => (
+            "packet_set_split",
+            "packet_set",
+            parent_packet_set_id.clone(),
+            reason,
+        ),
+        OperatorMaintenanceRequest::RefreshPortfolioHistory {
+            packet_set_id,
+            reason,
+        } => (
+            "refresh_portfolio_history",
+            "packet_set",
+            packet_set_id.clone(),
+            reason,
+        ),
+    }
+}
+
+fn decision_label(value: EvolutionPortfolioDecisionAction) -> &'static str {
+    match value {
+        EvolutionPortfolioDecisionAction::Include => "include",
+        EvolutionPortfolioDecisionAction::Defer => "defer",
+        EvolutionPortfolioDecisionAction::Drop => "drop",
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after UNIX_EPOCH")
+        .as_millis() as i64
+}
+
+fn now_unix_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after UNIX_EPOCH")
+        .as_nanos()
+}
+
+fn sanitize_id(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' => character.to_ascii_lowercase(),
+            _ => '_',
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FileOperatorMaintenanceStore, OperatorMaintenanceRecord, OperatorMaintenanceRequest,
+        OperatorMaintenanceStatus,
+    };
+    use crate::portfolio::EvolutionPortfolioDecisionAction;
+
+    #[test]
+    fn maintenance_store_round_trips_records() {
+        let root = std::env::temp_dir().join("swarm-operator-maintenance-store-roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileOperatorMaintenanceStore::open(&root).unwrap();
+        let record = OperatorMaintenanceRecord {
+            action_id: "maintenance:test:1".to_string(),
+            actor: "local-operator".to_string(),
+            requested_at_ms: 1,
+            completed_at_ms: 2,
+            action: OperatorMaintenanceRequest::PortfolioEntryDecision {
+                portfolio_id: "portfolio:red".to_string(),
+                entry_id: "entry:red".to_string(),
+                decision: EvolutionPortfolioDecisionAction::Include,
+                reason: "include it".to_string(),
+            },
+            target_kind: "portfolio_entry".to_string(),
+            target_id: "portfolio:red:entry:red".to_string(),
+            reason: "include it".to_string(),
+            status: OperatorMaintenanceStatus::Applied,
+            summary: "applied".to_string(),
+            artifacts: Vec::new(),
+            native_history_ref: Some("portfolio:red/entry:red".to_string()),
+        };
+
+        let stored = store.persist(&record).unwrap();
+        let loaded = store.load(&stored.record.action_id).unwrap().unwrap();
+        assert_eq!(loaded.record.action_id, "maintenance:test:1");
+        assert_eq!(loaded.record.status, OperatorMaintenanceStatus::Applied);
+    }
+}

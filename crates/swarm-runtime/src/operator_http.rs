@@ -8,6 +8,11 @@ use crate::governance_prep::{
     DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePacketSetList,
     EvolutionPortfolioHistoryList,
 };
+use crate::operator_maintenance::{
+    OperatorMaintenanceError, OperatorMaintenanceExecution, OperatorMaintenanceList,
+    OperatorMaintenanceRecord, OperatorMaintenanceRequest, OperatorMaintenanceService,
+    OperatorMaintenanceStatus,
+};
 use crate::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioList,
 };
@@ -34,6 +39,7 @@ pub struct OperatorSurfacePaths {
     pub evolution_packet_set_results_dir: PathBuf,
     pub strategy_memory_results_dir: PathBuf,
     pub evolution_portfolio_history_results_dir: PathBuf,
+    pub operator_maintenance_results_dir: PathBuf,
 }
 
 /// Errors raised while building or serving the authenticated operator surface.
@@ -50,6 +56,9 @@ pub enum OperatorHttpError {
 
     #[error(transparent)]
     GovernancePrep(#[from] crate::governance_prep::EvolutionGovernancePrepError),
+
+    #[error(transparent)]
+    Maintenance(#[from] OperatorMaintenanceError),
 
     #[error("operator surface is disabled in repo config")]
     Disabled,
@@ -81,6 +90,7 @@ struct OperatorHttpState {
     control: Arc<DefaultControlPlane>,
     portfolio: Option<Arc<DefaultEvolutionPortfolioHarness>>,
     governance_prep: Option<Arc<DefaultEvolutionGovernancePrepHarness>>,
+    maintenance: Option<Arc<OperatorMaintenanceService>>,
     max_list_results: usize,
 }
 
@@ -125,6 +135,12 @@ struct PortfolioListQuery {
 #[derive(Debug, Deserialize)]
 struct CohortListQuery {
     cohort: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaintenanceActionListQuery {
+    status: Option<String>,
     limit: Option<usize>,
 }
 
@@ -241,7 +257,7 @@ impl LocalOperatorSurface {
 
         let config_path = config_path.into();
         let control = DefaultControlPlane::from_config(config_path.clone(), config.clone())?;
-        let (portfolio, governance_prep) = if let Some(paths) = paths {
+        let (portfolio, governance_prep, maintenance) = if let Some(paths) = paths {
             let portfolio = DefaultEvolutionPortfolioHarness::from_path(
                 &paths.evolution_ranking_results_dir,
                 &paths.evolution_selection_results_dir,
@@ -254,9 +270,17 @@ impl LocalOperatorSurface {
                 &paths.strategy_memory_results_dir,
                 &paths.evolution_portfolio_history_results_dir,
             )?;
-            (Some(Arc::new(portfolio)), Some(Arc::new(governance_prep)))
+            let maintenance = OperatorMaintenanceService::from_paths(
+                config.operator.auth.operator_id.clone(),
+                &paths,
+            )?;
+            (
+                Some(Arc::new(portfolio)),
+                Some(Arc::new(governance_prep)),
+                Some(Arc::new(maintenance)),
+            )
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         Ok(Self {
@@ -265,6 +289,7 @@ impl LocalOperatorSurface {
                 control: Arc::new(control),
                 portfolio,
                 governance_prep,
+                maintenance,
                 max_list_results: config.operator.max_list_results,
             },
         })
@@ -323,6 +348,14 @@ impl LocalOperatorSurface {
             .route(
                 "/v1/operator/evolution/portfolio-histories/{history_id}",
                 get(portfolio_history_handler),
+            )
+            .route(
+                "/v1/operator/maintenance/actions",
+                get(maintenance_action_list_handler).post(maintenance_action_handler),
+            )
+            .route(
+                "/v1/operator/maintenance/actions/{action_id}",
+                get(maintenance_action_lookup_handler),
             )
             .with_state(self.state.clone())
             .layer(middleware::from_fn_with_state(
@@ -515,6 +548,65 @@ async fn portfolio_history_list_handler(
     )))
 }
 
+async fn maintenance_action_handler(
+    State(state): State<OperatorHttpState>,
+    Json(request): Json<OperatorMaintenanceRequest>,
+) -> Response {
+    let service = match maintenance_service(&state) {
+        Ok(service) => service,
+        Err(error) => return error.into_response(),
+    };
+    match service.execute(request) {
+        Ok(execution) => {
+            let (status, record) = match execution {
+                OperatorMaintenanceExecution::Applied(lookup) => (StatusCode::OK, lookup.record),
+                OperatorMaintenanceExecution::Blocked(lookup) => {
+                    (StatusCode::CONFLICT, lookup.record)
+                }
+                OperatorMaintenanceExecution::Failed(lookup) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, lookup.record)
+                }
+            };
+            (status, Json(record)).into_response()
+        }
+        Err(error) => OperatorApiError::internal(error.to_string()).into_response(),
+    }
+}
+
+async fn maintenance_action_lookup_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(action_id): RoutePath<String>,
+) -> Result<Json<OperatorMaintenanceRecord>, OperatorApiError> {
+    let service = maintenance_service(&state)?;
+    let lookup = service
+        .load(&action_id)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorApiError::not_found(format!("maintenance action `{action_id}` was not found"))
+        })?;
+    Ok(Json(lookup.record))
+}
+
+async fn maintenance_action_list_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<MaintenanceActionListQuery>,
+) -> Result<Json<OperatorMaintenanceList>, OperatorApiError> {
+    let service = maintenance_service(&state)?;
+    let status = query
+        .status
+        .as_deref()
+        .map(parse_maintenance_status)
+        .transpose()?;
+    let list = service
+        .list(status)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+    Ok(Json(limit_maintenance_list(
+        list,
+        query.limit,
+        state.max_list_results,
+    )))
+}
+
 async fn require_bearer_auth(
     State(auth): State<OperatorAuthState>,
     headers: HeaderMap,
@@ -618,6 +710,17 @@ fn parse_portfolio_review_state(
     }
 }
 
+fn parse_maintenance_status(value: &str) -> Result<OperatorMaintenanceStatus, OperatorApiError> {
+    match value {
+        "applied" => Ok(OperatorMaintenanceStatus::Applied),
+        "blocked" => Ok(OperatorMaintenanceStatus::Blocked),
+        "failed" => Ok(OperatorMaintenanceStatus::Failed),
+        other => Err(OperatorApiError::bad_request(format!(
+            "unsupported maintenance status `{other}`"
+        ))),
+    }
+}
+
 fn map_control_error(error: ControlError) -> OperatorApiError {
     match error {
         ControlError::NotFound { entity, lookup } => {
@@ -643,6 +746,15 @@ fn governance_harness(
         .governance_prep
         .as_deref()
         .ok_or_else(|| OperatorApiError::internal("governance-prep stores are not configured"))
+}
+
+fn maintenance_service(
+    state: &OperatorHttpState,
+) -> Result<&OperatorMaintenanceService, OperatorApiError> {
+    state
+        .maintenance
+        .as_deref()
+        .ok_or_else(|| OperatorApiError::internal("maintenance stores are not configured"))
 }
 
 fn count_set(values: &[Option<&str>]) -> usize {
@@ -686,13 +798,24 @@ fn limit_portfolio_history_list(
     list
 }
 
+fn limit_maintenance_list(
+    mut list: OperatorMaintenanceList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> OperatorMaintenanceList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.actions = list.actions.into_iter().take(limit).collect();
+    list.total_count = list.actions.len();
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::{LocalOperatorSurface, OperatorSurfacePaths};
     use crate::service::EventExecutionContext;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1088,6 +1211,7 @@ mod tests {
             evolution_packet_set_results_dir: root.join("packet-sets"),
             strategy_memory_results_dir: root.join("strategy-memory"),
             evolution_portfolio_history_results_dir: root.join("portfolio-history"),
+            operator_maintenance_results_dir: root.join("operator-maintenance-actions"),
         }
     }
 
@@ -1306,5 +1430,157 @@ mod tests {
             .unwrap();
         let history_json: Value = serde_json::from_slice(&history_body).unwrap();
         assert_eq!(history_json["history_id"], "portfolio_history:red:1");
+    }
+
+    #[tokio::test]
+    async fn maintenance_endpoints_persist_audit_records() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+
+        let root = unique_temp_dir("maintenance-endpoints");
+        seed_evolution_artifacts(&root);
+        let paths = surface_paths(&root);
+        let surface =
+            LocalOperatorSurface::from_config_and_paths("inline", operator_config(), paths)
+                .unwrap();
+        let app = surface.router("secret-token".to_string());
+        let auth = ("authorization", "Bearer secret-token");
+
+        let applied_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/maintenance/actions")
+                    .header(auth.0, auth.1)
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "action": "refresh_portfolio_history",
+                            "packet_set_id": "packet_set:red:1",
+                            "reason": "refresh local review snapshot"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(applied_response.status(), StatusCode::OK);
+        let applied_body = to_bytes(applied_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let applied_json: Value = serde_json::from_slice(&applied_body).unwrap();
+        let applied_action_id = applied_json["action_id"].as_str().unwrap().to_string();
+        assert_eq!(applied_json["actor"], "local-operator");
+        assert_eq!(applied_json["status"], "applied");
+        assert_eq!(applied_json["reason"], "refresh local review snapshot");
+        assert_eq!(applied_json["artifacts"][0]["kind"], "portfolio_history");
+
+        let blocked_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/maintenance/actions")
+                    .header(auth.0, auth.1)
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "action": "packet_set_split",
+                            "parent_packet_set_id": "packet_set:red:1",
+                            "name": "red subset",
+                            "packet_ids": ["packet:missing"],
+                            "reason": "test blocked maintenance flow"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked_response.status(), StatusCode::CONFLICT);
+        let blocked_body = to_bytes(blocked_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let blocked_json: Value = serde_json::from_slice(&blocked_body).unwrap();
+        let blocked_action_id = blocked_json["action_id"].as_str().unwrap().to_string();
+        assert_eq!(blocked_json["status"], "blocked");
+        assert_eq!(blocked_json["target_kind"], "packet_set");
+        assert!(
+            blocked_json["summary"]
+                .as_str()
+                .unwrap()
+                .contains("packet:missing")
+        );
+
+        let lookup_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/operator/maintenance/actions/{blocked_action_id}"
+                    ))
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lookup_response.status(), StatusCode::OK);
+        let lookup_body = to_bytes(lookup_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let lookup_json: Value = serde_json::from_slice(&lookup_body).unwrap();
+        assert_eq!(lookup_json["action_id"], blocked_action_id);
+        assert_eq!(lookup_json["status"], "blocked");
+
+        let blocked_list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/maintenance/actions?status=blocked&limit=5")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked_list_response.status(), StatusCode::OK);
+        let blocked_list_body = to_bytes(blocked_list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let blocked_list_json: Value = serde_json::from_slice(&blocked_list_body).unwrap();
+        assert_eq!(blocked_list_json["total_count"], 1);
+        assert_eq!(
+            blocked_list_json["actions"][0]["action_id"],
+            blocked_action_id
+        );
+
+        let all_actions_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/maintenance/actions?limit=5")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(all_actions_response.status(), StatusCode::OK);
+        let all_actions_body = to_bytes(all_actions_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let all_actions_json: Value = serde_json::from_slice(&all_actions_body).unwrap();
+        assert_eq!(all_actions_json["total_count"], 2);
+        let action_ids = all_actions_json["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value["action_id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert!(action_ids.contains(&applied_action_id));
+        assert!(action_ids.contains(&blocked_action_id));
     }
 }

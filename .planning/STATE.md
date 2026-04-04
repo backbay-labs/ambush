@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.17
 milestone_name: authenticated-operator-surface
-status: planning
-last_updated: "2026-04-04T14:14:33Z"
+status: ready-for-audit
+last_updated: "2026-04-04T18:25:00Z"
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-04)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.17 Authenticated Operator Surface` is active and Phases 53-54 are complete.
+**Current focus:** `v1.17 Authenticated Operator Surface` implementation is complete and ready for milestone audit.
 
 ## Memory
 
@@ -30,7 +30,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-04)
 - `v1.17` will extend those repo-owned review flows into an authenticated local operator surface instead of jumping early into quorum governance.
 - Phase 53 shipped the local operator-surface config contract, bearer-token auth boundary, and protected `/v1/operator/status` route through `swarmctl serve`.
 - Phase 54 extended that surface with authenticated runtime artifact, portfolio, governance-packet, packet-set, and portfolio-history read endpoints.
+- Phase 55 added bounded authenticated maintenance actions plus durable stable-ID audit records for applied and blocked attempts.
 
 ## Next Command
 
-`$gsd-plan-phase 55`
+`$gsd-audit-milestone`

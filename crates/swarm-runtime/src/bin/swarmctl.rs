@@ -169,6 +169,13 @@ struct Cli {
     )]
     evolution_portfolio_history_results_dir: std::path::PathBuf,
 
+    #[arg(
+        long,
+        global = true,
+        default_value = "data/operator-maintenance-actions"
+    )]
+    operator_maintenance_results_dir: std::path::PathBuf,
+
     #[arg(long, global = true)]
     json: bool,
 
@@ -1127,6 +1134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     evolution_portfolio_history_results_dir: cli
                         .evolution_portfolio_history_results_dir
                         .clone(),
+                    operator_maintenance_results_dir: cli.operator_maintenance_results_dir.clone(),
                 },
             )?;
             eprintln!(

@@ -146,7 +146,8 @@ cargo run -p swarm-runtime --bin swarmctl -- serve \
   --evolution-governance-review-packet-results-dir data/evolution-governance-review-packets \
   --evolution-packet-set-results-dir data/evolution-packet-sets \
   --evolution-portfolio-history-results-dir data/evolution-portfolio-history \
-  --strategy-memory-results-dir data/strategy-memory
+  --strategy-memory-results-dir data/strategy-memory \
+  --operator-maintenance-results-dir data/operator-maintenance-actions
 ```
 
 Example authenticated reads:
@@ -171,7 +172,26 @@ curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evolution/portfolio-histories?cohort=red&limit=10"
 ```
 
-Current authenticated read surface:
+Example authenticated maintenance flow:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:7766/v1/operator/maintenance/actions \
+  -d '{
+    "action": "refresh_portfolio_history",
+    "packet_set_id": "packet_set:red:1",
+    "reason": "refresh local review snapshot"
+  }'
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/maintenance/actions?status=blocked&limit=10"
+```
+
+Maintenance actions inherit the authenticated local operator identity from `operator_surface.auth.operator_id`. Every maintenance request must include a non-empty `reason`, and every applied or blocked attempt is written to `data/operator-maintenance-actions/` as a stable-ID audit record.
+
+Current authenticated surface:
 
 - `/v1/operator/status`
 - `/v1/operator/replay`
@@ -184,6 +204,8 @@ Current authenticated read surface:
 - `/v1/operator/evolution/packet-sets?cohort=&limit=`
 - `/v1/operator/evolution/portfolio-histories/{history_id}`
 - `/v1/operator/evolution/portfolio-histories?cohort=&limit=`
+- `/v1/operator/maintenance/actions` `GET`, `POST`
+- `/v1/operator/maintenance/actions/{action_id}` `GET`
 
 ### Offline Replay Harness
 

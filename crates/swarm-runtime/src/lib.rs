@@ -14,6 +14,7 @@ pub mod governance_prep;
 pub mod investigation;
 pub mod mutation;
 pub mod operator_http;
+pub mod operator_maintenance;
 pub mod pipeline;
 pub mod portfolio;
 pub mod promotion;
