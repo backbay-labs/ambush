@@ -1,25 +1,24 @@
 # Requirements: Swarm Team Six
 
-**Defined:** 2026-04-03
+**Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.13 Requirements
+## v1.14 Requirements
 
-### Structured Mutation
+### Ranked Candidate Selection
 
-- [x] **EVOL-10**: Operator can derive a structured mutation spec from a reviewed draft or materialized candidate through `swarmctl` without hand-editing multiple manifests
-- [x] **EVOL-11**: Mutation specs preserve parent candidate references, intended mutation dimensions, and operator rationale in one durable artifact
+- [ ] **EVOL-17**: Operator can create a durable ranked-candidate selection from one shortlist review packet through `swarmctl` without re-materializing the candidate manifest
+- [ ] **EVOL-18**: Ranked-candidate selection artifacts preserve ranking, review packet, materialization, validation, advisory, and parent queue lineage in one durable record
 
-### Batch Candidate Generation
+### Review Decisions
 
-- [x] **EVOL-12**: Team can materialize a batch of candidate variants from one mutation spec through a repo-owned CLI flow
-- [x] **EVOL-13**: Batch candidate generation preserves stable per-candidate links back to the source mutation spec and parent draft lineage
+- [ ] **EVOL-19**: Operator can list and inspect ranked-candidate selections by stable ID through `swarmctl`
+- [ ] **EVOL-20**: Operator can record accepted, deferred, or rejected review state for ranked-candidate selections without rewriting underlying ranking evidence
 
-### Batch Validation And Ranking
+### Rollout Bridge
 
-- [x] **EVOL-14**: Team can refresh validation bundles for multiple materialized candidates in one batch without overwriting per-candidate evidence artifacts
-- [x] **EVOL-15**: Operator can rank or shortlist validated candidates for later review using deterministic criteria derived from validation and advisory evidence
-- [x] **EVOL-16**: Ranking packets preserve references to each candidate's materialization, validation bundle, and reviewed queue state so later review does not require rewriting evidence artifacts
+- [ ] **EVOL-21**: Accepted ranked-candidate selections can feed the existing handoff and canary launch path using the preserved experiment and validation artifacts
+- [ ] **EVOL-22**: Stale, blocked, or inconsistent ranked-candidate selections fail closed and persist inspectable blocked records instead of mutating queue, canary, or production state
 
 ## Future Requirements
 
@@ -35,38 +34,36 @@
 
 ### Advanced Evolution
 
-- **EVOL-08**: Queue-approved detector proposals can feed a later governance-backed rollout path without manual artifact translation
-- **EVOL-17**: Ranked candidate batches can be promoted into later governance or fleet rollout review without re-materializing evidence
+- **EVOL-23**: Ranked-candidate selections can feed a later governance-backed or multi-node rollout review path without re-encoding existing evidence
+- **EVOL-24**: Operators can compare and curate shortlisted candidates across multiple mutation batches or campaign cohorts
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Autonomous mutation from pressure signals | `v1.13` turns operator hints into structured mutation specs only; it does not let the runtime invent new mutations by itself |
-| Automatic queue promotion for ranked candidates | Ranking remains advisory and operator-reviewed |
-| Automatic canary or production launch from ranked batches | Existing rollout gates remain explicit and separate from offline candidate ranking |
+| Automatic ranked-candidate selection from batch scores | `v1.14` keeps selection explicit and operator-reviewed |
+| Automatic canary or production launch from ranked candidates | Existing rollout gates remain explicit and separate from offline ranking |
 | Quorum or BFT approval for ranked candidates | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
-| Multi-node or partial-fleet rollout | The runtime is still single-node and self-contained; this cycle focuses on offline candidate comparison |
+| Cross-batch tournament ranking | This cycle bridges one ranked batch back into rollout review before building broader portfolio workflows |
+| Hot-path mutation, selection, or rollout bridging | Fast detection remains the core value, so all ranked-candidate work stays off the critical lane |
 | Authenticated HTTP or TUI control plane | CLI-first remains the smallest practical operator surface for the current runtime |
-| Hot-path mutation or ranking | Fast detection remains the core value, so batch mutation and ranking stay off the critical lane |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EVOL-10 | Phase 41 | Satisfied |
-| EVOL-11 | Phase 41 | Satisfied |
-| EVOL-12 | Phase 42 | Satisfied |
-| EVOL-13 | Phase 42 | Satisfied |
-| EVOL-14 | Phase 42 | Satisfied |
-| EVOL-15 | Phase 43 | Satisfied |
-| EVOL-16 | Phase 43 | Satisfied |
+| EVOL-17 | Pending roadmap | Pending |
+| EVOL-18 | Pending roadmap | Pending |
+| EVOL-19 | Pending roadmap | Pending |
+| EVOL-20 | Pending roadmap | Pending |
+| EVOL-21 | Pending roadmap | Pending |
+| EVOL-22 | Pending roadmap | Pending |
 
 **Coverage:**
-- v1.13 requirements: 7 total
-- Mapped to phases: 7
-- Unmapped: 0
+- v1.14 requirements: 6 total
+- Mapped to phases: 0
+- Unmapped: 6 ⚠️
 
 ---
-*Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after milestone v1.13 completion*
+*Requirements defined: 2026-04-04*
+*Last updated: 2026-04-04 after milestone v1.14 requirements definition*
