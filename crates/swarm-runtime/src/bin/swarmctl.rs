@@ -27,7 +27,7 @@ use swarm_runtime::mutation::{
     render_evolution_mutation_materialization_batch, render_evolution_mutation_ranking,
     render_evolution_mutation_spec, render_evolution_mutation_validation_batch,
 };
-use swarm_runtime::operator_http::LocalOperatorSurface;
+use swarm_runtime::operator_http::{LocalOperatorSurface, OperatorSurfacePaths};
 use swarm_runtime::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction,
     EvolutionPortfolioEntryCreateRequest, EvolutionPortfolioEntryReviewState,
@@ -1113,7 +1113,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let output = match cli.command {
         Command::Serve => {
-            let surface = LocalOperatorSurface::from_path(&cli.config)?;
+            let surface = LocalOperatorSurface::from_paths(
+                &cli.config,
+                OperatorSurfacePaths {
+                    evolution_ranking_results_dir: cli.evolution_ranking_results_dir.clone(),
+                    evolution_selection_results_dir: cli.evolution_selection_results_dir.clone(),
+                    evolution_portfolio_results_dir: cli.evolution_portfolio_results_dir.clone(),
+                    evolution_governance_review_packet_results_dir: cli
+                        .evolution_governance_review_packet_results_dir
+                        .clone(),
+                    evolution_packet_set_results_dir: cli.evolution_packet_set_results_dir.clone(),
+                    strategy_memory_results_dir: cli.strategy_memory_results_dir.clone(),
+                    evolution_portfolio_history_results_dir: cli
+                        .evolution_portfolio_history_results_dir
+                        .clone(),
+                },
+            )?;
             eprintln!(
                 "serving authenticated operator surface on http://{}",
                 surface.bind_addr()

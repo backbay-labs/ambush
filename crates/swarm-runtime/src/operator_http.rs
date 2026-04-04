@@ -1,17 +1,40 @@
 use crate::config::{RuntimeConfigError, load_config};
-use crate::control::{ControlEnvelope, ControlError, DefaultControlPlane};
+use crate::control::{
+    ControlEnvelope, ControlError, DefaultControlPlane, IncidentArtifactView,
+    IncidentLookupSelector, InvestigationArtifactView, InvestigationLookupSelector,
+    ReplayArtifactView, ReplayLookupSelector,
+};
+use crate::governance_prep::{
+    DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePacketSetList,
+    EvolutionPortfolioHistoryList,
+};
+use crate::portfolio::{
+    DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioList,
+};
 use crate::service::OperatorStatusReport;
-use axum::extract::State;
+use axum::extract::{Path as RoutePath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swarm_core::config::SwarmConfig;
+
+/// Result directories required to expose evolution review artifacts through HTTP.
+#[derive(Debug, Clone)]
+pub struct OperatorSurfacePaths {
+    pub evolution_ranking_results_dir: PathBuf,
+    pub evolution_selection_results_dir: PathBuf,
+    pub evolution_portfolio_results_dir: PathBuf,
+    pub evolution_governance_review_packet_results_dir: PathBuf,
+    pub evolution_packet_set_results_dir: PathBuf,
+    pub strategy_memory_results_dir: PathBuf,
+    pub evolution_portfolio_history_results_dir: PathBuf,
+}
 
 /// Errors raised while building or serving the authenticated operator surface.
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +44,12 @@ pub enum OperatorHttpError {
 
     #[error(transparent)]
     Control(#[from] ControlError),
+
+    #[error(transparent)]
+    Portfolio(#[from] crate::portfolio::EvolutionPortfolioError),
+
+    #[error(transparent)]
+    GovernancePrep(#[from] crate::governance_prep::EvolutionGovernancePrepError),
 
     #[error("operator surface is disabled in repo config")]
     Disabled,
@@ -50,6 +79,9 @@ pub struct LocalOperatorSurface {
 #[derive(Clone)]
 struct OperatorHttpState {
     control: Arc<DefaultControlPlane>,
+    portfolio: Option<Arc<DefaultEvolutionPortfolioHarness>>,
+    governance_prep: Option<Arc<DefaultEvolutionGovernancePrepHarness>>,
+    max_list_results: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +95,39 @@ struct OperatorApiErrorBody {
     message: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReplayLookupQuery {
+    bundle_id: Option<String>,
+    hunt_id: Option<String>,
+    receipt_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InvestigationLookupQuery {
+    investigation_id: Option<String>,
+    hunt_id: Option<String>,
+    receipt_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IncidentLookupQuery {
+    incident_id: Option<String>,
+    hunt_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PortfolioListQuery {
+    cohort: Option<String>,
+    review_state: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CohortListQuery {
+    cohort: Option<String>,
+    limit: Option<usize>,
+}
+
 struct OperatorApiError {
     status: StatusCode,
     error: &'static str,
@@ -74,6 +139,22 @@ impl OperatorApiError {
         Self {
             status: StatusCode::UNAUTHORIZED,
             error: "unauthorized",
+            message: message.into(),
+        }
+    }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            error: "bad_request",
+            message: message.into(),
+        }
+    }
+
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            error: "not_found",
             message: message.into(),
         }
     }
@@ -113,18 +194,35 @@ impl LocalOperatorSurface {
         config_path: impl Into<PathBuf>,
         config: SwarmConfig,
     ) -> Result<Self, OperatorHttpError> {
+        Self::from_config_with_paths(config_path, config, None)
+    }
+
+    /// Build the local operator surface with additional evolution artifact stores.
+    pub fn from_config_and_paths(
+        config_path: impl Into<PathBuf>,
+        config: SwarmConfig,
+        paths: OperatorSurfacePaths,
+    ) -> Result<Self, OperatorHttpError> {
+        Self::from_config_with_paths(config_path, config, Some(paths))
+    }
+
+    fn from_config_with_paths(
+        config_path: impl Into<PathBuf>,
+        config: SwarmConfig,
+        paths: Option<OperatorSurfacePaths>,
+    ) -> Result<Self, OperatorHttpError> {
         if !config.operator.enabled {
             return Err(OperatorHttpError::Disabled);
         }
 
-        let env_name = config.operator.auth.token_env.clone();
-        let _token = std::env::var(&env_name)
+        std::env::var(&config.operator.auth.token_env)
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .ok_or_else(|| OperatorHttpError::MissingTokenEnv {
-                env_name: env_name.clone(),
+                env_name: config.operator.auth.token_env.clone(),
             })?;
+
         let bind_addr =
             config
                 .operator
@@ -141,13 +239,45 @@ impl LocalOperatorSurface {
                     },
                 })?;
 
-        let control = DefaultControlPlane::from_config(config_path, config)?;
+        let config_path = config_path.into();
+        let control = DefaultControlPlane::from_config(config_path.clone(), config.clone())?;
+        let (portfolio, governance_prep) = if let Some(paths) = paths {
+            let portfolio = DefaultEvolutionPortfolioHarness::from_path(
+                &paths.evolution_ranking_results_dir,
+                &paths.evolution_selection_results_dir,
+                &paths.evolution_portfolio_results_dir,
+                &paths.evolution_governance_review_packet_results_dir,
+            )?;
+            let governance_prep = DefaultEvolutionGovernancePrepHarness::from_path(
+                &paths.evolution_governance_review_packet_results_dir,
+                &paths.evolution_packet_set_results_dir,
+                &paths.strategy_memory_results_dir,
+                &paths.evolution_portfolio_history_results_dir,
+            )?;
+            (Some(Arc::new(portfolio)), Some(Arc::new(governance_prep)))
+        } else {
+            (None, None)
+        };
+
         Ok(Self {
             bind_addr,
             state: OperatorHttpState {
                 control: Arc::new(control),
+                portfolio,
+                governance_prep,
+                max_list_results: config.operator.max_list_results,
             },
         })
+    }
+
+    /// Build the local operator surface from config on disk plus evolution artifact stores.
+    pub fn from_paths(
+        config_path: impl AsRef<Path>,
+        paths: OperatorSurfacePaths,
+    ) -> Result<Self, OperatorHttpError> {
+        let config_path = config_path.as_ref();
+        let config = load_config(config_path)?;
+        Self::from_config_and_paths(config_path, config, paths)
     }
 
     /// Bound socket address for the local surface.
@@ -163,6 +293,37 @@ impl LocalOperatorSurface {
 
         Router::new()
             .route("/v1/operator/status", get(status_handler))
+            .route("/v1/operator/replay", get(replay_handler))
+            .route("/v1/operator/investigation", get(investigation_handler))
+            .route("/v1/operator/incident", get(incident_handler))
+            .route(
+                "/v1/operator/evolution/portfolios",
+                get(portfolio_list_handler),
+            )
+            .route(
+                "/v1/operator/evolution/portfolios/{portfolio_id}",
+                get(portfolio_handler),
+            )
+            .route(
+                "/v1/operator/evolution/governance-packets/{packet_id}",
+                get(governance_packet_handler),
+            )
+            .route(
+                "/v1/operator/evolution/packet-sets",
+                get(packet_set_list_handler),
+            )
+            .route(
+                "/v1/operator/evolution/packet-sets/{packet_set_id}",
+                get(packet_set_handler),
+            )
+            .route(
+                "/v1/operator/evolution/portfolio-histories",
+                get(portfolio_history_list_handler),
+            )
+            .route(
+                "/v1/operator/evolution/portfolio-histories/{history_id}",
+                get(portfolio_history_handler),
+            )
             .with_state(self.state.clone())
             .layer(middleware::from_fn_with_state(
                 auth_state,
@@ -212,6 +373,148 @@ async fn status_handler(
     Ok(Json(status))
 }
 
+async fn replay_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<ReplayLookupQuery>,
+) -> Result<Json<ControlEnvelope<ReplayArtifactView>>, OperatorApiError> {
+    let selector = parse_replay_selector(&query)?;
+    let replay = state
+        .control
+        .replay_lookup(selector)
+        .map_err(map_control_error)?;
+    Ok(Json(replay))
+}
+
+async fn investigation_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<InvestigationLookupQuery>,
+) -> Result<Json<ControlEnvelope<InvestigationArtifactView>>, OperatorApiError> {
+    let selector = parse_investigation_selector(&query)?;
+    let lookup = state
+        .control
+        .investigation_lookup(selector)
+        .map_err(map_control_error)?;
+    Ok(Json(lookup))
+}
+
+async fn incident_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<IncidentLookupQuery>,
+) -> Result<Json<ControlEnvelope<IncidentArtifactView>>, OperatorApiError> {
+    let selector = parse_incident_selector(&query)?;
+    let incident = state
+        .control
+        .incident_lookup(selector)
+        .map_err(map_control_error)?;
+    Ok(Json(incident))
+}
+
+async fn portfolio_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(portfolio_id): RoutePath<String>,
+) -> Result<Json<crate::portfolio::EvolutionPortfolioReport>, OperatorApiError> {
+    let harness = portfolio_harness(&state)?;
+    let lookup = harness
+        .load_portfolio(&portfolio_id)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorApiError::not_found(format!("portfolio `{portfolio_id}` was not found"))
+        })?;
+    Ok(Json(lookup.report))
+}
+
+async fn portfolio_list_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<PortfolioListQuery>,
+) -> Result<Json<EvolutionPortfolioList>, OperatorApiError> {
+    let harness = portfolio_harness(&state)?;
+    let review_state = query
+        .review_state
+        .as_deref()
+        .map(parse_portfolio_review_state)
+        .transpose()?;
+    let list = harness
+        .list_portfolios(query.cohort.as_deref(), review_state)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+    Ok(Json(limit_portfolio_list(
+        list,
+        query.limit,
+        state.max_list_results,
+    )))
+}
+
+async fn governance_packet_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(packet_id): RoutePath<String>,
+) -> Result<Json<crate::portfolio::EvolutionGovernanceReviewPacketReport>, OperatorApiError> {
+    let harness = portfolio_harness(&state)?;
+    let lookup = harness
+        .load_governance_review_packet(&packet_id)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorApiError::not_found(format!("governance packet `{packet_id}` was not found"))
+        })?;
+    Ok(Json(lookup.report))
+}
+
+async fn packet_set_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(packet_set_id): RoutePath<String>,
+) -> Result<Json<crate::governance_prep::EvolutionGovernancePacketSetReport>, OperatorApiError> {
+    let harness = governance_harness(&state)?;
+    let lookup = harness
+        .load_packet_set(&packet_set_id)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorApiError::not_found(format!("packet set `{packet_set_id}` was not found"))
+        })?;
+    Ok(Json(lookup.report))
+}
+
+async fn packet_set_list_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<CohortListQuery>,
+) -> Result<Json<EvolutionGovernancePacketSetList>, OperatorApiError> {
+    let harness = governance_harness(&state)?;
+    let list = harness
+        .list_packet_sets(query.cohort.as_deref())
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+    Ok(Json(limit_packet_set_list(
+        list,
+        query.limit,
+        state.max_list_results,
+    )))
+}
+
+async fn portfolio_history_handler(
+    State(state): State<OperatorHttpState>,
+    RoutePath(history_id): RoutePath<String>,
+) -> Result<Json<crate::governance_prep::EvolutionPortfolioHistoryReport>, OperatorApiError> {
+    let harness = governance_harness(&state)?;
+    let lookup = harness
+        .load_portfolio_history(&history_id)
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            OperatorApiError::not_found(format!("portfolio history `{history_id}` was not found"))
+        })?;
+    Ok(Json(lookup.report))
+}
+
+async fn portfolio_history_list_handler(
+    State(state): State<OperatorHttpState>,
+    Query(query): Query<CohortListQuery>,
+) -> Result<Json<EvolutionPortfolioHistoryList>, OperatorApiError> {
+    let harness = governance_harness(&state)?;
+    let list = harness
+        .list_portfolio_history(query.cohort.as_deref())
+        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+    Ok(Json(limit_portfolio_history_list(
+        list,
+        query.limit,
+        state.max_list_results,
+    )))
+}
+
 async fn require_bearer_auth(
     State(auth): State<OperatorAuthState>,
     headers: HeaderMap,
@@ -232,18 +535,199 @@ async fn require_bearer_auth(
     Ok(next.run(request).await)
 }
 
+fn parse_replay_selector(
+    query: &ReplayLookupQuery,
+) -> Result<ReplayLookupSelector<'_>, OperatorApiError> {
+    let set = count_set(&[
+        query.bundle_id.as_deref(),
+        query.hunt_id.as_deref(),
+        query.receipt_id.as_deref(),
+    ]);
+    if set != 1 {
+        return Err(OperatorApiError::bad_request(
+            "exactly one replay selector must be supplied",
+        ));
+    }
+    if let Some(bundle_id) = query.bundle_id.as_deref() {
+        Ok(ReplayLookupSelector::BundleId(bundle_id))
+    } else if let Some(hunt_id) = query.hunt_id.as_deref() {
+        Ok(ReplayLookupSelector::HuntId(hunt_id))
+    } else {
+        Ok(ReplayLookupSelector::ReceiptId(
+            query.receipt_id.as_deref().expect("receipt selector"),
+        ))
+    }
+}
+
+fn parse_investigation_selector(
+    query: &InvestigationLookupQuery,
+) -> Result<InvestigationLookupSelector<'_>, OperatorApiError> {
+    let set = count_set(&[
+        query.investigation_id.as_deref(),
+        query.hunt_id.as_deref(),
+        query.receipt_id.as_deref(),
+    ]);
+    if set != 1 {
+        return Err(OperatorApiError::bad_request(
+            "exactly one investigation selector must be supplied",
+        ));
+    }
+    if let Some(investigation_id) = query.investigation_id.as_deref() {
+        Ok(InvestigationLookupSelector::InvestigationId(
+            investigation_id,
+        ))
+    } else if let Some(hunt_id) = query.hunt_id.as_deref() {
+        Ok(InvestigationLookupSelector::HuntId(hunt_id))
+    } else {
+        Ok(InvestigationLookupSelector::ReceiptId(
+            query.receipt_id.as_deref().expect("receipt selector"),
+        ))
+    }
+}
+
+fn parse_incident_selector(
+    query: &IncidentLookupQuery,
+) -> Result<IncidentLookupSelector<'_>, OperatorApiError> {
+    let set = count_set(&[query.incident_id.as_deref(), query.hunt_id.as_deref()]);
+    if set != 1 {
+        return Err(OperatorApiError::bad_request(
+            "exactly one incident selector must be supplied",
+        ));
+    }
+    if let Some(incident_id) = query.incident_id.as_deref() {
+        Ok(IncidentLookupSelector::IncidentId(incident_id))
+    } else {
+        Ok(IncidentLookupSelector::HuntId(
+            query.hunt_id.as_deref().expect("hunt selector"),
+        ))
+    }
+}
+
+fn parse_portfolio_review_state(
+    value: &str,
+) -> Result<EvolutionPortfolioEntryReviewState, OperatorApiError> {
+    match value {
+        "pending_review" => Ok(EvolutionPortfolioEntryReviewState::PendingReview),
+        "included" => Ok(EvolutionPortfolioEntryReviewState::Included),
+        "deferred" => Ok(EvolutionPortfolioEntryReviewState::Deferred),
+        "dropped" => Ok(EvolutionPortfolioEntryReviewState::Dropped),
+        "blocked" => Ok(EvolutionPortfolioEntryReviewState::Blocked),
+        other => Err(OperatorApiError::bad_request(format!(
+            "unsupported portfolio review_state `{other}`"
+        ))),
+    }
+}
+
+fn map_control_error(error: ControlError) -> OperatorApiError {
+    match error {
+        ControlError::NotFound { entity, lookup } => {
+            OperatorApiError::not_found(format!("{entity} `{lookup}` was not found"))
+        }
+        other => OperatorApiError::internal(other.to_string()),
+    }
+}
+
+fn portfolio_harness(
+    state: &OperatorHttpState,
+) -> Result<&DefaultEvolutionPortfolioHarness, OperatorApiError> {
+    state
+        .portfolio
+        .as_deref()
+        .ok_or_else(|| OperatorApiError::internal("portfolio stores are not configured"))
+}
+
+fn governance_harness(
+    state: &OperatorHttpState,
+) -> Result<&DefaultEvolutionGovernancePrepHarness, OperatorApiError> {
+    state
+        .governance_prep
+        .as_deref()
+        .ok_or_else(|| OperatorApiError::internal("governance-prep stores are not configured"))
+}
+
+fn count_set(values: &[Option<&str>]) -> usize {
+    values.iter().filter(|value| value.is_some()).count()
+}
+
+fn effective_limit(requested_limit: Option<usize>, max_limit: usize) -> usize {
+    requested_limit.unwrap_or(max_limit).min(max_limit)
+}
+
+fn limit_portfolio_list(
+    mut list: EvolutionPortfolioList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> EvolutionPortfolioList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.portfolios = list.portfolios.into_iter().take(limit).collect();
+    list.total_count = list.portfolios.len();
+    list
+}
+
+fn limit_packet_set_list(
+    mut list: EvolutionGovernancePacketSetList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> EvolutionGovernancePacketSetList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.packet_sets = list.packet_sets.into_iter().take(limit).collect();
+    list.total_count = list.packet_sets.len();
+    list
+}
+
+fn limit_portfolio_history_list(
+    mut list: EvolutionPortfolioHistoryList,
+    requested_limit: Option<usize>,
+    max_limit: usize,
+) -> EvolutionPortfolioHistoryList {
+    let limit = effective_limit(requested_limit, max_limit);
+    list.histories = list.histories.into_iter().take(limit).collect();
+    list.total_count = list.histories.len();
+    list
+}
+
 #[cfg(test)]
 mod tests {
-    use super::LocalOperatorSurface;
+    use super::{LocalOperatorSurface, OperatorSurfacePaths};
+    use crate::service::EventExecutionContext;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use serde_json::Value;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
-        InvestigationConfig, OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig,
-        PolicyConfig, PromotionConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        InvestigationConfig, OperatorAuthConfig, OperatorSurfaceConfig, PheromoneBackendConfig,
+        PheromoneConfig, PolicyConfig, PromotionConfig, RuntimeSettings, SwarmConfig,
+        TelemetrySourceConfig,
     };
+    use swarm_core::types::AgentId;
+    use swarm_policy::ApprovalContext;
+    use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
     use tower::ServiceExt;
+
+    use crate::drafting::EvolutionValidationBundleStatus;
+    use crate::evolution::{
+        EvolutionProposalBlockingReason, EvolutionProposalProofStatus,
+        EvolutionProposalProofSummary, EvolutionProposalReviewState,
+    };
+    use crate::governance_prep::{
+        EvolutionGovernancePacketSetEntryReport, EvolutionGovernancePacketSetReport,
+        EvolutionPortfolioHistoryCohortSummary, EvolutionPortfolioHistoryEntryReport,
+        EvolutionPortfolioHistoryOutcomeCounts, EvolutionPortfolioHistoryOutcomeKind,
+        EvolutionPortfolioHistoryReport, EvolutionPortfolioHistoryReviewDebtKind,
+        FileEvolutionGovernancePacketSetStore, FileEvolutionPortfolioHistoryStore,
+    };
+    use crate::portfolio::{
+        EvolutionGovernanceReviewPacketReport, EvolutionPortfolioDecisionRecord,
+        EvolutionPortfolioEntryReport, EvolutionPortfolioEntryReviewState,
+        EvolutionPortfolioReport, FileEvolutionGovernanceReviewPacketStore,
+        FileEvolutionPortfolioStore,
+    };
+    use crate::replay::ExperimentLineage;
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn operator_config() -> SwarmConfig {
         SwarmConfig {
@@ -280,14 +764,14 @@ mod tests {
                 recent_decisions_limit: 10,
             },
             investigation: InvestigationConfig {
-                enabled: false,
+                enabled: true,
                 worker_count: 1,
                 max_pending_jobs: 4,
                 time_budget_ms: 250,
                 bundle_store: BundleStoreConfig::Memory,
             },
             correlation: CorrelationConfig {
-                enabled: false,
+                enabled: true,
                 time_window_ms: 60_000,
                 min_shared_keys: 1,
                 candidate_limit: 8,
@@ -298,13 +782,340 @@ mod tests {
             operator: OperatorSurfaceConfig {
                 enabled: true,
                 bind_addr: "127.0.0.1:7766".to_string(),
-                max_list_results: 50,
-                auth: swarm_core::config::OperatorAuthConfig {
+                max_list_results: 2,
+                auth: OperatorAuthConfig {
                     operator_id: "local-operator".to_string(),
                     token_env: "SWARM_OPERATOR_TEST_TOKEN".to_string(),
                 },
             },
         }
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        path.push(format!(
+            "swarm-team-six-operator-http-{}-{}-{}",
+            label,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            counter
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn event(event_id: &str, command_line: &str) -> TelemetryEvent {
+        TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "winword".to_string(),
+                process_name: "powershell".to_string(),
+                command_line: command_line.to_string(),
+                user: Some("alice".to_string()),
+            }),
+        }
+    }
+
+    fn approval_context(now_ms: i64) -> ApprovalContext {
+        ApprovalContext {
+            live_mode: true,
+            receipt_chain: vec![format!("receipt-upstream-{now_ms}")],
+            now_ms,
+        }
+    }
+
+    fn sample_lineage(strategy_id: &str) -> ExperimentLineage {
+        ExperimentLineage {
+            parent_strategy_id: "office_baseline_control".to_string(),
+            mutation: format!("mutation_for_{strategy_id}"),
+            rationale: format!("rationale for {strategy_id}"),
+        }
+    }
+
+    fn sample_governance_packet(
+        packet_id: &str,
+        strategy_id: &str,
+        cohort: &str,
+        ready_for_governance: bool,
+    ) -> EvolutionGovernanceReviewPacketReport {
+        let blocking_reasons = if ready_for_governance {
+            Vec::new()
+        } else {
+            vec![EvolutionProposalBlockingReason {
+                source: "governance_packet".to_string(),
+                name: "candidate_blocked".to_string(),
+                details: "candidate remained blocked during governance packet preparation"
+                    .to_string(),
+                references: vec![packet_id.to_string()],
+            }]
+        };
+        EvolutionGovernanceReviewPacketReport {
+            packet_id: packet_id.to_string(),
+            portfolio_id: format!("portfolio:{cohort}"),
+            portfolio_name: format!("portfolio {cohort}"),
+            entry_id: format!("entry:{packet_id}"),
+            selection_id: format!("selection:{strategy_id}"),
+            ranking_id: format!("ranking:{strategy_id}"),
+            validation_batch_id: format!("validation_batch:{strategy_id}"),
+            mutation_spec_id: format!("mutation_spec:{strategy_id}"),
+            created_at_ms: 1_710_000_000_000,
+            cohort: cohort.to_string(),
+            rank: 1,
+            strategy_id: strategy_id.to_string(),
+            strategy_description: format!("strategy {strategy_id}"),
+            score: 0.91,
+            summary: format!("summary for {strategy_id}"),
+            materialization_id: format!("materialization:{strategy_id}"),
+            validation_bundle_id: format!("validation_bundle:{strategy_id}"),
+            experiment_id: format!("experiment:{strategy_id}"),
+            experiment_name: format!("experiment {strategy_id}"),
+            experiment_path: format!("/tmp/{strategy_id}.yaml"),
+            lineage: sample_lineage(strategy_id),
+            manifest_sha256: format!("manifest_sha_for_{strategy_id}"),
+            lineage_sha256: format!("lineage_sha_for_{strategy_id}"),
+            verification_id: format!("verification:{strategy_id}"),
+            verification_passed: ready_for_governance,
+            proof_status: if ready_for_governance {
+                EvolutionProposalProofStatus::Proved
+            } else {
+                EvolutionProposalProofStatus::Missing
+            },
+            proof: ready_for_governance.then(|| EvolutionProposalProofSummary {
+                proof_id: format!("proof:{strategy_id}"),
+                proof_system: "repo_owned".to_string(),
+                attestation_sha256: format!("attestation_sha_for_{strategy_id}"),
+                invariant_count: 4,
+            }),
+            advisory: None,
+            shadow_id: format!("shadow:{strategy_id}"),
+            shadow_passed: ready_for_governance,
+            validation_status: if ready_for_governance {
+                EvolutionValidationBundleStatus::ReadyForQueue
+            } else {
+                EvolutionValidationBundleStatus::Blocked
+            },
+            parent_queue_proposal_id: Some(format!("proposal:{strategy_id}")),
+            parent_queue_review_state: Some(EvolutionProposalReviewState::AcceptedForCanary),
+            selection_review_state: if ready_for_governance {
+                EvolutionProposalReviewState::AcceptedForCanary
+            } else {
+                EvolutionProposalReviewState::Blocked
+            },
+            portfolio_review_state: if ready_for_governance {
+                EvolutionPortfolioEntryReviewState::Included
+            } else {
+                EvolutionPortfolioEntryReviewState::Blocked
+            },
+            operator_reason: "prepare for governance-prep review".to_string(),
+            ready_for_governance,
+            blocking_reasons,
+        }
+    }
+
+    fn sample_portfolio_report() -> EvolutionPortfolioReport {
+        EvolutionPortfolioReport {
+            portfolio_id: "portfolio:red".to_string(),
+            portfolio_name: "red portfolio".to_string(),
+            operator_rationale: "review red cohort".to_string(),
+            created_at_ms: 1_710_000_000_100,
+            entries: vec![EvolutionPortfolioEntryReport {
+                entry_id: "entry:packet:red:ready".to_string(),
+                selection_id: "selection:office_red_ready_v1".to_string(),
+                ranking_id: "ranking:office_red_ready_v1".to_string(),
+                validation_batch_id: "validation_batch:office_red_ready_v1".to_string(),
+                mutation_spec_id: "mutation_spec:office_red_ready_v1".to_string(),
+                cohort: "red".to_string(),
+                rank: 1,
+                strategy_id: "office_red_ready_v1".to_string(),
+                strategy_description: "strategy office_red_ready_v1".to_string(),
+                score: 0.91,
+                summary: "summary for office_red_ready_v1".to_string(),
+                materialization_id: "materialization:office_red_ready_v1".to_string(),
+                validation_bundle_id: "validation_bundle:office_red_ready_v1".to_string(),
+                experiment_id: "experiment:office_red_ready_v1".to_string(),
+                experiment_name: "experiment office_red_ready_v1".to_string(),
+                experiment_path: "/tmp/office_red_ready_v1.yaml".to_string(),
+                lineage: sample_lineage("office_red_ready_v1"),
+                manifest_sha256: "manifest_sha_for_office_red_ready_v1".to_string(),
+                lineage_sha256: "lineage_sha_for_office_red_ready_v1".to_string(),
+                verification_id: "verification:office_red_ready_v1".to_string(),
+                verification_passed: true,
+                proof_status: EvolutionProposalProofStatus::Proved,
+                proof: Some(EvolutionProposalProofSummary {
+                    proof_id: "proof:office_red_ready_v1".to_string(),
+                    proof_system: "repo_owned".to_string(),
+                    attestation_sha256: "attestation_sha_for_office_red_ready_v1".to_string(),
+                    invariant_count: 4,
+                }),
+                advisory: None,
+                shadow_id: "shadow:office_red_ready_v1".to_string(),
+                shadow_passed: true,
+                validation_status: EvolutionValidationBundleStatus::ReadyForQueue,
+                parent_queue_proposal_id: Some("proposal:office_red_ready_v1".to_string()),
+                parent_queue_review_state: Some(EvolutionProposalReviewState::AcceptedForCanary),
+                selection_review_state: EvolutionProposalReviewState::AcceptedForCanary,
+                portfolio_review_state: EvolutionPortfolioEntryReviewState::Included,
+                blocking_reasons: Vec::new(),
+                decision_history: vec![EvolutionPortfolioDecisionRecord {
+                    decided_at_ms: 1_710_000_000_120,
+                    action: crate::portfolio::EvolutionPortfolioDecisionAction::Include,
+                    reason: "include the ready portfolio entry".to_string(),
+                }],
+            }],
+        }
+    }
+
+    fn sample_packet_set_report() -> EvolutionGovernancePacketSetReport {
+        EvolutionGovernancePacketSetReport {
+            packet_set_id: "packet_set:red:1".to_string(),
+            packet_set_name: "red review set".to_string(),
+            operator_rationale: "group red governance packets".to_string(),
+            created_at_ms: 1_710_000_000_200,
+            parent_packet_set_id: None,
+            entries: vec![EvolutionGovernancePacketSetEntryReport {
+                packet_set_entry_id: "packet_set_entry:packet:red:ready:0".to_string(),
+                source_packet_set_entry_id: None,
+                packet_id: "packet:red:ready".to_string(),
+                source_packet_created_at_ms: 1_710_000_000_000,
+                operator_reason: "prepare for governance-prep review".to_string(),
+                portfolio_id: "portfolio:red".to_string(),
+                portfolio_name: "red portfolio".to_string(),
+                portfolio_entry_id: "entry:packet:red:ready".to_string(),
+                selection_id: "selection:office_red_ready_v1".to_string(),
+                ranking_id: "ranking:office_red_ready_v1".to_string(),
+                validation_batch_id: "validation_batch:office_red_ready_v1".to_string(),
+                mutation_spec_id: "mutation_spec:office_red_ready_v1".to_string(),
+                cohort: "red".to_string(),
+                rank: 1,
+                strategy_id: "office_red_ready_v1".to_string(),
+                strategy_description: "strategy office_red_ready_v1".to_string(),
+                score: 0.91,
+                summary: "summary for office_red_ready_v1".to_string(),
+                materialization_id: "materialization:office_red_ready_v1".to_string(),
+                validation_bundle_id: "validation_bundle:office_red_ready_v1".to_string(),
+                experiment_id: "experiment:office_red_ready_v1".to_string(),
+                experiment_name: "experiment office_red_ready_v1".to_string(),
+                experiment_path: "/tmp/office_red_ready_v1.yaml".to_string(),
+                lineage: sample_lineage("office_red_ready_v1"),
+                manifest_sha256: "manifest_sha_for_office_red_ready_v1".to_string(),
+                lineage_sha256: "lineage_sha_for_office_red_ready_v1".to_string(),
+                verification_id: "verification:office_red_ready_v1".to_string(),
+                verification_passed: true,
+                proof_status: EvolutionProposalProofStatus::Proved,
+                proof: Some(EvolutionProposalProofSummary {
+                    proof_id: "proof:office_red_ready_v1".to_string(),
+                    proof_system: "repo_owned".to_string(),
+                    attestation_sha256: "attestation_sha_for_office_red_ready_v1".to_string(),
+                    invariant_count: 4,
+                }),
+                advisory: None,
+                shadow_id: "shadow:office_red_ready_v1".to_string(),
+                shadow_passed: true,
+                validation_status: EvolutionValidationBundleStatus::ReadyForQueue,
+                parent_queue_proposal_id: Some("proposal:office_red_ready_v1".to_string()),
+                parent_queue_review_state: Some(EvolutionProposalReviewState::AcceptedForCanary),
+                selection_review_state: EvolutionProposalReviewState::AcceptedForCanary,
+                portfolio_review_state: EvolutionPortfolioEntryReviewState::Included,
+                ready_for_governance: true,
+                blocking_reasons: Vec::new(),
+            }],
+        }
+    }
+
+    fn sample_portfolio_history_report() -> EvolutionPortfolioHistoryReport {
+        EvolutionPortfolioHistoryReport {
+            history_id: "portfolio_history:red:1".to_string(),
+            packet_set_id: "packet_set:red:1".to_string(),
+            packet_set_name: "red review set".to_string(),
+            created_at_ms: 1_710_000_000_300,
+            outcomes: EvolutionPortfolioHistoryOutcomeCounts {
+                entry_count: 1,
+                survived_count: 1,
+                stable_count: 1,
+                ready_for_promotion_review_count: 0,
+                blocked_count: 0,
+                halted_count: 0,
+                unobserved_count: 0,
+                review_debt_count: 0,
+            },
+            cohorts: vec![EvolutionPortfolioHistoryCohortSummary {
+                cohort: "red".to_string(),
+                entry_count: 1,
+                survived_count: 1,
+                stable_count: 1,
+                blocked_count: 0,
+                halted_count: 0,
+                unobserved_count: 0,
+                review_debt_count: 0,
+            }],
+            entries: vec![EvolutionPortfolioHistoryEntryReport {
+                packet_set_entry_id: "packet_set_entry:packet:red:ready:0".to_string(),
+                packet_id: "packet:red:ready".to_string(),
+                portfolio_id: "portfolio:red".to_string(),
+                portfolio_name: "red portfolio".to_string(),
+                portfolio_entry_id: "entry:packet:red:ready".to_string(),
+                cohort: "red".to_string(),
+                strategy_id: "office_red_ready_v1".to_string(),
+                strategy_description: "strategy office_red_ready_v1".to_string(),
+                ready_for_governance: true,
+                blocking_reasons: Vec::new(),
+                memory_ids: vec!["memory:office_red_ready_v1:1".to_string()],
+                latest_rollout_state: Some(crate::strategy::StrategyRolloutStateSummary {
+                    source_kind: crate::strategy::StrategyMemorySourceKind::Promotion,
+                    source_artifact_id: "promotion:office_red_ready_v1".to_string(),
+                    outcome_kind: crate::strategy::StrategyMemoryOutcomeKind::StableInProduction,
+                    observed_at_ms: 1_710_000_000_250,
+                }),
+                outcome: EvolutionPortfolioHistoryOutcomeKind::StableInProduction,
+                survived_live_rollout: true,
+                review_debt: Some(EvolutionPortfolioHistoryReviewDebtKind::AwaitingStableOutcome),
+            }],
+        }
+    }
+
+    fn surface_paths(root: &PathBuf) -> OperatorSurfacePaths {
+        OperatorSurfacePaths {
+            evolution_ranking_results_dir: root.join("rankings"),
+            evolution_selection_results_dir: root.join("selections"),
+            evolution_portfolio_results_dir: root.join("portfolios"),
+            evolution_governance_review_packet_results_dir: root.join("governance-packets"),
+            evolution_packet_set_results_dir: root.join("packet-sets"),
+            strategy_memory_results_dir: root.join("strategy-memory"),
+            evolution_portfolio_history_results_dir: root.join("portfolio-history"),
+        }
+    }
+
+    fn seed_evolution_artifacts(root: &PathBuf) {
+        let paths = surface_paths(root);
+        FileEvolutionPortfolioStore::open(&paths.evolution_portfolio_results_dir)
+            .unwrap()
+            .persist(&sample_portfolio_report())
+            .unwrap();
+        FileEvolutionGovernanceReviewPacketStore::open(
+            &paths.evolution_governance_review_packet_results_dir,
+        )
+        .unwrap()
+        .persist(&sample_governance_packet(
+            "packet:red:ready",
+            "office_red_ready_v1",
+            "red",
+            true,
+        ))
+        .unwrap();
+        FileEvolutionGovernancePacketSetStore::open(&paths.evolution_packet_set_results_dir)
+            .unwrap()
+            .persist(&sample_packet_set_report())
+            .unwrap();
+        FileEvolutionPortfolioHistoryStore::open(&paths.evolution_portfolio_history_results_dir)
+            .unwrap()
+            .persist(&sample_portfolio_history_report())
+            .unwrap();
     }
 
     #[tokio::test]
@@ -352,5 +1163,148 @@ mod tests {
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["origin"], "live_runtime_status");
         assert_eq!(json["config_name"], "operator-http");
+    }
+
+    #[tokio::test]
+    async fn read_endpoints_return_runtime_and_governance_artifacts() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+
+        let root = unique_temp_dir("read-endpoints");
+        seed_evolution_artifacts(&root);
+        let paths = surface_paths(&root);
+        let surface =
+            LocalOperatorSurface::from_config_and_paths("inline", operator_config(), paths)
+                .unwrap();
+
+        let agent_id = AgentId("whisker-a".to_string());
+        let processed = surface
+            .state
+            .control
+            .stack
+            .process_event(
+                &swarm_whisker::SuspiciousProcessTreeDetector::default(),
+                &event("evt-http-1", "powershell.exe -enc AAA="),
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &approval_context(1_700_000_000_001),
+                },
+                |_finding| {
+                    Some(swarm_core::types::ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        let _ = surface
+            .state
+            .control
+            .stack
+            .correlate_hunt("evt-http-1")
+            .unwrap();
+
+        let app = surface.router("secret-token".to_string());
+        let auth = ("authorization", "Bearer secret-token");
+
+        let replay_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/operator/replay?receipt_id={}",
+                        processed
+                            .replay
+                            .record
+                            .response_receipt_id
+                            .as_deref()
+                            .unwrap()
+                    ))
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay_response.status(), StatusCode::OK);
+        let replay_body = to_bytes(replay_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let replay_json: Value = serde_json::from_slice(&replay_body).unwrap();
+        assert_eq!(replay_json["data"]["record"]["hunt_id"], "evt-http-1");
+
+        let portfolio_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/evolution/portfolios/portfolio:red")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(portfolio_response.status(), StatusCode::OK);
+        let portfolio_body = to_bytes(portfolio_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let portfolio_json: Value = serde_json::from_slice(&portfolio_body).unwrap();
+        assert_eq!(portfolio_json["portfolio_id"], "portfolio:red");
+
+        let packet_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/evolution/governance-packets/packet:red:ready")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(packet_response.status(), StatusCode::OK);
+
+        let packet_set_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/evolution/packet-sets?cohort=red&limit=1")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(packet_set_response.status(), StatusCode::OK);
+        let packet_set_body = to_bytes(packet_set_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let packet_set_json: Value = serde_json::from_slice(&packet_set_body).unwrap();
+        assert_eq!(packet_set_json["total_count"], 1);
+        assert_eq!(
+            packet_set_json["packet_sets"][0]["packet_set_id"],
+            "packet_set:red:1"
+        );
+
+        let history_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/evolution/portfolio-histories/portfolio_history:red:1")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(history_response.status(), StatusCode::OK);
+        let history_body = to_bytes(history_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let history_json: Value = serde_json::from_slice(&history_body).unwrap();
+        assert_eq!(history_json["history_id"], "portfolio_history:red:1");
     }
 }

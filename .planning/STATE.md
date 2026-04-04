@@ -6,9 +6,9 @@ status: planning
 last_updated: "2026-04-04T14:14:33Z"
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # State
@@ -18,7 +18,7 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-04)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.17 Authenticated Operator Surface` is active and Phase 53 is complete.
+**Current focus:** `v1.17 Authenticated Operator Surface` is active and Phases 53-54 are complete.
 
 ## Memory
 
@@ -29,7 +29,8 @@ See: `.planning/PROJECT.md` (updated 2026-04-04)
 - Packet-set and portfolio-history review surfaces now ship through `swarmctl` with stable-ID reload and cohort filtering.
 - `v1.17` will extend those repo-owned review flows into an authenticated local operator surface instead of jumping early into quorum governance.
 - Phase 53 shipped the local operator-surface config contract, bearer-token auth boundary, and protected `/v1/operator/status` route through `swarmctl serve`.
+- Phase 54 extended that surface with authenticated runtime artifact, portfolio, governance-packet, packet-set, and portfolio-history read endpoints.
 
 ## Next Command
 
-`$gsd-plan-phase 54`
+`$gsd-plan-phase 55`

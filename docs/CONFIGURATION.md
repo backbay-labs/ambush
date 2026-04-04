@@ -114,6 +114,77 @@ The CLI labels output by origin:
 - `persisted_runtime_artifact`: replay, investigation, or incident artifacts loaded from durable runtime stores
 - `offline_replay_artifact`: reserved for the offline replay workflows added in later milestones
 
+### Authenticated Local Operator Surface
+
+The repo now also ships a local authenticated HTTP surface above the existing CLI. This surface is intentionally narrow:
+
+- bind address must stay on loopback
+- authentication is one bearer token loaded from env
+- the surface reuses existing serializable runtime and artifact views instead of defining a second operator model
+- multi-user auth, RBAC, and internet exposure remain out of scope
+
+Enable it in repo config:
+
+```yaml
+operator_surface:
+  enabled: true
+  bind_addr: "127.0.0.1:7766"
+  max_list_results: 50
+  auth:
+    operator_id: local-operator
+    token_env: SWARM_OPERATOR_TOKEN
+```
+
+Start it through the existing repo-owned binary:
+
+```bash
+export SWARM_OPERATOR_TOKEN=replace-me-with-a-local-secret
+
+cargo run -p swarm-runtime --bin swarmctl -- serve \
+  --config rulesets/default.yaml \
+  --evolution-portfolio-results-dir data/evolution-portfolios \
+  --evolution-governance-review-packet-results-dir data/evolution-governance-review-packets \
+  --evolution-packet-set-results-dir data/evolution-packet-sets \
+  --evolution-portfolio-history-results-dir data/evolution-portfolio-history \
+  --strategy-memory-results-dir data/strategy-memory
+```
+
+Example authenticated reads:
+
+```bash
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  http://127.0.0.1:7766/v1/operator/status
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/replay?receipt_id=receipt-123"
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/evolution/portfolios/portfolio:red"
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/evolution/governance-packets/packet:red:ready"
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/evolution/packet-sets?cohort=red&limit=10"
+
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  "http://127.0.0.1:7766/v1/operator/evolution/portfolio-histories?cohort=red&limit=10"
+```
+
+Current authenticated read surface:
+
+- `/v1/operator/status`
+- `/v1/operator/replay`
+- `/v1/operator/investigation`
+- `/v1/operator/incident`
+- `/v1/operator/evolution/portfolios/{portfolio_id}`
+- `/v1/operator/evolution/portfolios?cohort=&review_state=&limit=`
+- `/v1/operator/evolution/governance-packets/{packet_id}`
+- `/v1/operator/evolution/packet-sets/{packet_set_id}`
+- `/v1/operator/evolution/packet-sets?cohort=&limit=`
+- `/v1/operator/evolution/portfolio-histories/{history_id}`
+- `/v1/operator/evolution/portfolio-histories?cohort=&limit=`
+
 ### Offline Replay Harness
 
 The repo now ships a deterministic offline replay harness. It uses the same Rust detector, policy, and receipt types as the production runtime, but forces `detect_only` execution so no live response action is executed.

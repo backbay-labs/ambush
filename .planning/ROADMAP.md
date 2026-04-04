@@ -32,7 +32,7 @@
 
 ### Phase 54: Operator Review And Artifact Endpoints
 
-**Status:** ACTIVE
+**Status:** COMPLETE
 
 **Goal:** Expose authenticated read surfaces for runtime state, stable-ID artifact lookup, and governance-prep review flows.
 
@@ -40,7 +40,7 @@
 
 **Depends on:** Phase 53
 
-**Plans:** 0/0 plans complete
+**Plans:** 1/1 plans complete
 
 **Success Criteria:**
 - Operators can fetch runtime status and recent review context through authenticated endpoints.
@@ -50,7 +50,7 @@
 
 ### Phase 55: Maintenance Actions And Audit Trails
 
-**Status:** PLANNED
+**Status:** ACTIVE
 
 **Goal:** Allow a bounded set of approved maintenance operations through the control surface while preserving durable audit records.
 
@@ -84,7 +84,7 @@
 
 ## Next Step
 
-`$gsd-plan-phase 54`
+`$gsd-plan-phase 55`
 
 ---
 *Roadmap created: 2026-04-04*
