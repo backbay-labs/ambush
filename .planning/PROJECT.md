@@ -10,29 +10,26 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.17 Authenticated Operator Surface` shipped on 2026-04-04.
+`v1.18 Signed Evidence And External Verification` shipped on 2026-04-04.
 
 **What is now real:**
-- operators can now run a local authenticated HTTP operator surface alongside the existing repo-owned CLI
-- the authenticated surface now exposes runtime status, stable-ID runtime artifact lookup, and portfolio or governance-prep review endpoints without reading raw store files
-- bounded operator maintenance actions now support portfolio decisions, packet-set splits, and portfolio-history refresh through authenticated requests
-- every applied or blocked maintenance attempt now persists a stable-ID audit artifact with actor identity, rationale, target, timestamps, and outcome
-- the operator surface remains local, single-node, and fail-closed while quorum governance and multi-user control remain deferred
+- operators can now export signed evidence bundles for stable-ID replay, investigation, incident, maintenance, canary, promotion, verification, shadow, and promotion-review artifacts
+- evidence bundles preserve canonical payload bytes, SHA-256 digests, detached Ed25519 signatures, signer metadata, timestamps, related refs, and receipt-chain context for offline verification
+- local verification now persists explicit pass or fail reports and the authenticated operator surface can reload evidence bundles, verifications, and promotion evidence packets without raw file inspection
+- promotion evidence packets now tie rollout outcome, fallback lineage, and verified supporting evidence into one advisory packet while still failing closed when evidence is missing or invalid
+- the trust boundary remains single-node and advisory: quorum approvals, signed votes, and distributed promotion governance are still deferred
 
 ## Current Milestone
 
-`v1.18 Signed Evidence And External Verification` is now active.
+No active milestone. `v1.18 Signed Evidence And External Verification` is archived.
 
-**Goal:** turn the runtime's internal audit trail into exportable, locally verifiable signed evidence without jumping early into distributed governance.
+**Next step:** start the next cycle with `$gsd-new-milestone`.
 
-**Target features:**
-- signed evidence bundle export for stable-ID runtime, rollout, and maintenance artifacts
-- local verification flows for signatures, canonical payloads, and receipt-chain linkage
-- governance-ready promotion evidence packets that stay advisory and single-node
+**Last completed goal:** turn the runtime's internal audit trail into exportable, locally verifiable signed evidence without jumping early into distributed governance.
 
 ## Next Planning Step
 
-Plan the first phase with `$gsd-plan-phase 56`.
+Start the next cycle with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -103,15 +100,15 @@ Plan the first phase with `$gsd-plan-phase 56`.
 
 ### Most Recently Shipped
 
-- ✓ Operators can now run a local authenticated HTTP control surface in addition to `swarmctl` — v1.17
-- ✓ Runtime status, stable-ID artifact views, and governance-prep review artifacts are now available through authenticated local endpoints — v1.17
-- ✓ Bounded maintenance actions now persist durable stable-ID audit trails for applied and blocked requests — v1.17
+- ✓ Operators can now export signed evidence bundles for stable-ID runtime and rollout artifacts through `swarmctl` — v1.18
+- ✓ Local verification records now detect canonical payload, digest, signature, and signer drift and can be reloaded through the authenticated operator surface — v1.18
+- ✓ Promotion evidence packets now preserve rollout lineage plus verified supporting evidence while staying advisory and single-node — v1.18
 
-### Current Milestone
+### No Active Milestone
 
-- The authenticated operator surface is now the transport and review seam for signed evidence work.
-- `v1.18` will export signed evidence bundles, verify them locally, and assemble governance-ready promotion evidence without implementing quorum approval.
+- Signed evidence and external verification are now shipped and archived.
 - Quorum approvals, signed votes, and multi-user or federated operator workflows remain deferred until independent trust boundaries exist.
+- The next milestone has not been selected yet.
 
 ### Out of Scope
 
@@ -130,7 +127,7 @@ Plan the first phase with `$gsd-plan-phase 56`.
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, and authenticated operator bridge: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance. `v1.17` closed the CLI-only operator gap without widening autonomy into quorum governance or a multi-user control plane. The next missing seam is making that evidence exportable and verifiable outside the immediate runtime process so later trust-boundary work has a real signed artifact base.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, and signed evidence lane: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets. `v1.18` closed the gap between internal runtime artifacts and externally checkable evidence without widening autonomy into quorum governance or a multi-user control plane. No next milestone has been selected yet.
 
 ## Constraints
 
@@ -191,4 +188,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Choose signed evidence and external verification as the next milestone | The operator surface and durable artifact lanes are now real, while the docs still defer actual quorum governance until independent trust boundaries exist | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 for milestone v1.18 planning*
+*Last updated: 2026-04-04 after archiving milestone v1.18*

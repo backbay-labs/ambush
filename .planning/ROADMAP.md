@@ -1,89 +1,19 @@
-# Milestone v1.18: Signed Evidence And External Verification
+# Roadmap
 
-**Status:** ACTIVE
-**Date:** 2026-04-04
-**Milestone Goal:** Turn the runtime's internal audit trail into exportable, locally verifiable signed evidence and promotion-ready evidence packets without widening into quorum governance or multi-user control.
+No active milestone.
 
-## Overview
+## Last Completed Milestone
 
-`v1.17` completed the authenticated local operator surface and bounded maintenance audit trail, but the strongest trust claims in the docs still stop inside the runtime process. The architecture, integration, and governance docs all assume signed receipts, canonical payloads, and reconstructable evidence chains that can be checked outside the immediate execution context.
+`v1.18 Signed Evidence And External Verification` shipped on 2026-04-04.
 
-`v1.18` closes that gap without pretending distributed governance is ready. It focuses on signed evidence bundle export, local verification flows, and governance-ready promotion evidence packets that remain advisory and single-node. Real quorum approvals, signed votes, and distributed promotion logic remain deferred.
-
-## Phase Plan
-
-### Phase 56: Signed Evidence Bundle Export
-
-**Status:** PLANNED
-
-**Goal:** Export stable-ID runtime and rollout artifacts as signed evidence bundles with canonical payload and receipt-chain context.
-
-**Requirements:** EVID-01, EVID-02
-
-**Depends on:** Phase 55
-
-**Plans:** 0/0 plans complete
-
-**Success Criteria:**
-- Operators can export signed evidence bundles for the main runtime, maintenance, and rollout artifact types by stable ID.
-- Evidence bundles preserve canonical payload bytes, signatures, timestamps, and lineage needed for offline verification.
-- Export flows fail closed when a required artifact, signature, or chain reference is missing.
-
-### Phase 57: Local Verification And Evidence Surfaces
-
-**Status:** PLANNED
-
-**Goal:** Verify exported evidence bundles locally and expose verification summaries through the authenticated operator surface.
-
-**Requirements:** VERF-01, VERF-02
-
-**Depends on:** Phase 56
-
-**Plans:** 0/0 plans complete
-
-**Success Criteria:**
-- Operators can verify signed evidence bundles locally and receive explicit integrity failures when payloads, signatures, or linkage drift.
-- Verification summaries can be reloaded through authenticated endpoints and repo-owned CLI flows without raw store inspection.
-- Verification output stays aligned with the signed evidence contract and remains deterministic.
-
-### Phase 58: Promotion Evidence Packets
-
-**Status:** PLANNED
-
-**Goal:** Package rollout outcome, fallback lineage, and signed supporting evidence into one governance-ready promotion packet that stays advisory.
-
-**Requirements:** TRST-01, TRST-02
-
-**Depends on:** Phase 57
-
-**Plans:** 0/0 plans complete
-
-**Success Criteria:**
-- Operators can assemble one durable promotion evidence packet from existing rollout artifacts and signed supporting evidence.
-- Promotion evidence packets preserve fallback lineage, observation outcome, and verification references without regenerating underlying artifacts.
-- The packet remains advisory only and does not implement quorum approval, signed votes, or distributed promotion state.
-
-## Traceability
-
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| EVID-01 | Phase 56 | Planned |
-| EVID-02 | Phase 56 | Planned |
-| VERF-01 | Phase 57 | Planned |
-| VERF-02 | Phase 57 | Planned |
-| TRST-01 | Phase 58 | Planned |
-| TRST-02 | Phase 58 | Planned |
-
-## Deferred Work
-
-- Quorum-based approval, signed vote collection, and durable consensus receipts remain deferred until independent trust boundaries exist.
-- Multi-user RBAC, federated operator workflows, and internet-exposed evidence exchange remain out of scope for this cycle.
-- Fleet-wide promotion and partial-fleet approval choreography remain out of scope while the runtime stays single-node.
+Completed phases:
+- `56` Signed Evidence Bundle Export
+- `57` Local Verification And Evidence Surfaces
+- `58` Promotion Evidence Packets
 
 ## Next Step
 
-`$gsd-plan-phase 56`
+`$gsd-new-milestone`
 
 ---
-*Roadmap created: 2026-04-04*
-*Last updated: 2026-04-04 for milestone v1.18 planning*
+*Roadmap cleared: 2026-04-04 after completing milestone v1.18*

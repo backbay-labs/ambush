@@ -1,5 +1,16 @@
 # Milestones
 
+## v1.18 Signed Evidence And External Verification (Shipped: 2026-04-04)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- stable-ID runtime, rollout, and maintenance artifacts can now be exported as signed evidence bundles with canonical payloads, digests, signer metadata, and receipt-chain context
+- local verification reports now detect payload, digest, signature, or signer drift and can be reloaded through both `swarmctl` and the authenticated operator surface
+- advisory promotion evidence packets now tie rollout outcome, fallback lineage, and verified supporting evidence into one governance-ready artifact without implementing quorum approval
+
+---
+
 ## v1.17 Authenticated Operator Surface (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks
