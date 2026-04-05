@@ -10,32 +10,25 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.22 Portable Review Capsules And External Handoff` shipped on 2026-04-04.
+`v1.24 Approval Ledger And Quorum Readiness` shipped on 2026-04-05.
 
 **What is now real:**
-- operators can now sign one portable review capsule from a cross-lane session or promotion-readiness artifact through both `swarmctl` and the authenticated local review surface
-- imported capsules now preserve remote signer lineage, local trust status, and related stable refs as durable stable-ID artifacts instead of requiring direct store access
-- advisory-only delegation packets can now preserve review continuity across trust boundaries without widening into rollout, promotion, or governance authority
-- the trust boundary remains single-node and bounded: portable review improves external verification and continuity, but it still cannot bypass maintenance, rollout, promotion, or quorum governance gates
+- operators can now define durable approval sets with eligible voters, threshold rules, and supporting promotion evidence refs through both the runtime harness and `swarmctl`
+- signed approval ledgers now preserve detached vote signatures, timestamped spine-backed lineage hashes, and explicit missing-quorum state
+- deterministic approval verdicts and portable signed receipt packs now preserve approval lineage for later offline verification
+- critical-severity promotions now enter an explicit human-approval-pending state until an operator clears them
+- promotion records now preserve signed approval votes, optional durable consensus receipts, and structural quorum-gate configuration without introducing distributed consensus
 
-## Current Milestone: v1.24 Approval Ledger And Quorum Readiness
+## Current Milestone: v1.25 Operational Hardening And Service Extraction
 
-**Goal:** Prepare local approval ledgers, signed vote artifacts, threshold-based quorum validation, approval receipt packs, and human-gate pending states for critical-severity promotion candidates — all without requiring distributed consensus.
+**Goal:** Extract the detection hot path into a standalone service binary, wire rulesets and scenarios into detection config, add Prometheus metrics on the critical path, cover the full critical path with integration tests, and enforce strict clippy lints across the workspace.
 
 **Target features:**
-- Operator can define approval sets with eligible voters and threshold rules
-- Signed approval ledgers preserve vote lineage and missing quorum state
-- Local approval verdicts assembled from signed ledger entries and threshold rules
-- Signed approval receipt packs with approval lineage and audit references
-- Critical-severity promotion candidates held in explicit human-approval-pending state
-- Promotion records include signed votes and durable consensus receipts
-
-**Queued after this:**
-- `v1.25 Operational Hardening And Service Extraction`
-
-## Next Planning Step
-
-Start the next cycle with `$gsd-new-milestone`.
+- Standalone `swarm-detect` binary running detection hot path independent of operator workbench
+- Rulesets and scenarios loaded via detection config at startup
+- Prometheus histogram metrics for detection latency, policy evaluation time, response execution time
+- Integration tests exercising the full telemetry-to-receipt critical path
+- Workspace-level clippy `unwrap_used` and `expect_used` denial
 
 ## Requirements
 
@@ -121,10 +114,10 @@ Start the next cycle with `$gsd-new-milestone`.
 
 ### Current Milestone
 
-- `v1.22 Portable Review Capsules And External Handoff` is complete.
+- `v1.24 Approval Ledger And Quorum Readiness` is complete.
 - There is no active milestone at the moment; the repo is ready for the next planning cycle.
-- `v1.23 Approval Ledger And Quorum Readiness` and `v1.24 Approval Receipt Packs And Human Gate Prep` are queued behind `v1.22`.
-- Quorum approvals, signed votes across independent nodes, multi-user control, and direct rollout or governance actions from the review client remain deferred until independent trust boundaries exist.
+- `v1.25 Operational Hardening And Service Extraction` is queued next.
+- Distributed trust boundaries, multi-user governance, and true quorum activation remain deferred until the runtime is no longer strictly single-node.
 
 ### Out of Scope
 
@@ -216,4 +209,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-04 after starting milestone v1.22 planning and queuing v1.23-v1.24*
+*Last updated: 2026-04-05 after shipping v1.24 and queuing v1.25*
