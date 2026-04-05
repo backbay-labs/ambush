@@ -42,19 +42,19 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| GOV-03 | — | Pending |
-| GOV-04 | — | Pending |
-| GOV-01 | — | Pending |
-| GOV-05 | — | Pending |
-| GOV-06 | — | Pending |
-| GOV-07 | — | Pending |
-| GOV-02 | — | Pending |
+| GOV-03 | Phase 75 | Pending |
+| GOV-04 | Phase 75 | Pending |
+| GOV-01 | Phase 77 | Pending |
+| GOV-05 | Phase 76 | Pending |
+| GOV-06 | Phase 76 | Pending |
+| GOV-07 | Phase 77 | Pending |
+| GOV-02 | Phase 77 | Pending |
 
 **Coverage:**
 - v1.24 requirements: 7 total
-- Mapped to phases: 0
-- Unmapped: 7
+- Mapped to phases: 7
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after milestone v1.24 definition*
+*Last updated: 2026-04-05 after roadmap creation for v1.24*

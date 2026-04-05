@@ -9,89 +9,100 @@ Phases 1-70 shipped across milestones v1.0 through v1.22. Full history in `.plan
 
 </details>
 
-### v1.23 Cryptographic Foundation And Guard Pipeline (In Progress)
+<details>
+<summary>v1.23 Cryptographic Foundation And Guard Pipeline (Shipped 2026-04-05)</summary>
 
 **Milestone Goal:** Port battle-tested hush-core crypto and clawdstrike guard implementations into STS crates, wire the guard pipeline into response authorization, and establish CI quality gates.
 
+#### Phase 71: Cryptographic Foundation
+**Goal**: swarm-crypto provides real cryptographic primitives from hush-core so downstream crates can sign, verify, hash, and prove inclusion without minimal stubs
+**Status**: Complete (2026-04-05 UTC)
+**Plans:** 2/2 complete
+
+#### Phase 72: Guard Trait And Implementations
+**Goal**: swarm-guard provides a fail-closed pluggable guard pipeline with four concrete guards covering filesystem, shell, secret, and egress safety
+**Status**: Complete (2026-04-05 UTC)
+**Plans:** 2/2 complete
+
+#### Phase 73: Spine Enhancement And Runtime Integration
+**Goal**: swarm-spine can construct and verify signed envelopes and checkpoint statements using swarm-crypto, and the guard pipeline gates response actions in the runtime before execution
+**Status**: Complete (2026-04-05 UTC)
+**Plans:** 2/2 complete
+
+#### Phase 74: CI Pipeline And Quality Gates
+**Goal**: Every push and pull request is automatically checked for formatting, lint, build, and test correctness, and dependency governance prevents unapproved licenses or known vulnerabilities
+**Status**: Complete (2026-04-05 UTC)
+**Plans:** 1/1 complete
+
+</details>
+
+### v1.24 Approval Ledger And Quorum Readiness (In Progress)
+
+**Milestone Goal:** Prepare local approval ledgers, signed vote artifacts, threshold-based quorum validation, approval receipt packs, and human-gate pending states for critical-severity promotion candidates -- all without requiring distributed consensus.
+
 ## Phases
 
-- [ ] **Phase 71: Cryptographic Foundation** - Port hush-core primitives into swarm-crypto replacing minimal stubs
-- [ ] **Phase 72: Guard Trait And Implementations** - Build pluggable guard framework with four production guards from clawdstrike
-- [ ] **Phase 73: Spine Enhancement And Runtime Integration** - Add signed envelopes and checkpoints to swarm-spine and wire guard pipeline into runtime
-- [ ] **Phase 74: CI Pipeline And Quality Gates** - Establish GitHub Actions workflow and dependency governance
+- [ ] **Phase 75: Approval Set Definition And Signed Ledgers** - Define approval sets with voters and thresholds, create signed ledger artifacts that preserve vote lineage
+- [ ] **Phase 76: Approval Verdict And Receipt Packs** - Assemble local verdicts from ledger entries, export signed receipt packs with approval lineage
+- [ ] **Phase 77: Human Gate And Promotion Integration** - Hold critical-severity candidates in human-approval-pending state, wire quorum requirement and signed votes into promotion records
 
 ## Phase Details
 
-### Phase 71: Cryptographic Foundation
-**Goal**: swarm-crypto provides real cryptographic primitives from hush-core so downstream crates can sign, verify, hash, and prove inclusion without minimal stubs
-**Depends on**: Nothing (first phase this milestone)
-**Requirements**: CRYPTO-01, CRYPTO-02, CRYPTO-03, CRYPTO-04
+### Phase 75: Approval Set Definition And Signed Ledgers
+**Goal**: Operators can define who is eligible to approve, what threshold is required, and the runtime can persist signed approval ledger entries that preserve vote lineage and quorum state
+**Depends on**: Nothing (first phase this milestone; builds on swarm-crypto signing and swarm-spine envelopes from v1.23)
+**Requirements**: GOV-03, GOV-04
 **Success Criteria** (what must be TRUE):
-  1. `cargo test -p swarm-crypto` passes with Ed25519 key generation, signing, and verification round-tripping correctly
-  2. Canonical JSON serialization produces identical byte output for semantically equivalent JSON inputs across re-serialization
-  3. Merkle tree construction from a known leaf set produces a deterministic root hash and inclusion proofs verify against it
-  4. SHA-256 content hashing and hex encoding are available as public swarm-crypto APIs and match known test vectors
-**Plans:** 2 plans
+  1. Operator can create an approval set through `swarmctl` specifying eligible voter identities, a threshold rule, and a reference to supporting promotion evidence
+  2. Approval set persists as a durable artifact with a stable ID and can be reloaded by that ID
+  3. Signed votes can be appended to an approval ledger where each entry carries a voter identity, Ed25519 signature, and timestamp
+  4. The approval ledger tracks current vote count against the threshold and exposes explicit missing-quorum state when the threshold is not yet met
+  5. Ledger entries and approval sets are accessible through `swarmctl` and the authenticated HTTP surface
+**Plans**: TBD
 
 Plans:
-- [ ] 71-01-PLAN.md -- Port error, hashing, and canonical JSON modules with workspace deps
-- [ ] 71-02-PLAN.md -- Port signing and merkle modules, rewrite lib.rs with backward-compat shims
+- [ ] 75-01: TBD
+- [ ] 75-02: TBD
 
-### Phase 72: Guard Trait And Implementations
-**Goal**: swarm-guard provides a fail-closed pluggable guard pipeline with four concrete guards covering filesystem, shell, secret, and egress safety
-**Depends on**: Nothing (independent of Phase 71)
-**Requirements**: GUARD-01, GUARD-02, GUARD-03, GUARD-04, GUARD-05
+### Phase 76: Approval Verdict And Receipt Packs
+**Goal**: Operators can evaluate a completed or partial ledger against threshold rules to produce a deterministic verdict, and export the full approval chain as a signed receipt pack for later verification
+**Depends on**: Phase 75 (approval sets and signed ledger entries must exist)
+**Requirements**: GOV-05, GOV-06
 **Success Criteria** (what must be TRUE):
-  1. Guard trait is exported from swarm-guard with evaluate semantics and a pipeline combinator that fails closed on any guard rejection
-  2. ForbiddenPathGuard blocks response actions targeting sensitive filesystem paths (e.g., /etc/shadow, ~/.ssh) and passes benign paths
-  3. ShellCommandGuard blocks destructive shell commands (e.g., rm -rf, mkfs) in response action arguments and passes safe commands
-  4. SecretLeakGuard detects credential patterns (API keys, tokens, passwords) in response action arguments and blocks the action
-  5. EgressAllowlistGuard blocks network destinations not on the configured allowlist and passes allowed destinations
-**Plans:** 2 plans
+  1. Operator can assemble a local approval verdict from an approval ledger that evaluates signed entries against the approval set threshold rules
+  2. The verdict is deterministic: the same ledger state and threshold rules always produce the same approved or not-approved result
+  3. Operator can export a signed approval receipt pack that bundles the approval set, ledger entries, final verdict, and audit references into one portable artifact
+  4. The receipt pack is signed using swarm-crypto Ed25519 and can be independently verified without access to the local store
+**Plans**: TBD
 
 Plans:
-- [ ] 72-01-PLAN.md -- Guard trait framework, pipeline combinator, ForbiddenPathGuard, ShellCommandGuard
-- [ ] 72-02-PLAN.md -- SecretLeakGuard, EgressAllowlistGuard, full pipeline integration tests
+- [ ] 76-01: TBD
+- [ ] 76-02: TBD
 
-### Phase 73: Spine Enhancement And Runtime Integration
-**Goal**: swarm-spine can construct and verify signed envelopes and checkpoint statements using swarm-crypto, and the guard pipeline gates response actions in the runtime before execution
-**Depends on**: Phase 71 (crypto primitives for signing), Phase 72 (guard trait and implementations for runtime wiring)
-**Requirements**: SPINE-01, SPINE-02, GUARD-06
+### Phase 77: Human Gate And Promotion Integration
+**Goal**: Critical-severity promotion candidates are held in a human-approval-pending state until an operator explicitly clears them, and promotion records now carry signed votes and durable consensus receipts
+**Depends on**: Phase 76 (verdicts and receipt packs feed into promotion gating)
+**Requirements**: GOV-07, GOV-01, GOV-02
 **Success Criteria** (what must be TRUE):
-  1. swarm-spine can construct a signed envelope over an arbitrary payload using swarm-crypto Ed25519 keys and a separate caller can verify the envelope signature
-  2. swarm-spine can create a checkpoint statement and verify a witness co-signature against it
-  3. Response actions in swarm-runtime pass through the guard pipeline before execution, and a guard rejection prevents the response adapter from firing
-  4. A response action that would have executed under the old path is now blocked when a guard rejects it, with the rejection reason preserved in the audit record
-**Plans:** 2 plans
+  1. A promotion candidate tagged as critical-severity enters an explicit human-approval-pending state instead of proceeding directly through the promotion pipeline
+  2. The pending state persists a review packet and durable audit history that an operator can inspect through `swarmctl` and the authenticated HTTP surface
+  3. Promotion records now include signed vote references and a durable consensus receipt that links back to the approval ledger and verdict
+  4. The quorum-approval requirement is structurally present in the promotion path so that when independent trust boundaries arrive, the gate activates without changing the promotion model
+**Plans**: TBD
 
 Plans:
-- [ ] 73-01-PLAN.md -- Port envelope, checkpoint, and chain modules from vendor spine into swarm-spine
-- [ ] 73-02-PLAN.md -- Wire guard pipeline into swarm-runtime response authorization with GuardRejected audit variant
-
-### Phase 74: CI Pipeline And Quality Gates
-**Goal**: Every push and pull request is automatically checked for formatting, lint, build, and test correctness, and dependency governance prevents unapproved licenses or known vulnerabilities
-**Depends on**: Phase 71, Phase 72, Phase 73 (CI validates the full workspace)
-**Requirements**: CI-01, CI-02
-**Success Criteria** (what must be TRUE):
-  1. A GitHub Actions workflow runs cargo fmt --check, clippy, build, and test on every push and pull request to main
-  2. deny.toml exists in the workspace root with a license allowlist and advisory-db vulnerability checks configured
-  3. `cargo deny check` passes against the current workspace dependency tree
-**Plans:** 1 plan
-
-Plans:
-- [ ] 74-01-PLAN.md -- GitHub Actions CI workflow and cargo-deny dependency governance
+- [ ] 77-01: TBD
+- [ ] 77-02: TBD
 
 ## Progress
 
-**Execution Order:** 71 -> 72 -> 73 -> 74
-(Phases 71 and 72 have no mutual dependency and could execute in parallel.)
+**Execution Order:** 75 -> 76 -> 77
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 71. Cryptographic Foundation | v1.23 | 0/2 | Planned | - |
-| 72. Guard Trait And Implementations | v1.23 | 0/2 | Planned | - |
-| 73. Spine Enhancement And Runtime Integration | v1.23 | 0/2 | Planned | - |
-| 74. CI Pipeline And Quality Gates | v1.23 | 0/1 | Planned | - |
+| 75. Approval Set Definition And Signed Ledgers | v1.24 | 0/TBD | Not started | - |
+| 76. Approval Verdict And Receipt Packs | v1.24 | 0/TBD | Not started | - |
+| 77. Human Gate And Promotion Integration | v1.24 | 0/TBD | Not started | - |
 
 ---
-*Roadmap created: 2026-04-04 for milestone v1.23*
+*Roadmap created: 2026-04-05 for milestone v1.24*
