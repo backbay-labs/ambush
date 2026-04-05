@@ -28,10 +28,10 @@ Phases 1-89 shipped across milestones v1.0 through v1.29. Full history is in `.p
   1. Every ingest request gets a unique correlation ID that appears in all downstream log entries through detect, policy, and response stages
   2. Log output is JSON-formatted with at minimum timestamp, level, correlation_id, module, and message fields
   3. Prometheus counters track verdict outcomes (allow/deny/require_human), guard rejections by guard name, adapter outcomes (success/timeout/failure), and findings by threat class and detector
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 90-01: TBD
+- [ ] 90-01-PLAN.md -- Expand CriticalPathMetrics with counter families, thread correlation IDs through ingest, instrument service decision points, and initialize JSON subscriber
 
 ### Phase 91: Adapter Resilience And Operational Probes
 **Goal**: Response adapters handle transient failures gracefully, health probes separate readiness from liveness, and invalid detector config is rejected at load time
@@ -56,9 +56,9 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 90. Structured Logging And Expanded Metrics | v1.30 | 0/? | Not started | - |
+| 90. Structured Logging And Expanded Metrics | v1.30 | 0/1 | Planned | - |
 | 91. Adapter Resilience And Operational Probes | v1.30 | 0/? | Not started | - |
 
 ---
 *Last shipped milestone: v1.29 Runtime Decomposition And Test Coverage on 2026-04-05*
-*Last updated: 2026-04-05 after creating v1.30 roadmap*
+*Last updated: 2026-04-05 after planning Phase 90*
