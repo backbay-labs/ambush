@@ -72,11 +72,10 @@ Plans:
   2. The verdict is deterministic: the same ledger state and threshold rules always produce the same approved or not-approved result
   3. Operator can export a signed approval receipt pack that bundles the approval set, ledger entries, final verdict, and audit references into one portable artifact
   4. The receipt pack is signed using swarm-crypto Ed25519 and can be independently verified without access to the local store
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 76-01: TBD
-- [ ] 76-02: TBD
+- [ ] 76-01-PLAN.md -- Verdict evaluation, receipt pack types, stores, harness, and swarmctl subcommands
 
 ### Phase 77: Human Gate And Promotion Integration
 **Goal**: Critical-severity promotion candidates are held in a human-approval-pending state until an operator explicitly clears them, and promotion records now carry signed votes and durable consensus receipts
@@ -100,7 +99,7 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 75. Approval Set Definition And Signed Ledgers | v1.24 | 0/1 | Planning complete | - |
-| 76. Approval Verdict And Receipt Packs | v1.24 | 0/TBD | Not started | - |
+| 76. Approval Verdict And Receipt Packs | v1.24 | 0/1 | Planning complete | - |
 | 77. Human Gate And Promotion Integration | v1.24 | 0/TBD | Not started | - |
 
 ---
