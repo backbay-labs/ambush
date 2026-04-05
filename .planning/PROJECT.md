@@ -18,15 +18,20 @@ Detect real threats quickly enough to take safe action before the window to resp
 - advisory-only delegation packets can now preserve review continuity across trust boundaries without widening into rollout, promotion, or governance authority
 - the trust boundary remains single-node and bounded: portable review improves external verification and continuity, but it still cannot bypass maintenance, rollout, promotion, or quorum governance gates
 
-## Current Milestone
+## Current Milestone: v1.23 Cryptographic Foundation And Guard Pipeline
 
-No active milestone. `v1.22 Portable Review Capsules And External Handoff` is complete.
+**Goal:** Port battle-tested hush-core crypto and clawdstrike guard implementations into STS stub crates, wire the guard pipeline into response authorization, and establish CI quality gates.
+
+**Target features:**
+- Replace swarm-crypto minimal impl with full hush-core primitives (Ed25519, canonical JSON, Merkle trees, hashing)
+- Fill swarm-guard with Guard trait and 4 production guards from clawdstrike (ForbiddenPath, ShellCommand, SecretLeak, EgressAllowlist)
+- Add signed envelope and checkpoint modules to swarm-spine from clawdstrike spine
+- Wire guard pipeline into swarm-runtime response authorization path
+- Add GitHub Actions CI pipeline and deny.toml for dependency governance
 
 **Queued after this:**
-- `v1.23 Approval Ledger And Quorum Readiness`
-- `v1.24 Approval Receipt Packs And Human Gate Prep`
-
-**Next step:** start the next cycle with `$gsd-new-milestone`.
+- `v1.24 Approval Ledger And Quorum Readiness`
+- `v1.25 Operational Hardening And Service Extraction`
 
 ## Next Planning Step
 
@@ -207,6 +212,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Queue approval ledgers before real quorum governance | Signed approval sets and threshold math can be prepared locally first so later quorum work reuses stable evidence and receipt shapes instead of changing the promotion model again | ✓ Chosen |
 | Choose portable review capsules as the next milestone | Cross-lane review is now local-only; the next documented gap is packaging that evidence for external verification without granting direct store access | ✓ Chosen |
 | Queue approval receipt packs and human-gate prep after ledgers | The consensus docs require signed receipts and critical-action human approval, but those contracts can be prepared locally before any distributed quorum exists | ✓ Chosen |
+| Insert crypto foundation and guard pipeline before governance milestones | Approval ledgers will sign votes and verify quorum signatures; building on full hush-core Merkle and canonical JSON is stronger than the current minimal crypto. Guards on response actions are a prerequisite for governance that widens autonomy. | ✓ Chosen |
+| Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
 *Last updated: 2026-04-04 after starting milestone v1.22 planning and queuing v1.23-v1.24*
