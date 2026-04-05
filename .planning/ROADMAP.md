@@ -43,10 +43,11 @@ Plans:
   3. Failed response actions that exhaust retries are written to a dead-letter journal for later inspection instead of being silently lost
   4. /readyz returns 200 only when all runtime components are healthy; /livez returns 200 when the process is alive
   5. Detector profiles with invalid thresholds (negative entropy, out-of-range confidence, non-positive count values) are rejected at load time with clear error messages
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 91-01: TBD
+- [ ] 91-01-PLAN.md -- Retry with exponential backoff, circuit breaker, and dead-letter journal for HTTP EDR and webhook adapters
+- [ ] 91-02-PLAN.md -- /readyz and /livez Kubernetes probe endpoints, detector profile threshold validation on all 5 profiles
 
 ## Queued Milestones
 
@@ -57,8 +58,8 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 90. Structured Logging And Expanded Metrics | v1.30 | 0/1 | Planned | - |
-| 91. Adapter Resilience And Operational Probes | v1.30 | 0/? | Not started | - |
+| 91. Adapter Resilience And Operational Probes | v1.30 | 0/2 | Planned | - |
 
 ---
 *Last shipped milestone: v1.29 Runtime Decomposition And Test Coverage on 2026-04-05*
-*Last updated: 2026-04-05 after planning Phase 90*
+*Last updated: 2026-04-05 after planning Phase 91*
