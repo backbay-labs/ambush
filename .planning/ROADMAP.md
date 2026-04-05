@@ -3,59 +3,63 @@
 ## Milestones
 
 <details>
-<summary>Shipped milestones (v1.0 through v1.27) -- see MILESTONES.md and .planning/milestones/</summary>
+<summary>Shipped milestones (v1.0 through v1.28) -- see MILESTONES.md and .planning/milestones/</summary>
 
-Phases 1-85 shipped across milestones v1.0 through v1.27. Full history is in `.planning/MILESTONES.md`, and per-milestone roadmap snapshots live in `.planning/milestones/`.
+Phases 1-87 shipped across milestones v1.0 through v1.28. Full history is in `.planning/MILESTONES.md`, and per-milestone roadmap snapshots live in `.planning/milestones/`.
 
 </details>
 
-### v1.28 Durable Substrate And Multi-Instance Coordination (In Progress)
+### v1.29 Runtime Decomposition And Test Coverage (In Progress)
 
-**Milestone Goal:** Replace in-memory pheromone substrate with durable NATS JetStream backend, enable multiple swarm-detect instances to share pheromone state, and clean up legacy artifacts.
+**Milestone Goal:** Split the 49K-line swarm-runtime monolith into focused modules, extract swarmctl CLI logic into testable library harnesses, and raise test coverage from 0.23% to 2-3% across the crate.
 
 ## Phases
 
-- [ ] **Phase 86: NATS JetStream Pheromone Backend** - Pheromone deposits persist to NATS JetStream and survive process restarts
-- [ ] **Phase 87: Multi-Instance Coordination And Cleanup** - Multiple instances share pheromone state with cross-instance escalation, legacy code removed
+- [ ] **Phase 88: Module Decomposition** - Split the 4 largest monolithic files and extract swarmctl binary logic into testable library harnesses
+- [ ] **Phase 89: Test Coverage And Hot-Path Consolidation** - Add tests to newly-split modules and consolidate hot-path detection into a detection/ submodule
 
 ## Phase Details
 
-### Phase 86: NATS JetStream Pheromone Backend
-**Goal**: Pheromone deposits survive restarts and are queryable from any connected instance through a JetStream-backed substrate
-**Depends on**: v1.27 (deployment infrastructure provides NATS sidecar)
-**Requirements**: SUB-01
+### Phase 88: Module Decomposition
+**Goal**: The 4 largest monolithic files in swarm-runtime are split into focused, bounded modules and the swarmctl binary is reduced to a thin CLI wrapper
+**Depends on**: Nothing (first phase of v1.29)
+**Requirements**: REFAC-01, REFAC-02, REFAC-03, REFAC-04
 **Success Criteria** (what must be TRUE):
-  1. A JetStream implementation of PheromoneSubstrate persists deposits to NATS and reads them back after process restart
-  2. Exponential decay and evaporation GC produce correct concentrations against durable JetStream-backed deposits
-  3. ConfiguredPheromoneSubstrate selects the JetStream backend from repo-owned config alongside existing InMemory and LocalJournal backends
-  4. Integration tests confirm deposit survival across a simulated restart with the JetStream backend
-**Plans**: 1 plan
-Plans:
-- [ ] 86-01-PLAN.md -- JetStream KV substrate implementation, config wiring, and integration tests
+  1. `swarmctl` binary is under 300 lines and all CLI parsing, dispatch, and formatting logic lives in library modules that can be tested with `cargo test`
+  2. `operator_http.rs` no longer exists as a single file; its route handlers live in 4-5 focused modules (approval, evolution, evidence, governance, review) each under 1.5K lines
+  3. `review_workbench.rs` no longer exists as a single file; its logic lives in focused modules (sessions, capsules, exports, readiness) each with clear public API boundaries
+  4. `replay.rs` no longer exists as a single file; its logic lives in focused modules (scenarios, execution, store, experiments) each under 1.5K lines
+  5. `cargo build --workspace && cargo test --workspace && cargo clippy --workspace -- -D warnings` passes with zero regressions against the existing 114+ test suite
+**Plans**: TBD
 
-### Phase 87: Multi-Instance Coordination And Cleanup
-**Goal**: Multiple detection instances share pheromone state with correct cross-instance escalation enforcement, and legacy dead code is removed from the workspace
-**Depends on**: Phase 86
-**Requirements**: SUB-02, SUB-03, CLEAN-01
-**Success Criteria** (what must be TRUE):
-  1. Two swarm-detect instances depositing to the same NATS substrate see each other's deposits reflected in concentration queries
-  2. min_sources_for_escalation correctly counts distinct source instances so escalation fires only when enough independent instances contribute
-  3. swarm-bridge crate is removed from the Cargo workspace and kernel/ directory is archived or removed
-  4. Workspace builds, clippy, and tests remain green after legacy removal
-**Plans**: 2 plans
 Plans:
-- [ ] 87-01-PLAN.md -- Multi-instance integration tests for cross-instance deposit visibility and escalation enforcement
-- [ ] 87-02-PLAN.md -- Remove swarm-bridge crate, kernel/ directory, and pyproject.toml
+- [ ] 88-01: TBD
+- [ ] 88-02: TBD
+
+### Phase 89: Test Coverage And Hot-Path Consolidation
+**Goal**: The newly-split modules have meaningful test coverage and hot-path detection modules are consolidated into a detection/ submodule with clear boundaries
+**Depends on**: Phase 88
+**Requirements**: TEST-01, TEST-02, TEST-03
+**Success Criteria** (what must be TRUE):
+  1. `cargo test --workspace` reports at least 2% line coverage across swarm-runtime (up from 0.23%), measurable via `cargo llvm-cov` or equivalent
+  2. `ingest.rs` has tests covering event validation (valid and malformed payloads), HTTP error responses (bad content-type, oversized body), and batch processing edge cases (empty batch, partial failure)
+  3. Hot-path modules (pipeline, service, detection logic) live under a `detection/` submodule with a single public re-export boundary, and existing imports compile without manual fixups outside the crate
+  4. The 5 largest previously-untested modules each have at least one test exercising their primary code path
+**Plans**: TBD
+
+Plans:
+- [ ] 89-01: TBD
+- [ ] 89-02: TBD
 
 ## Progress
 
-**Execution Order:** 86 -> 87
+**Execution Order:**
+Phases execute in numeric order: 88 -> 89
 
-| Phase | Milestone | Plans Complete | Status | Completed |
-|-------|-----------|----------------|--------|-----------|
-| 86. NATS JetStream Pheromone Backend | v1.28 | 0/1 | Planned | - |
-| 87. Multi-Instance Coordination And Cleanup | v1.28 | 0/2 | Planned | - |
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 88. Module Decomposition | 0/? | Not started | - |
+| 89. Test Coverage And Hot-Path Consolidation | 0/? | Not started | - |
 
 ---
-*Last shipped milestone: v1.27 Live Response Adapters And Deployment on 2026-04-05*
-*Last updated: 2026-04-05 after planning Phase 87*
+*Last shipped milestone: v1.28 Durable Substrate And Multi-Instance Coordination on 2026-04-05*

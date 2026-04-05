@@ -51,19 +51,19 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REFAC-01 | — | Pending |
-| REFAC-02 | — | Pending |
-| REFAC-03 | — | Pending |
-| REFAC-04 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
+| REFAC-01 | Phase 88 | Pending |
+| REFAC-02 | Phase 88 | Pending |
+| REFAC-03 | Phase 88 | Pending |
+| REFAC-04 | Phase 88 | Pending |
+| TEST-01 | Phase 89 | Pending |
+| TEST-02 | Phase 89 | Pending |
+| TEST-03 | Phase 89 | Pending |
 
 **Coverage:**
 - v1.29 requirements: 7 total
-- Mapped to phases: 0
-- Unmapped: 7
+- Mapped to phases: 7
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after milestone v1.29 definition*
+*Last updated: 2026-04-05 after roadmap creation*
