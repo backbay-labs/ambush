@@ -30,11 +30,12 @@ Phases 1-87 shipped across milestones v1.0 through v1.28. Full history is in `.p
   3. `review_workbench.rs` no longer exists as a single file; its logic lives in focused modules (sessions, capsules, exports, readiness) each with clear public API boundaries
   4. `replay.rs` no longer exists as a single file; its logic lives in focused modules (scenarios, execution, store, experiments) each under 1.5K lines
   5. `cargo build --workspace && cargo test --workspace && cargo clippy --workspace -- -D warnings` passes with zero regressions against the existing 114+ test suite
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 88-01: TBD
-- [ ] 88-02: TBD
+- [ ] 88-01-PLAN.md -- Extract swarmctl CLI logic into testable cli/ library modules (REFAC-01)
+- [ ] 88-02-PLAN.md -- Split operator_http.rs into focused http/ route modules (REFAC-02)
+- [ ] 88-03-PLAN.md -- Split review_workbench.rs and replay.rs into focused submodules (REFAC-03, REFAC-04)
 
 ### Phase 89: Test Coverage And Hot-Path Consolidation
 **Goal**: The newly-split modules have meaningful test coverage and hot-path detection modules are consolidated into a detection/ submodule with clear boundaries
@@ -58,7 +59,7 @@ Phases execute in numeric order: 88 -> 89
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 88. Module Decomposition | 0/? | Not started | - |
+| 88. Module Decomposition | 0/3 | Planned | - |
 | 89. Test Coverage And Hot-Path Consolidation | 0/2 | Planned | - |
 
 ---
