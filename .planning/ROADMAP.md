@@ -47,10 +47,11 @@ Plans:
   3. ShellCommandGuard blocks destructive shell commands (e.g., rm -rf, mkfs) in response action arguments and passes safe commands
   4. SecretLeakGuard detects credential patterns (API keys, tokens, passwords) in response action arguments and blocks the action
   5. EgressAllowlistGuard blocks network destinations not on the configured allowlist and passes allowed destinations
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 72-01: TBD
+- [ ] 72-01-PLAN.md -- Guard trait framework, pipeline combinator, ForbiddenPathGuard, ShellCommandGuard
+- [ ] 72-02-PLAN.md -- SecretLeakGuard, EgressAllowlistGuard, full pipeline integration tests
 
 ### Phase 73: Spine Enhancement And Runtime Integration
 **Goal**: swarm-spine can construct and verify signed envelopes and checkpoint statements using swarm-crypto, and the guard pipeline gates response actions in the runtime before execution
@@ -87,7 +88,7 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 71. Cryptographic Foundation | v1.23 | 0/2 | Planned | - |
-| 72. Guard Trait And Implementations | v1.23 | 0/? | Not started | - |
+| 72. Guard Trait And Implementations | v1.23 | 0/2 | Planned | - |
 | 73. Spine Enhancement And Runtime Integration | v1.23 | 0/? | Not started | - |
 | 74. CI Pipeline And Quality Gates | v1.23 | 0/? | Not started | - |
 
