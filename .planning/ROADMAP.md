@@ -57,10 +57,11 @@ Plans:
   1. Workspace `Cargo.toml` `[lints.clippy]` section denies `unwrap_used` and `expect_used`
   2. All existing crate code compiles cleanly under the new lint rules with zero violations
   3. CI workflow validates the stricter lints on every push to main
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 80-01: TBD
+- [ ] 80-01-PLAN.md -- Workspace lint config, crate Cargo.toml wiring, and non-runtime crate fixes
+- [ ] 80-02-PLAN.md -- Runtime production code refactoring, test module annotations, and full workspace validation
 
 ## Progress
 
@@ -71,4 +72,4 @@ Phases execute in numeric order: 78 -> 79 -> 80 (Phase 80 may run in parallel wi
 |-------|----------------|--------|-----------|
 | 78. Service Extraction And Detection Binary | 0/1 | Planned | - |
 | 79. Metrics And Integration Tests | 0/2 | Planned | - |
-| 80. Clippy Enforcement | 0/? | Not started | - |
+| 80. Clippy Enforcement | 0/2 | Planned | - |
