@@ -46,11 +46,11 @@ Plans:
   3. A /healthz endpoint returns service readiness including detection pipeline and substrate status
   4. SIGTERM triggers graceful shutdown that drains in-flight events and flushes state before exit
   5. Policy file changes are detected and applied at runtime without restarting the binary (file-watch or SIGHUP)
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 85-01: TBD
-- [ ] 85-02: TBD
+- [ ] 85-01-PLAN.md -- /healthz endpoint, graceful shutdown, config file watching and SIGHUP reload
+- [ ] 85-02-PLAN.md -- Multi-stage Dockerfile, docker-compose with optional NATS, .dockerignore
 
 ## Next Up
 
@@ -61,8 +61,8 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 84. Real Response Adapters | v1.27 | 0/2 | Planned | - |
-| 85. Container And Deployment Infrastructure | v1.27 | 0/? | Not started | - |
+| 85. Container And Deployment Infrastructure | v1.27 | 0/2 | Planned | - |
 
 ---
 *Last shipped milestone: v1.26 Detection Breadth And Telemetry Ingestion on 2026-04-05*
-*Last updated: 2026-04-05 after Phase 84 planning*
+*Last updated: 2026-04-05 after Phase 85 planning*
