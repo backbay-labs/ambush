@@ -69,26 +69,26 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CRYPTO-01 | — | Pending |
-| CRYPTO-02 | — | Pending |
-| CRYPTO-03 | — | Pending |
-| CRYPTO-04 | — | Pending |
-| GUARD-01 | — | Pending |
-| GUARD-02 | — | Pending |
-| GUARD-03 | — | Pending |
-| GUARD-04 | — | Pending |
-| GUARD-05 | — | Pending |
-| GUARD-06 | — | Pending |
-| SPINE-01 | — | Pending |
-| SPINE-02 | — | Pending |
-| CI-01 | — | Pending |
-| CI-02 | — | Pending |
+| CRYPTO-01 | Phase 71 | Pending |
+| CRYPTO-02 | Phase 71 | Pending |
+| CRYPTO-03 | Phase 71 | Pending |
+| CRYPTO-04 | Phase 71 | Pending |
+| GUARD-01 | Phase 72 | Pending |
+| GUARD-02 | Phase 72 | Pending |
+| GUARD-03 | Phase 72 | Pending |
+| GUARD-04 | Phase 72 | Pending |
+| GUARD-05 | Phase 72 | Pending |
+| GUARD-06 | Phase 73 | Pending |
+| SPINE-01 | Phase 73 | Pending |
+| SPINE-02 | Phase 73 | Pending |
+| CI-01 | Phase 74 | Pending |
+| CI-02 | Phase 74 | Pending |
 
 **Coverage:**
 - v1.23 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after milestone v1.23 definition*
+*Last updated: 2026-04-04 after roadmap creation for v1.23*
