@@ -10,24 +10,30 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.27 Live Response Adapters And Deployment` shipped on 2026-04-05.
+`v1.28 Durable Substrate And Multi-Instance Coordination` shipped on 2026-04-05.
 
 **What is now real:**
 - the runtime now supports `sandbox`, `http_edr`, and `webhook` response adapters selected from repo-owned config
-- live response audit trails now preserve dispatched success, timeout, and failure outcomes instead of treating adapter-level failures as silent successes
-- `swarm-detect` now exposes `/healthz`, reloads config on file change or `SIGHUP`, and exits cleanly on `SIGTERM`
-- the repo now ships a multi-stage `Dockerfile`, `.dockerignore`, and `docker-compose.yml` with an optional internal NATS sidecar
-- the verified `swarm-team-six-swarm-detect` container image is about 39.8 MB and passed build, health, profile, and shutdown checks
+- `swarm-pheromone` now supports `in_memory`, `local_journal`, and durable `jet_stream` backends
+- live JetStream verification now proves restart-safe persistence, evaporation GC, and cross-instance aggregation plus `min_sources_for_escalation` enforcement
+- the dead Python/PyO3 bridge surface (`swarm-bridge`, `kernel/`, `pyproject.toml`) has been removed from the live repo
+- the repo still ships a multi-stage `Dockerfile`, `.dockerignore`, and `docker-compose.yml` with an optional internal NATS sidecar
 
-## Current Milestone: v1.28 Durable Substrate And Multi-Instance Coordination
+## Current Milestone: v1.29 Runtime Decomposition And Test Coverage
 
-**Goal:** Replace in-memory pheromone substrate with durable NATS JetStream backend, enable multiple swarm-detect instances to share pheromone state, and clean up legacy artifacts.
+**Goal:** Split the 49K-line swarm-runtime monolith into focused modules, extract swarmctl CLI logic into testable library harnesses, and raise test coverage from 0.23% to 2-3% across the crate.
 
 **Target features:**
-- NATS JetStream pheromone substrate backend persisting deposits across restarts
-- Multiple swarm-detect instances sharing deposits with correct concentration aggregation
-- min_sources_for_escalation enforcement across multiple instances
-- Legacy cleanup: remove swarm-bridge and archive kernel/ Python stubs
+- Extract swarmctl CLI parsing into library harnesses (binary becomes ~200 lines)
+- Split operator_http.rs (5.4K lines) into 4-5 focused route modules
+- Split review_workbench.rs (3.8K lines, 0 tests) into focused modules with tests
+- Split replay.rs (5.3K lines) into scenarios/execution/store/experiments
+- Add tests to the 5 largest untested modules
+- Consolidate hot-path modules into detection/ submodule
+
+**Queued after this:**
+- `v1.30 Structured Observability And Adapter Resilience`
+- `v1.31 Runtime Agent Dispatcher And Pheromone-Driven Escalation`
 
 ## Requirements
 
@@ -116,10 +122,9 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Current Milestone
 
-- `v1.27 Live Response Adapters And Deployment` is complete.
+- `v1.28 Durable Substrate And Multi-Instance Coordination` is complete.
 - There is no active milestone at the moment; the repo is ready for the next planning cycle.
 - Start the next cycle with `$gsd-new-milestone`.
-- `v1.28 Durable Substrate And Multi-Instance Coordination` is queued next.
 - Distributed trust boundaries, multi-user governance, and true quorum activation remain deferred until the runtime is no longer strictly single-node.
 
 ### Out of Scope
@@ -140,7 +145,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, local review surface, approval hardening, broader detector coverage, live HTTP ingest, and a first active Tetragon bridge seam: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review -> approval ledgers and guard-gated promotion -> multi-detector telemetry ingest. `v1.23` through `v1.26` moved the runtime from governance-readiness preparation into safer execution and real telemetry intake without widening autonomy beyond single-node operator control. The next missing seam is operational hardening: real response adapters, deployment packaging, health and shutdown surfaces, runtime policy reload, and later a shared multi-instance substrate.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, local review surface, approval hardening, broader detector coverage, live HTTP ingest, a first active Tetragon bridge seam, real response adapters, deployment packaging, runtime health and reload surfaces, and a durable shared JetStream substrate: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review -> approval ledgers and guard-gated promotion -> multi-detector telemetry ingest -> shared multi-instance pheromone coordination. `v1.23` through `v1.28` moved the runtime from governance-readiness preparation into safer execution, real telemetry intake, durable response infrastructure, and shared substrate coordination without widening autonomy beyond single-node operator control. There is no active milestone at the moment.
 
 ## Constraints
 
@@ -155,8 +160,8 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Move the production runtime to pure Rust | Fast detection and live response are easier to measure, secure, and operate with one runtime | ✓ Good |
-| Keep `kernel/` as reference only | The Python tree is useful inspiration but not a viable hot path | ✓ Good |
-| Keep `swarm-bridge` as legacy only | PyO3 is unnecessary for the current product direction | ✓ Good |
+| Remove the legacy Python tree from the live repo surface | The Python stubs were useful inspiration but not part of the viable hot path | ✓ Completed in v1.28 |
+| Remove `swarm-bridge` from the live repo surface | PyO3 is unnecessary for the current product direction | ✓ Completed in v1.28 |
 | Start with a narrow response safety model | Deterministic policy and scoped leases proved the basic live-response boundary without fake distributed consensus | ✓ Good |
 | Copy focused upstream code into `vendor/reference/` | Local references reduced upstream dependency risk while preserving freedom to refactor inward | ✓ Good |
 | Tackle durability before async investigation | The shipped lane needed restart safety and operator visibility before more reasoning features | ✓ Good |
@@ -212,4 +217,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-05 after shipping v1.27*
+*Last updated: 2026-04-05 after shipping v1.28*
