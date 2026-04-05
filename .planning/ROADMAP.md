@@ -86,11 +86,11 @@ Plans:
   2. The pending state persists a review packet and durable audit history that an operator can inspect through `swarmctl` and the authenticated HTTP surface
   3. Promotion records now include signed vote references and a durable consensus receipt that links back to the approval ledger and verdict
   4. The quorum-approval requirement is structurally present in the promotion path so that when independent trust boundaries arrive, the gate activates without changing the promotion model
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 77-01: TBD
-- [ ] 77-02: TBD
+- [ ] 77-01-PLAN.md -- Human approval gate, severity-based pending state, approval reference types, HTTP routes
+- [ ] 77-02-PLAN.md -- Quorum gate validation, vote/receipt signature verification, swarmctl commands
 
 ## Progress
 
@@ -100,7 +100,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 75. Approval Set Definition And Signed Ledgers | v1.24 | 0/1 | Planning complete | - |
 | 76. Approval Verdict And Receipt Packs | v1.24 | 0/1 | Planning complete | - |
-| 77. Human Gate And Promotion Integration | v1.24 | 0/TBD | Not started | - |
+| 77. Human Gate And Promotion Integration | v1.24 | 0/2 | Planning complete | - |
 
 ---
 *Roadmap created: 2026-04-05 for milestone v1.24*
