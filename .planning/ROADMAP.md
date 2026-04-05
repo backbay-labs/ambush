@@ -30,11 +30,11 @@ Phases 1-83 shipped across milestones v1.0 through v1.26. Full history is in `.p
   3. Both adapters only fire after the guard pipeline approves the action and the policy gate returns an allow verdict
   4. Each adapter execution produces a signed receipt that records adapter type, target, result status (success, failure, timeout), and elapsed time
   5. HTTP client handles configurable timeouts and returns structured errors instead of panicking on network failures
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 84-01: TBD
-- [ ] 84-02: TBD
+- [ ] 84-01-PLAN.md -- Add reqwest dependency, adapter config types, HttpEdrAdapter and WebhookAdapter implementations
+- [ ] 84-02-PLAN.md -- DispatchingExecutor, config-driven adapter selection, runtime wiring and integration tests
 
 ### Phase 85: Container And Deployment Infrastructure
 **Goal**: The detection service is containerized and deployable with health monitoring, graceful lifecycle, and hot policy reload
@@ -60,9 +60,9 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 84. Real Response Adapters | v1.27 | 0/? | Not started | - |
+| 84. Real Response Adapters | v1.27 | 0/2 | Planned | - |
 | 85. Container And Deployment Infrastructure | v1.27 | 0/? | Not started | - |
 
 ---
 *Last shipped milestone: v1.26 Detection Breadth And Telemetry Ingestion on 2026-04-05*
-*Last updated: 2026-04-05 after v1.27 roadmap creation*
+*Last updated: 2026-04-05 after Phase 84 planning*
