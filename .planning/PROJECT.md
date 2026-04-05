@@ -10,29 +10,28 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.28 Durable Substrate And Multi-Instance Coordination` shipped on 2026-04-05.
+`v1.29 Runtime Decomposition And Test Coverage` shipped on 2026-04-05.
 
 **What is now real:**
-- the runtime now supports `sandbox`, `http_edr`, and `webhook` response adapters selected from repo-owned config
-- `swarm-pheromone` now supports `in_memory`, `local_journal`, and durable `jet_stream` backends
-- live JetStream verification now proves restart-safe persistence, evaporation GC, and cross-instance aggregation plus `min_sources_for_escalation` enforcement
-- the dead Python/PyO3 bridge surface (`swarm-bridge`, `kernel/`, `pyproject.toml`) has been removed from the live repo
-- the repo still ships a multi-stage `Dockerfile`, `.dockerignore`, and `docker-compose.yml` with an optional internal NATS sidecar
+- `swarmctl` now resolves through a library-owned `cli/` module tree while the binary stays tiny.
+- The operator surface, review workbench, and replay logic now sit behind dedicated module boundaries instead of single giant entry files.
+- The hot-path detection lane now lives under `crate::detection`.
+- `swarm-runtime` now has focused regression coverage for ingest, CLI parsing, operator maintenance, workbench rendering, and replay manifests.
+- `cargo llvm-cov -p swarm-runtime --lib --summary-only` measured 74.46% line coverage across swarm-runtime library sources.
 
-## Current Milestone: v1.29 Runtime Decomposition And Test Coverage
+## Current Milestone: v1.30 Structured Observability And Adapter Resilience
 
-**Goal:** Split the 49K-line swarm-runtime monolith into focused modules, extract swarmctl CLI logic into testable library harnesses, and raise test coverage from 0.23% to 2-3% across the crate.
+**Goal:** Add structured JSON logging with correlation IDs, expand Prometheus metrics with counter dimensions, implement retry/circuit-breaker for response adapters, add dead-letter persistence, Kubernetes probes, and config validation.
 
 **Target features:**
-- Extract swarmctl CLI parsing into library harnesses (binary becomes ~200 lines)
-- Split operator_http.rs (5.4K lines) into 4-5 focused route modules
-- Split review_workbench.rs (3.8K lines, 0 tests) into focused modules with tests
-- Split replay.rs (5.3K lines) into scenarios/execution/store/experiments
-- Add tests to the 5 largest untested modules
-- Consolidate hot-path modules into detection/ submodule
+- Structured JSON logs with request correlation IDs flowing through detect/policy/response
+- Counter metrics for verdicts, guard rejections, adapter outcomes, findings per threat class
+- Retry with exponential backoff + circuit breaker for HTTP EDR and webhook adapters
+- Dead-letter journal for failed response actions
+- /readyz and /livez endpoints for Kubernetes probes
+- Detector profile threshold validation on load
 
 **Queued after this:**
-- `v1.30 Structured Observability And Adapter Resilience`
 - `v1.31 Runtime Agent Dispatcher And Pheromone-Driven Escalation`
 
 ## Requirements
@@ -122,7 +121,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Current Milestone
 
-- `v1.28 Durable Substrate And Multi-Instance Coordination` is complete.
+- `v1.29 Runtime Decomposition And Test Coverage` is complete.
 - There is no active milestone at the moment; the repo is ready for the next planning cycle.
 - Start the next cycle with `$gsd-new-milestone`.
 - Distributed trust boundaries, multi-user governance, and true quorum activation remain deferred until the runtime is no longer strictly single-node.
