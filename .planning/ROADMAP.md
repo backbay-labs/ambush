@@ -29,7 +29,9 @@ Phases 1-85 shipped across milestones v1.0 through v1.27. Full history is in `.p
   2. Exponential decay and evaporation GC produce correct concentrations against durable JetStream-backed deposits
   3. ConfiguredPheromoneSubstrate selects the JetStream backend from repo-owned config alongside existing InMemory and LocalJournal backends
   4. Integration tests confirm deposit survival across a simulated restart with the JetStream backend
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 86-01-PLAN.md -- JetStream KV substrate implementation, config wiring, and integration tests
 
 ### Phase 87: Multi-Instance Coordination And Cleanup
 **Goal**: Multiple detection instances share pheromone state with correct cross-instance escalation enforcement, and legacy dead code is removed from the workspace
@@ -48,9 +50,9 @@ Phases 1-85 shipped across milestones v1.0 through v1.27. Full history is in `.p
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 86. NATS JetStream Pheromone Backend | v1.28 | 0/TBD | Not started | - |
+| 86. NATS JetStream Pheromone Backend | v1.28 | 0/1 | Planned | - |
 | 87. Multi-Instance Coordination And Cleanup | v1.28 | 0/TBD | Not started | - |
 
 ---
 *Last shipped milestone: v1.27 Live Response Adapters And Deployment on 2026-04-05*
-*Last updated: 2026-04-05 after creating v1.28 roadmap*
+*Last updated: 2026-04-05 after planning Phase 86*
