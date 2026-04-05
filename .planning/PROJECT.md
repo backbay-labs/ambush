@@ -10,25 +10,29 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.24 Approval Ledger And Quorum Readiness` shipped on 2026-04-05.
+`v1.25 Operational Hardening And Service Extraction` shipped on 2026-04-05.
 
 **What is now real:**
-- operators can now define durable approval sets with eligible voters, threshold rules, and supporting promotion evidence refs through both the runtime harness and `swarmctl`
-- signed approval ledgers now preserve detached vote signatures, timestamped spine-backed lineage hashes, and explicit missing-quorum state
-- deterministic approval verdicts and portable signed receipt packs now preserve approval lineage for later offline verification
-- critical-severity promotions now enter an explicit human-approval-pending state until an operator clears them
-- promotion records now preserve signed approval votes, optional durable consensus receipts, and structural quorum-gate configuration without introducing distributed consensus
+- operators can now run a standalone `swarm-detect` binary that loads repo-owned rulesets and scenario fixtures without the `swarmctl` workbench
+- shared detector-factory and replay-scenario loaders now support both binaries and external-style integration tests through the same runtime APIs
+- the critical path now emits Prometheus histogram metrics for detection, policy, and response latency, and the operator surface exposes them at `/metrics`
+- the workspace test suite now includes end-to-end detect-to-receipt integration coverage for happy-path, benign, fixture-driven, and policy-deny scenarios
+- workspace clippy now denies production `unwrap` and `expect` usage across all crates while the existing CI pipeline enforces the stricter lint policy on every push
 
-## Current Milestone: v1.25 Operational Hardening And Service Extraction
+## Current Milestone: v1.26 Detection Breadth And Telemetry Ingestion
 
-**Goal:** Extract the detection hot path into a standalone service binary, wire rulesets and scenarios into detection config, add Prometheus metrics on the critical path, cover the full critical path with integration tests, and enforce strict clippy lints across the workspace.
+**Goal:** Expand detection from one narrow detector to broad threat coverage, and build real telemetry ingestion so the system can process live events rather than only synthetic fixtures.
 
 **Target features:**
-- Standalone `swarm-detect` binary running detection hot path independent of operator workbench
-- Rulesets and scenarios loaded via detection config at startup
-- Prometheus histogram metrics for detection latency, policy evaluation time, response execution time
-- Integration tests exercising the full telemetry-to-receipt critical path
-- Workspace-level clippy `unwrap_used` and `expect_used` denial
+- 3-4 new detection strategies covering network exfiltration, lateral movement, credential access, and suspicious scripting
+- HTTP/JSON telemetry ingest server in swarm-detect for real event sources
+- Tetragon bridge port from vendor reference for kernel-level process telemetry
+- Expanded MITRE ATT&CK-tagged scenario corpus for new detectors
+- reqwest HTTP client in workspace for outbound integrations
+
+**Queued after this:**
+- `v1.27 Live Response Adapters And Deployment`
+- `v1.28 Durable Substrate And Multi-Instance Coordination`
 
 ## Requirements
 
@@ -114,9 +118,9 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Current Milestone
 
-- `v1.24 Approval Ledger And Quorum Readiness` is complete.
+- `v1.25 Operational Hardening And Service Extraction` is complete.
 - There is no active milestone at the moment; the repo is ready for the next planning cycle.
-- `v1.25 Operational Hardening And Service Extraction` is queued next.
+- Start the next cycle with `$gsd-new-milestone`.
 - Distributed trust boundaries, multi-user governance, and true quorum activation remain deferred until the runtime is no longer strictly single-node.
 
 ### Out of Scope
@@ -209,4 +213,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-05 after shipping v1.24 and queuing v1.25*
+*Last updated: 2026-04-05 after shipping v1.25*
