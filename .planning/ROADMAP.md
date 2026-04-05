@@ -3,66 +3,54 @@
 ## Milestones
 
 <details>
-<summary>Shipped milestones (v1.0 through v1.26) -- see MILESTONES.md and .planning/milestones/</summary>
+<summary>Shipped milestones (v1.0 through v1.27) -- see MILESTONES.md and .planning/milestones/</summary>
 
-Phases 1-83 shipped across milestones v1.0 through v1.26. Full history is in `.planning/MILESTONES.md`, and per-milestone roadmap snapshots live in `.planning/milestones/`.
+Phases 1-85 shipped across milestones v1.0 through v1.27. Full history is in `.planning/MILESTONES.md`, and per-milestone roadmap snapshots live in `.planning/milestones/`.
 
 </details>
 
-### v1.27 Live Response Adapters And Deployment (In Progress)
+### v1.28 Durable Substrate And Multi-Instance Coordination (In Progress)
 
-**Milestone Goal:** Implement real response adapters that execute actual side effects (EDR block/isolate, webhook notifications), containerize the detection service, and add runtime policy reload.
+**Milestone Goal:** Replace in-memory pheromone substrate with durable NATS JetStream backend, enable multiple swarm-detect instances to share pheromone state, and clean up legacy artifacts.
 
 ## Phases
 
-- [ ] **Phase 84: Real Response Adapters** - HTTP EDR and webhook adapters behind ResponseExecutor, gated by guards and policy
-- [ ] **Phase 85: Container And Deployment Infrastructure** - Dockerfile, docker-compose, health checks, graceful shutdown, runtime policy reload
+- [ ] **Phase 86: NATS JetStream Pheromone Backend** - Pheromone deposits persist to NATS JetStream and survive process restarts
+- [ ] **Phase 87: Multi-Instance Coordination And Cleanup** - Multiple instances share pheromone state with cross-instance escalation, legacy code removed
 
 ## Phase Details
 
-### Phase 84: Real Response Adapters
-**Goal**: Response actions produce real side effects through HTTP-based adapters gated by the existing guard pipeline and policy
-**Depends on**: v1.26 (telemetry ingest and detection breadth must exist for end-to-end response testing)
-**Requirements**: RESP-01, RESP-02
+### Phase 86: NATS JetStream Pheromone Backend
+**Goal**: Pheromone deposits survive restarts and are queryable from any connected instance through a JetStream-backed substrate
+**Depends on**: v1.27 (deployment infrastructure provides NATS sidecar)
+**Requirements**: SUB-01
 **Success Criteria** (what must be TRUE):
-  1. An HTTP EDR adapter sends block or isolate requests to a configurable endpoint with authorization headers and parses confirmation or error responses
-  2. A webhook adapter sends escalation notifications as Slack/PagerDuty-compatible JSON payloads to a configurable URL
-  3. Both adapters only fire after the guard pipeline approves the action and the policy gate returns an allow verdict
-  4. Each adapter execution produces a signed receipt that records adapter type, target, result status (success, failure, timeout), and elapsed time
-  5. HTTP client handles configurable timeouts and returns structured errors instead of panicking on network failures
-**Plans:** 2 plans
+  1. A JetStream implementation of PheromoneSubstrate persists deposits to NATS and reads them back after process restart
+  2. Exponential decay and evaporation GC produce correct concentrations against durable JetStream-backed deposits
+  3. ConfiguredPheromoneSubstrate selects the JetStream backend from repo-owned config alongside existing InMemory and LocalJournal backends
+  4. Integration tests confirm deposit survival across a simulated restart with the JetStream backend
+**Plans**: TBD
 
-Plans:
-- [ ] 84-01-PLAN.md -- Add reqwest dependency, adapter config types, HttpEdrAdapter and WebhookAdapter implementations
-- [ ] 84-02-PLAN.md -- DispatchingExecutor, config-driven adapter selection, runtime wiring and integration tests
-
-### Phase 85: Container And Deployment Infrastructure
-**Goal**: The detection service is containerized and deployable with health monitoring, graceful lifecycle, and hot policy reload
-**Depends on**: Phase 84
-**Requirements**: DEPLOY-01, DEPLOY-02, DEPLOY-03, DEPLOY-04
+### Phase 87: Multi-Instance Coordination And Cleanup
+**Goal**: Multiple detection instances share pheromone state with correct cross-instance escalation enforcement, and legacy dead code is removed from the workspace
+**Depends on**: Phase 86
+**Requirements**: SUB-02, SUB-03, CLEAN-01
 **Success Criteria** (what must be TRUE):
-  1. A multi-stage Dockerfile produces minimal images containing swarm-detect and swarmctl binaries without build toolchain or source
-  2. docker-compose brings up the detection service and an optional NATS sidecar with one command
-  3. A /healthz endpoint returns service readiness including detection pipeline and substrate status
-  4. SIGTERM triggers graceful shutdown that drains in-flight events and flushes state before exit
-  5. Policy file changes are detected and applied at runtime without restarting the binary (file-watch or SIGHUP)
-**Plans:** 2 plans
-
-Plans:
-- [ ] 85-01-PLAN.md -- /healthz endpoint, graceful shutdown, config file watching and SIGHUP reload
-- [ ] 85-02-PLAN.md -- Multi-stage Dockerfile, docker-compose with optional NATS, .dockerignore
-
-## Next Up
-
-- `v1.28 Durable Substrate And Multi-Instance Coordination`
+  1. Two swarm-detect instances depositing to the same NATS substrate see each other's deposits reflected in concentration queries
+  2. min_sources_for_escalation correctly counts distinct source instances so escalation fires only when enough independent instances contribute
+  3. swarm-bridge crate is removed from the Cargo workspace and kernel/ directory is archived or removed
+  4. Workspace builds, clippy, and tests remain green after legacy removal
+**Plans**: TBD
 
 ## Progress
 
+**Execution Order:** 86 -> 87
+
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 84. Real Response Adapters | v1.27 | 0/2 | Planned | - |
-| 85. Container And Deployment Infrastructure | v1.27 | 0/2 | Planned | - |
+| 86. NATS JetStream Pheromone Backend | v1.28 | 0/TBD | Not started | - |
+| 87. Multi-Instance Coordination And Cleanup | v1.28 | 0/TBD | Not started | - |
 
 ---
-*Last shipped milestone: v1.26 Detection Breadth And Telemetry Ingestion on 2026-04-05*
-*Last updated: 2026-04-05 after Phase 85 planning*
+*Last shipped milestone: v1.27 Live Response Adapters And Deployment on 2026-04-05*
+*Last updated: 2026-04-05 after creating v1.28 roadmap*

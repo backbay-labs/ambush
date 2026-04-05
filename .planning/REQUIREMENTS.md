@@ -31,16 +31,16 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SUB-01 | — | Pending |
-| SUB-02 | — | Pending |
-| SUB-03 | — | Pending |
-| CLEAN-01 | — | Pending |
+| SUB-01 | Phase 86 | Pending |
+| SUB-02 | Phase 87 | Pending |
+| SUB-03 | Phase 87 | Pending |
+| CLEAN-01 | Phase 87 | Pending |
 
 **Coverage:**
 - v1.28 requirements: 4 total
-- Mapped to phases: 0
-- Unmapped: 4
+- Mapped to phases: 4
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after milestone v1.28 definition*
+*Last updated: 2026-04-05 after v1.28 roadmap creation*
