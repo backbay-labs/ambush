@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can already detect suspicious behavior, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, surface the full chain in one operator review report, and execute offline replay plus regression evaluation over a tracked scenario corpus.
+Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can already detect multiple threat families, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, surface the full chain in one operator review report, execute offline replay plus regression evaluation over a tracked scenario corpus, and ingest real telemetry through HTTP plus Tetragon-derived process events.
 
 ## Core Value
 
@@ -10,28 +10,29 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.25 Operational Hardening And Service Extraction` shipped on 2026-04-05.
+`v1.26 Detection Breadth And Telemetry Ingestion` shipped on 2026-04-05.
 
 **What is now real:**
-- operators can now run a standalone `swarm-detect` binary that loads repo-owned rulesets and scenario fixtures without the `swarmctl` workbench
-- shared detector-factory and replay-scenario loaders now support both binaries and external-style integration tests through the same runtime APIs
-- the critical path now emits Prometheus histogram metrics for detection, policy, and response latency, and the operator surface exposes them at `/metrics`
-- the workspace test suite now includes end-to-end detect-to-receipt integration coverage for happy-path, benign, fixture-driven, and policy-deny scenarios
-- workspace clippy now denies production `unwrap` and `expect` usage across all crates while the existing CI pipeline enforces the stricter lint policy on every push
+- the runtime now supports five detector strategies: suspicious process tree, DNS exfiltration, lateral movement, credential access, and suspicious scripting
+- telemetry normalization now covers process, network, DNS, registry, and authentication events instead of only the earlier narrow payload set
+- ATT&CK-tagged scenario fixtures and critical-path integration tests now prove end-to-end coverage for each new detector family plus a benign DNS control
+- `swarm-detect` now exposes `/v1/ingest/events` alongside `/metrics`, validating live JSON telemetry batches and returning per-event accepted or rejected status
+- the workspace now includes `swarm-ingest-tetragon`, which compiles Tetragon gRPC protos, maps `ProcessExec` events into `TelemetryEvent`, and forwards them through a retrying bridge loop
 
-## Current Milestone: v1.26 Detection Breadth And Telemetry Ingestion
+## Current Milestone: v1.27 Live Response Adapters And Deployment
 
-**Goal:** Expand detection from one narrow detector to broad threat coverage, and build real telemetry ingestion so the system can process live events rather than only synthetic fixtures.
+**Goal:** Implement real response adapters that execute actual side effects (HTTP-based EDR block/isolate, webhook notifications), containerize the detection service, and add runtime policy reload.
 
 **Target features:**
-- 3-4 new detection strategies covering network exfiltration, lateral movement, credential access, and suspicious scripting
-- HTTP/JSON telemetry ingest server in swarm-detect for real event sources
-- Tetragon bridge port from vendor reference for kernel-level process telemetry
-- Expanded MITRE ATT&CK-tagged scenario corpus for new detectors
-- reqwest HTTP client in workspace for outbound integrations
+- HTTP EDR adapter for block/isolate requests to configurable endpoints
+- Webhook adapter for escalation notifications (Slack/PagerDuty compatible)
+- Response adapters gated by guard pipeline and policy before firing
+- Dockerfile with multi-stage build for swarm-detect and swarmctl
+- docker-compose for local development with optional NATS
+- Health check endpoint and graceful shutdown
+- Runtime policy reload without binary restart
 
 **Queued after this:**
-- `v1.27 Live Response Adapters And Deployment`
 - `v1.28 Durable Substrate And Multi-Instance Coordination`
 
 ## Requirements
@@ -118,7 +119,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Current Milestone
 
-- `v1.25 Operational Hardening And Service Extraction` is complete.
+- `v1.26 Detection Breadth And Telemetry Ingestion` is complete.
 - There is no active milestone at the moment; the repo is ready for the next planning cycle.
 - Start the next cycle with `$gsd-new-milestone`.
 - Distributed trust boundaries, multi-user governance, and true quorum activation remain deferred until the runtime is no longer strictly single-node.
@@ -141,7 +142,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, and local review surface: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review. `v1.21` closed the lane-fragmentation gap without widening autonomy into quorum governance or direct rollout writes from the browser. The next missing seam is portable review continuity: package cross-lane review state for external verification, then prepare approval ledgers and receipt-ready human gate artifacts without pretending distributed trust already exists.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, local review surface, approval hardening, broader detector coverage, live HTTP ingest, and a first active Tetragon bridge seam: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review -> approval ledgers and guard-gated promotion -> multi-detector telemetry ingest. `v1.23` through `v1.26` moved the runtime from governance-readiness preparation into safer execution and real telemetry intake without widening autonomy beyond single-node operator control. The next missing seam is operational hardening: real response adapters, deployment packaging, health and shutdown surfaces, runtime policy reload, and later a shared multi-instance substrate.
 
 ## Constraints
 
@@ -213,4 +214,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-05 after shipping v1.25*
+*Last updated: 2026-04-05 after shipping v1.26*

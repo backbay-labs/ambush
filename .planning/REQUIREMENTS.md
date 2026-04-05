@@ -3,35 +3,21 @@
 **Defined:** 2026-04-05
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.26 Requirements
+## v1.27 Requirements
 
-### Detection Breadth
+### Response Adapters
 
-- [ ] **DET-01**: swarm-whisker includes a DNS exfiltration detector that flags suspicious DNS query patterns (high entropy subdomains, excessive query volume, known tunneling signatures)
-- [ ] **DET-02**: swarm-whisker includes a lateral movement detector that flags remote execution patterns (WMI, PsExec, SSH from unusual sources, RDP brute-force indicators)
-- [ ] **DET-03**: swarm-whisker includes a credential access detector that flags credential dumping indicators (LSASS access, SAM registry reads, Kerberoasting patterns)
-- [ ] **DET-04**: swarm-whisker includes a suspicious scripting detector that flags encoded command execution, download-and-execute chains, and living-off-the-land binary abuse
+- [ ] **RESP-01**: At least two real response adapters exist behind the ResponseExecutor trait (HTTP-based EDR block/isolate, webhook-based escalation notification)
+- [ ] **RESP-02**: Response adapters fire only after guard pipeline and policy gate approval with signed receipt
 
-### Telemetry Ingestion
+### Deployment Infrastructure
 
-- [ ] **INGEST-01**: swarm-detect accepts telemetry events over HTTP POST (JSON) on a configurable ingest endpoint without requiring the operator workbench
-- [ ] **INGEST-02**: Telemetry ingest normalizes incoming events into the existing TelemetryPayload schema with validation and rejection of malformed inputs
-- [ ] **INGEST-03**: The Tetragon bridge pattern from vendor reference is ported into an active crate that can consume Tetragon gRPC events and publish normalized telemetry
-
-### Test Coverage
-
-- [ ] **DET-05**: Each new detector has MITRE ATT&CK-tagged scenario fixtures exercised by integration tests
+- [ ] **DEPLOY-01**: Dockerfile exists with multi-stage build for swarm-detect and swarmctl binaries
+- [ ] **DEPLOY-02**: docker-compose exists for local development (runtime + optional NATS)
+- [ ] **DEPLOY-03**: Health check endpoint and graceful shutdown are implemented
+- [ ] **DEPLOY-04**: Policy can be reloaded at runtime without binary restart
 
 ## Future Requirements
-
-### Live Response And Deployment (v1.27)
-
-- **RESP-01**: At least two real response adapters exist behind the ResponseExecutor trait (HTTP-based EDR block/isolate, webhook-based credential revocation or escalation notification)
-- **RESP-02**: Response adapters fire only after guard pipeline and policy gate approval with signed receipt
-- **DEPLOY-01**: Dockerfile exists with multi-stage build for swarm-detect and swarmctl binaries
-- **DEPLOY-02**: docker-compose exists for local development (runtime + optional NATS)
-- **DEPLOY-03**: Health check endpoint and graceful shutdown are implemented
-- **DEPLOY-04**: Policy can be reloaded at runtime without binary restart
 
 ### Durable Substrate And Multi-Instance (v1.28)
 
@@ -44,30 +30,28 @@
 
 | Feature | Reason |
 |---------|--------|
-| eBPF program development | Tetragon provides kernel instrumentation; we consume its output, not write eBPF |
-| ML/statistical anomaly detection | Start with deterministic rule-based detectors; ML detectors are future work |
-| Real-time streaming ingestion (Kafka/Kinesis) | HTTP POST and gRPC are sufficient for v1.26; streaming is future |
-| Distributed consensus | Still deferred until multi-instance substrate proves the need |
-| LLM-powered investigation | Async lane remains deferred |
+| Real EDR vendor SDK integration (CrowdStrike Falcon, Defender, etc.) | HTTP adapter is generic; vendor-specific SDKs are future work |
+| Kubernetes manifests or Helm charts | Dockerfile + docker-compose is sufficient for v1.27; k8s is future |
+| TLS certificate management | Use reverse proxy for TLS termination; not in-binary |
+| Multi-region or HA deployment | Single-node deployment first; HA comes with v1.28 multi-instance |
+| Automatic scaling or load balancing | Manual deployment; orchestration is future work |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DET-01 | Phase 81 | Pending |
-| DET-02 | Phase 81 | Pending |
-| DET-03 | Phase 81 | Pending |
-| DET-04 | Phase 81 | Pending |
-| DET-05 | Phase 81 | Pending |
-| INGEST-01 | Phase 82 | Pending |
-| INGEST-02 | Phase 82 | Pending |
-| INGEST-03 | Phase 83 | Pending |
+| RESP-01 | — | Pending |
+| RESP-02 | — | Pending |
+| DEPLOY-01 | — | Pending |
+| DEPLOY-02 | — | Pending |
+| DEPLOY-03 | — | Pending |
+| DEPLOY-04 | — | Pending |
 
 **Coverage:**
-- v1.26 requirements: 8 total
-- Mapped to phases: 8
-- Unmapped: 0
+- v1.27 requirements: 6 total
+- Mapped to phases: 0
+- Unmapped: 6
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after roadmap creation*
+*Last updated: 2026-04-05 after milestone v1.27 definition*

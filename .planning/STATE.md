@@ -1,11 +1,11 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.26
-milestone_name: Detection Breadth And Telemetry Ingestion
-status: roadmap-created
+milestone: v1.27
+milestone_name: Live Response Adapters And Deployment
+status: defining-requirements
 last_updated: "2026-04-05T00:00:00Z"
 progress:
-  total_phases: 3
+  total_phases: 0
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,34 +18,25 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-05)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** v1.26 Detection Breadth And Telemetry Ingestion -- Phase 81
+**Current focus:** v1.27 Live Response Adapters And Deployment
 
 ## Current Position
 
-Phase: 81 of 83 (Detection Strategy Expansion)
+Phase: Not started (defining requirements)
 Plan: --
-Status: Ready to plan
-Last activity: 2026-04-05 -- Roadmap created for v1.26
-
-Progress: [░░░░░░░░░░] 0%
-
-## Performance Metrics
-
-**Velocity:**
-- Total plans completed: 0
-- Average duration: --
-- Total execution time: 0 hours
+Status: Defining requirements
+Last activity: 2026-04-05 -- Milestone v1.27 started
 
 ## Memory
 
-- `v1.25` shipped standalone binary, metrics, integration tests, clippy enforcement.
-- Only one detector exists (SuspiciousProcessTreeDetector). Need 3-4 more for real coverage.
-- TelemetryPayload enum has ProcessStart and NetworkConnect variants -- may need DnsQuery and others for new detectors.
-- swarm-detect binary uses axum for /metrics -- ingest routes can be added to the same server.
-- Tetragon bridge reference at vendor/reference/clawdstrike/bridges/tetragon-bridge/.
-- Phases 81 and 82 are independent; Phase 83 depends on 82 (ingest normalization).
-- reqwest not yet in workspace deps -- needed for outbound HTTP in later milestones.
+- `v1.26` shipped 5 detectors, HTTP ingest, and Tetragon bridge. 275 tests passing.
+- Only SandboxExecutor exists for response — no real side effects.
+- No Dockerfile, docker-compose, or deployment infrastructure.
+- reqwest not yet in workspace deps — needed for HTTP response adapters.
+- Guard pipeline and policy gate already protect response path (v1.23).
+- axum server in swarm-detect already serves /metrics and /v1/ingest/events.
+- v1.28 (durable substrate + multi-instance) is queued after this.
 
 ## Next Command
 
-Plan phase 81: `/gsd:plan-phase 81`
+Define requirements, then create roadmap.
