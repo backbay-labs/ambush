@@ -43,18 +43,18 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OBS-01 | — | Pending |
-| OBS-02 | — | Pending |
-| OBS-03 | — | Pending |
-| OBS-04 | — | Pending |
-| OBS-05 | — | Pending |
-| OBS-06 | — | Pending |
+| OBS-01 | Phase 90 | Pending |
+| OBS-02 | Phase 90 | Pending |
+| OBS-03 | Phase 91 | Pending |
+| OBS-04 | Phase 91 | Pending |
+| OBS-05 | Phase 91 | Pending |
+| OBS-06 | Phase 91 | Pending |
 
 **Coverage:**
 - v1.30 requirements: 6 total
-- Mapped to phases: 0
-- Unmapped: 6
+- Mapped to phases: 6
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after milestone v1.30 definition*
+*Last updated: 2026-04-05 after v1.30 roadmap creation*

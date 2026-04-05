@@ -3,64 +3,62 @@
 ## Milestones
 
 <details>
-<summary>Shipped milestones (v1.0 through v1.28) -- see MILESTONES.md and .planning/milestones/</summary>
+<summary>Shipped milestones (v1.0 through v1.29) -- see MILESTONES.md and .planning/milestones/</summary>
 
-Phases 1-87 shipped across milestones v1.0 through v1.28. Full history is in `.planning/MILESTONES.md`, and per-milestone roadmap snapshots live in `.planning/milestones/`.
+Phases 1-89 shipped across milestones v1.0 through v1.29. Full history is in `.planning/MILESTONES.md`, and per-milestone roadmap snapshots live in `.planning/milestones/`.
 
 </details>
 
-### v1.29 Runtime Decomposition And Test Coverage (In Progress)
+### v1.30 Structured Observability And Adapter Resilience (In Progress)
 
-**Milestone Goal:** Split the 49K-line swarm-runtime monolith into focused modules, extract swarmctl CLI logic into testable library harnesses, and raise test coverage from 0.23% to 2-3% across the crate.
+**Milestone Goal:** Add structured JSON logging with correlation IDs, expand Prometheus metrics with counter dimensions, implement retry/circuit-breaker for response adapters, add dead-letter persistence, Kubernetes probes, and config validation.
 
 ## Phases
 
-- [ ] **Phase 88: Module Decomposition** - Split the 4 largest monolithic files and extract swarmctl binary logic into testable library harnesses
-- [ ] **Phase 89: Test Coverage And Hot-Path Consolidation** - Add tests to newly-split modules and consolidate hot-path detection into a detection/ submodule
+- [ ] **Phase 90: Structured Logging And Expanded Metrics** - Operations are traceable through correlation IDs and metrics cover all decision dimensions
+- [ ] **Phase 91: Adapter Resilience And Operational Probes** - Response adapters handle transient failures gracefully, health probes separate readiness from liveness, and invalid config is rejected at load time
 
 ## Phase Details
 
-### Phase 88: Module Decomposition
-**Goal**: The 4 largest monolithic files in swarm-runtime are split into focused, bounded modules and the swarmctl binary is reduced to a thin CLI wrapper
-**Depends on**: Nothing (first phase of v1.29)
-**Requirements**: REFAC-01, REFAC-02, REFAC-03, REFAC-04
+### Phase 90: Structured Logging And Expanded Metrics
+**Goal**: Operations are traceable through structured logs with correlation IDs and metrics cover all decision dimensions
+**Depends on**: Phase 89 (v1.29 complete)
+**Requirements**: OBS-01, OBS-02
 **Success Criteria** (what must be TRUE):
-  1. `swarmctl` binary is under 300 lines and all CLI parsing, dispatch, and formatting logic lives in library modules that can be tested with `cargo test`
-  2. `operator_http.rs` no longer exists as a single file; its route handlers live in 4-5 focused modules (approval, evolution, evidence, governance, review) each under 1.5K lines
-  3. `review_workbench.rs` no longer exists as a single file; its logic lives in focused modules (sessions, capsules, exports, readiness) each with clear public API boundaries
-  4. `replay.rs` no longer exists as a single file; its logic lives in focused modules (scenarios, execution, store, experiments) each under 1.5K lines
-  5. `cargo build --workspace && cargo test --workspace && cargo clippy --workspace -- -D warnings` passes with zero regressions against the existing 114+ test suite
-**Plans**: 3 plans
+  1. Every ingest request gets a unique correlation ID that appears in all downstream log entries through detect, policy, and response stages
+  2. Log output is JSON-formatted with at minimum timestamp, level, correlation_id, module, and message fields
+  3. Prometheus counters track verdict outcomes (allow/deny/require_human), guard rejections by guard name, adapter outcomes (success/timeout/failure), and findings by threat class and detector
+**Plans**: TBD
 
 Plans:
-- [ ] 88-01-PLAN.md -- Extract swarmctl CLI logic into testable cli/ library modules (REFAC-01)
-- [ ] 88-02-PLAN.md -- Split operator_http.rs into focused http/ route modules (REFAC-02)
-- [ ] 88-03-PLAN.md -- Split review_workbench.rs and replay.rs into focused submodules (REFAC-03, REFAC-04)
+- [ ] 90-01: TBD
 
-### Phase 89: Test Coverage And Hot-Path Consolidation
-**Goal**: The newly-split modules have meaningful test coverage and hot-path detection modules are consolidated into a detection/ submodule with clear boundaries
-**Depends on**: Phase 88
-**Requirements**: TEST-01, TEST-02, TEST-03
+### Phase 91: Adapter Resilience And Operational Probes
+**Goal**: Response adapters handle transient failures gracefully, health probes separate readiness from liveness, and invalid detector config is rejected at load time
+**Depends on**: Phase 90
+**Requirements**: OBS-03, OBS-04, OBS-05, OBS-06
 **Success Criteria** (what must be TRUE):
-  1. `cargo test --workspace` reports at least 2% line coverage across swarm-runtime (up from 0.23%), measurable via `cargo llvm-cov` or equivalent
-  2. `ingest.rs` has tests covering event validation (valid and malformed payloads), HTTP error responses (bad content-type, oversized body), and batch processing edge cases (empty batch, partial failure)
-  3. Hot-path modules (pipeline, service, detection logic) live under a `detection/` submodule with a single public re-export boundary, and existing imports compile without manual fixups outside the crate
-  4. The 5 largest previously-untested modules each have at least one test exercising their primary code path
-**Plans**: 2 plans
+  1. HTTP EDR and webhook adapters retry transient failures with configurable exponential backoff and max retry count
+  2. Circuit breaker disables an adapter after N consecutive failures and re-enables it after a configurable cooldown period
+  3. Failed response actions that exhaust retries are written to a dead-letter journal for later inspection instead of being silently lost
+  4. /readyz returns 200 only when all runtime components are healthy; /livez returns 200 when the process is alive
+  5. Detector profiles with invalid thresholds (negative entropy, out-of-range confidence, non-positive count values) are rejected at load time with clear error messages
+**Plans**: TBD
 
 Plans:
-- [ ] 89-01-PLAN.md -- Consolidate pipeline.rs and metrics.rs into detection/ submodule with public re-export boundary
-- [ ] 89-02-PLAN.md -- Add test coverage to ingest.rs and the 4 other largest previously-untested modules
+- [ ] 91-01: TBD
+
+## Queued Milestones
+
+- `v1.31 Runtime Agent Dispatcher And Pheromone-Driven Escalation`
 
 ## Progress
 
-**Execution Order:**
-Phases execute in numeric order: 88 -> 89
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 88. Module Decomposition | 0/3 | Planned | - |
-| 89. Test Coverage And Hot-Path Consolidation | 0/2 | Planned | - |
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 90. Structured Logging And Expanded Metrics | v1.30 | 0/? | Not started | - |
+| 91. Adapter Resilience And Operational Probes | v1.30 | 0/? | Not started | - |
 
 ---
-*Last shipped milestone: v1.28 Durable Substrate And Multi-Instance Coordination on 2026-04-05*
+*Last shipped milestone: v1.29 Runtime Decomposition And Test Coverage on 2026-04-05*
+*Last updated: 2026-04-05 after creating v1.30 roadmap*
