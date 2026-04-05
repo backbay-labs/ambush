@@ -31,11 +31,11 @@ Phases 1-80 shipped across milestones v1.0 through v1.25. Full history is in `.p
   3. Running a credential access scenario (LSASS access, SAM registry read, Kerberoasting) through the detection pipeline produces a detection record from the credential access detector
   4. Running a suspicious scripting scenario (encoded commands, download-and-execute, LOLBin abuse) through the detection pipeline produces a detection record from the suspicious scripting detector
   5. Each new detector has at least one MITRE ATT&CK-tagged scenario fixture exercised by an integration test that passes in `cargo test --workspace`
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 81-01: TBD
-- [ ] 81-02: TBD
+- [ ] 81-01-PLAN.md -- Extend TelemetryPayload with new event types and create four detector modules with unit tests
+- [ ] 81-02-PLAN.md -- Wire detectors into runtime, create MITRE-tagged scenario fixtures and integration tests
 
 ### Phase 82: Telemetry Ingest Server
 **Goal**: Operators can push live telemetry events into swarm-detect over HTTP without requiring the swarmctl workbench
@@ -70,6 +70,6 @@ Phases 81 and 82 are independent and can execute in either order. Phase 83 depen
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 81. Detection Strategy Expansion | v1.26 | 0/? | Not started | - |
+| 81. Detection Strategy Expansion | v1.26 | 0/2 | Planned | - |
 | 82. Telemetry Ingest Server | v1.26 | 0/1 | Planned | - |
 | 83. Tetragon Bridge Port | v1.26 | 0/1 | Planned | - |
