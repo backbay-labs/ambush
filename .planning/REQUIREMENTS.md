@@ -40,18 +40,18 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| RESP-01 | — | Pending |
-| RESP-02 | — | Pending |
-| DEPLOY-01 | — | Pending |
-| DEPLOY-02 | — | Pending |
-| DEPLOY-03 | — | Pending |
-| DEPLOY-04 | — | Pending |
+| RESP-01 | Phase 84 | Pending |
+| RESP-02 | Phase 84 | Pending |
+| DEPLOY-01 | Phase 85 | Pending |
+| DEPLOY-02 | Phase 85 | Pending |
+| DEPLOY-03 | Phase 85 | Pending |
+| DEPLOY-04 | Phase 85 | Pending |
 
 **Coverage:**
 - v1.27 requirements: 6 total
-- Mapped to phases: 0
-- Unmapped: 6
+- Mapped to phases: 6
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after milestone v1.27 definition*
+*Last updated: 2026-04-05 after v1.27 roadmap creation*

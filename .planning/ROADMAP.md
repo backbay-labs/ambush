@@ -3,73 +3,66 @@
 ## Milestones
 
 <details>
-<summary>Shipped milestones (v1.0 through v1.25) -- see MILESTONES.md and .planning/milestones/</summary>
+<summary>Shipped milestones (v1.0 through v1.26) -- see MILESTONES.md and .planning/milestones/</summary>
 
-Phases 1-80 shipped across milestones v1.0 through v1.25. Full history is in `.planning/MILESTONES.md`, and per-milestone roadmap snapshots live in `.planning/milestones/`.
+Phases 1-83 shipped across milestones v1.0 through v1.26. Full history is in `.planning/MILESTONES.md`, and per-milestone roadmap snapshots live in `.planning/milestones/`.
 
 </details>
 
-### v1.26 Detection Breadth And Telemetry Ingestion (In Progress)
+### v1.27 Live Response Adapters And Deployment (In Progress)
 
-**Milestone Goal:** Expand detection from one narrow detector to broad threat coverage, and build real telemetry ingestion so the system can process live events rather than only synthetic fixtures.
+**Milestone Goal:** Implement real response adapters that execute actual side effects (EDR block/isolate, webhook notifications), containerize the detection service, and add runtime policy reload.
 
 ## Phases
 
-- [ ] **Phase 81: Detection Strategy Expansion** - Four new detectors covering DNS exfiltration, lateral movement, credential access, and suspicious scripting, with MITRE ATT&CK-tagged scenario fixtures
-- [ ] **Phase 82: Telemetry Ingest Server** - HTTP POST JSON ingest endpoint in swarm-detect with normalization and validation
-- [ ] **Phase 83: Tetragon Bridge Port** - gRPC bridge crate consuming Tetragon kernel-level process telemetry into normalized TelemetryPayload
+- [ ] **Phase 84: Real Response Adapters** - HTTP EDR and webhook adapters behind ResponseExecutor, gated by guards and policy
+- [ ] **Phase 85: Container And Deployment Infrastructure** - Dockerfile, docker-compose, health checks, graceful shutdown, runtime policy reload
 
 ## Phase Details
 
-### Phase 81: Detection Strategy Expansion
-**Goal**: The runtime can detect DNS exfiltration, lateral movement, credential access, and suspicious scripting threats through the existing DetectionStrategy trait
-**Depends on**: Nothing (independent of Phase 82)
-**Requirements**: DET-01, DET-02, DET-03, DET-04, DET-05
+### Phase 84: Real Response Adapters
+**Goal**: Response actions produce real side effects through HTTP-based adapters gated by the existing guard pipeline and policy
+**Depends on**: v1.26 (telemetry ingest and detection breadth must exist for end-to-end response testing)
+**Requirements**: RESP-01, RESP-02
 **Success Criteria** (what must be TRUE):
-  1. Running a DNS tunneling scenario through the detection pipeline produces a detection record with the DNS exfiltration detector, flagging high-entropy subdomains or excessive query volume
-  2. Running a lateral movement scenario (WMI, PsExec, SSH from unusual source) through the detection pipeline produces a detection record from the lateral movement detector
-  3. Running a credential access scenario (LSASS access, SAM registry read, Kerberoasting) through the detection pipeline produces a detection record from the credential access detector
-  4. Running a suspicious scripting scenario (encoded commands, download-and-execute, LOLBin abuse) through the detection pipeline produces a detection record from the suspicious scripting detector
-  5. Each new detector has at least one MITRE ATT&CK-tagged scenario fixture exercised by an integration test that passes in `cargo test --workspace`
-**Plans**: 2 plans
+  1. An HTTP EDR adapter sends block or isolate requests to a configurable endpoint with authorization headers and parses confirmation or error responses
+  2. A webhook adapter sends escalation notifications as Slack/PagerDuty-compatible JSON payloads to a configurable URL
+  3. Both adapters only fire after the guard pipeline approves the action and the policy gate returns an allow verdict
+  4. Each adapter execution produces a signed receipt that records adapter type, target, result status (success, failure, timeout), and elapsed time
+  5. HTTP client handles configurable timeouts and returns structured errors instead of panicking on network failures
+**Plans**: TBD
 
 Plans:
-- [ ] 81-01-PLAN.md -- Extend TelemetryPayload with new event types and create four detector modules with unit tests
-- [ ] 81-02-PLAN.md -- Wire detectors into runtime, create MITRE-tagged scenario fixtures and integration tests
+- [ ] 84-01: TBD
+- [ ] 84-02: TBD
 
-### Phase 82: Telemetry Ingest Server
-**Goal**: Operators can push live telemetry events into swarm-detect over HTTP without requiring the swarmctl workbench
-**Depends on**: Nothing (independent of Phase 81)
-**Requirements**: INGEST-01, INGEST-02
+### Phase 85: Container And Deployment Infrastructure
+**Goal**: The detection service is containerized and deployable with health monitoring, graceful lifecycle, and hot policy reload
+**Depends on**: Phase 84
+**Requirements**: DEPLOY-01, DEPLOY-02, DEPLOY-03, DEPLOY-04
 **Success Criteria** (what must be TRUE):
-  1. An HTTP POST to the configurable ingest endpoint with a valid JSON telemetry event returns a success response and the event enters the detection pipeline
-  2. An HTTP POST with malformed or schema-invalid JSON returns a structured rejection response and does not enter the detection pipeline
-  3. The ingest endpoint coexists with the existing /metrics endpoint on the swarm-detect binary without requiring a separate process
-**Plans**: 1 plan
+  1. A multi-stage Dockerfile produces minimal images containing swarm-detect and swarmctl binaries without build toolchain or source
+  2. docker-compose brings up the detection service and an optional NATS sidecar with one command
+  3. A /healthz endpoint returns service readiness including detection pipeline and substrate status
+  4. SIGTERM triggers graceful shutdown that drains in-flight events and flushes state before exit
+  5. Policy file changes are detected and applied at runtime without restarting the binary (file-watch or SIGHUP)
+**Plans**: TBD
 
 Plans:
-- [ ] 82-01-PLAN.md -- Ingest module, handler, swarm-detect --serve mode, integration tests
+- [ ] 85-01: TBD
+- [ ] 85-02: TBD
 
-### Phase 83: Tetragon Bridge Port
-**Goal**: The runtime can consume kernel-level process telemetry from Tetragon over gRPC and route it through the same detection pipeline as HTTP-ingested events
-**Depends on**: Phase 82 (ingest normalization contract)
-**Requirements**: INGEST-03
-**Success Criteria** (what must be TRUE):
-  1. A Tetragon bridge crate exists that can connect to a Tetragon gRPC endpoint and receive process execution events
-  2. Received Tetragon events are normalized into the existing TelemetryPayload schema and published to the detection pipeline
-  3. The bridge handles connection failures and malformed gRPC messages without crashing the swarm-detect process
-**Plans**: 1 plan
+## Next Up
 
-Plans:
-- [ ] 83-01-PLAN.md -- swarm-ingest-tetragon crate with proto compilation, gRPC client, event mapper, and bridge event loop
+- `v1.28 Durable Substrate And Multi-Instance Coordination`
 
 ## Progress
 
-**Execution Order:**
-Phases 81 and 82 are independent and can execute in either order. Phase 83 depends on Phase 82.
-
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 81. Detection Strategy Expansion | v1.26 | 0/2 | Planned | - |
-| 82. Telemetry Ingest Server | v1.26 | 0/1 | Planned | - |
-| 83. Tetragon Bridge Port | v1.26 | 0/1 | Planned | - |
+| 84. Real Response Adapters | v1.27 | 0/? | Not started | - |
+| 85. Container And Deployment Infrastructure | v1.27 | 0/? | Not started | - |
+
+---
+*Last shipped milestone: v1.26 Detection Breadth And Telemetry Ingestion on 2026-04-05*
+*Last updated: 2026-04-05 after v1.27 roadmap creation*
