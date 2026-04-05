@@ -58,11 +58,10 @@ Phases 1-70 shipped across milestones v1.0 through v1.22. Full history in `.plan
   3. Signed votes can be appended to an approval ledger where each entry carries a voter identity, Ed25519 signature, and timestamp
   4. The approval ledger tracks current vote count against the threshold and exposes explicit missing-quorum state when the threshold is not yet met
   5. Ledger entries and approval sets are accessible through `swarmctl` and the authenticated HTTP surface
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 75-01: TBD
-- [ ] 75-02: TBD
+- [ ] 75-01-PLAN.md -- Core approval types, file-backed stores, harness, swarmctl subcommands, and HTTP endpoints
 
 ### Phase 76: Approval Verdict And Receipt Packs
 **Goal**: Operators can evaluate a completed or partial ledger against threshold rules to produce a deterministic verdict, and export the full approval chain as a signed receipt pack for later verification
@@ -100,7 +99,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 75. Approval Set Definition And Signed Ledgers | v1.24 | 0/TBD | Not started | - |
+| 75. Approval Set Definition And Signed Ledgers | v1.24 | 0/1 | Planning complete | - |
 | 76. Approval Verdict And Receipt Packs | v1.24 | 0/TBD | Not started | - |
 | 77. Human Gate And Promotion Integration | v1.24 | 0/TBD | Not started | - |
 
