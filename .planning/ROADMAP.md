@@ -31,10 +31,11 @@ Phases 1-70 shipped across milestones v1.0 through v1.22. Full history in `.plan
   2. Canonical JSON serialization produces identical byte output for semantically equivalent JSON inputs across re-serialization
   3. Merkle tree construction from a known leaf set produces a deterministic root hash and inclusion proofs verify against it
   4. SHA-256 content hashing and hex encoding are available as public swarm-crypto APIs and match known test vectors
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 71-01: TBD
+- [ ] 71-01-PLAN.md -- Port error, hashing, and canonical JSON modules with workspace deps
+- [ ] 71-02-PLAN.md -- Port signing and merkle modules, rewrite lib.rs with backward-compat shims
 
 ### Phase 72: Guard Trait And Implementations
 **Goal**: swarm-guard provides a fail-closed pluggable guard pipeline with four concrete guards covering filesystem, shell, secret, and egress safety
@@ -85,7 +86,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 71. Cryptographic Foundation | v1.23 | 0/? | Not started | - |
+| 71. Cryptographic Foundation | v1.23 | 0/2 | Planned | - |
 | 72. Guard Trait And Implementations | v1.23 | 0/? | Not started | - |
 | 73. Spine Enhancement And Runtime Integration | v1.23 | 0/? | Not started | - |
 | 74. CI Pipeline And Quality Gates | v1.23 | 0/? | Not started | - |
