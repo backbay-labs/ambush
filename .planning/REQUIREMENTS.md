@@ -3,55 +3,44 @@
 **Defined:** 2026-04-05
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.27 Requirements
+## v1.28 Requirements
 
-### Response Adapters
+### Durable Substrate
 
-- [ ] **RESP-01**: At least two real response adapters exist behind the ResponseExecutor trait (HTTP-based EDR block/isolate, webhook-based escalation notification)
-- [ ] **RESP-02**: Response adapters fire only after guard pipeline and policy gate approval with signed receipt
+- [ ] **SUB-01**: NATS JetStream pheromone substrate backend persists deposits across restarts
 
-### Deployment Infrastructure
+### Multi-Instance Coordination
 
-- [ ] **DEPLOY-01**: Dockerfile exists with multi-stage build for swarm-detect and swarmctl binaries
-- [ ] **DEPLOY-02**: docker-compose exists for local development (runtime + optional NATS)
-- [ ] **DEPLOY-03**: Health check endpoint and graceful shutdown are implemented
-- [ ] **DEPLOY-04**: Policy can be reloaded at runtime without binary restart
+- [ ] **SUB-02**: Multiple swarm-detect instances contribute deposits to shared substrate with correct concentration aggregation
+- [ ] **SUB-03**: min_sources_for_escalation enforcement works correctly across multiple instances
 
-## Future Requirements
+### Legacy Cleanup
 
-### Durable Substrate And Multi-Instance (v1.28)
-
-- **SUB-01**: NATS JetStream pheromone substrate backend persists deposits across restarts
-- **SUB-02**: Multiple swarm-detect instances contribute deposits to shared substrate with correct concentration aggregation
-- **SUB-03**: min_sources_for_escalation enforcement works correctly across multiple instances
-- **CLEAN-01**: swarm-bridge (dead PyO3 shim) and kernel/ Python stubs are removed or archived
+- [ ] **CLEAN-01**: swarm-bridge (dead PyO3 shim) and kernel/ Python stubs are removed or archived
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Real EDR vendor SDK integration (CrowdStrike Falcon, Defender, etc.) | HTTP adapter is generic; vendor-specific SDKs are future work |
-| Kubernetes manifests or Helm charts | Dockerfile + docker-compose is sufficient for v1.27; k8s is future |
-| TLS certificate management | Use reverse proxy for TLS termination; not in-binary |
-| Multi-region or HA deployment | Single-node deployment first; HA comes with v1.28 multi-instance |
-| Automatic scaling or load balancing | Manual deployment; orchestration is future work |
+| Distributed consensus or BFT | Multi-instance substrate sharing is not consensus; BFT remains deferred |
+| Automatic fleet scaling | Manual multi-instance deployment; orchestration is future work |
+| Cross-instance response coordination | Each instance responds independently; coordinated response is future |
+| NATS cluster HA configuration | Single NATS instance sufficient for v1.28; HA is operational concern |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| RESP-01 | Phase 84 | Pending |
-| RESP-02 | Phase 84 | Pending |
-| DEPLOY-01 | Phase 85 | Pending |
-| DEPLOY-02 | Phase 85 | Pending |
-| DEPLOY-03 | Phase 85 | Pending |
-| DEPLOY-04 | Phase 85 | Pending |
+| SUB-01 | — | Pending |
+| SUB-02 | — | Pending |
+| SUB-03 | — | Pending |
+| CLEAN-01 | — | Pending |
 
 **Coverage:**
-- v1.27 requirements: 6 total
-- Mapped to phases: 6
-- Unmapped: 0
+- v1.28 requirements: 4 total
+- Mapped to phases: 0
+- Unmapped: 4
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after v1.27 roadmap creation*
+*Last updated: 2026-04-05 after milestone v1.28 definition*

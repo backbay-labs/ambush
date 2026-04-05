@@ -10,30 +10,24 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.26 Detection Breadth And Telemetry Ingestion` shipped on 2026-04-05.
+`v1.27 Live Response Adapters And Deployment` shipped on 2026-04-05.
 
 **What is now real:**
-- the runtime now supports five detector strategies: suspicious process tree, DNS exfiltration, lateral movement, credential access, and suspicious scripting
-- telemetry normalization now covers process, network, DNS, registry, and authentication events instead of only the earlier narrow payload set
-- ATT&CK-tagged scenario fixtures and critical-path integration tests now prove end-to-end coverage for each new detector family plus a benign DNS control
-- `swarm-detect` now exposes `/v1/ingest/events` alongside `/metrics`, validating live JSON telemetry batches and returning per-event accepted or rejected status
-- the workspace now includes `swarm-ingest-tetragon`, which compiles Tetragon gRPC protos, maps `ProcessExec` events into `TelemetryEvent`, and forwards them through a retrying bridge loop
+- the runtime now supports `sandbox`, `http_edr`, and `webhook` response adapters selected from repo-owned config
+- live response audit trails now preserve dispatched success, timeout, and failure outcomes instead of treating adapter-level failures as silent successes
+- `swarm-detect` now exposes `/healthz`, reloads config on file change or `SIGHUP`, and exits cleanly on `SIGTERM`
+- the repo now ships a multi-stage `Dockerfile`, `.dockerignore`, and `docker-compose.yml` with an optional internal NATS sidecar
+- the verified `swarm-team-six-swarm-detect` container image is about 39.8 MB and passed build, health, profile, and shutdown checks
 
-## Current Milestone: v1.27 Live Response Adapters And Deployment
+## Current Milestone: v1.28 Durable Substrate And Multi-Instance Coordination
 
-**Goal:** Implement real response adapters that execute actual side effects (HTTP-based EDR block/isolate, webhook notifications), containerize the detection service, and add runtime policy reload.
+**Goal:** Replace in-memory pheromone substrate with durable NATS JetStream backend, enable multiple swarm-detect instances to share pheromone state, and clean up legacy artifacts.
 
 **Target features:**
-- HTTP EDR adapter for block/isolate requests to configurable endpoints
-- Webhook adapter for escalation notifications (Slack/PagerDuty compatible)
-- Response adapters gated by guard pipeline and policy before firing
-- Dockerfile with multi-stage build for swarm-detect and swarmctl
-- docker-compose for local development with optional NATS
-- Health check endpoint and graceful shutdown
-- Runtime policy reload without binary restart
-
-**Queued after this:**
-- `v1.28 Durable Substrate And Multi-Instance Coordination`
+- NATS JetStream pheromone substrate backend persisting deposits across restarts
+- Multiple swarm-detect instances sharing deposits with correct concentration aggregation
+- min_sources_for_escalation enforcement across multiple instances
+- Legacy cleanup: remove swarm-bridge and archive kernel/ Python stubs
 
 ## Requirements
 
@@ -104,6 +98,9 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Most Recently Shipped
 
+- ✓ Operators can now execute response actions through repo-owned sandbox, HTTP EDR, or webhook adapters selected from config while preserving guard and policy safety gates — v1.27
+- ✓ Runtime audit trails now preserve dispatched success, skipped, guard-rejected, timeout, and failure outcomes for live response adapters — v1.27
+- ✓ `swarm-detect` now exposes `/healthz`, reloads config on file-watch or `SIGHUP`, and runs cleanly inside a compose-managed container image — v1.27
 - ✓ Operators can now export one signed portable review capsule from a cross-lane session or a promotion-readiness artifact without granting direct store access — v1.22
 - ✓ Imported review capsules now preserve remote signer lineage, local trust status, and related stable refs as durable inspectable artifacts — v1.22
 - ✓ Advisory-only delegation packets now preserve signed review continuity across trust boundaries without widening rollout, promotion, or governance authority — v1.22
@@ -119,9 +116,10 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Current Milestone
 
-- `v1.26 Detection Breadth And Telemetry Ingestion` is complete.
+- `v1.27 Live Response Adapters And Deployment` is complete.
 - There is no active milestone at the moment; the repo is ready for the next planning cycle.
 - Start the next cycle with `$gsd-new-milestone`.
+- `v1.28 Durable Substrate And Multi-Instance Coordination` is queued next.
 - Distributed trust boundaries, multi-user governance, and true quorum activation remain deferred until the runtime is no longer strictly single-node.
 
 ### Out of Scope
@@ -214,4 +212,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-05 after shipping v1.26*
+*Last updated: 2026-04-05 after shipping v1.27*
