@@ -62,10 +62,11 @@ Plans:
   2. swarm-spine can create a checkpoint statement and verify a witness co-signature against it
   3. Response actions in swarm-runtime pass through the guard pipeline before execution, and a guard rejection prevents the response adapter from firing
   4. A response action that would have executed under the old path is now blocked when a guard rejects it, with the rejection reason preserved in the audit record
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 73-01: TBD
+- [ ] 73-01-PLAN.md -- Port envelope, checkpoint, and chain modules from vendor spine into swarm-spine
+- [ ] 73-02-PLAN.md -- Wire guard pipeline into swarm-runtime response authorization with GuardRejected audit variant
 
 ### Phase 74: CI Pipeline And Quality Gates
 **Goal**: Every push and pull request is automatically checked for formatting, lint, build, and test correctness, and dependency governance prevents unapproved licenses or known vulnerabilities
@@ -89,7 +90,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 71. Cryptographic Foundation | v1.23 | 0/2 | Planned | - |
 | 72. Guard Trait And Implementations | v1.23 | 0/2 | Planned | - |
-| 73. Spine Enhancement And Runtime Integration | v1.23 | 0/? | Not started | - |
+| 73. Spine Enhancement And Runtime Integration | v1.23 | 0/2 | Planned | - |
 | 74. CI Pipeline And Quality Gates | v1.23 | 0/1 | Planned | - |
 
 ---
