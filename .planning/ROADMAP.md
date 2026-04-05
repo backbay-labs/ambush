@@ -45,11 +45,11 @@ Plans:
   2. `ingest.rs` has tests covering event validation (valid and malformed payloads), HTTP error responses (bad content-type, oversized body), and batch processing edge cases (empty batch, partial failure)
   3. Hot-path modules (pipeline, service, detection logic) live under a `detection/` submodule with a single public re-export boundary, and existing imports compile without manual fixups outside the crate
   4. The 5 largest previously-untested modules each have at least one test exercising their primary code path
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 89-01: TBD
-- [ ] 89-02: TBD
+- [ ] 89-01-PLAN.md -- Consolidate pipeline.rs and metrics.rs into detection/ submodule with public re-export boundary
+- [ ] 89-02-PLAN.md -- Add test coverage to ingest.rs and the 4 other largest previously-untested modules
 
 ## Progress
 
@@ -59,7 +59,7 @@ Phases execute in numeric order: 88 -> 89
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 88. Module Decomposition | 0/? | Not started | - |
-| 89. Test Coverage And Hot-Path Consolidation | 0/? | Not started | - |
+| 89. Test Coverage And Hot-Path Consolidation | 0/2 | Planned | - |
 
 ---
 *Last shipped milestone: v1.28 Durable Substrate And Multi-Instance Coordination on 2026-04-05*
