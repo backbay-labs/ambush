@@ -9,6 +9,8 @@ This file marks which docs are canonical for the current Rust-first rebuild and 
 - `docs/ROADMAP.md`
 - `docs/decisions/0001-rust-first-runtime.md`
 - `docs/VENDOR-REFERENCES.md`
+- `docs/PORTING-TRACKER.md`
+- `docs/ARC-UPSTREAM.md`
 - `vendor/reference/README.md`
 
 ## Historical / Inspiration Only
