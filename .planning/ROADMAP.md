@@ -45,10 +45,10 @@ Plans:
   1. An HTTP POST to the configurable ingest endpoint with a valid JSON telemetry event returns a success response and the event enters the detection pipeline
   2. An HTTP POST with malformed or schema-invalid JSON returns a structured rejection response and does not enter the detection pipeline
   3. The ingest endpoint coexists with the existing /metrics endpoint on the swarm-detect binary without requiring a separate process
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 82-01: TBD
+- [ ] 82-01-PLAN.md -- Ingest module, handler, swarm-detect --serve mode, integration tests
 
 ### Phase 83: Tetragon Bridge Port
 **Goal**: The runtime can consume kernel-level process telemetry from Tetragon over gRPC and route it through the same detection pipeline as HTTP-ingested events
@@ -71,5 +71,5 @@ Phases 81 and 82 are independent and can execute in either order. Phase 83 depen
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 81. Detection Strategy Expansion | v1.26 | 0/? | Not started | - |
-| 82. Telemetry Ingest Server | v1.26 | 0/? | Not started | - |
+| 82. Telemetry Ingest Server | v1.26 | 0/1 | Planned | - |
 | 83. Tetragon Bridge Port | v1.26 | 0/1 | Planned | - |
