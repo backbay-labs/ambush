@@ -54,20 +54,20 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DET-01 | — | Pending |
-| DET-02 | — | Pending |
-| DET-03 | — | Pending |
-| DET-04 | — | Pending |
-| INGEST-01 | — | Pending |
-| INGEST-02 | — | Pending |
-| INGEST-03 | — | Pending |
-| DET-05 | — | Pending |
+| DET-01 | Phase 81 | Pending |
+| DET-02 | Phase 81 | Pending |
+| DET-03 | Phase 81 | Pending |
+| DET-04 | Phase 81 | Pending |
+| DET-05 | Phase 81 | Pending |
+| INGEST-01 | Phase 82 | Pending |
+| INGEST-02 | Phase 82 | Pending |
+| INGEST-03 | Phase 83 | Pending |
 
 **Coverage:**
 - v1.26 requirements: 8 total
-- Mapped to phases: 0
-- Unmapped: 8
+- Mapped to phases: 8
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after milestone v1.26 definition*
+*Last updated: 2026-04-05 after roadmap creation*
