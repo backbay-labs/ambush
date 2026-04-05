@@ -18,19 +18,19 @@ Detect real threats quickly enough to take safe action before the window to resp
 - advisory-only delegation packets can now preserve review continuity across trust boundaries without widening into rollout, promotion, or governance authority
 - the trust boundary remains single-node and bounded: portable review improves external verification and continuity, but it still cannot bypass maintenance, rollout, promotion, or quorum governance gates
 
-## Current Milestone: v1.23 Cryptographic Foundation And Guard Pipeline
+## Current Milestone: v1.24 Approval Ledger And Quorum Readiness
 
-**Goal:** Port battle-tested hush-core crypto and clawdstrike guard implementations into STS stub crates, wire the guard pipeline into response authorization, and establish CI quality gates.
+**Goal:** Prepare local approval ledgers, signed vote artifacts, threshold-based quorum validation, approval receipt packs, and human-gate pending states for critical-severity promotion candidates — all without requiring distributed consensus.
 
 **Target features:**
-- Replace swarm-crypto minimal impl with full hush-core primitives (Ed25519, canonical JSON, Merkle trees, hashing)
-- Fill swarm-guard with Guard trait and 4 production guards from clawdstrike (ForbiddenPath, ShellCommand, SecretLeak, EgressAllowlist)
-- Add signed envelope and checkpoint modules to swarm-spine from clawdstrike spine
-- Wire guard pipeline into swarm-runtime response authorization path
-- Add GitHub Actions CI pipeline and deny.toml for dependency governance
+- Operator can define approval sets with eligible voters and threshold rules
+- Signed approval ledgers preserve vote lineage and missing quorum state
+- Local approval verdicts assembled from signed ledger entries and threshold rules
+- Signed approval receipt packs with approval lineage and audit references
+- Critical-severity promotion candidates held in explicit human-approval-pending state
+- Promotion records include signed votes and durable consensus receipts
 
 **Queued after this:**
-- `v1.24 Approval Ledger And Quorum Readiness`
 - `v1.25 Operational Hardening And Service Extraction`
 
 ## Next Planning Step
