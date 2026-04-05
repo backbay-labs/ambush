@@ -29,11 +29,10 @@ Phases 1-77 shipped across milestones v1.0 through v1.24. Full history is in `.p
   1. Operator can build and run a `swarm-detect` binary that performs detection, pheromone deposit, and policy evaluation without the `swarmctl` operator workbench
   2. Rulesets from `rulesets/default.yaml` and scenarios from `scenarios/*.yaml` are loaded by the detection binary at startup via detection config
   3. The `swarm-detect` binary supports both `detect_only` and `live_response` runtime modes with the same semantics as the library runtime
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 78-01: TBD
-- [ ] 78-02: TBD
+- [ ] 78-01-PLAN.md -- Extract detection binary with public detector factory, scenario loading, and standalone hot path
 
 ### Phase 79: Metrics And Integration Tests
 **Goal**: Critical path emits structured Prometheus metrics and integration tests exercise the full telemetry-to-receipt flow
@@ -70,6 +69,6 @@ Phases execute in numeric order: 78 -> 79 -> 80 (Phase 80 may run in parallel wi
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 78. Service Extraction And Detection Binary | 0/? | Not started | - |
+| 78. Service Extraction And Detection Binary | 0/1 | Planned | - |
 | 79. Metrics And Integration Tests | 0/2 | Planned | - |
 | 80. Clippy Enforcement | 0/? | Not started | - |
