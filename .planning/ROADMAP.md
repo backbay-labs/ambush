@@ -58,10 +58,10 @@ Plans:
   1. A Tetragon bridge crate exists that can connect to a Tetragon gRPC endpoint and receive process execution events
   2. Received Tetragon events are normalized into the existing TelemetryPayload schema and published to the detection pipeline
   3. The bridge handles connection failures and malformed gRPC messages without crashing the swarm-detect process
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 83-01: TBD
+- [ ] 83-01-PLAN.md -- swarm-ingest-tetragon crate with proto compilation, gRPC client, event mapper, and bridge event loop
 
 ## Progress
 
@@ -72,4 +72,4 @@ Phases 81 and 82 are independent and can execute in either order. Phase 83 depen
 |-------|-----------|----------------|--------|-----------|
 | 81. Detection Strategy Expansion | v1.26 | 0/? | Not started | - |
 | 82. Telemetry Ingest Server | v1.26 | 0/? | Not started | - |
-| 83. Tetragon Bridge Port | v1.26 | 0/? | Not started | - |
+| 83. Tetragon Bridge Port | v1.26 | 0/1 | Planned | - |
