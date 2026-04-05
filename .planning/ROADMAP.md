@@ -75,10 +75,10 @@ Plans:
   1. A GitHub Actions workflow runs cargo fmt --check, clippy, build, and test on every push and pull request to main
   2. deny.toml exists in the workspace root with a license allowlist and advisory-db vulnerability checks configured
   3. `cargo deny check` passes against the current workspace dependency tree
-**Plans**: TBD
+**Plans:** 1 plan
 
 Plans:
-- [ ] 74-01: TBD
+- [ ] 74-01-PLAN.md -- GitHub Actions CI workflow and cargo-deny dependency governance
 
 ## Progress
 
@@ -90,7 +90,7 @@ Plans:
 | 71. Cryptographic Foundation | v1.23 | 0/2 | Planned | - |
 | 72. Guard Trait And Implementations | v1.23 | 0/2 | Planned | - |
 | 73. Spine Enhancement And Runtime Integration | v1.23 | 0/? | Not started | - |
-| 74. CI Pipeline And Quality Gates | v1.23 | 0/? | Not started | - |
+| 74. CI Pipeline And Quality Gates | v1.23 | 0/1 | Planned | - |
 
 ---
 *Roadmap created: 2026-04-04 for milestone v1.23*
