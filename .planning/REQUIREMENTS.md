@@ -33,17 +33,17 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-26 | — | Pending |
-| OPS-27 | — | Pending |
-| OPS-28 | — | Pending |
-| OPS-29 | — | Pending |
-| OPS-30 | — | Pending |
+| OPS-26 | Phase 78 | Pending |
+| OPS-27 | Phase 78 | Pending |
+| OPS-28 | Phase 79 | Pending |
+| OPS-29 | Phase 79 | Pending |
+| OPS-30 | Phase 80 | Pending |
 
 **Coverage:**
 - v1.25 requirements: 5 total
-- Mapped to phases: 0
-- Unmapped: 5
+- Mapped to phases: 5
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-05 after milestone v1.25 definition*
+*Last updated: 2026-04-04 after roadmap creation*
