@@ -42,7 +42,10 @@ Plans:
   2. min_sources_for_escalation correctly counts distinct source instances so escalation fires only when enough independent instances contribute
   3. swarm-bridge crate is removed from the Cargo workspace and kernel/ directory is archived or removed
   4. Workspace builds, clippy, and tests remain green after legacy removal
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 87-01-PLAN.md -- Multi-instance integration tests for cross-instance deposit visibility and escalation enforcement
+- [ ] 87-02-PLAN.md -- Remove swarm-bridge crate, kernel/ directory, and pyproject.toml
 
 ## Progress
 
@@ -51,8 +54,8 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 86. NATS JetStream Pheromone Backend | v1.28 | 0/1 | Planned | - |
-| 87. Multi-Instance Coordination And Cleanup | v1.28 | 0/TBD | Not started | - |
+| 87. Multi-Instance Coordination And Cleanup | v1.28 | 0/2 | Planned | - |
 
 ---
 *Last shipped milestone: v1.27 Live Response Adapters And Deployment on 2026-04-05*
-*Last updated: 2026-04-05 after planning Phase 86*
+*Last updated: 2026-04-05 after planning Phase 87*
