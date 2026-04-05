@@ -44,11 +44,11 @@ Plans:
   2. A `/metrics` endpoint on the detection service serves OpenMetrics-format text that external scrapers can consume
   3. Integration tests exercise the complete critical path from telemetry event ingestion through whisker detection, pheromone deposit, policy authorization, response execution, and receipt verification
   4. Integration tests run as part of `cargo test --workspace` and fail on any critical-path regression
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 79-01: TBD
-- [ ] 79-02: TBD
+- [ ] 79-01-PLAN.md -- Prometheus histogram metrics for critical-path stages and /metrics endpoint
+- [ ] 79-02-PLAN.md -- Integration tests for the full telemetry-to-receipt critical path
 
 ### Phase 80: Clippy Enforcement
 **Goal**: Workspace enforces strict error-handling lints to eliminate panic-inducing unwrap and expect calls across all crates
@@ -71,5 +71,5 @@ Phases execute in numeric order: 78 -> 79 -> 80 (Phase 80 may run in parallel wi
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 78. Service Extraction And Detection Binary | 0/? | Not started | - |
-| 79. Metrics And Integration Tests | 0/? | Not started | - |
+| 79. Metrics And Integration Tests | 0/2 | Planned | - |
 | 80. Clippy Enforcement | 0/? | Not started | - |
