@@ -3,60 +3,92 @@
 **Defined:** 2026-04-04
 **Core Value:** Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## v1.22 Requirements
+## v1.23 Requirements
 
-### Portable Review Capsules
+### Cryptographic Foundation
 
-- [x] **OPS-24**: Operator can package a signed review capsule for external review without granting direct store access
-- [x] **OPS-25**: Operator can import and verify a foreign review capsule while preserving remote signer lineage, local trust status, and related stable refs
+- [ ] **CRYPTO-01**: swarm-crypto provides Ed25519 key generation, signing, and verification using hush-core primitives replacing the minimal existing implementation
+- [ ] **CRYPTO-02**: swarm-crypto provides RFC 8785 canonical JSON serialization for deterministic cross-platform signing
+- [ ] **CRYPTO-03**: swarm-crypto provides RFC 6962 Merkle tree construction and inclusion proof verification
+- [ ] **CRYPTO-04**: swarm-crypto provides SHA-256 content hashing and hex utilities
 
-### Delegation And Continuity
+### Guard Pipeline
 
-- [x] **OPS-20**: Operator can share or delegate signed review sessions across independent trust boundaries once multi-user governance exists
+- [ ] **GUARD-01**: swarm-guard exports a Guard trait with pluggable evaluation semantics and fail-closed pipeline composition
+- [ ] **GUARD-02**: swarm-guard includes a ForbiddenPathGuard preventing response actions from accessing sensitive filesystem paths
+- [ ] **GUARD-03**: swarm-guard includes a ShellCommandGuard blocking destructive commands in response execution
+- [ ] **GUARD-04**: swarm-guard includes a SecretLeakGuard detecting credentials in response action arguments
+- [ ] **GUARD-05**: swarm-guard includes an EgressAllowlistGuard controlling network destinations for response adapters
+- [ ] **GUARD-06**: Guard pipeline is wired into swarm-runtime response authorization path so response actions pass through guards before execution
+
+### Spine Enhancement
+
+- [ ] **SPINE-01**: swarm-spine provides signed envelope construction and verification using swarm-crypto primitives
+- [ ] **SPINE-02**: swarm-spine provides checkpoint statement creation and witness co-signature verification
+
+### Quality Infrastructure
+
+- [ ] **CI-01**: GitHub Actions workflow enforces cargo fmt, clippy, build, and test on pushes and pull requests
+- [ ] **CI-02**: Workspace includes deny.toml for dependency license allowlist and security vulnerability scanning
 
 ## Future Requirements
 
-### Approval Ledger Readiness
+### Approval Ledger Readiness (v1.24)
 
 - **GOV-03**: Operator can define an approval set with eligible voters, threshold rules, and supporting promotion evidence without executing distributed consensus
 - **GOV-04**: Signed approval ledgers preserve vote lineage, missing quorum state, and related promotion evidence refs for later independent verification
 - **GOV-01**: Strategy promotion to production requires quorum-based approval once independent trust boundaries exist
 
-### Receipt And Human Gate Prep
+### Receipt And Human Gate Prep (v1.24)
 
 - **GOV-05**: Operator can assemble a local approval verdict from signed approval-ledger entries and threshold rules without contacting distributed voters
 - **GOV-06**: Operator can export a signed approval receipt pack with approval lineage, final verdict, and audit references for later independent verification
 - **GOV-07**: Critical-severity promotion candidates can remain in an explicit human-approval-pending state with review packets and durable audit history
 - **GOV-02**: Promotion records include signed votes and durable consensus receipts
 
+### Operational Hardening (v1.25)
+
+- **OPS-26**: Detection hot path runs as a standalone binary separate from the operator workbench
+- **OPS-27**: Rulesets and scenarios are wired into detection config rather than only the workbench CLI
+- **OPS-28**: Critical path emits structured Prometheus metrics for detection latency, policy evaluation time, and response execution time
+- **OPS-29**: Integration tests cover the full critical path from telemetry to verified receipt
+- **OPS-30**: Workspace enforces clippy unwrap_used and expect_used denial across all crates
+
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Actual quorum voting or distributed consensus for promotion | Independent trust boundaries still do not exist, and governance remains explicitly deferred |
-| Multi-user RBAC or federated operator workflows | The runtime still operates as a local single-node control surface |
-| Internet-exposed evidence or operator service | This cycle keeps the review surface local-only and loopback-oriented |
-| Direct rollout, promotion, or governance actions from imported or delegated review artifacts | Portable review remains advisory and cannot bypass the existing maintenance or rollout gates |
-| Fleet-wide or partial-fleet promotion approvals | The rollout path remains bounded to one single-node production lane |
-| Replacing the authenticated JSON API with a separate UI-only protocol | The review client layers above the existing operator surface instead of forking it |
+| Spider Sense cosine-similarity detector | Valuable but depends on embedding infrastructure not yet available; defer to future guard expansion |
+| WASM guard plugin SDK | ClawdStrike has this but swarm-guard should start with compiled-in guards |
+| Async guards requiring network access | Start with sync guards; async guard trait can be added later |
+| swarm-consensus implementation | No upstream BFT source; remains deferred until governance milestones need it |
+| SIEM export from arc | Useful but not blocking; defer to operational hardening or later |
+| Full hush-core receipt types | swarm-spine already has receipt types; only envelope and checkpoint are needed now |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OPS-24 | Phase 68 | Complete |
-| OPS-25 | Phase 69 | Complete |
-| OPS-20 | Phase 70 | Complete |
+| CRYPTO-01 | — | Pending |
+| CRYPTO-02 | — | Pending |
+| CRYPTO-03 | — | Pending |
+| CRYPTO-04 | — | Pending |
+| GUARD-01 | — | Pending |
+| GUARD-02 | — | Pending |
+| GUARD-03 | — | Pending |
+| GUARD-04 | — | Pending |
+| GUARD-05 | — | Pending |
+| GUARD-06 | — | Pending |
+| SPINE-01 | — | Pending |
+| SPINE-02 | — | Pending |
+| CI-01 | — | Pending |
+| CI-02 | — | Pending |
 
 **Coverage:**
-- v1.22 requirements: 3 total
-- Mapped to phases: 3
-- Unmapped: 0
-
-## Next Step
-
-`$gsd-new-milestone`
+- v1.23 requirements: 14 total
+- Mapped to phases: 0
+- Unmapped: 14
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after completing milestone v1.22*
+*Last updated: 2026-04-04 after milestone v1.23 definition*
