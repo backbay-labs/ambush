@@ -316,7 +316,52 @@ impl AgentDispatcher {
                         self.health_overrides
                             .insert(completed.agent_id.clone(), status);
                     }
-                    _ => {}
+                    // Agent-direct: deposits are submitted to the substrate by the
+                    // agent itself during tick(). The action is recorded as an
+                    // AgentFinding for peer visibility but requires no dispatcher routing.
+                    SwarmAction::DepositPheromone { .. } => {}
+                    // Agent-direct: the response executor pipeline handles these.
+                    // Recorded as an AgentFinding for peer visibility.
+                    SwarmAction::RequestResponse { .. } => {}
+                    // Agent-direct: the stalker agent manages investigation state
+                    // internally. These exist in SwarmAction so they can be recorded
+                    // as AgentFindings for peer visibility.
+                    SwarmAction::ClaimInvestigation { hunt_id, lead } => {
+                        tracing::debug!(
+                            agent_id = %completed.agent_id,
+                            hunt_id = %hunt_id.0,
+                            lead = %lead,
+                            module = module_path!(),
+                            "agent-direct action: claim_investigation (not dispatcher-routed)"
+                        );
+                    }
+                    SwarmAction::PublishFindings {
+                        hunt_id, confidence, ..
+                    } => {
+                        tracing::debug!(
+                            agent_id = %completed.agent_id,
+                            hunt_id = %hunt_id.0,
+                            confidence = %confidence,
+                            module = module_path!(),
+                            "agent-direct action: publish_findings (not dispatcher-routed)"
+                        );
+                    }
+                    // ProposeStrategy has no handler yet — log a structured warning
+                    // so the unhandled variant is visible in operational logs.
+                    SwarmAction::ProposeStrategy {
+                        strategy_id,
+                        fitness,
+                        ..
+                    } => {
+                        tracing::warn!(
+                            agent_id = %completed.agent_id,
+                            action = "propose_strategy",
+                            strategy_id = %strategy_id,
+                            fitness = %fitness,
+                            module = module_path!(),
+                            "unhandled swarm action variant in dispatcher"
+                        );
+                    }
                 }
             }
 
@@ -525,7 +570,7 @@ mod tests {
         AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmEvent,
     };
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
-    use swarm_core::types::{AgentId, SwarmAction};
+    use swarm_core::types::{AgentId, HuntId, SwarmAction};
     use swarm_pheromone::{ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate};
     use tokio::sync::watch;
 
@@ -1097,5 +1142,87 @@ mod tests {
     fn default_agent_tick_timeout_is_500() {
         let config = AgentDispatcherConfig::default();
         assert_eq!(config.agent_tick_timeout_ms, 500);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_logs_warning_for_unhandled_propose_strategy_action() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig {
+                tick_interval_ms: 5,
+                ..AgentDispatcherConfig::default()
+            },
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        );
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "kitten-evolver",
+                    AgentRole::Kitten,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_actions(vec![vec![SwarmAction::ProposeStrategy {
+                    strategy_id: "strategy-1".to_string(),
+                    strategy: serde_json::json!({"kind": "evolved"}),
+                    fitness: 0.87,
+                }]]),
+            ))
+            .unwrap();
+
+        // Tick should not panic; the agent should remain healthy
+        dispatcher.tick_agents().await;
+
+        let snapshot = health_state.load_full();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].health, AgentHealth::Healthy);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_handles_claim_investigation_and_publish_findings_without_panic() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig {
+                tick_interval_ms: 5,
+                ..AgentDispatcherConfig::default()
+            },
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        );
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "stalker-primary",
+                    AgentRole::Stalker,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_actions(vec![vec![
+                    SwarmAction::ClaimInvestigation {
+                        hunt_id: HuntId("hunt-1".to_string()),
+                        lead: "suspicious lateral movement".to_string(),
+                    },
+                    SwarmAction::PublishFindings {
+                        hunt_id: HuntId("hunt-1".to_string()),
+                        findings: serde_json::json!({"confirmed": true}),
+                        confidence: 0.92,
+                    },
+                ]]),
+            ))
+            .unwrap();
+
+        // Tick should not panic; agent stays healthy; actions are acknowledged
+        dispatcher.tick_agents().await;
+
+        let snapshot = health_state.load_full();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].health, AgentHealth::Healthy);
     }
 }
