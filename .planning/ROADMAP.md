@@ -21,7 +21,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [x] **Phase 115: Persistence And Supply Chain Integration Proof** - Integration coverage, replay/canary/promotion support, docs, and milestone verification prove the new detectors through deposits and threat-class tagging
 - [x] **Phase 116: Agent Safety Hardening** - Signed pheromone deposits, configurable tick timeout, and explicit action-handling warnings close the three agent-safety audit findings (completed 2026-04-07)
 - [x] **Phase 117: Substrate Durability And Bridge Resilience** - Threat-intel GC on all three backends, journal rewrite on GC, gRPC stream timeout, and empty-parent schema fix close the four substrate and bridge audit findings (completed 2026-04-07)
-- [x] **Phase 118: Operational Hardening** - Independent secret-dir file-watch for hot rotation and size-based dead-letter rotation close the two operational-gap audit findings (completed 2026-04-07)
+- [ ] **Phase 118: Operational Hardening** - Independent secret-dir file-watch for hot rotation and size-based dead-letter rotation close the two operational-gap audit findings (gap closure in progress)
 - [ ] **Phase 119: Pheromone Test Suite** - A focused `swarm-pheromone` test suite with 15+ tests covering the substrate trait contract closes the test-coverage audit finding
 
 ## Phase Details
@@ -128,10 +128,12 @@ Plans:
   1. The `SwarmSecretProvider` file-watch thread monitors `secret_dir` independently; when a secret file changes, only the affected `@secret:` references are re-resolved and injected into active adapter configs without triggering a full config reload
   2. Response and notification dead-letter journals rotate when the file exceeds `max_dead_letter_bytes` from `RuntimeSettings`; the rotated file receives a timestamp suffix and the active journal is truncated to an empty state
   3. The runtime can cycle through at least one secret rotation and one dead-letter rotation in integration conditions without losing in-flight deposits or notification records
-**Plans**: 2/2 plans
+**Plans**: 3 plans
 
+Plans:
 - [x] 118-01-PLAN.md -- Independent secret-dir file-watch for hot rotation
-- [ ] 118-02-PLAN.md -- Size-based dead-letter journal rotation
+- [x] 118-02-PLAN.md -- Size-based dead-letter journal rotation
+- [ ] 118-03-PLAN.md -- Thread max_dead_letter_bytes to production paths and add rotation integration test (gap closure)
 
 ### Phase 119: Pheromone Test Suite
 **Goal**: `swarm-pheromone` has a focused, self-contained test suite that exercises the substrate trait contract independently of the runtime
@@ -169,10 +171,10 @@ Plans:
 | 115. Persistence And Supply Chain Integration Proof | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 116. Agent Safety Hardening | 2/2 | Complete    | 2026-04-07 | - |
 | 117. Substrate Durability And Bridge Resilience | 2/2 | Complete   | 2026-04-07 | - |
-| 118. Operational Hardening | v1.37.1 | 2/2 | Complete | 2026-04-07 |
+| 118. Operational Hardening | v1.37.1 | 2/3 | Gap closure | 2026-04-07 |
 | 119. Pheromone Test Suite | v1.37.1 | 0/? | Not started | - |
 
 ---
 *Last shipped milestone: v1.37 Persistence And Supply Chain Detection on 2026-04-07*
 *Active milestone: v1.37.1 Runtime Hardening And Audit Debt*
-*Last updated: 2026-04-07 after completing phase 118*
+*Last updated: 2026-04-07 after gap closure planning for phase 118*
