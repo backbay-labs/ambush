@@ -1,9 +1,10 @@
 //! Fundamental types used across the swarm.
 
+use crate::pheromone::ThreatClass;
 use serde::{Deserialize, Serialize};
 
 /// Unique identifier for a swarm agent.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AgentId(pub String);
 
 impl AgentId {
@@ -69,6 +70,25 @@ pub enum SwarmAction {
 
     /// Report health status change.
     HealthReport { status: super::agent::AgentHealth },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EscalationEvent {
+    Alert {
+        threat_class: ThreatClass,
+        total_strength: f64,
+        distinct_sources: usize,
+        peak_confidence: f64,
+        timestamp: i64,
+    },
+    Incident {
+        threat_class: ThreatClass,
+        total_strength: f64,
+        distinct_sources: usize,
+        peak_confidence: f64,
+        timestamp: i64,
+    },
 }
 
 /// Severity levels for threat indicators.

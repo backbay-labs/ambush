@@ -1291,7 +1291,7 @@ fn sanitize_id(value: &str) -> String {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time after unix epoch")
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -1306,6 +1306,7 @@ struct StrategyScorecardIndex {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         DefaultStrategyMemoryHarness, DefaultStrategyScorecardHarness,
@@ -1331,8 +1332,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
-        InvestigationConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PromotionConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        DetectorProfilesConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
+        PolicyConfig, PromotionConfig, ResponseAdapterConfig, RuntimeSettings, SwarmConfig,
+        TelemetrySourceConfig,
     };
     use swarm_core::types::Severity;
     use swarm_whisker::SuspiciousProcessTreeProfile;
@@ -1351,6 +1353,7 @@ mod tests {
 
     fn strategy_config() -> SwarmConfig {
         SwarmConfig {
+            schema_version: 1,
             name: "strategy-test".to_string(),
             description: "strategy memory test config".to_string(),
             runtime: RuntimeSettings {
@@ -1358,14 +1361,19 @@ mod tests {
                 telemetry_sources: vec![TelemetrySourceConfig {
                     name: "synthetic".to_string(),
                     subject: "telemetry.synthetic.process".to_string(),
+                    bridge: None,
                 }],
                 max_in_flight_actions: 2,
+                drain_timeout_ms: 30_000,
                 require_durable_live_response: false,
+                max_heap_pressure: 0.90,
+                secret_dir: None,
             },
             detection: DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
+                profiles: DetectorProfilesConfig::default(),
             },
             pheromone: PheromoneConfig {
                 default_half_life_secs: 3600.0,
@@ -1379,6 +1387,10 @@ mod tests {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
             },
+            response_adapter: ResponseAdapterConfig::Sandbox,
+            siem_forward: None,
+            notification_channels: std::collections::BTreeMap::new(),
+            notification_routing: swarm_core::config::NotificationRoutingConfig::default(),
             audit: AuditConfig {
                 bundle_store: BundleStoreConfig::Memory,
                 recent_decisions_limit: 20,
@@ -1536,6 +1548,11 @@ mod tests {
             threshold_results: Vec::new(),
             recent_promoted_findings: Vec::new(),
             rollback_history: Vec::new(),
+            pending_review: None,
+            approval_votes: Vec::new(),
+            consensus_receipt: None,
+            approval_severity: None,
+            quorum_gate_config: None,
         }
     }
 

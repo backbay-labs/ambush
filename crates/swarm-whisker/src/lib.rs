@@ -7,10 +7,63 @@
 //!
 //! No LLM per signal. LLM only for ambiguous signals routed to Stalkers.
 
+pub mod credential_access;
 pub mod detector;
+pub mod dns_exfiltration;
+pub mod lateral_movement;
 pub mod stream;
+pub mod suspicious_scripting;
 
+#[derive(Debug, Clone)]
+pub struct ProfileValidationError {
+    pub profile: &'static str,
+    pub field: &'static str,
+    pub reason: String,
+}
+
+impl std::fmt::Display for ProfileValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{} {}", self.profile, self.field, self.reason)
+    }
+}
+
+impl std::error::Error for ProfileValidationError {}
+
+pub(crate) fn validate_confidence_thresholds(
+    profile: &'static str,
+    high: f64,
+    medium: f64,
+) -> Result<(), ProfileValidationError> {
+    if !(0.0..=1.0).contains(&high) {
+        return Err(ProfileValidationError {
+            profile,
+            field: "high_confidence_threshold",
+            reason: "must be between 0.0 and 1.0".to_string(),
+        });
+    }
+    if !(0.0..=1.0).contains(&medium) {
+        return Err(ProfileValidationError {
+            profile,
+            field: "medium_confidence_threshold",
+            reason: "must be between 0.0 and 1.0".to_string(),
+        });
+    }
+    if high < medium {
+        return Err(ProfileValidationError {
+            profile,
+            field: "high_confidence_threshold",
+            reason: "must be greater than or equal to medium_confidence_threshold".to_string(),
+        });
+    }
+    Ok(())
+}
+
+pub use credential_access::{CredentialAccessDetector, CredentialAccessProfile};
 pub use detector::{
-    DetectionFinding, DetectionStrategy, NetworkConnectEvent, ProcessStartEvent,
-    SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
+    AuthenticationEventData, DetectionFinding, DetectionStrategy, DnsQueryEvent,
+    NetworkConnectEvent, ProcessStartEvent, RegistryAccessEvent, SuspiciousProcessTreeDetector,
+    SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
 };
+pub use dns_exfiltration::{DnsExfiltrationDetector, DnsExfiltrationProfile};
+pub use lateral_movement::{LateralMovementDetector, LateralMovementProfile};
+pub use suspicious_scripting::{SuspiciousScriptingDetector, SuspiciousScriptingProfile};

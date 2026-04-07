@@ -1,5 +1,197 @@
 # Milestones
 
+## Latest Completed Milestone
+
+### v1.36 SIEM/SOAR Forward And Alert Routing
+**Executable phases:** 108-111
+**Shipped:** 2026-04-07
+
+## Active Milestone
+
+No active milestone. `v1.36 SIEM/SOAR Forward And Alert Routing` shipped on 2026-04-07, and the queue is ready for `v1.37 Persistence And Supply Chain Detection`.
+
+## Queued Milestones
+
+| Milestone | Name | Requirements | Tier |
+|-----------|------|--------------|------|
+| v1.37 | Persistence And Supply Chain Detection | PERSIST-01–05 (5) | Detection Breadth |
+| v1.38 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
+| v1.39 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
+
+## History
+
+## v1.36 SIEM/SOAR Forward And Alert Routing (Shipped: 2026-04-07)
+
+**Phases completed:** 4 phases, 8 plans, 0 tasks
+
+**Key accomplishments:**
+- The response layer now owns a canonical `swarm_finding` schema and a resilient `SiemForwardAdapter` for Splunk HEC, ELK bulk ingest, and Chronicle delivery.
+- The shared runtime path now enriches every finding with `parent_process_ancestry`, `host_metadata`, and deterministic `time_to_detect_ms` before persistence or external delivery.
+- Repo-owned `notification_channels` and `notification_routing.rules` now route enriched findings to named notification sinks using severity, threat class, and UTC time-window matching.
+- Notification delivery now deduplicates bursts, enforces per-channel in-memory rate limits, and persists replay-ready suppressed alerts into per-channel dead-letter journals.
+- The authenticated local operator surface now exposes `GET|POST /v1/notifications/dead-letter/{channel}` so operators can list and replay suppressed notifications without touching storage directly.
+- Workspace verification remained green through focused core, response, and runtime tests, strict clippy, and a full workspace build after the delivery milestone landed.
+
+## v1.35 Production Hardening And Kubernetes Lifecycle (Shipped: 2026-04-07)
+
+**Phases completed:** 4 phases, 8 plans, 0 tasks
+
+**Key accomplishments:**
+- Serve mode now supports PreStop-driven drain handling, bounded in-flight shutdown, and a startup-only `/startupz` probe contract for Kubernetes rollouts.
+- Runtime config now enforces a required `schema_version`, migrates supported legacy shapes deterministically, and rejects future or unrecognized versions fail closed.
+- Response adapters can now resolve `@secret:` auth references from mounted files or environment variables, and secret-directory file changes trigger live config reload.
+- Prometheus now exposes live heap bytes and heap-pressure ratio gauges derived from the running process and its container memory budget.
+- `/readyz` now fails closed when heap pressure exceeds `RuntimeSettings.max_heap_pressure`, while `/livez` and `/startupz` remain semantically separate.
+- The repo now ships a disaster-recovery runbook and updated configuration guidance covering schema versioning, startup probes, drain behavior, secrets, and heap-pressure readiness.
+
+## v1.34 Queryable Substrate And Threat Intel Cache (Shipped: 2026-04-07)
+
+**Phases completed:** 4 phases, 8 plans, 0 tasks
+
+**Key accomplishments:**
+- The substrate now persists durable `EscalationRecord`, `ThreatClassConfig`, and `ThreatIntelEntry` state across in-memory, local-journal, and JetStream backends.
+- Agents now receive explicit mode-aware environment helpers, and live runtime escalation writes only true upward mode transitions back into the substrate.
+- Per-threat-class pheromone policy can now be listed and upserted through the authenticated operator surface and is resolved live without process restart.
+- Operators can now seed and query exact TTL-bound threat-intel entries through the authenticated control surface instead of editing backend storage directly.
+- The shared live detection pipeline now enriches DNS and network findings from substrate-backed threat intel before pheromone deposits are written.
+- Integration proof now shows a seeded DNS threat-intel entry can raise a live finding above alert threshold and record an alert escalation in the substrate.
+
+## v1.33 Telemetry Bridge Architecture (Shipped: 2026-04-07)
+
+**Phases completed:** 4 phases, 8 plans, 0 tasks
+
+**Key accomplishments:**
+- Shared telemetry schema ownership and the `TelemetryBridge` contract now live in `swarm-core`, which removes crate-cycle blockers for runtime-managed bridge orchestration.
+- `TetragonBridge`, `CloudTrailBridge`, and `GenericJsonBridge` now all implement the same normalized bridge contract and can be described from repo-owned config.
+- `swarm-detect --serve` now builds only configured bridge instances, runs one worker per bridge, and feeds bridge output into the same shared `telemetry_tx` lane already used by live detection.
+- Bridge readiness, processed-event counts, error counts, and lag now surface on operator status, `/healthz`, and `/metrics` without degrading the core detector readiness contract.
+- Integration coverage now proves two bridge workers can feed the shared detection pipeline concurrently and deposit pheromones end to end.
+- Workspace verification remained green through `cargo test --workspace` and `cargo clippy --workspace --tests -- -D warnings` after the bridge milestone landed.
+
+## v1.32 Multi-Agent Runtime And Role Shifts (Shipped: 2026-04-06)
+
+**Phases completed:** 2 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The dispatcher now owns a keyed multi-agent registry with runtime role-shift propagation, peer-finding snapshots, and shared lifecycle telemetry exposed on `/metrics`.
+- `whisker-primary`, `stalker-primary`, and `weaver-primary` can now run together inside one live serve-mode registry using the existing runtime stack and config toggles.
+- `StalkerAgent` now turns Whisker pheromones into persisted investigation work and republishes completed investigation output back into the pheromone substrate.
+- `WeaverAgent` now consumes investigation pheromones and persists `CorrelatedIncident` records through the existing correlation engine and incident store.
+- Integration coverage now proves the bounded detect -> pheromone deposit -> investigation -> correlation -> incident assembly pipeline with the real in-memory runtime stack.
+- Workspace verification remained green through `cargo build --workspace`, `cargo clippy --workspace -- -D warnings`, and `cargo test --workspace`.
+
+## v1.31 Runtime Agent Dispatcher And Pheromone-Driven Escalation (Shipped: 2026-04-06)
+
+**Phases completed:** 2 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarm-detect` now runs a configurable `AgentDispatcher` loop that manages registered `SwarmAgent` implementations and reports agent health through `/healthz`.
+- `WhiskerAgent` now wraps the shipped detection pipeline, drains buffered ingest telemetry, and deposits agent-owned pheromones on dispatcher ticks.
+- Live ingest serve mode now fans accepted telemetry into the agent loop without changing the existing HTTP request/response contract.
+- A live `ConcentrationMonitor` now evaluates pheromone strength plus `min_sources_for_escalation` and emits typed alert and incident escalation outcomes.
+- Shared `SwarmModeState` now drives monotonic `Normal` -> `Alert` -> `Incident` transitions that are visible to runtime agents during serve mode.
+- Integration coverage now proves below-threshold silence, single-source suppression, dual-source alert and incident escalation, and the full workspace build, clippy, and test suite remained green.
+
+## v1.30 Structured Observability And Adapter Resilience (Shipped: 2026-04-05)
+
+**Phases completed:** 2 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- ingest now assigns per-request correlation IDs, returns them in HTTP responses, and threads them through structured JSON logging across the runtime path
+- Prometheus metrics now include verdict, guard-rejection, adapter-outcome, and finding counters alongside the existing critical-path latency histograms
+- HTTP EDR and webhook adapters now execute behind retry, exponential backoff, circuit-breaker, and dead-letter persistence logic configured from repo-owned runtime config
+- detector profile overrides now validate at config load time and are resolved consistently across control, ingest, CLI, replay, canary, and promotion code paths
+- the detect server now exposes distinct `/readyz` and `/livez` semantics while keeping `/healthz` as the readiness-compatible legacy surface
+- `cargo test --workspace`, `cargo test -p swarm-runtime`, and strict clippy across the touched crates all remained green after the milestone landed
+
+## v1.29 Runtime Decomposition And Test Coverage (Shipped: 2026-04-05)
+
+**Phases completed:** 2 phases, 5 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarmctl` now resolves through a library-owned `cli/` module tree and the binary entrypoint is a thin wrapper.
+- The operator surface, review workbench, and replay logic now sit behind dedicated `http/`, `workbench/`, and `replay/` module boundaries with compatibility facades preserved for callers.
+- The hot-path detection lane now resolves through `crate::detection`, and all known runtime consumers were updated to that boundary.
+- Added 29 focused regression tests across ingest, CLI parsing, operator maintenance, workbench rendering, and replay manifest handling.
+- `cargo test --workspace` and `cargo clippy --workspace -- -D warnings` both remained green after the refactor.
+- `cargo llvm-cov -p swarm-runtime --lib --summary-only` measured 74.46% line coverage across swarm-runtime library sources.
+
+## v1.28 Durable Substrate And Multi-Instance Coordination (Shipped: 2026-04-05)
+
+**Phases completed:** 2 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarm-pheromone` now supports a durable JetStream KV backend selected from repo-owned config without forcing an async bootstrap refactor through the runtime stack.
+- Live-NATS integration coverage now proves restart-safe JetStream persistence, evaporation GC, cross-instance visibility, shared deposit queries, and `min_sources_for_escalation` enforcement across two substrate instances.
+- The JetStream backend now preserves repeated same-agent deposits as distinct persisted records while keeping the threat/timestamp/agent prefix needed for bucket scans.
+- The dead `swarm-bridge` crate, legacy `kernel/` tree, and `pyproject.toml` manifest were removed from the live repo surface.
+- Canonical docs now reflect the Rust-only workspace, while older Python-centric docs remain explicitly historical reference material.
+
+## v1.27 Live Response Adapters And Deployment (Shipped: 2026-04-05)
+
+**Phases completed:** 2 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The runtime now supports `sandbox`, `http_edr`, and `webhook` response adapters selected from repo-owned config instead of being hard-wired to the sandbox executor.
+- HTTP EDR and webhook adapters now emit dry-run, success, timeout, and failure receipts with structured adapter metadata preserved through the audit trail.
+- `swarm-detect` now serves `/healthz`, reloads config on file changes or `SIGHUP`, and shuts down cleanly on `SIGTERM`.
+- The repo now ships a multi-stage `Dockerfile`, compose orchestration, and an optional internal NATS sidecar profile.
+- The verified `swarm-team-six-swarm-detect` image is about 39.8 MB and passed compose build, health, profile, and shutdown checks.
+
+## v1.26 Detection Breadth And Telemetry Ingestion (Shipped: 2026-04-05)
+
+**Phases completed:** 3 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- swarm-whisker now understands DNS, registry, and authentication telemetry and ships four configurable detectors for DNS exfiltration, lateral movement, credential access, and suspicious scripting.
+- All five detector strategies are now selectable through control and replay surfaces, and MITRE ATT&CK-tagged scenarios plus integration tests prove end-to-end detection for each new threat family.
+- swarm-detect now serves `/v1/ingest/events` alongside `/metrics`, validating each JSON event independently and returning per-event accepted or rejected status.
+- A new `swarm-ingest-tetragon` workspace crate now compiles Tetragon gRPC protos, maps `ProcessExec` events into normalized `TelemetryEvent`s, and forwards them through a retrying bridge loop.
+
+---
+
+## v1.25 Operational Hardening And Service Extraction (Shipped: 2026-04-05)
+
+**Phases completed:** 3 phases, 5 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarm-detect` now runs the detection hot path as a standalone binary separate from the operator workbench CLI.
+- Rulesets and scenario fixtures are now loaded through shared runtime config and replay helpers instead of only through `swarmctl`.
+- Detection, policy, and response stages now emit Prometheus histogram metrics and the operator surface exposes them at `/metrics`.
+- Integration tests now cover the full detect-to-receipt flow, including benign no-op and policy-deny behavior, inside `cargo test --workspace`.
+- Workspace clippy denial for `unwrap_used` and `expect_used` is now active across all crates and enforced by the existing CI validation path.
+
+---
+
+## v1.24 Approval Ledger And Quorum Readiness (Shipped: 2026-04-05)
+
+**Phases completed:** 3 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Operators can now define durable local approval sets with threshold rules and supporting promotion evidence refs.
+- Signed approval ledgers now preserve detached vote signatures, spine-backed lineage hashes, and explicit missing-quorum state.
+- Deterministic approval verdicts and portable signed receipt packs now preserve approval lineage for later offline verification.
+- Critical-severity promotions now enter an explicit human-approval-pending state instead of advancing directly.
+- Promotion records now preserve signed approval votes, optional durable consensus receipts, and structural quorum-gate configuration.
+- Workspace verification remained green through `cargo fmt`, `cargo build`, `cargo clippy`, and `cargo test` after the governance changes landed.
+
+---
+
+## v1.23 Cryptographic Foundation And Guard Pipeline (Shipped: 2026-04-05)
+
+**Phases completed:** 4 phases, 7 plans, 0 tasks
+
+**Key accomplishments:**
+- RFC 8785 canonical JSON and typed SHA-256 hashing now back swarm-crypto.
+- swarm-crypto now ships real Ed25519 signing, RFC 6962 Merkle proofs, and backward-compatible runtime shims.
+- A fail-closed guard pipeline now blocks forbidden filesystem paths and dangerous shell commands.
+- Secret and egress guards complete a four-guard pipeline for response safety.
+- swarm-spine now signs envelopes, co-signs checkpoints, and verifies issuer chains through swarm-crypto.
+- Runtime response execution is now guard-gated and records explicit guard rejections in audit trails.
+- GitHub Actions now enforces workspace formatting, lint, build, test, and cargo-deny gates on main-bound changes.
+
+---
+
 ## v1.22 Portable Review Capsules And External Handoff (Shipped: 2026-04-04)
 
 **Phases completed:** 3 phases, 3 plans, 0 tasks

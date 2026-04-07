@@ -1,0 +1,57 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
+pub mod cloudtrail;
+pub mod generic_json;
+pub mod source;
+
+pub use cloudtrail::CloudTrailBridge;
+pub use generic_json::GenericJsonBridge;
+pub use source::{JsonRecordSource, JsonRecordSourceError};
+
+use swarm_core::{BridgeHealth, TelemetryBridgeError, TelemetryEvent, TelemetryPayload};
+
+#[derive(Debug, thiserror::Error)]
+pub enum JsonBridgeConfigError {
+    #[error(transparent)]
+    Source(#[from] JsonRecordSourceError),
+
+    #[error(transparent)]
+    Bridge(#[from] TelemetryBridgeError),
+}
+
+fn validate_event_schema(event: &TelemetryEvent, source_id: &str) -> bool {
+    if event.source != source_id {
+        return false;
+    }
+    if event.event_id.trim().is_empty() || event.timestamp <= 0 {
+        return false;
+    }
+
+    match &event.payload {
+        TelemetryPayload::ProcessStart(process) => {
+            !process.parent_process.trim().is_empty()
+                && !process.process_name.trim().is_empty()
+                && !process.command_line.trim().is_empty()
+        }
+        TelemetryPayload::NetworkConnect(connect) => {
+            !connect.process_name.trim().is_empty()
+                && !connect.destination_ip.trim().is_empty()
+                && !connect.protocol.trim().is_empty()
+        }
+        TelemetryPayload::DnsQuery(query) => {
+            !query.query_name.trim().is_empty() && !query.query_type.trim().is_empty()
+        }
+        TelemetryPayload::RegistryAccess(access) => {
+            !access.process_name.trim().is_empty()
+                && !access.registry_path.trim().is_empty()
+                && !access.access_type.trim().is_empty()
+        }
+        TelemetryPayload::AuthenticationEvent(auth) => !auth.auth_type.trim().is_empty(),
+    }
+}
+
+fn record_error(health: &mut BridgeHealth, message: impl Into<String>) -> TelemetryBridgeError {
+    let message = message.into();
+    health.record_error(message.clone());
+    TelemetryBridgeError::Mapping(message)
+}

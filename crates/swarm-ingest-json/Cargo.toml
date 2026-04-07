@@ -1,0 +1,19 @@
+[package]
+name = "swarm-ingest-json"
+description = "JSON-backed telemetry bridges for CloudTrail and config-driven generic event mapping"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

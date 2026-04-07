@@ -10,29 +10,48 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.29 Runtime Decomposition And Test Coverage` shipped on 2026-04-05.
+`v1.33 Telemetry Bridge Architecture` shipped on 2026-04-07, `v1.34 Queryable Substrate And Threat Intel Cache` completed on 2026-04-07, `v1.35 Production Hardening And Kubernetes Lifecycle` shipped on 2026-04-07, and `v1.36 SIEM/SOAR Forward And Alert Routing` shipped on 2026-04-07. No active milestone is open at the moment; the repo is ready for `v1.37 Persistence And Supply Chain Detection`.
 
 **What is now real:**
-- `swarmctl` now resolves through a library-owned `cli/` module tree while the binary stays tiny.
-- The operator surface, review workbench, and replay logic now sit behind dedicated module boundaries instead of single giant entry files.
-- The hot-path detection lane now lives under `crate::detection`.
-- `swarm-runtime` now has focused regression coverage for ingest, CLI parsing, operator maintenance, workbench rendering, and replay manifests.
-- `cargo llvm-cov -p swarm-runtime --lib --summary-only` measured 74.46% line coverage across swarm-runtime library sources.
+- `swarm-detect` now runs a keyed multi-agent registry during serve mode with runtime role-shift propagation, peer-finding snapshots, and shared lifecycle telemetry.
+- `whisker-primary`, `stalker-primary`, and `weaver-primary` now execute against the same live dispatcher and shared runtime stack when investigation and correlation are enabled.
+- `StalkerAgent` now consumes Whisker pheromones, submits replay bundles into the async investigation pipeline, and republishes completed investigation results back into the substrate.
+- `WeaverAgent` now consumes investigation-result pheromones and persists `CorrelatedIncident` records through the shipped correlation engine.
+- Integration coverage now proves the bounded detect -> investigate -> correlate pipeline, and the full workspace build, clippy, and test suites remained green.
+- Shared telemetry schema and bridge ownership now live in `swarm-core`, which removes the crate-cycle blocker for first-class bridge orchestration.
+- `TetragonBridge` now implements the shared `TelemetryBridge` contract and consumes the core-owned normalized schema directly.
+- `swarm-ingest-json` now provides `CloudTrailBridge` and `GenericJsonBridge`, and bridge-backed telemetry sources can be described from repo-owned YAML with JSON Pointer mappings.
+- Serve mode now constructs only configured bridge instances, runs them through `BridgeRuntimeRegistry`, and forwards normalized bridge output into the live `WhiskerAgent` telemetry lane.
+- `/healthz`, operator status, and `/metrics` now expose per-bridge readiness, processed events, error counts, and lag without failing the core detector/substrate readiness path.
+- The runtime now has a deterministic concurrent bridge proof showing CloudTrail and generic JSON bridge workers can feed the shared detection path and deposit pheromones together.
+- The substrate now persists durable `EscalationRecord` history across in-memory, local-journal, and JetStream backends, and runtime escalation writes only true upward mode transitions.
+- Agents now receive explicit `current_mode()` and `mode_transition_at()` accessors through `SwarmEnvironment`, which makes mode-aware runtime behavior a first-class contract instead of a raw field convention.
+- `ThreatClassConfig` records now persist across in-memory, local-journal, and JetStream substrates, and live deposit plus escalation paths resolve threat-class-specific half-life, evaporation, alert, and incident thresholds.
+- The authenticated operator surface now exposes threat-class pheromone policy list and upsert routes, and operator-written overrides are visible to the live runtime without restart.
+- `ThreatIntelEntry` records now persist across every substrate backend, and the authenticated operator surface can seed and query exact TTL-bound threat-intel entries without direct storage edits.
+- The shared live detection pipeline now enriches DNS and network findings with substrate-backed threat-intel matches before writing pheromone deposits.
+- A seeded DNS threat-intel entry can now push live finding confidence above alert threshold and record a durable `SwarmMode::Alert` escalation in the substrate.
+- Serve mode now supports bounded drain-aware PreStop shutdown, rejects new ingest traffic while draining, and exposes a dedicated `/startupz` contract for startup-only checks.
+- Runtime config is now schema-aware, can migrate supported legacy payloads, and resolves response-adapter secrets from mounted files or environment variables with live secret-dir reload.
+- Prometheus now exports live heap pressure gauges, and `/readyz` fails closed when runtime memory pressure exceeds the configured threshold.
+- The repo now ships a disaster-recovery runbook and updated configuration guidance for Kubernetes lifecycle operation.
+- The response layer now forwards canonical `swarm_finding` payloads into Splunk, ELK, or Chronicle through resilient execution instead of ad hoc webhook reuse.
+- Every finding is now enriched with normalized ancestry, host metadata, and deterministic detection latency before replay persistence or external delivery.
+- Repo-owned notification channels and routing rules now fan findings out by severity, threat class, and UTC windows without going through the response-action policy gate.
+- Operators can now inspect and replay suppressed notifications through the authenticated `/v1/notifications/dead-letter/{channel}` surface.
 
-## Current Milestone: v1.30 Structured Observability And Adapter Resilience
+## Current Milestone
 
-**Goal:** Add structured JSON logging with correlation IDs, expand Prometheus metrics with counter dimensions, implement retry/circuit-breaker for response adapters, add dead-letter persistence, Kubernetes probes, and config validation.
-
-**Target features:**
-- Structured JSON logs with request correlation IDs flowing through detect/policy/response
-- Counter metrics for verdicts, guard rejections, adapter outcomes, findings per threat class
-- Retry with exponential backoff + circuit breaker for HTTP EDR and webhook adapters
-- Dead-letter journal for failed response actions
-- /readyz and /livez endpoints for Kubernetes probes
-- Detector profile threshold validation on load
-
-**Queued after this:**
-- `v1.31 Runtime Agent Dispatcher And Pheromone-Driven Escalation`
+- `v1.33 Telemetry Bridge Architecture` is complete.
+- `v1.34 Queryable Substrate And Threat Intel Cache` is complete.
+- `v1.35 Production Hardening And Kubernetes Lifecycle` is complete.
+- `v1.36 SIEM/SOAR Forward And Alert Routing` is complete.
+- No active milestone is open right now; the repo is ready for `v1.37 Persistence And Supply Chain Detection`.
+- Phase 104 added bounded drain control, PreStop coordination, and `/startupz` startup-probe semantics for serve mode.
+- Phase 105 added schema-aware config migration and `@secret:` resolution for live response adapters with secret-directory reload.
+- Phase 106 added live heap metrics and readiness shedding before the runtime reaches an OOM boundary.
+- Phase 107 added the disaster-recovery runbook, configuration guidance, and milestone verification/archive closeout.
+- Phases 108-111 completed canonical SIEM finding delivery, finding enrichment, rule-based notification routing, and replayable suppressed-alert queues.
 
 ## Requirements
 
@@ -121,9 +140,12 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Current Milestone
 
-- `v1.29 Runtime Decomposition And Test Coverage` is complete.
-- There is no active milestone at the moment; the repo is ready for the next planning cycle.
-- Start the next cycle with `$gsd-new-milestone`.
+- `v1.33 Telemetry Bridge Architecture` is complete.
+- `v1.34 Queryable Substrate And Threat Intel Cache` is complete.
+- `v1.35 Production Hardening And Kubernetes Lifecycle` is complete.
+- `v1.36 SIEM/SOAR Forward And Alert Routing` is complete.
+- The repo is now ready to activate `v1.37 Persistence And Supply Chain Detection`.
+- The most recent milestone added resilient SIEM forwarding, enriched finding delivery, repo-owned notification routing, and authenticated notification dead-letter replay.
 - Distributed trust boundaries, multi-user governance, and true quorum activation remain deferred until the runtime is no longer strictly single-node.
 
 ### Out of Scope
@@ -144,7 +166,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 v1.0 shipped the first trusted Rust vertical slice: config loading, detection, in-memory substrate, deterministic policy, sandboxed response execution, and replayable audit artifacts. v1.1 hardened that slice with local durability, persistent replay storage, and operator status or metrics surfaces. v1.2 layered in async investigation, explainable incident assembly, and one operator review report without compromising the hot path. v1.3 completed the operator CLI plus replay and regression loop. v1.4 turned that replay loop into an offline adversarial bench with named suites, candidate detector experiments, persisted reports, and explicit offline safety gates. v1.5 added repo-owned verification corpora, invariant-based verification, shadow comparison artifacts, and promotion review packets without widening live autonomy. v1.6 completed bounded canary execution, persisted canary evidence, and explicit rollback workflows. v1.7 completed controlled production promotion, bounded production observation, and rollback to the retained baseline detector. v1.8 turned those rollout artifacts into durable strategy memories and advisory scorecards. v1.9-v1.12 extended the deferred evolution lane through proof-backed queueing, operator drafting, draft materialization, validation refresh, and queue reconciliation. v1.13 widened that lane into a multi-candidate offline mutation bench.
 
-The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, local review surface, approval hardening, broader detector coverage, live HTTP ingest, a first active Tetragon bridge seam, real response adapters, deployment packaging, runtime health and reload surfaces, and a durable shared JetStream substrate: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review -> approval ledgers and guard-gated promotion -> multi-detector telemetry ingest -> shared multi-instance pheromone coordination. `v1.23` through `v1.28` moved the runtime from governance-readiness preparation into safer execution, real telemetry intake, durable response infrastructure, and shared substrate coordination without widening autonomy beyond single-node operator control. There is no active milestone at the moment.
+The project now has an end-to-end rollout ladder plus an offline mutation, ranking, portfolio, governance-prep, authenticated operator bridge, signed evidence lane, local review surface, approval hardening, broader detector coverage, live HTTP ingest, a shared core-owned telemetry bridge contract, real response adapters, deployment packaging, runtime health and reload surfaces, and a durable shared JetStream substrate: experiment -> verification -> shadow -> canary -> production promotion -> strategy memory -> advisory scorecard -> pressure report -> draft -> reviewed queue -> mutation spec -> materialization batch -> validation batch -> ranking packet -> ranked selection -> portfolio -> governance-ready packet -> packet set -> portfolio history -> authenticated local operator review and maintenance -> signed evidence export -> local evidence verification -> advisory promotion evidence packets -> local HTML evidence review -> multi-artifact evidence workbench sessions -> cross-lane promotion review -> approval ledgers and guard-gated promotion -> multi-detector telemetry ingest -> shared multi-instance pheromone coordination -> shared telemetry bridge normalization -> production-hardened Kubernetes lifecycle controls. `v1.23` through `v1.28` moved the runtime from governance-readiness preparation into safer execution, real telemetry intake, durable response infrastructure, and shared substrate coordination without widening autonomy beyond single-node operator control. The latest shipped milestone hardened the serve-mode runtime for rollouts, config evolution, secret rotation, memory-pressure shedding, and operator recovery without widening autonomy beyond that same model.
 
 ## Constraints
 
@@ -216,4 +238,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-05 after shipping v1.28*
+*Last updated: 2026-04-07 after closing v1.36*

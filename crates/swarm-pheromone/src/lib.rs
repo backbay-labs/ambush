@@ -9,8 +9,10 @@
 //! - Garbage-collect evaporated pheromones
 //! - Enforce source diversity (one agent can't flood)
 
+pub mod jetstream;
 pub mod substrate;
 
+pub use jetstream::JetStreamPheromoneSubstrate;
 pub use substrate::{
     ConfiguredPheromoneSubstrate, DepositQuery, InMemoryPheromoneSubstrate,
     LocalJournalPheromoneSubstrate, PheromoneSubstrate, SubstrateError, SubstrateHealth,

@@ -1,0 +1,14 @@
+target/
+.git/
+.planning/
+.github/
+vendor/reference/
+kernel/
+data/
+experiments/
+__pycache__/
+.venv/
+*.log
+.DS_Store
+.idea/
+.vscode/

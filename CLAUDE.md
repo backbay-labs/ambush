@@ -25,11 +25,9 @@ The production path is the Rust critical lane under `crates/`:
 
 ## Reference-Only Material
 
-These paths exist for inspiration, not as the production runtime:
-- `kernel/` - legacy Python ideas and stubs
-- `pyproject.toml` - legacy reference only
-- `crates/swarm-bridge` - transitional compatibility shim, not the target runtime seam
+These paths exist for inspiration or archive context, not as the production runtime:
 - `vendor/reference/` - copied upstream code used for adaptation and design reference
+- `.planning/milestones/` - archived milestone plans, summaries, and audits
 
 ## Upstream Adaptation Strategy
 
@@ -54,7 +52,7 @@ cargo fmt --all
 cargo clippy --workspace -- -D warnings
 ```
 
-Legacy Python commands may still be useful for reference material, but they are not part of the current production milestone.
+Legacy Python commands are no longer part of the live repo surface or current production milestone.
 
 ## Conventions
 

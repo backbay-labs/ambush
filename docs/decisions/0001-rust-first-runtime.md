@@ -46,5 +46,5 @@ STS will adopt a Rust-first production runtime.
 ## Follow-On Work
 
 - keep `vendor/reference/` current enough to support local porting
-- treat `kernel/` and `swarm-bridge` as legacy until removed or replaced
+- keep legacy Python/PyO3 material out of the live runtime surface now that it has been removed
 - build one benchmarked end-to-end Rust slice before revisiting distributed governance

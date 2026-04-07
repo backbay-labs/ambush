@@ -1,4 +1,5 @@
 # Default repository-owned configuration for the Rust-first runtime.
+schema_version: 1
 name: default
 description: Default configuration for the v1 detect-and-respond slice
 
@@ -8,9 +9,15 @@ runtime:
     - name: synthetic-process
       subject: telemetry.synthetic.process
   max_in_flight_actions: 4
+  drain_timeout_ms: 30000
   require_durable_live_response: true
+  max_heap_pressure: 0.90
+  # Set secret_dir when using @secret:file-name adapter references.
+  secret_dir:
 
 detection:
+  # Supported strategies: suspicious_process_tree, dns_exfiltration,
+  # lateral_movement, credential_access, suspicious_scripting
   strategy: suspicious_process_tree
   high_confidence_threshold: 0.90
   medium_confidence_threshold: 0.70
@@ -21,12 +28,49 @@ pheromone:
   min_sources_for_escalation: 2
   alert_threshold: 2.0
   incident_threshold: 5.0
+  # For a durable shared substrate, switch backend.kind to jet_stream
+  # and add:
+  #   url: nats://127.0.0.1:4222
+  #   connect_timeout_ms: 5000
+  #   gc_page_size: 512
   backend:
     kind: in_memory
 
 policy:
   human_gate_severity: HIGH
   lease_ttl_ms: 60000
+
+response_adapter:
+  kind: sandbox
+
+# Optional canonical finding forwarding for external SIEM sinks.
+# siem_forward:
+#   kind: splunk_hec
+#   endpoint: https://splunk.example/services/collector/event
+#   auth_token: "@secret:env:SWARM_SPLUNK_TOKEN"
+#   timeout_ms: 5000
+#   dead_letter_path: ./siem-dead-letter.jsonl
+
+# Optional routed notification channels for operator-facing alerts.
+# notification_channels:
+#   pager:
+#     target_url: https://hooks.example/swarm/pager
+#     auth_token: "@secret:env:SWARM_NOTIFY_TOKEN"
+#     timeout_ms: 5000
+#     rate_limit:
+#       max_notifications: 5
+#       window_ms: 60000
+#     quiet_hours:
+#       start_hour_utc: 0
+#       end_hour_utc: 6
+#     dead_letter_path: ./notification-pager.jsonl
+#
+# notification_routing:
+#   dedup_window_ms: 1000
+#   rules:
+#     - min_severity: HIGH
+#       threat_class: execution
+#       channels: [pager]
 
 audit:
   bundle_store:

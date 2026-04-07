@@ -208,11 +208,8 @@ The first milestone is complete only when this works end to end:
 6. `swarm-spine` and `swarm-crypto` emit a reconstructable receipt chain
 7. benchmark results are captured for latency and throughput
 
-## What Still Exists But Is No Longer Canonical
+## What Is No Longer Canonical
 
-The following remain in the repo but are now reference-only until rewritten or removed:
-
-- `kernel/`
-- `pyproject.toml`
-- `swarm-bridge`
-- older docs centered on Python agents, BFT governance, or co-evolution as near-term scope
+The legacy Python control-plane stubs, `pyproject.toml`, and `swarm-bridge` were removed in `v1.28`.
+What remains as non-canonical material is the historical documentation centered on Python agents,
+BFT governance, or co-evolution as near-term scope.

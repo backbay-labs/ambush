@@ -27,10 +27,11 @@ These documents may still contain useful ideas, but they no longer define the ne
 - `docs/plans/BRAINSTORM-v1.md`
 - `docs/plans/BRAINSTORM-v2.md`
 
-The same rule applies to:
+Legacy Python and PyO3 transition artifacts were removed from the live repo in `v1.28`:
 
 - `kernel/`
 - `pyproject.toml`
 - `crates/swarm-bridge`
 
-They remain in the repo for transition or reference only.
+Historical discussion of those artifacts may still appear in older docs, but they are no longer
+part of the workspace or filesystem layout.

@@ -7,16 +7,6 @@ use swarm_policy::{ActionRequest, CapabilityLease};
 #[derive(Debug, Default)]
 pub struct SandboxExecutor;
 
-fn action_name(request: &ActionRequest) -> &'static str {
-    match request.action {
-        swarm_core::types::ResponseAction::BlockEgress { .. } => "block_egress",
-        swarm_core::types::ResponseAction::IsolateHost { .. } => "isolate_host",
-        swarm_core::types::ResponseAction::RevokeCredential { .. } => "revoke_credential",
-        swarm_core::types::ResponseAction::DeployDecoy { .. } => "deploy_decoy",
-        swarm_core::types::ResponseAction::Escalate { .. } => "escalate",
-    }
-}
-
 #[async_trait]
 impl ResponseExecutor for SandboxExecutor {
     async fn execute(
@@ -25,7 +15,7 @@ impl ResponseExecutor for SandboxExecutor {
         lease: &CapabilityLease,
         mode: ExecutionMode,
     ) -> Result<ResponseReceipt, ResponseError> {
-        let action = action_name(request);
+        let action = request.action.kind();
         if matches!(
             request.action,
             swarm_core::types::ResponseAction::BlockEgress { .. }
@@ -66,6 +56,7 @@ impl ResponseExecutor for SandboxExecutor {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::SandboxExecutor;
     use crate::{ExecutionMode, ResponseExecutor, ResponseStatus};

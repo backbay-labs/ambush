@@ -11,10 +11,13 @@ swarm-policy.workspace = true
 swarm-response.workspace = true
 swarm-whisker.workspace = true
 swarm-crypto.workspace = true
-async-nats.workspace = true
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+
+[lints]
+workspace = true

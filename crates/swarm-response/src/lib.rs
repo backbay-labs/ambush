@@ -4,10 +4,31 @@
 //! adapters that execute capability-scoped actions and emit signed receipts.
 
 pub mod adapters;
+pub mod config;
+pub mod dead_letter;
+pub mod dispatch;
+pub mod http_edr;
+pub mod notification;
+pub mod resilience;
+pub mod siem;
+pub mod webhook;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use swarm_policy::{ActionRequest, CapabilityLease};
+
+pub use config::{
+    CircuitBreakerConfig, HttpEdrConfig, NotificationChannelConfig, NotificationRateLimitConfig,
+    NotificationRoutingConfig, QuietHoursConfig, ResponseAdapterConfig, RetryConfig, RoutingRule,
+    SiemForwardConfig, WebhookConfig,
+};
+pub use dead_letter::{DeadLetterEntry, DeadLetterJournal};
+pub use dispatch::DispatchingExecutor;
+pub use http_edr::HttpEdrAdapter;
+pub use notification::{NotificationError, NotificationReplayResult, NotificationRouter};
+pub use resilience::{CircuitBreakerState, ResilientExecutor};
+pub use siem::{SiemFindingForwarder, SiemForwardAdapter, SwarmFindingEnvelope};
+pub use webhook::WebhookAdapter;
 
 /// Whether a response adapter should act or simulate execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,12 +57,14 @@ pub struct ResponseReceipt {
     pub details: serde_json::Value,
 }
 
-/// Normalized successful response status.
+/// Normalized response status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseStatus {
     Simulated,
     Executed,
+    Timeout,
+    Failed,
 }
 
 /// Normalized failure record for response execution.
@@ -101,6 +124,27 @@ impl ResponseError {
                 message: message.into(),
                 details,
             },
+        }
+    }
+}
+
+impl ResponseStatus {
+    pub fn indicates_success(self) -> bool {
+        matches!(self, Self::Simulated | Self::Executed)
+    }
+}
+
+impl ResponseReceipt {
+    pub fn into_failure(self) -> ResponseFailure {
+        ResponseFailure {
+            receipt_id: self.receipt_id,
+            action: self.action,
+            mode: self.mode,
+            message: self.summary,
+            details: serde_json::json!({
+                "status": self.status,
+                "details": self.details,
+            }),
         }
     }
 }

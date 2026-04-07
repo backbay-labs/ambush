@@ -1,4 +1,8 @@
-use crate::config::{RuntimeConfigError, load_config};
+use crate::config::{
+    DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
+    lateral_movement_profile, load_config, suspicious_process_tree_profile,
+    suspicious_scripting_profile,
+};
 use crate::replay::{
     DetectorCandidateManifest, DetectorExperimentManifest, ExperimentLineage, FileShadowStore,
     FileVerificationStore, ReplayHarnessError, ShadowStoreError, VerificationStoreError,
@@ -13,7 +17,10 @@ use swarm_core::config::SwarmConfig;
 use swarm_core::types::Severity;
 use swarm_whisker::stream::{evaluate_event, findings_to_deposits};
 use swarm_whisker::{
-    DetectionFinding, DetectionStrategy, SuspiciousProcessTreeDetector, TelemetryEvent,
+    CredentialAccessDetector, CredentialAccessProfile, DetectionFinding, DetectionStrategy,
+    DnsExfiltrationDetector, DnsExfiltrationProfile, LateralMovementDetector,
+    LateralMovementProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
+    SuspiciousScriptingDetector, SuspiciousScriptingProfile, TelemetryEvent,
 };
 
 /// Errors surfaced by the bounded canary lane.
@@ -24,6 +31,12 @@ pub enum CanaryError {
 
     #[error(transparent)]
     Replay(#[from] ReplayHarnessError),
+
+    #[error(transparent)]
+    DetectorProfile(#[from] DetectorProfileError),
+
+    #[error(transparent)]
+    ProfileValidation(#[from] swarm_whisker::ProfileValidationError),
 
     #[error(transparent)]
     VerificationStore(#[from] VerificationStoreError),
@@ -830,18 +843,42 @@ enum SupportedCanaryDetector {
         strategy_id: String,
         detector: SuspiciousProcessTreeDetector,
     },
+    DnsExfiltration {
+        strategy_id: String,
+        detector: DnsExfiltrationDetector,
+    },
+    LateralMovement {
+        strategy_id: String,
+        detector: LateralMovementDetector,
+    },
+    CredentialAccess {
+        strategy_id: String,
+        detector: CredentialAccessDetector,
+    },
+    SuspiciousScripting {
+        strategy_id: String,
+        detector: SuspiciousScriptingDetector,
+    },
 }
 
 impl DetectionStrategy for SupportedCanaryDetector {
     fn id(&self) -> &str {
         match self {
             Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
+            Self::DnsExfiltration { strategy_id, .. } => strategy_id.as_str(),
+            Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
+            Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
+            Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
         }
     }
 
     fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
         match self {
             Self::SuspiciousProcessTree { detector, .. } => detector.evaluate(event),
+            Self::DnsExfiltration { detector, .. } => detector.evaluate(event),
+            Self::LateralMovement { detector, .. } => detector.evaluate(event),
+            Self::CredentialAccess { detector, .. } => detector.evaluate(event),
+            Self::SuspiciousScripting { detector, .. } => detector.evaluate(event),
         }
     }
 }
@@ -849,12 +886,52 @@ impl DetectionStrategy for SupportedCanaryDetector {
 impl SupportedCanaryDetector {
     fn suspicious_process_tree(
         strategy_id: impl Into<String>,
-        profile: swarm_whisker::SuspiciousProcessTreeProfile,
-    ) -> Self {
-        Self::SuspiciousProcessTree {
+        profile: SuspiciousProcessTreeProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::SuspiciousProcessTree {
             strategy_id: strategy_id.into(),
-            detector: SuspiciousProcessTreeDetector::from_profile(profile),
-        }
+            detector: SuspiciousProcessTreeDetector::from_profile(profile)?,
+        })
+    }
+
+    fn dns_exfiltration(
+        strategy_id: impl Into<String>,
+        profile: DnsExfiltrationProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::DnsExfiltration {
+            strategy_id: strategy_id.into(),
+            detector: DnsExfiltrationDetector::from_profile(profile)?,
+        })
+    }
+
+    fn lateral_movement(
+        strategy_id: impl Into<String>,
+        profile: LateralMovementProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::LateralMovement {
+            strategy_id: strategy_id.into(),
+            detector: LateralMovementDetector::from_profile(profile)?,
+        })
+    }
+
+    fn credential_access(
+        strategy_id: impl Into<String>,
+        profile: CredentialAccessProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::CredentialAccess {
+            strategy_id: strategy_id.into(),
+            detector: CredentialAccessDetector::from_profile(profile)?,
+        })
+    }
+
+    fn suspicious_scripting(
+        strategy_id: impl Into<String>,
+        profile: SuspiciousScriptingProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::SuspiciousScripting {
+            strategy_id: strategy_id.into(),
+            detector: SuspiciousScriptingDetector::from_profile(profile)?,
+        })
     }
 }
 
@@ -862,12 +939,24 @@ fn baseline_detector(config: &SwarmConfig) -> Result<SupportedCanaryDetector, Ca
     match config.detection.strategy.as_str() {
         "suspicious_process_tree" => Ok(SupportedCanaryDetector::suspicious_process_tree(
             config.detection.strategy.clone(),
-            swarm_whisker::SuspiciousProcessTreeProfile {
-                high_confidence_threshold: config.detection.high_confidence_threshold,
-                medium_confidence_threshold: config.detection.medium_confidence_threshold,
-                ..swarm_whisker::SuspiciousProcessTreeProfile::default()
-            },
-        )),
+            suspicious_process_tree_profile(&config.detection)?,
+        )?),
+        "dns_exfiltration" => Ok(SupportedCanaryDetector::dns_exfiltration(
+            config.detection.strategy.clone(),
+            dns_exfiltration_profile(&config.detection)?,
+        )?),
+        "lateral_movement" => Ok(SupportedCanaryDetector::lateral_movement(
+            config.detection.strategy.clone(),
+            lateral_movement_profile(&config.detection)?,
+        )?),
+        "credential_access" => Ok(SupportedCanaryDetector::credential_access(
+            config.detection.strategy.clone(),
+            credential_access_profile(&config.detection)?,
+        )?),
+        "suspicious_scripting" => Ok(SupportedCanaryDetector::suspicious_scripting(
+            config.detection.strategy.clone(),
+            suspicious_scripting_profile(&config.detection)?,
+        )?),
         other => Err(CanaryError::UnsupportedDetector {
             strategy: other.to_string(),
         }),
@@ -885,7 +974,39 @@ fn candidate_detector(
         } => Ok(SupportedCanaryDetector::suspicious_process_tree(
             strategy_id.clone(),
             profile.clone(),
-        )),
+        )?),
+        DetectorCandidateManifest::DnsExfiltration {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedCanaryDetector::dns_exfiltration(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::LateralMovement {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedCanaryDetector::lateral_movement(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::CredentialAccess {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedCanaryDetector::credential_access(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::SuspiciousScripting {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedCanaryDetector::suspicious_scripting(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
     }
 }
 
@@ -1025,7 +1146,7 @@ fn sanitize_id(value: &str) -> String {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time after unix epoch")
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -1035,6 +1156,7 @@ struct CanaryIndex {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         CanaryRecommendation, CanaryRollbackTrigger, CanaryRunStatus, DefaultCanaryHarness,
@@ -1052,8 +1174,9 @@ mod tests {
     use std::path::{Path, PathBuf};
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
-        InvestigationConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PromotionConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        DetectorProfilesConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
+        PolicyConfig, PromotionConfig, ResponseAdapterConfig, RuntimeSettings, SwarmConfig,
+        TelemetrySourceConfig,
     };
     use swarm_core::types::Severity;
     use swarm_whisker::{
@@ -1074,6 +1197,7 @@ mod tests {
 
     fn canary_config() -> SwarmConfig {
         SwarmConfig {
+            schema_version: 1,
             name: "canary-test".to_string(),
             description: "bounded canary test config".to_string(),
             runtime: RuntimeSettings {
@@ -1081,14 +1205,19 @@ mod tests {
                 telemetry_sources: vec![TelemetrySourceConfig {
                     name: "synthetic".to_string(),
                     subject: "telemetry.synthetic.process".to_string(),
+                    bridge: None,
                 }],
                 max_in_flight_actions: 2,
+                drain_timeout_ms: 30_000,
                 require_durable_live_response: false,
+                max_heap_pressure: 0.90,
+                secret_dir: None,
             },
             detection: DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
+                profiles: DetectorProfilesConfig::default(),
             },
             pheromone: PheromoneConfig {
                 default_half_life_secs: 3600.0,
@@ -1102,6 +1231,10 @@ mod tests {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
             },
+            response_adapter: ResponseAdapterConfig::Sandbox,
+            siem_forward: None,
+            notification_channels: std::collections::BTreeMap::new(),
+            notification_routing: swarm_core::config::NotificationRoutingConfig::default(),
             audit: AuditConfig {
                 bundle_store: BundleStoreConfig::Memory,
                 recent_decisions_limit: 20,

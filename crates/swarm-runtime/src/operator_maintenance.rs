@@ -792,14 +792,14 @@ fn decision_label(value: EvolutionPortfolioDecisionAction) -> &'static str {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time should be after UNIX_EPOCH")
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
 fn now_unix_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time should be after UNIX_EPOCH")
+        .unwrap_or_default()
         .as_nanos()
 }
 
@@ -817,20 +817,20 @@ fn sanitize_id(value: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        FileOperatorMaintenanceStore, OperatorMaintenanceRecord, OperatorMaintenanceRequest,
-        OperatorMaintenanceStatus,
+        FileOperatorMaintenanceStore, OperatorMaintenanceExecution, OperatorMaintenanceRecord,
+        OperatorMaintenanceRequest, OperatorMaintenanceStatus,
     };
     use crate::portfolio::EvolutionPortfolioDecisionAction;
 
-    #[test]
-    fn maintenance_store_round_trips_records() {
-        let root = std::env::temp_dir().join("swarm-operator-maintenance-store-roundtrip");
-        let _ = std::fs::remove_dir_all(&root);
-        let store = FileOperatorMaintenanceStore::open(&root).unwrap();
-        let record = OperatorMaintenanceRecord {
-            action_id: "maintenance:test:1".to_string(),
+    fn sample_record(
+        action_id: &str,
+        status: OperatorMaintenanceStatus,
+    ) -> OperatorMaintenanceRecord {
+        OperatorMaintenanceRecord {
+            action_id: action_id.to_string(),
             actor: "local-operator".to_string(),
             requested_at_ms: 1,
             completed_at_ms: 2,
@@ -843,15 +843,107 @@ mod tests {
             target_kind: "portfolio_entry".to_string(),
             target_id: "portfolio:red:entry:red".to_string(),
             reason: "include it".to_string(),
-            status: OperatorMaintenanceStatus::Applied,
+            status,
             summary: "applied".to_string(),
             artifacts: Vec::new(),
             native_history_ref: Some("portfolio:red/entry:red".to_string()),
-        };
+        }
+    }
+
+    #[test]
+    fn maintenance_store_round_trips_records() {
+        let root = std::env::temp_dir().join("swarm-operator-maintenance-store-roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileOperatorMaintenanceStore::open(&root).unwrap();
+        let record = sample_record("maintenance:test:1", OperatorMaintenanceStatus::Applied);
 
         let stored = store.persist(&record).unwrap();
         let loaded = store.load(&stored.record.action_id).unwrap().unwrap();
         assert_eq!(loaded.record.action_id, "maintenance:test:1");
         assert_eq!(loaded.record.status, OperatorMaintenanceStatus::Applied);
+    }
+
+    #[test]
+    fn maintenance_request_round_trips_through_json() {
+        let request = OperatorMaintenanceRequest::PacketSetSplit {
+            parent_packet_set_id: "packet-set:parent".to_string(),
+            name: "split-red".to_string(),
+            packet_ids: vec!["packet-1".to_string(), "packet-2".to_string()],
+            reason: "split for review".to_string(),
+        };
+
+        let encoded = serde_json::to_string(&request).unwrap();
+        let decoded: OperatorMaintenanceRequest = serde_json::from_str(&encoded).unwrap();
+        match decoded {
+            OperatorMaintenanceRequest::PacketSetSplit {
+                parent_packet_set_id,
+                name,
+                packet_ids,
+                reason,
+            } => {
+                assert_eq!(parent_packet_set_id, "packet-set:parent");
+                assert_eq!(name, "split-red");
+                assert_eq!(packet_ids.len(), 2);
+                assert_eq!(reason, "split for review");
+            }
+            other => panic!("unexpected request variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maintenance_status_serializes_to_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&OperatorMaintenanceStatus::Applied).unwrap(),
+            "\"applied\""
+        );
+        assert_eq!(
+            serde_json::to_string(&OperatorMaintenanceStatus::Blocked).unwrap(),
+            "\"blocked\""
+        );
+        assert_eq!(
+            serde_json::to_string(&OperatorMaintenanceStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+    }
+
+    #[test]
+    fn maintenance_store_filters_by_status() {
+        let root = std::env::temp_dir().join("swarm-operator-maintenance-store-filter");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileOperatorMaintenanceStore::open(&root).unwrap();
+        store
+            .persist(&sample_record(
+                "maintenance:test:applied",
+                OperatorMaintenanceStatus::Applied,
+            ))
+            .unwrap();
+        store
+            .persist(&sample_record(
+                "maintenance:test:blocked",
+                OperatorMaintenanceStatus::Blocked,
+            ))
+            .unwrap();
+
+        let filtered = store
+            .list(Some(OperatorMaintenanceStatus::Blocked))
+            .unwrap();
+        assert_eq!(filtered.total_count, 1);
+        assert_eq!(filtered.actions[0].action_id, "maintenance:test:blocked");
+    }
+
+    #[test]
+    fn maintenance_execution_lookup_returns_inner_lookup() {
+        let root = std::env::temp_dir().join("swarm-operator-maintenance-store-execution");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileOperatorMaintenanceStore::open(&root).unwrap();
+        let lookup = store
+            .persist(&sample_record(
+                "maintenance:test:execution",
+                OperatorMaintenanceStatus::Applied,
+            ))
+            .unwrap();
+
+        let execution = OperatorMaintenanceExecution::Applied(lookup.clone());
+        assert_eq!(execution.lookup().record.action_id, lookup.record.action_id);
     }
 }

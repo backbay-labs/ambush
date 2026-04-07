@@ -657,6 +657,9 @@ fn extract_process_name(replay: &ReplayBundle) -> Option<String> {
     match &replay.event.payload {
         TelemetryPayload::ProcessStart(process) => Some(process.process_name.clone()),
         TelemetryPayload::NetworkConnect(connect) => Some(connect.process_name.clone()),
+        TelemetryPayload::DnsQuery(dns) => dns.process_name.clone(),
+        TelemetryPayload::RegistryAccess(registry) => Some(registry.process_name.clone()),
+        TelemetryPayload::AuthenticationEvent(auth) => auth.process_name.clone(),
     }
 }
 
@@ -670,10 +673,19 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
             .get("user")
             .and_then(|value| value.as_str())
             .map(ToString::to_string),
+        TelemetryPayload::DnsQuery(_) | TelemetryPayload::RegistryAccess(_) => replay
+            .audit
+            .detection
+            .evidence
+            .get("user")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string),
+        TelemetryPayload::AuthenticationEvent(auth) => auth.user.clone(),
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,

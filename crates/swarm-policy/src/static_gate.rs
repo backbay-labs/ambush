@@ -147,6 +147,7 @@ impl ApprovalGate for StaticApprovalGate {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::StaticApprovalGate;
     use crate::{ActionRequest, ApprovalContext, ApprovalGate, PolicyVerdict};
@@ -167,6 +168,7 @@ mod tests {
         ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-1".to_string()],
+            correlation_id: None,
             now_ms: 1_700_000_000_000,
         }
     }

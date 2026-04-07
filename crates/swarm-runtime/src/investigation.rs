@@ -197,7 +197,9 @@ where
                     };
 
                     {
-                        let mut guard = worker_state.lock().expect("investigation queue state");
+                        let mut guard = worker_state
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
                         guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
                         guard.running_jobs = guard.running_jobs.saturating_add(1);
                     }
@@ -209,7 +211,9 @@ where
                         None,
                     );
                     if let Err(error) = worker_store.persist(&running_bundle) {
-                        let mut guard = worker_state.lock().expect("investigation queue state");
+                        let mut guard = worker_state
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
                         guard.running_jobs = guard.running_jobs.saturating_sub(1);
                         guard.failed_jobs = guard.failed_jobs.saturating_add(1);
                         guard.last_failure_reason = Some(error.to_string());
@@ -246,7 +250,9 @@ where
                     };
 
                     let persist_result = worker_store.persist(&terminal_bundle);
-                    let mut guard = worker_state.lock().expect("investigation queue state");
+                    let mut guard = worker_state
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner());
                     guard.running_jobs = guard.running_jobs.saturating_sub(1);
                     match terminal_bundle.status {
                         InvestigationStatus::Completed => {
@@ -304,7 +310,10 @@ where
             bundle: queued_bundle.clone(),
         }) {
             Ok(()) => {
-                let mut guard = self.state.lock().expect("investigation queue state");
+                let mut guard = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
                 guard.queued_jobs = guard.queued_jobs.saturating_add(1);
                 Ok(Some(queued_record))
             }
@@ -315,7 +324,10 @@ where
                     now_ms(),
                 );
                 let failed_record = self.store.persist(&failed_bundle)?;
-                let mut guard = self.state.lock().expect("investigation queue state");
+                let mut guard = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
                 guard.dropped_jobs = guard.dropped_jobs.saturating_add(1);
                 guard.failed_jobs = guard.failed_jobs.saturating_add(1);
                 guard.last_failure_reason = failed_bundle.failure_reason.clone();
@@ -325,7 +337,10 @@ where
     }
 
     pub fn snapshot(&self) -> InvestigationQueueSnapshot {
-        let guard = self.state.lock().expect("investigation queue state");
+        let guard = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         InvestigationQueueSnapshot {
             enabled: self.config.enabled,
             worker_count: self.config.worker_count,
@@ -379,6 +394,7 @@ fn now_ms() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         InvestigationCoordinator, InvestigationOutcome, InvestigationStatus, InvestigationStrategy,

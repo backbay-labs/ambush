@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/swarm-core",
     "crates/swarm-whisker",
+    "crates/swarm-ingest-tetragon",
+    "crates/swarm-ingest-json",
     "crates/swarm-pheromone",
     "crates/swarm-policy",
     "crates/swarm-response",
@@ -23,6 +25,8 @@ repository = "https://github.com/backbay-labs/swarm-team-six"
 # Internal crates
 swarm-core = { path = "crates/swarm-core" }
 swarm-whisker = { path = "crates/swarm-whisker" }
+swarm-ingest-tetragon = { path = "crates/swarm-ingest-tetragon" }
+swarm-ingest-json = { path = "crates/swarm-ingest-json" }
 swarm-pheromone = { path = "crates/swarm-pheromone" }
 swarm-policy = { path = "crates/swarm-policy" }
 swarm-response = { path = "crates/swarm-response" }
@@ -34,9 +38,19 @@ swarm-crypto = { path = "crates/swarm-crypto" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
 async-trait = "0.1"
+async-nats = "0.47"
 axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
+prometheus-client = "0.23"
+tonic = "0.13"
+prost = "0.13"
+prost-types = "0.13"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+notify = "7"
+arc-swap = "1"
+sysinfo = "0.33"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -44,15 +58,17 @@ serde_json = "1"
 serde_yaml = "0.9"
 
 # Crypto
-ed25519-dalek = { version = "2", features = ["serde"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
 sha2 = "0.10"
-
-# NATS
-async-nats = "0.38"
+hex = "0.4"
+ryu = "1"
+rand_core = { version = "0.6", features = ["getrandom"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+uuid = { version = "1", features = ["v4"] }
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 # Error handling
 thiserror = "2"
@@ -60,3 +76,7 @@ anyhow = "1"
 
 # Testing
 proptest = "1"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

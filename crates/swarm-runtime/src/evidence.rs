@@ -1023,6 +1023,16 @@ pub enum EvidenceError {
     #[error(transparent)]
     MaintenanceStore(#[from] OperatorMaintenanceStoreError),
 
+    #[error(transparent)]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("canonical evidence payload for bundle `{bundle_id}` was not valid UTF-8: {source}")]
+    CanonicalPayloadUtf8 {
+        bundle_id: String,
+        #[source]
+        source: std::string::FromUtf8Error,
+    },
+
     #[error("artifact `{kind}` with id `{id}` was not found")]
     ArtifactNotFound { kind: &'static str, id: String },
 }
@@ -1091,6 +1101,12 @@ impl DefaultEvidenceHarness {
             &payload_sha256,
             &subject,
         )?;
+        let canonical_payload = String::from_utf8(payload_bytes).map_err(|source| {
+            EvidenceError::CanonicalPayloadUtf8 {
+                bundle_id: bundle_id.clone(),
+                source,
+            }
+        })?;
         let signed_bundle = EvidenceBundle {
             bundle_id,
             schema_version: "v1".to_string(),
@@ -1098,7 +1114,7 @@ impl DefaultEvidenceHarness {
             exported_at_ms,
             subject,
             payload_sha256,
-            canonical_payload: String::from_utf8(payload_bytes).expect("canonical JSON is utf-8"),
+            canonical_payload,
             signature: EvidenceSignature::from_detached(
                 request.signer_id,
                 signer.sign(&statement_bytes),
@@ -1290,19 +1306,19 @@ impl DefaultEvidenceHarness {
                 let lookup = self
                     .control
                     .replay_lookup(ReplayLookupSelector::BundleId(stable_id))?;
-                Ok(export_replay_view(&lookup.data))
+                export_replay_view(&lookup.data)
             }
             EvidenceSubjectKind::InvestigationBundle => {
                 let lookup = self.control.investigation_lookup(
                     InvestigationLookupSelector::InvestigationId(stable_id),
                 )?;
-                Ok(export_investigation_view(&lookup.data))
+                export_investigation_view(&lookup.data)
             }
             EvidenceSubjectKind::CorrelatedIncident => {
                 let lookup = self
                     .control
                     .incident_lookup(IncidentLookupSelector::IncidentId(stable_id))?;
-                Ok(export_incident_view(&lookup.data))
+                export_incident_view(&lookup.data)
             }
             EvidenceSubjectKind::CanaryRun => {
                 let lookup = self.canary_store.load(stable_id)?.ok_or_else(|| {
@@ -1311,7 +1327,7 @@ impl DefaultEvidenceHarness {
                         id: stable_id.to_string(),
                     }
                 })?;
-                Ok(export_canary_lookup(&lookup))
+                export_canary_lookup(&lookup)
             }
             EvidenceSubjectKind::ProductionPromotion => {
                 let lookup = self.promotion_store.load(stable_id)?.ok_or_else(|| {
@@ -1320,7 +1336,7 @@ impl DefaultEvidenceHarness {
                         id: stable_id.to_string(),
                     }
                 })?;
-                Ok(export_promotion_lookup(&lookup))
+                export_promotion_lookup(&lookup)
             }
             EvidenceSubjectKind::OperatorMaintenanceAction => {
                 let lookup = self.maintenance_store.load(stable_id)?.ok_or_else(|| {
@@ -1329,7 +1345,7 @@ impl DefaultEvidenceHarness {
                         id: stable_id.to_string(),
                     }
                 })?;
-                Ok(export_maintenance_lookup(&lookup))
+                export_maintenance_lookup(&lookup)
             }
             EvidenceSubjectKind::DetectorVerification => {
                 let store = FileVerificationStore::open(&self.verification_results_dir)?;
@@ -1340,7 +1356,7 @@ impl DefaultEvidenceHarness {
                             kind: "detector verification",
                             id: stable_id.to_string(),
                         })?;
-                Ok(export_verification_lookup(&lookup))
+                export_verification_lookup(&lookup)
             }
             EvidenceSubjectKind::StrategyShadow => {
                 let store = FileShadowStore::open(&self.shadow_results_dir)?;
@@ -1351,7 +1367,7 @@ impl DefaultEvidenceHarness {
                             kind: "strategy shadow",
                             id: stable_id.to_string(),
                         })?;
-                Ok(export_shadow_lookup(&lookup))
+                export_shadow_lookup(&lookup)
             }
             EvidenceSubjectKind::PromotionReview => {
                 let store = FilePromotionReviewStore::open(&self.promotion_review_results_dir)?;
@@ -1362,7 +1378,7 @@ impl DefaultEvidenceHarness {
                             kind: "promotion review",
                             id: stable_id.to_string(),
                         })?;
-                Ok(export_promotion_review_lookup(&lookup))
+                export_promotion_review_lookup(&lookup)
             }
         }
     }
@@ -1482,8 +1498,8 @@ pub fn render_promotion_evidence_packet(packet: &PromotionEvidencePacket) -> Str
     lines.join("\n")
 }
 
-fn export_replay_view(view: &ReplayArtifactView) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_replay_view(view: &ReplayArtifactView) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::ReplayBundle,
             stable_id: view.record.bundle_id.clone(),
@@ -1499,12 +1515,14 @@ fn export_replay_view(view: &ReplayArtifactView) -> ExportableArtifact {
                     .map(|id| ("response_receipt", id)),
             ]),
         },
-        payload: serde_json::to_value(view).expect("replay view is serializable"),
-    }
+        payload: serde_json::to_value(view)?,
+    })
 }
 
-fn export_investigation_view(view: &InvestigationArtifactView) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_investigation_view(
+    view: &InvestigationArtifactView,
+) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::InvestigationBundle,
             stable_id: view.record.investigation_id.clone(),
@@ -1517,12 +1535,12 @@ fn export_investigation_view(view: &InvestigationArtifactView) -> ExportableArti
                 Some(("trail", view.record.trail_id.clone())),
             ]),
         },
-        payload: serde_json::to_value(view).expect("investigation view is serializable"),
-    }
+        payload: serde_json::to_value(view)?,
+    })
 }
 
-fn export_incident_view(view: &IncidentArtifactView) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_incident_view(view: &IncidentArtifactView) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::CorrelatedIncident,
             stable_id: view.record.incident_id.clone(),
@@ -1550,12 +1568,12 @@ fn export_incident_view(view: &IncidentArtifactView) -> ExportableArtifact {
                 )
                 .collect(),
         },
-        payload: serde_json::to_value(view).expect("incident view is serializable"),
-    }
+        payload: serde_json::to_value(view)?,
+    })
 }
 
-fn export_canary_lookup(lookup: &CanaryRunLookup) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_canary_lookup(lookup: &CanaryRunLookup) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::CanaryRun,
             stable_id: lookup.record.run_id.clone(),
@@ -1571,12 +1589,14 @@ fn export_canary_lookup(lookup: &CanaryRunLookup) -> ExportableArtifact {
                 Some(("shadow", lookup.report.assignment.shadow_id.clone())),
             ]),
         },
-        payload: serde_json::to_value(&lookup.report).expect("canary report is serializable"),
-    }
+        payload: serde_json::to_value(&lookup.report)?,
+    })
 }
 
-fn export_promotion_lookup(lookup: &ProductionPromotionLookup) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_promotion_lookup(
+    lookup: &ProductionPromotionLookup,
+) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::ProductionPromotion,
             stable_id: lookup.record.promotion_id.clone(),
@@ -1600,12 +1620,14 @@ fn export_promotion_lookup(lookup: &ProductionPromotionLookup) -> ExportableArti
                 )),
             ]),
         },
-        payload: serde_json::to_value(&lookup.report).expect("promotion report is serializable"),
-    }
+        payload: serde_json::to_value(&lookup.report)?,
+    })
 }
 
-fn export_maintenance_lookup(lookup: &OperatorMaintenanceLookup) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_maintenance_lookup(
+    lookup: &OperatorMaintenanceLookup,
+) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::OperatorMaintenanceAction,
             stable_id: lookup.summary.action_id.clone(),
@@ -1622,12 +1644,14 @@ fn export_maintenance_lookup(lookup: &OperatorMaintenanceLookup) -> ExportableAr
                 })
                 .collect(),
         },
-        payload: serde_json::to_value(&lookup.record).expect("maintenance record is serializable"),
-    }
+        payload: serde_json::to_value(&lookup.record)?,
+    })
 }
 
-fn export_verification_lookup(lookup: &DetectorVerificationLookup) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_verification_lookup(
+    lookup: &DetectorVerificationLookup,
+) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::DetectorVerification,
             stable_id: lookup.record.verification_id.clone(),
@@ -1642,12 +1666,14 @@ fn export_verification_lookup(lookup: &DetectorVerificationLookup) -> Exportable
                 )),
             ]),
         },
-        payload: serde_json::to_value(&lookup.report).expect("verification report is serializable"),
-    }
+        payload: serde_json::to_value(&lookup.report)?,
+    })
 }
 
-fn export_shadow_lookup(lookup: &StrategyShadowLookup) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_shadow_lookup(
+    lookup: &StrategyShadowLookup,
+) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::StrategyShadow,
             stable_id: lookup.record.shadow_id.clone(),
@@ -1662,12 +1688,14 @@ fn export_shadow_lookup(lookup: &StrategyShadowLookup) -> ExportableArtifact {
                 )),
             ]),
         },
-        payload: serde_json::to_value(&lookup.report).expect("shadow report is serializable"),
-    }
+        payload: serde_json::to_value(&lookup.report)?,
+    })
 }
 
-fn export_promotion_review_lookup(lookup: &PromotionReviewLookup) -> ExportableArtifact {
-    ExportableArtifact {
+fn export_promotion_review_lookup(
+    lookup: &PromotionReviewLookup,
+) -> Result<ExportableArtifact, EvidenceError> {
+    Ok(ExportableArtifact {
         subject: EvidenceSubjectMetadata {
             kind: EvidenceSubjectKind::PromotionReview,
             stable_id: lookup.record.review_id.clone(),
@@ -1682,9 +1710,8 @@ fn export_promotion_review_lookup(lookup: &PromotionReviewLookup) -> ExportableA
                 )),
             ]),
         },
-        payload: serde_json::to_value(&lookup.packet)
-            .expect("promotion review packet is serializable"),
-    }
+        payload: serde_json::to_value(&lookup.packet)?,
+    })
 }
 
 fn collect_non_empty_refs<const N: usize>(
@@ -1870,6 +1897,7 @@ fn now_ms() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         DefaultEvidenceHarness, EvidenceBundle, EvidenceExportRequest, EvidenceHarnessPaths,
@@ -1894,8 +1922,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
-        InvestigationConfig, OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig,
-        PolicyConfig, PromotionConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        DetectorProfilesConfig, InvestigationConfig, OperatorSurfaceConfig, PheromoneBackendConfig,
+        PheromoneConfig, PolicyConfig, PromotionConfig, RuntimeSettings, SwarmConfig,
+        TelemetrySourceConfig,
     };
     use swarm_core::types::{AgentId, Severity};
     use swarm_policy::ApprovalContext;
@@ -1906,7 +1935,7 @@ mod tests {
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    fn evidence_paths(root: &PathBuf) -> EvidenceHarnessPaths {
+    fn evidence_paths(root: &std::path::Path) -> EvidenceHarnessPaths {
         EvidenceHarnessPaths {
             verification_results_dir: root.join("verifications"),
             shadow_results_dir: root.join("shadows"),
@@ -1920,8 +1949,9 @@ mod tests {
         }
     }
 
-    fn config(root: &PathBuf) -> SwarmConfig {
+    fn config(root: &std::path::Path) -> SwarmConfig {
         SwarmConfig {
+            schema_version: 1,
             name: "evidence-test".to_string(),
             description: "evidence harness test config".to_string(),
             runtime: RuntimeSettings {
@@ -1929,14 +1959,19 @@ mod tests {
                 telemetry_sources: vec![TelemetrySourceConfig {
                     name: "synthetic".to_string(),
                     subject: "telemetry.synthetic.process".to_string(),
+                    bridge: None,
                 }],
                 max_in_flight_actions: 2,
+                drain_timeout_ms: 30_000,
                 require_durable_live_response: false,
+                max_heap_pressure: 0.90,
+                secret_dir: None,
             },
             detection: DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
+                profiles: DetectorProfilesConfig::default(),
             },
             pheromone: PheromoneConfig {
                 default_half_life_secs: 3600.0,
@@ -1950,6 +1985,10 @@ mod tests {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
             },
+            response_adapter: swarm_core::config::ResponseAdapterConfig::Sandbox,
+            siem_forward: None,
+            notification_channels: std::collections::BTreeMap::new(),
+            notification_routing: swarm_core::config::NotificationRoutingConfig::default(),
             audit: AuditConfig {
                 bundle_store: BundleStoreConfig::LocalFiles {
                     directory: root.join("replay-bundles").display().to_string(),
@@ -1980,7 +2019,7 @@ mod tests {
         }
     }
 
-    fn write_config(root: &PathBuf) -> PathBuf {
+    fn write_config(root: &std::path::Path) -> PathBuf {
         let path = root.join("config.yaml");
         fs::write(&path, serde_yaml::to_string(&config(root)).unwrap()).unwrap();
         path
@@ -2005,6 +2044,7 @@ mod tests {
         ApprovalContext {
             live_mode: false,
             receipt_chain: vec![format!("receipt-upstream-{now_ms}")],
+            correlation_id: None,
             now_ms,
         }
     }
@@ -2100,6 +2140,11 @@ mod tests {
             threshold_results: vec![],
             recent_promoted_findings: vec![],
             rollback_history: vec![],
+            pending_review: None,
+            approval_votes: vec![],
+            consensus_receipt: None,
+            approval_severity: None,
+            quorum_gate_config: None,
         }
     }
 

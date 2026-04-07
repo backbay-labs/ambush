@@ -10,10 +10,22 @@
 pub mod agent;
 pub mod config;
 pub mod pheromone;
+pub mod telemetry;
 pub mod types;
 pub mod verdict;
 
-pub use agent::{AgentHealth, AgentRole, SwarmAgent};
-pub use pheromone::{Pheromone, PheromoneDeposit, ThreatClass};
-pub use types::{AgentId, HuntId, SwarmAction};
+pub use agent::{
+    AgentFinding, AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmEvent, SwarmMode,
+    SwarmModeState,
+};
+pub use pheromone::{
+    EscalationRecord, Pheromone, PheromoneDeposit, ThreatClass, ThreatClassConfig,
+    ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
+};
+pub use telemetry::{
+    AuthenticationEventData, BridgeHealth, DnsQueryEvent, NetworkConnectEvent, ProcessStartEvent,
+    RegistryAccessEvent, TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult,
+    TelemetryEvent, TelemetryPayload,
+};
+pub use types::{AgentId, EscalationEvent, HuntId, SwarmAction};
 pub use verdict::{ConsensusResult, ThreatVerdict};

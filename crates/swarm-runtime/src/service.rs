@@ -1,30 +1,38 @@
+use crate::bridge_runtime::BridgeStatusReport;
 use crate::config::RuntimeConfig;
 use crate::correlation::{CorrelationEngine, CorrelationError, CorrelationOutcome};
+use crate::detection::metrics::CriticalPathMetrics;
+use crate::detection::pipeline::{DetectionPipelineOutcome, PipelineError, detect_and_deposit};
 use crate::investigation::{
     InvestigationCoordinator, InvestigationError, InvestigationQueueSnapshot, InvestigationStrategy,
 };
-use crate::pipeline::{DetectionPipelineOutcome, PipelineError, detect_and_deposit};
 use crate::{RuntimeError, RuntimeMode, SwarmRuntime};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::any::type_name;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use swarm_core::config::SwarmConfig;
+use swarm_core::pheromone::ThreatClass;
+use swarm_core::telemetry::TelemetryPayload;
 use swarm_core::types::{AgentId, ResponseAction};
 use swarm_pheromone::{
     ConfiguredPheromoneSubstrate, PheromoneSubstrate, SubstrateError, SubstrateHealth,
 };
 use swarm_policy::ApprovalGate;
-use swarm_policy::{ActionRequest, ApprovalContext};
-use swarm_response::ResponseExecutor;
+use swarm_policy::static_gate::StaticApprovalGate;
+use swarm_policy::{ActionRequest, ApprovalContext, PolicyVerdict};
+use swarm_response::{
+    DispatchingExecutor, NotificationRouter, ResponseExecutor, SiemFindingForwarder,
+};
 use swarm_spine::{
-    ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, ConfiguredReplayBundleStore,
-    IncidentLookup, IncidentRecord, IncidentStore, IncidentStoreHealth, InvestigationBundleLookup,
-    InvestigationBundleRecord, InvestigationBundleStore, InvestigationStoreHealth, ReplayBundle,
-    ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,
-    ReplayStoreHealth,
+    AuditResponseRecord, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
+    ConfiguredReplayBundleStore, IncidentLookup, IncidentRecord, IncidentStore,
+    IncidentStoreHealth, InvestigationBundleLookup, InvestigationBundleRecord,
+    InvestigationBundleStore, InvestigationStoreHealth, ReplayBundle, ReplayBundleLookup,
+    ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError, ReplayStoreHealth,
 };
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 
@@ -118,6 +126,7 @@ pub struct OperatorStatusReport {
     pub policy: ComponentStatus,
     pub response: ComponentStatus,
     pub replay_store: ComponentStatus,
+    pub bridges: Option<BridgeStatusReport>,
     pub metrics: RuntimeMetricsSnapshot,
     pub recent_decisions: Vec<ReplayBundleRecord>,
     pub investigation_review: Option<InvestigationReviewStatus>,
@@ -156,6 +165,17 @@ pub struct PersistedReplayBundle {
 pub struct PersistedReplayBundleWithInvestigation {
     pub replay: PersistedReplayBundle,
     pub investigation: Option<InvestigationBundleRecord>,
+}
+
+impl OperatorStatusReport {
+    pub fn with_bridges(mut self, bridges: BridgeStatusReport) -> Self {
+        if bridges.has_degraded() {
+            self.warnings
+                .push(format!("{} telemetry bridge(s) degraded", bridges.degraded));
+        }
+        self.bridges = Some(bridges);
+        self
+    }
 }
 
 /// Repository-configured runtime stack that composes critical-lane and async review components.
@@ -205,7 +225,10 @@ impl Default for StageMetrics {
 
 impl RuntimeMetrics {
     fn record(&self, stage: RuntimeStage, elapsed_us: u64, success: bool) {
-        let mut guard = self.inner.lock().expect("metrics lock");
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let target = match stage {
             RuntimeStage::Detect => &mut guard.detect,
             RuntimeStage::Policy => &mut guard.policy,
@@ -228,7 +251,10 @@ impl RuntimeMetrics {
     }
 
     fn snapshot(&self) -> RuntimeMetricsSnapshot {
-        let guard = self.inner.lock().expect("metrics lock");
+        let guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         RuntimeMetricsSnapshot {
             detect: StageMetricsSnapshot::from_metrics(&guard.detect),
             policy: StageMetricsSnapshot::from_metrics(&guard.policy),
@@ -273,11 +299,159 @@ enum RuntimeStage {
 
 const LATENCY_BUCKETS_US: [u64; 7] = [100, 500, 1_000, 5_000, 10_000, 50_000, u64::MAX];
 
+#[derive(Debug, Clone, Copy, Default)]
+struct FindingEnrichmentService;
+
+impl FindingEnrichmentService {
+    fn enrich(
+        &self,
+        event: &TelemetryEvent,
+        findings: Vec<DetectionFinding>,
+        detected_at_ms: i64,
+    ) -> Vec<DetectionFinding> {
+        findings
+            .into_iter()
+            .map(|finding| DetectionFinding {
+                evidence: enrich_finding_evidence(event, finding.evidence, detected_at_ms),
+                ..finding
+            })
+            .collect()
+    }
+}
+
+fn approval_correlation_id(context: &ApprovalContext) -> &str {
+    context.correlation_id.as_deref().unwrap_or("unknown")
+}
+
+fn threat_class_label(threat_class: &ThreatClass) -> &str {
+    match threat_class {
+        ThreatClass::LateralMovement => "lateral_movement",
+        ThreatClass::DataExfiltration => "data_exfiltration",
+        ThreatClass::PrivilegeEscalation => "privilege_escalation",
+        ThreatClass::CommandAndControl => "command_and_control",
+        ThreatClass::InitialAccess => "initial_access",
+        ThreatClass::Persistence => "persistence",
+        ThreatClass::DefenseEvasion => "defense_evasion",
+        ThreatClass::CredentialAccess => "credential_access",
+        ThreatClass::Discovery => "discovery",
+        ThreatClass::Execution => "execution",
+        ThreatClass::Impact => "impact",
+        ThreatClass::Custom(value) => value.as_str(),
+    }
+}
+
+fn verdict_label(verdict: PolicyVerdict) -> &'static str {
+    match verdict {
+        PolicyVerdict::Deny => "deny",
+        PolicyVerdict::Allow => "allow",
+        PolicyVerdict::RequireHuman => "require_human",
+    }
+}
+
+fn adapter_outcome_label(response: &AuditResponseRecord) -> Option<&'static str> {
+    match response {
+        AuditResponseRecord::Success(_) => Some("success"),
+        AuditResponseRecord::Failure(failure) => {
+            let is_timeout = failure
+                .details
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                == Some("timeout");
+            Some(if is_timeout { "timeout" } else { "failure" })
+        }
+        AuditResponseRecord::Skipped { .. } | AuditResponseRecord::GuardRejected { .. } => None,
+    }
+}
+
+fn enrich_finding_evidence(
+    event: &TelemetryEvent,
+    evidence: serde_json::Value,
+    detected_at_ms: i64,
+) -> serde_json::Value {
+    let ancestry = parent_process_ancestry(event);
+    let host_metadata = json!({
+        "source": event.source,
+        "host_id": event.host_id,
+        "event_id": event.event_id,
+        "event_timestamp": event.timestamp,
+    });
+    let time_to_detect_ms = (detected_at_ms - normalized_timestamp_ms(event.timestamp)).max(0);
+
+    match evidence {
+        serde_json::Value::Object(mut object) => {
+            object.insert(
+                "parent_process_ancestry".to_string(),
+                serde_json::json!(ancestry),
+            );
+            object.insert("host_metadata".to_string(), host_metadata);
+            object.insert(
+                "time_to_detect_ms".to_string(),
+                serde_json::json!(time_to_detect_ms),
+            );
+            serde_json::Value::Object(object)
+        }
+        other => serde_json::json!({
+            "evidence": other,
+            "parent_process_ancestry": ancestry,
+            "host_metadata": host_metadata,
+            "time_to_detect_ms": time_to_detect_ms,
+        }),
+    }
+}
+
+fn parent_process_ancestry(event: &TelemetryEvent) -> Vec<String> {
+    match &event.payload {
+        TelemetryPayload::ProcessStart(process) => {
+            vec![process.parent_process.clone(), process.process_name.clone()]
+                .into_iter()
+                .filter(|value| !value.trim().is_empty())
+                .collect()
+        }
+        TelemetryPayload::NetworkConnect(connection) => vec![connection.process_name.clone()]
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .collect(),
+        TelemetryPayload::DnsQuery(dns) => dns
+            .process_name
+            .clone()
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .collect(),
+        TelemetryPayload::RegistryAccess(registry) => {
+            let mut ancestry = vec![registry.process_name.clone()];
+            if let Some(target_process) = &registry.target_process {
+                ancestry.push(target_process.clone());
+            }
+            ancestry
+                .into_iter()
+                .filter(|value| !value.trim().is_empty())
+                .collect()
+        }
+        TelemetryPayload::AuthenticationEvent(authentication) => authentication
+            .process_name
+            .clone()
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .collect(),
+    }
+}
+
+fn normalized_timestamp_ms(timestamp: i64) -> i64 {
+    if timestamp.abs() < 100_000_000_000 {
+        timestamp.saturating_mul(1_000)
+    } else {
+        timestamp
+    }
+}
+
 /// Thin service wrapper around the first Rust-only runtime slice.
 pub struct RuntimeService<P, E> {
     pub config: SwarmConfig,
     pub runtime: SwarmRuntime<P, E>,
     metrics: RuntimeMetrics,
+    prometheus: Option<CriticalPathMetrics>,
+    siem_forwarder: Option<SiemFindingForwarder>,
+    notification_router: Option<NotificationRouter>,
 }
 
 impl<P, E> RuntimeService<P, E>
@@ -286,11 +460,30 @@ where
     E: ResponseExecutor,
 {
     pub fn new(config: SwarmConfig, runtime: SwarmRuntime<P, E>) -> Self {
+        let siem_forwarder = config.siem_forward.clone().map(SiemFindingForwarder::new);
+        let notification_router = if config.notification_channels.is_empty()
+            || config.notification_routing.rules.is_empty()
+        {
+            None
+        } else {
+            Some(NotificationRouter::new(
+                config.notification_channels.clone(),
+                config.notification_routing.clone(),
+            ))
+        };
         Self {
             config,
             runtime,
             metrics: RuntimeMetrics::default(),
+            prometheus: None,
+            siem_forwarder,
+            notification_router,
         }
+    }
+
+    pub fn with_prometheus(mut self, metrics: CriticalPathMetrics) -> Self {
+        self.prometheus = Some(metrics);
+        self
     }
 
     pub fn mode(&self) -> RuntimeMode {
@@ -368,20 +561,88 @@ where
             detect_elapsed_us,
             detection_result.is_ok(),
         );
+        if let Some(prometheus) = &self.prometheus {
+            prometheus.observe_detect(detect_elapsed_us as f64);
+        }
 
         let DetectionPipelineOutcome {
             event,
             findings,
             deposits,
         } = detection_result?;
+        let detected_at_ms = execution.approval.now_ms;
+        let findings = FindingEnrichmentService.enrich(&event, findings, detected_at_ms);
+        tracing::info!(
+            correlation_id = %approval_correlation_id(execution.approval),
+            event_id = %event.event_id,
+            finding_count = findings.len(),
+            deposit_count = deposits.len(),
+            module = module_path!(),
+            "detection completed"
+        );
+        if let Some(prometheus) = &self.prometheus {
+            for finding in &findings {
+                prometheus.observe_finding(
+                    threat_class_label(&finding.threat_class),
+                    &finding.strategy_id,
+                );
+            }
+        }
+        if let Some(forwarder) = &self.siem_forwarder {
+            for finding in &findings {
+                match forwarder.forward_finding(finding).await {
+                    Ok(receipt) if receipt.status.indicates_success() => {
+                        tracing::info!(
+                            event_id = %finding.event_id,
+                            finding_id = %finding.finding_id,
+                            transport = "siem_forward",
+                            status = ?receipt.status,
+                            "forwarded finding to SIEM"
+                        );
+                    }
+                    Ok(receipt) => {
+                        tracing::warn!(
+                            event_id = %finding.event_id,
+                            finding_id = %finding.finding_id,
+                            status = ?receipt.status,
+                            summary = %receipt.summary,
+                            "siem finding forward degraded"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            event_id = %finding.event_id,
+                            finding_id = %finding.finding_id,
+                            reason = %error,
+                            "siem finding forward failed"
+                        );
+                    }
+                }
+            }
+        }
+        if let Some(router) = &self.notification_router {
+            for finding in &findings {
+                router.route_finding(finding).await;
+            }
+        }
 
         let Some(primary_finding) = findings.first().cloned() else {
-            tracing::info!("no findings emitted for event");
+            tracing::info!(
+                correlation_id = %approval_correlation_id(execution.approval),
+                event_id = %event.event_id,
+                module = module_path!(),
+                "no findings emitted for event"
+            );
             return Ok(None);
         };
 
         let Some(action) = request_builder(&primary_finding) else {
-            tracing::info!(event_id = %primary_finding.event_id, "no action proposed for finding");
+            tracing::info!(
+                correlation_id = %approval_correlation_id(execution.approval),
+                event_id = %primary_finding.event_id,
+                module = module_path!(),
+                "no action proposed for finding"
+            );
             return Ok(None);
         };
 
@@ -406,6 +667,16 @@ where
             Err(error) => {
                 let elapsed_us = execution_started.elapsed().as_micros() as u64;
                 self.metrics.record(RuntimeStage::Policy, elapsed_us, false);
+                if let Some(prometheus) = &self.prometheus {
+                    prometheus.observe_policy(elapsed_us as f64);
+                }
+                tracing::error!(
+                    correlation_id = %approval_correlation_id(execution.approval),
+                    event_id = %event.event_id,
+                    reason = %error,
+                    module = module_path!(),
+                    "authorization or response execution failed"
+                );
                 return Err(error.into());
             }
         };
@@ -414,12 +685,27 @@ where
             execution_report.policy_elapsed_us,
             true,
         );
+        if let Some(prometheus) = &self.prometheus {
+            prometheus.observe_policy(execution_report.policy_elapsed_us as f64);
+            prometheus.observe_verdict(verdict_label(execution_report.audit.policy.verdict));
+            if let AuditResponseRecord::GuardRejected { guard_name, .. } =
+                &execution_report.audit.response
+            {
+                prometheus.observe_guard_rejection(guard_name);
+            }
+            if let Some(outcome) = adapter_outcome_label(&execution_report.audit.response) {
+                prometheus.observe_adapter_outcome(outcome);
+            }
+        }
         if let Some(response_elapsed_us) = execution_report.response_elapsed_us {
             self.metrics.record(
                 RuntimeStage::Response,
                 response_elapsed_us,
                 execution_report.response_succeeded,
             );
+            if let Some(prometheus) = &self.prometheus {
+                prometheus.observe_response(response_elapsed_us as f64);
+            }
         }
 
         Ok(Some(ReplayBundle {
@@ -434,6 +720,14 @@ where
 
     pub fn metrics_snapshot(&self) -> RuntimeMetricsSnapshot {
         self.metrics.snapshot()
+    }
+
+    pub fn prometheus_metrics(&self) -> Option<&CriticalPathMetrics> {
+        self.prometheus.as_ref()
+    }
+
+    pub fn notification_router(&self) -> Option<&NotificationRouter> {
+        self.notification_router.as_ref()
     }
 
     pub fn persist_replay_bundle<Store>(
@@ -700,6 +994,7 @@ where
                 details: type_name::<E>().to_string(),
             },
             replay_store: component_status_from_replay_store(&replay_store_health),
+            bridges: None,
             metrics: self.metrics_snapshot(),
             recent_decisions: recent_decisions.clone(),
             investigation_review: None,
@@ -784,6 +1079,60 @@ where
         Ok(report)
     }
 
+    pub async fn operator_status_with_bridges<D, S, Store>(
+        &self,
+        detector: &D,
+        substrate: &S,
+        store: &Store,
+        bridges: BridgeStatusReport,
+    ) -> Result<OperatorStatusReport, ServiceError>
+    where
+        D: DetectionStrategy,
+        S: PheromoneSubstrate,
+        Store: ReplayBundleStore,
+    {
+        Ok(self
+            .operator_status(detector, substrate, store)
+            .await?
+            .with_bridges(bridges))
+    }
+
+    pub async fn operator_review_status_with_bridges<
+        D,
+        S,
+        ReplayStore,
+        Strategy,
+        InvestigationStoreT,
+        IncidentStoreT,
+    >(
+        &self,
+        detector: &D,
+        substrate: &S,
+        replay_store: &ReplayStore,
+        investigation: &InvestigationCoordinator<Strategy, InvestigationStoreT>,
+        incident_store: &IncidentStoreT,
+        bridges: BridgeStatusReport,
+    ) -> Result<OperatorStatusReport, ServiceError>
+    where
+        D: DetectionStrategy,
+        S: PheromoneSubstrate,
+        ReplayStore: ReplayBundleStore,
+        Strategy: InvestigationStrategy,
+        InvestigationStoreT: InvestigationBundleStore + Clone + Send + Sync + 'static,
+        IncidentStoreT: IncidentStore,
+    {
+        Ok(self
+            .operator_review_status(
+                detector,
+                substrate,
+                replay_store,
+                investigation,
+                incident_store,
+            )
+            .await?
+            .with_bridges(bridges))
+    }
+
     pub fn save_replay_bundle(
         &self,
         bundle: &ReplayBundle,
@@ -833,7 +1182,8 @@ where
             investigation_store.clone(),
         );
         let correlation = CorrelationEngine::new(config.correlation.clone());
-        let service = RuntimeService::new(config, runtime);
+        let service =
+            RuntimeService::new(config, runtime).with_prometheus(CriticalPathMetrics::new());
 
         Ok(Self {
             service,
@@ -990,6 +1340,18 @@ where
     }
 }
 
+impl<Strategy> ConfiguredRuntimeStack<StaticApprovalGate, DispatchingExecutor, Strategy>
+where
+    Strategy: InvestigationStrategy,
+{
+    /// Build the runtime stack from repository config using the configured response adapter.
+    pub fn from_config(config: SwarmConfig, strategy: Strategy) -> Result<Self, ServiceError> {
+        let response = DispatchingExecutor::from_config(config.response_adapter.clone())
+            .map_err(|error| ServiceError::Runtime(crate::RuntimeError::Response(error)))?;
+        Self::from_components(config, StaticApprovalGate::default(), response, strategy)
+    }
+}
+
 fn component_status_from_substrate(health: &SubstrateHealth) -> ComponentStatus {
     ComponentStatus {
         ready: health.ready,
@@ -1023,24 +1385,37 @@ fn component_status_from_incident_store(health: &IncidentStoreHealth) -> Compone
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{ConfiguredRuntimeStack, EventExecutionContext, RuntimeService};
+    use crate::bridge_runtime::{BridgeStatusReport, BridgeStatusSnapshot};
     use crate::correlation::CorrelationEngine;
+    use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use crate::investigation::{InvestigationOutcome, InvestigationStrategy};
     use crate::{RuntimeMode, SwarmRuntime};
     use async_trait::async_trait;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode, header};
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use serde_json::{Value, json};
     use swarm_core::config::{
-        AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, InvestigationConfig,
-        PheromoneBackendConfig, PheromoneConfig, PolicyConfig, PromotionConfig, RuntimeSettings,
-        SwarmConfig, TelemetrySourceConfig,
+        AuditConfig, BundleStoreConfig, CanaryConfig, CircuitBreakerConfig, CorrelationConfig,
+        InvestigationConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
+        PromotionConfig, RetryConfig, RuntimeSettings, SiemForwardConfig, SwarmConfig,
+        TelemetrySourceConfig,
     };
-    use swarm_core::types::AgentId;
-    use swarm_core::types::Severity;
+    use swarm_core::types::{AgentId, ResponseAction, Severity};
+    use swarm_guard::{
+        Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
+    };
     use swarm_pheromone::{InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate};
-    use swarm_policy::ApprovalContext;
     use swarm_policy::static_gate::StaticApprovalGate;
-    use swarm_response::ResponseStatus;
+    use swarm_policy::{ActionRequest, ApprovalContext, CapabilityLease, PolicyVerdict};
     use swarm_response::adapters::SandboxExecutor;
+    use swarm_response::{
+        ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt, ResponseStatus,
+    };
     use swarm_spine::{
         AuditResponseRecord, FileReplayBundleStore, InvestigationBundleStore, MemoryIncidentStore,
         MemoryInvestigationBundleStore, ReplayBundle, ReplayBundleStore,
@@ -1048,6 +1423,7 @@ mod tests {
     use swarm_whisker::{
         ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
     };
+    use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
     fn service_config(
         mode: RuntimeMode,
@@ -1055,6 +1431,7 @@ mod tests {
         require_durable: bool,
     ) -> SwarmConfig {
         SwarmConfig {
+            schema_version: 1,
             name: "test".to_string(),
             description: "test config".to_string(),
             runtime: RuntimeSettings {
@@ -1062,14 +1439,19 @@ mod tests {
                 telemetry_sources: vec![TelemetrySourceConfig {
                     name: "synthetic".to_string(),
                     subject: "telemetry.synthetic.process".to_string(),
+                    bridge: None,
                 }],
                 max_in_flight_actions: 4,
+                drain_timeout_ms: 30_000,
                 require_durable_live_response: require_durable,
+                max_heap_pressure: 0.90,
+                secret_dir: None,
             },
             detection: swarm_core::config::DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
+                profiles: swarm_core::config::DetectorProfilesConfig::default(),
             },
             pheromone: PheromoneConfig {
                 default_half_life_secs: 3600.0,
@@ -1083,6 +1465,10 @@ mod tests {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
             },
+            response_adapter: swarm_core::config::ResponseAdapterConfig::Sandbox,
+            siem_forward: None,
+            notification_channels: std::collections::BTreeMap::new(),
+            notification_routing: swarm_core::config::NotificationRoutingConfig::default(),
             audit: AuditConfig {
                 bundle_store: BundleStoreConfig::Memory,
                 recent_decisions_limit: 20,
@@ -1108,6 +1494,136 @@ mod tests {
                 SandboxExecutor,
             ),
         )
+    }
+
+    fn runtime_service_with_prometheus() -> RuntimeService<StaticApprovalGate, SandboxExecutor> {
+        runtime_service().with_prometheus(CriticalPathMetrics::new())
+    }
+
+    fn suspicious_event(event_id: &str, command_line: &str) -> TelemetryEvent {
+        TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "winword".to_string(),
+                process_name: "powershell".to_string(),
+                command_line: command_line.to_string(),
+                user: Some("alice".to_string()),
+            }),
+        }
+    }
+
+    fn approval_context(now_ms: i64, correlation_id: &str) -> ApprovalContext {
+        ApprovalContext {
+            live_mode: true,
+            receipt_chain: vec![format!("receipt-upstream-{now_ms}")],
+            correlation_id: Some(correlation_id.to_string()),
+            now_ms,
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ForwardCaptureState {
+        auth: std::sync::Arc<AsyncMutex<Option<String>>>,
+        payloads: std::sync::Arc<AsyncMutex<Vec<Value>>>,
+    }
+
+    async fn forward_capture_handler(
+        State(state): State<ForwardCaptureState>,
+        headers: HeaderMap,
+        Json(payload): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        {
+            let mut auth = state.auth.lock().await;
+            *auth = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string);
+        }
+        {
+            let mut payloads = state.payloads.lock().await;
+            payloads.push(payload);
+        }
+        (StatusCode::OK, Json(json!({"ok": true})))
+    }
+
+    async fn spawn_forward_capture_server() -> (
+        String,
+        ForwardCaptureState,
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let state = ForwardCaptureState::default();
+        let app = Router::new()
+            .route("/", post(forward_capture_handler))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            let server = axum::serve(listener, app).with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            });
+            let _ = server.await;
+        });
+        (format!("http://{address}/"), state, shutdown_tx, handle)
+    }
+
+    fn temp_jsonl_path(label: &str) -> String {
+        std::env::temp_dir()
+            .join(format!(
+                "swarm-runtime-{label}-{}-{}.jsonl",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .display()
+            .to_string()
+    }
+
+    struct BlockingGuard;
+
+    impl Guard for BlockingGuard {
+        fn name(&self) -> &str {
+            "test_guard"
+        }
+
+        fn handles(&self, _action: &GuardAction<'_>) -> bool {
+            true
+        }
+
+        fn check(&self, _action: &GuardAction<'_>, _context: &GuardContext) -> GuardResult {
+            GuardResult::block("test_guard", GuardSeverity::Critical, "blocked in test")
+        }
+    }
+
+    #[derive(Clone)]
+    struct TimeoutExecutor;
+
+    #[async_trait]
+    impl ResponseExecutor for TimeoutExecutor {
+        async fn execute(
+            &self,
+            request: &ActionRequest,
+            _lease: &CapabilityLease,
+            mode: ExecutionMode,
+        ) -> Result<ResponseReceipt, ResponseError> {
+            Ok(ResponseReceipt {
+                receipt_id: format!("timeout:{}", request.hunt_id.0),
+                action: request.action.kind().to_string(),
+                mode,
+                status: ResponseStatus::Timeout,
+                summary: "timed out in test".to_string(),
+                details: serde_json::json!({
+                    "adapter": "timeout_test",
+                    "status": "timeout",
+                }),
+            })
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -1151,6 +1667,7 @@ mod tests {
         let context = ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-1".to_string()],
+            correlation_id: None,
             now_ms: 1_700_000_000_000,
         };
         let agent_id = AgentId("whisker-a".to_string());
@@ -1189,6 +1706,302 @@ mod tests {
         assert_eq!(replayed.audit.trail_id, bundle.audit.trail_id);
         assert_eq!(replayed.findings.len(), 1);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn process_event_enriches_findings_before_bundle_persistence() {
+        let service = runtime_service();
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-enrichment-1", "powershell.exe -enc AAA=");
+        let context = approval_context(1_700_000_000_005, "corr-enrichment");
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let bundle = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context,
+                },
+                |_finding| {
+                    Some(ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        let evidence = &bundle.findings[0].evidence;
+        assert_eq!(
+            evidence["parent_process_ancestry"],
+            json!(["winword", "powershell"])
+        );
+        assert_eq!(evidence["host_metadata"]["source"], "synthetic");
+        assert_eq!(evidence["host_metadata"]["host_id"], "host-1");
+        assert_eq!(evidence["host_metadata"]["event_id"], "evt-enrichment-1");
+        assert_eq!(evidence["host_metadata"]["event_timestamp"], 1_700_000_000);
+        assert!(evidence["time_to_detect_ms"].as_i64().unwrap() >= 0);
+    }
+
+    #[tokio::test]
+    async fn process_event_forwards_enriched_findings_to_siem() {
+        let (endpoint, state, shutdown_tx, handle) = spawn_forward_capture_server().await;
+        let dead_letter_path = temp_jsonl_path("siem-forward");
+        let mut config = service_config(
+            RuntimeMode::LiveResponse,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        config.siem_forward = Some(SiemForwardConfig::SplunkHec {
+            endpoint,
+            auth_token: "splunk-secret".to_string(),
+            timeout_ms: 500,
+            retry: RetryConfig::default(),
+            circuit_breaker: CircuitBreakerConfig::default(),
+            dead_letter_path: dead_letter_path.clone(),
+        });
+        let service = RuntimeService::new(
+            config,
+            SwarmRuntime::new(
+                RuntimeMode::LiveResponse,
+                StaticApprovalGate::default(),
+                SandboxExecutor,
+            ),
+        );
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-siem-1", "powershell.exe -enc AAA=");
+        let context = approval_context(1_700_000_000_021, "corr-siem");
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let bundle = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context,
+                },
+                |_finding| None,
+            )
+            .await
+            .unwrap();
+
+        assert!(bundle.is_none());
+        assert_eq!(
+            state.auth.lock().await.clone().as_deref(),
+            Some("Splunk splunk-secret")
+        );
+        let payloads = state.payloads.lock().await.clone();
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["event"]["schema"], "swarm_finding");
+        assert_eq!(payloads[0]["event"]["event_id"], "evt-siem-1");
+        assert_eq!(
+            payloads[0]["event"]["evidence"]["parent_process_ancestry"],
+            json!(["winword", "powershell"])
+        );
+        assert_eq!(
+            payloads[0]["event"]["evidence"]["host_metadata"]["host_id"],
+            "host-1"
+        );
+        assert!(
+            payloads[0]["event"]["evidence"]["time_to_detect_ms"]
+                .as_i64()
+                .unwrap()
+                >= 0
+        );
+
+        let _ = shutdown_tx.send(());
+        handle.abort();
+        let _ = std::fs::remove_file(dead_letter_path);
+    }
+
+    #[tokio::test]
+    async fn process_event_records_success_metrics_in_prometheus() {
+        let service = runtime_service_with_prometheus();
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-metrics-success", "powershell.exe -enc AAA=");
+        let context = approval_context(1_700_000_000_010, "corr-success");
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let bundle = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context,
+                },
+                |_finding| {
+                    Some(ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(bundle.audit.policy.verdict, PolicyVerdict::Allow);
+        let encoded = encode_metrics(service.prometheus_metrics().unwrap());
+        assert!(encoded.contains("swarm_verdict_total{verdict=\"allow\"} 1"));
+        assert!(encoded.contains("swarm_adapter_outcomes_total{outcome=\"success\"} 1"));
+        assert!(
+            encoded.contains(
+                "swarm_findings_total{detector=\"suspicious_process_tree\",threat_class=\"execution\"} 1"
+            ) || encoded.contains(
+                "swarm_findings_total{threat_class=\"execution\",detector=\"suspicious_process_tree\"} 1"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn process_event_records_guard_rejection_metrics_in_prometheus() {
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            SandboxExecutor,
+        )
+        .with_guard_pipeline(GuardPipeline::new(vec![Box::new(BlockingGuard)]));
+        let service = RuntimeService::new(
+            service_config(
+                RuntimeMode::LiveResponse,
+                PheromoneBackendConfig::InMemory,
+                false,
+            ),
+            runtime,
+        )
+        .with_prometheus(CriticalPathMetrics::new());
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-metrics-guard", "powershell.exe -enc AAA=");
+        let context = approval_context(1_700_000_000_011, "corr-guard");
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let bundle = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context,
+                },
+                |_finding| {
+                    Some(ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            bundle.audit.response,
+            AuditResponseRecord::GuardRejected { .. }
+        ));
+        let encoded = encode_metrics(service.prometheus_metrics().unwrap());
+        assert!(encoded.contains("swarm_verdict_total{verdict=\"allow\"} 1"));
+        assert!(encoded.contains("swarm_guard_rejections_total{guard_name=\"test_guard\"} 1"));
+    }
+
+    #[tokio::test]
+    async fn process_event_records_timeout_metrics_in_prometheus() {
+        let service = RuntimeService::new(
+            service_config(
+                RuntimeMode::LiveResponse,
+                PheromoneBackendConfig::InMemory,
+                false,
+            ),
+            SwarmRuntime::new(
+                RuntimeMode::LiveResponse,
+                StaticApprovalGate::default(),
+                TimeoutExecutor,
+            ),
+        )
+        .with_prometheus(CriticalPathMetrics::new());
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-metrics-timeout", "powershell.exe -enc AAA=");
+        let context = approval_context(1_700_000_000_012, "corr-timeout");
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let bundle = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context,
+                },
+                |_finding| {
+                    Some(ResponseAction::DeployDecoy {
+                        decoy_type: "honeypot".to_string(),
+                        target_zone: "dmz".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            bundle.audit.response,
+            AuditResponseRecord::Failure(_)
+        ));
+        let encoded = encode_metrics(service.prometheus_metrics().unwrap());
+        assert!(encoded.contains("swarm_verdict_total{verdict=\"allow\"} 1"));
+        assert!(encoded.contains("swarm_adapter_outcomes_total{outcome=\"timeout\"} 1"));
+    }
+
+    #[tokio::test]
+    async fn process_event_records_require_human_metrics_in_prometheus() {
+        let service = runtime_service_with_prometheus();
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-metrics-human", "powershell.exe -enc AAA=");
+        let context = approval_context(1_700_000_000_013, "corr-human");
+        let agent_id = AgentId("whisker-a".to_string());
+
+        let bundle = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &context,
+                },
+                |_finding| {
+                    Some(ResponseAction::BlockEgress {
+                        target: "203.0.113.10".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(bundle.audit.policy.verdict, PolicyVerdict::RequireHuman);
+        assert!(matches!(
+            bundle.audit.response,
+            AuditResponseRecord::Skipped { .. }
+        ));
+        let encoded = encode_metrics(service.prometheus_metrics().unwrap());
+        assert!(encoded.contains("swarm_verdict_total{verdict=\"require_human\"} 1"));
     }
 
     #[tokio::test]
@@ -1268,6 +2081,7 @@ mod tests {
         let context = ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-upstream-1".to_string()],
+            correlation_id: None,
             now_ms: 1_700_000_000_001,
         };
         let agent_id = AgentId("whisker-a".to_string());
@@ -1338,6 +2152,7 @@ mod tests {
         let context = ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-upstream-2".to_string()],
+            correlation_id: None,
             now_ms: 1_700_000_000_002,
         };
         let agent_id = AgentId("whisker-a".to_string());
@@ -1378,12 +2193,70 @@ mod tests {
         assert_eq!(status.metrics.policy.successes, 1);
         assert_eq!(status.metrics.persist.successes, 1);
         assert_eq!(status.metrics.response.successes, 1);
+        assert!(status.bridges.is_none());
         assert!(status.warnings.is_empty());
 
         let recent = store.recent(1).unwrap();
         assert_eq!(recent.len(), 1);
 
         let _ = std::fs::remove_dir_all(store_root);
+    }
+
+    #[tokio::test]
+    async fn operator_status_with_bridges_surfaces_bridge_report_and_warning() {
+        let config = service_config(
+            RuntimeMode::DetectOnly,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        let service = RuntimeService::new(
+            config,
+            SwarmRuntime::new(
+                RuntimeMode::DetectOnly,
+                StaticApprovalGate::default(),
+                SandboxExecutor,
+            ),
+        );
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let store = swarm_spine::MemoryReplayBundleStore::default();
+
+        let bridges = BridgeStatusReport::from_entries(vec![
+            BridgeStatusSnapshot {
+                name: "cloudtrail-primary".to_string(),
+                source_id: "cloudtrail".to_string(),
+                ready: true,
+                events_processed: 4,
+                error_count: 0,
+                lag_seconds: Some(1.5),
+                last_error: None,
+            },
+            BridgeStatusSnapshot {
+                name: "tetragon-primary".to_string(),
+                source_id: "tetragon".to_string(),
+                ready: false,
+                events_processed: 9,
+                error_count: 2,
+                lag_seconds: Some(8.0),
+                last_error: Some("stream closed".to_string()),
+            },
+        ]);
+
+        let status = service
+            .operator_status_with_bridges(&detector, &substrate, &store, bridges)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            status.bridges.as_ref().map(|report| report.configured),
+            Some(2)
+        );
+        assert!(
+            status
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("telemetry bridge"))
+        );
     }
 
     #[tokio::test]
@@ -1435,6 +2308,7 @@ mod tests {
         let context = ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-upstream-3".to_string()],
+            correlation_id: None,
             now_ms: 1_700_000_000_003,
         };
         let agent_id = AgentId("whisker-a".to_string());
@@ -1679,11 +2553,13 @@ mod tests {
         let context_one = ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-upstream-review-1".to_string()],
+            correlation_id: None,
             now_ms: 1_700_000_000_010,
         };
         let context_two = ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-upstream-review-2".to_string()],
+            correlation_id: None,
             now_ms: 1_700_000_000_020,
         };
         let agent_id = AgentId("whisker-a".to_string());
@@ -1857,6 +2733,7 @@ mod tests {
         let make_context = |now_ms| ApprovalContext {
             live_mode: true,
             receipt_chain: vec![format!("receipt-upstream-{now_ms}")],
+            correlation_id: None,
             now_ms,
         };
 

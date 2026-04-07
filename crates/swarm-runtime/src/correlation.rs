@@ -235,6 +235,7 @@ fn now_ms() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::CorrelationEngine;
     use swarm_core::config::{BundleStoreConfig, CorrelationConfig};

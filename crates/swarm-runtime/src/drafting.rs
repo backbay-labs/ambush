@@ -1607,6 +1607,17 @@ impl DefaultEvolutionDraftingHarness {
         let base_manifest = load_detector_experiment_manifest(&base_experiment_path)?;
         let mut profile = match &base_manifest.candidate {
             DetectorCandidateManifest::SuspiciousProcessTree { profile, .. } => profile.clone(),
+            DetectorCandidateManifest::DnsExfiltration { strategy_id, .. }
+            | DetectorCandidateManifest::LateralMovement { strategy_id, .. }
+            | DetectorCandidateManifest::CredentialAccess { strategy_id, .. }
+            | DetectorCandidateManifest::SuspiciousScripting { strategy_id, .. } => {
+                return Err(ReplayHarnessError::UnsupportedDetector {
+                    strategy: format!(
+                        "pressure-mutation not yet supported for detector `{strategy_id}`"
+                    ),
+                }
+                .into());
+            }
         };
         let applied_changes = apply_profile_overrides(&mut profile, &request)?;
         let created_at_ms = now_ms();
@@ -3053,7 +3064,7 @@ fn sanitize_id(value: &str) -> String {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time after unix epoch")
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -3088,6 +3099,7 @@ struct EvolutionQueueReconciliationIndex {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest,

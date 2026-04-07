@@ -4,29 +4,41 @@
 //! detection stays in Rust, policy stays deterministic, and live response
 //! execution is capability-scoped.
 
+pub mod approval;
+pub mod bridge_runtime;
 pub mod canary;
+pub mod cli;
 pub mod config;
 pub mod control;
 pub mod correlation;
+pub mod detection;
+pub mod dispatcher;
 pub mod drafting;
+pub mod escalation;
 pub mod evidence;
 pub mod evolution;
 pub mod governance_prep;
+pub mod http;
+pub mod ingest;
 pub mod investigation;
 pub mod mutation;
 pub mod operator_http;
 pub mod operator_maintenance;
-pub mod pipeline;
 pub mod portfolio;
 pub mod promotion;
 pub mod replay;
 pub mod review_workbench;
 pub mod selection;
 pub mod service;
+pub mod stalker_agent;
 pub mod strategy;
+pub mod weaver_agent;
+pub mod whisker_agent;
+pub mod workbench;
 
 use std::time::Instant;
 pub use swarm_core::config::RuntimeMode;
+use swarm_guard::{GuardAction, GuardContext, GuardPipeline};
 use swarm_policy::{ActionRequest, ApprovalContext, ApprovalError, ApprovalGate};
 use swarm_response::{ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt};
 use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
@@ -38,6 +50,9 @@ pub enum RuntimeError {
     #[error(transparent)]
     Approval(#[from] ApprovalError),
 
+    #[error("guard rejected: {guard_name}: {reason}")]
+    GuardRejected { guard_name: String, reason: String },
+
     #[error(transparent)]
     Response(#[from] ResponseError),
 }
@@ -47,6 +62,7 @@ pub struct SwarmRuntime<P, E> {
     mode: RuntimeMode,
     policy: P,
     response: E,
+    guard_pipeline: Option<GuardPipeline>,
 }
 
 /// Timing and outcome details for one audited execution.
@@ -66,12 +82,40 @@ impl<P, E> SwarmRuntime<P, E> {
             mode,
             policy,
             response,
+            guard_pipeline: None,
         }
     }
 
     /// Current runtime mode.
     pub fn mode(&self) -> RuntimeMode {
         self.mode
+    }
+
+    /// Attach a guard pipeline that evaluates actions before execution.
+    pub fn with_guard_pipeline(mut self, pipeline: GuardPipeline) -> Self {
+        self.guard_pipeline = Some(pipeline);
+        self
+    }
+
+    fn evaluate_guard_rejection(&self, request: &ActionRequest) -> Option<(String, String)> {
+        let pipeline = self.guard_pipeline.as_ref()?;
+        let context = GuardContext::new()
+            .with_agent_id(request.requested_by.0.clone())
+            .with_metadata(serde_json::json!({
+                "hunt_id": request.hunt_id.0,
+                "severity": request.severity,
+            }));
+        let result = pipeline.evaluate(&GuardAction::ResponseAction(&request.action), &context);
+
+        if result.allowed {
+            None
+        } else {
+            Some((result.guard, result.message))
+        }
+    }
+
+    fn correlation_id(context: &ApprovalContext) -> &str {
+        context.correlation_id.as_deref().unwrap_or("unknown")
     }
 }
 
@@ -88,9 +132,11 @@ where
     ) -> Result<ResponseReceipt, RuntimeError> {
         let decision = self.policy.evaluate(request, context)?;
         tracing::info!(
+            correlation_id = %Self::correlation_id(context),
             hunt_id = %request.hunt_id.0,
             verdict = ?decision.verdict,
             mode = ?self.mode,
+            module = module_path!(),
             "policy evaluated response request"
         );
 
@@ -104,6 +150,18 @@ where
             swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {}
         }
 
+        if let Some((guard_name, reason)) = self.evaluate_guard_rejection(request) {
+            tracing::warn!(
+                correlation_id = %Self::correlation_id(context),
+                hunt_id = %request.hunt_id.0,
+                guard_name = %guard_name,
+                reason = %reason,
+                module = module_path!(),
+                "guard rejected response request"
+            );
+            return Err(RuntimeError::GuardRejected { guard_name, reason });
+        }
+
         let lease = self.policy.issue_lease(request, context)?;
         let execution_mode = match self.mode {
             RuntimeMode::DetectOnly => ExecutionMode::DryRun,
@@ -115,11 +173,18 @@ where
             .execute(request, &lease, execution_mode)
             .await
             .map_err(RuntimeError::from)?;
+        if !receipt.status.indicates_success() {
+            return Err(RuntimeError::Response(ResponseError {
+                failure: receipt.into_failure(),
+            }));
+        }
         tracing::info!(
+            correlation_id = %Self::correlation_id(context),
             hunt_id = %request.hunt_id.0,
             action = %receipt.action,
             mode = ?receipt.mode,
             status = ?receipt.status,
+            module = module_path!(),
             "response executed"
         );
         Ok(receipt)
@@ -149,10 +214,12 @@ where
         let decision = self.policy.evaluate(request, context)?;
         let policy_elapsed_us = policy_started.elapsed().as_micros() as u64;
         tracing::info!(
+            correlation_id = %Self::correlation_id(context),
             hunt_id = %request.hunt_id.0,
             event_id = %detection.event_id,
             verdict = ?decision.verdict,
             mode = ?self.mode,
+            module = module_path!(),
             "building audit trail for response decision"
         );
 
@@ -186,24 +253,63 @@ where
                     )
                 }
                 swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {
-                    let lease = self.policy.issue_lease(request, context)?;
-                    let response_started = Instant::now();
-                    let response =
-                        match self.response.execute(request, &lease, execution_mode).await {
-                            Ok(receipt) => AuditResponseRecord::Success(receipt),
-                            Err(error) => AuditResponseRecord::Failure(error.failure),
-                        };
-                    let response_elapsed_us = response_started.elapsed().as_micros() as u64;
-                    let response_succeeded = matches!(response, AuditResponseRecord::Success(_));
-                    (
-                        Some(lease),
-                        response,
-                        Some(response_elapsed_us),
-                        true,
-                        response_succeeded,
-                    )
+                    if let Some((guard_name, reason)) = self.evaluate_guard_rejection(request) {
+                        tracing::warn!(
+                            correlation_id = %Self::correlation_id(context),
+                            hunt_id = %request.hunt_id.0,
+                            guard_name = %guard_name,
+                            reason = %reason,
+                            module = module_path!(),
+                            "guard rejected response request"
+                        );
+                        (
+                            None,
+                            AuditResponseRecord::GuardRejected { guard_name, reason },
+                            None,
+                            false,
+                            false,
+                        )
+                    } else {
+                        let lease = self.policy.issue_lease(request, context)?;
+                        let response_started = Instant::now();
+                        let response =
+                            match self.response.execute(request, &lease, execution_mode).await {
+                                Ok(receipt) if receipt.status.indicates_success() => {
+                                    AuditResponseRecord::Success(receipt)
+                                }
+                                Ok(receipt) => AuditResponseRecord::Failure(receipt.into_failure()),
+                                Err(error) => AuditResponseRecord::Failure(error.failure),
+                            };
+                        let response_elapsed_us = response_started.elapsed().as_micros() as u64;
+                        let response_succeeded =
+                            matches!(response, AuditResponseRecord::Success(_));
+                        (
+                            Some(lease),
+                            response,
+                            Some(response_elapsed_us),
+                            true,
+                            response_succeeded,
+                        )
+                    }
                 }
             };
+
+        tracing::info!(
+            correlation_id = %Self::correlation_id(context),
+            hunt_id = %request.hunt_id.0,
+            event_id = %detection.event_id,
+            action = %request.action.kind(),
+            response_kind = match &response {
+                AuditResponseRecord::Success(_) => "success",
+                AuditResponseRecord::Failure(_) => "failure",
+                AuditResponseRecord::Skipped { .. } => "skipped",
+                AuditResponseRecord::GuardRejected { .. } => "guard_rejected",
+            },
+            response_attempted,
+            response_succeeded,
+            module = module_path!(),
+            "response stage completed"
+        );
 
         Ok(RuntimeExecutionReport {
             audit: AuditTrail {
@@ -228,17 +334,84 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{RuntimeMode, SwarmRuntime};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use swarm_core::ThreatClass;
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
+    use swarm_guard::{
+        Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
+    };
     use swarm_policy::static_gate::StaticApprovalGate;
     use swarm_policy::{ActionRequest, ApprovalContext};
-    use swarm_response::{ExecutionMode, ResponseStatus, adapters::SandboxExecutor};
+    use swarm_response::{
+        ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt, ResponseStatus,
+        adapters::SandboxExecutor,
+    };
+    use swarm_spine::AuditResponseRecord;
+
+    #[derive(Clone)]
+    struct RecordingExecutor {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ResponseExecutor for RecordingExecutor {
+        async fn execute(
+            &self,
+            request: &ActionRequest,
+            _lease: &swarm_policy::CapabilityLease,
+            mode: ExecutionMode,
+        ) -> Result<ResponseReceipt, ResponseError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ResponseReceipt {
+                receipt_id: format!("receipt:{}", request.hunt_id.0),
+                action: request.action.kind().to_string(),
+                mode,
+                status: if matches!(mode, ExecutionMode::DryRun) {
+                    ResponseStatus::Simulated
+                } else {
+                    ResponseStatus::Executed
+                },
+                summary: "executed".to_string(),
+                details: serde_json::json!({}),
+            })
+        }
+    }
+
+    struct FixedGuard {
+        allow: bool,
+        name: &'static str,
+        message: &'static str,
+    }
+
+    impl Guard for FixedGuard {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn handles(&self, _action: &GuardAction<'_>) -> bool {
+            true
+        }
+
+        fn check(&self, _action: &GuardAction<'_>, _context: &GuardContext) -> GuardResult {
+            if self.allow {
+                GuardResult::allow(self.name)
+            } else {
+                GuardResult::block(self.name, GuardSeverity::Critical, self.message)
+            }
+        }
+    }
 
     fn sample_context() -> ApprovalContext {
         ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-1".to_string()],
+            correlation_id: None,
             now_ms: 1_700_000_000_000,
         }
     }
@@ -348,5 +521,102 @@ mod tests {
                 .to_string()
                 .contains("destructive actions require at least medium severity")
         );
+    }
+
+    #[tokio::test]
+    async fn guard_rejection_prevents_execution() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::DetectOnly,
+            StaticApprovalGate::default(),
+            RecordingExecutor {
+                calls: Arc::clone(&calls),
+            },
+        )
+        .with_guard_pipeline(GuardPipeline::new(vec![Box::new(FixedGuard {
+            allow: false,
+            name: "test_guard",
+            message: "blocked by test",
+        })]));
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-guard".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::DeployDecoy {
+                decoy_type: "honeypot".to_string(),
+                target_zone: "dmz".to_string(),
+            },
+            severity: Severity::High,
+            evidence: serde_json::json!({"signal": "guard-test"}),
+        };
+        let detection = swarm_whisker::DetectionFinding {
+            finding_id: "finding-guard".to_string(),
+            event_id: "evt-guard".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.9,
+            evidence: serde_json::json!({"signal": "guard-test"}),
+            strategy_id: "strategy-1".to_string(),
+        };
+
+        let report = runtime
+            .audit_authorize_and_execute_instrumented(&detection, &request, &sample_context())
+            .await
+            .unwrap();
+
+        assert!(!report.response_attempted);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            report.audit.response,
+            AuditResponseRecord::GuardRejected { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn guard_allows_execution_proceeds() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::DetectOnly,
+            StaticApprovalGate::default(),
+            RecordingExecutor {
+                calls: Arc::clone(&calls),
+            },
+        )
+        .with_guard_pipeline(GuardPipeline::new(vec![Box::new(FixedGuard {
+            allow: true,
+            name: "test_guard",
+            message: "allowed",
+        })]));
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-allow".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::DeployDecoy {
+                decoy_type: "honeypot".to_string(),
+                target_zone: "dmz".to_string(),
+            },
+            severity: Severity::High,
+            evidence: serde_json::json!({"signal": "guard-test"}),
+        };
+        let detection = swarm_whisker::DetectionFinding {
+            finding_id: "finding-allow".to_string(),
+            event_id: "evt-allow".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.9,
+            evidence: serde_json::json!({"signal": "guard-test"}),
+            strategy_id: "strategy-1".to_string(),
+        };
+
+        let report = runtime
+            .audit_authorize_and_execute_instrumented(&detection, &request, &sample_context())
+            .await
+            .unwrap();
+
+        assert!(report.response_attempted);
+        assert!(report.response_succeeded);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            report.audit.response,
+            AuditResponseRecord::Success(_)
+        ));
     }
 }

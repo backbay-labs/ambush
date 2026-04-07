@@ -6,10 +6,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::SwarmMode;
+use crate::config::PheromoneConfig;
 use crate::types::{AgentId, Severity};
 
 /// Classification of threat indicators.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreatClass {
     LateralMovement,
@@ -25,6 +27,53 @@ pub enum ThreatClass {
     Impact,
     /// Custom threat class not in the standard taxonomy.
     Custom(String),
+}
+
+/// Durable per-threat-class pheromone overrides stored in the substrate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreatClassConfig {
+    /// Threat class the override applies to.
+    pub threat_class: ThreatClass,
+    /// Half-life used for deposits of this threat class.
+    pub half_life_secs: f64,
+    /// Effective-strength floor used for evaporation checks.
+    pub evaporation_threshold: f64,
+    /// Concentration threshold for alert mode.
+    pub alert_threshold: f64,
+    /// Concentration threshold for incident mode.
+    pub incident_threshold: f64,
+}
+
+/// Supported threat-intel indicator families.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreatIntelIndicatorType {
+    IpAddress,
+    Domain,
+    FileHash,
+}
+
+/// Durable operator-seeded threat-intel record stored in the substrate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreatIntelEntry {
+    /// Indicator family used for exact lookup.
+    pub indicator_type: ThreatIntelIndicatorType,
+    /// Normalized indicator value.
+    pub value: String,
+    /// Confidence contribution applied when a detector matches this indicator.
+    pub confidence: f64,
+    /// When the indicator expires (unix timestamp milliseconds).
+    pub expires_at: i64,
+}
+
+/// Effective pheromone policy after base config plus threat-class override resolution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreatClassPolicy {
+    pub half_life_secs: f64,
+    pub evaporation_threshold: f64,
+    pub min_sources_for_escalation: usize,
+    pub alert_threshold: f64,
+    pub incident_threshold: f64,
 }
 
 /// A pheromone deposit — a signed threat indicator in the substrate.
@@ -50,6 +99,23 @@ pub struct PheromoneDeposit {
     pub agent_key: Vec<u8>,
 }
 
+/// A durable record of a swarm-mode escalation transition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EscalationRecord {
+    /// The new swarm mode entered by the runtime.
+    pub mode: SwarmMode,
+    /// Threat class that triggered the transition.
+    pub threat_class: ThreatClass,
+    /// Total pheromone strength observed at transition time.
+    pub total_strength: f64,
+    /// Number of distinct sources contributing to the transition.
+    pub distinct_sources: usize,
+    /// Highest individual confidence contributing to the transition.
+    pub peak_confidence: f64,
+    /// When the transition was recorded (unix timestamp seconds).
+    pub timestamp: i64,
+}
+
 /// A pheromone with computed effective strength (after decay).
 #[derive(Debug, Clone)]
 pub struct Pheromone {
@@ -73,6 +139,30 @@ impl PheromoneDeposit {
     /// Check if this pheromone has effectively evaporated (strength < threshold).
     pub fn is_evaporated(&self, now: i64, threshold: f64) -> bool {
         self.strength_at(now) < threshold
+    }
+}
+
+impl PheromoneConfig {
+    /// Resolve the effective pheromone policy for one threat class.
+    pub fn resolve_threat_class_policy(
+        &self,
+        override_config: Option<&ThreatClassConfig>,
+    ) -> ThreatClassPolicy {
+        ThreatClassPolicy {
+            half_life_secs: override_config
+                .map(|config| config.half_life_secs)
+                .unwrap_or(self.default_half_life_secs),
+            evaporation_threshold: override_config
+                .map(|config| config.evaporation_threshold)
+                .unwrap_or(self.evaporation_threshold),
+            min_sources_for_escalation: self.min_sources_for_escalation,
+            alert_threshold: override_config
+                .map(|config| config.alert_threshold)
+                .unwrap_or(self.alert_threshold),
+            incident_threshold: override_config
+                .map(|config| config.incident_threshold)
+                .unwrap_or(self.incident_threshold),
+        }
     }
 }
 

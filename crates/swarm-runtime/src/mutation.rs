@@ -1169,7 +1169,11 @@ impl DefaultEvolutionMutationHarness {
                 variants: Vec::new(),
             }
         } else {
-            let materialization_id = request.materialization_id.expect("validated source");
+            let materialization_id = request.materialization_id.ok_or_else(|| {
+                EvolutionMutationError::InvalidMutationSpecRequest {
+                    reason: "exactly one of draft_id or materialization_id must be set".to_string(),
+                }
+            })?;
             let materialization = drafting
                 .load_materialization(&materialization_id)?
                 .ok_or_else(|| EvolutionDraftingError::MaterializationNotFound {
@@ -1683,13 +1687,25 @@ fn materialize_variant_report(
     request: &EvolutionDraftMaterializationRequest,
     created_at_ms: i64,
 ) -> Result<EvolutionMaterializationReport, EvolutionMutationError> {
-    let base_experiment_path = request
-        .base_experiment_path
-        .as_ref()
-        .expect("validated base experiment path");
+    let base_experiment_path = request.base_experiment_path.as_ref().ok_or_else(|| {
+        EvolutionMutationError::InvalidMutationSpecRequest {
+            reason: "materialization request is missing a base experiment path".to_string(),
+        }
+    })?;
     let base_manifest = load_detector_experiment_manifest(base_experiment_path)?;
     let mut profile = match &base_manifest.candidate {
         DetectorCandidateManifest::SuspiciousProcessTree { profile, .. } => profile.clone(),
+        DetectorCandidateManifest::DnsExfiltration { strategy_id, .. }
+        | DetectorCandidateManifest::LateralMovement { strategy_id, .. }
+        | DetectorCandidateManifest::CredentialAccess { strategy_id, .. }
+        | DetectorCandidateManifest::SuspiciousScripting { strategy_id, .. } => {
+            return Err(ReplayHarnessError::UnsupportedDetector {
+                strategy: format!(
+                    "mutation materialization not yet supported for detector `{strategy_id}`"
+                ),
+            }
+            .into());
+        }
     };
     let applied_changes = apply_profile_overrides(&mut profile, request)?;
     let experiment_name = materialized_experiment_name(&variant.strategy_id, created_at_ms);
@@ -2202,7 +2218,7 @@ fn sanitize_id(value: &str) -> String {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time after unix epoch")
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -2227,6 +2243,7 @@ struct EvolutionMutationRankingIndex {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         DefaultEvolutionMutationHarness, EvolutionDraftMaterializationRequest,
@@ -2273,7 +2290,7 @@ mod tests {
         path
     }
 
-    fn copy_experiment_fixture(root: &PathBuf, name: &str) -> PathBuf {
+    fn copy_experiment_fixture(root: &std::path::Path, name: &str) -> PathBuf {
         let path = root.join(format!("{name}.yaml"));
         fs::copy(office_control_experiment(), &path).unwrap();
         path

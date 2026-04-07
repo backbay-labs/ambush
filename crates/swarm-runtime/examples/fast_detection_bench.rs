@@ -1,9 +1,11 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::time::Instant;
 
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
 use swarm_core::types::AgentId;
 use swarm_pheromone::InMemoryPheromoneSubstrate;
-use swarm_runtime::pipeline::detect_and_deposit;
+use swarm_runtime::detection::pipeline::detect_and_deposit;
 use swarm_whisker::{
     ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
 };

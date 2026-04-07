@@ -1,0 +1,34 @@
+name: benign_dns_baseline
+description: Normal web DNS lookup should not trigger the exfiltration detector
+seed_time_ms: 1700000500000
+requested_by: replay-whisker
+metadata:
+  class: benign
+  tags:
+    - dns
+    - benign
+    - control
+
+input:
+  kind: events
+  events:
+    - action:
+        type: escalate
+        summary: This should never execute because no finding is expected
+        urgency: LOW
+      event:
+        source: synthetic
+        event_id: hunt-benign-dns-1
+        timestamp: 1700000500100
+        host_id: host-benign-1
+        payload:
+          kind: dns_query
+          query_name: www.google.com
+          query_type: A
+          source_ip: 10.10.2.10
+          process_name: chrome.exe
+          response_code: NOERROR
+
+expectations:
+  replay_bundle_count: 0
+  max_detect_latency_us: 50000

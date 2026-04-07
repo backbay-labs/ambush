@@ -1894,7 +1894,7 @@ fn sanitize_id(value: &str) -> String {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time before unix epoch")
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -1922,6 +1922,7 @@ struct ProofAttestationPayload {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness,

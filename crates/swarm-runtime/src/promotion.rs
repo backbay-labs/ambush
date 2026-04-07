@@ -1,7 +1,11 @@
 use crate::canary::{
     CanaryRecommendation, CanaryRunReport, CanaryRunStatus, CanaryStoreError, FileCanaryStore,
 };
-use crate::config::{RuntimeConfigError, load_config};
+use crate::config::{
+    DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
+    lateral_movement_profile, load_config, suspicious_process_tree_profile,
+    suspicious_scripting_profile,
+};
 use crate::replay::{DetectorCandidateManifest, ExperimentLineage};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -9,9 +13,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use swarm_core::config::{PromotionConfig, SwarmConfig};
 use swarm_core::types::Severity;
+use swarm_crypto::{
+    DetachedSignature, PublicKey, Signature, canonical_json_bytes, verify_detached_signature,
+};
 use swarm_whisker::stream::{evaluate_event, findings_to_deposits};
 use swarm_whisker::{
-    DetectionFinding, DetectionStrategy, SuspiciousProcessTreeDetector, TelemetryEvent,
+    CredentialAccessDetector, CredentialAccessProfile, DetectionFinding, DetectionStrategy,
+    DnsExfiltrationDetector, DnsExfiltrationProfile, LateralMovementDetector,
+    LateralMovementProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
+    SuspiciousScriptingDetector, SuspiciousScriptingProfile, TelemetryEvent,
 };
 
 /// Errors surfaced by the controlled production-promotion lane.
@@ -22,6 +32,12 @@ pub enum ProductionPromotionError {
 
     #[error(transparent)]
     CanaryStore(#[from] CanaryStoreError),
+
+    #[error(transparent)]
+    DetectorProfile(#[from] DetectorProfileError),
+
+    #[error(transparent)]
+    ProfileValidation(#[from] swarm_whisker::ProfileValidationError),
 
     #[error(transparent)]
     Store(#[from] ProductionPromotionStoreError),
@@ -75,6 +91,27 @@ pub enum ProductionPromotionError {
         status: ProductionPromotionStatus,
     },
 
+    #[error(
+        "production promotion `{promotion_id}` is not pending human approval (status `{status:?}`)"
+    )]
+    RunNotPending {
+        promotion_id: String,
+        status: ProductionPromotionStatus,
+    },
+
+    #[error("quorum not met: {have} of {need} votes, missing voters: {missing}")]
+    QuorumNotMet {
+        have: usize,
+        need: usize,
+        missing: String,
+    },
+
+    #[error("vote signature verification failed for voter `{voter_id}`")]
+    VoteSignatureInvalid { voter_id: String },
+
+    #[error("consensus receipt signature verification failed for receipt `{receipt_id}`")]
+    ReceiptSignatureInvalid { receipt_id: String },
+
     #[error("unsupported detector strategy `{strategy}`")]
     UnsupportedDetector { strategy: String },
 }
@@ -109,6 +146,7 @@ pub enum ProductionPromotionStoreError {
 #[serde(rename_all = "snake_case")]
 pub enum ProductionPromotionStatus {
     Active,
+    HumanApprovalPending,
     Completed,
     RolledBack,
     Halted,
@@ -119,6 +157,7 @@ pub enum ProductionPromotionStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ProductionPromotionRecommendation {
     Observing,
+    PendingHumanApproval,
     StableInProduction,
     Blocked,
 }
@@ -162,6 +201,50 @@ pub struct ProductionPromotionFindingPreview {
     pub severity: Severity,
     pub confidence: f64,
     pub shared_with_fallback: bool,
+}
+
+/// Reference to a signed approval vote for one promotion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionApprovalVoteRef {
+    pub voter_id: String,
+    pub public_key_hex: String,
+    pub signature_hex: String,
+    pub approved_at_ms: i64,
+    pub ledger_entry_id: String,
+}
+
+/// Durable consensus receipt linking a promotion to its approval verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionConsensusReceipt {
+    pub receipt_id: String,
+    pub approval_set_id: String,
+    pub verdict_id: String,
+    pub ledger_id: String,
+    pub threshold_met: bool,
+    pub vote_count: usize,
+    pub threshold_required: usize,
+    pub receipt_signature_hex: String,
+    pub receipt_signer_key_id: String,
+    pub receipt_signer_public_key_hex: String,
+    pub created_at_ms: i64,
+}
+
+/// Review packet persisted when a promotion enters human-approval-pending state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionPendingReviewPacket {
+    pub gate_reason: String,
+    pub severity: Severity,
+    pub canary_run_id: String,
+    pub promoted_strategy_id: String,
+    pub canary_recommendation: CanaryRecommendation,
+    pub pending_since_ms: i64,
+}
+
+/// Structural quorum-gate configuration for the promotion path.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionQuorumGateConfig {
+    pub required_threshold: Option<usize>,
+    pub required_voter_ids: Vec<String>,
 }
 
 /// Aggregate metrics recorded over the production observation window.
@@ -273,6 +356,11 @@ pub struct ProductionPromotionReport {
     pub threshold_results: Vec<ProductionPromotionThresholdResult>,
     pub recent_promoted_findings: Vec<ProductionPromotionFindingPreview>,
     pub rollback_history: Vec<ProductionPromotionRollbackRecord>,
+    pub pending_review: Option<PromotionPendingReviewPacket>,
+    pub approval_votes: Vec<PromotionApprovalVoteRef>,
+    pub consensus_receipt: Option<PromotionConsensusReceipt>,
+    pub approval_severity: Option<Severity>,
+    pub quorum_gate_config: Option<PromotionQuorumGateConfig>,
 }
 
 /// Metadata surfaced for one persisted production-promotion run.
@@ -310,6 +398,13 @@ impl ProductionPromotionRecord {
 pub struct ProductionPromotionLookup {
     pub record: ProductionPromotionRecord,
     pub report: ProductionPromotionReport,
+}
+
+/// Operator-facing production promotion listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionPromotionList {
+    pub total_count: usize,
+    pub promotions: Vec<ProductionPromotionRecord>,
 }
 
 /// File-backed store used for controlled production-promotion runs.
@@ -434,7 +529,12 @@ impl FileProductionPromotionStore {
             .entries
             .iter()
             .find(|entry| {
-                entry.window_id == window_id && entry.status == ProductionPromotionStatus::Active
+                entry.window_id == window_id
+                    && matches!(
+                        entry.status,
+                        ProductionPromotionStatus::Active
+                            | ProductionPromotionStatus::HumanApprovalPending
+                    )
             })
             .cloned()
         else {
@@ -452,6 +552,25 @@ impl FileProductionPromotionStore {
                 source,
             })?;
         Ok(Some(ProductionPromotionLookup { record, report }))
+    }
+
+    pub fn list(
+        &self,
+        status: Option<ProductionPromotionStatus>,
+    ) -> Result<ProductionPromotionList, ProductionPromotionStoreError> {
+        let mut index = self.read_index()?;
+        index
+            .entries
+            .sort_by_key(|entry| std::cmp::Reverse(entry.updated_at_ms));
+        let promotions = index
+            .entries
+            .into_iter()
+            .filter(|entry| status.is_none_or(|value| entry.status == value))
+            .collect::<Vec<_>>();
+        Ok(ProductionPromotionList {
+            total_count: promotions.len(),
+            promotions,
+        })
     }
 }
 
@@ -489,6 +608,15 @@ impl DefaultProductionPromotionHarness {
         &self,
         canary_results_dir: impl AsRef<Path>,
         canary_run_id: &str,
+    ) -> Result<ProductionPromotionLookup, ProductionPromotionError> {
+        self.start_run_with_severity(canary_results_dir, canary_run_id, None)
+    }
+
+    pub fn start_run_with_severity(
+        &self,
+        canary_results_dir: impl AsRef<Path>,
+        canary_run_id: &str,
+        severity_override: Option<Severity>,
     ) -> Result<ProductionPromotionLookup, ProductionPromotionError> {
         if !self.config.promotion.enabled {
             return Err(ProductionPromotionError::Disabled);
@@ -547,18 +675,44 @@ impl DefaultProductionPromotionHarness {
             &ProductionPromotionMetrics::default(),
             &assignment.promotion,
         );
+        let approval_severity =
+            severity_override.unwrap_or_else(|| promotion_severity(&canary.report));
+        let gated = approval_severity == Severity::Critical;
         let report = ProductionPromotionReport {
             promotion_id,
             window_id: self.config.promotion.window_id.clone(),
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
-            status: ProductionPromotionStatus::Active,
-            recommendation: ProductionPromotionRecommendation::Observing,
+            status: if gated {
+                ProductionPromotionStatus::HumanApprovalPending
+            } else {
+                ProductionPromotionStatus::Active
+            },
+            recommendation: if gated {
+                ProductionPromotionRecommendation::PendingHumanApproval
+            } else {
+                ProductionPromotionRecommendation::Observing
+            },
             assignment,
             metrics: ProductionPromotionMetrics::default(),
             threshold_results,
             recent_promoted_findings: Vec::new(),
             rollback_history: Vec::new(),
+            pending_review: gated.then(|| PromotionPendingReviewPacket {
+                gate_reason: format!(
+                    "promotion requires human approval because severity is {:?}",
+                    approval_severity
+                ),
+                severity: approval_severity,
+                canary_run_id: canary.report.run_id.clone(),
+                promoted_strategy_id: canary.report.assignment.candidate_strategy_id.clone(),
+                canary_recommendation: canary.report.recommendation,
+                pending_since_ms: now_ms,
+            }),
+            approval_votes: Vec::new(),
+            consensus_receipt: None,
+            approval_severity: Some(approval_severity),
+            quorum_gate_config: Some(self.quorum_config()),
         };
         let record = self.store.persist(&report)?;
         Ok(ProductionPromotionLookup { record, report })
@@ -709,6 +863,64 @@ impl DefaultProductionPromotionHarness {
         Ok(self.store.load(promotion_id)?)
     }
 
+    pub fn list_runs(
+        &self,
+        status: Option<ProductionPromotionStatus>,
+    ) -> Result<ProductionPromotionList, ProductionPromotionError> {
+        Ok(self.store.list(status)?)
+    }
+
+    pub fn approve_pending_run(
+        &self,
+        promotion_id: &str,
+        votes: Vec<PromotionApprovalVoteRef>,
+        consensus_receipt: Option<PromotionConsensusReceipt>,
+        _reason: &str,
+    ) -> Result<ProductionPromotionLookup, ProductionPromotionError> {
+        let mut lookup = self.store.load(promotion_id)?.ok_or_else(|| {
+            ProductionPromotionError::RunNotFound {
+                promotion_id: promotion_id.to_string(),
+            }
+        })?;
+        if lookup.report.status != ProductionPromotionStatus::HumanApprovalPending {
+            return Err(ProductionPromotionError::RunNotPending {
+                promotion_id: promotion_id.to_string(),
+                status: lookup.report.status,
+            });
+        }
+
+        let quorum_config = lookup
+            .report
+            .quorum_gate_config
+            .clone()
+            .unwrap_or_else(|| self.quorum_config());
+        validate_quorum_gate(&votes, &quorum_config)?;
+        for vote in &votes {
+            if !verify_vote_signature(vote, promotion_id) {
+                return Err(ProductionPromotionError::VoteSignatureInvalid {
+                    voter_id: vote.voter_id.clone(),
+                });
+            }
+        }
+        if let Some(receipt) = &consensus_receipt
+            && !verify_consensus_receipt_signature(receipt)
+        {
+            return Err(ProductionPromotionError::ReceiptSignatureInvalid {
+                receipt_id: receipt.receipt_id.clone(),
+            });
+        }
+
+        lookup.report.status = ProductionPromotionStatus::Active;
+        lookup.report.recommendation = ProductionPromotionRecommendation::Observing;
+        lookup.report.updated_at_ms = now_ms();
+        lookup.report.pending_review = None;
+        lookup.report.approval_votes = votes;
+        lookup.report.consensus_receipt = consensus_receipt;
+        lookup.report.quorum_gate_config = Some(quorum_config);
+        lookup.record = self.store.persist(&lookup.report)?;
+        Ok(lookup)
+    }
+
     fn finalize_run(
         &self,
         promotion_id: &str,
@@ -721,7 +933,10 @@ impl DefaultProductionPromotionHarness {
                 promotion_id: promotion_id.to_string(),
             }
         })?;
-        if lookup.report.status != ProductionPromotionStatus::Active {
+        if !matches!(
+            lookup.report.status,
+            ProductionPromotionStatus::Active | ProductionPromotionStatus::HumanApprovalPending
+        ) {
             return Err(ProductionPromotionError::RunNotActive {
                 promotion_id: promotion_id.to_string(),
                 status: lookup.report.status,
@@ -749,6 +964,10 @@ impl DefaultProductionPromotionHarness {
         lookup.record = self.store.persist(&lookup.report)?;
         Ok(lookup)
     }
+
+    fn quorum_config(&self) -> PromotionQuorumGateConfig {
+        PromotionQuorumGateConfig::default()
+    }
 }
 
 pub fn render_production_promotion_report(report: &ProductionPromotionReport) -> String {
@@ -758,6 +977,7 @@ pub fn render_production_promotion_report(report: &ProductionPromotionReport) ->
         format!("Window: {}", report.window_id),
         format!("Status: {:?}", report.status),
         format!("Recommendation: {:?}", report.recommendation),
+        format!("Approval Severity: {:?}", report.approval_severity),
         format!(
             "Rollback target: {} | Promoted: {}",
             report.assignment.previous_production_strategy_id,
@@ -799,6 +1019,16 @@ pub fn render_production_promotion_report(report: &ProductionPromotionReport) ->
         ),
     ];
 
+    if let Some(pending_review) = &report.pending_review {
+        lines.push("PENDING HUMAN APPROVAL".to_string());
+        lines.push(format!("Gate reason: {}", pending_review.gate_reason));
+        lines.push(format!("Severity: {:?}", pending_review.severity));
+        lines.push(format!(
+            "Pending since: {} | Canary: {}",
+            pending_review.pending_since_ms, pending_review.canary_run_id
+        ));
+    }
+
     if report.threshold_results.is_empty() {
         lines.push("Thresholds: none".to_string());
     } else {
@@ -811,6 +1041,22 @@ pub fn render_production_promotion_report(report: &ProductionPromotionReport) ->
                 result.details
             ));
         }
+    }
+
+    if let Some(config) = &report.quorum_gate_config {
+        let threshold = config
+            .required_threshold
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "advisory-only".to_string());
+        lines.push(format!(
+            "Quorum Gate: threshold={} required_voters={}",
+            threshold,
+            if config.required_voter_ids.is_empty() {
+                "none".to_string()
+            } else {
+                config.required_voter_ids.join(", ")
+            }
+        ));
     }
 
     if report.rollback_history.is_empty() {
@@ -827,6 +1073,34 @@ pub fn render_production_promotion_report(report: &ProductionPromotionReport) ->
                 rollback.observed_events
             ));
         }
+    }
+
+    if report.approval_votes.is_empty() {
+        lines.push("Approval votes: none".to_string());
+    } else {
+        lines.push("Approval votes:".to_string());
+        for vote in &report.approval_votes {
+            lines.push(format!(
+                "- {} at {} ledger_entry={} verified={}",
+                vote.voter_id,
+                vote.approved_at_ms,
+                vote.ledger_entry_id,
+                verify_vote_signature(vote, &report.promotion_id)
+            ));
+        }
+    }
+
+    if let Some(receipt) = &report.consensus_receipt {
+        lines.push(format!(
+            "Consensus receipt: {} threshold_met={} vote_count={} threshold_required={} verified={}",
+            receipt.receipt_id,
+            receipt.threshold_met,
+            receipt.vote_count,
+            receipt.threshold_required,
+            verify_consensus_receipt_signature(receipt)
+        ));
+    } else {
+        lines.push("Consensus receipt: none".to_string());
     }
 
     if report.recent_promoted_findings.is_empty() {
@@ -848,11 +1122,114 @@ pub fn render_production_promotion_report(report: &ProductionPromotionReport) ->
     lines.join("\n")
 }
 
+pub fn render_production_promotion_list(list: &ProductionPromotionList) -> String {
+    let mut lines = vec![format!("Production Promotions ({})", list.total_count)];
+    if list.promotions.is_empty() {
+        lines.push("none".to_string());
+        return lines.join("\n");
+    }
+
+    lines.extend(list.promotions.iter().map(|record| {
+        format!(
+            "- {} status={:?} recommendation={:?} strategy={}",
+            record.promotion_id, record.status, record.recommendation, record.promoted_strategy_id
+        )
+    }));
+    lines.join("\n")
+}
+
+pub fn validate_quorum_gate(
+    votes: &[PromotionApprovalVoteRef],
+    config: &PromotionQuorumGateConfig,
+) -> Result<(), ProductionPromotionError> {
+    let Some(required_threshold) = config.required_threshold else {
+        return Ok(());
+    };
+
+    let missing_voters = config
+        .required_voter_ids
+        .iter()
+        .filter(|required| !votes.iter().any(|vote| &vote.voter_id == *required))
+        .cloned()
+        .collect::<Vec<_>>();
+    if votes.len() < required_threshold || !missing_voters.is_empty() {
+        return Err(ProductionPromotionError::QuorumNotMet {
+            have: votes.len(),
+            need: required_threshold,
+            missing: if missing_voters.is_empty() {
+                "none".to_string()
+            } else {
+                missing_voters.join(", ")
+            },
+        });
+    }
+    Ok(())
+}
+
+pub fn verify_vote_signature(vote: &PromotionApprovalVoteRef, promotion_id: &str) -> bool {
+    let Ok(payload) = canonical_json_bytes(&PromotionApprovalVotePayload {
+        promotion_id,
+        voter_id: &vote.voter_id,
+        approved_at_ms: vote.approved_at_ms,
+        ledger_entry_id: &vote.ledger_entry_id,
+    }) else {
+        return false;
+    };
+    if vote.voter_id != format!("swarm:ed25519:{}", vote.public_key_hex) {
+        return false;
+    }
+    let Ok(public_key) = PublicKey::from_hex(&vote.public_key_hex) else {
+        return false;
+    };
+    let Ok(signature) = Signature::from_hex(&vote.signature_hex) else {
+        return false;
+    };
+    public_key.verify(&payload, &signature)
+}
+
+pub fn verify_consensus_receipt_signature(receipt: &PromotionConsensusReceipt) -> bool {
+    let Ok(payload) = canonical_json_bytes(&PromotionConsensusReceiptPayload {
+        receipt_id: &receipt.receipt_id,
+        approval_set_id: &receipt.approval_set_id,
+        verdict_id: &receipt.verdict_id,
+        ledger_id: &receipt.ledger_id,
+        threshold_met: receipt.threshold_met,
+        vote_count: receipt.vote_count,
+        threshold_required: receipt.threshold_required,
+        created_at_ms: receipt.created_at_ms,
+    }) else {
+        return false;
+    };
+    let detached = DetachedSignature {
+        algorithm: "ed25519".to_string(),
+        key_id: receipt.receipt_signer_key_id.clone(),
+        public_key_hex: receipt.receipt_signer_public_key_hex.clone(),
+        signature_hex: receipt.receipt_signature_hex.clone(),
+    };
+    verify_detached_signature(&payload, &detached).is_ok()
+}
+
 #[derive(Debug, Clone)]
 enum SupportedPromotionDetector {
     SuspiciousProcessTree {
         strategy_id: String,
         detector: SuspiciousProcessTreeDetector,
+    },
+    DnsExfiltration {
+        strategy_id: String,
+        detector: DnsExfiltrationDetector,
+    },
+    LateralMovement {
+        strategy_id: String,
+        detector: LateralMovementDetector,
+    },
+    CredentialAccess {
+        strategy_id: String,
+        detector: CredentialAccessDetector,
+    },
+    SuspiciousScripting {
+        strategy_id: String,
+        detector: SuspiciousScriptingDetector,
     },
 }
 
@@ -860,12 +1237,20 @@ impl DetectionStrategy for SupportedPromotionDetector {
     fn id(&self) -> &str {
         match self {
             Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
+            Self::DnsExfiltration { strategy_id, .. } => strategy_id.as_str(),
+            Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
+            Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
+            Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
         }
     }
 
     fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
         match self {
             Self::SuspiciousProcessTree { detector, .. } => detector.evaluate(event),
+            Self::DnsExfiltration { detector, .. } => detector.evaluate(event),
+            Self::LateralMovement { detector, .. } => detector.evaluate(event),
+            Self::CredentialAccess { detector, .. } => detector.evaluate(event),
+            Self::SuspiciousScripting { detector, .. } => detector.evaluate(event),
         }
     }
 }
@@ -873,13 +1258,82 @@ impl DetectionStrategy for SupportedPromotionDetector {
 impl SupportedPromotionDetector {
     fn suspicious_process_tree(
         strategy_id: impl Into<String>,
-        profile: swarm_whisker::SuspiciousProcessTreeProfile,
-    ) -> Self {
-        Self::SuspiciousProcessTree {
+        profile: SuspiciousProcessTreeProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::SuspiciousProcessTree {
             strategy_id: strategy_id.into(),
-            detector: SuspiciousProcessTreeDetector::from_profile(profile),
-        }
+            detector: SuspiciousProcessTreeDetector::from_profile(profile)?,
+        })
     }
+
+    fn dns_exfiltration(
+        strategy_id: impl Into<String>,
+        profile: DnsExfiltrationProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::DnsExfiltration {
+            strategy_id: strategy_id.into(),
+            detector: DnsExfiltrationDetector::from_profile(profile)?,
+        })
+    }
+
+    fn lateral_movement(
+        strategy_id: impl Into<String>,
+        profile: LateralMovementProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::LateralMovement {
+            strategy_id: strategy_id.into(),
+            detector: LateralMovementDetector::from_profile(profile)?,
+        })
+    }
+
+    fn credential_access(
+        strategy_id: impl Into<String>,
+        profile: CredentialAccessProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::CredentialAccess {
+            strategy_id: strategy_id.into(),
+            detector: CredentialAccessDetector::from_profile(profile)?,
+        })
+    }
+
+    fn suspicious_scripting(
+        strategy_id: impl Into<String>,
+        profile: SuspiciousScriptingProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::SuspiciousScripting {
+            strategy_id: strategy_id.into(),
+            detector: SuspiciousScriptingDetector::from_profile(profile)?,
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct PromotionApprovalVotePayload<'a> {
+    promotion_id: &'a str,
+    voter_id: &'a str,
+    approved_at_ms: i64,
+    ledger_entry_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct PromotionConsensusReceiptPayload<'a> {
+    receipt_id: &'a str,
+    approval_set_id: &'a str,
+    verdict_id: &'a str,
+    ledger_id: &'a str,
+    threshold_met: bool,
+    vote_count: usize,
+    threshold_required: usize,
+    created_at_ms: i64,
+}
+
+fn promotion_severity(report: &CanaryRunReport) -> Severity {
+    report
+        .recent_candidate_findings
+        .iter()
+        .map(|finding| finding.severity)
+        .max()
+        .unwrap_or(Severity::High)
 }
 
 fn baseline_candidate_from_config(
@@ -889,11 +1343,27 @@ fn baseline_candidate_from_config(
         "suspicious_process_tree" => Ok(DetectorCandidateManifest::SuspiciousProcessTree {
             strategy_id: config.detection.strategy.clone(),
             description: "production baseline at promotion start".to_string(),
-            profile: swarm_whisker::SuspiciousProcessTreeProfile {
-                high_confidence_threshold: config.detection.high_confidence_threshold,
-                medium_confidence_threshold: config.detection.medium_confidence_threshold,
-                ..swarm_whisker::SuspiciousProcessTreeProfile::default()
-            },
+            profile: suspicious_process_tree_profile(&config.detection)?,
+        }),
+        "dns_exfiltration" => Ok(DetectorCandidateManifest::DnsExfiltration {
+            strategy_id: config.detection.strategy.clone(),
+            description: "production baseline at promotion start".to_string(),
+            profile: dns_exfiltration_profile(&config.detection)?,
+        }),
+        "lateral_movement" => Ok(DetectorCandidateManifest::LateralMovement {
+            strategy_id: config.detection.strategy.clone(),
+            description: "production baseline at promotion start".to_string(),
+            profile: lateral_movement_profile(&config.detection)?,
+        }),
+        "credential_access" => Ok(DetectorCandidateManifest::CredentialAccess {
+            strategy_id: config.detection.strategy.clone(),
+            description: "production baseline at promotion start".to_string(),
+            profile: credential_access_profile(&config.detection)?,
+        }),
+        "suspicious_scripting" => Ok(DetectorCandidateManifest::SuspiciousScripting {
+            strategy_id: config.detection.strategy.clone(),
+            description: "production baseline at promotion start".to_string(),
+            profile: suspicious_scripting_profile(&config.detection)?,
         }),
         other => Err(ProductionPromotionError::UnsupportedDetector {
             strategy: other.to_string(),
@@ -912,7 +1382,39 @@ fn detector_from_candidate(
         } => Ok(SupportedPromotionDetector::suspicious_process_tree(
             strategy_id.clone(),
             profile.clone(),
-        )),
+        )?),
+        DetectorCandidateManifest::DnsExfiltration {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedPromotionDetector::dns_exfiltration(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::LateralMovement {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedPromotionDetector::lateral_movement(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::CredentialAccess {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedPromotionDetector::credential_access(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::SuspiciousScripting {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedPromotionDetector::suspicious_scripting(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
     }
 }
 
@@ -1048,7 +1550,7 @@ fn sanitize_id(value: &str) -> String {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time after unix epoch")
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -1058,14 +1560,17 @@ struct ProductionPromotionIndex {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         DefaultProductionPromotionHarness, ProductionPromotionRecommendation,
-        ProductionPromotionRollbackTrigger, ProductionPromotionStatus,
-        render_production_promotion_report,
+        ProductionPromotionRollbackTrigger, ProductionPromotionStatus, PromotionApprovalVoteRef,
+        PromotionConsensusReceipt, PromotionQuorumGateConfig, render_production_promotion_report,
+        validate_quorum_gate, verify_consensus_receipt_signature, verify_vote_signature,
     };
     use crate::canary::{
-        CanaryAssignment, CanaryRecommendation, CanaryRunReport, CanaryRunStatus, FileCanaryStore,
+        CanaryAssignment, CanaryFindingPreview, CanaryRecommendation, CanaryRunReport,
+        CanaryRunStatus, FileCanaryStore,
     };
     use crate::config::RuntimeMode;
     use crate::replay::{DetectorCandidateManifest, ExperimentLineage};
@@ -1073,10 +1578,12 @@ mod tests {
     use std::path::PathBuf;
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
-        InvestigationConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PromotionConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        DetectorProfilesConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
+        PolicyConfig, PromotionConfig, ResponseAdapterConfig, RuntimeSettings, SwarmConfig,
+        TelemetrySourceConfig,
     };
     use swarm_core::types::Severity;
+    use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
     use swarm_whisker::{
         ProcessStartEvent, SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
     };
@@ -1095,6 +1602,7 @@ mod tests {
 
     fn promotion_config() -> SwarmConfig {
         SwarmConfig {
+            schema_version: 1,
             name: "promotion-test".to_string(),
             description: "production promotion test config".to_string(),
             runtime: RuntimeSettings {
@@ -1102,14 +1610,19 @@ mod tests {
                 telemetry_sources: vec![TelemetrySourceConfig {
                     name: "synthetic".to_string(),
                     subject: "telemetry.synthetic.process".to_string(),
+                    bridge: None,
                 }],
                 max_in_flight_actions: 2,
+                drain_timeout_ms: 30_000,
                 require_durable_live_response: false,
+                max_heap_pressure: 0.90,
+                secret_dir: None,
             },
             detection: DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
+                profiles: DetectorProfilesConfig::default(),
             },
             pheromone: PheromoneConfig {
                 default_half_life_secs: 3600.0,
@@ -1123,6 +1636,10 @@ mod tests {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
             },
+            response_adapter: ResponseAdapterConfig::Sandbox,
+            siem_forward: None,
+            notification_channels: std::collections::BTreeMap::new(),
+            notification_routing: swarm_core::config::NotificationRoutingConfig::default(),
             audit: AuditConfig {
                 bundle_store: BundleStoreConfig::Memory,
                 recent_decisions_limit: 20,
@@ -1219,11 +1736,84 @@ mod tests {
         }
     }
 
-    fn persist_ready_canary(root: &PathBuf, report: &CanaryRunReport) -> (PathBuf, String) {
+    fn ready_canary_report_with_severity(
+        config: &SwarmConfig,
+        candidate: DetectorCandidateManifest,
+        severity: Severity,
+    ) -> CanaryRunReport {
+        let mut report = ready_canary_report(config, candidate);
+        report.recent_candidate_findings.push(CanaryFindingPreview {
+            event_id: format!("event:{severity:?}"),
+            strategy_id: report.assignment.candidate_strategy_id.clone(),
+            severity,
+            confidence: 0.99,
+            shared_with_baseline: false,
+        });
+        report
+    }
+
+    fn persist_ready_canary(root: &std::path::Path, report: &CanaryRunReport) -> (PathBuf, String) {
         let canaries_dir = root.join("canaries");
         let store = FileCanaryStore::open(&canaries_dir).unwrap();
         let record = store.persist(report).unwrap();
         (canaries_dir, record.run_id)
+    }
+
+    fn signed_vote(
+        promotion_id: &str,
+        secret_material: &str,
+        approved_at_ms: i64,
+        ledger_entry_id: &str,
+    ) -> PromotionApprovalVoteRef {
+        let signer = Ed25519Signer::from_secret_material(secret_material);
+        let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+        let signature = signer
+            .sign(
+                &canonical_json_bytes(&super::PromotionApprovalVotePayload {
+                    promotion_id,
+                    voter_id: &voter_id,
+                    approved_at_ms,
+                    ledger_entry_id,
+                })
+                .unwrap(),
+            )
+            .signature_hex;
+        PromotionApprovalVoteRef {
+            voter_id,
+            public_key_hex: signer.public_key_hex().to_string(),
+            signature_hex: signature,
+            approved_at_ms,
+            ledger_entry_id: ledger_entry_id.to_string(),
+        }
+    }
+
+    fn signed_receipt(secret_material: &str, created_at_ms: i64) -> PromotionConsensusReceipt {
+        let signer = Ed25519Signer::from_secret_material(secret_material);
+        let payload = canonical_json_bytes(&super::PromotionConsensusReceiptPayload {
+            receipt_id: "receipt:test",
+            approval_set_id: "approval-set:test",
+            verdict_id: "approval-verdict:test",
+            ledger_id: "approval-ledger:test",
+            threshold_met: true,
+            vote_count: 2,
+            threshold_required: 2,
+            created_at_ms,
+        })
+        .unwrap();
+        let signature = signer.sign(&payload);
+        PromotionConsensusReceipt {
+            receipt_id: "receipt:test".to_string(),
+            approval_set_id: "approval-set:test".to_string(),
+            verdict_id: "approval-verdict:test".to_string(),
+            ledger_id: "approval-ledger:test".to_string(),
+            threshold_met: true,
+            vote_count: 2,
+            threshold_required: 2,
+            receipt_signature_hex: signature.signature_hex,
+            receipt_signer_key_id: signature.key_id,
+            receipt_signer_public_key_hex: signer.public_key_hex().to_string(),
+            created_at_ms,
+        }
     }
 
     fn suspicious_event(event_id: &str) -> TelemetryEvent {
@@ -1332,6 +1922,62 @@ mod tests {
     }
 
     #[test]
+    fn critical_severity_promotion_starts_pending_human_approval() {
+        let root = unique_temp_dir("pending");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary =
+            ready_canary_report_with_severity(&config, control_candidate(), Severity::Critical);
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let lookup = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+
+        assert_eq!(
+            lookup.report.status,
+            ProductionPromotionStatus::HumanApprovalPending
+        );
+        assert_eq!(
+            lookup.report.recommendation,
+            ProductionPromotionRecommendation::PendingHumanApproval
+        );
+        assert_eq!(lookup.report.approval_severity, Some(Severity::Critical));
+        assert!(lookup.report.pending_review.is_some());
+        assert!(
+            render_production_promotion_report(&lookup.report).contains("PENDING HUMAN APPROVAL")
+        );
+    }
+
+    #[test]
+    fn non_critical_promotion_starts_active() {
+        let root = unique_temp_dir("active-high");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary =
+            ready_canary_report_with_severity(&config, control_candidate(), Severity::High);
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let lookup = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+
+        assert_eq!(lookup.report.status, ProductionPromotionStatus::Active);
+        assert_eq!(
+            lookup.report.recommendation,
+            ProductionPromotionRecommendation::Observing
+        );
+    }
+
+    #[test]
     fn promotion_auto_rollback_triggers_on_promoted_only_detection() {
         let root = unique_temp_dir("rollback");
         let results_dir = root.join("promotions");
@@ -1373,6 +2019,255 @@ mod tests {
                 .iter()
                 .any(|result| result.name == "promoted_only_rate" && !result.passed)
         );
+    }
+
+    #[test]
+    fn pending_promotion_requires_explicit_approval_before_events() {
+        let root = unique_temp_dir("pending-event");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary =
+            ready_canary_report_with_severity(&config, control_candidate(), Severity::Critical);
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let started = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+        let error = harness
+            .ingest_event(
+                &started.record.promotion_id,
+                &suspicious_event("evt-pending"),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            super::ProductionPromotionError::RunNotActive { .. }
+        ));
+    }
+
+    #[test]
+    fn pending_promotion_can_be_approved_and_persists_votes_and_receipt() {
+        let root = unique_temp_dir("approve");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary =
+            ready_canary_report_with_severity(&config, control_candidate(), Severity::Critical);
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let started = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+        let vote_a = signed_vote(
+            &started.record.promotion_id,
+            "alpha",
+            1_700_000_000_500,
+            "ledger-entry-a",
+        );
+        let vote_b = signed_vote(
+            &started.record.promotion_id,
+            "bravo",
+            1_700_000_000_501,
+            "ledger-entry-b",
+        );
+        let receipt = signed_receipt("receipt-signer", 1_700_000_000_502);
+
+        let approved = harness
+            .approve_pending_run(
+                &started.record.promotion_id,
+                vec![vote_a.clone(), vote_b.clone()],
+                Some(receipt.clone()),
+                "approved by operator",
+            )
+            .unwrap();
+        assert_eq!(approved.report.status, ProductionPromotionStatus::Active);
+        assert!(approved.report.pending_review.is_none());
+        assert_eq!(
+            approved.report.approval_votes,
+            vec![vote_a.clone(), vote_b.clone()]
+        );
+        assert_eq!(approved.report.consensus_receipt, Some(receipt.clone()));
+
+        let reloaded = harness
+            .load_run(&started.record.promotion_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.report.approval_votes, vec![vote_a, vote_b]);
+        assert_eq!(reloaded.report.consensus_receipt, Some(receipt));
+        let rendered = render_production_promotion_report(&reloaded.report);
+        assert!(rendered.contains("Approval votes:"));
+        assert!(rendered.contains("Consensus receipt:"));
+    }
+
+    #[test]
+    fn approving_non_pending_promotion_fails() {
+        let root = unique_temp_dir("approve-active");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary =
+            ready_canary_report_with_severity(&config, control_candidate(), Severity::High);
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let started = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+        let error = harness
+            .approve_pending_run(
+                &started.record.promotion_id,
+                vec![signed_vote(
+                    &started.record.promotion_id,
+                    "alpha",
+                    1_700_000_000_500,
+                    "ledger-entry-a",
+                )],
+                None,
+                "should fail",
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            super::ProductionPromotionError::RunNotPending { .. }
+        ));
+    }
+
+    #[test]
+    fn pending_promotions_can_still_be_halted_or_rolled_back() {
+        let root = unique_temp_dir("pending-finalize");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary =
+            ready_canary_report_with_severity(&config, control_candidate(), Severity::Critical);
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config.clone(),
+            &results_dir,
+        )
+        .unwrap();
+        let started = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+        let halted = harness
+            .halt_run(&started.record.promotion_id, "operator requested stop")
+            .unwrap();
+        assert_eq!(halted.report.status, ProductionPromotionStatus::Halted);
+
+        let second_root = unique_temp_dir("pending-rollback");
+        let second_results = second_root.join("promotions");
+        let second_ready_canary =
+            ready_canary_report_with_severity(&config, control_candidate(), Severity::Critical);
+        let (second_canaries_dir, second_canary_run_id) =
+            persist_ready_canary(&second_root, &second_ready_canary);
+        let second_harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            promotion_config(),
+            &second_results,
+        )
+        .unwrap();
+        let second_started = second_harness
+            .start_run(&second_canaries_dir, &second_canary_run_id)
+            .unwrap();
+        let rolled_back = second_harness
+            .rollback_run(&second_started.record.promotion_id, "operator rollback")
+            .unwrap();
+        assert_eq!(
+            rolled_back.report.status,
+            ProductionPromotionStatus::RolledBack
+        );
+    }
+
+    #[test]
+    fn quorum_gate_and_signature_helpers_behave_as_expected() {
+        let advisory = PromotionQuorumGateConfig::default();
+        assert!(validate_quorum_gate(&[], &advisory).is_ok());
+
+        let vote_a = signed_vote(
+            "promotion:test",
+            "alpha",
+            1_700_000_000_600,
+            "ledger-entry-a",
+        );
+        let vote_b = signed_vote(
+            "promotion:test",
+            "bravo",
+            1_700_000_000_601,
+            "ledger-entry-b",
+        );
+        assert!(verify_vote_signature(&vote_a, "promotion:test"));
+        let mut tampered_vote = vote_a.clone();
+        tampered_vote.signature_hex = "deadbeef".to_string();
+        assert!(!verify_vote_signature(&tampered_vote, "promotion:test"));
+
+        let thresholded = PromotionQuorumGateConfig {
+            required_threshold: Some(2),
+            required_voter_ids: vec![vote_a.voter_id.clone()],
+        };
+        assert!(validate_quorum_gate(&[vote_a.clone(), vote_b.clone()], &thresholded).is_ok());
+        assert!(matches!(
+            validate_quorum_gate(std::slice::from_ref(&vote_a), &thresholded),
+            Err(super::ProductionPromotionError::QuorumNotMet { .. })
+        ));
+
+        let receipt = signed_receipt("receipt-signer", 1_700_000_000_602);
+        assert!(verify_consensus_receipt_signature(&receipt));
+        let mut tampered_receipt = receipt.clone();
+        tampered_receipt.receipt_signature_hex = "deadbeef".to_string();
+        assert!(!verify_consensus_receipt_signature(&tampered_receipt));
+    }
+
+    #[test]
+    fn pending_approval_respects_persisted_quorum_gate_configuration() {
+        let root = unique_temp_dir("quorum-block");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary =
+            ready_canary_report_with_severity(&config, control_candidate(), Severity::Critical);
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let started = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+        let mut pending = harness
+            .load_run(&started.record.promotion_id)
+            .unwrap()
+            .unwrap();
+        pending.report.quorum_gate_config = Some(PromotionQuorumGateConfig {
+            required_threshold: Some(2),
+            required_voter_ids: Vec::new(),
+        });
+        harness.store.persist(&pending.report).unwrap();
+
+        let error = harness
+            .approve_pending_run(
+                &started.record.promotion_id,
+                vec![signed_vote(
+                    &started.record.promotion_id,
+                    "alpha",
+                    1_700_000_000_700,
+                    "ledger-entry-a",
+                )],
+                None,
+                "insufficient quorum",
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            super::ProductionPromotionError::QuorumNotMet { .. }
+        ));
     }
 
     #[test]

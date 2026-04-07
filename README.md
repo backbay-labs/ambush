@@ -58,6 +58,8 @@ Async investigation and correlation still matter, but they are now follow-on wor
                    async side lane: investigation / correlation / operator context
 ```
 
+Canonical `swarm_finding` forwarding and replayable notification routing now sit on that runtime as optional outbound sinks configured from repo-owned YAML. The operator and configuration details live in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
 ## Design Principles
 
 1. **Rust on the critical path.** Detection, policy, response, and receipts stay in one language and one type system.
@@ -71,12 +73,14 @@ Async investigation and correlation still matter, but they are now follow-on wor
 The repo currently contains three kinds of material:
 
 - **Active Rust crates** in `crates/`
-- **Legacy Python/reference material** in `kernel/` and `pyproject.toml`
+- **Archived legacy material** removed in `v1.28` from the live tree
 - **Copied upstream references** in `vendor/reference/`
 
 The canonical docs for the new direction are:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+- [docs/DR-RUNBOOK.md](docs/DR-RUNBOOK.md)
 - [docs/ROADMAP.md](docs/ROADMAP.md)
 - [docs/decisions/0001-rust-first-runtime.md](docs/decisions/0001-rust-first-runtime.md)
 - [docs/REFERENCE-STATUS.md](docs/REFERENCE-STATUS.md)
@@ -99,13 +103,11 @@ swarm-team-six/
 |   |-- swarm-spine/       # envelopes and receipt chain
 |   |-- swarm-crypto/      # signing, hashing, merkle helpers
 |   |-- swarm-consensus/   # deferred/optional advanced governance
-|   +-- swarm-bridge/      # legacy compatibility shim only
 |
 |-- docs/
 |-- rulesets/
 |-- vendor/reference/      # copied upstream inspiration, not active deps
-|-- kernel/                # legacy reference area
-+-- pyproject.toml         # legacy reference area
++-- .planning/             # milestone planning and archive artifacts
 ```
 
 ## Vendor References

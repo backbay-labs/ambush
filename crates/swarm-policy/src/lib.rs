@@ -33,6 +33,9 @@ pub struct ApprovalContext {
     pub live_mode: bool,
     /// Receipt or checkpoint identifiers already associated with the request.
     pub receipt_chain: Vec<String>,
+    /// Optional request correlation ID for structured logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
     /// Wall-clock timestamp in unix milliseconds.
     pub now_ms: i64,
 }

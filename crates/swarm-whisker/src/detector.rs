@@ -1,8 +1,13 @@
 //! Detection strategies that Whiskers execute on each telemetry event.
 
+use crate::{ProfileValidationError, validate_confidence_thresholds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use swarm_core::pheromone::ThreatClass;
+pub use swarm_core::telemetry::{
+    AuthenticationEventData, DnsQueryEvent, NetworkConnectEvent, ProcessStartEvent,
+    RegistryAccessEvent, TelemetryEvent, TelemetryPayload,
+};
 use swarm_core::types::Severity;
 
 /// Trait for pluggable detection strategies.
@@ -14,45 +19,6 @@ pub trait DetectionStrategy: Send + Sync {
 
     /// Evaluate a single telemetry event. Returns findings (possibly empty).
     fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding>;
-}
-
-/// A normalized telemetry event from the environment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TelemetryEvent {
-    pub source: String,
-    pub event_id: String,
-    pub timestamp: i64,
-    pub host_id: Option<String>,
-    pub payload: TelemetryPayload,
-}
-
-/// Normalized payload kinds handled by the first detector slice.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TelemetryPayload {
-    ProcessStart(ProcessStartEvent),
-    NetworkConnect(NetworkConnectEvent),
-}
-
-/// Normalized process execution event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProcessStartEvent {
-    pub parent_process: String,
-    pub process_name: String,
-    pub command_line: String,
-    pub user: Option<String>,
-}
-
-/// Normalized outbound network event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NetworkConnectEvent {
-    pub process_name: String,
-    pub destination_ip: String,
-    pub destination_port: u16,
-    pub protocol: String,
 }
 
 /// A concrete structured finding produced by a detector.
@@ -103,22 +69,19 @@ pub struct SuspiciousProcessTreeDetector {
 
 impl Default for SuspiciousProcessTreeDetector {
     fn default() -> Self {
-        Self::from_profile(SuspiciousProcessTreeProfile::default())
+        match Self::from_profile(SuspiciousProcessTreeProfile::default()) {
+            Ok(detector) => detector,
+            Err(error) => panic!("default SuspiciousProcessTreeProfile is invalid: {error}"),
+        }
     }
 }
 
 impl SuspiciousProcessTreeDetector {
-    pub fn new(high_confidence_threshold: f64, medium_confidence_threshold: f64) -> Self {
-        Self {
-            suspicious_parents: default_suspicious_parents(),
-            suspicious_children: default_suspicious_children(),
-            high_confidence_threshold,
-            medium_confidence_threshold,
-        }
-    }
-
-    pub fn from_profile(profile: SuspiciousProcessTreeProfile) -> Self {
-        Self {
+    pub fn from_profile(
+        profile: SuspiciousProcessTreeProfile,
+    ) -> Result<Self, ProfileValidationError> {
+        profile.validate()?;
+        Ok(Self {
             suspicious_parents: profile
                 .suspicious_parents
                 .into_iter()
@@ -131,6 +94,15 @@ impl SuspiciousProcessTreeDetector {
                 .collect(),
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
+        })
+    }
+
+    pub fn new(high_confidence_threshold: f64, medium_confidence_threshold: f64) -> Self {
+        Self {
+            suspicious_parents: default_suspicious_parents(),
+            suspicious_children: default_suspicious_children(),
+            high_confidence_threshold,
+            medium_confidence_threshold,
         }
     }
 
@@ -200,6 +172,16 @@ impl SuspiciousProcessTreeDetector {
     }
 }
 
+impl SuspiciousProcessTreeProfile {
+    pub fn validate(&self) -> Result<(), ProfileValidationError> {
+        validate_confidence_thresholds(
+            "SuspiciousProcessTreeProfile",
+            self.high_confidence_threshold,
+            self.medium_confidence_threshold,
+        )
+    }
+}
+
 impl DetectionStrategy for SuspiciousProcessTreeDetector {
     fn id(&self) -> &str {
         "suspicious_process_tree"
@@ -210,7 +192,10 @@ impl DetectionStrategy for SuspiciousProcessTreeDetector {
             TelemetryPayload::ProcessStart(process) => {
                 self.process_match(event, process).into_iter().collect()
             }
-            TelemetryPayload::NetworkConnect(_) => Vec::new(),
+            TelemetryPayload::NetworkConnect(_)
+            | TelemetryPayload::DnsQuery(_)
+            | TelemetryPayload::RegistryAccess(_)
+            | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
         }
     }
 }
@@ -238,6 +223,7 @@ fn default_medium_confidence_threshold() -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         DetectionStrategy, ProcessStartEvent, SuspiciousProcessTreeDetector,
@@ -299,7 +285,8 @@ mod tests {
             suspicious_children: vec!["curl".to_string()],
             high_confidence_threshold: 0.9,
             medium_confidence_threshold: 0.7,
-        });
+        })
+        .expect("profile should be valid");
         let event = TelemetryEvent {
             source: "synthetic".to_string(),
             event_id: "evt-3".to_string(),

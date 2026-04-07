@@ -1306,7 +1306,7 @@ fn short_digest(value: &str) -> String {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("time went backwards")
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -1393,6 +1393,7 @@ struct EvolutionGovernanceReviewPacketIndex {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction,
@@ -1447,7 +1448,7 @@ mod tests {
         path
     }
 
-    fn copy_experiment_fixture(root: &PathBuf, name: &str) -> PathBuf {
+    fn copy_experiment_fixture(root: &std::path::Path, name: &str) -> PathBuf {
         let path = root.join(format!("{name}.yaml"));
         let raw = fs::read_to_string(office_control_experiment()).unwrap();
         let mut manifest: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
@@ -1505,7 +1506,7 @@ mod tests {
 
         let replay = DefaultReplayHarness::from_path(ruleset_path(), &replay_dir).unwrap();
         let verification = replay
-            .evaluate_verification_path(office_control_experiment(), &verification_dir)
+            .evaluate_verification_path(&base_experiment, &verification_dir)
             .await
             .unwrap();
         let proofs =
@@ -1517,7 +1518,7 @@ mod tests {
         let scorecard = scorecards
             .create_scorecard(
                 &replay,
-                office_control_experiment(),
+                &base_experiment,
                 &experiment_dir,
                 &verification_dir,
                 &verification.report.verification_id,

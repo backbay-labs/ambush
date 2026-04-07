@@ -1,7 +1,7 @@
 # Swarm Team Six: Configuration Reference
 
 > Hunt mission YAML format, tuning parameters, and environment variables.  
-> Last updated: 2026-04-04
+> Last updated: 2026-04-07
 
 ---
 
@@ -16,13 +16,35 @@ The config is loaded at startup and validated fail-closed: invalid configuration
 The current production slice is much narrower than the historical mission schema below. The live Rust runtime reads these repository-owned sections today:
 
 ```yaml
+schema_version: 1
+
 runtime:
   mode: detect_only | live_response
   telemetry_sources:
     - name: synthetic-process
       subject: telemetry.synthetic.process
+    - name: cloudtrail-primary
+      bridge:
+        kind: cloud_trail
+        path: data/cloudtrail.jsonl
+    - name: generic-json-primary
+      bridge:
+        kind: generic_json
+        path: data/generic-events.jsonl
+        mapping:
+          event_id_path: "/meta/id"
+          timestamp_path: "/meta/timestamp"
+          host_id_path: "/meta/host"
+          payload:
+            kind: process_start
+            parent_process_path: "/proc/parent"
+            process_name_path: "/proc/name"
+            command_line_path: "/proc/cmd"
   max_in_flight_actions: 4
+  drain_timeout_ms: 30000
   require_durable_live_response: true
+  max_heap_pressure: 0.90
+  secret_dir: /var/run/swarm-secrets
 
 detection:
   strategy: suspicious_process_tree
@@ -42,6 +64,43 @@ pheromone:
 policy:
   human_gate_severity: HIGH
   lease_ttl_ms: 60000
+
+response_adapter:
+  kind: sandbox | http_edr | webhook
+  endpoint: https://edr.example/api/actions   # http_edr only
+  url: https://hooks.example/swarm           # webhook only
+  auth_token: "@secret:edr-token"            # or @secret:env:SWARM_WEBHOOK_TOKEN
+  timeout_ms: 5000
+  dead_letter_path: ./dead-letter.jsonl
+
+siem_forward:
+  kind: splunk_hec | elk_bulk | chronicle
+  endpoint: https://siem.example/ingest
+  auth_token: "@secret:siem-token"           # Splunk and Chronicle
+  index: swarm-findings                      # elk_bulk only
+  customer_id: customer-123                  # chronicle only
+  timeout_ms: 5000
+  dead_letter_path: ./siem-dead-letter.jsonl
+
+notification_channels:
+  pager:
+    target_url: https://hooks.example/swarm/pager
+    auth_token: "@secret:notify-token"
+    timeout_ms: 5000
+    rate_limit:
+      max_notifications: 5
+      window_ms: 60000
+    quiet_hours:
+      start_hour_utc: 0
+      end_hour_utc: 6
+    dead_letter_path: ./notification-pager.jsonl
+
+notification_routing:
+  dedup_window_ms: 1000
+  rules:
+    - min_severity: HIGH
+      threat_class: execution
+      channels: [pager]
 
 audit:
   bundle_store:
@@ -83,6 +142,84 @@ correlation:
 - `min_shared_keys`: minimum overlapping correlation keys required for inclusion.
 - `candidate_limit`: how many recent investigation bundles to scan when assembling one incident.
 - `incident_store`: where correlated incidents are persisted for operator review.
+
+### Schema Versioning
+
+- `schema_version` is now required for repo-owned runtime config. The current compiled schema is `1`.
+- The loader still migrates the immediate legacy config shape that omitted `schema_version`, and it logs the migration steps through structured runtime logging.
+- Future or unrecognized schema versions are rejected fail closed before the runtime starts.
+
+### Runtime Lifecycle
+
+- `drain_timeout_ms`: maximum time the serve-mode runtime waits for accepted ingest work to finish after entering drain mode.
+- `max_heap_pressure`: readiness threshold for `swarm_heap_pressure_ratio`. When the measured ratio exceeds this value, `/readyz` returns HTTP 503.
+- `secret_dir`: optional directory used for file-backed `@secret:` references. Relative paths resolve relative to the config file location.
+
+Serve mode now exposes separate lifecycle routes:
+
+- `/startupz`: startup-only checks for schema compatibility, substrate readiness, and telemetry-source presence
+- `/readyz`: steady-state readiness, including detector health, substrate/replay health, drain mode, and heap-pressure gating
+- `/livez`: simple liveness that stays green while the process is running
+- `/healthz`: legacy readiness-compatible status surface with component detail
+- `/prestop`: Kubernetes-friendly drain hook that stops new ingest work, waits for in-flight work up to `drain_timeout_ms`, and then triggers clean shutdown
+
+### Bridge-Backed Telemetry Sources
+
+- A source may define either `subject` for the existing runtime ingest path or `bridge` for a bridge-backed source.
+- `bridge.kind: cloud_trail` loads CloudTrail JSON or JSON Lines records from `path` and normalizes them into shared telemetry.
+- `bridge.kind: generic_json` loads arbitrary JSON records from `path` and maps them through JSON Pointer fields declared under `mapping`.
+- `mapping.payload.kind` currently supports `process_start`, `network_connect`, `dns_query`, `registry_access`, and `authentication_event`.
+- JSON Pointer paths must start with `/`; invalid pointers are rejected at config load time.
+
+### Adapter Secrets
+
+`http_edr.auth_token`, `webhook.auth_token`, `siem_forward.auth_token`, and `notification_channels.*.auth_token` support direct values or `@secret:` references:
+
+- `@secret:file-name` reads `file-name` from `runtime.secret_dir`
+- `@secret:env:VARIABLE_NAME` reads the token from the named environment variable
+
+Mounted secret files are trimmed for trailing newlines so Kubernetes-style projected secrets work without wrapper scripts. When `runtime.secret_dir` is configured, serve mode watches that directory and reloads adapter secrets without process restart.
+
+Example:
+
+```yaml
+schema_version: 1
+runtime:
+  mode: live_response
+  telemetry_sources:
+    - name: synthetic-process
+      subject: telemetry.synthetic.process
+  max_in_flight_actions: 4
+  drain_timeout_ms: 30000
+  require_durable_live_response: true
+  max_heap_pressure: 0.90
+  secret_dir: ./secrets
+
+response_adapter:
+  kind: webhook
+  url: https://hooks.example/swarm
+  auth_token: "@secret:env:SWARM_WEBHOOK_TOKEN"
+```
+
+### SIEM Finding Forwarding
+
+- `siem_forward` is optional and additive. It does not replace the existing `response_adapter` path for live response actions.
+- `kind: splunk_hec` wraps the canonical `swarm_finding` payload in a Splunk HEC event envelope and uses `Authorization: Splunk ...`.
+- `kind: elk_bulk` emits NDJSON bulk-index records and supports an optional bearer token plus a required target `index`.
+- `kind: chronicle` posts the same canonical `swarm_finding` payload inside the Chronicle transport envelope with optional `customer_id`.
+- Every variant reuses the existing retry, circuit-breaker, and dead-letter behavior from `swarm-response`.
+
+### Notification Routing
+
+- `notification_channels` is a named map of webhook-like notification sinks owned by repo config.
+- Each channel declares `target_url`, optional `auth_token`, `timeout_ms`, in-memory `rate_limit`, optional UTC `quiet_hours`, and a per-channel dead-letter journal path.
+- `notification_routing.rules` matches findings by minimum severity, optional `threat_class`, and optional UTC hour window, then fans matching findings out to one or more named channels.
+- Findings with the same `strategy_id` and `ThreatClass` are deduplicated for `dedup_window_ms` and emitted as one `swarm_notification` aggregate containing count, time range, highest severity, and a sample canonical finding.
+- Suppressed notifications are written to the channel dead-letter journal and can be listed or replayed through the authenticated operator endpoint `GET|POST /v1/notifications/dead-letter/{channel}`.
+
+### Disaster Recovery
+
+The production recovery procedures for JetStream loss, dead-letter disk-full, stuck-open circuit breakers, and blanket policy deny are documented in [docs/DR-RUNBOOK.md](DR-RUNBOOK.md).
 
 ### Operator Review Surface
 
