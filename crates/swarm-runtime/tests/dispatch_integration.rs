@@ -112,7 +112,7 @@ async fn dispatch_sandbox_via_config_records_success_receipt() -> Result<(), Box
     let runtime = SwarmRuntime::new(
         config.runtime.mode,
         StaticApprovalGate::default(),
-        DispatchingExecutor::from_config(config.response_adapter.clone())?,
+        DispatchingExecutor::from_config(config.response_adapter.clone(), None)?,
     );
     let request = sample_request(
         ResponseAction::DeployDecoy {
@@ -141,7 +141,7 @@ async fn guard_blocks_dispatched_executor_before_execution() -> Result<(), Box<d
     let runtime = SwarmRuntime::new(
         RuntimeMode::DetectOnly,
         StaticApprovalGate::default(),
-        DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox)?,
+        DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox, None)?,
     )
     .with_guard_pipeline(GuardPipeline::new(vec![Box::new(FixedGuard {
         allow: false,
@@ -173,7 +173,7 @@ async fn policy_deny_skips_dispatched_executor() -> Result<(), Box<dyn Error>> {
     let runtime = SwarmRuntime::new(
         RuntimeMode::LiveResponse,
         StaticApprovalGate::default(),
-        DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox)?,
+        DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox, None)?,
     );
     let request = sample_request(
         ResponseAction::IsolateHost {
@@ -211,7 +211,7 @@ async fn timeout_from_dispatched_webhook_records_failure() -> Result<(), Box<dyn
                 circuit_breaker: CircuitBreakerConfig::default(),
                 dead_letter_path: "./dead-letter.jsonl".to_string(),
             },
-        })?,
+        }, None)?,
     );
     let request = sample_request(
         ResponseAction::DeployDecoy {

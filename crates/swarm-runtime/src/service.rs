@@ -479,6 +479,7 @@ where
             Some(NotificationRouter::new(
                 config.notification_channels.clone(),
                 config.notification_routing.clone(),
+                config.runtime.max_dead_letter_bytes,
             ))
         };
         Self {
@@ -1357,8 +1358,11 @@ where
 {
     /// Build the runtime stack from repository config using the configured response adapter.
     pub fn from_config(config: SwarmConfig, strategy: Strategy) -> Result<Self, ServiceError> {
-        let response = DispatchingExecutor::from_config(config.response_adapter.clone())
-            .map_err(|error| ServiceError::Runtime(crate::RuntimeError::Response(error)))?;
+        let response = DispatchingExecutor::from_config(
+            config.response_adapter.clone(),
+            config.runtime.max_dead_letter_bytes,
+        )
+        .map_err(|error| ServiceError::Runtime(crate::RuntimeError::Response(error)))?;
         Self::from_components(config, StaticApprovalGate::default(), response, strategy)
     }
 }

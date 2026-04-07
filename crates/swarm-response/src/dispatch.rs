@@ -20,12 +20,14 @@ pub struct DispatchingExecutor {
 }
 
 impl DispatchingExecutor {
-    pub fn from_config(config: ResponseAdapterConfig) -> Result<Self, ResponseError> {
+    pub fn from_config(
+        config: ResponseAdapterConfig,
+        max_dead_letter_bytes: Option<u64>,
+    ) -> Result<Self, ResponseError> {
         let inner = match config {
             ResponseAdapterConfig::Sandbox => AdapterInner::Sandbox(SandboxExecutor),
             ResponseAdapterConfig::HttpEdr { config } => {
-                // TODO: thread max_dead_letter_bytes from RuntimeSettings
-                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path, None).map_err(
+                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path, max_dead_letter_bytes).map_err(
                     |error| {
                         ResponseError::unavailable(
                             "http_edr",
@@ -44,8 +46,7 @@ impl DispatchingExecutor {
                 ))
             }
             ResponseAdapterConfig::Webhook { config } => {
-                // TODO: thread max_dead_letter_bytes from RuntimeSettings
-                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path, None).map_err(
+                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path, max_dead_letter_bytes).map_err(
                     |error| {
                         ResponseError::unavailable(
                             "webhook",
@@ -174,7 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_config_dispatches_to_simulated_receipt() {
-        let executor = DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox).unwrap();
+        let executor = DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox, None).unwrap();
         let request = ActionRequest {
             hunt_id: HuntId("hunt-1".to_string()),
             requested_by: AgentId("agent-1".to_string()),
@@ -210,7 +211,7 @@ mod tests {
                 circuit_breaker: CircuitBreakerConfig::default(),
                 dead_letter_path: "./dead-letter.jsonl".to_string(),
             },
-        })
+        }, None)
         .unwrap();
         let request = ActionRequest {
             hunt_id: HuntId("hunt-edr".to_string()),
@@ -260,7 +261,7 @@ mod tests {
                 circuit_breaker: CircuitBreakerConfig::default(),
                 dead_letter_path: "./dead-letter.jsonl".to_string(),
             },
-        })
+        }, None)
         .unwrap();
         let request = ActionRequest {
             hunt_id: HuntId("hunt-webhook".to_string()),

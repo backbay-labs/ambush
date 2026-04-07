@@ -90,14 +90,14 @@ impl NotificationRouter {
     pub fn new(
         channels: BTreeMap<String, NotificationChannelConfig>,
         routing: NotificationRoutingConfig,
+        max_dead_letter_bytes: Option<u64>,
     ) -> Self {
         let channels = channels
             .into_iter()
             .map(|(name, config)| {
-                // TODO: thread max_dead_letter_bytes from RuntimeSettings
                 let journal = Arc::new(DeadLetterJournal::from_path(
                     config.dead_letter_path.clone(),
-                    None,
+                    max_dead_letter_bytes,
                 ));
                 (
                     name,
@@ -577,6 +577,7 @@ mod tests {
                     channels: vec!["soc".to_string()],
                 }],
             },
+            None,
         );
 
         router
@@ -633,6 +634,7 @@ mod tests {
                     channels: vec!["soc".to_string()],
                 }],
             },
+            None,
         );
 
         router
