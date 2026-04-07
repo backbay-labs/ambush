@@ -345,6 +345,10 @@ impl IngestState {
         self.stack.load_full().service.config.pheromone.clone()
     }
 
+    pub fn current_response_adapter_config(&self) -> ResponseAdapterConfig {
+        self.stack.load_full().service.config.response_adapter.clone()
+    }
+
     pub fn detector_strategy_name(&self) -> String {
         self.detector.load_full().id().to_string()
     }
