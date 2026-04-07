@@ -239,6 +239,8 @@ pub trait PheromoneSubstrate: Send + Sync {
 
     async fn gc_evaporated(&self, now: i64) -> Result<usize, SubstrateError>;
 
+    async fn gc_expired_threat_intel(&self, now: i64) -> Result<usize, SubstrateError>;
+
     async fn health(&self) -> Result<SubstrateHealth, SubstrateError>;
 }
 
@@ -392,6 +394,14 @@ impl PheromoneSubstrate for ConfiguredPheromoneSubstrate {
             Self::InMemory(substrate) => substrate.gc_evaporated(now).await,
             Self::LocalJournal(substrate) => substrate.gc_evaporated(now).await,
             Self::JetStream(substrate) => substrate.gc_evaporated(now).await,
+        }
+    }
+
+    async fn gc_expired_threat_intel(&self, now: i64) -> Result<usize, SubstrateError> {
+        match self {
+            Self::InMemory(substrate) => substrate.gc_expired_threat_intel(now).await,
+            Self::LocalJournal(substrate) => substrate.gc_expired_threat_intel(now).await,
+            Self::JetStream(substrate) => substrate.gc_expired_threat_intel(now).await,
         }
     }
 
@@ -563,6 +573,22 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             !deposit.is_evaporated(now, policy.evaporation_threshold)
         });
         Ok(before - guard.len())
+    }
+
+    async fn gc_expired_threat_intel(&self, now: i64) -> Result<usize, SubstrateError> {
+        let mut guard = self
+            .threat_intel_entries
+            .write()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        let before = guard.len();
+        guard.retain(|_key, entry| entry.expires_at > now);
+        let purged = before - guard.len();
+        if purged > 0 {
+            tracing::info!(purged, "gc_expired_threat_intel complete");
+        } else {
+            tracing::debug!(purged, "gc_expired_threat_intel complete");
+        }
+        Ok(purged)
     }
 
     async fn health(&self) -> Result<SubstrateHealth, SubstrateError> {
@@ -762,6 +788,26 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
         });
         rewrite_jsonl(&self.journal_path, &guard)?;
         Ok(before - guard.len())
+    }
+
+    async fn gc_expired_threat_intel(&self, now: i64) -> Result<usize, SubstrateError> {
+        let mut guard = self
+            .threat_intel_entries
+            .write()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        let before = guard.len();
+        guard.retain(|_key, entry| entry.expires_at > now);
+        rewrite_jsonl(
+            &self.threat_intel_journal_path,
+            &guard.values().collect::<Vec<_>>(),
+        )?;
+        let purged = before - guard.len();
+        if purged > 0 {
+            tracing::info!(purged, "gc_expired_threat_intel complete");
+        } else {
+            tracing::debug!(purged, "gc_expired_threat_intel complete");
+        }
+        Ok(purged)
     }
 
     async fn health(&self) -> Result<SubstrateHealth, SubstrateError> {
@@ -1647,5 +1693,129 @@ mod tests {
         let _ = std::fs::remove_file(super::escalation_journal_path(&path));
         let _ = std::fs::remove_file(super::threat_class_config_journal_path(&path));
         let _ = std::fs::remove_file(super::threat_intel_journal_path(&path));
+    }
+
+    // --- Threat-intel GC tests ---
+
+    #[tokio::test]
+    async fn gc_expired_threat_intel_removes_expired_entries() {
+        let substrate = in_memory();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::Domain,
+                "expired.example.com",
+                0.9,
+                500,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::IpAddress,
+                "10.0.0.1",
+                0.8,
+                2000,
+            ))
+            .await
+            .unwrap();
+
+        let purged = substrate.gc_expired_threat_intel(1000).await.unwrap();
+        assert_eq!(purged, 1);
+
+        let expired = substrate
+            .query_threat_intel_entry(
+                &ThreatIntelIndicatorType::Domain,
+                "expired.example.com",
+                0,
+            )
+            .await
+            .unwrap();
+        assert!(expired.is_none());
+
+        let still_present = substrate
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::IpAddress, "10.0.0.1", 0)
+            .await
+            .unwrap();
+        assert!(still_present.is_some());
+    }
+
+    #[tokio::test]
+    async fn gc_expired_threat_intel_returns_zero_when_nothing_expired() {
+        let substrate = in_memory();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::Domain,
+                "active.example.com",
+                0.9,
+                2000,
+            ))
+            .await
+            .unwrap();
+
+        let purged = substrate.gc_expired_threat_intel(1000).await.unwrap();
+        assert_eq!(purged, 0);
+    }
+
+    #[tokio::test]
+    async fn local_journal_gc_expired_threat_intel_rewrites_file() {
+        let path = std::env::temp_dir().join("swarm-pheromone-gc-threat-intel.jsonl");
+        let escalation_path = super::escalation_journal_path(&path);
+        let config_path = super::threat_class_config_journal_path(&path);
+        let threat_intel_path = super::threat_intel_journal_path(&path);
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+
+        {
+            let substrate = LocalJournalPheromoneSubstrate::open(config.clone(), &path).unwrap();
+            substrate
+                .store_threat_intel_entry(sample_threat_intel_entry(
+                    ThreatIntelIndicatorType::Domain,
+                    "expired.example.com",
+                    0.9,
+                    500,
+                ))
+                .await
+                .unwrap();
+            substrate
+                .store_threat_intel_entry(sample_threat_intel_entry(
+                    ThreatIntelIndicatorType::IpAddress,
+                    "10.0.0.1",
+                    0.8,
+                    2000,
+                ))
+                .await
+                .unwrap();
+
+            let purged = substrate.gc_expired_threat_intel(1000).await.unwrap();
+            assert_eq!(purged, 1);
+        }
+
+        // Reopen from disk — only the unexpired entry should be present
+        let reopened = LocalJournalPheromoneSubstrate::open(config, &path).unwrap();
+
+        let expired = reopened
+            .query_threat_intel_entry(
+                &ThreatIntelIndicatorType::Domain,
+                "expired.example.com",
+                0,
+            )
+            .await
+            .unwrap();
+        assert!(expired.is_none());
+
+        let still_present = reopened
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::IpAddress, "10.0.0.1", 0)
+            .await
+            .unwrap();
+        assert!(still_present.is_some());
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(escalation_path);
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_file(threat_intel_path);
     }
 }

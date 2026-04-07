@@ -705,6 +705,52 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
         Ok(removed)
     }
 
+    async fn gc_expired_threat_intel(&self, now: i64) -> Result<usize, SubstrateError> {
+        let connection = self.ensure_connected().await?;
+        let mut keys = connection
+            .store
+            .keys()
+            .await
+            .map_err(|error| nats_error("list keys", error))?;
+        let mut purged = 0usize;
+
+        while let Some(entry) = keys.next().await {
+            let key = entry.map_err(|error| nats_error("stream keys", error))?;
+            if !is_threat_intel_key(&key) {
+                continue;
+            }
+
+            let Some(payload) = connection
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| nats_error("get value", error))?
+            else {
+                continue;
+            };
+
+            let location = format!("jetstream://{}/{}", self.bucket, key);
+            let intel_entry = serde_json::from_slice::<ThreatIntelEntry>(&payload)
+                .map_err(|source| SubstrateError::Decode { location, source })?;
+
+            if intel_entry.expires_at <= now {
+                connection
+                    .store
+                    .delete(&key)
+                    .await
+                    .map_err(|error| nats_error("delete value", error))?;
+                purged = purged.saturating_add(1);
+            }
+        }
+
+        if purged > 0 {
+            tracing::info!(purged, "gc_expired_threat_intel complete");
+        } else {
+            tracing::debug!(purged, "gc_expired_threat_intel complete");
+        }
+        Ok(purged)
+    }
+
     async fn health(&self) -> Result<SubstrateHealth, SubstrateError> {
         match self.ensure_connected().await {
             Ok(connection) => {
@@ -813,6 +859,10 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     }
 
     async fn gc_evaporated(&self, _now: i64) -> Result<usize, SubstrateError> {
+        Err(unsupported_backend())
+    }
+
+    async fn gc_expired_threat_intel(&self, _now: i64) -> Result<usize, SubstrateError> {
         Err(unsupported_backend())
     }
 
