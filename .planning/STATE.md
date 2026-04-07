@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.37
 milestone_name: milestone
-status: in_progress
-last_updated: "2026-04-07T23:11:47Z"
-last_activity: 2026-04-07 — Completed 117-01 (threat-intel GC across all backends)
+status: completed
+last_updated: "2026-04-07T23:14:31.408Z"
+last_activity: "2026-04-07 — Completed 117-02 (bridge resilience: stream timeout and empty-parent sentinel)"
 progress:
   total_phases: 8
-  completed_phases: 5
-  total_plans: 10
-  completed_plans: 10
-  percent: 25
+  completed_phases: 6
+  total_plans: 14
+  completed_plans: 12
+  percent: 50
 ---
 
 # State
@@ -24,12 +24,12 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 ## Current Position
 
-Phase: 117 (Substrate Durability And Bridge Resilience)
-Plan: 1/2
-Status: 117-01 complete (threat-intel GC), 117-02 pending
-Last activity: 2026-04-07 — Completed 117-01 (threat-intel GC across all backends)
+Phase: 117 (Substrate Durability And Bridge Resilience) — complete
+Plan: 2/2
+Status: Phase 117 complete, ready for Phase 118 or 119
+Last activity: 2026-04-07 — Completed 117-02 (bridge resilience: stream timeout and empty-parent sentinel)
 
-Progress: [####░░░░░░] 40% (1.5/4 phases)
+Progress: [#####░░░░░] 50% (2/4 phases)
 
 ## Memory
 
@@ -48,16 +48,19 @@ Progress: [####░░░░░░] 40% (1.5/4 phases)
 - gc_expired_threat_intel() added to PheromoneSubstrate trait and all 3 backends (InMemory, LocalJournal, JetStream).
 - LocalJournal threat-intel GC rewrites journal file to prevent unbounded disk growth (HARDEN-05).
 - JetStream threat-intel GC iterates intel-prefixed keys and deletes expired entries from KV store.
+- TetragonBridge::poll() now wraps stream.next() in tokio::time::timeout (default 30s) for reconnect on silent gRPC streams (HARDEN-06).
+- Mapper produces "<none>" sentinel for missing/empty parent_process; schema validation relaxed (HARDEN-07).
+- Phase 117 complete: HARDEN-04 through HARDEN-07 all closed.
 
 ## Phase Map
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
 | 116 | Agent Safety Hardening | HARDEN-01, HARDEN-02, HARDEN-03 | Complete |
-| 117 | Substrate Durability And Bridge Resilience | HARDEN-04, HARDEN-05, HARDEN-06, HARDEN-07 | In progress (1/2 plans) |
+| 117 | Substrate Durability And Bridge Resilience | HARDEN-04, HARDEN-05, HARDEN-06, HARDEN-07 | Complete |
 | 118 | Operational Hardening | HARDEN-08, HARDEN-09 | Not started |
 | 119 | Pheromone Test Suite | HARDEN-10 | Not started |
 
 ## Next Command
 
-`/gsd:execute-phase 117` (plan 117-02 pending) or `/gsd:plan-phase 118`
+`/gsd:execute-phase 118` or `/gsd:execute-phase 119`

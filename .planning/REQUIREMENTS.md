@@ -107,8 +107,8 @@
 
 #### Bridge Resilience
 
-- **HARDEN-06**: `TetragonBridge::poll()` wraps `stream.next().await` in `tokio::time::timeout()` with a configurable `event_timeout_secs` (default 30s); a timeout records a health error, increments `swarm_bridge_error_count`, and triggers reconnect-backoff instead of hanging indefinitely
-- **HARDEN-07**: `TetragonBridge` schema validation accepts `ProcessStartEvent` with an empty `parent_process` field (init-spawned processes have no parent) instead of rejecting it, using `"<none>"` as a sentinel value when the parent is absent
+- [x] **HARDEN-06**: `TetragonBridge::poll()` wraps `stream.next().await` in `tokio::time::timeout()` with a configurable `event_timeout_secs` (default 30s); a timeout records a health error, increments `swarm_bridge_error_count`, and triggers reconnect-backoff instead of hanging indefinitely
+- [x] **HARDEN-07**: `TetragonBridge` schema validation accepts `ProcessStartEvent` with an empty `parent_process` field (init-spawned processes have no parent) instead of rejecting it, using `"<none>"` as a sentinel value when the parent is absent
 
 #### Operational Gaps
 
@@ -201,8 +201,8 @@
 | HARDEN-03 | Phase 116, Plan 02 | Satisfied |
 | HARDEN-04 | 117-01 | Complete |
 | HARDEN-05 | 117-01 | Complete |
-| HARDEN-06 | Queued milestone v1.37.1 | Queued |
-| HARDEN-07 | Queued milestone v1.37.1 | Queued |
+| HARDEN-06 | 117-02 | Complete |
+| HARDEN-07 | 117-02 | Complete |
 | HARDEN-08 | Queued milestone v1.37.1 | Queued |
 | HARDEN-09 | Queued milestone v1.37.1 | Queued |
 | HARDEN-10 | Queued milestone v1.37.1 | Queued |
