@@ -23,6 +23,7 @@ pub struct AgentDispatcherConfig {
     pub tick_interval_ms: u64,
     pub max_agents: usize,
     pub enabled: bool,
+    pub agent_tick_timeout_ms: u64,
 }
 
 impl Default for AgentDispatcherConfig {
@@ -31,6 +32,7 @@ impl Default for AgentDispatcherConfig {
             tick_interval_ms: 100,
             max_agents: 16,
             enabled: true,
+            agent_tick_timeout_ms: 500,
         }
     }
 }
@@ -932,5 +934,156 @@ mod tests {
         )));
         assert!(encoded.contains("swarm_agent_role_shifts_total{role=\"stalker\"} 1"));
         assert!(encoded.contains("swarm_agent_health_transitions_total{role=\"stalker\"} 1"));
+    }
+
+    struct SlowMockAgent {
+        id: AgentId,
+        verifying_key: VerifyingKey,
+        delay: Duration,
+    }
+
+    impl SlowMockAgent {
+        fn new(id: &str, delay: Duration) -> Self {
+            let signing_key = SigningKey::from_bytes(&[9; 32]);
+            Self {
+                id: AgentId(id.to_string()),
+                verifying_key: signing_key.verifying_key(),
+                delay,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SwarmAgent for SlowMockAgent {
+        fn identity(&self) -> &VerifyingKey {
+            &self.verifying_key
+        }
+
+        fn id(&self) -> &AgentId {
+            &self.id
+        }
+
+        fn role(&self) -> AgentRole {
+            AgentRole::Whisker
+        }
+
+        async fn tick(&mut self, _env: &SwarmEnvironment) -> Result<Vec<SwarmAction>, SwarmError> {
+            tokio::time::sleep(self.delay).await;
+            Ok(vec![])
+        }
+
+        fn health(&self) -> AgentHealth {
+            AgentHealth::Healthy
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_marks_slow_agent_degraded_on_tick_timeout() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig {
+                tick_interval_ms: 5,
+                agent_tick_timeout_ms: 50,
+                ..AgentDispatcherConfig::default()
+            },
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        );
+        dispatcher
+            .register(Box::new(SlowMockAgent::new(
+                "slow-whisker",
+                Duration::from_millis(200),
+            )))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+
+        let snapshot = health_state.load_full();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].health, AgentHealth::Degraded);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_keeps_fast_agent_healthy_within_tick_timeout() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig {
+                tick_interval_ms: 5,
+                agent_tick_timeout_ms: 500,
+                ..AgentDispatcherConfig::default()
+            },
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        );
+        dispatcher
+            .register(Box::new(SlowMockAgent::new(
+                "fast-whisker",
+                Duration::from_millis(5),
+            )))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+
+        let snapshot = health_state.load_full();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].health, AgentHealth::Healthy);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_discards_actions_from_timed_out_agent() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig {
+                tick_interval_ms: 5,
+                agent_tick_timeout_ms: 50,
+                ..AgentDispatcherConfig::default()
+            },
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        );
+
+        // Register a slow agent -- its tick will time out so any actions would be discarded
+        dispatcher
+            .register(Box::new(SlowMockAgent::new(
+                "slow-whisker",
+                Duration::from_millis(200),
+            )))
+            .unwrap();
+
+        // Register a normal agent that emits a RoleShift -- should NOT see role shift broadcast
+        // from the slow agent (because slow agent's result is discarded)
+        let observer_events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "normal-whisker",
+                    AgentRole::Whisker,
+                    AgentHealth::Healthy,
+                    Arc::clone(&ticks),
+                    false,
+                )
+                .with_event_log(Arc::clone(&observer_events)),
+            ))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+
+        // The slow agent should be degraded
+        let snapshot = health_state.load_full();
+        let slow_entry = snapshot.iter().find(|e| e.id == "slow-whisker").unwrap();
+        assert_eq!(slow_entry.health, AgentHealth::Degraded);
+    }
+
+    #[test]
+    fn default_agent_tick_timeout_is_500() {
+        let config = AgentDispatcherConfig::default();
+        assert_eq!(config.agent_tick_timeout_ms, 500);
     }
 }

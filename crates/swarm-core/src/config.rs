@@ -86,6 +86,10 @@ pub struct RuntimeSettings {
     /// Optional directory holding mounted secret files used by `@secret:` references.
     #[serde(default)]
     pub secret_dir: Option<String>,
+    /// Maximum time in milliseconds for a single agent tick before the dispatcher
+    /// marks the agent Degraded and skips that cycle.
+    #[serde(default = "default_agent_tick_timeout_ms")]
+    pub agent_tick_timeout_ms: u64,
 }
 
 /// One configured telemetry source.
@@ -1800,6 +1804,10 @@ const fn default_recent_decisions_limit() -> usize {
     20
 }
 
+const fn default_agent_tick_timeout_ms() -> u64 {
+    500
+}
+
 const fn default_drain_timeout_ms() -> u64 {
     30_000
 }
@@ -2049,6 +2057,7 @@ mod tests {
                 require_durable_live_response: true,
                 max_heap_pressure: 0.90,
                 secret_dir: None,
+                agent_tick_timeout_ms: 500,
             },
             detection: super::DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
