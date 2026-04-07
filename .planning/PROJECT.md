@@ -8,9 +8,27 @@ Swarm Team Six is a Rust-first threat detection and controlled live-response run
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
+## Current Milestone: v1.37.1 Runtime Hardening And Audit Debt
+
+**Goal:** Fix critical infrastructure bugs and test coverage gaps identified during the v1.31-v1.37 audit before adding more features.
+
+**Target features:**
+- Sign pheromone deposits with agent keys; reject unsigned deposits at the substrate
+- Add configurable tick timeout to prevent hanging agents from blocking the dispatcher
+- Implement threat-intel GC on all three substrate backends (in-memory, local-journal, JetStream)
+- Add gRPC stream timeout to TetragonBridge to detect silent network partitions
+- Fix empty parent process rejection in Tetragon schema validation
+- Implement hot secret rotation via independent secret-dir file-watch
+- Add size-based dead-letter journal rotation
+- Create a focused swarm-pheromone test suite (15+ tests)
+
+**Queued after this:**
+- `v1.38 Fileless Execution And Behavioral Baselines`
+- `v1.39 Adversarial Robustness And Evasion Bench`
+
 ## Current State
 
-`v1.33 Telemetry Bridge Architecture` shipped on 2026-04-07, `v1.34 Queryable Substrate And Threat Intel Cache` completed on 2026-04-07, `v1.35 Production Hardening And Kubernetes Lifecycle` shipped on 2026-04-07, `v1.36 SIEM/SOAR Forward And Alert Routing` shipped on 2026-04-07, and `v1.37 Persistence And Supply Chain Detection` shipped on 2026-04-07. There is no active milestone right now, and the roadmap is ready for `v1.38 Fileless Execution And Behavioral Baselines`.
+`v1.37 Persistence And Supply Chain Detection` shipped on 2026-04-07. The v1.31-v1.37 audit identified critical infrastructure debt (unsigned deposits, missing GC, no tick timeout) that should be resolved before adding fileless detection capabilities.
 
 **What is now real:**
 - `swarm-detect` now runs a keyed multi-agent registry during serve mode with runtime role-shift propagation, peer-finding snapshots, and shared lifecycle telemetry.
