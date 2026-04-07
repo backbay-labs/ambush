@@ -241,8 +241,9 @@ impl AgentDispatcher {
                     .collect(),
             };
             let tick_role = agent.role();
-            match agent.tick(&env).await {
-                Ok(actions) => {
+            let tick_timeout = Duration::from_millis(self.config.agent_tick_timeout_ms);
+            match tokio::time::timeout(tick_timeout, agent.tick(&env)).await {
+                Ok(Ok(actions)) => {
                     self.health_overrides.remove(agent_id);
                     tracing::info!(
                         agent_id = %agent_id,
@@ -257,13 +258,24 @@ impl AgentDispatcher {
                         actions,
                     });
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     tracing::warn!(
                         agent_id = %agent_id,
                         role = agent_role_label(tick_role),
                         reason = %error,
                         module = module_path!(),
                         "agent tick failed"
+                    );
+                    self.health_overrides
+                        .insert(agent_id.clone(), AgentHealth::Degraded);
+                }
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        role = agent_role_label(tick_role),
+                        timeout_ms = self.config.agent_tick_timeout_ms,
+                        module = module_path!(),
+                        "agent tick timed out, marking degraded"
                     );
                     self.health_overrides
                         .insert(agent_id.clone(), AgentHealth::Degraded);
