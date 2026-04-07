@@ -203,8 +203,8 @@
 | HARDEN-05 | 117-01 | Complete |
 | HARDEN-06 | 117-02 | Complete |
 | HARDEN-07 | 117-02 | Complete |
-| HARDEN-08 | Queued milestone v1.37.1 | Queued |
-| HARDEN-09 | Queued milestone v1.37.1 | Queued |
+| HARDEN-08 | Phase 118, Plan 01 | Complete |
+| HARDEN-09 | Phase 118, Plan 02 | Complete |
 | HARDEN-10 | Queued milestone v1.37.1 | Queued |
 | FILELESS-01 | Queued milestone v1.38 | Queued |
 | FILELESS-02 | Queued milestone v1.38 | Queued |
