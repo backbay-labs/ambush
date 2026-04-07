@@ -128,11 +128,10 @@ Plans:
   1. The `SwarmSecretProvider` file-watch thread monitors `secret_dir` independently; when a secret file changes, only the affected `@secret:` references are re-resolved and injected into active adapter configs without triggering a full config reload
   2. Response and notification dead-letter journals rotate when the file exceeds `max_dead_letter_bytes` from `RuntimeSettings`; the rotated file receives a timestamp suffix and the active journal is truncated to an empty state
   3. The runtime can cycle through at least one secret rotation and one dead-letter rotation in integration conditions without losing in-flight deposits or notification records
-**Plans**: 2 plans
+**Plans**: 2/2 plans
 
-Plans:
-- [ ] 116-01-PLAN.md -- Enforce signed pheromone deposits across substrate and agents
-- [ ] 116-02-PLAN.md -- Add tick timeout enforcement and structured warnings for unhandled actions
+- [ ] 118-01-PLAN.md -- Independent secret-dir file-watch for hot rotation
+- [ ] 118-02-PLAN.md -- Size-based dead-letter journal rotation
 
 ### Phase 119: Pheromone Test Suite
 **Goal**: `swarm-pheromone` has a focused, self-contained test suite that exercises the substrate trait contract independently of the runtime
@@ -170,7 +169,7 @@ Plans:
 | 115. Persistence And Supply Chain Integration Proof | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 116. Agent Safety Hardening | 2/2 | Complete    | 2026-04-07 | - |
 | 117. Substrate Durability And Bridge Resilience | v1.37.1 | 0/? | Not started | - |
-| 118. Operational Hardening | v1.37.1 | 0/? | Not started | - |
+| 118. Operational Hardening | v1.37.1 | 0/2 | Not started | - |
 | 119. Pheromone Test Suite | v1.37.1 | 0/? | Not started | - |
 
 ---
