@@ -19,6 +19,7 @@ pub struct BridgeConfig {
     pub endpoint: String,
     pub reconnect_backoff_ms: u64,
     pub max_reconnect_backoff_ms: u64,
+    pub event_timeout_secs: u64,
 }
 
 impl Default for BridgeConfig {
@@ -27,6 +28,7 @@ impl Default for BridgeConfig {
             endpoint: "http://127.0.0.1:54321".to_string(),
             reconnect_backoff_ms: 1_000,
             max_reconnect_backoff_ms: 30_000,
+            event_timeout_secs: 30,
         }
     }
 }
@@ -150,9 +152,7 @@ impl TetragonBridge {
     }
 
     fn process_start_schema_valid(process: &ProcessStartEvent) -> bool {
-        !process.process_name.trim().is_empty()
-            && !process.parent_process.trim().is_empty()
-            && !process.command_line.trim().is_empty()
+        !process.process_name.trim().is_empty() && !process.command_line.trim().is_empty()
     }
 
     fn reconnect_backoff(&self, attempts: u32) -> Duration {
@@ -185,8 +185,9 @@ impl TelemetryBridge for TetragonBridge {
                 continue;
             };
 
-            match stream.next().await {
-                Some(Ok(response)) => {
+            let timeout_duration = Duration::from_secs(self.config.event_timeout_secs);
+            match tokio::time::timeout(timeout_duration, stream.next()).await {
+                Ok(Some(Ok(response))) => {
                     let Some(event) = self.map_response(response)? else {
                         continue;
                     };
@@ -203,15 +204,24 @@ impl TelemetryBridge for TetragonBridge {
                     self.record_event(&event);
                     return Ok(vec![event]);
                 }
-                Some(Err(error)) => {
+                Ok(Some(Err(error))) => {
                     self.stream = None;
                     let message = format!("event stream failed: {error}");
                     self.sleep_on_disconnect(message.clone()).await;
                     return Err(TelemetryBridgeError::Connection(message));
                 }
-                None => {
+                Ok(None) => {
                     self.stream = None;
                     let message = "event stream closed".to_string();
+                    self.sleep_on_disconnect(message.clone()).await;
+                    return Err(TelemetryBridgeError::Connection(message));
+                }
+                Err(_elapsed) => {
+                    self.stream = None;
+                    let message = format!(
+                        "event stream silent for {}s; triggering reconnect",
+                        self.config.event_timeout_secs
+                    );
                     self.sleep_on_disconnect(message.clone()).await;
                     return Err(TelemetryBridgeError::Connection(message));
                 }
@@ -339,6 +349,7 @@ mod tests {
             endpoint: "http://127.0.0.1:54321".to_string(),
             reconnect_backoff_ms: 500,
             max_reconnect_backoff_ms: 4_000,
+            event_timeout_secs: 30,
         });
 
         assert_eq!(bridge.reconnect_backoff(0), Duration::from_millis(500));

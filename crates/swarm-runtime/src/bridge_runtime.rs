@@ -314,6 +314,7 @@ fn tetragon_runtime_config(config: &TetragonBridgeConfig) -> TetragonRuntimeConf
         endpoint: config.endpoint.clone(),
         reconnect_backoff_ms: config.reconnect_backoff_ms,
         max_reconnect_backoff_ms: config.max_reconnect_backoff_ms,
+        event_timeout_secs: config.event_timeout_secs,
     }
 }
 

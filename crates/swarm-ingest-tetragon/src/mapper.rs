@@ -12,7 +12,8 @@ pub fn map_process_exec(exec: &proto::ProcessExec, node_name: &str) -> Option<Te
         .parent
         .as_ref()
         .map(|parent| parent.binary.clone())
-        .unwrap_or_default();
+        .filter(|binary| !binary.trim().is_empty())
+        .unwrap_or_else(|| "<none>".to_string());
     let event_id = if node_name.is_empty() {
         format!("tetragon:{}", process.exec_id)
     } else {

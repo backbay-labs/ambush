@@ -90,6 +90,11 @@ pub struct RuntimeSettings {
     /// marks the agent Degraded and skips that cycle.
     #[serde(default = "default_agent_tick_timeout_ms")]
     pub agent_tick_timeout_ms: u64,
+    /// Maximum size in bytes for dead-letter journal files before rotation.
+    /// When set, journals exceeding this size are renamed with a timestamp
+    /// suffix and a fresh file is started. When `None` (default), no rotation.
+    #[serde(default)]
+    pub max_dead_letter_bytes: Option<u64>,
 }
 
 /// One configured telemetry source.
@@ -137,6 +142,8 @@ pub struct TetragonBridgeConfig {
     pub reconnect_backoff_ms: u64,
     #[serde(default = "default_tetragon_max_reconnect_backoff_ms")]
     pub max_reconnect_backoff_ms: u64,
+    #[serde(default = "default_tetragon_event_timeout_secs")]
+    pub event_timeout_secs: u64,
 }
 
 /// CloudTrail bridge configuration.
@@ -699,6 +706,12 @@ impl TetragonBridgeConfig {
             return Err(ConfigValidationError::InvalidField {
                 field: "runtime.telemetry_sources.bridge.max_reconnect_backoff_ms",
                 reason: "must be greater than or equal to reconnect_backoff_ms".to_string(),
+            });
+        }
+        if self.event_timeout_secs == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "tetragon.event_timeout_secs",
+                reason: "must be greater than zero".to_string(),
             });
         }
         Ok(())
@@ -1884,6 +1897,10 @@ const fn default_tetragon_max_reconnect_backoff_ms() -> u64 {
     30_000
 }
 
+const fn default_tetragon_event_timeout_secs() -> u64 {
+    30
+}
+
 const fn default_jetstream_gc_page_size() -> usize {
     512
 }
@@ -2058,6 +2075,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                max_dead_letter_bytes: None,
             },
             detection: super::DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
