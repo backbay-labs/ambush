@@ -4,7 +4,7 @@ milestone: v1.37
 milestone_name: milestone
 status: completed
 last_updated: "2026-04-07T23:20:36.597Z"
-last_activity: 2026-04-07 — Completed 118-02 (dead-letter journal rotation)
+last_activity: 2026-04-07 — Completed 118-03 (gap closure: production dead-letter threading + rotation integration test)
 progress:
   total_phases: 8
   completed_phases: 8
@@ -25,9 +25,9 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 ## Current Position
 
 Phase: 118 (Operational Hardening) — complete
-Plan: 2/2
-Status: Phase 118 complete, ready for Phase 119
-Last activity: 2026-04-07 — Completed 118-02 (dead-letter journal rotation)
+Plan: 3/3
+Status: Phase 118 complete (including gap closure 118-03), ready for Phase 119
+Last activity: 2026-04-07 — Completed 118-03 (gap closure: production dead-letter threading + rotation integration test)
 
 Progress: [########░░] 75% (3/4 phases)
 
@@ -56,6 +56,8 @@ Progress: [########░░] 75% (3/4 phases)
 - 118-02 complete: DeadLetterJournal now rotates files when exceeding max_dead_letter_bytes threshold (HARDEN-09).
 - Rotated files renamed with {path}.{timestamp_ms} suffix; max_bytes passed at journal construction.
 - Phase 118 complete: HARDEN-08 and HARDEN-09 both closed.
+- 118-03 gap closure: threaded max_dead_letter_bytes from RuntimeSettings through DispatchingExecutor::from_config and NotificationRouter::new to production DeadLetterJournal constructors.
+- Integration test proves secret rotation (reload_secrets_only) and dead-letter journal rotation work together without data loss in the same runtime context.
 
 ## Phase Map
 
