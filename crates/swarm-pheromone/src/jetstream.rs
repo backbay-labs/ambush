@@ -1439,4 +1439,72 @@ mod tests {
             .unwrap();
         assert!(expired.is_none());
     }
+
+    #[tokio::test]
+    #[ignore = "requires a JetStream-enabled NATS server at NATS_URL or nats://127.0.0.1:4222"]
+    async fn jetstream_gc_expired_threat_intel_removes_expired_entries() {
+        let Some((_bucket, substrate)) = connect_for_test("gc-threat-intel").await else {
+            return;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_secs() as i64;
+
+        // Store one expired and one active threat-intel entry
+        substrate
+            .store_threat_intel_entry(ThreatIntelEntry {
+                indicator_type: ThreatIntelIndicatorType::Domain,
+                value: "expired.example.com".to_string(),
+                confidence: 0.9,
+                expires_at: now - 100,
+            })
+            .await
+            .unwrap();
+        substrate
+            .store_threat_intel_entry(ThreatIntelEntry {
+                indicator_type: ThreatIntelIndicatorType::IpAddress,
+                value: "10.0.0.1".to_string(),
+                confidence: 0.8,
+                expires_at: now + 100_000,
+            })
+            .await
+            .unwrap();
+
+        wait_until(|| {
+            let sub = substrate.clone();
+            async move {
+                sub.query_threat_intel_entry(
+                    &ThreatIntelIndicatorType::IpAddress,
+                    "10.0.0.1",
+                    now,
+                )
+                .await
+                .unwrap()
+                .is_some()
+            }
+        })
+        .await;
+
+        let purged = substrate.gc_expired_threat_intel(now).await.unwrap();
+        assert_eq!(purged, 1);
+
+        // Expired entry should be gone
+        let expired = substrate
+            .query_threat_intel_entry(
+                &ThreatIntelIndicatorType::Domain,
+                "expired.example.com",
+                0,
+            )
+            .await
+            .unwrap();
+        assert!(expired.is_none());
+
+        // Active entry should remain
+        let active = substrate
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::IpAddress, "10.0.0.1", now)
+            .await
+            .unwrap();
+        assert!(active.is_some());
+    }
 }
