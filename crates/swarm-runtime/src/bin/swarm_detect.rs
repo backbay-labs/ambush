@@ -210,6 +210,33 @@ fn spawn_reload_tasks(
                         break;
                     };
 
+                    // SecretChange triggers only secret re-resolution (no
+                    // YAML re-parse). FileChange and Signal do a full reload.
+                    match trigger {
+                        ReloadTrigger::SecretChange => {
+                            let reason = "secret file change";
+                            match state.reload_secrets_only() {
+                                Ok(()) => {
+                                    tracing::info!(
+                                        module = module_path!(),
+                                        trigger = %reason,
+                                        "reloaded secrets without full config reload"
+                                    );
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        module = module_path!(),
+                                        trigger = %reason,
+                                        reason = %error,
+                                        "secret reload failed"
+                                    );
+                                }
+                            }
+                            continue;
+                        }
+                        ReloadTrigger::FileChange | ReloadTrigger::Signal(_) => {}
+                    }
+
                     let reason = match trigger {
                         ReloadTrigger::FileChange => {
                             let mut seen_file_events = 1usize;
@@ -227,15 +254,19 @@ fn spawn_reload_tasks(
                                         Some(ReloadTrigger::FileChange) => {
                                             seen_file_events = seen_file_events.saturating_add(1);
                                         }
-                                        Some(ReloadTrigger::SecretChange) => break "secret file change".to_string(),
+                                        Some(ReloadTrigger::SecretChange) => {
+                                            // Secret changed during config debounce — do a
+                                            // full reload which also re-resolves secrets.
+                                            break "config + secret file change".to_string();
+                                        }
                                         Some(ReloadTrigger::Signal(reason)) => break reason.to_string(),
                                         None => return,
                                     }
                                 }
                             }
                         }
-                        ReloadTrigger::SecretChange => "secret file change".to_string(),
                         ReloadTrigger::Signal(reason) => reason.to_string(),
+                        ReloadTrigger::SecretChange => unreachable!("handled above"),
                     };
 
                     match state.reload_from_disk() {

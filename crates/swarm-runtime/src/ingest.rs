@@ -1,6 +1,7 @@
 use crate::bridge_runtime::{SharedBridgeHealth, bridge_health_report};
 use crate::config::{
-    CURRENT_SCHEMA_VERSION, RuntimeConfigError, load_config, resolve_secret_dir_path,
+    CURRENT_SCHEMA_VERSION, RuntimeConfigError, load_config_unresolved,
+    resolve_outbound_secrets, resolve_secret_dir_path,
 };
 use crate::control::{ControlError, SupportedDetector, supported_detector};
 use crate::correlation::CorrelationEngine;
@@ -158,6 +159,10 @@ pub struct IngestState {
     detector: Arc<ArcSwap<SupportedDetector>>,
     detector_status: Arc<ArcSwap<DetectorRuntimeStatus>>,
     config_path: Arc<PathBuf>,
+    /// The config template before `@secret:` references are resolved.
+    /// Stored so that [`Self::reload_secrets_only`] can re-resolve secrets
+    /// from disk without re-reading or re-parsing the YAML config file.
+    config_template: Arc<ArcSwap<SwarmConfig>>,
     lifecycle: Arc<IngestLifecycleState>,
     telemetry_tx: Option<tokio::sync::mpsc::Sender<TelemetryEvent>>,
     agent_dispatcher_health: Option<Arc<ArcSwap<Vec<AgentHealthEntry>>>>,
@@ -184,7 +189,16 @@ impl IngestState {
         config: SwarmConfig,
     ) -> Result<Self, IngestBuildError> {
         let config_path = config_path.into();
-        let (stack, detector) = Self::build_runtime(config)?;
+        // Store the raw config before secret resolution as the template
+        // so that reload_secrets_only can re-resolve from disk later.
+        let template = config.clone();
+        let resolved = resolve_outbound_secrets(config, Some(&config_path)).map_err(|source| {
+            RuntimeConfigError::Validation {
+                source_name: config_path.display().to_string(),
+                source,
+            }
+        })?;
+        let (stack, detector) = Self::build_runtime(resolved)?;
         let detector_status = Arc::new(ArcSwap::from(Arc::new(DetectorRuntimeStatus::loaded(
             detector.id().to_string(),
         ))));
@@ -193,6 +207,7 @@ impl IngestState {
             detector: Arc::new(ArcSwap::from(detector)),
             detector_status,
             config_path: Arc::new(config_path),
+            config_template: Arc::new(ArcSwap::from(Arc::new(template))),
             lifecycle: Arc::new(IngestLifecycleState::default()),
             telemetry_tx: None,
             agent_dispatcher_health: None,
@@ -205,7 +220,7 @@ impl IngestState {
 
     pub fn from_path(config_path: impl Into<PathBuf>) -> Result<Self, IngestBuildError> {
         let config_path = config_path.into();
-        let config = load_config(&config_path)?;
+        let config = load_config_unresolved(&config_path)?;
         Self::from_config(config_path, config)
     }
 
@@ -234,12 +249,37 @@ impl IngestState {
     /// Re-resolve `@secret:` references from disk and update the active runtime
     /// stack without re-reading or re-parsing the YAML config file. This avoids
     /// the overhead of a full config reload when only secret values have rotated.
+    ///
+    /// The stored config template (with `@secret:` references intact) is cloned,
+    /// passed through [`resolve_outbound_secrets`] to read fresh secret files,
+    /// and fed to [`Self::reload`] which rebuilds the runtime stack. Because the
+    /// config structure is unchanged (only secret values differ), the detector
+    /// rebuild is lightweight -- same strategy, same profiles.
     pub fn reload_secrets_only(&self) -> Result<(), IngestBuildError> {
-        todo!("reload_secrets_only not yet implemented")
+        // Clone the unresolved template -- no YAML file read, no parsing.
+        let template = self.config_template.load_full();
+        let config = resolve_outbound_secrets(
+            template.as_ref().clone(),
+            Some(self.config_path()),
+        )
+        .map_err(|source| RuntimeConfigError::Validation {
+            source_name: self.config_path().display().to_string(),
+            source,
+        })?;
+
+        self.reload(config)?;
+
+        tracing::info!(
+            module = module_path!(),
+            "reloaded secrets without full config reload"
+        );
+        Ok(())
     }
 
     pub fn reload_from_disk(&self) -> Result<(), IngestBuildError> {
-        let config = match load_config(self.config_path()) {
+        // Load the unresolved template first so we can store it for
+        // future reload_secrets_only calls.
+        let template = match load_config_unresolved(self.config_path()) {
             Ok(config) => config,
             Err(error) => {
                 let current = self.detector_status.load_full();
@@ -251,7 +291,13 @@ impl IngestState {
                 return Err(error.into());
             }
         };
-        self.reload(config)
+        let resolved = resolve_outbound_secrets(template.clone(), Some(self.config_path()))
+            .map_err(|source| RuntimeConfigError::Validation {
+                source_name: self.config_path().display().to_string(),
+                source,
+            })?;
+        self.config_template.store(Arc::new(template));
+        self.reload(resolved)
     }
 
     pub fn config_path(&self) -> &Path {
@@ -1764,14 +1810,13 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("edr-token"), "initial-value\n").unwrap();
 
+        // Pass the unresolved config — from_config resolves internally
+        // and stores the template with @secret: references intact.
         let config_path = temp_path("secrets-reload");
-        let mut config = test_config_with_secret_token(&tmp);
-        // Pre-resolve the initial secret so IngestState can be built
-        config = crate::config::resolve_outbound_secrets(config, Some(&config_path)).unwrap();
-
+        let config = test_config_with_secret_token(&tmp);
         let state = IngestState::from_config(&config_path, config).unwrap();
 
-        // Verify initial value
+        // Verify initial value was resolved on construction
         let stack = state.stack.load_full();
         match &stack.service.config.response_adapter {
             ResponseAdapterConfig::HttpEdr { config: edr } => {
@@ -1781,7 +1826,7 @@ mod tests {
         }
         drop(stack);
 
-        // Now rotate the secret on disk and reload secrets only
+        // Rotate the secret on disk and reload secrets only
         fs::write(tmp.join("edr-token"), "rotated-value\n").unwrap();
         state.reload_secrets_only().unwrap();
 
@@ -1812,9 +1857,7 @@ mod tests {
         fs::write(tmp.join("edr-token"), "some-token\n").unwrap();
 
         let config_path = temp_path("secrets-strategy");
-        let mut config = test_config_with_secret_token(&tmp);
-        config = crate::config::resolve_outbound_secrets(config, Some(&config_path)).unwrap();
-
+        let config = test_config_with_secret_token(&tmp);
         let state = IngestState::from_config(&config_path, config).unwrap();
         let strategy_before = state.detector_strategy_name();
 
@@ -1847,15 +1890,14 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("edr-token"), "the-token\n").unwrap();
 
+        // Pass unresolved config — from_config stores the template
         let config_path = temp_path("secrets-nofile");
-        let mut config = test_config_with_secret_token(&tmp);
-        config = crate::config::resolve_outbound_secrets(config, Some(&config_path)).unwrap();
-
+        let config = test_config_with_secret_token(&tmp);
         let state = IngestState::from_config(&config_path, config).unwrap();
 
         // The config YAML file was never actually written, so reload_from_disk
-        // would fail. reload_secrets_only should work because it uses the in-memory
-        // config from the current stack.
+        // would fail. reload_secrets_only works because it uses the stored
+        // config template — no YAML file is read.
         fs::write(tmp.join("edr-token"), "fresh-token\n").unwrap();
         state.reload_secrets_only().unwrap();
 

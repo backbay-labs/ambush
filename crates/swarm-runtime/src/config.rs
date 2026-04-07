@@ -185,12 +185,77 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<SwarmConfig, RuntimeConfigE
     parse_config_with_base(&raw, path.display().to_string(), Some(path))
 }
 
+/// Load a runtime config from disk without resolving `@secret:` references.
+///
+/// The returned config passes migration, deserialization, structural validation,
+/// and detector-profile validation, but `@secret:` references remain as literal
+/// string values. Use [`resolve_outbound_secrets`] to resolve them afterwards.
+pub fn load_config_unresolved(path: impl AsRef<Path>) -> Result<SwarmConfig, RuntimeConfigError> {
+    let path = path.as_ref();
+    let raw = fs::read_to_string(path).map_err(|source| RuntimeConfigError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    parse_config_unresolved(&raw, path.display().to_string())
+}
+
 /// Parse and validate a runtime config from raw YAML.
 pub fn parse_config(
     yaml: &str,
     source_name: impl Into<String>,
 ) -> Result<SwarmConfig, RuntimeConfigError> {
     parse_config_with_base(yaml, source_name.into(), None)
+}
+
+fn parse_config_unresolved(
+    yaml: &str,
+    source_name: String,
+) -> Result<SwarmConfig, RuntimeConfigError> {
+    let mut raw: YamlValue =
+        serde_yaml::from_str(yaml).map_err(|source| RuntimeConfigError::Parse {
+            source_name: source_name.clone(),
+            source,
+        })?;
+    if let Some(summary) =
+        migrate_config_value(&mut raw).map_err(|source| RuntimeConfigError::Validation {
+            source_name: source_name.clone(),
+            source,
+        })?
+    {
+        tracing::info!(
+            module = module_path!(),
+            source_name = %source_name,
+            from_schema_version = summary.from_version,
+            to_schema_version = summary.to_version,
+            migration_steps = ?summary.steps,
+            "applied runtime config migration (unresolved)"
+        );
+    }
+
+    let config: SwarmConfig =
+        serde_yaml::from_value(raw).map_err(|source| RuntimeConfigError::Parse {
+            source_name: source_name.clone(),
+            source,
+        })?;
+
+    // Validate structural constraints. Secret references remain as literal
+    // strings (e.g., `@secret:edr-token`) which pass string validation.
+    // The caller resolves secrets and validates again afterwards.
+    config
+        .validate()
+        .map_err(|source| RuntimeConfigError::Validation {
+            source_name: source_name.clone(),
+            source,
+        })?;
+    validate_detector_profiles(&config.detection).map_err(|source| {
+        RuntimeConfigError::DetectorProfile {
+            source_name,
+            source,
+        }
+    })?;
+
+    Ok(config)
 }
 
 fn parse_config_with_base(
