@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.37
 milestone_name: milestone
-status: completed
-last_updated: "2026-04-07T22:59:28.104Z"
-last_activity: 2026-04-07 — Completed 116-02 (tick timeout and unhandled action hardening)
+status: in_progress
+last_updated: "2026-04-07T23:11:47Z"
+last_activity: 2026-04-07 — Completed 117-01 (threat-intel GC across all backends)
 progress:
   total_phases: 8
   completed_phases: 5
@@ -24,12 +24,12 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 ## Current Position
 
-Phase: 116 (Agent Safety Hardening) — complete
-Plan: 2/2
-Status: Phase 116 complete, ready for Phase 117 or 118
-Last activity: 2026-04-07 — Completed 116-02 (tick timeout and unhandled action hardening)
+Phase: 117 (Substrate Durability And Bridge Resilience)
+Plan: 1/2
+Status: 117-01 complete (threat-intel GC), 117-02 pending
+Last activity: 2026-04-07 — Completed 117-01 (threat-intel GC across all backends)
 
-Progress: [##░░░░░░░░] 25% (1/4 phases)
+Progress: [####░░░░░░] 40% (1.5/4 phases)
 
 ## Memory
 
@@ -45,16 +45,19 @@ Progress: [##░░░░░░░░] 25% (1/4 phases)
 - Phase 116 complete: signed deposits (HARDEN-01), tick timeout (HARDEN-02), exhaustive action match (HARDEN-03).
 - Default agent_tick_timeout_ms is 500ms; timed-out agents marked Degraded with actions discarded.
 - All SwarmAction variants explicitly handled in dispatcher apply_actions (no wildcards).
+- gc_expired_threat_intel() added to PheromoneSubstrate trait and all 3 backends (InMemory, LocalJournal, JetStream).
+- LocalJournal threat-intel GC rewrites journal file to prevent unbounded disk growth (HARDEN-05).
+- JetStream threat-intel GC iterates intel-prefixed keys and deletes expired entries from KV store.
 
 ## Phase Map
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
 | 116 | Agent Safety Hardening | HARDEN-01, HARDEN-02, HARDEN-03 | Complete |
-| 117 | Substrate Durability And Bridge Resilience | HARDEN-04, HARDEN-05, HARDEN-06, HARDEN-07 | Not started |
+| 117 | Substrate Durability And Bridge Resilience | HARDEN-04, HARDEN-05, HARDEN-06, HARDEN-07 | In progress (1/2 plans) |
 | 118 | Operational Hardening | HARDEN-08, HARDEN-09 | Not started |
 | 119 | Pheromone Test Suite | HARDEN-10 | Not started |
 
 ## Next Command
 
-`/gsd:plan-phase 117` or `/gsd:plan-phase 118` (can execute in parallel)
+`/gsd:execute-phase 117` (plan 117-02 pending) or `/gsd:plan-phase 118`

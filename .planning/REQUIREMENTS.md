@@ -102,8 +102,8 @@
 
 #### Substrate Durability
 
-- **HARDEN-04**: A `gc_expired_threat_intel()` method on `PheromoneSubstrate` removes `ThreatIntelEntry` records whose `expires_at` has passed; the method runs on the same GC interval as `gc_evaporated()` across all three backends (in-memory, local-journal, JetStream) and logs the number of entries purged
-- **HARDEN-05**: The `LocalJournalPheromoneSubstrate` rewrites the threat-intel journal file during GC to remove expired entries, preventing unbounded disk growth consistent with the existing deposit journal rewrite pattern
+- [x] **HARDEN-04**: A `gc_expired_threat_intel()` method on `PheromoneSubstrate` removes `ThreatIntelEntry` records whose `expires_at` has passed; the method runs on the same GC interval as `gc_evaporated()` across all three backends (in-memory, local-journal, JetStream) and logs the number of entries purged
+- [x] **HARDEN-05**: The `LocalJournalPheromoneSubstrate` rewrites the threat-intel journal file during GC to remove expired entries, preventing unbounded disk growth consistent with the existing deposit journal rewrite pattern
 
 #### Bridge Resilience
 
@@ -199,8 +199,8 @@
 | HARDEN-01 | Phase 116, Plan 01 | Satisfied |
 | HARDEN-02 | Phase 116, Plan 02 | Satisfied |
 | HARDEN-03 | Phase 116, Plan 02 | Satisfied |
-| HARDEN-04 | Queued milestone v1.37.1 | Queued |
-| HARDEN-05 | Queued milestone v1.37.1 | Queued |
+| HARDEN-04 | 117-01 | Complete |
+| HARDEN-05 | 117-01 | Complete |
 | HARDEN-06 | Queued milestone v1.37.1 | Queued |
 | HARDEN-07 | Queued milestone v1.37.1 | Queued |
 | HARDEN-08 | Queued milestone v1.37.1 | Queued |

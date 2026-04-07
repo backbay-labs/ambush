@@ -168,7 +168,7 @@ Plans:
 | 114. Supply Chain Detector And Profile Support | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 115. Persistence And Supply Chain Integration Proof | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 116. Agent Safety Hardening | 2/2 | Complete    | 2026-04-07 | - |
-| 117. Substrate Durability And Bridge Resilience | v1.37.1 | 0/2 | Not started | - |
+| 117. Substrate Durability And Bridge Resilience | 1/2 | In Progress|  | - |
 | 118. Operational Hardening | v1.37.1 | 0/2 | Not started | - |
 | 119. Pheromone Test Suite | v1.37.1 | 0/? | Not started | - |
 
