@@ -380,4 +380,52 @@ mod tests {
 
         assert!(!bridge.validate_schema(&event));
     }
+
+    #[test]
+    fn validate_schema_accepts_sentinel_parent_process() {
+        let bridge = TetragonBridge::new(BridgeConfig::default());
+        let event = TelemetryEvent {
+            source: "tetragon".to_string(),
+            event_id: "evt-sentinel".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("node-a".to_string()),
+            payload: TelemetryPayload::ProcessStart(swarm_core::ProcessStartEvent {
+                parent_process: "<none>".to_string(),
+                process_name: "/usr/lib/systemd/systemd".to_string(),
+                command_line: "/usr/lib/systemd/systemd --system".to_string(),
+                user: Some("root".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
+            }),
+        };
+        assert!(bridge.validate_schema(&event));
+    }
+
+    #[test]
+    fn validate_schema_accepts_empty_parent_process() {
+        let bridge = TetragonBridge::new(BridgeConfig::default());
+        let event = TelemetryEvent {
+            source: "tetragon".to_string(),
+            event_id: "evt-empty-parent".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("node-a".to_string()),
+            payload: TelemetryPayload::ProcessStart(swarm_core::ProcessStartEvent {
+                parent_process: String::new(),
+                process_name: "/sbin/init".to_string(),
+                command_line: "/sbin/init".to_string(),
+                user: Some("root".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
+            }),
+        };
+        assert!(bridge.validate_schema(&event));
+    }
+
+    #[test]
+    fn bridge_config_default_includes_event_timeout() {
+        let config = BridgeConfig::default();
+        assert_eq!(config.event_timeout_secs, 30);
+    }
 }

@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_parent_maps_to_empty_parent_process() {
+    fn missing_parent_maps_to_sentinel() {
         let exec = proto::ProcessExec {
             process: Some(make_process(
                 "exec-2",
@@ -126,7 +126,32 @@ mod tests {
         let event = map_process_exec(&exec, "node-b").expect("event should map");
         match event.payload {
             TelemetryPayload::ProcessStart(process) => {
-                assert_eq!(process.parent_process, "");
+                assert_eq!(process.parent_process, "<none>");
+            }
+            _ => panic!("expected process_start payload"),
+        }
+    }
+
+    #[test]
+    fn empty_binary_parent_maps_to_sentinel() {
+        let exec = proto::ProcessExec {
+            process: Some(make_process(
+                "exec-6",
+                "/usr/bin/systemd",
+                "--system",
+                Some(1),
+                Some(1),
+            )),
+            parent: Some(proto::Process {
+                binary: "".to_string(),
+                ..Default::default()
+            }),
+            ancestors: Vec::new(),
+        };
+        let event = map_process_exec(&exec, "node-f").expect("event should map");
+        match event.payload {
+            TelemetryPayload::ProcessStart(process) => {
+                assert_eq!(process.parent_process, "<none>");
             }
             _ => panic!("expected process_start payload"),
         }
