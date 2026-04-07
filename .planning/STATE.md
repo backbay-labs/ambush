@@ -1,14 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.37.1
-milestone_name: Runtime Hardening And Audit Debt
-status: active
-last_updated: "2026-04-07T22:52:36Z"
+milestone: v1.37
+milestone_name: milestone
+status: completed
+last_updated: "2026-04-07T22:59:28.104Z"
+last_activity: 2026-04-07 — Completed 116-02 (tick timeout and unhandled action hardening)
 progress:
-  total_phases: 4
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_phases: 8
+  completed_phases: 5
+  total_plans: 10
+  completed_plans: 10
+  percent: 25
 ---
 
 # State
