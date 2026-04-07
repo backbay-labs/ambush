@@ -11,6 +11,8 @@ nats = ["dep:async-nats", "dep:tokio-stream"]
 
 [dependencies]
 swarm-core.workspace = true
+swarm-crypto.workspace = true
+ed25519-dalek.workspace = true
 async-trait.workspace = true
 async-nats = { workspace = true, optional = true }
 serde.workspace = true

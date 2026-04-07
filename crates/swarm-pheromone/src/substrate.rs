@@ -2,6 +2,7 @@
 
 use crate::jetstream::JetStreamPheromoneSubstrate;
 use async_trait::async_trait;
+use ed25519_dalek::{Signature as DalekSignature, Verifier, VerifyingKey};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -14,6 +15,7 @@ use swarm_core::pheromone::{
     EscalationRecord, PheromoneConcentration, PheromoneDeposit, ThreatClass, ThreatClassConfig,
     ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
+use swarm_core::types::{AgentId, Severity};
 
 /// Errors raised by the pheromone substrate.
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +70,92 @@ pub enum SubstrateError {
         backend: &'static str,
         reason: String,
     },
+
+    #[error("deposit rejected: {reason}")]
+    InvalidDeposit { reason: String },
+}
+
+/// Canonical payload used for signing and verifying pheromone deposits.
+///
+/// The fields here must match the signing side exactly (same order, same types).
+/// Both `pipeline.rs` and `stalker_agent.rs` serialize this struct to produce the
+/// bytes that are signed; `validate_deposit_signature` deserializes and re-verifies.
+#[derive(Serialize)]
+pub struct DepositSigningPayload<'a> {
+    pub indicator: &'a serde_json::Value,
+    pub threat_class: &'a ThreatClass,
+    pub severity: &'a Severity,
+    pub confidence: f64,
+    pub timestamp: i64,
+    pub decay_half_life: f64,
+    pub agent_id: &'a AgentId,
+}
+
+/// Validate that a [`PheromoneDeposit`] carries a valid Ed25519 signature
+/// over its canonical content. Returns `Err(SubstrateError::InvalidDeposit)`
+/// when the signature is missing, malformed, or does not verify.
+pub fn validate_deposit_signature(deposit: &PheromoneDeposit) -> Result<(), SubstrateError> {
+    if deposit.signature.is_empty() {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: "empty signature".into(),
+        });
+    }
+    if deposit.agent_key.is_empty() {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: "empty agent_key".into(),
+        });
+    }
+
+    let key_bytes: [u8; 32] =
+        deposit
+            .agent_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "agent_key must be 32 bytes, got {}",
+                    deposit.agent_key.len()
+                ),
+            })?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&key_bytes).map_err(|err| SubstrateError::InvalidDeposit {
+            reason: format!("invalid agent_key: {err}"),
+        })?;
+
+    let sig_bytes: [u8; 64] =
+        deposit
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| SubstrateError::InvalidDeposit {
+                reason: format!(
+                    "signature must be 64 bytes, got {}",
+                    deposit.signature.len()
+                ),
+            })?;
+    let signature = DalekSignature::from_bytes(&sig_bytes);
+
+    let payload = DepositSigningPayload {
+        indicator: &deposit.indicator,
+        threat_class: &deposit.threat_class,
+        severity: &deposit.severity,
+        confidence: deposit.confidence,
+        timestamp: deposit.timestamp,
+        decay_half_life: deposit.decay_half_life,
+        agent_id: &deposit.agent_id,
+    };
+    let payload_bytes = serde_json::to_vec(&payload).map_err(|err| SubstrateError::Encode {
+        context: "deposit signing payload".into(),
+        source: err,
+    })?;
+
+    verifying_key
+        .verify(&payload_bytes, &signature)
+        .map_err(|err| SubstrateError::InvalidDeposit {
+            reason: format!("signature verification failed: {err}"),
+        })?;
+
+    Ok(())
 }
 
 /// Query filters for reading persisted deposits.
@@ -181,6 +269,7 @@ impl ConfiguredPheromoneSubstrate {
 #[async_trait]
 impl PheromoneSubstrate for ConfiguredPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
+        validate_deposit_signature(&deposit)?;
         match self {
             Self::InMemory(substrate) => substrate.deposit(deposit).await,
             Self::LocalJournal(substrate) => substrate.deposit(deposit).await,
@@ -340,6 +429,7 @@ impl InMemoryPheromoneSubstrate {
 #[async_trait]
 impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
+        validate_deposit_signature(&deposit)?;
         let mut guard = self
             .deposits
             .write()
@@ -533,6 +623,7 @@ impl LocalJournalPheromoneSubstrate {
 #[async_trait]
 impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
+        validate_deposit_signature(&deposit)?;
         append_jsonl_line(&self.journal_path, &deposit)?;
         let mut guard = self
             .deposits
@@ -955,9 +1046,10 @@ fn threat_intel_key(indicator_type: &ThreatIntelIndicatorType, value: &str) -> T
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConfiguredPheromoneSubstrate, DepositQuery, InMemoryPheromoneSubstrate,
-        LocalJournalPheromoneSubstrate, PheromoneSubstrate,
+        ConfiguredPheromoneSubstrate, DepositQuery, DepositSigningPayload,
+        InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate, PheromoneSubstrate,
     };
+    use ed25519_dalek::{Signer, SigningKey};
     use swarm_core::agent::SwarmMode;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::pheromone::{
@@ -966,8 +1058,29 @@ mod tests {
     };
     use swarm_core::types::{AgentId, Severity};
 
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[42u8; 32])
+    }
+
+    fn sign_deposit(deposit: &mut PheromoneDeposit, key: &SigningKey) {
+        let payload = DepositSigningPayload {
+            indicator: &deposit.indicator,
+            threat_class: &deposit.threat_class,
+            severity: &deposit.severity,
+            confidence: deposit.confidence,
+            timestamp: deposit.timestamp,
+            decay_half_life: deposit.decay_half_life,
+            agent_id: &deposit.agent_id,
+        };
+        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        let sig = key.sign(&payload_bytes);
+        deposit.signature = sig.to_bytes().to_vec();
+        deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+    }
+
     fn sample_deposit(agent_id: &str, timestamp: i64, confidence: f64) -> PheromoneDeposit {
-        PheromoneDeposit {
+        let key = test_signing_key();
+        let mut deposit = PheromoneDeposit {
             indicator: serde_json::json!({"signal": "process-tree"}),
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
@@ -975,6 +1088,22 @@ mod tests {
             timestamp,
             decay_half_life: 3600.0,
             agent_id: AgentId(agent_id.to_string()),
+            signature: Vec::new(),
+            agent_key: Vec::new(),
+        };
+        sign_deposit(&mut deposit, &key);
+        deposit
+    }
+
+    fn unsigned_deposit() -> PheromoneDeposit {
+        PheromoneDeposit {
+            indicator: serde_json::json!({"signal": "process-tree"}),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.9,
+            timestamp: 100,
+            decay_half_life: 3600.0,
+            agent_id: AgentId("test-agent".to_string()),
             signature: Vec::new(),
             agent_key: Vec::new(),
         }
@@ -1089,8 +1218,10 @@ mod tests {
             .deposit(sample_deposit("whisker-a", 100, 1.0))
             .await
             .unwrap();
+        let key = test_signing_key();
         let mut second = sample_deposit("whisker-b", 200, 0.9);
         second.threat_class = ThreatClass::DefenseEvasion;
+        sign_deposit(&mut second, &key);
         substrate.deposit(second).await.unwrap();
 
         let deposits = substrate
@@ -1435,5 +1566,86 @@ mod tests {
             jetstream,
             ConfiguredPheromoneSubstrate::JetStream(_)
         ));
+    }
+
+    // --- Signature validation tests ---
+
+    #[tokio::test]
+    async fn deposit_rejects_empty_signature() {
+        let substrate = in_memory();
+        let deposit = unsigned_deposit();
+        let err = substrate.deposit(deposit).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("empty signature"),
+            "expected 'empty signature', got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn deposit_rejects_empty_agent_key() {
+        let substrate = in_memory();
+        let mut deposit = unsigned_deposit();
+        deposit.signature = vec![0u8; 64]; // non-empty but invalid
+        let err = substrate.deposit(deposit).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("agent_key"),
+            "expected 'agent_key', got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn deposit_accepts_valid_signed_deposit() {
+        let substrate = in_memory();
+        let deposit = sample_deposit("whisker-test", 100, 0.9);
+        substrate.deposit(deposit).await.unwrap();
+
+        let deposits = substrate.recent_deposits(10).await.unwrap();
+        assert_eq!(deposits.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deposit_rejects_invalid_signature_bytes() {
+        let substrate = in_memory();
+        let key = test_signing_key();
+        let mut deposit = sample_deposit("whisker-test", 100, 0.9);
+        // Corrupt the signature
+        deposit.signature = key
+            .sign(b"wrong content entirely")
+            .to_bytes()
+            .to_vec();
+        deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+
+        let err = substrate.deposit(deposit).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("signature verification failed"),
+            "expected verification failure, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_backends_reject_unsigned_deposits() {
+        // InMemory
+        let in_mem = in_memory();
+        let err = in_mem.deposit(unsigned_deposit()).await.unwrap_err();
+        assert!(err.to_string().contains("empty signature"));
+
+        // LocalJournal
+        let path = std::env::temp_dir().join("sig-validation-test.jsonl");
+        let journal = LocalJournalPheromoneSubstrate::open(substrate_config(), &path).unwrap();
+        let err = journal.deposit(unsigned_deposit()).await.unwrap_err();
+        assert!(err.to_string().contains("empty signature"));
+
+        // ConfiguredPheromoneSubstrate (InMemory variant)
+        let configured = ConfiguredPheromoneSubstrate::from_config(&substrate_config()).unwrap();
+        let err = configured.deposit(unsigned_deposit()).await.unwrap_err();
+        assert!(err.to_string().contains("empty signature"));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(super::escalation_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_class_config_journal_path(&path));
+        let _ = std::fs::remove_file(super::threat_intel_journal_path(&path));
     }
 }
