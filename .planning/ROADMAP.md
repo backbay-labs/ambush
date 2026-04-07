@@ -117,8 +117,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 116-01-PLAN.md -- Enforce signed pheromone deposits across substrate and agents
-- [ ] 116-02-PLAN.md -- Add tick timeout enforcement and structured warnings for unhandled actions
+- [ ] 117-01-PLAN.md -- Add gc_expired_threat_intel() to PheromoneSubstrate across all three backends with journal rewrite
+- [ ] 117-02-PLAN.md -- Add stream timeout to TetragonBridge::poll() and fix empty-parent schema validation
 
 ### Phase 118: Operational Hardening
 **Goal**: Secret-dir changes are detected and applied independently of config reload, and dead-letter journals rotate by size instead of growing without bound
@@ -168,11 +168,11 @@ Plans:
 | 114. Supply Chain Detector And Profile Support | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 115. Persistence And Supply Chain Integration Proof | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 116. Agent Safety Hardening | 2/2 | Complete    | 2026-04-07 | - |
-| 117. Substrate Durability And Bridge Resilience | v1.37.1 | 0/? | Not started | - |
+| 117. Substrate Durability And Bridge Resilience | v1.37.1 | 0/2 | Not started | - |
 | 118. Operational Hardening | v1.37.1 | 0/2 | Not started | - |
 | 119. Pheromone Test Suite | v1.37.1 | 0/? | Not started | - |
 
 ---
 *Last shipped milestone: v1.37 Persistence And Supply Chain Detection on 2026-04-07*
 *Active milestone: v1.37.1 Runtime Hardening And Audit Debt*
-*Last updated: 2026-04-06 after activating v1.37.1*
+*Last updated: 2026-04-06 after planning phase 117*
