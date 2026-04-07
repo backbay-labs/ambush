@@ -156,8 +156,8 @@ impl SwarmAgent for StalkerAgent {
                 decay_half_life: deposit.decay_half_life,
                 agent_id: &deposit.agent_id,
             };
-            let payload_bytes = serde_json::to_vec(&signing_payload)
-                .expect("deposit signing payload serialization must succeed");
+            let payload_bytes =
+                serde_json::to_vec(&signing_payload).map_err(internal_error)?;
             let sig = self.signing_key.sign(&payload_bytes);
             deposit.signature = sig.to_bytes().to_vec();
             deposit.agent_key = self.signing_key.verifying_key().to_bytes().to_vec();

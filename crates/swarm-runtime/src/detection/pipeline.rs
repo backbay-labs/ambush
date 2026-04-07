@@ -44,7 +44,7 @@ where
     let mut deposits = resolve_deposits(substrate, &findings, event, agent_id, pheromone).await?;
 
     for deposit in &mut deposits {
-        sign_deposit(deposit, signing_key);
+        sign_deposit(deposit, signing_key)?;
         substrate.deposit(deposit.clone()).await?;
     }
 
@@ -56,7 +56,10 @@ where
 }
 
 /// Sign a [`PheromoneDeposit`] in place using an Ed25519 signing key.
-fn sign_deposit(deposit: &mut PheromoneDeposit, signing_key: &SigningKey) {
+fn sign_deposit(
+    deposit: &mut PheromoneDeposit,
+    signing_key: &SigningKey,
+) -> Result<(), PipelineError> {
     let payload = DepositSigningPayload {
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
@@ -66,11 +69,16 @@ fn sign_deposit(deposit: &mut PheromoneDeposit, signing_key: &SigningKey) {
         decay_half_life: deposit.decay_half_life,
         agent_id: &deposit.agent_id,
     };
-    let payload_bytes =
-        serde_json::to_vec(&payload).expect("deposit signing payload serialization must succeed");
+    let payload_bytes = serde_json::to_vec(&payload).map_err(|source| {
+        PipelineError::Substrate(SubstrateError::Encode {
+            context: "deposit signing payload".into(),
+            source,
+        })
+    })?;
     let sig = signing_key.sign(&payload_bytes);
     deposit.signature = sig.to_bytes().to_vec();
     deposit.agent_key = signing_key.verifying_key().to_bytes().to_vec();
+    Ok(())
 }
 
 async fn enrich_findings_with_threat_intel<S>(
