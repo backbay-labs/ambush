@@ -760,6 +760,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context(1_700_000_000_001),
+                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -801,6 +802,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context(1_700_000_000_002),
+                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -868,21 +870,33 @@ mod tests {
             .unwrap();
 
         let substrate = Arc::new(plane.stack.substrate.clone());
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
         for agent in ["agent-a", "agent-b"] {
-            substrate
-                .deposit(swarm_core::pheromone::PheromoneDeposit {
-                    indicator: serde_json::json!({"signal": "execution"}),
-                    threat_class: ThreatClass::Execution,
-                    severity: Severity::High,
-                    confidence: 0.8,
-                    timestamp: 1_700_000_000,
-                    decay_half_life: 3600.0,
-                    agent_id: AgentId(agent.to_string()),
-                    signature: Vec::new(),
-                    agent_key: Vec::new(),
-                })
-                .await
-                .unwrap();
+            let mut deposit = swarm_core::pheromone::PheromoneDeposit {
+                indicator: serde_json::json!({"signal": "execution"}),
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+                confidence: 0.8,
+                timestamp: 1_700_000_000,
+                decay_half_life: 3600.0,
+                agent_id: AgentId(agent.to_string()),
+                signature: Vec::new(),
+                agent_key: Vec::new(),
+            };
+            let payload = swarm_pheromone::DepositSigningPayload {
+                indicator: &deposit.indicator,
+                threat_class: &deposit.threat_class,
+                severity: &deposit.severity,
+                confidence: deposit.confidence,
+                timestamp: deposit.timestamp,
+                decay_half_life: deposit.decay_half_life,
+                agent_id: &deposit.agent_id,
+            };
+            let payload_bytes = serde_json::to_vec(&payload).unwrap();
+            let sig = ed25519_dalek::Signer::sign(&signing_key, &payload_bytes);
+            deposit.signature = sig.to_bytes().to_vec();
+            deposit.agent_key = signing_key.verifying_key().to_bytes().to_vec();
+            substrate.deposit(deposit).await.unwrap();
         }
 
         let mut monitor =

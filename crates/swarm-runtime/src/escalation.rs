@@ -278,12 +278,13 @@ fn unix_timestamp_secs() -> i64 {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::ConcentrationMonitor;
+    use ed25519_dalek::{Signer, SigningKey};
     use std::sync::Arc;
     use swarm_core::agent::SwarmMode;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::{AgentId, EscalationEvent, Severity};
-    use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
+    use swarm_pheromone::{DepositSigningPayload, InMemoryPheromoneSubstrate, PheromoneSubstrate};
 
     fn test_config() -> PheromoneConfig {
         PheromoneConfig {
@@ -296,8 +297,13 @@ mod tests {
         }
     }
 
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[42u8; 32])
+    }
+
     fn make_deposit(agent_id: &str, confidence: f64, timestamp: i64) -> PheromoneDeposit {
-        PheromoneDeposit {
+        let key = test_signing_key();
+        let mut deposit = PheromoneDeposit {
             indicator: serde_json::json!({"signal": "process-tree"}),
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
@@ -307,7 +313,21 @@ mod tests {
             agent_id: AgentId(agent_id.to_string()),
             signature: Vec::new(),
             agent_key: Vec::new(),
-        }
+        };
+        let payload = DepositSigningPayload {
+            indicator: &deposit.indicator,
+            threat_class: &deposit.threat_class,
+            severity: &deposit.severity,
+            confidence: deposit.confidence,
+            timestamp: deposit.timestamp,
+            decay_half_life: deposit.decay_half_life,
+            agent_id: &deposit.agent_id,
+        };
+        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        let sig = key.sign(&payload_bytes);
+        deposit.signature = sig.to_bytes().to_vec();
+        deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+        deposit
     }
 
     #[tokio::test]

@@ -35,7 +35,8 @@ fn make_deposit(
     confidence: f64,
     timestamp: i64,
 ) -> PheromoneDeposit {
-    PheromoneDeposit {
+    let key = test_signing_key();
+    let mut deposit = PheromoneDeposit {
         indicator: serde_json::json!({"signal": "execution"}),
         threat_class,
         severity: Severity::High,
@@ -45,7 +46,21 @@ fn make_deposit(
         agent_id: AgentId(agent_id.to_string()),
         signature: Vec::new(),
         agent_key: Vec::new(),
-    }
+    };
+    let payload = swarm_pheromone::DepositSigningPayload {
+        indicator: &deposit.indicator,
+        threat_class: &deposit.threat_class,
+        severity: &deposit.severity,
+        confidence: deposit.confidence,
+        timestamp: deposit.timestamp,
+        decay_half_life: deposit.decay_half_life,
+        agent_id: &deposit.agent_id,
+    };
+    let payload_bytes = serde_json::to_vec(&payload).unwrap();
+    let sig = ed25519_dalek::Signer::sign(&key, &payload_bytes);
+    deposit.signature = sig.to_bytes().to_vec();
+    deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+    deposit
 }
 
 fn threat_intel_alert_config() -> PheromoneConfig {

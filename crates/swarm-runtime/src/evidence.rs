@@ -2214,6 +2214,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &AgentId("whisker-a".to_string()),
                     approval: &approval_context(1_710_000_000_001),
+                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {

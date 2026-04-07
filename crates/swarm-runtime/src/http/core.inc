@@ -4802,6 +4802,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &approval_context(1_700_000_000_010),
+                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -4940,6 +4941,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &approval_context(1_700_000_000_001),
+                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
