@@ -231,6 +231,13 @@ impl IngestState {
         }
     }
 
+    /// Re-resolve `@secret:` references from disk and update the active runtime
+    /// stack without re-reading or re-parsing the YAML config file. This avoids
+    /// the overhead of a full config reload when only secret values have rotated.
+    pub fn reload_secrets_only(&self) -> Result<(), IngestBuildError> {
+        todo!("reload_secrets_only not yet implemented")
+    }
+
     pub fn reload_from_disk(&self) -> Result<(), IngestBuildError> {
         let config = match load_config(self.config_path()) {
             Ok(config) => config,
@@ -1023,6 +1030,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
                 strategy: strategy.to_string(),
@@ -1720,6 +1728,146 @@ mod tests {
         let metrics = String::from_utf8(body.to_vec()).unwrap();
         assert!(metrics.contains("swarm_heap_bytes 4096"));
         assert!(metrics.contains("swarm_heap_pressure_ratio 0.5"));
+    }
+
+    fn test_config_with_secret_token(secret_dir: &Path) -> SwarmConfig {
+        use swarm_core::config::{CircuitBreakerConfig, HttpEdrConfig, RetryConfig};
+        SwarmConfig {
+            response_adapter: ResponseAdapterConfig::HttpEdr {
+                config: HttpEdrConfig {
+                    endpoint: "https://edr.example".to_string(),
+                    auth_token: "@secret:edr-token".to_string(),
+                    timeout_ms: 1_000,
+                    retry: RetryConfig::default(),
+                    circuit_breaker: CircuitBreakerConfig::default(),
+                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                },
+            },
+            runtime: swarm_core::config::RuntimeSettings {
+                secret_dir: Some(secret_dir.display().to_string()),
+                ..test_config("suspicious_process_tree").runtime
+            },
+            ..test_config("suspicious_process_tree")
+        }
+    }
+
+    #[test]
+    fn reload_secrets_only_updates_auth_token() {
+        let tmp = std::env::temp_dir().join(format!(
+            "swarm-secrets-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("edr-token"), "initial-value\n").unwrap();
+
+        let config_path = temp_path("secrets-reload");
+        let mut config = test_config_with_secret_token(&tmp);
+        // Pre-resolve the initial secret so IngestState can be built
+        config = crate::config::resolve_outbound_secrets(config, Some(&config_path)).unwrap();
+
+        let state = IngestState::from_config(&config_path, config).unwrap();
+
+        // Verify initial value
+        let stack = state.stack.load_full();
+        match &stack.service.config.response_adapter {
+            ResponseAdapterConfig::HttpEdr { config: edr } => {
+                assert_eq!(edr.auth_token, "initial-value");
+            }
+            other => panic!("expected HttpEdr, got {:?}", other),
+        }
+        drop(stack);
+
+        // Now rotate the secret on disk and reload secrets only
+        fs::write(tmp.join("edr-token"), "rotated-value\n").unwrap();
+        state.reload_secrets_only().unwrap();
+
+        // Verify the rotated value is visible in the active stack
+        let stack = state.stack.load_full();
+        match &stack.service.config.response_adapter {
+            ResponseAdapterConfig::HttpEdr { config: edr } => {
+                assert_eq!(edr.auth_token, "rotated-value");
+            }
+            other => panic!("expected HttpEdr after reload, got {:?}", other),
+        }
+
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn reload_secrets_only_preserves_detector_strategy() {
+        let tmp = std::env::temp_dir().join(format!(
+            "swarm-secrets-strategy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("edr-token"), "some-token\n").unwrap();
+
+        let config_path = temp_path("secrets-strategy");
+        let mut config = test_config_with_secret_token(&tmp);
+        config = crate::config::resolve_outbound_secrets(config, Some(&config_path)).unwrap();
+
+        let state = IngestState::from_config(&config_path, config).unwrap();
+        let strategy_before = state.detector_strategy_name();
+
+        fs::write(tmp.join("edr-token"), "new-token\n").unwrap();
+        state.reload_secrets_only().unwrap();
+
+        let strategy_after = state.detector_strategy_name();
+        assert_eq!(
+            strategy_before, strategy_after,
+            "detector strategy must not change after secrets-only reload"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn reload_secrets_only_does_not_read_config_yaml() {
+        // Build state with a config path that does NOT exist on disk.
+        // reload_secrets_only must succeed because it should NOT try
+        // to re-read the YAML file — only re-resolve secrets.
+        let tmp = std::env::temp_dir().join(format!(
+            "swarm-secrets-nofile-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("edr-token"), "the-token\n").unwrap();
+
+        let config_path = temp_path("secrets-nofile");
+        let mut config = test_config_with_secret_token(&tmp);
+        config = crate::config::resolve_outbound_secrets(config, Some(&config_path)).unwrap();
+
+        let state = IngestState::from_config(&config_path, config).unwrap();
+
+        // The config YAML file was never actually written, so reload_from_disk
+        // would fail. reload_secrets_only should work because it uses the in-memory
+        // config from the current stack.
+        fs::write(tmp.join("edr-token"), "fresh-token\n").unwrap();
+        state.reload_secrets_only().unwrap();
+
+        let stack = state.stack.load_full();
+        match &stack.service.config.response_adapter {
+            ResponseAdapterConfig::HttpEdr { config: edr } => {
+                assert_eq!(edr.auth_token, "fresh-token");
+            }
+            other => panic!("expected HttpEdr, got {:?}", other),
+        }
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

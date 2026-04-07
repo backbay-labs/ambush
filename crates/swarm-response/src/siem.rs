@@ -321,7 +321,7 @@ impl SiemFindingForwarder {
             ),
         };
         let adapter = SiemForwardAdapter::new(config);
-        let journal = Arc::new(DeadLetterJournal::from_path(dead_letter_path));
+        let journal = Arc::new(DeadLetterJournal::from_path(dead_letter_path, None));
         Self {
             executor: Arc::new(ResilientExecutor::new(
                 adapter,

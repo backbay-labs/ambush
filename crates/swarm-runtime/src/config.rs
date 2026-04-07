@@ -297,7 +297,7 @@ fn migrate_config_value(
     }
 }
 
-fn resolve_outbound_secrets(
+pub fn resolve_outbound_secrets(
     mut config: SwarmConfig,
     config_path: Option<&Path>,
 ) -> Result<SwarmConfig, ConfigValidationError> {
