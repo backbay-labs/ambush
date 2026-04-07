@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.37.1
 milestone_name: Runtime Hardening And Audit Debt
 status: active
-last_updated: "2026-04-06T00:00:00Z"
+last_updated: "2026-04-07T22:52:36Z"
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
 ---
 
 # State

@@ -96,9 +96,9 @@
 
 #### Agent Safety
 
-- **HARDEN-01**: `WhiskerAgent` and `StalkerAgent` sign every `PheromoneDeposit` using their agent signing key before submitting to the substrate; deposits with empty `signature` or `agent_key` fields are rejected by `PheromoneSubstrate::deposit()` with a structured error
-- **HARDEN-02**: The `AgentDispatcher` wraps every `SwarmAgent::tick()` call in `tokio::time::timeout()` with a configurable `agent_tick_timeout_ms` in `RuntimeSettings` (default 500ms); agents that exceed the timeout are marked `AgentHealth::Degraded` and their tick is skipped for that cycle
-- **HARDEN-03**: The `AgentDispatcher::apply_actions()` handler logs a structured warning for any `SwarmAction` variant that is not explicitly processed (currently `ClaimInvestigation` and `PublishFindings` are silently dropped), and documents in code comments which actions are agent-direct vs dispatcher-routed
+- [x] **HARDEN-01**: `WhiskerAgent` and `StalkerAgent` sign every `PheromoneDeposit` using their agent signing key before submitting to the substrate; deposits with empty `signature` or `agent_key` fields are rejected by `PheromoneSubstrate::deposit()` with a structured error
+- [x] **HARDEN-02**: The `AgentDispatcher` wraps every `SwarmAgent::tick()` call in `tokio::time::timeout()` with a configurable `agent_tick_timeout_ms` in `RuntimeSettings` (default 500ms); agents that exceed the timeout are marked `AgentHealth::Degraded` and their tick is skipped for that cycle
+- [x] **HARDEN-03**: The `AgentDispatcher::apply_actions()` handler logs a structured warning for any `SwarmAction` variant that is not explicitly processed (currently `ClaimInvestigation` and `PublishFindings` are silently dropped), and documents in code comments which actions are agent-direct vs dispatcher-routed
 
 #### Substrate Durability
 
@@ -197,8 +197,8 @@
 | PERSIST-04 | Phases 112, 113, 114 | Satisfied |
 | PERSIST-05 | Phase 115 | Satisfied |
 | HARDEN-01 | Phase 116, Plan 01 | Satisfied |
-| HARDEN-02 | Queued milestone v1.37.1 | Queued |
-| HARDEN-03 | Queued milestone v1.37.1 | Queued |
+| HARDEN-02 | Phase 116, Plan 02 | Satisfied |
+| HARDEN-03 | Phase 116, Plan 02 | Satisfied |
 | HARDEN-04 | Queued milestone v1.37.1 | Queued |
 | HARDEN-05 | Queued milestone v1.37.1 | Queued |
 | HARDEN-06 | Queued milestone v1.37.1 | Queued |
