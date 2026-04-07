@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 
+use ed25519_dalek::SigningKey;
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
 use swarm_core::types::AgentId;
 use swarm_pheromone::InMemoryPheromoneSubstrate;
@@ -40,6 +41,7 @@ async fn main() {
     let detector = SuspiciousProcessTreeDetector::default();
     let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
     let agent_id = AgentId("whisker-bench".to_string());
+    let signing_key = SigningKey::from_bytes(&[42u8; 32]);
 
     let base_event = TelemetryEvent {
         source: "benchmark".to_string(),
@@ -67,6 +69,7 @@ async fn main() {
             &event,
             &agent_id,
             &pheromone_config(),
+            &signing_key,
         )
         .await
         .unwrap();
@@ -86,6 +89,7 @@ async fn main() {
             &event,
             &agent_id,
             &pheromone_config(),
+            &signing_key,
         )
         .await
         .unwrap();

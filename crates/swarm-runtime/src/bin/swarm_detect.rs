@@ -567,6 +567,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let agent_id = AgentId("swarm-detect".to_string());
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
     let mut scenarios = 0usize;
     let mut events = 0usize;
     let mut findings = 0usize;
@@ -605,6 +606,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     EventExecutionContext {
                         agent_id: &agent_id,
                         approval: &approval,
+                        signing_key: &signing_key,
                     },
                     |_| Some(step.action.clone()),
                 )

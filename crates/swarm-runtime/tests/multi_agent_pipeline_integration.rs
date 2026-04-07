@@ -124,6 +124,7 @@ async fn full_multi_agent_pipeline() -> Result<(), Box<dyn Error>> {
             EventExecutionContext {
                 agent_id: &AgentId("swarm-detect".to_string()),
                 approval: &approval,
+                signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
             },
             |_| {
                 Some(ResponseAction::DeployDecoy {

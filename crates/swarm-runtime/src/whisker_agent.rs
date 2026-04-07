@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 pub struct WhiskerAgent {
     id: AgentId,
-    _signing_key: SigningKey,
+    signing_key: SigningKey,
     verifying_key: VerifyingKey,
     event_rx: Mutex<mpsc::Receiver<TelemetryEvent>>,
     detector: Arc<SupportedDetector>,
@@ -40,7 +40,7 @@ impl WhiskerAgent {
 
         Self {
             id,
-            _signing_key: signing_key,
+            signing_key,
             verifying_key,
             event_rx: Mutex::new(event_rx),
             detector,
@@ -95,6 +95,7 @@ impl SwarmAgent for WhiskerAgent {
                 &event,
                 &self.id,
                 &self.pheromone_config,
+                &self.signing_key,
             )
             .await
             {

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use std::collections::HashSet;
 use swarm_core::agent::{
@@ -8,7 +8,7 @@ use swarm_core::agent::{
 use swarm_core::config::PheromoneConfig;
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
-use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+use swarm_pheromone::{ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate};
 use swarm_spine::{ConfiguredReplayBundleStore, ReplayBundleStore};
 
 use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
@@ -16,7 +16,7 @@ use swarm_spine::ConfiguredInvestigationBundleStore;
 
 pub struct StalkerAgent {
     id: AgentId,
-    _signing_key: SigningKey,
+    signing_key: SigningKey,
     verifying_key: VerifyingKey,
     replay_store: ConfiguredReplayBundleStore,
     investigation:
@@ -44,7 +44,7 @@ impl StalkerAgent {
         let verifying_key = signing_key.verifying_key();
         Self {
             id,
-            _signing_key: signing_key,
+            signing_key,
             verifying_key,
             replay_store,
             investigation,
@@ -136,7 +136,7 @@ impl SwarmAgent for StalkerAgent {
             let policy = self
                 .pheromone_config
                 .resolve_threat_class_policy(threat_class_config.as_ref());
-            let deposit = PheromoneDeposit {
+            let mut deposit = PheromoneDeposit {
                 indicator: indicator.clone(),
                 threat_class: investigation.bundle.threat_class.clone(),
                 severity: investigation.bundle.severity,
@@ -147,6 +147,20 @@ impl SwarmAgent for StalkerAgent {
                 signature: Vec::new(),
                 agent_key: Vec::new(),
             };
+            let signing_payload = DepositSigningPayload {
+                indicator: &deposit.indicator,
+                threat_class: &deposit.threat_class,
+                severity: &deposit.severity,
+                confidence: deposit.confidence,
+                timestamp: deposit.timestamp,
+                decay_half_life: deposit.decay_half_life,
+                agent_id: &deposit.agent_id,
+            };
+            let payload_bytes = serde_json::to_vec(&signing_payload)
+                .expect("deposit signing payload serialization must succeed");
+            let sig = self.signing_key.sign(&payload_bytes);
+            deposit.signature = sig.to_bytes().to_vec();
+            deposit.agent_key = self.signing_key.verifying_key().to_bytes().to_vec();
             self.substrate
                 .deposit(deposit)
                 .await

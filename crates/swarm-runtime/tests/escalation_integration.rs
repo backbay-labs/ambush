@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use ed25519_dalek::SigningKey;
 use std::sync::Arc;
 use swarm_core::agent::{AgentFinding, SwarmEnvironment, SwarmMode};
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
@@ -12,6 +13,10 @@ use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
 use swarm_runtime::detection::detect_and_deposit;
 use swarm_runtime::escalation::ConcentrationMonitor;
 use swarm_whisker::DnsExfiltrationDetector;
+
+fn test_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[42u8; 32])
+}
 
 fn test_config() -> PheromoneConfig {
     PheromoneConfig {
@@ -301,6 +306,7 @@ async fn threat_intel_enriched_dns_detection_triggers_alert_escalation() {
         &event,
         &AgentId("whisker-dns".to_string()),
         &config,
+        &test_signing_key(),
     )
     .await
     .unwrap();

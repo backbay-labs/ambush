@@ -2556,9 +2556,11 @@ impl DefaultReplayHarness {
                 correlation_id: None,
                 now_ms: loaded.manifest.seed_time_ms + index as i64,
             };
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
             let execution = EventExecutionContext {
                 agent_id: &agent_id,
                 approval: &approval,
+                signing_key: &signing_key,
             };
 
             if let Some(bundle) = service

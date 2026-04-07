@@ -85,6 +85,7 @@ pub enum ServiceError {
 pub struct EventExecutionContext<'a> {
     pub agent_id: &'a AgentId,
     pub approval: &'a ApprovalContext,
+    pub signing_key: &'a ed25519_dalek::SigningKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -562,6 +563,7 @@ where
             event,
             execution.agent_id,
             &self.config.pheromone,
+            execution.signing_key,
         )
         .await;
         let detect_elapsed_us = detect_started.elapsed().as_micros() as u64;
@@ -1434,6 +1436,10 @@ mod tests {
     };
     use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
+    fn test_signing_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[42u8; 32])
+    }
+
     fn service_config(
         mode: RuntimeMode,
         backend: PheromoneBackendConfig,
@@ -1696,6 +1702,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -1741,6 +1748,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(ResponseAction::DeployDecoy {
@@ -1804,6 +1812,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| None,
             )
@@ -1856,6 +1865,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(ResponseAction::DeployDecoy {
@@ -1912,6 +1922,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(ResponseAction::DeployDecoy {
@@ -1962,6 +1973,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(ResponseAction::DeployDecoy {
@@ -2000,6 +2012,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(ResponseAction::BlockEgress {
@@ -2114,6 +2127,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -2188,6 +2202,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -2349,6 +2364,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -2605,6 +2621,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context_one,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -2626,6 +2643,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context_two,
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -2778,6 +2796,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &make_context(1_700_000_000_100),
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -2796,6 +2815,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &make_context(1_700_000_000_200),
+                    signing_key: &test_signing_key(),
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {

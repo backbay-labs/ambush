@@ -164,6 +164,7 @@ pub struct IngestState {
     bridge_health: Option<SharedBridgeHealth>,
     shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
     heap_snapshot_provider: HeapSnapshotProvider,
+    signing_key: ed25519_dalek::SigningKey,
 }
 
 impl IngestState {
@@ -198,6 +199,7 @@ impl IngestState {
             bridge_health: None,
             shutdown_tx: None,
             heap_snapshot_provider: Arc::new(sample_heap_pressure),
+            signing_key: ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng),
         })
     }
 
@@ -483,6 +485,7 @@ pub async fn ingest_events_handler(
                             crate::service::EventExecutionContext {
                                 agent_id: &agent_id,
                                 approval: &approval,
+                                signing_key: &state.signing_key,
                             },
                             |_| None,
                         )

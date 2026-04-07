@@ -1,9 +1,10 @@
+use ed25519_dalek::{Signer, SigningKey};
 use std::collections::BTreeSet;
 use swarm_core::config::PheromoneConfig;
 use swarm_core::pheromone::{PheromoneDeposit, ThreatIntelEntry, ThreatIntelIndicatorType};
 use swarm_core::telemetry::TelemetryPayload;
 use swarm_core::types::AgentId;
-use swarm_pheromone::{PheromoneSubstrate, SubstrateError};
+use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate, SubstrateError};
 use swarm_whisker::stream::evaluate_event;
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 
@@ -23,12 +24,15 @@ pub enum PipelineError {
 }
 
 /// Evaluate one telemetry event and persist any resulting pheromone deposits.
+///
+/// Every deposit is signed with `signing_key` before being submitted to the substrate.
 pub async fn detect_and_deposit<D, S>(
     detector: &D,
     substrate: &S,
     event: &TelemetryEvent,
     agent_id: &AgentId,
     pheromone: &PheromoneConfig,
+    signing_key: &SigningKey,
 ) -> Result<DetectionPipelineOutcome, PipelineError>
 where
     D: DetectionStrategy,
@@ -37,9 +41,10 @@ where
     let findings =
         enrich_findings_with_threat_intel(substrate, event, evaluate_event(detector, event))
             .await?;
-    let deposits = resolve_deposits(substrate, &findings, event, agent_id, pheromone).await?;
+    let mut deposits = resolve_deposits(substrate, &findings, event, agent_id, pheromone).await?;
 
-    for deposit in &deposits {
+    for deposit in &mut deposits {
+        sign_deposit(deposit, signing_key);
         substrate.deposit(deposit.clone()).await?;
     }
 
@@ -48,6 +53,24 @@ where
         findings,
         deposits,
     })
+}
+
+/// Sign a [`PheromoneDeposit`] in place using an Ed25519 signing key.
+fn sign_deposit(deposit: &mut PheromoneDeposit, signing_key: &SigningKey) {
+    let payload = DepositSigningPayload {
+        indicator: &deposit.indicator,
+        threat_class: &deposit.threat_class,
+        severity: &deposit.severity,
+        confidence: deposit.confidence,
+        timestamp: deposit.timestamp,
+        decay_half_life: deposit.decay_half_life,
+        agent_id: &deposit.agent_id,
+    };
+    let payload_bytes =
+        serde_json::to_vec(&payload).expect("deposit signing payload serialization must succeed");
+    let sig = signing_key.sign(&payload_bytes);
+    deposit.signature = sig.to_bytes().to_vec();
+    deposit.agent_key = signing_key.verifying_key().to_bytes().to_vec();
 }
 
 async fn enrich_findings_with_threat_intel<S>(
@@ -242,6 +265,7 @@ where
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::detect_and_deposit;
+    use ed25519_dalek::SigningKey;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::pheromone::{ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType};
     use swarm_core::types::AgentId;
@@ -250,6 +274,10 @@ mod tests {
         DnsExfiltrationDetector, DnsQueryEvent, ProcessStartEvent, SuspiciousProcessTreeDetector,
         TelemetryEvent, TelemetryPayload,
     };
+
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[42u8; 32])
+    }
 
     fn pheromone_config() -> PheromoneConfig {
         PheromoneConfig {
@@ -288,6 +316,7 @@ mod tests {
             &event,
             &AgentId("whisker-a".to_string()),
             &pheromone_config(),
+            &test_signing_key(),
         )
         .await
         .unwrap();
@@ -333,6 +362,7 @@ mod tests {
             &event,
             &AgentId("whisker-a".to_string()),
             &pheromone_config(),
+            &test_signing_key(),
         )
         .await
         .unwrap();
@@ -374,6 +404,7 @@ mod tests {
             &event,
             &AgentId("whisker-dns".to_string()),
             &pheromone_config(),
+            &test_signing_key(),
         )
         .await
         .unwrap();

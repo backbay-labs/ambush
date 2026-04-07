@@ -105,7 +105,7 @@ fn benign_event() -> TelemetryEvent {
     }
 }
 
-fn execution_context() -> (AgentId, ApprovalContext) {
+fn execution_context() -> (AgentId, ApprovalContext, ed25519_dalek::SigningKey) {
     (
         AgentId("integration-agent".to_string()),
         ApprovalContext {
@@ -114,6 +114,7 @@ fn execution_context() -> (AgentId, ApprovalContext) {
             correlation_id: None,
             now_ms: 1_700_000_000_500,
         },
+        ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
     )
 }
 
@@ -165,7 +166,7 @@ async fn run_scenario_with_strategy(
         SummaryInvestigator,
     )?;
     let (_, step) = load_single_event_scenario(relative_path)?;
-    let (agent_id, approval) = execution_context();
+    let (agent_id, approval, signing_key) = execution_context();
     Ok(stack
         .process_event(
             &detector,
@@ -173,6 +174,7 @@ async fn run_scenario_with_strategy(
             EventExecutionContext {
                 agent_id: &agent_id,
                 approval: &approval,
+                signing_key: &signing_key,
             },
             |_| Some(step.action.clone()),
         )
@@ -190,7 +192,7 @@ async fn full_critical_path_detect_to_receipt() -> Result<(), Box<dyn std::error
         SummaryInvestigator,
     )?;
     let event = suspicious_event("suspicious-evt");
-    let (agent_id, approval) = execution_context();
+    let (agent_id, approval, signing_key) = execution_context();
     let result = stack
         .process_event(
             &detector,
@@ -198,6 +200,7 @@ async fn full_critical_path_detect_to_receipt() -> Result<(), Box<dyn std::error
             EventExecutionContext {
                 agent_id: &agent_id,
                 approval: &approval,
+                signing_key: &signing_key,
             },
             |_| {
                 Some(ResponseAction::BlockEgress {
@@ -238,7 +241,7 @@ async fn benign_event_produces_no_bundle() -> Result<(), Box<dyn std::error::Err
         NoOpInvestigation,
     )?;
     let event = benign_event();
-    let (agent_id, approval) = execution_context();
+    let (agent_id, approval, signing_key) = execution_context();
     let result = stack
         .process_event(
             &detector,
@@ -246,6 +249,7 @@ async fn benign_event_produces_no_bundle() -> Result<(), Box<dyn std::error::Err
             EventExecutionContext {
                 agent_id: &agent_id,
                 approval: &approval,
+                signing_key: &signing_key,
             },
             |_| {
                 Some(ResponseAction::BlockEgress {
@@ -401,7 +405,7 @@ async fn policy_deny_produces_bundle_with_skipped_response()
         NoOpInvestigation,
     )?;
     let event = suspicious_event("deny-evt");
-    let (agent_id, approval) = execution_context();
+    let (agent_id, approval, signing_key) = execution_context();
     let result = stack
         .process_event(
             &detector,
@@ -409,6 +413,7 @@ async fn policy_deny_produces_bundle_with_skipped_response()
             EventExecutionContext {
                 agent_id: &agent_id,
                 approval: &approval,
+                signing_key: &signing_key,
             },
             |_| {
                 Some(ResponseAction::IsolateHost {

@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use ed25519_dalek::SigningKey;
 use swarm_core::config::SwarmConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::AgentId;
@@ -10,6 +11,10 @@ use swarm_runtime::detection::detect_and_deposit;
 use swarm_whisker::{
     ProcessStartEvent, RegistryPersistenceEvent, TelemetryEvent, TelemetryPayload,
 };
+
+fn test_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[42u8; 32])
+}
 
 fn config_with_strategy(strategy: &str) -> Result<SwarmConfig, Box<dyn std::error::Error>> {
     let mut config = load_config(concat!(
@@ -66,6 +71,7 @@ async fn persistence_strategy_detects_registry_run_key_and_deposits()
         &persistence_event(),
         &AgentId("whisker-persistence".to_string()),
         &config.pheromone,
+        &test_signing_key(),
     )
     .await?;
 
@@ -96,6 +102,7 @@ async fn supply_chain_strategy_detects_unsigned_trusted_path_execution_and_depos
         &supply_chain_event(),
         &AgentId("whisker-supply".to_string()),
         &config.pheromone,
+        &test_signing_key(),
     )
     .await?;
 
