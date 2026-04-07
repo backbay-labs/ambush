@@ -387,7 +387,7 @@ mod tests {
     #[tokio::test]
     async fn writes_dead_letter_after_final_failure() {
         let path = temp_path("dead-letter-final");
-        let journal = Arc::new(DeadLetterJournal::new(&path).unwrap());
+        let journal = Arc::new(DeadLetterJournal::new(&path, None).unwrap());
         let executor = ResilientExecutor::new(
             StubExecutor {
                 calls: Arc::new(AtomicUsize::new(0)),

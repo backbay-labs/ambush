@@ -3941,6 +3941,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),

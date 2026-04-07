@@ -94,8 +94,10 @@ impl NotificationRouter {
         let channels = channels
             .into_iter()
             .map(|(name, config)| {
+                // TODO: thread max_dead_letter_bytes from RuntimeSettings
                 let journal = Arc::new(DeadLetterJournal::from_path(
                     config.dead_letter_path.clone(),
+                    None,
                 ));
                 (
                     name,

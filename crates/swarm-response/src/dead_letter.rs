@@ -20,20 +20,25 @@ pub struct DeadLetterEntry {
 #[derive(Debug)]
 pub struct DeadLetterJournal {
     path: PathBuf,
+    max_bytes: Option<u64>,
 }
 
 impl DeadLetterJournal {
-    pub fn new(path: impl Into<PathBuf>) -> io::Result<Self> {
-        let journal = Self::from_path(path);
+    pub fn new(path: impl Into<PathBuf>, max_bytes: Option<u64>) -> io::Result<Self> {
+        let journal = Self::from_path(path, max_bytes);
         journal.ensure_path()?;
         Ok(journal)
     }
 
-    pub fn from_path(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+    pub fn from_path(path: impl Into<PathBuf>, max_bytes: Option<u64>) -> Self {
+        Self {
+            path: path.into(),
+            max_bytes,
+        }
     }
 
     pub fn write(&self, entry: &DeadLetterEntry) -> io::Result<()> {
+        self.rotate_if_needed()?;
         self.ensure_path()?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -67,6 +72,29 @@ impl DeadLetterJournal {
             return Ok(entries.split_off(start));
         }
         Ok(entries)
+    }
+
+    fn rotate_if_needed(&self) -> io::Result<()> {
+        let Some(max_bytes) = self.max_bytes else {
+            return Ok(());
+        };
+        let metadata = match std::fs::metadata(&self.path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if metadata.len() < max_bytes {
+            return Ok(());
+        }
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let rotated = PathBuf::from(format!("{}.{}", self.path.display(), timestamp_ms));
+        std::fs::rename(&self.path, &rotated)?;
+        // Create a fresh empty journal file
+        File::create(&self.path)?;
+        Ok(())
     }
 
     fn ensure_path(&self) -> io::Result<()> {
@@ -104,7 +132,7 @@ mod tests {
     #[test]
     fn write_appends_jsonl_line() {
         let path = temp_path("dead-letter");
-        let journal = DeadLetterJournal::new(&path).unwrap();
+        let journal = DeadLetterJournal::new(&path, None).unwrap();
         journal
             .write(&DeadLetterEntry {
                 timestamp_ms: 1_700_000_000_000,
@@ -128,7 +156,7 @@ mod tests {
     fn write_creates_missing_parent_directories() {
         let root = temp_path("dead-letter-parent");
         let path = root.join("nested/dead-letter.jsonl");
-        let journal = DeadLetterJournal::new(&path).unwrap();
+        let journal = DeadLetterJournal::new(&path, None).unwrap();
         journal
             .write(&DeadLetterEntry {
                 timestamp_ms: 1_700_000_000_001,
@@ -149,9 +177,10 @@ mod tests {
     #[test]
     fn rotation_renames_file_when_exceeding_max_bytes() {
         let path = temp_path("dead-letter-rotate");
-        let journal = DeadLetterJournal::new(&path, Some(100)).unwrap();
+        // Each JSON entry is ~189 bytes, so 800 bytes holds about 4 entries
+        let journal = DeadLetterJournal::new(&path, Some(800)).unwrap();
 
-        // Write entries until file exceeds 100 bytes
+        // Write entries until file exceeds 800 bytes (5 entries ~= 945 bytes)
         for idx in 0..5 {
             journal
                 .write(&DeadLetterEntry {
@@ -167,9 +196,9 @@ mod tests {
                 .unwrap();
         }
 
-        // File should be larger than 100 bytes now
+        // File should be larger than 800 bytes now
         let size_before = fs::metadata(&path).unwrap().len();
-        assert!(size_before > 100, "file should exceed max_bytes threshold");
+        assert!(size_before > 800, "file should exceed max_bytes threshold");
 
         // Write one more entry which should trigger rotation
         journal
@@ -253,9 +282,10 @@ mod tests {
     #[test]
     fn rotated_file_preserves_original_entries() {
         let path = temp_path("dead-letter-preserve");
-        let journal = DeadLetterJournal::new(&path, Some(100)).unwrap();
+        // Each JSON entry is ~189 bytes, so 800 bytes holds about 4 entries
+        let journal = DeadLetterJournal::new(&path, Some(800)).unwrap();
 
-        // Write entries until file exceeds 100 bytes
+        // Write entries until file exceeds 800 bytes (5 entries ~= 945 bytes)
         let mut written_count = 0;
         for idx in 0..5 {
             journal
@@ -318,7 +348,7 @@ mod tests {
     #[test]
     fn read_entries_returns_latest_entries_when_limited() {
         let path = temp_path("dead-letter-read");
-        let journal = DeadLetterJournal::from_path(&path);
+        let journal = DeadLetterJournal::from_path(&path, None);
         for idx in 0..3 {
             journal
                 .write(&DeadLetterEntry {

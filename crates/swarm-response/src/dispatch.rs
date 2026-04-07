@@ -24,7 +24,8 @@ impl DispatchingExecutor {
         let inner = match config {
             ResponseAdapterConfig::Sandbox => AdapterInner::Sandbox(SandboxExecutor),
             ResponseAdapterConfig::HttpEdr { config } => {
-                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path).map_err(
+                // TODO: thread max_dead_letter_bytes from RuntimeSettings
+                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path, None).map_err(
                     |error| {
                         ResponseError::unavailable(
                             "http_edr",
@@ -43,7 +44,8 @@ impl DispatchingExecutor {
                 ))
             }
             ResponseAdapterConfig::Webhook { config } => {
-                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path).map_err(
+                // TODO: thread max_dead_letter_bytes from RuntimeSettings
+                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path, None).map_err(
                     |error| {
                         ResponseError::unavailable(
                             "webhook",
