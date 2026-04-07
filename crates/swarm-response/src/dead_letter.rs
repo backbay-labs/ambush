@@ -147,6 +147,175 @@ mod tests {
     }
 
     #[test]
+    fn rotation_renames_file_when_exceeding_max_bytes() {
+        let path = temp_path("dead-letter-rotate");
+        let journal = DeadLetterJournal::new(&path, Some(100)).unwrap();
+
+        // Write entries until file exceeds 100 bytes
+        for idx in 0..5 {
+            journal
+                .write(&DeadLetterEntry {
+                    timestamp_ms: 1_700_000_000_000 + idx,
+                    receipt_id: format!("receipt-rot-{idx}"),
+                    action: "block_egress".to_string(),
+                    mode: ExecutionMode::Enforced,
+                    adapter: "http_edr".to_string(),
+                    attempts: 1,
+                    last_error: "failed".to_string(),
+                    details: serde_json::json!({"status": "timeout"}),
+                })
+                .unwrap();
+        }
+
+        // File should be larger than 100 bytes now
+        let size_before = fs::metadata(&path).unwrap().len();
+        assert!(size_before > 100, "file should exceed max_bytes threshold");
+
+        // Write one more entry which should trigger rotation
+        journal
+            .write(&DeadLetterEntry {
+                timestamp_ms: 1_700_000_000_099,
+                receipt_id: "receipt-rot-final".to_string(),
+                action: "block_egress".to_string(),
+                mode: ExecutionMode::Enforced,
+                adapter: "http_edr".to_string(),
+                attempts: 1,
+                last_error: "failed".to_string(),
+                details: serde_json::json!({"status": "timeout"}),
+            })
+            .unwrap();
+
+        // After rotation, the active journal should only have the new entry
+        let entries = journal.read_entries(None).unwrap();
+        assert_eq!(entries.len(), 1, "active journal should have 1 entry after rotation");
+        assert_eq!(entries[0].receipt_id, "receipt-rot-final");
+
+        // A rotated file should exist with a numeric timestamp suffix
+        let parent = path.parent().unwrap();
+        let prefix = path.file_name().unwrap().to_str().unwrap();
+        let rotated_files: Vec<_> = fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with(prefix) && name != prefix
+            })
+            .collect();
+        assert_eq!(rotated_files.len(), 1, "should have exactly one rotated file");
+        let rotated_name = rotated_files[0].file_name().to_string_lossy().to_string();
+        let suffix = rotated_name.strip_prefix(&format!("{prefix}.")).unwrap();
+        assert!(suffix.parse::<u128>().is_ok(), "suffix should be a numeric timestamp");
+
+        // Cleanup
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(rotated_files[0].path());
+    }
+
+    #[test]
+    fn no_rotation_when_max_bytes_is_none() {
+        let path = temp_path("dead-letter-no-rotate");
+        let journal = DeadLetterJournal::new(&path, None).unwrap();
+
+        for idx in 0..10 {
+            journal
+                .write(&DeadLetterEntry {
+                    timestamp_ms: 1_700_000_000_000 + idx,
+                    receipt_id: format!("receipt-nr-{idx}"),
+                    action: "block_egress".to_string(),
+                    mode: ExecutionMode::Enforced,
+                    adapter: "http_edr".to_string(),
+                    attempts: 1,
+                    last_error: "failed".to_string(),
+                    details: serde_json::json!({"status": "timeout"}),
+                })
+                .unwrap();
+        }
+
+        // No rotated files should exist
+        let parent = path.parent().unwrap();
+        let prefix = path.file_name().unwrap().to_str().unwrap();
+        let rotated_files: Vec<_> = fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with(prefix) && name != prefix
+            })
+            .collect();
+        assert!(rotated_files.is_empty(), "no rotated files should exist");
+
+        let entries = journal.read_entries(None).unwrap();
+        assert_eq!(entries.len(), 10);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rotated_file_preserves_original_entries() {
+        let path = temp_path("dead-letter-preserve");
+        let journal = DeadLetterJournal::new(&path, Some(100)).unwrap();
+
+        // Write entries until file exceeds 100 bytes
+        let mut written_count = 0;
+        for idx in 0..5 {
+            journal
+                .write(&DeadLetterEntry {
+                    timestamp_ms: 1_700_000_000_000 + idx,
+                    receipt_id: format!("receipt-pres-{idx}"),
+                    action: "block_egress".to_string(),
+                    mode: ExecutionMode::Enforced,
+                    adapter: "http_edr".to_string(),
+                    attempts: 1,
+                    last_error: "failed".to_string(),
+                    details: serde_json::json!({"status": "timeout"}),
+                })
+                .unwrap();
+            written_count += 1;
+        }
+
+        // Trigger rotation
+        journal
+            .write(&DeadLetterEntry {
+                timestamp_ms: 1_700_000_000_099,
+                receipt_id: "receipt-pres-trigger".to_string(),
+                action: "block_egress".to_string(),
+                mode: ExecutionMode::Enforced,
+                adapter: "http_edr".to_string(),
+                attempts: 1,
+                last_error: "failed".to_string(),
+                details: serde_json::json!({"status": "timeout"}),
+            })
+            .unwrap();
+
+        // Find the rotated file
+        let parent = path.parent().unwrap();
+        let prefix = path.file_name().unwrap().to_str().unwrap();
+        let rotated_path = fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .find(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with(prefix) && name != prefix
+            })
+            .expect("rotated file should exist")
+            .path();
+
+        // Read rotated file and verify it has the original entries
+        let rotated_journal = DeadLetterJournal::from_path(&rotated_path, None);
+        let rotated_entries = rotated_journal.read_entries(None).unwrap();
+        assert_eq!(rotated_entries.len(), written_count);
+        assert_eq!(rotated_entries[0].receipt_id, "receipt-pres-0");
+        assert_eq!(
+            rotated_entries[written_count - 1].receipt_id,
+            format!("receipt-pres-{}", written_count - 1)
+        );
+
+        // Cleanup
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&rotated_path);
+    }
+
+    #[test]
     fn read_entries_returns_latest_entries_when_limited() {
         let path = temp_path("dead-letter-read");
         let journal = DeadLetterJournal::from_path(&path);
