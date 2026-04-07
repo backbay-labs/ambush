@@ -19,7 +19,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [x] **Phase 113: Persistence Detector And Profile Support** - A `PersistenceDetector` identifies scheduled tasks, cron changes, systemd timers, and run-key writes using a validated `PersistenceProfile`
 - [x] **Phase 114: Supply Chain Detector And Profile Support** - A `SupplyChainDetector` identifies unsigned trusted-path binaries, DLL side-loading, and signed-binary abuse with ATT&CK-tagged evidence
 - [x] **Phase 115: Persistence And Supply Chain Integration Proof** - Integration coverage, replay/canary/promotion support, docs, and milestone verification prove the new detectors through deposits and threat-class tagging
-- [ ] **Phase 116: Agent Safety Hardening** - Signed pheromone deposits, configurable tick timeout, and explicit action-handling warnings close the three agent-safety audit findings
+- [x] **Phase 116: Agent Safety Hardening** - Signed pheromone deposits, configurable tick timeout, and explicit action-handling warnings close the three agent-safety audit findings (completed 2026-04-07)
 - [ ] **Phase 117: Substrate Durability And Bridge Resilience** - Threat-intel GC on all three backends, journal rewrite on GC, gRPC stream timeout, and empty-parent schema fix close the four substrate and bridge audit findings
 - [ ] **Phase 118: Operational Hardening** - Independent secret-dir file-watch for hot rotation and size-based dead-letter rotation close the two operational-gap audit findings
 - [ ] **Phase 119: Pheromone Test Suite** - A focused `swarm-pheromone` test suite with 15+ tests covering the substrate trait contract closes the test-coverage audit finding
@@ -168,7 +168,7 @@ Plans:
 | 113. Persistence Detector And Profile Support | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 114. Supply Chain Detector And Profile Support | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 115. Persistence And Supply Chain Integration Proof | v1.37 | 2/2 | Complete | 2026-04-07 |
-| 116. Agent Safety Hardening | v1.37.1 | 0/2 | Planned | - |
+| 116. Agent Safety Hardening | 2/2 | Complete   | 2026-04-07 | - |
 | 117. Substrate Durability And Bridge Resilience | v1.37.1 | 0/? | Not started | - |
 | 118. Operational Hardening | v1.37.1 | 0/? | Not started | - |
 | 119. Pheromone Test Suite | v1.37.1 | 0/? | Not started | - |

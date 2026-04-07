@@ -92,6 +92,33 @@
 - **PERSIST-04**: Both detectors are configurable via `PersistenceProfile` and `SupplyChainProfile` with `validate()` returning `ProfileValidationError` consistent with existing detector profiles
 - **PERSIST-05**: Integration tests construct synthetic telemetry events, evaluate them through both detectors, assert correct `ThreatClass` and `mitre_technique_id`, and convert findings to `PheromoneDeposit` entries via `findings_to_deposits`
 
+### Runtime Hardening And Audit Debt (v1.37.1)
+
+#### Agent Safety
+
+- **HARDEN-01**: `WhiskerAgent` and `StalkerAgent` sign every `PheromoneDeposit` using their agent signing key before submitting to the substrate; deposits with empty `signature` or `agent_key` fields are rejected by `PheromoneSubstrate::deposit()` with a structured error
+- **HARDEN-02**: The `AgentDispatcher` wraps every `SwarmAgent::tick()` call in `tokio::time::timeout()` with a configurable `agent_tick_timeout_ms` in `RuntimeSettings` (default 500ms); agents that exceed the timeout are marked `AgentHealth::Degraded` and their tick is skipped for that cycle
+- **HARDEN-03**: The `AgentDispatcher::apply_actions()` handler logs a structured warning for any `SwarmAction` variant that is not explicitly processed (currently `ClaimInvestigation` and `PublishFindings` are silently dropped), and documents in code comments which actions are agent-direct vs dispatcher-routed
+
+#### Substrate Durability
+
+- **HARDEN-04**: A `gc_expired_threat_intel()` method on `PheromoneSubstrate` removes `ThreatIntelEntry` records whose `expires_at` has passed; the method runs on the same GC interval as `gc_evaporated()` across all three backends (in-memory, local-journal, JetStream) and logs the number of entries purged
+- **HARDEN-05**: The `LocalJournalPheromoneSubstrate` rewrites the threat-intel journal file during GC to remove expired entries, preventing unbounded disk growth consistent with the existing deposit journal rewrite pattern
+
+#### Bridge Resilience
+
+- **HARDEN-06**: `TetragonBridge::poll()` wraps `stream.next().await` in `tokio::time::timeout()` with a configurable `event_timeout_secs` (default 30s); a timeout records a health error, increments `swarm_bridge_error_count`, and triggers reconnect-backoff instead of hanging indefinitely
+- **HARDEN-07**: `TetragonBridge` schema validation accepts `ProcessStartEvent` with an empty `parent_process` field (init-spawned processes have no parent) instead of rejecting it, using `"<none>"` as a sentinel value when the parent is absent
+
+#### Operational Gaps
+
+- **HARDEN-08**: The `SwarmSecretProvider` file-watch thread monitors the configured `secret_dir` for changes independently of the main config file watch; when a secret file changes, only the affected `@secret:` references are re-resolved and injected into active response adapter configs without requiring a full config reload
+- **HARDEN-09**: Dead-letter journals (response and notification) implement size-based rotation when the journal file exceeds a configurable `max_dead_letter_bytes` in `RuntimeSettings`; the rotated file is renamed with a timestamp suffix and the active journal is truncated
+
+#### Test Coverage
+
+- **HARDEN-10**: `swarm-pheromone` gains a focused test suite covering deposit, query, evaporation GC, escalation record persistence, threat-intel CRUD with TTL expiry, and `ThreatClassConfig` store/query across the `InMemoryPheromoneSubstrate`; at least 15 tests that exercise the substrate trait contract independently of the runtime
+
 ### Fileless Execution And Behavioral Baselines (v1.38)
 
 - **FILELESS-01**: A `FilelessExecutionDetector` implements `DetectionStrategy` and identifies indicators of reflective DLL injection, encoded PowerShell execution with multi-stage deobfuscation hints, and raw syscall gadget patterns from a new `TelemetryPayload::ProcessMemoryAccess` variant and existing `ProcessStart` events
@@ -169,6 +196,16 @@
 | PERSIST-03 | Phases 112, 114 | Satisfied |
 | PERSIST-04 | Phases 112, 113, 114 | Satisfied |
 | PERSIST-05 | Phase 115 | Satisfied |
+| HARDEN-01 | Phase 116, Plan 01 | Satisfied |
+| HARDEN-02 | Queued milestone v1.37.1 | Queued |
+| HARDEN-03 | Queued milestone v1.37.1 | Queued |
+| HARDEN-04 | Queued milestone v1.37.1 | Queued |
+| HARDEN-05 | Queued milestone v1.37.1 | Queued |
+| HARDEN-06 | Queued milestone v1.37.1 | Queued |
+| HARDEN-07 | Queued milestone v1.37.1 | Queued |
+| HARDEN-08 | Queued milestone v1.37.1 | Queued |
+| HARDEN-09 | Queued milestone v1.37.1 | Queued |
+| HARDEN-10 | Queued milestone v1.37.1 | Queued |
 | FILELESS-01 | Queued milestone v1.38 | Queued |
 | FILELESS-02 | Queued milestone v1.38 | Queued |
 | FILELESS-03 | Queued milestone v1.38 | Queued |
@@ -190,10 +227,12 @@
 - v1.35 complete: 6 satisfied, 0 remaining
 - v1.36 complete: 6 satisfied, 0 remaining
 - v1.37 complete: 5 satisfied, 0 remaining
+- v1.37.1 queued: 10 (HARDEN-01 through HARDEN-10)
 - v1.38 queued: 6 (FILELESS-01 through FILELESS-06)
 - v1.39 queued: 5 (EVASION-01 through EVASION-05)
-- Total queued future requirements: 11
+- Total queued future requirements: 21
 
 ---
 *Requirements defined: 2026-04-05*
+*Last updated: 2026-04-07 after v1.31-v1.37 audit and hardening milestone definition*
 *Last updated: 2026-04-07 after closing v1.37*
