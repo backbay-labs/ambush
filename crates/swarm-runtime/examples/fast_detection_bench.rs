@@ -52,6 +52,9 @@ async fn main() {
             command_line: "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ=="
                 .to_string(),
             user: Some("benchmark".to_string()),
+            executable_path: None,
+            signer: None,
+            signature_valid: None,
         }),
     };
 

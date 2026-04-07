@@ -242,6 +242,16 @@ impl TelemetryBridge for TetragonBridge {
                     && !access.registry_path.trim().is_empty()
                     && !access.access_type.trim().is_empty()
             }
+            TelemetryPayload::RegistryPersistence(persistence) => {
+                !persistence.process_name.trim().is_empty()
+                    && !persistence.registry_path.trim().is_empty()
+                    && !persistence.access_type.trim().is_empty()
+            }
+            TelemetryPayload::FilePersistence(file) => {
+                !file.file_path.trim().is_empty()
+                    && !file.operation.trim().is_empty()
+                    && !file.process_name.trim().is_empty()
+            }
             TelemetryPayload::AuthenticationEvent(auth) => !auth.auth_type.trim().is_empty(),
         }
     }
@@ -351,6 +361,9 @@ mod tests {
                 process_name: String::new(),
                 command_line: "bash -lc whoami".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
 

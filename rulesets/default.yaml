@@ -17,7 +17,8 @@ runtime:
 
 detection:
   # Supported strategies: suspicious_process_tree, dns_exfiltration,
-  # lateral_movement, credential_access, suspicious_scripting
+  # lateral_movement, credential_access, suspicious_scripting,
+  # persistence, supply_chain
   strategy: suspicious_process_tree
   high_confidence_threshold: 0.90
   medium_confidence_threshold: 0.70

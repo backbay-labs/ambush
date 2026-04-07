@@ -3,8 +3,8 @@ use crate::canary::{
 };
 use crate::config::{
     DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
-    lateral_movement_profile, load_config, suspicious_process_tree_profile,
-    suspicious_scripting_profile,
+    lateral_movement_profile, load_config, persistence_profile, supply_chain_profile,
+    suspicious_process_tree_profile, suspicious_scripting_profile,
 };
 use crate::replay::{DetectorCandidateManifest, ExperimentLineage};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,8 @@ use swarm_whisker::stream::{evaluate_event, findings_to_deposits};
 use swarm_whisker::{
     CredentialAccessDetector, CredentialAccessProfile, DetectionFinding, DetectionStrategy,
     DnsExfiltrationDetector, DnsExfiltrationProfile, LateralMovementDetector,
-    LateralMovementProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
+    LateralMovementProfile, PersistenceDetector, PersistenceProfile, SupplyChainDetector,
+    SupplyChainProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
     SuspiciousScriptingDetector, SuspiciousScriptingProfile, TelemetryEvent,
 };
 
@@ -1231,6 +1232,14 @@ enum SupportedPromotionDetector {
         strategy_id: String,
         detector: SuspiciousScriptingDetector,
     },
+    Persistence {
+        strategy_id: String,
+        detector: PersistenceDetector,
+    },
+    SupplyChain {
+        strategy_id: String,
+        detector: SupplyChainDetector,
+    },
 }
 
 impl DetectionStrategy for SupportedPromotionDetector {
@@ -1241,6 +1250,8 @@ impl DetectionStrategy for SupportedPromotionDetector {
             Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
             Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
             Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
+            Self::Persistence { strategy_id, .. } => strategy_id.as_str(),
+            Self::SupplyChain { strategy_id, .. } => strategy_id.as_str(),
         }
     }
 
@@ -1251,6 +1262,8 @@ impl DetectionStrategy for SupportedPromotionDetector {
             Self::LateralMovement { detector, .. } => detector.evaluate(event),
             Self::CredentialAccess { detector, .. } => detector.evaluate(event),
             Self::SuspiciousScripting { detector, .. } => detector.evaluate(event),
+            Self::Persistence { detector, .. } => detector.evaluate(event),
+            Self::SupplyChain { detector, .. } => detector.evaluate(event),
         }
     }
 }
@@ -1303,6 +1316,26 @@ impl SupportedPromotionDetector {
         Ok(Self::SuspiciousScripting {
             strategy_id: strategy_id.into(),
             detector: SuspiciousScriptingDetector::from_profile(profile)?,
+        })
+    }
+
+    fn persistence(
+        strategy_id: impl Into<String>,
+        profile: PersistenceProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::Persistence {
+            strategy_id: strategy_id.into(),
+            detector: PersistenceDetector::from_profile(profile)?,
+        })
+    }
+
+    fn supply_chain(
+        strategy_id: impl Into<String>,
+        profile: SupplyChainProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::SupplyChain {
+            strategy_id: strategy_id.into(),
+            detector: SupplyChainDetector::from_profile(profile)?,
         })
     }
 }
@@ -1365,6 +1398,16 @@ fn baseline_candidate_from_config(
             description: "production baseline at promotion start".to_string(),
             profile: suspicious_scripting_profile(&config.detection)?,
         }),
+        "persistence" => Ok(DetectorCandidateManifest::Persistence {
+            strategy_id: config.detection.strategy.clone(),
+            description: "production baseline at promotion start".to_string(),
+            profile: persistence_profile(&config.detection)?,
+        }),
+        "supply_chain" => Ok(DetectorCandidateManifest::SupplyChain {
+            strategy_id: config.detection.strategy.clone(),
+            description: "production baseline at promotion start".to_string(),
+            profile: supply_chain_profile(&config.detection)?,
+        }),
         other => Err(ProductionPromotionError::UnsupportedDetector {
             strategy: other.to_string(),
         }),
@@ -1412,6 +1455,22 @@ fn detector_from_candidate(
             profile,
             ..
         } => Ok(SupportedPromotionDetector::suspicious_scripting(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::Persistence {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedPromotionDetector::persistence(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::SupplyChain {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedPromotionDetector::supply_chain(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -1827,6 +1886,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc AAA=".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }
@@ -1842,6 +1904,9 @@ mod tests {
                 process_name: "curl".to_string(),
                 command_line: "curl https://example.invalid/script.ps1".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }

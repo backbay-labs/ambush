@@ -21,6 +21,8 @@ pub enum TelemetryPayload {
     NetworkConnect(NetworkConnectEvent),
     DnsQuery(DnsQueryEvent),
     RegistryAccess(RegistryAccessEvent),
+    RegistryPersistence(RegistryPersistenceEvent),
+    FilePersistence(FilePersistenceEvent),
     AuthenticationEvent(AuthenticationEventData),
 }
 
@@ -32,6 +34,9 @@ pub struct ProcessStartEvent {
     pub process_name: String,
     pub command_line: String,
     pub user: Option<String>,
+    pub executable_path: Option<String>,
+    pub signer: Option<String>,
+    pub signature_valid: Option<bool>,
 }
 
 /// Normalized outbound network event.
@@ -63,6 +68,27 @@ pub struct RegistryAccessEvent {
     pub registry_path: String,
     pub access_type: String,
     pub target_process: Option<String>,
+}
+
+/// Normalized registry-based persistence event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryPersistenceEvent {
+    pub process_name: String,
+    pub registry_path: String,
+    pub value_name: Option<String>,
+    pub value_data: Option<String>,
+    pub access_type: String,
+}
+
+/// Normalized file-based persistence or side-loading artifact event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilePersistenceEvent {
+    pub file_path: String,
+    pub operation: String,
+    pub process_name: String,
+    pub content_preview: Option<String>,
 }
 
 /// Normalized authentication or remote-access event.

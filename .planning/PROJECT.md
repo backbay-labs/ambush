@@ -10,7 +10,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current State
 
-`v1.33 Telemetry Bridge Architecture` shipped on 2026-04-07, `v1.34 Queryable Substrate And Threat Intel Cache` completed on 2026-04-07, `v1.35 Production Hardening And Kubernetes Lifecycle` shipped on 2026-04-07, and `v1.36 SIEM/SOAR Forward And Alert Routing` shipped on 2026-04-07. No active milestone is open at the moment; the repo is ready for `v1.37 Persistence And Supply Chain Detection`.
+`v1.33 Telemetry Bridge Architecture` shipped on 2026-04-07, `v1.34 Queryable Substrate And Threat Intel Cache` completed on 2026-04-07, `v1.35 Production Hardening And Kubernetes Lifecycle` shipped on 2026-04-07, `v1.36 SIEM/SOAR Forward And Alert Routing` shipped on 2026-04-07, and `v1.37 Persistence And Supply Chain Detection` shipped on 2026-04-07. There is no active milestone right now, and the roadmap is ready for `v1.38 Fileless Execution And Behavioral Baselines`.
 
 **What is now real:**
 - `swarm-detect` now runs a keyed multi-agent registry during serve mode with runtime role-shift propagation, peer-finding snapshots, and shared lifecycle telemetry.
@@ -39,6 +39,8 @@ Detect real threats quickly enough to take safe action before the window to resp
 - Every finding is now enriched with normalized ancestry, host metadata, and deterministic detection latency before replay persistence or external delivery.
 - Repo-owned notification channels and routing rules now fan findings out by severity, threat class, and UTC windows without going through the response-action policy gate.
 - Operators can now inspect and replay suppressed notifications through the authenticated `/v1/notifications/dead-letter/{channel}` surface.
+- Shared telemetry now includes `RegistryPersistence` and `FilePersistence` payloads, and `ProcessStart` carries optional signer metadata for supply-chain evaluation.
+- `PersistenceDetector` and `SupplyChainDetector` now ship as config-selectable strategies across live runtime, replay, canary, and promotion lanes, with ATT&CK-tagged evidence and deposit proof.
 
 ## Current Milestone
 
@@ -46,7 +48,9 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.34 Queryable Substrate And Threat Intel Cache` is complete.
 - `v1.35 Production Hardening And Kubernetes Lifecycle` is complete.
 - `v1.36 SIEM/SOAR Forward And Alert Routing` is complete.
-- No active milestone is open right now; the repo is ready for `v1.37 Persistence And Supply Chain Detection`.
+- `v1.37 Persistence And Supply Chain Detection` is complete.
+- No milestone is active right now.
+- The roadmap is ready for `v1.38 Fileless Execution And Behavioral Baselines`.
 - Phase 104 added bounded drain control, PreStop coordination, and `/startupz` startup-probe semantics for serve mode.
 - Phase 105 added schema-aware config migration and `@secret:` resolution for live response adapters with secret-directory reload.
 - Phase 106 added live heap metrics and readiness shedding before the runtime reaches an OOM boundary.
@@ -238,4 +242,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-07 after closing v1.36*
+*Last updated: 2026-04-07 after activating v1.37*

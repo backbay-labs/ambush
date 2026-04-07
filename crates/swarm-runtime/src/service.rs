@@ -331,6 +331,7 @@ fn threat_class_label(threat_class: &ThreatClass) -> &str {
         ThreatClass::CommandAndControl => "command_and_control",
         ThreatClass::InitialAccess => "initial_access",
         ThreatClass::Persistence => "persistence",
+        ThreatClass::SupplyChain => "supply_chain",
         ThreatClass::DefenseEvasion => "defense_evasion",
         ThreatClass::CredentialAccess => "credential_access",
         ThreatClass::Discovery => "discovery",
@@ -427,6 +428,14 @@ fn parent_process_ancestry(event: &TelemetryEvent) -> Vec<String> {
                 .filter(|value| !value.trim().is_empty())
                 .collect()
         }
+        TelemetryPayload::RegistryPersistence(registry) => vec![registry.process_name.clone()]
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .collect(),
+        TelemetryPayload::FilePersistence(file) => vec![file.process_name.clone()]
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .collect(),
         TelemetryPayload::AuthenticationEvent(authentication) => authentication
             .process_name
             .clone()
@@ -1511,6 +1520,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: command_line.to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }
@@ -1662,6 +1674,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc AAA=".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
         let context = ApprovalContext {
@@ -2076,6 +2091,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc AAA=".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
         let context = ApprovalContext {
@@ -2147,6 +2165,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc AAA=".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
         let context = ApprovalContext {
@@ -2303,6 +2324,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc AAA=".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
         let context = ApprovalContext {
@@ -2536,6 +2560,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc AAA=".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
         let event_two = TelemetryEvent {
@@ -2548,6 +2575,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc BBB=".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
         let context_one = ApprovalContext {
@@ -2728,6 +2758,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: command_line.to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
         let make_context = |now_ms| ApprovalContext {

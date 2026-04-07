@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use swarm_core::pheromone::ThreatClass;
 pub use swarm_core::telemetry::{
-    AuthenticationEventData, DnsQueryEvent, NetworkConnectEvent, ProcessStartEvent,
-    RegistryAccessEvent, TelemetryEvent, TelemetryPayload,
+    AuthenticationEventData, DnsQueryEvent, FilePersistenceEvent, NetworkConnectEvent,
+    ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent, TelemetryEvent,
+    TelemetryPayload,
 };
 use swarm_core::types::Severity;
 
@@ -195,6 +196,8 @@ impl DetectionStrategy for SuspiciousProcessTreeDetector {
             TelemetryPayload::NetworkConnect(_)
             | TelemetryPayload::DnsQuery(_)
             | TelemetryPayload::RegistryAccess(_)
+            | TelemetryPayload::RegistryPersistence(_)
+            | TelemetryPayload::FilePersistence(_)
             | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
         }
     }
@@ -242,6 +245,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: command_line.to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }
@@ -272,6 +278,9 @@ mod tests {
                 process_name: "ls".to_string(),
                 command_line: "ls -la".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
 
@@ -297,6 +306,9 @@ mod tests {
                 process_name: "curl".to_string(),
                 command_line: "curl https://intranet.local/health".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
 

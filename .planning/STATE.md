@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.36
-milestone_name: SIEM/SOAR Forward And Alert Routing
+milestone: v1.37
+milestone_name: Persistence And Supply Chain Detection
 status: completed
-last_updated: "2026-04-07T19:35:43Z"
+last_updated: "2026-04-07T21:15:12Z"
 progress:
   total_phases: 4
   completed_phases: 4
@@ -18,16 +18,16 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** v1.36 closed; repo ready for `v1.37 Persistence And Supply Chain Detection`
+**Current focus:** `v1.37 Persistence And Supply Chain Detection` is shipped; the roadmap is ready for `v1.38 Fileless Execution And Behavioral Baselines`
 
 ## Current Position
 
 Phase: none
 Plan: none
-Status: v1.36 shipped; canonical SIEM forwarding, enriched finding delivery, notification routing, and operator dead-letter replay are complete
-Last activity: 2026-04-07 -- Closed v1.36 with verification, audit, and archive-ready phase evidence
+Status: v1.37 shipped; persistence and supply-chain detection are complete, and there is no active milestone until v1.38 is activated
+Last activity: 2026-04-07 -- Closed phases 112-115, wrote verification artifacts, and archived v1.37
 
-Progress: [██████████] 100% through v1.36
+Progress: [██████████] 100% through v1.37
 
 ## Memory
 
@@ -46,8 +46,8 @@ Progress: [██████████] 100% through v1.36
 - Phase 106 is complete: `/metrics` exports live heap gauges and `/readyz` sheds load when pressure exceeds the configured memory budget.
 - Phase 107 is complete: operator docs and verification artifacts now close the Kubernetes lifecycle hardening milestone cleanly.
 - `v1.36` is complete: the runtime now forwards canonical `swarm_finding` payloads to SIEM targets, enriches findings before persistence or delivery, routes operator notifications through repo-owned rules, and exposes replayable notification dead-letter queues on the authenticated HTTP surface.
-- No active milestone is open right now; the next queued milestone is `v1.37 Persistence And Supply Chain Detection`.
+- `v1.37` is complete: the shared telemetry schema now carries persistence payloads and optional signer metadata, and the runtime ships first-class `PersistenceDetector` and `SupplyChainDetector` strategy families with ATT&CK-tagged integration proof.
 
 ## Next Command
 
-`$gsd-autonomous`
+`activate the next milestone phases and continue $gsd-autonomous`

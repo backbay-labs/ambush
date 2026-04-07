@@ -23,9 +23,9 @@ pub use pheromone::{
     ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
 pub use telemetry::{
-    AuthenticationEventData, BridgeHealth, DnsQueryEvent, NetworkConnectEvent, ProcessStartEvent,
-    RegistryAccessEvent, TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult,
-    TelemetryEvent, TelemetryPayload,
+    AuthenticationEventData, BridgeHealth, DnsQueryEvent, FilePersistenceEvent,
+    NetworkConnectEvent, ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent,
+    TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult, TelemetryEvent, TelemetryPayload,
 };
 pub use types::{AgentId, EscalationEvent, HuntId, SwarmAction};
 pub use verdict::{ConsensusResult, ThreatVerdict};

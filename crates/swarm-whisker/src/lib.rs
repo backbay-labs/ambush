@@ -11,7 +11,9 @@ pub mod credential_access;
 pub mod detector;
 pub mod dns_exfiltration;
 pub mod lateral_movement;
+pub mod persistence;
 pub mod stream;
+pub mod supply_chain;
 pub mod suspicious_scripting;
 
 #[derive(Debug, Clone)]
@@ -61,9 +63,12 @@ pub(crate) fn validate_confidence_thresholds(
 pub use credential_access::{CredentialAccessDetector, CredentialAccessProfile};
 pub use detector::{
     AuthenticationEventData, DetectionFinding, DetectionStrategy, DnsQueryEvent,
-    NetworkConnectEvent, ProcessStartEvent, RegistryAccessEvent, SuspiciousProcessTreeDetector,
-    SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
+    FilePersistenceEvent, NetworkConnectEvent, ProcessStartEvent, RegistryAccessEvent,
+    RegistryPersistenceEvent, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
+    TelemetryEvent, TelemetryPayload,
 };
 pub use dns_exfiltration::{DnsExfiltrationDetector, DnsExfiltrationProfile};
 pub use lateral_movement::{LateralMovementDetector, LateralMovementProfile};
+pub use persistence::{PersistenceDetector, PersistenceProfile};
+pub use supply_chain::{SupplyChainDetector, SupplyChainProfile};
 pub use suspicious_scripting::{SuspiciousScriptingDetector, SuspiciousScriptingProfile};

@@ -4022,6 +4022,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: command_line.to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }

@@ -659,6 +659,8 @@ fn extract_process_name(replay: &ReplayBundle) -> Option<String> {
         TelemetryPayload::NetworkConnect(connect) => Some(connect.process_name.clone()),
         TelemetryPayload::DnsQuery(dns) => dns.process_name.clone(),
         TelemetryPayload::RegistryAccess(registry) => Some(registry.process_name.clone()),
+        TelemetryPayload::RegistryPersistence(registry) => Some(registry.process_name.clone()),
+        TelemetryPayload::FilePersistence(file) => Some(file.process_name.clone()),
         TelemetryPayload::AuthenticationEvent(auth) => auth.process_name.clone(),
     }
 }
@@ -674,6 +676,13 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
             .and_then(|value| value.as_str())
             .map(ToString::to_string),
         TelemetryPayload::DnsQuery(_) | TelemetryPayload::RegistryAccess(_) => replay
+            .audit
+            .detection
+            .evidence
+            .get("user")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string),
+        TelemetryPayload::RegistryPersistence(_) | TelemetryPayload::FilePersistence(_) => replay
             .audit
             .detection
             .evidence
@@ -712,6 +721,9 @@ mod tests {
                     process_name: "powershell".to_string(),
                     command_line: "powershell.exe -enc AAA=".to_string(),
                     user: Some("alice".to_string()),
+                    executable_path: None,
+                    signer: None,
+                    signature_valid: None,
                 }),
             },
             findings: vec![DetectionFinding {

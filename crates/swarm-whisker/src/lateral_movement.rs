@@ -270,7 +270,9 @@ impl DetectionStrategy for LateralMovementDetector {
             }
             TelemetryPayload::NetworkConnect(_)
             | TelemetryPayload::DnsQuery(_)
-            | TelemetryPayload::RegistryAccess(_) => Vec::new(),
+            | TelemetryPayload::RegistryAccess(_)
+            | TelemetryPayload::RegistryPersistence(_)
+            | TelemetryPayload::FilePersistence(_) => Vec::new(),
         }
     }
 }
@@ -336,6 +338,9 @@ mod tests {
                 process_name: process_name.to_string(),
                 command_line: command_line.to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }

@@ -119,6 +119,9 @@ fn map_payload(
             process_name_path,
             command_line_path,
             user_path,
+            executable_path_path,
+            signer_path,
+            signature_valid_path,
         } => Ok(TelemetryPayload::ProcessStart(ProcessStartEvent {
             parent_process: required_string(
                 record,
@@ -141,6 +144,15 @@ fn map_payload(
             user: user_path
                 .as_ref()
                 .and_then(|pointer| optional_string(record, pointer)),
+            executable_path: executable_path_path
+                .as_ref()
+                .and_then(|pointer| optional_string(record, pointer)),
+            signer: signer_path
+                .as_ref()
+                .and_then(|pointer| optional_string(record, pointer)),
+            signature_valid: signature_valid_path
+                .as_ref()
+                .and_then(|pointer| optional_bool(record, pointer)),
         })),
         GenericJsonPayloadMappingConfig::NetworkConnect {
             process_name_path,
@@ -225,6 +237,70 @@ fn map_payload(
                 .as_ref()
                 .and_then(|pointer| optional_string(record, pointer)),
         })),
+        GenericJsonPayloadMappingConfig::RegistryPersistence {
+            process_name_path,
+            registry_path_path,
+            access_type_path,
+            value_name_path,
+            value_data_path,
+        } => Ok(TelemetryPayload::RegistryPersistence(
+            swarm_core::RegistryPersistenceEvent {
+                process_name: required_string(
+                    record,
+                    process_name_path,
+                    "payload.process_name_path",
+                    health,
+                )?,
+                registry_path: required_string(
+                    record,
+                    registry_path_path,
+                    "payload.registry_path_path",
+                    health,
+                )?,
+                value_name: value_name_path
+                    .as_ref()
+                    .and_then(|pointer| optional_string(record, pointer)),
+                value_data: value_data_path
+                    .as_ref()
+                    .and_then(|pointer| optional_string(record, pointer)),
+                access_type: required_string(
+                    record,
+                    access_type_path,
+                    "payload.access_type_path",
+                    health,
+                )?,
+            },
+        )),
+        GenericJsonPayloadMappingConfig::FilePersistence {
+            file_path_path,
+            operation_path,
+            process_name_path,
+            content_preview_path,
+        } => Ok(TelemetryPayload::FilePersistence(
+            swarm_core::FilePersistenceEvent {
+                file_path: required_string(
+                    record,
+                    file_path_path,
+                    "payload.file_path_path",
+                    health,
+                )?,
+                operation: required_string(
+                    record,
+                    operation_path,
+                    "payload.operation_path",
+                    health,
+                )?,
+                process_name: required_string(
+                    record,
+                    process_name_path,
+                    "payload.process_name_path",
+                    health,
+                )?,
+                content_preview: content_preview_path
+                    .as_ref()
+                    .and_then(|pointer| optional_string(record, pointer)),
+            },
+        )),
         GenericJsonPayloadMappingConfig::AuthenticationEvent {
             auth_type_path,
             source_host_path,
@@ -282,6 +358,15 @@ fn optional_string(record: &Value, pointer: &str) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .filter(|value| !value.trim().is_empty())
+}
+
+fn optional_bool(record: &Value, pointer: &str) -> Option<bool> {
+    let value = record.pointer(pointer)?;
+    match value {
+        Value::Bool(boolean) => Some(*boolean),
+        Value::String(raw) => raw.parse::<bool>().ok(),
+        _ => None,
+    }
 }
 
 fn required_u16(
@@ -392,6 +477,9 @@ mod tests {
                 process_name_path: "/proc/name".to_string(),
                 command_line_path: "/proc/cmd".to_string(),
                 user_path: Some("/proc/user".to_string()),
+                executable_path_path: None,
+                signer_path: None,
+                signature_valid_path: None,
             },
         }
     }

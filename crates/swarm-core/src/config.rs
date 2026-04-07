@@ -173,6 +173,12 @@ pub enum GenericJsonPayloadMappingConfig {
         command_line_path: String,
         #[serde(default)]
         user_path: Option<String>,
+        #[serde(default)]
+        executable_path_path: Option<String>,
+        #[serde(default)]
+        signer_path: Option<String>,
+        #[serde(default)]
+        signature_valid_path: Option<String>,
     },
     NetworkConnect {
         process_name_path: String,
@@ -196,6 +202,22 @@ pub enum GenericJsonPayloadMappingConfig {
         access_type_path: String,
         #[serde(default)]
         target_process_path: Option<String>,
+    },
+    RegistryPersistence {
+        process_name_path: String,
+        registry_path_path: String,
+        access_type_path: String,
+        #[serde(default)]
+        value_name_path: Option<String>,
+        #[serde(default)]
+        value_data_path: Option<String>,
+    },
+    FilePersistence {
+        file_path_path: String,
+        operation_path: String,
+        process_name_path: String,
+        #[serde(default)]
+        content_preview_path: Option<String>,
     },
     AuthenticationEvent {
         auth_type_path: String,
@@ -233,6 +255,8 @@ pub struct DetectorProfilesConfig {
     pub lateral_movement: Option<serde_json::Value>,
     pub credential_access: Option<serde_json::Value>,
     pub suspicious_scripting: Option<serde_json::Value>,
+    pub persistence: Option<serde_json::Value>,
+    pub supply_chain: Option<serde_json::Value>,
 }
 
 /// Pheromone substrate tuning.
@@ -720,6 +744,9 @@ impl GenericJsonPayloadMappingConfig {
                 process_name_path,
                 command_line_path,
                 user_path,
+                executable_path_path,
+                signer_path,
+                signature_valid_path,
             } => {
                 validate_json_pointer(
                     "runtime.telemetry_sources.bridge.mapping.payload.parent_process_path",
@@ -736,6 +763,24 @@ impl GenericJsonPayloadMappingConfig {
                 if let Some(path) = user_path {
                     validate_json_pointer(
                         "runtime.telemetry_sources.bridge.mapping.payload.user_path",
+                        path,
+                    )?;
+                }
+                if let Some(path) = executable_path_path {
+                    validate_json_pointer(
+                        "runtime.telemetry_sources.bridge.mapping.payload.executable_path_path",
+                        path,
+                    )?;
+                }
+                if let Some(path) = signer_path {
+                    validate_json_pointer(
+                        "runtime.telemetry_sources.bridge.mapping.payload.signer_path",
+                        path,
+                    )?;
+                }
+                if let Some(path) = signature_valid_path {
+                    validate_json_pointer(
+                        "runtime.telemetry_sources.bridge.mapping.payload.signature_valid_path",
                         path,
                     )?;
                 }
@@ -818,6 +863,63 @@ impl GenericJsonPayloadMappingConfig {
                 if let Some(path) = target_process_path {
                     validate_json_pointer(
                         "runtime.telemetry_sources.bridge.mapping.payload.target_process_path",
+                        path,
+                    )?;
+                }
+            }
+            Self::RegistryPersistence {
+                process_name_path,
+                registry_path_path,
+                access_type_path,
+                value_name_path,
+                value_data_path,
+            } => {
+                validate_json_pointer(
+                    "runtime.telemetry_sources.bridge.mapping.payload.process_name_path",
+                    process_name_path,
+                )?;
+                validate_json_pointer(
+                    "runtime.telemetry_sources.bridge.mapping.payload.registry_path_path",
+                    registry_path_path,
+                )?;
+                validate_json_pointer(
+                    "runtime.telemetry_sources.bridge.mapping.payload.access_type_path",
+                    access_type_path,
+                )?;
+                if let Some(path) = value_name_path {
+                    validate_json_pointer(
+                        "runtime.telemetry_sources.bridge.mapping.payload.value_name_path",
+                        path,
+                    )?;
+                }
+                if let Some(path) = value_data_path {
+                    validate_json_pointer(
+                        "runtime.telemetry_sources.bridge.mapping.payload.value_data_path",
+                        path,
+                    )?;
+                }
+            }
+            Self::FilePersistence {
+                file_path_path,
+                operation_path,
+                process_name_path,
+                content_preview_path,
+            } => {
+                validate_json_pointer(
+                    "runtime.telemetry_sources.bridge.mapping.payload.file_path_path",
+                    file_path_path,
+                )?;
+                validate_json_pointer(
+                    "runtime.telemetry_sources.bridge.mapping.payload.operation_path",
+                    operation_path,
+                )?;
+                validate_json_pointer(
+                    "runtime.telemetry_sources.bridge.mapping.payload.process_name_path",
+                    process_name_path,
+                )?;
+                if let Some(path) = content_preview_path {
+                    validate_json_pointer(
+                        "runtime.telemetry_sources.bridge.mapping.payload.content_preview_path",
                         path,
                     )?;
                 }

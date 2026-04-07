@@ -46,6 +46,16 @@ fn validate_event_schema(event: &TelemetryEvent, source_id: &str) -> bool {
                 && !access.registry_path.trim().is_empty()
                 && !access.access_type.trim().is_empty()
         }
+        TelemetryPayload::RegistryPersistence(persistence) => {
+            !persistence.process_name.trim().is_empty()
+                && !persistence.registry_path.trim().is_empty()
+                && !persistence.access_type.trim().is_empty()
+        }
+        TelemetryPayload::FilePersistence(file) => {
+            !file.file_path.trim().is_empty()
+                && !file.operation.trim().is_empty()
+                && !file.process_name.trim().is_empty()
+        }
         TelemetryPayload::AuthenticationEvent(auth) => !auth.auth_type.trim().is_empty(),
     }
 }

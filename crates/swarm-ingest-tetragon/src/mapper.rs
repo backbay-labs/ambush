@@ -33,6 +33,9 @@ pub fn map_process_exec(exec: &proto::ProcessExec, node_name: &str) -> Option<Te
             process_name,
             command_line,
             user: process.uid.map(|uid| uid.to_string()),
+            executable_path: Some(process.binary.clone()),
+            signer: None,
+            signature_valid: None,
         }),
     })
 }

@@ -205,6 +205,7 @@ fn threat_class_name(threat_class: &swarm_core::pheromone::ThreatClass) -> Strin
         swarm_core::pheromone::ThreatClass::CommandAndControl => "command_and_control".to_string(),
         swarm_core::pheromone::ThreatClass::InitialAccess => "initial_access".to_string(),
         swarm_core::pheromone::ThreatClass::Persistence => "persistence".to_string(),
+        swarm_core::pheromone::ThreatClass::SupplyChain => "supply_chain".to_string(),
         swarm_core::pheromone::ThreatClass::DefenseEvasion => "defense_evasion".to_string(),
         swarm_core::pheromone::ThreatClass::CredentialAccess => "credential_access".to_string(),
         swarm_core::pheromone::ThreatClass::Discovery => "discovery".to_string(),
@@ -287,6 +288,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc AAA=".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         };
         ReplayBundle {

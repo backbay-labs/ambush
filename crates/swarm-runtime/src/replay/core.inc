@@ -1,7 +1,7 @@
 use crate::config::{
     DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
-    lateral_movement_profile, load_config, suspicious_process_tree_profile,
-    suspicious_scripting_profile,
+    lateral_movement_profile, load_config, persistence_profile, supply_chain_profile,
+    suspicious_process_tree_profile, suspicious_scripting_profile,
 };
 use crate::correlation::{CorrelationEngine, CorrelationError, CorrelationOutcome};
 use crate::investigation::{InvestigationStrategy, SummaryInvestigator};
@@ -28,7 +28,8 @@ use swarm_spine::{
 use swarm_whisker::{
     CredentialAccessDetector, CredentialAccessProfile, DetectionFinding, DetectionStrategy,
     DnsExfiltrationDetector, DnsExfiltrationProfile, LateralMovementDetector,
-    LateralMovementProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
+    LateralMovementProfile, PersistenceDetector, PersistenceProfile, SupplyChainDetector,
+    SupplyChainProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
     SuspiciousScriptingDetector, SuspiciousScriptingProfile, TelemetryEvent,
 };
 
@@ -182,6 +183,14 @@ enum SupportedDetector {
         strategy_id: String,
         detector: SuspiciousScriptingDetector,
     },
+    Persistence {
+        strategy_id: String,
+        detector: PersistenceDetector,
+    },
+    SupplyChain {
+        strategy_id: String,
+        detector: SupplyChainDetector,
+    },
 }
 
 impl DetectionStrategy for SupportedDetector {
@@ -192,6 +201,8 @@ impl DetectionStrategy for SupportedDetector {
             Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
             Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
             Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
+            Self::Persistence { strategy_id, .. } => strategy_id.as_str(),
+            Self::SupplyChain { strategy_id, .. } => strategy_id.as_str(),
         }
     }
 
@@ -257,6 +268,30 @@ impl DetectionStrategy for SupportedDetector {
                     finding
                 })
                 .collect(),
+            Self::Persistence {
+                strategy_id,
+                detector,
+            } => detector
+                .evaluate(event)
+                .into_iter()
+                .map(|mut finding| {
+                    finding.strategy_id = strategy_id.clone();
+                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
+                    finding
+                })
+                .collect(),
+            Self::SupplyChain {
+                strategy_id,
+                detector,
+            } => detector
+                .evaluate(event)
+                .into_iter()
+                .map(|mut finding| {
+                    finding.strategy_id = strategy_id.clone();
+                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
+                    finding
+                })
+                .collect(),
         }
     }
 }
@@ -309,6 +344,26 @@ impl SupportedDetector {
         Ok(Self::SuspiciousScripting {
             strategy_id: strategy_id.into(),
             detector: SuspiciousScriptingDetector::from_profile(profile)?,
+        })
+    }
+
+    fn persistence(
+        strategy_id: impl Into<String>,
+        profile: PersistenceProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::Persistence {
+            strategy_id: strategy_id.into(),
+            detector: PersistenceDetector::from_profile(profile)?,
+        })
+    }
+
+    fn supply_chain(
+        strategy_id: impl Into<String>,
+        profile: SupplyChainProfile,
+    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
+        Ok(Self::SupplyChain {
+            strategy_id: strategy_id.into(),
+            detector: SupplyChainDetector::from_profile(profile)?,
         })
     }
 }
@@ -957,6 +1012,16 @@ pub enum DetectorCandidateManifest {
         description: String,
         profile: SuspiciousScriptingProfile,
     },
+    Persistence {
+        strategy_id: String,
+        description: String,
+        profile: PersistenceProfile,
+    },
+    SupplyChain {
+        strategy_id: String,
+        description: String,
+        profile: SupplyChainProfile,
+    },
 }
 
 impl DetectorCandidateManifest {
@@ -967,6 +1032,8 @@ impl DetectorCandidateManifest {
             Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
             Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
             Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
+            Self::Persistence { strategy_id, .. } => strategy_id.as_str(),
+            Self::SupplyChain { strategy_id, .. } => strategy_id.as_str(),
         }
     }
 
@@ -977,6 +1044,8 @@ impl DetectorCandidateManifest {
             Self::LateralMovement { description, .. } => description.as_str(),
             Self::CredentialAccess { description, .. } => description.as_str(),
             Self::SuspiciousScripting { description, .. } => description.as_str(),
+            Self::Persistence { description, .. } => description.as_str(),
+            Self::SupplyChain { description, .. } => description.as_str(),
         }
     }
 }
@@ -3013,6 +3082,14 @@ fn supported_detector(config: &SwarmConfig) -> Result<SupportedDetector, ReplayH
             config.detection.strategy.clone(),
             suspicious_scripting_profile(&config.detection)?,
         )?),
+        "persistence" => Ok(SupportedDetector::persistence(
+            config.detection.strategy.clone(),
+            persistence_profile(&config.detection)?,
+        )?),
+        "supply_chain" => Ok(SupportedDetector::supply_chain(
+            config.detection.strategy.clone(),
+            supply_chain_profile(&config.detection)?,
+        )?),
         other => Err(ReplayHarnessError::UnsupportedDetector {
             strategy: other.to_string(),
         }),
@@ -3060,6 +3137,22 @@ fn detector_from_candidate(
             profile,
             ..
         } => Ok(SupportedDetector::suspicious_scripting(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::Persistence {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedDetector::persistence(
+            strategy_id.clone(),
+            profile.clone(),
+        )?),
+        DetectorCandidateManifest::SupplyChain {
+            strategy_id,
+            profile,
+            ..
+        } => Ok(SupportedDetector::supply_chain(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -3385,6 +3478,16 @@ fn validate_experiment_manifest(
             ..
         }
         | DetectorCandidateManifest::SuspiciousScripting {
+            strategy_id,
+            description,
+            ..
+        }
+        | DetectorCandidateManifest::Persistence {
+            strategy_id,
+            description,
+            ..
+        }
+        | DetectorCandidateManifest::SupplyChain {
             strategy_id,
             description,
             ..
@@ -4175,6 +4278,9 @@ correlation:
                 process_name: "powershell".to_string(),
                 command_line: command_line.to_string(),
                 user: Some(user.to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }
@@ -4190,6 +4296,9 @@ correlation:
                 process_name: "ls".to_string(),
                 command_line: "ls -la".to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }
@@ -4323,6 +4432,9 @@ max_response_latency_us: 5000
                             process_name: "curl".to_string(),
                             command_line: "curl https://intranet.local/health".to_string(),
                             user: Some("svc-maintenance".to_string()),
+                            executable_path: None,
+                            signer: None,
+                            signature_valid: None,
                         }),
                     },
                 }],
@@ -4373,6 +4485,9 @@ max_response_latency_us: 5000
                             process_name: "cmd".to_string(),
                             command_line: "cmd.exe /c powershell.exe -enc BBB=".to_string(),
                             user: Some("alice".to_string()),
+                            executable_path: None,
+                            signer: None,
+                            signature_valid: None,
                         }),
                     },
                 }],

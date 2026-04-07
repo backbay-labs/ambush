@@ -47,7 +47,9 @@ runtime:
   secret_dir: /var/run/swarm-secrets
 
 detection:
-  strategy: suspicious_process_tree
+  strategy: suspicious_process_tree  # or dns_exfiltration, lateral_movement,
+                                     # credential_access, suspicious_scripting,
+                                     # persistence, supply_chain
   high_confidence_threshold: 0.90
   medium_confidence_threshold: 0.70
 
@@ -168,7 +170,7 @@ Serve mode now exposes separate lifecycle routes:
 - A source may define either `subject` for the existing runtime ingest path or `bridge` for a bridge-backed source.
 - `bridge.kind: cloud_trail` loads CloudTrail JSON or JSON Lines records from `path` and normalizes them into shared telemetry.
 - `bridge.kind: generic_json` loads arbitrary JSON records from `path` and maps them through JSON Pointer fields declared under `mapping`.
-- `mapping.payload.kind` currently supports `process_start`, `network_connect`, `dns_query`, `registry_access`, and `authentication_event`.
+- `mapping.payload.kind` currently supports `process_start`, `network_connect`, `dns_query`, `registry_access`, `registry_persistence`, `file_persistence`, and `authentication_event`.
 - JSON Pointer paths must start with `/`; invalid pointers are rejected at config load time.
 
 ### Adapter Secrets

@@ -1698,7 +1698,9 @@ fn materialize_variant_report(
         DetectorCandidateManifest::DnsExfiltration { strategy_id, .. }
         | DetectorCandidateManifest::LateralMovement { strategy_id, .. }
         | DetectorCandidateManifest::CredentialAccess { strategy_id, .. }
-        | DetectorCandidateManifest::SuspiciousScripting { strategy_id, .. } => {
+        | DetectorCandidateManifest::SuspiciousScripting { strategy_id, .. }
+        | DetectorCandidateManifest::Persistence { strategy_id, .. }
+        | DetectorCandidateManifest::SupplyChain { strategy_id, .. } => {
             return Err(ReplayHarnessError::UnsupportedDetector {
                 strategy: format!(
                     "mutation materialization not yet supported for detector `{strategy_id}`"

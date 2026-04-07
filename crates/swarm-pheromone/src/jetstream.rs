@@ -887,6 +887,7 @@ fn threat_class_segment(threat_class: &ThreatClass) -> String {
         ThreatClass::CommandAndControl => "command_and_control".to_string(),
         ThreatClass::InitialAccess => "initial_access".to_string(),
         ThreatClass::Persistence => "persistence".to_string(),
+        ThreatClass::SupplyChain => "supply_chain".to_string(),
         ThreatClass::DefenseEvasion => "defense_evasion".to_string(),
         ThreatClass::CredentialAccess => "credential_access".to_string(),
         ThreatClass::Discovery => "discovery".to_string(),

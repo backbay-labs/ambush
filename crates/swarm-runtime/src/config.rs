@@ -6,8 +6,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use swarm_whisker::{
-    CredentialAccessProfile, DnsExfiltrationProfile, LateralMovementProfile,
-    ProfileValidationError, SuspiciousProcessTreeProfile, SuspiciousScriptingProfile,
+    CredentialAccessProfile, DnsExfiltrationProfile, LateralMovementProfile, PersistenceProfile,
+    ProfileValidationError, SupplyChainProfile, SuspiciousProcessTreeProfile,
+    SuspiciousScriptingProfile,
 };
 
 pub use swarm_core::config::{
@@ -468,6 +469,36 @@ pub(crate) fn suspicious_scripting_profile(
     )
 }
 
+pub(crate) fn persistence_profile(
+    config: &DetectionConfig,
+) -> Result<PersistenceProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "persistence",
+        PersistenceProfile {
+            high_confidence_threshold: config.high_confidence_threshold,
+            medium_confidence_threshold: config.medium_confidence_threshold,
+            ..PersistenceProfile::default()
+        },
+        config.profiles.persistence.as_ref(),
+        PersistenceProfile::validate,
+    )
+}
+
+pub(crate) fn supply_chain_profile(
+    config: &DetectionConfig,
+) -> Result<SupplyChainProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "supply_chain",
+        SupplyChainProfile {
+            high_confidence_threshold: config.high_confidence_threshold,
+            medium_confidence_threshold: config.medium_confidence_threshold,
+            ..SupplyChainProfile::default()
+        },
+        config.profiles.supply_chain.as_ref(),
+        SupplyChainProfile::validate,
+    )
+}
+
 pub(crate) fn validate_detector_profiles(
     config: &DetectionConfig,
 ) -> Result<(), DetectorProfileError> {
@@ -485,6 +516,12 @@ pub(crate) fn validate_detector_profiles(
     }
     if config.profiles.suspicious_scripting.is_some() {
         suspicious_scripting_profile(config)?;
+    }
+    if config.profiles.persistence.is_some() {
+        persistence_profile(config)?;
+    }
+    if config.profiles.supply_chain.is_some() {
+        supply_chain_profile(config)?;
     }
     Ok(())
 }

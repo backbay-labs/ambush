@@ -58,7 +58,7 @@ Async investigation and correlation still matter, but they are now follow-on wor
                    async side lane: investigation / correlation / operator context
 ```
 
-Canonical `swarm_finding` forwarding and replayable notification routing now sit on that runtime as optional outbound sinks configured from repo-owned YAML. The operator and configuration details live in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+Canonical `swarm_finding` forwarding and replayable notification routing now sit on that runtime as optional outbound sinks configured from repo-owned YAML. The current detector slice also includes persistence and supply-chain strategy families alongside the earlier execution, DNS, lateral-movement, credential-access, and scripting coverage. The operator and configuration details live in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Design Principles
 

@@ -256,6 +256,9 @@ impl DetectionStrategy for CredentialAccessDetector {
             TelemetryPayload::ProcessStart(_)
             | TelemetryPayload::NetworkConnect(_)
             | TelemetryPayload::DnsQuery(_) => Vec::new(),
+            TelemetryPayload::RegistryPersistence(_) | TelemetryPayload::FilePersistence(_) => {
+                Vec::new()
+            }
         }
     }
 }

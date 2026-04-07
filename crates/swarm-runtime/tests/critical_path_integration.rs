@@ -80,6 +80,9 @@ fn suspicious_event(event_id: &str) -> TelemetryEvent {
             process_name: "powershell".to_string(),
             command_line: "powershell.exe -enc AAA=".to_string(),
             user: Some("alice".to_string()),
+            executable_path: None,
+            signer: None,
+            signature_valid: None,
         }),
     }
 }
@@ -95,6 +98,9 @@ fn benign_event() -> TelemetryEvent {
             process_name: "notepad".to_string(),
             command_line: "notepad.exe notes.txt".to_string(),
             user: Some("bob".to_string()),
+            executable_path: None,
+            signer: None,
+            signature_valid: None,
         }),
     }
 }
@@ -279,6 +285,8 @@ fn supported_detector_factory_covers_all_runtime_strategies()
         "lateral_movement",
         "credential_access",
         "suspicious_scripting",
+        "persistence",
+        "supply_chain",
     ] {
         let cfg = config_with_strategy(strategy)?;
         assert!(supported_detector(&cfg.detection).is_ok(), "{strategy}");

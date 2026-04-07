@@ -2,23 +2,34 @@
 
 ## Latest Completed Milestone
 
-### v1.36 SIEM/SOAR Forward And Alert Routing
-**Executable phases:** 108-111
+### v1.37 Persistence And Supply Chain Detection
+**Executable phases:** 112-115
 **Shipped:** 2026-04-07
 
 ## Active Milestone
 
-No active milestone. `v1.36 SIEM/SOAR Forward And Alert Routing` shipped on 2026-04-07, and the queue is ready for `v1.37 Persistence And Supply Chain Detection`.
+No active milestone. `v1.37 Persistence And Supply Chain Detection` shipped on 2026-04-07, and the roadmap is ready for `v1.38 Fileless Execution And Behavioral Baselines`.
 
 ## Queued Milestones
 
 | Milestone | Name | Requirements | Tier |
 |-----------|------|--------------|------|
-| v1.37 | Persistence And Supply Chain Detection | PERSIST-01–05 (5) | Detection Breadth |
 | v1.38 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
 | v1.39 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
 
 ## History
+
+## v1.37 Persistence And Supply Chain Detection (Shipped: 2026-04-07)
+
+**Phases completed:** 4 phases, 8 plans, 0 tasks
+
+**Key accomplishments:**
+- Shared telemetry schema ownership now includes `RegistryPersistence`, `FilePersistence`, and optional signer metadata for `ProcessStart` events.
+- The shared pheromone taxonomy now includes `ThreatClass::SupplyChain`, and runtime-facing label helpers surface it consistently.
+- `PersistenceDetector` now recognizes run keys, cron entries, systemd timers, and scheduled-task artifacts with ATT&CK-tagged evidence.
+- `SupplyChainDetector` now recognizes unsigned trusted-path execution, DLL side-loading, and signed-binary abuse with ATT&CK-tagged evidence.
+- Live runtime, replay, canary, and promotion surfaces can all construct `persistence` and `supply_chain` strategies from repo-owned config.
+- Runtime integration proof now shows persistence and supply-chain telemetry flow through config-selected detectors into non-zero pheromone deposits without regressing workspace verification.
 
 ## v1.36 SIEM/SOAR Forward And Alert Routing (Shipped: 2026-04-07)
 

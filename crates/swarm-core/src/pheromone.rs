@@ -20,6 +20,7 @@ pub enum ThreatClass {
     CommandAndControl,
     InitialAccess,
     Persistence,
+    SupplyChain,
     DefenseEvasion,
     CredentialAccess,
     Discovery,

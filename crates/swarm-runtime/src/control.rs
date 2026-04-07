@@ -1,7 +1,7 @@
 use crate::config::{
     DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
-    lateral_movement_profile, load_config, suspicious_process_tree_profile,
-    suspicious_scripting_profile,
+    lateral_movement_profile, load_config, persistence_profile, supply_chain_profile,
+    suspicious_process_tree_profile, suspicious_scripting_profile,
 };
 use crate::investigation::SummaryInvestigator;
 use crate::service::{ConfiguredRuntimeStack, OperatorStatusReport, ServiceError};
@@ -20,7 +20,8 @@ use swarm_spine::{
 };
 use swarm_whisker::{
     CredentialAccessDetector, DetectionStrategy, DnsExfiltrationDetector, LateralMovementDetector,
-    SuspiciousProcessTreeDetector, SuspiciousScriptingDetector,
+    PersistenceDetector, SupplyChainDetector, SuspiciousProcessTreeDetector,
+    SuspiciousScriptingDetector,
 };
 
 /// Errors surfaced by the repo-owned operator control surface.
@@ -131,6 +132,8 @@ pub enum SupportedDetector {
     LateralMovement(LateralMovementDetector),
     CredentialAccess(CredentialAccessDetector),
     SuspiciousScripting(SuspiciousScriptingDetector),
+    Persistence(PersistenceDetector),
+    SupplyChain(SupplyChainDetector),
 }
 
 impl DetectionStrategy for SupportedDetector {
@@ -141,6 +144,8 @@ impl DetectionStrategy for SupportedDetector {
             Self::LateralMovement(detector) => detector.id(),
             Self::CredentialAccess(detector) => detector.id(),
             Self::SuspiciousScripting(detector) => detector.id(),
+            Self::Persistence(detector) => detector.id(),
+            Self::SupplyChain(detector) => detector.id(),
         }
     }
 
@@ -154,6 +159,8 @@ impl DetectionStrategy for SupportedDetector {
             Self::LateralMovement(detector) => detector.evaluate(event),
             Self::CredentialAccess(detector) => detector.evaluate(event),
             Self::SuspiciousScripting(detector) => detector.evaluate(event),
+            Self::Persistence(detector) => detector.evaluate(event),
+            Self::SupplyChain(detector) => detector.evaluate(event),
         }
     }
 }
@@ -472,6 +479,22 @@ pub fn supported_detector(config: &DetectionConfig) -> Result<SupportedDetector,
                     source,
                 })?,
         )),
+        "persistence" => Ok(SupportedDetector::Persistence(
+            PersistenceDetector::from_profile(persistence_profile(config)?).map_err(|source| {
+                DetectorProfileError::Validation {
+                    strategy: "persistence",
+                    source,
+                }
+            })?,
+        )),
+        "supply_chain" => Ok(SupportedDetector::SupplyChain(
+            SupplyChainDetector::from_profile(supply_chain_profile(config)?).map_err(|source| {
+                DetectorProfileError::Validation {
+                    strategy: "supply_chain",
+                    source,
+                }
+            })?,
+        )),
         other => Err(ControlError::UnsupportedDetector {
             strategy: other.to_string(),
         }),
@@ -707,6 +730,9 @@ mod tests {
                 process_name: "powershell".to_string(),
                 command_line: command_line.to_string(),
                 user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
             }),
         }
     }

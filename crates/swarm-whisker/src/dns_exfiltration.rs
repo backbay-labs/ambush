@@ -272,6 +272,8 @@ impl DetectionStrategy for DnsExfiltrationDetector {
             TelemetryPayload::ProcessStart(_)
             | TelemetryPayload::NetworkConnect(_)
             | TelemetryPayload::RegistryAccess(_)
+            | TelemetryPayload::RegistryPersistence(_)
+            | TelemetryPayload::FilePersistence(_)
             | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
         }
     }
