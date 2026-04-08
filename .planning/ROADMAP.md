@@ -163,14 +163,14 @@ Plans:
 
 **v1.37.1 execution order:** 116 -> 117 || 118 -> 119
 
-| Phase | Milestone | Plans Complete | Status | Completed |
+| Phase | Complete    | 2026-04-08 | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 112. Telemetry Persistence Payloads And Detector Contracts | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 113. Persistence Detector And Profile Support | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 114. Supply Chain Detector And Profile Support | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 115. Persistence And Supply Chain Integration Proof | v1.37 | 2/2 | Complete | 2026-04-07 |
 | 116. Agent Safety Hardening | 2/2 | Complete    | 2026-04-07 | - |
-| 117. Substrate Durability And Bridge Resilience | 2/2 | Complete   | 2026-04-07 | - |
+| 117. Substrate Durability And Bridge Resilience | 2/2 | Complete    | 2026-04-08 | - |
 | 118. Operational Hardening | v1.37.1 | 3/3 | Complete | 2026-04-07 |
 | 119. Pheromone Test Suite | v1.37.1 | 0/? | Not started | - |
 
