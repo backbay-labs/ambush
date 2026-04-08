@@ -144,11 +144,10 @@ Plans:
   2. Every test runs against `InMemoryPheromoneSubstrate` without importing `swarm-runtime` or requiring a running server
   3. Tests for threat-intel TTL expiry call `gc_expired_threat_intel()` and assert the expired entry is absent while unexpired entries remain present
   4. `cargo test -p swarm-pheromone` passes with `cargo clippy -p swarm-pheromone -- -D warnings` clean
-**Plans**: 2 plans
+**Plans**: 1 plan
 
 Plans:
-- [ ] 116-01-PLAN.md -- Enforce signed pheromone deposits across substrate and agents
-- [ ] 116-02-PLAN.md -- Add tick timeout enforcement and structured warnings for unhandled actions
+- [ ] 119-01-PLAN.md -- Add 16 focused substrate trait contract tests for deposit, query, GC, escalation, threat-intel, and ThreatClassConfig
 
 ## Queued Milestones
 
