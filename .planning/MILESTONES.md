@@ -8,14 +8,14 @@
 
 ## Active Milestone
 
-None. `v1.39 PounceAgent And Policy Gate Hardening` shipped on 2026-04-08.
-The next queued milestone is `v1.40 Killer Demo And Providence Integration`.
+### v1.40 Killer Demo And Providence Integration
+**Requirements:** DEMO-01-05, PROV-01-03
+**Status:** Active on 2026-04-08; requirements and roadmap are being finalized
 
 ## Queued Milestones
 
 | Milestone | Name | Requirements | Tier |
 |-----------|------|--------------|------|
-| v1.40 | Killer Demo And Providence Integration | DEMO-01–05, PROV-01–03 (8) | Product Visibility |
 | v1.41 | Platform APIs And Deployment Experience | API-01–04, HELM-01–02, CLI-01–02 (8) | Product Visibility |
 | v1.42 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
 | v1.43 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |

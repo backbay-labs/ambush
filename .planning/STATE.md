@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.39
-milestone_name: PounceAgent And Policy Gate Hardening
-status: completed
-last_updated: "2026-04-08T16:14:11.272Z"
-last_activity: 2026-04-08 — v1.39 requirements were archived, phases 124-127 moved into milestone history, and the planning surface is ready for the next milestone
+milestone: v1.40
+milestone_name: Killer Demo And Providence Integration
+status: active
+last_updated: "2026-04-08T16:33:54Z"
+last_activity: 2026-04-08 — v1.40 milestone started, archived v1.39 research was moved out of the live research folder, and requirements are being activated
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 15
-  completed_plans: 15
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State
@@ -20,16 +20,16 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-08)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** No active milestone — v1.39 is archived and the planning surface is ready for v1.40 definition
+**Current focus:** v1.40 is active and the planning surface is defining demo and Providence requirements
 
 ## Current Position
 
-Phase: None active
-Plan: v1.39 archived
-Status: Ready to start the next milestone
-Last activity: 2026-04-08 — milestone artifacts archived to `.planning/milestones/` and v1.39 phase directories moved to `v1.39-phases`
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-08 — milestone v1.40 started and stale v1.39 research was archived out of `.planning/research/`
 
-Progress: [██████████] 100%
+Progress: [----------] 0%
 
 ## Memory
 
@@ -44,10 +44,12 @@ Progress: [██████████] 100%
 - Phase 126 package re-verification stayed green after the repo-owned `office_detector_safety_v1` detect-latency budget was aligned with the current debug-test runtime envelope.
 - Phase 127 added routed proofs for same-session dedupe, fail-closed empty rules, auditable expired-lease denial, and cooldown reset without regressing dry-run parity, audit lineage, or governance veto coverage.
 - The v1.39 lifecycle is complete: requirements and audit are archived in `.planning/milestones/`, and phase directories `124` through `127` now live in `.planning/milestones/v1.39-phases/`.
+- v1.39 research is archived in `.planning/milestones/v1.39-research/` so the live `.planning/research/` folder is clean for v1.40-specific work.
+- v1.40 scope is anchored to the queued demo and Providence requirements already captured in `.planning/REQUIREMENTS.md`.
 
 ## Issues
 
-- None active. The workspace is ready for the next milestone definition cycle.
+- None active beyond milestone definition. Requirements and roadmap creation are the current work.
 
 ## Next Command
 

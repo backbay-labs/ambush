@@ -10,23 +10,31 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.39 PounceAgent And Policy Gate Hardening` shipped on 2026-04-08.
+`v1.40 Killer Demo And Providence Integration` is now active as of 2026-04-08.
 
-**Latest milestone outcomes:**
-- PounceAgent now routes autonomous responses through the canonical policy, guard, and executor path with dry-run parity and lineage-bearing receipts.
-- Policy is now repo-owned and fail-closed, with configurable YAML rules, scoped rate limiting, and durable verdict attribution.
-- TomAgent now provides synchronous governance veto over destructive autonomous actions, with receipt-bearing audit artifacts.
-- Routed integration coverage now proves the v1.39 correctness pitfalls end to end, and the settled tree is green under full workspace tests and warnings-as-errors lint.
+**Goal:**
+- Turn the shipped runtime into a compelling operator demo with replay injection, streamed swarm visibility, approval-in-the-loop response, signed proof export, and Providence delivery.
+
+**Target features:**
+- Scenario replay injection into the live telemetry lane with configurable pacing
+- Server-Sent Events and a live dashboard for mode, agent health, pheromone pressure, and escalation timeline
+- Human approval checkpoints with signed approval-chain receipts
+- Demo proof export and Providence webhook delivery with drilldown context
+
+**Recently shipped foundation:**
+- v1.39 closed the detect-to-respond loop with autonomous PounceAgent execution through the canonical policy, guard, and executor path.
+- Policy is now repo-owned and fail-closed, with configurable YAML rules, scope-aware burst limiting, and durable verdict attribution.
+- TomAgent governance can now synchronously veto destructive autonomous actions and persist typed audit receipts.
 
 **Next queued milestone:**
-- `v1.40 Killer Demo And Providence Integration`
+- `v1.41 Platform APIs And Deployment Experience`
 
 **Queued after that:**
-- `v1.41 Platform APIs And Deployment Experience`
+- `v1.42 Fileless Execution And Behavioral Baselines`
 
 ## Current State
 
-`v1.39 PounceAgent And Policy Gate Hardening` shipped on 2026-04-08. The runtime now closes the detect-to-respond loop with an autonomous PounceAgent, repo-owned fail-closed policy control, cooldown-driven de-escalation, and synchronous TomAgent governance veto over destructive autonomous actions.
+`v1.40 Killer Demo And Providence Integration` is now active. This cycle turns the shipped detection, correlation, response, and governance runtime into a demoable operator surface: replay-driven live swarm activity, streamed event observability, human approval checkpoints, signed proof export, and Providence delivery on top of the v1.39 response foundation.
 
 **What v1.37.1 hardened:**
 - Pheromone deposits are now Ed25519-signed by agents and validated by the substrate on all backends
@@ -173,8 +181,12 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.34 Queryable Substrate And Threat Intel Cache` is complete.
 - `v1.35 Production Hardening And Kubernetes Lifecycle` is complete.
 - `v1.36 SIEM/SOAR Forward And Alert Routing` is complete.
-- The repo is now ready to activate `v1.37 Persistence And Supply Chain Detection`.
-- The most recent milestone added resilient SIEM forwarding, enriched finding delivery, repo-owned notification routing, and authenticated notification dead-letter replay.
+- `v1.37 Persistence And Supply Chain Detection` is complete.
+- `v1.38 Multi-Detector Composition And Network Detection` is complete.
+- `v1.39 PounceAgent And Policy Gate Hardening` is complete.
+- `v1.40 Killer Demo And Providence Integration` is active.
+- This milestone will deliver live replay injection, streamed runtime visibility, approval-in-the-loop demo response, signed proof export, and Providence delivery.
+- `v1.41 Platform APIs And Deployment Experience` remains queued after v1.40.
 - Distributed trust boundaries, multi-user governance, and true quorum activation remain deferred until the runtime is no longer strictly single-node.
 
 ### Out of Scope
@@ -267,4 +279,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-08 after completing v1.39*
+*Last updated: 2026-04-08 after starting v1.40*
