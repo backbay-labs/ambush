@@ -2009,4 +2009,234 @@ mod tests {
         let h2 = substrate.health().await.unwrap();
         assert_eq!(h2.deposit_count, 2);
     }
+
+    // --- Threat-intel CRUD, ThreatClassConfig, and normalization tests ---
+
+    #[tokio::test]
+    async fn threat_intel_ip_address_normalization() {
+        let substrate = in_memory();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::IpAddress,
+                " 192.168.1.1 ",
+                0.85,
+                999_999,
+            ))
+            .await
+            .unwrap();
+
+        let entry = substrate
+            .query_threat_intel_entry(
+                &ThreatIntelIndicatorType::IpAddress,
+                "192.168.1.1",
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.value, "192.168.1.1");
+    }
+
+    #[tokio::test]
+    async fn threat_intel_file_hash_case_normalization() {
+        let substrate = in_memory();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::FileHash,
+                " AABBCCDD ",
+                0.9,
+                999_999,
+            ))
+            .await
+            .unwrap();
+
+        let entry = substrate
+            .query_threat_intel_entry(
+                &ThreatIntelIndicatorType::FileHash,
+                "aabbccdd",
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.value, "aabbccdd");
+    }
+
+    #[tokio::test]
+    async fn threat_intel_multiple_types_coexist() {
+        let substrate = in_memory();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::IpAddress,
+                "10.0.0.1",
+                0.7,
+                999_999,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::Domain,
+                "evil.com",
+                0.8,
+                999_999,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::FileHash,
+                "deadbeef",
+                0.9,
+                999_999,
+            ))
+            .await
+            .unwrap();
+
+        let ip = substrate
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::IpAddress, "10.0.0.1", 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((ip.confidence - 0.7).abs() < f64::EPSILON);
+
+        let domain = substrate
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::Domain, "evil.com", 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((domain.confidence - 0.8).abs() < f64::EPSILON);
+
+        let hash = substrate
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::FileHash, "deadbeef", 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((hash.confidence - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn threat_intel_overwrite_same_key() {
+        let substrate = in_memory();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::Domain,
+                "replace.me",
+                0.5,
+                999_999,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::Domain,
+                "replace.me",
+                0.99,
+                999_999,
+            ))
+            .await
+            .unwrap();
+
+        let entry = substrate
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::Domain, "replace.me", 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((entry.confidence - 0.99).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn threat_intel_gc_preserves_unexpired_across_types() {
+        let substrate = in_memory();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::IpAddress,
+                "1.2.3.4",
+                0.8,
+                100,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .store_threat_intel_entry(sample_threat_intel_entry(
+                ThreatIntelIndicatorType::Domain,
+                "safe.com",
+                0.9,
+                999_999,
+            ))
+            .await
+            .unwrap();
+
+        let purged = substrate.gc_expired_threat_intel(500).await.unwrap();
+        assert_eq!(purged, 1);
+
+        let expired = substrate
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::IpAddress, "1.2.3.4", 0)
+            .await
+            .unwrap();
+        assert!(expired.is_none());
+
+        let alive = substrate
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::Domain, "safe.com", 0)
+            .await
+            .unwrap();
+        assert!(alive.is_some());
+    }
+
+    #[tokio::test]
+    async fn threat_class_config_overwrite_updates_existing() {
+        let substrate = in_memory();
+        substrate
+            .store_threat_class_config(sample_threat_class_config(
+                ThreatClass::Execution,
+                60.0,
+                1.0,
+                3.0,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .store_threat_class_config(sample_threat_class_config(
+                ThreatClass::Execution,
+                120.0,
+                1.0,
+                3.0,
+            ))
+            .await
+            .unwrap();
+
+        let config = substrate
+            .query_threat_class_config(&ThreatClass::Execution)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((config.half_life_secs - 120.0).abs() < f64::EPSILON);
+
+        let all = substrate.query_threat_class_configs().await.unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn threat_class_config_missing_returns_none() {
+        let substrate = in_memory();
+        let config = substrate
+            .query_threat_class_config(&ThreatClass::Persistence)
+            .await
+            .unwrap();
+        assert!(config.is_none());
+    }
+
+    #[tokio::test]
+    async fn query_threat_intel_nonexistent_returns_none() {
+        let substrate = in_memory();
+        let entry = substrate
+            .query_threat_intel_entry(
+                &ThreatIntelIndicatorType::Domain,
+                "nonexistent.example.com",
+                0,
+            )
+            .await
+            .unwrap();
+        assert!(entry.is_none());
+    }
 }
