@@ -171,7 +171,7 @@ Plans:
 | 116. Agent Safety Hardening | 2/2 | Complete    | 2026-04-07 | - |
 | 117. Substrate Durability And Bridge Resilience | 2/2 | Complete    | 2026-04-08 | - |
 | 118. Operational Hardening | v1.37.1 | 3/3 | Complete | 2026-04-07 |
-| 119. Pheromone Test Suite | 1/1 | Complete   | 2026-04-08 | - |
+| 119. Pheromone Test Suite | 1/1 | Complete    | 2026-04-08 | - |
 
 ---
 *Last shipped milestone: v1.37 Persistence And Supply Chain Detection on 2026-04-07*
