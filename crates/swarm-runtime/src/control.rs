@@ -125,46 +125,6 @@ pub enum IncidentLookupSelector<'a> {
     HuntId(&'a str),
 }
 
-#[derive(Debug, Clone)]
-pub enum SupportedDetector {
-    SuspiciousProcessTree(SuspiciousProcessTreeDetector),
-    DnsExfiltration(DnsExfiltrationDetector),
-    LateralMovement(LateralMovementDetector),
-    CredentialAccess(CredentialAccessDetector),
-    SuspiciousScripting(SuspiciousScriptingDetector),
-    Persistence(PersistenceDetector),
-    SupplyChain(SupplyChainDetector),
-}
-
-impl DetectionStrategy for SupportedDetector {
-    fn id(&self) -> &str {
-        match self {
-            Self::SuspiciousProcessTree(detector) => detector.id(),
-            Self::DnsExfiltration(detector) => detector.id(),
-            Self::LateralMovement(detector) => detector.id(),
-            Self::CredentialAccess(detector) => detector.id(),
-            Self::SuspiciousScripting(detector) => detector.id(),
-            Self::Persistence(detector) => detector.id(),
-            Self::SupplyChain(detector) => detector.id(),
-        }
-    }
-
-    fn evaluate(
-        &self,
-        event: &swarm_whisker::TelemetryEvent,
-    ) -> Vec<swarm_whisker::DetectionFinding> {
-        match self {
-            Self::SuspiciousProcessTree(detector) => detector.evaluate(event),
-            Self::DnsExfiltration(detector) => detector.evaluate(event),
-            Self::LateralMovement(detector) => detector.evaluate(event),
-            Self::CredentialAccess(detector) => detector.evaluate(event),
-            Self::SuspiciousScripting(detector) => detector.evaluate(event),
-            Self::Persistence(detector) => detector.evaluate(event),
-            Self::SupplyChain(detector) => detector.evaluate(event),
-        }
-    }
-}
-
 /// Default operator control plane built from repo-owned config and the shipped runtime defaults.
 pub struct DefaultControlPlane {
     pub config_path: PathBuf,
@@ -439,10 +399,6 @@ pub fn render_output(output: &OperatorControlOutput) -> String {
     }
 }
 
-pub fn supported_detector(config: &DetectionConfig) -> Result<SupportedDetector, ControlError> {
-    build_supported_detector(config.strategy.as_str(), config)
-}
-
 pub fn build_composite_detector(
     config: &DetectionConfig,
 ) -> Result<CompositeDetector, ControlError> {
@@ -459,22 +415,15 @@ fn build_single_detector(
     strategy_name: &str,
     config: &DetectionConfig,
 ) -> Result<Box<dyn DetectionStrategy>, ControlError> {
-    Ok(Box::new(build_supported_detector(strategy_name, config)?))
-}
-
-fn build_supported_detector(
-    strategy_name: &str,
-    config: &DetectionConfig,
-) -> Result<SupportedDetector, ControlError> {
     match strategy_name {
-        "suspicious_process_tree" => Ok(SupportedDetector::SuspiciousProcessTree(
+        "suspicious_process_tree" => Ok(Box::new(
             SuspiciousProcessTreeDetector::from_profile(suspicious_process_tree_profile(config)?)
                 .map_err(|source| DetectorProfileError::Validation {
                 strategy: "suspicious_process_tree",
                 source,
             })?,
         )),
-        "dns_exfiltration" => Ok(SupportedDetector::DnsExfiltration(
+        "dns_exfiltration" => Ok(Box::new(
             DnsExfiltrationDetector::from_profile(dns_exfiltration_profile(config)?).map_err(
                 |source| DetectorProfileError::Validation {
                     strategy: "dns_exfiltration",
@@ -482,7 +431,7 @@ fn build_supported_detector(
                 },
             )?,
         )),
-        "lateral_movement" => Ok(SupportedDetector::LateralMovement(
+        "lateral_movement" => Ok(Box::new(
             LateralMovementDetector::from_profile(lateral_movement_profile(config)?).map_err(
                 |source| DetectorProfileError::Validation {
                     strategy: "lateral_movement",
@@ -490,7 +439,7 @@ fn build_supported_detector(
                 },
             )?,
         )),
-        "credential_access" => Ok(SupportedDetector::CredentialAccess(
+        "credential_access" => Ok(Box::new(
             CredentialAccessDetector::from_profile(credential_access_profile(config)?).map_err(
                 |source| DetectorProfileError::Validation {
                     strategy: "credential_access",
@@ -498,14 +447,14 @@ fn build_supported_detector(
                 },
             )?,
         )),
-        "suspicious_scripting" => Ok(SupportedDetector::SuspiciousScripting(
+        "suspicious_scripting" => Ok(Box::new(
             SuspiciousScriptingDetector::from_profile(suspicious_scripting_profile(config)?)
                 .map_err(|source| DetectorProfileError::Validation {
                     strategy: "suspicious_scripting",
                     source,
                 })?,
         )),
-        "persistence" => Ok(SupportedDetector::Persistence(
+        "persistence" => Ok(Box::new(
             PersistenceDetector::from_profile(persistence_profile(config)?).map_err(|source| {
                 DetectorProfileError::Validation {
                     strategy: "persistence",
@@ -513,7 +462,7 @@ fn build_supported_detector(
                 }
             })?,
         )),
-        "supply_chain" => Ok(SupportedDetector::SupplyChain(
+        "supply_chain" => Ok(Box::new(
             SupplyChainDetector::from_profile(supply_chain_profile(config)?).map_err(|source| {
                 DetectorProfileError::Validation {
                     strategy: "supply_chain",

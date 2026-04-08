@@ -162,7 +162,7 @@ pub enum ReplayHarnessError {
 }
 
 #[derive(Debug, Clone)]
-enum SupportedDetector {
+enum ReplayDetector {
     SuspiciousProcessTree {
         strategy_id: String,
         detector: SuspiciousProcessTreeDetector,
@@ -193,7 +193,7 @@ enum SupportedDetector {
     },
 }
 
-impl DetectionStrategy for SupportedDetector {
+impl DetectionStrategy for ReplayDetector {
     fn id(&self) -> &str {
         match self {
             Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
@@ -296,7 +296,7 @@ impl DetectionStrategy for SupportedDetector {
     }
 }
 
-impl SupportedDetector {
+impl ReplayDetector {
     fn suspicious_process_tree(
         strategy_id: impl Into<String>,
         profile: SuspiciousProcessTreeProfile,
@@ -1897,7 +1897,7 @@ pub struct DefaultReplayHarness {
     pub config_path: PathBuf,
     pub config: SwarmConfig,
     pub results_dir: PathBuf,
-    detector: SupportedDetector,
+    detector: ReplayDetector,
     result_store: FileReplayRunStore,
 }
 
@@ -1918,7 +1918,7 @@ impl DefaultReplayHarness {
         config: SwarmConfig,
         results_dir: impl AsRef<Path>,
     ) -> Result<Self, ReplayHarnessError> {
-        let detector = supported_detector(&config)?;
+        let detector = replay_detector(&config)?;
         let result_store = FileReplayRunStore::open(results_dir.as_ref())?;
         Ok(Self {
             config_path: config_path.into(),
@@ -2500,7 +2500,7 @@ impl DefaultReplayHarness {
 
     async fn evaluate_suite_selection(
         &self,
-        detector: &SupportedDetector,
+        detector: &ReplayDetector,
         scenario_paths: Vec<PathBuf>,
         selection: ReplaySuiteSelection,
     ) -> Result<ReplaySuiteReport, ReplayHarnessError> {
@@ -2540,7 +2540,7 @@ impl DefaultReplayHarness {
 
     async fn run_loaded_scenario(
         &self,
-        detector: &SupportedDetector,
+        detector: &ReplayDetector,
         loaded: &LoadedReplayScenario,
     ) -> Result<ReplayRunBundle, ReplayHarnessError> {
         let steps = self.materialize_steps(loaded)?;
@@ -3062,33 +3062,33 @@ pub fn render_promotion_review_packet(packet: &PromotionReviewPacket) -> String 
     lines.join("\n")
 }
 
-fn supported_detector(config: &SwarmConfig) -> Result<SupportedDetector, ReplayHarnessError> {
+fn replay_detector(config: &SwarmConfig) -> Result<ReplayDetector, ReplayHarnessError> {
     match config.detection.strategy.as_str() {
-        "suspicious_process_tree" => Ok(SupportedDetector::suspicious_process_tree(
+        "suspicious_process_tree" => Ok(ReplayDetector::suspicious_process_tree(
             config.detection.strategy.clone(),
             suspicious_process_tree_profile(&config.detection)?,
         )?),
-        "dns_exfiltration" => Ok(SupportedDetector::dns_exfiltration(
+        "dns_exfiltration" => Ok(ReplayDetector::dns_exfiltration(
             config.detection.strategy.clone(),
             dns_exfiltration_profile(&config.detection)?,
         )?),
-        "lateral_movement" => Ok(SupportedDetector::lateral_movement(
+        "lateral_movement" => Ok(ReplayDetector::lateral_movement(
             config.detection.strategy.clone(),
             lateral_movement_profile(&config.detection)?,
         )?),
-        "credential_access" => Ok(SupportedDetector::credential_access(
+        "credential_access" => Ok(ReplayDetector::credential_access(
             config.detection.strategy.clone(),
             credential_access_profile(&config.detection)?,
         )?),
-        "suspicious_scripting" => Ok(SupportedDetector::suspicious_scripting(
+        "suspicious_scripting" => Ok(ReplayDetector::suspicious_scripting(
             config.detection.strategy.clone(),
             suspicious_scripting_profile(&config.detection)?,
         )?),
-        "persistence" => Ok(SupportedDetector::persistence(
+        "persistence" => Ok(ReplayDetector::persistence(
             config.detection.strategy.clone(),
             persistence_profile(&config.detection)?,
         )?),
-        "supply_chain" => Ok(SupportedDetector::supply_chain(
+        "supply_chain" => Ok(ReplayDetector::supply_chain(
             config.detection.strategy.clone(),
             supply_chain_profile(&config.detection)?,
         )?),
@@ -3100,13 +3100,13 @@ fn supported_detector(config: &SwarmConfig) -> Result<SupportedDetector, ReplayH
 
 fn detector_from_candidate(
     candidate: &DetectorCandidateManifest,
-) -> Result<SupportedDetector, ReplayHarnessError> {
+) -> Result<ReplayDetector, ReplayHarnessError> {
     match candidate {
         DetectorCandidateManifest::SuspiciousProcessTree {
             strategy_id,
             profile,
             ..
-        } => Ok(SupportedDetector::suspicious_process_tree(
+        } => Ok(ReplayDetector::suspicious_process_tree(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -3114,7 +3114,7 @@ fn detector_from_candidate(
             strategy_id,
             profile,
             ..
-        } => Ok(SupportedDetector::dns_exfiltration(
+        } => Ok(ReplayDetector::dns_exfiltration(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -3122,7 +3122,7 @@ fn detector_from_candidate(
             strategy_id,
             profile,
             ..
-        } => Ok(SupportedDetector::lateral_movement(
+        } => Ok(ReplayDetector::lateral_movement(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -3130,7 +3130,7 @@ fn detector_from_candidate(
             strategy_id,
             profile,
             ..
-        } => Ok(SupportedDetector::credential_access(
+        } => Ok(ReplayDetector::credential_access(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -3138,7 +3138,7 @@ fn detector_from_candidate(
             strategy_id,
             profile,
             ..
-        } => Ok(SupportedDetector::suspicious_scripting(
+        } => Ok(ReplayDetector::suspicious_scripting(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -3146,7 +3146,7 @@ fn detector_from_candidate(
             strategy_id,
             profile,
             ..
-        } => Ok(SupportedDetector::persistence(
+        } => Ok(ReplayDetector::persistence(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -3154,7 +3154,7 @@ fn detector_from_candidate(
             strategy_id,
             profile,
             ..
-        } => Ok(SupportedDetector::supply_chain(
+        } => Ok(ReplayDetector::supply_chain(
             strategy_id.clone(),
             profile.clone(),
         )?),
@@ -3897,7 +3897,7 @@ fn verify_known_bad_coverage(report: &ReplaySuiteReport) -> VerificationInvarian
 }
 
 fn verify_canonical_templates(
-    detector: &SupportedDetector,
+    detector: &ReplayDetector,
     templates: &[VerificationThreatClassTemplate],
 ) -> VerificationInvariantResult {
     let counterexamples = templates

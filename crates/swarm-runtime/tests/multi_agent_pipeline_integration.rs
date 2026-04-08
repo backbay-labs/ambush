@@ -11,7 +11,7 @@ use swarm_core::config::{
 use swarm_core::types::{AgentId, ResponseAction, Severity};
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::ApprovalContext;
-use swarm_runtime::control::supported_detector;
+use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::investigation::SummaryInvestigator;
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
@@ -109,7 +109,7 @@ fn suspicious_event(event_id: &str) -> TelemetryEvent {
 #[tokio::test]
 async fn full_multi_agent_pipeline() -> Result<(), Box<dyn Error>> {
     let config = integration_config();
-    let detector = supported_detector(&config.detection)?;
+    let detector = build_composite_detector(&config.detection)?;
     let stack = ConfiguredRuntimeStack::from_config(config.clone(), SummaryInvestigator)?;
     let event = suspicious_event("evt-multi-1");
     let approval = ApprovalContext {

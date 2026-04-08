@@ -6,7 +6,7 @@ use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::AgentId;
 use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::supported_detector;
+use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::detection::detect_and_deposit;
 use swarm_whisker::{
     ProcessStartEvent, RegistryPersistenceEvent, TelemetryEvent, TelemetryPayload,
@@ -63,7 +63,7 @@ fn supply_chain_event() -> TelemetryEvent {
 async fn persistence_strategy_detects_registry_run_key_and_deposits()
 -> Result<(), Box<dyn std::error::Error>> {
     let config = config_with_strategy("persistence")?;
-    let detector = supported_detector(&config.detection)?;
+    let detector = build_composite_detector(&config.detection)?;
     let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
     let outcome = detect_and_deposit(
         &detector,
@@ -94,7 +94,7 @@ async fn persistence_strategy_detects_registry_run_key_and_deposits()
 async fn supply_chain_strategy_detects_unsigned_trusted_path_execution_and_deposits()
 -> Result<(), Box<dyn std::error::Error>> {
     let config = config_with_strategy("supply_chain")?;
-    let detector = supported_detector(&config.detection)?;
+    let detector = build_composite_detector(&config.detection)?;
     let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
     let outcome = detect_and_deposit(
         &detector,

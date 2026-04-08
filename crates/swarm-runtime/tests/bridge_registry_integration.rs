@@ -15,7 +15,7 @@ use swarm_core::types::AgentId;
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, DepositQuery, PheromoneSubstrate};
 use swarm_runtime::bridge_runtime::{BridgeRuntimeRegistry, bridge_health_report};
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::supported_detector;
+use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::whisker_agent::WhiskerAgent;
 use tokio::sync::{mpsc, watch};
 
@@ -134,7 +134,7 @@ async fn concurrent_bridge_registry_feeds_shared_whisker_pipeline()
     )?;
 
     let config = config_with_concurrent_bridges(&cloudtrail_path, &generic_json_path)?;
-    let detector = Arc::new(supported_detector(&config.detection)?);
+    let detector = Arc::new(build_composite_detector(&config.detection)?);
     let substrate = ConfiguredPheromoneSubstrate::from_config(&config.pheromone)?;
     let registry = BridgeRuntimeRegistry::from_config(&config)?;
     let bridge_health = registry.shared_health();

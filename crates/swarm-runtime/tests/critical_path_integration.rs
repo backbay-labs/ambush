@@ -7,7 +7,7 @@ use swarm_policy::{
 };
 use swarm_response::adapters::SandboxExecutor;
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::supported_detector;
+use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::investigation::{
     InvestigationOutcome, InvestigationStrategy, SummaryInvestigator,
 };
@@ -158,7 +158,7 @@ async fn run_scenario_with_strategy(
     Box<dyn std::error::Error>,
 > {
     let cfg = config_with_strategy(strategy)?;
-    let detector = supported_detector(&cfg.detection)?;
+    let detector = build_composite_detector(&cfg.detection)?;
     let stack = ConfiguredRuntimeStack::from_components(
         cfg,
         StaticApprovalGate::default(),
@@ -184,7 +184,7 @@ async fn run_scenario_with_strategy(
 #[tokio::test]
 async fn full_critical_path_detect_to_receipt() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = config()?;
-    let detector = supported_detector(&cfg.detection)?;
+    let detector = build_composite_detector(&cfg.detection)?;
     let stack = ConfiguredRuntimeStack::from_components(
         cfg,
         StaticApprovalGate::default(),
@@ -233,7 +233,7 @@ async fn full_critical_path_detect_to_receipt() -> Result<(), Box<dyn std::error
 #[tokio::test]
 async fn benign_event_produces_no_bundle() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = config()?;
-    let detector = supported_detector(&cfg.detection)?;
+    let detector = build_composite_detector(&cfg.detection)?;
     let stack = ConfiguredRuntimeStack::from_components(
         cfg,
         StaticApprovalGate::default(),
@@ -281,7 +281,7 @@ async fn full_path_with_scenario_fixture() -> Result<(), Box<dyn std::error::Err
 }
 
 #[test]
-fn supported_detector_factory_covers_all_runtime_strategies()
+fn composite_detector_factory_covers_all_runtime_strategies()
 -> Result<(), Box<dyn std::error::Error>> {
     for strategy in [
         "suspicious_process_tree",
@@ -293,7 +293,7 @@ fn supported_detector_factory_covers_all_runtime_strategies()
         "supply_chain",
     ] {
         let cfg = config_with_strategy(strategy)?;
-        assert!(supported_detector(&cfg.detection).is_ok(), "{strategy}");
+        assert!(build_composite_detector(&cfg.detection).is_ok(), "{strategy}");
     }
     Ok(())
 }
@@ -397,7 +397,7 @@ async fn benign_dns_fixture_produces_no_detections() -> Result<(), Box<dyn std::
 async fn policy_deny_produces_bundle_with_skipped_response()
 -> Result<(), Box<dyn std::error::Error>> {
     let cfg = config()?;
-    let detector = supported_detector(&cfg.detection)?;
+    let detector = build_composite_detector(&cfg.detection)?;
     let stack = ConfiguredRuntimeStack::from_components(
         cfg,
         DenyAllGate,

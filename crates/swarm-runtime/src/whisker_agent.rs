@@ -1,4 +1,3 @@
-use crate::control::SupportedDetector;
 use crate::detection::pipeline::detect_and_deposit;
 use async_trait::async_trait;
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -11,7 +10,7 @@ use swarm_core::config::PheromoneConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{AgentId, SwarmAction};
 use swarm_pheromone::ConfiguredPheromoneSubstrate;
-use swarm_whisker::TelemetryEvent;
+use swarm_whisker::{CompositeDetector, TelemetryEvent};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
@@ -20,7 +19,7 @@ pub struct WhiskerAgent {
     signing_key: SigningKey,
     verifying_key: VerifyingKey,
     event_rx: Mutex<mpsc::Receiver<TelemetryEvent>>,
-    detector: Arc<SupportedDetector>,
+    detector: Arc<CompositeDetector>,
     substrate: ConfiguredPheromoneSubstrate,
     pheromone_config: PheromoneConfig,
     role: AgentRole,
@@ -31,7 +30,7 @@ impl WhiskerAgent {
     pub fn new(
         id: AgentId,
         event_rx: mpsc::Receiver<TelemetryEvent>,
-        detector: Arc<SupportedDetector>,
+        detector: Arc<CompositeDetector>,
         substrate: ConfiguredPheromoneSubstrate,
         pheromone_config: PheromoneConfig,
     ) -> Self {
@@ -152,7 +151,6 @@ fn threat_class_name(threat_class: &ThreatClass) -> String {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::WhiskerAgent;
-    use crate::control::SupportedDetector;
     use std::sync::Arc;
     use swarm_core::agent::{
         AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmEvent, SwarmMode,
@@ -163,7 +161,8 @@ mod tests {
         ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, PheromoneSubstrate,
     };
     use swarm_whisker::{
-        ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
+        CompositeDetector, ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent,
+        TelemetryPayload,
     };
     use tokio::sync::mpsc;
 
@@ -210,6 +209,12 @@ mod tests {
         }
     }
 
+    fn detector() -> Arc<CompositeDetector> {
+        Arc::new(CompositeDetector::new(vec![Box::new(
+            SuspiciousProcessTreeDetector::default(),
+        )]))
+    }
+
     #[tokio::test]
     async fn whisker_agent_reports_role_and_health() {
         let config = pheromone_config();
@@ -218,9 +223,7 @@ mod tests {
         let agent = WhiskerAgent::new(
             AgentId::new("whisker", "primary"),
             rx,
-            Arc::new(SupportedDetector::SuspiciousProcessTree(
-                SuspiciousProcessTreeDetector::default(),
-            )),
+            detector(),
             substrate(&config),
             config,
         );
@@ -237,9 +240,7 @@ mod tests {
         let mut agent = WhiskerAgent::new(
             AgentId::new("whisker", "primary"),
             rx,
-            Arc::new(SupportedDetector::SuspiciousProcessTree(
-                SuspiciousProcessTreeDetector::default(),
-            )),
+            detector(),
             substrate(&config),
             config,
         );
@@ -262,9 +263,7 @@ mod tests {
         let mut agent = WhiskerAgent::new(
             AgentId::new("whisker", "primary"),
             rx,
-            Arc::new(SupportedDetector::SuspiciousProcessTree(
-                SuspiciousProcessTreeDetector::default(),
-            )),
+            detector(),
             substrate(&config),
             config,
         );
@@ -277,9 +276,7 @@ mod tests {
     async fn whisker_agent_drains_buffer_and_deposits_pheromones() {
         let config = pheromone_config();
         let substrate = substrate(&config);
-        let detector = Arc::new(SupportedDetector::SuspiciousProcessTree(
-            SuspiciousProcessTreeDetector::default(),
-        ));
+        let detector = detector();
         let (tx, rx) = mpsc::channel(4);
         tx.send(event()).await.unwrap();
         drop(tx);

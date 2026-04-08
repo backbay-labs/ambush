@@ -3,7 +3,7 @@ use crate::config::{
     CURRENT_SCHEMA_VERSION, RuntimeConfigError, load_config_unresolved,
     resolve_outbound_secrets, resolve_secret_dir_path,
 };
-use crate::control::{ControlError, SupportedDetector, supported_detector};
+use crate::control::{ControlError, build_composite_detector};
 use crate::correlation::CorrelationEngine;
 use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use crate::dispatcher::AgentHealthEntry;
@@ -31,7 +31,7 @@ use swarm_spine::{
     ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, ConfiguredReplayBundleStore,
     ReplayBundleStore,
 };
-use swarm_whisker::{DetectionStrategy, TelemetryEvent};
+use swarm_whisker::{CompositeDetector, TelemetryEvent};
 use sysinfo::{ProcessesToUpdate, System, get_current_pid};
 use tracing::Instrument;
 use uuid::Uuid;
@@ -156,7 +156,7 @@ pub enum IngestBuildError {
 #[derive(Clone)]
 pub struct IngestState {
     stack: Arc<ArcSwap<IngestRuntimeStack>>,
-    detector: Arc<ArcSwap<SupportedDetector>>,
+    detector: Arc<ArcSwap<CompositeDetector>>,
     detector_status: Arc<ArcSwap<DetectorRuntimeStatus>>,
     config_path: Arc<PathBuf>,
     /// The config template before `@secret:` references are resolved.
@@ -175,8 +175,8 @@ pub struct IngestState {
 impl IngestState {
     fn build_runtime(
         config: SwarmConfig,
-    ) -> Result<(Arc<IngestRuntimeStack>, Arc<SupportedDetector>), IngestBuildError> {
-        let detector = Arc::new(supported_detector(&config.detection)?);
+    ) -> Result<(Arc<IngestRuntimeStack>, Arc<CompositeDetector>), IngestBuildError> {
+        let detector = Arc::new(build_composite_detector(&config.detection)?);
         let stack = Arc::new(ConfiguredRuntimeStack::from_config(
             config,
             SummaryInvestigator,
@@ -198,9 +198,10 @@ impl IngestState {
                 source,
             }
         })?;
+        let strategy = strategy_status_label(&resolved);
         let (stack, detector) = Self::build_runtime(resolved)?;
         let detector_status = Arc::new(ArcSwap::from(Arc::new(DetectorRuntimeStatus::loaded(
-            detector.id().to_string(),
+            strategy,
         ))));
         Ok(Self {
             stack: Arc::new(ArcSwap::from(stack)),
@@ -225,9 +226,9 @@ impl IngestState {
     }
 
     pub fn reload(&self, config: SwarmConfig) -> Result<(), IngestBuildError> {
+        let strategy = strategy_status_label(&config);
         match Self::build_runtime(config) {
             Ok((stack, detector)) => {
-                let strategy = detector.id().to_string();
                 self.detector.store(detector);
                 self.stack.store(stack);
                 self.detector_status
@@ -333,7 +334,7 @@ impl IngestState {
         self
     }
 
-    pub fn current_detector(&self) -> Arc<SupportedDetector> {
+    pub fn current_detector(&self) -> Arc<CompositeDetector> {
         self.detector.load_full()
     }
 
@@ -350,7 +351,7 @@ impl IngestState {
     }
 
     pub fn detector_strategy_name(&self) -> String {
-        self.detector.load_full().id().to_string()
+        self.detector_status().strategy
     }
 
     pub fn current_prometheus_metrics(&self) -> Option<CriticalPathMetrics> {
@@ -425,6 +426,10 @@ impl IngestState {
     fn sample_heap_pressure(&self) -> Option<HeapPressureSnapshot> {
         (self.heap_snapshot_provider)()
     }
+}
+
+fn strategy_status_label(config: &SwarmConfig) -> String {
+    config.detection.active_strategies().join(", ")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

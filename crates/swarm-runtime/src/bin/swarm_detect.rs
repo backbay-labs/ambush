@@ -10,7 +10,7 @@ use swarm_core::types::AgentId;
 use swarm_policy::ApprovalContext;
 use swarm_runtime::bridge_runtime::BridgeRuntimeRegistry;
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::supported_detector;
+use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::escalation::ConcentrationMonitor;
 use swarm_runtime::ingest::{IngestState, detect_http_router};
@@ -584,7 +584,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let detector = supported_detector(&config.detection)?;
+    let detector = build_composite_detector(&config.detection)?;
     let stack = ConfiguredRuntimeStack::from_config(config.clone(), SummaryInvestigator)?;
     let mut paths = if let Some(dir) = &cli.scenarios_dir {
         scenario_paths_in_dir(dir)?
