@@ -36,18 +36,18 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Turn the shipped runtime into a compelling live demo surface with replay injection, streamed swarm visibility, approval-in-the-loop response, signed proof export, and Providence delivery.
 **Executable phases:** 128-131
 
-- [ ] **Phase 128: Demo Replay Injector And Event Stream Backbone** - Add the demo replay entrypoint and typed SSE stream so the running swarm can be driven and observed from one operator-facing lane.
-- [ ] **Phase 129: Live Demo Dashboard And Runtime Timeline** - Build the real-time workbench view for mode, agent health, pheromone pressure, and escalation timeline updates.
-- [ ] **Phase 130: Approval-In-The-Loop Demo And Signed Proof Export** - Turn `RequireHuman` response flow and signed proof packaging into a coherent demo path.
-- [ ] **Phase 131: Providence Webhook Delivery And Drilldown Context** - Deliver enriched Swarm findings to Providence with runtime context and stable drilldown links.
+- [x] **Phase 128: Demo Replay Injector And Event Stream Backbone** - Add the demo replay entrypoint and typed SSE stream so the running swarm can be driven and observed from one operator-facing lane. (completed 2026-04-08)
+- [x] **Phase 129: Live Demo Dashboard And Runtime Timeline** - Build the real-time workbench view for mode, agent health, pheromone pressure, and escalation timeline updates. (completed 2026-04-08)
+- [x] **Phase 130: Approval-In-The-Loop Demo And Signed Proof Export** - Turn `RequireHuman` response flow and signed proof packaging into a coherent demo path. (completed 2026-04-08)
+- [x] **Phase 131: Providence Webhook Delivery And Drilldown Context** - Deliver enriched Swarm findings to Providence with runtime context and stable drilldown links. (completed 2026-04-08)
 
 ### Phase 128: Demo Replay Injector And Event Stream Backbone
 
 **Goal:** Add the operator-facing replay injector and streamed event backbone needed to drive a live demo against the real runtime.
 **Requirements:** DEMO-01, DEMO-02
 **Depends on:** None
-**Status:** Planned
-**Plans:** 0
+**Status:** Complete
+**Plans:** 1
 **Success Criteria**:
 1. `POST /v1/demo/replay` is gated behind `demo_mode`, accepts a scenario YAML path plus replay pacing, and injects events into the running telemetry lane instead of a mock side channel.
 2. Replay injection produces real swarm activity across detection, investigation, correlation, escalation, and response surfaces.
@@ -58,8 +58,8 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Expose the live runtime state as a purpose-built demo dashboard on top of the streamed event backbone.
 **Requirements:** DEMO-03
 **Depends on:** Phase 128
-**Status:** Planned
-**Plans:** 0
+**Status:** Complete
+**Plans:** 1
 **Success Criteria**:
 1. The review workbench renders a live dashboard backed by the event stream rather than polling raw storage or logs.
 2. The dashboard shows current `SwarmMode`, per-agent health, and per-`ThreatClass` pheromone concentrations in one operator-facing view.
@@ -70,8 +70,8 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Make the human-gated response path demoable end to end and exportable as one signed evidence package.
 **Requirements:** DEMO-04, DEMO-05
 **Depends on:** Phase 128
-**Status:** Planned
-**Plans:** 0
+**Status:** Complete
+**Plans:** 1
 **Success Criteria**:
 1. Demo execution pauses cleanly on `RequireHuman` policy verdicts and persists a resumable approval target instead of executing immediately.
 2. The operator approval-set vote endpoint can approve the paused action and resume execution with signed receipt evidence for the approval chain.
@@ -82,8 +82,8 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Push Swarm findings into Providence with enough runtime and drilldown context to support an external live-demo story.
 **Requirements:** PROV-01, PROV-02, PROV-03
 **Depends on:** Phase 128
-**Status:** Planned
-**Plans:** 0
+**Status:** Complete
+**Plans:** 1
 **Success Criteria**:
 1. A `providence_webhook` notification channel delivers `SwarmFindingEnvelope` payloads to Providence with threat class and severity mapped into Providence incident fields.
 2. Providence payloads include stable links back to Swarm finding drilldown, replay-bundle access, and audit-trail inspection surfaces.
@@ -105,14 +105,26 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 (none remaining after v1.39)
 
-### Tier 2: Product Visibility
+### Tier 2: Deployment And Hardening
 
-- `v1.41 Platform APIs And Deployment Experience` -- Versioned platform API, Helm chart, config validation CLI, guided setup wizard (8 requirements: API-01-04, HELM-01-02, CLI-01-02)
+- `v1.41 Deployment And Hardening` -- Versioned platform API, Helm chart, config validation CLI, panic elimination, runtime monolith split, mTLS, structured tracing (12 requirements: API-01-04, HELM-01-02, CLI-01-02, HARD-01-04)
 
-### Tier 3: Detection Breadth (v1.42+)
+### Tier 3: Evolution And Differentiation
 
-- `v1.42 Fileless Execution And Behavioral Baselines` -- Memory-based detection, behavioral anomaly baselines (6 requirements: FILELESS-01-06)
-- `v1.43 Adversarial Robustness And Evasion Bench` -- Evasion test corpus, coverage metrics, strategy mutation (5 requirements: EVASION-01-05)
+- `v1.42 Evolution Engine` -- Self-evolving detection via Kitten agent with GP mutation, Z3 formal safety gate, Sphinx persistent memory, Hellcat adversarial co-evolution (14 requirements: KITTEN-01-04, Z3-01-03, SPHINX-01-04, HELLCAT-01-03)
+
+### Tier 4: Distributed Governance
+
+- `v1.43 Distributed Governance` -- Tendermint BFT consensus, multi-instance Tom agreement, partition authority with contingency leases, chaos/failure injection testing (13 requirements: CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
+
+### Tier 5: Deep Providence Integration
+
+- `v1.44 Providence Native` -- Bidirectional incident lifecycle sync, analyst feedback loop into pheromone substrate and evolution, Providence dashboard widget embedding (9 requirements: PROVBI-01-03, PROVFB-01-03, PROVDASH-01-03)
+
+### Tier 6: Detection Breadth (v1.45+)
+
+- `v1.45 Fileless Execution And Behavioral Baselines` -- Memory-based detection, behavioral anomaly baselines (6 requirements: FILELESS-01-06)
+- `v1.46 Adversarial Robustness And Evasion Bench` -- Evasion test corpus, coverage metrics, strategy mutation (5 requirements: EVASION-01-05)
 
 ## Progress
 
@@ -140,12 +152,12 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 | 125. Configurable Policy Rules And Audit Trail | v1.39 | 4/4 | Complete | 2026-04-08 |
 | 126. TomAgent Governance | v1.39 | 4/4 | Complete | 2026-04-08 |
 | 127. Integration Hardening | v1.39 | 2/2 | Complete | 2026-04-08 |
-| 128. Demo Replay Injector And Event Stream Backbone | v1.40 | 0/0 | Planned | — |
-| 129. Live Demo Dashboard And Runtime Timeline | v1.40 | 0/0 | Planned | — |
-| 130. Approval-In-The-Loop Demo And Signed Proof Export | v1.40 | 0/0 | Planned | — |
-| 131. Providence Webhook Delivery And Drilldown Context | v1.40 | 0/0 | Planned | — |
+| 128. Demo Replay Injector And Event Stream Backbone | v1.40 | 1/1 | Complete | 2026-04-08 |
+| 129. Live Demo Dashboard And Runtime Timeline | v1.40 | 1/1 | Complete | 2026-04-08 |
+| 130. Approval-In-The-Loop Demo And Signed Proof Export | v1.40 | 1/1 | Complete | 2026-04-08 |
+| 131. Providence Webhook Delivery And Drilldown Context | v1.40 | 1/1 | Complete | 2026-04-08 |
 
 ---
 *Last shipped milestone: v1.39 PounceAgent And Policy Gate Hardening on 2026-04-08*
 *Active milestone: v1.40 Killer Demo And Providence Integration*
-*Last updated: 2026-04-08 after activating v1.40*
+*Last updated: 2026-04-08 after completing Phase 131*

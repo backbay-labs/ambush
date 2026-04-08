@@ -168,19 +168,19 @@
 
 #### Demo Infrastructure
 
-- **DEMO-01**: `POST /v1/demo/replay` (gated behind `demo_mode` config) accepts a scenario YAML path and injects events into the running telemetry channel with configurable inter-event delay, driving the full agent swarm
-- **DEMO-02**: `GET /v1/events/stream` emits Server-Sent Events for agent actions (pheromone deposits, investigation claims, correlation publishes, escalation transitions, policy decisions, response executions) with event-type filtering
-- **DEMO-03**: The review workbench includes a real-time dashboard showing `SwarmMode`, per-agent health, per-`ThreatClass` pheromone concentrations, and a scrolling escalation timeline
-- **DEMO-04**: Demo flow pauses at `RequireHuman` policy verdicts; operator approves via approval-set vote endpoint; response executes with signed receipt proving the approval chain
-- **DEMO-05**: `GET /v1/demo/proof` exports a JSON document with all signed receipts, Merkle proofs, the final `CorrelatedIncident`, and full decision timeline
+- [x] **DEMO-01**: `POST /v1/demo/replay` (gated behind `demo_mode` config) accepts a scenario YAML path and injects events into the running telemetry channel with configurable inter-event delay, driving the full agent swarm
+- [x] **DEMO-02**: `GET /v1/events/stream` emits Server-Sent Events for agent actions (pheromone deposits, investigation claims, correlation publishes, escalation transitions, policy decisions, response executions) with event-type filtering
+- [x] **DEMO-03**: The review workbench includes a real-time dashboard showing `SwarmMode`, per-agent health, per-`ThreatClass` pheromone concentrations, and a scrolling escalation timeline
+- [x] **DEMO-04**: Demo flow pauses at `RequireHuman` policy verdicts; operator approves via approval-set vote endpoint; response executes with signed receipt proving the approval chain
+- [x] **DEMO-05**: `GET /v1/demo/proof` exports a JSON document with all signed receipts, Merkle proofs, the final `CorrelatedIncident`, and full decision timeline
 
 #### Providence Integration
 
-- **PROV-01**: A `providence_webhook` notification channel delivers `SwarmFindingEnvelope` payloads to a Providence API endpoint, mapping threat_class and severity to Providence incident fields
-- **PROV-02**: Providence webhook payloads include stable URL references back to Swarm operator API for finding drilldown, replay bundle access, and audit trail inspection
-- **PROV-03**: Providence webhook payloads include current `SwarmMode`, active agent count, and bridge health summary for runtime status display
+- [x] **PROV-01**: A `providence_webhook` notification channel delivers `SwarmFindingEnvelope` payloads to a Providence API endpoint, mapping threat_class and severity to Providence incident fields
+- [x] **PROV-02**: Providence webhook payloads include stable URL references back to Swarm operator API for finding drilldown, replay bundle access, and audit trail inspection
+- [x] **PROV-03**: Providence webhook payloads include current `SwarmMode`, active agent count, and bridge health summary for runtime status display
 
-### Platform APIs And Deployment Experience (v1.41)
+### Deployment And Hardening (v1.41)
 
 #### Platform API
 
@@ -196,9 +196,91 @@
 - **CLI-01**: `swarmctl validate --config <path>` performs full config validation including schema version, secret resolution, endpoint reachability, and detector profile thresholds
 - **CLI-02**: `swarmctl init` runs an interactive wizard generating a complete `rulesets/custom.yaml` with inline comments
 
-### Future: Detection Breadth (v1.42+)
+#### Runtime Hardening
 
-#### Fileless Execution And Behavioral Baselines
+- **HARD-01**: All production-path `panic!` calls in `swarm-ingest-tetragon`, `swarm-ingest-json`, `swarm-whisker`, and `swarm-response` are replaced with `Result` propagation; unexpected telemetry payload types return structured errors instead of crashing the runtime
+- **HARD-02**: `swarm-runtime` is split into `swarm-agents` (agent implementations and dispatcher), `swarm-http` (HTTP control plane and SSE), and `swarm-replay` (replay harness and scenario injection) crates, reducing the monolith from 90K LoC to focused compilation units
+- **HARD-03**: The HTTP control plane supports mTLS client certificate authentication and bearer token validation in addition to the existing basic auth, with per-endpoint audit logging of authenticated identity
+- **HARD-04**: Structured tracing spans (`tracing` crate) instrument the critical path from ingest through detection, policy evaluation, and response execution, with configurable export to stdout JSON or OTLP collector
+
+### Evolution Engine (v1.42)
+
+#### Kitten Agent
+
+- **KITTEN-01**: `KittenAgent` implements `SwarmAgent` with `AgentRole::Kitten` and runs a genetic programming mutation loop over `DetectionStrategy` configurations, producing candidate strategies with mutated thresholds, feature weights, and rule combinations
+- **KITTEN-02**: Candidate strategies are evaluated against the repo-owned replay corpus; fitness scoring uses a multi-objective function (0.40 detection rate, 0.30 false-positive cost, 0.15 speed, 0.15 ATT&CK coverage) with Pareto selection for non-dominated candidates
+- **KITTEN-03**: `KittenAgent` activates evolution based on detected concept drift (declining detection rates or rising evasion rates over a configurable observation window) rather than fixed schedules
+- **KITTEN-04**: Evolved candidates are submitted to the existing canary pipeline via `SwarmAction::SubmitCandidate` and cannot bypass the staged deployment ladder (canary → promotion → production)
+
+#### Formal Safety Gate
+
+- **Z3-01**: A `FormalSafetyGate` validates evolved detection strategies against Z3-encoded safety invariants before canary admission; strategies that weaken proven detection invariants (e.g., removing coverage for a known-bad pattern) are rejected with a structured proof of the violated invariant
+- **Z3-02**: Safety invariants are defined as repo-owned `.z3` specification files in `rulesets/safety/` with versioned schema; operators can add domain-specific invariants without modifying Rust code
+- **Z3-03**: The formal verification step runs as a synchronous gate in the evolution pipeline; verification results are persisted as signed evidence artifacts in the existing spine audit trail
+
+#### Sphinx Memory
+
+- **SPHINX-01**: `SphinxAgent` implements `SwarmAgent` with `AgentRole::Sphinx` and maintains a persistent knowledge graph of threat patterns, ATT&CK technique observations, and cross-engagement correlations using the durable substrate
+- **SPHINX-02**: The knowledge graph supports temporal, causal, entity, and semantic edge types following the MAGMA multi-graph architecture for multi-dimensional threat correlation
+- **SPHINX-03**: `SphinxAgent` responds to queries from other agents via `SwarmAction::QueryMemory` and `SwarmAction::MemoryResult`, providing historical context for active investigations and detection decisions
+- **SPHINX-04**: Strategy fitness evaluation in `KittenAgent` incorporates Sphinx memory via Q-value-based retrieval (past strategy effectiveness in similar threat contexts) rather than similarity-only matching
+
+#### Adversarial Co-Evolution
+
+- **HELLCAT-01**: A `RedSwarmAdapter` integrates with the Hellcat attack planner to generate adversarial telemetry sequences representing multi-step attack chains with evasion techniques
+- **HELLCAT-02**: `KittenAgent` fitness evaluation includes adversarial pressure from Hellcat-generated evasion attempts; blue detection fitness declines when red evasion succeeds and vice versa, creating an open-ended co-evolutionary arms race
+- **HELLCAT-03**: Red swarm attack patterns and blue swarm detection responses are logged as paired evolution episodes with ATT&CK technique coverage tracking
+
+### Distributed Governance (v1.43)
+
+#### Consensus Protocol
+
+- **CONSENSUS-01**: `swarm-consensus` implements a Tendermint-style propose-prevote-precommit BFT protocol tolerating f Byzantine agents in a 2f+1 committee, with round-based progress and view-change on proposer timeout
+- **CONSENSUS-02**: VRF-based committee rotation selects proposers fairly across agent identities, preventing proposer monopolization and enabling verifiable random leader election
+- **CONSENSUS-03**: Consensus protocol messages are signed with Ed25519 agent keys and verified before processing; Byzantine message detection (equivocation, invalid signatures) triggers automatic agent exclusion from the current round
+
+#### Multi-Instance Governance
+
+- **GOVERN-01**: `TomAgent` consensus extends from single-instance synchronous veto to multi-instance BFT agreement; response actions requiring governance approval are proposed to the consensus committee and executed only after 2f+1 prevote-precommit confirmation
+- **GOVERN-02**: Multi-instance pheromone deposits are validated against consensus-agreed agent identities; deposits from excluded or unknown agents are rejected by the substrate
+- **GOVERN-03**: Governance decisions (approve, veto, timeout) are persisted as signed consensus receipts in the spine audit trail with round number, committee composition, and vote tally
+
+#### Partition Authority
+
+- **PARTITION-01**: A partition detector identifies network splits using heartbeat timeout and quorum loss signals; partition state transitions (healthy → degraded → partitioned → healing) are logged as structured events
+- **PARTITION-02**: Contingency leases pre-authorize bounded action sets during healthy periods for redemption during partition; leases specify action type, blast radius cap, and maximum duration
+- **PARTITION-03**: During partition, detection and reporting continue (fail-open for observability) while destructive response actions are denied unless covered by a valid contingency lease (fail-closed for safety)
+- **PARTITION-04**: Partition reconciliation on healing merges divergent decisions from sub-swarms, preserving authorized actions and flagging unauthorized actions for operator review
+
+#### Resilience Testing
+
+- **CHAOS-01**: A chaos testing harness injects Byzantine agent behavior (equivocation, delayed responses, invalid signatures) into the consensus protocol and verifies safety properties hold
+- **CHAOS-02**: Network partition simulation tests verify that detection continues, unauthorized responses are blocked, and contingency leases are correctly redeemed and expired
+- **CHAOS-03**: Cascading failure scenarios (agent crash → health degradation → mode transition → recovery) are tested end-to-end with deterministic replay
+
+### Providence Native (v1.44)
+
+#### Bidirectional Integration
+
+- **PROVBI-01**: Providence webhook delivery is validated against a live Providence API instance with schema conformance tests and error handling for Providence-side rejections
+- **PROVBI-02**: A Providence incident lifecycle adapter synchronizes incident state (create → update → resolve) bidirectionally; Swarm escalation creates Providence incidents, de-escalation updates severity, and mode return to Normal resolves the incident
+- **PROVBI-03**: Providence incident IDs are stored in the Swarm substrate and linked to `CorrelatedIncident` records, enabling cross-system incident correlation
+
+#### Analyst Feedback Loop
+
+- **PROVFB-01**: Providence analyst triage actions (confirm threat, dismiss false positive, request investigation) are received via webhook callback and translated into pheromone substrate operations (confidence boost, deposit suppression, investigation trigger)
+- **PROVFB-02**: Analyst feedback on false positives feeds into `KittenAgent` evolution pressure, reducing false-positive fitness cost for patterns matching dismissed findings
+- **PROVFB-03**: Feedback actions are persisted as signed audit entries linking the Providence analyst identity, action type, and affected finding/incident IDs
+
+#### Dashboard Integration
+
+- **PROVDASH-01**: Providence dashboard embeds the Swarm runtime timeline via an iframe-compatible widget endpoint with CORS and CSP headers configured for cross-origin embedding
+- **PROVDASH-02**: The embedded widget displays real-time agent activity, pheromone concentrations, and escalation timeline scoped to the Providence incident context
+- **PROVDASH-03**: Deep links from Providence incident views navigate directly to Swarm finding drilldown, replay bundle, and approval proof surfaces with pre-authenticated context tokens
+
+### Future: Detection Breadth (v1.45+)
+
+#### Fileless Execution And Behavioral Baselines (v1.45)
 
 - **FILELESS-01**: A `FilelessExecutionDetector` implements `DetectionStrategy` and identifies indicators of reflective DLL injection, encoded PowerShell execution with multi-stage deobfuscation hints, and raw syscall gadget patterns from a new `TelemetryPayload::ProcessMemoryAccess` variant and existing `ProcessStart` events
 - **FILELESS-02**: A `BehavioralAnomalyDetector` implements `DetectionStrategy` and maintains per-host process ancestry baselines; it flags deviations such as unusual parent-child pairs, first-seen binaries, or atypical tool usage for a user role as medium-confidence findings
@@ -207,7 +289,7 @@
 - **FILELESS-05**: `ThreatClass::DefenseEvasion` is used for fileless execution findings; `ThreatClass::PrivilegeEscalation` is used when the detector observes memory manipulation targeting a higher-privilege process
 - **FILELESS-06**: Both detectors ship with configurable profiles; integration tests cover evasion scenarios through detection to pheromone deposit
 
-#### Adversarial Robustness And Evasion Bench
+#### Adversarial Robustness And Evasion Bench (v1.46)
 
 - **EVASION-01**: An evasion test corpus provides at least 10 curated payloads per `ThreatClass` representing real-world evasion techniques
 - **EVASION-02**: A coverage metrics module computes per-detector evasion catch rates via `/metrics` and `/api/v1/evasion/coverage`
@@ -308,14 +390,14 @@
 | DEESC-02 | Phase 124 | Complete |
 | TOM-01 | Phase 126 | Complete |
 | TOM-02 | Phase 126 | Complete |
-| DEMO-01 | Phase 128 | Pending |
-| DEMO-02 | Phase 128 | Pending |
-| DEMO-03 | Phase 129 | Pending |
-| DEMO-04 | Phase 130 | Pending |
-| DEMO-05 | Phase 130 | Pending |
-| PROV-01 | Phase 131 | Pending |
-| PROV-02 | Phase 131 | Pending |
-| PROV-03 | Phase 131 | Pending |
+| DEMO-01 | Phase 128 | Complete |
+| DEMO-02 | Phase 128 | Complete |
+| DEMO-03 | Phase 129 | Complete |
+| DEMO-04 | Phase 130 | Complete |
+| DEMO-05 | Phase 130 | Complete |
+| PROV-01 | Phase 131 | Complete |
+| PROV-02 | Phase 131 | Complete |
+| PROV-03 | Phase 131 | Complete |
 | API-01 | Queued milestone v1.41 | Queued |
 | API-02 | Queued milestone v1.41 | Queued |
 | API-03 | Queued milestone v1.41 | Queued |
@@ -324,27 +406,70 @@
 | HELM-02 | Queued milestone v1.41 | Queued |
 | CLI-01 | Queued milestone v1.41 | Queued |
 | CLI-02 | Queued milestone v1.41 | Queued |
-| FILELESS-01 | Queued future v1.42+ | Queued |
-| FILELESS-02 | Queued future v1.42+ | Queued |
-| FILELESS-03 | Queued future v1.42+ | Queued |
-| FILELESS-04 | Queued future v1.42+ | Queued |
-| FILELESS-05 | Queued future v1.42+ | Queued |
-| FILELESS-06 | Queued future v1.42+ | Queued |
-| EVASION-01 | Queued future v1.42+ | Queued |
-| EVASION-02 | Queued future v1.42+ | Queued |
-| EVASION-03 | Queued future v1.42+ | Queued |
-| EVASION-04 | Queued future v1.42+ | Queued |
-| EVASION-05 | Queued future v1.42+ | Queued |
+| HARD-01 | Queued milestone v1.41 | Queued |
+| HARD-02 | Queued milestone v1.41 | Queued |
+| HARD-03 | Queued milestone v1.41 | Queued |
+| HARD-04 | Queued milestone v1.41 | Queued |
+| KITTEN-01 | Queued milestone v1.42 | Queued |
+| KITTEN-02 | Queued milestone v1.42 | Queued |
+| KITTEN-03 | Queued milestone v1.42 | Queued |
+| KITTEN-04 | Queued milestone v1.42 | Queued |
+| Z3-01 | Queued milestone v1.42 | Queued |
+| Z3-02 | Queued milestone v1.42 | Queued |
+| Z3-03 | Queued milestone v1.42 | Queued |
+| SPHINX-01 | Queued milestone v1.42 | Queued |
+| SPHINX-02 | Queued milestone v1.42 | Queued |
+| SPHINX-03 | Queued milestone v1.42 | Queued |
+| SPHINX-04 | Queued milestone v1.42 | Queued |
+| HELLCAT-01 | Queued milestone v1.42 | Queued |
+| HELLCAT-02 | Queued milestone v1.42 | Queued |
+| HELLCAT-03 | Queued milestone v1.42 | Queued |
+| CONSENSUS-01 | Queued milestone v1.43 | Queued |
+| CONSENSUS-02 | Queued milestone v1.43 | Queued |
+| CONSENSUS-03 | Queued milestone v1.43 | Queued |
+| GOVERN-01 | Queued milestone v1.43 | Queued |
+| GOVERN-02 | Queued milestone v1.43 | Queued |
+| GOVERN-03 | Queued milestone v1.43 | Queued |
+| PARTITION-01 | Queued milestone v1.43 | Queued |
+| PARTITION-02 | Queued milestone v1.43 | Queued |
+| PARTITION-03 | Queued milestone v1.43 | Queued |
+| PARTITION-04 | Queued milestone v1.43 | Queued |
+| CHAOS-01 | Queued milestone v1.43 | Queued |
+| CHAOS-02 | Queued milestone v1.43 | Queued |
+| CHAOS-03 | Queued milestone v1.43 | Queued |
+| PROVBI-01 | Queued milestone v1.44 | Queued |
+| PROVBI-02 | Queued milestone v1.44 | Queued |
+| PROVBI-03 | Queued milestone v1.44 | Queued |
+| PROVFB-01 | Queued milestone v1.44 | Queued |
+| PROVFB-02 | Queued milestone v1.44 | Queued |
+| PROVFB-03 | Queued milestone v1.44 | Queued |
+| PROVDASH-01 | Queued milestone v1.44 | Queued |
+| PROVDASH-02 | Queued milestone v1.44 | Queued |
+| PROVDASH-03 | Queued milestone v1.44 | Queued |
+| FILELESS-01 | Queued future v1.45 | Queued |
+| FILELESS-02 | Queued future v1.45 | Queued |
+| FILELESS-03 | Queued future v1.45 | Queued |
+| FILELESS-04 | Queued future v1.45 | Queued |
+| FILELESS-05 | Queued future v1.45 | Queued |
+| FILELESS-06 | Queued future v1.45 | Queued |
+| EVASION-01 | Queued future v1.46 | Queued |
+| EVASION-02 | Queued future v1.46 | Queued |
+| EVASION-03 | Queued future v1.46 | Queued |
+| EVASION-04 | Queued future v1.46 | Queued |
+| EVASION-05 | Queued future v1.46 | Queued |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
 - v1.38 complete: 10 satisfied (COMPOSE-01-05 -> Phases 120,122; NETWORK-01-05 -> Phases 121,123)
 - v1.39 complete: 13 satisfied (POUNCE-01-05 -> Phase 124; POLICY-01 -> Phase 124; POLICY-02-04 -> Phase 125; DEESC-01-02 -> Phase 124; TOM-01-02 -> Phase 126)
-- v1.40 active: 8 mapped to phases 128-131 (DEMO-01-02 -> Phase 128; DEMO-03 -> Phase 129; DEMO-04-05 -> Phase 130; PROV-01-03 -> Phase 131)
-- v1.41 queued: 8 (API-01-04, HELM-01-02, CLI-01-02)
-- v1.42+ future: 11 (FILELESS-01-06, EVASION-01-05)
-- Total queued: 19 (v1.41-v1.43)
+- v1.40 implementation complete: 8 satisfied (DEMO-01-02 -> Phase 128; DEMO-03 -> Phase 129; DEMO-04-05 -> Phase 130; PROV-01-03 -> Phase 131)
+- v1.41 queued: 12 (API-01-04, HELM-01-02, CLI-01-02, HARD-01-04)
+- v1.42 queued: 14 (KITTEN-01-04, Z3-01-03, SPHINX-01-04, HELLCAT-01-03)
+- v1.43 queued: 13 (CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
+- v1.44 queued: 9 (PROVBI-01-03, PROVFB-01-03, PROVDASH-01-03)
+- v1.45-v1.46 future: 11 (FILELESS-01-06, EVASION-01-05)
+- Total queued: 59 (v1.41-v1.46)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-08 after creating the v1.40 roadmap*
+*Last updated: 2026-04-08 after completing Phase 131*
