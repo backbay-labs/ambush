@@ -184,103 +184,129 @@
 
 #### Platform API
 
-- **API-01**: A `/v2/api/` route group serves paginated, filterable endpoints for findings, incidents, and runtime status, separate from the `/v1/operator/` surface
-- **API-02**: `GET /v2/api/assets/{host_id}/posture` returns per-`ThreatClass` pheromone concentration summaries, active investigations, escalation level, and recent findings for a host
-- **API-03**: `GET /v2/api/stream/findings` emits Server-Sent Events of `SwarmFindingEnvelope` payloads as they are produced
-- **API-04**: Platform API authenticates via separate API keys in `SwarmConfig.platform_api.keys` with read-only scope that cannot invoke operator maintenance or approval actions
+- **API-01**: A `/v2/api/` route group on the detect HTTP server (port 9090) serves cursor-paginated, filterable endpoints for findings, incidents, and runtime status with a `{ data: [...], cursor: Option<String> }` envelope (default page_size=50, max 200), separate from the `/v1/operator/` surface
+- **API-02**: `GET /v2/api/assets/{host_id}/posture` returns per-`ThreatClass` pheromone concentration summaries, active investigations, escalation level, and recent findings for a host; prerequisite: `PheromoneSubstrate` gains a host-filtered query method or filter parameter on existing `query_deposits()`
+- **API-03**: `GET /v2/api/stream/findings` reuses the existing `RuntimeEventBroadcaster` with a `finding` event type filter (consistent with the `/v1/events/stream?types=` pattern) to emit Server-Sent Events of `SwarmFindingEnvelope` payloads as they are produced
+- **API-04**: Platform API keys protect only `/v2/api/*` routes; health probes and `/v1/ingest/events` remain unauthenticated. Each key entry in `SwarmConfig.platform_api.keys` includes `name`, `key_hash` (SHA-256), and `scopes: ["read"]`; middleware extracts the key, resolves scope, and attaches identity to the request context
 
 #### Deployment
 
-- **HELM-01**: A Helm chart parameterizes runtime mode, detection strategies, pheromone backend, response adapter, SIEM target, and notification channels, mapping to `SwarmConfig` sections with sensible defaults
-- **HELM-02**: The Helm chart wires `/startupz`, `/readyz`, `/livez`, `/prestop` to K8s probes and lifecycle hooks with `PodDisruptionBudget` and resource requests
-- **CLI-01**: `swarmctl validate --config <path>` performs full config validation including schema version, secret resolution, endpoint reachability, and detector profile thresholds
-- **CLI-02**: `swarmctl init` runs an interactive wizard generating a complete `rulesets/custom.yaml` with inline comments
+- **HELM-01a**: A base Helm chart deploys `swarm_detect --serve` as the main workload with ConfigMap-mounted `SwarmConfig`, Kubernetes Secrets for `@secret:` references, and sensible resource requests/limits derived from the existing `Dockerfile` multi-stage build
+- **HELM-01b**: The Helm chart parameterizes runtime mode, detection strategies, pheromone backend (in-memory vs JetStream), response adapter, SIEM target, and notification channels via `values.yaml`, with a NATS subchart dependency when the JetStream backend is selected
+- **HELM-02**: The Helm chart wires existing probe endpoints: startup `/startupz` (initialDelaySeconds=5, periodSeconds=5, failureThreshold=12), readiness `/readyz` (periodSeconds=10, failureThreshold=3), liveness `/livez` (periodSeconds=15, failureThreshold=3), PreStop `/prestop`, with a `PodDisruptionBudget` of minAvailable=1
+- **CLI-01**: `swarmctl validate --config <path>` performs full config validation including schema version, detector profile thresholds, and `@secret:` reference resolution; opt-in `--check-endpoints` attempts TCP connect (5s timeout) to configured webhook/SIEM URLs; exits non-zero on failure with structured JSON output when `--json` is passed
+- **CLI-02**: `swarmctl init --mode detect_only|live_response` generates a complete `rulesets/custom.yaml` with documented defaults and inline comments for the selected mode; no interactive prompts
 
 #### Runtime Hardening
 
-- **HARD-01**: All production-path `panic!` calls in `swarm-ingest-tetragon`, `swarm-ingest-json`, `swarm-whisker`, and `swarm-response` are replaced with `Result` propagation; unexpected telemetry payload types return structured errors instead of crashing the runtime
-- **HARD-02**: `swarm-runtime` is split into `swarm-agents` (agent implementations and dispatcher), `swarm-http` (HTTP control plane and SSE), and `swarm-replay` (replay harness and scenario injection) crates, reducing the monolith from 90K LoC to focused compilation units
-- **HARD-03**: The HTTP control plane supports mTLS client certificate authentication and bearer token validation in addition to the existing basic auth, with per-endpoint audit logging of authenticated identity
-- **HARD-04**: Structured tracing spans (`tracing` crate) instrument the critical path from ingest through detection, policy evaluation, and response execution, with configurable export to stdout JSON or OTLP collector
+- **HARD-01**: The 8 `Default::default()` implementations in `swarm-whisker` detectors (`detector.rs`, `dns_exfiltration.rs`, `lateral_movement.rs`, `credential_access.rs`, `suspicious_scripting.rs`, `persistence.rs`, `supply_chain.rs`, `network_connect.rs`) that panic on profile validation failure are replaced with `const`-validated defaults or fallible constructors returning `Result`; the 2 `.expect()` calls in `swarm-runtime/src/ingest.rs` (demo proof export path) are replaced with `Result` propagation
+- **HARD-02**: The evolution subsystem (~23K LoC: `drafting.rs`, `mutation.rs`, `evolution.rs`, `selection.rs`, `portfolio.rs`, `governance_prep.rs`, `canary.rs`, `promotion.rs`, `strategy.rs`, `evidence.rs`) is extracted to a `swarm-evolution` crate; the CLI (~3.5K LoC: `cli/core.inc`, `bin/swarmctl.rs`) is extracted to a `swarm-cli` crate; `swarm-runtime` retains agents, HTTP, ingest, and dispatcher since they share too much state to cleanly separate
+- **HARD-03a**: Bearer token validation is added to the detect server's `/v2/api/*` routes consistent with the operator surface `require_bearer_auth` middleware pattern; per-request authenticated identity is logged as a structured `tracing` span field
+- **HARD-03b**: Optional TLS on both HTTP servers via `SwarmConfig.tls.cert_path` and `tls.key_path` using `tokio-rustls`; when `tls.client_ca_cert` is additionally configured, the server requires and validates client certificates with identity extracted from the certificate Subject CN
+- **HARD-04**: `#[instrument]` attributes are added to the critical path: `IngestState::process_event()`, `ConfiguredRuntimeStack::process_event()`, `CompositeDetector::evaluate()`, `ConfigurableApprovalGate::check()`, and `DispatchingExecutor::execute()`; the existing `correlation_id` is used as the `trace_id` span field; OTLP export is behind an `--otlp-endpoint` CLI flag, defaulting to stdout JSON via the existing `init_tracing()` setup
 
-### Evolution Engine (v1.42)
+### Evolution Engine Core (v1.42)
 
 #### Kitten Agent
 
-- **KITTEN-01**: `KittenAgent` implements `SwarmAgent` with `AgentRole::Kitten` and runs a genetic programming mutation loop over `DetectionStrategy` configurations, producing candidate strategies with mutated thresholds, feature weights, and rule combinations
-- **KITTEN-02**: Candidate strategies are evaluated against the repo-owned replay corpus; fitness scoring uses a multi-objective function (0.40 detection rate, 0.30 false-positive cost, 0.15 speed, 0.15 ATT&CK coverage) with Pareto selection for non-dominated candidates
-- **KITTEN-03**: `KittenAgent` activates evolution based on detected concept drift (declining detection rates or rising evasion rates over a configurable observation window) rather than fixed schedules
-- **KITTEN-04**: Evolved candidates are submitted to the existing canary pipeline via `SwarmAction::SubmitCandidate` and cannot bypass the staged deployment ladder (canary → promotion → production)
+- **KITTEN-01**: `KittenAgent` implements `SwarmAgent` with `AgentRole::Kitten` and runs a genetic algorithm mutation loop over detector profile configurations (`SuspiciousProcessTreeProfile`, `DnsExfiltrationProfile`, `NetworkConnectProfile`, `PersistenceProfile`, `SupplyChainProfile`, `CredentialAccessProfile`), producing candidate strategies with mutated thresholds and rule combinations; mutation operators include Gaussian perturbation for floats, swap for categoricals, and toggle for rule activation; the agent uses a multi-tick state machine (`AwaitingDrift → Mutating → Evaluating → Verifying → Proposing`) to avoid exceeding the 500ms tick timeout
+- **KITTEN-02**: Candidate strategies are evaluated against the repo-owned replay corpus (`scenarios/`); fitness scoring uses a configurable multi-objective function (defaults: 0.40 detection rate, 0.30 false-positive cost against `benign-baseline.yaml`, 0.15 speed relative to a 1000us budget per event, 0.15 ATT&CK `ThreatClass` coverage fraction) with Pareto tournament selection for non-dominated candidates; fitness weights are specified in `SwarmConfig.evolution.fitness_weights`
+- **KITTEN-03**: `KittenAgent` activates evolution based on detected concept drift: a `ConceptDriftDetector` maintains a sliding window of detection metrics and triggers when detection rate declines or false-positive rate rises beyond configurable thresholds (`SwarmConfig.evolution.drift_threshold_pct`, `observation_window_secs`); includes a minimum observation count before drift is declared and a cooldown period after evolution produces a candidate
+- **KITTEN-04**: Evolved candidates are submitted to the existing canary pipeline via the existing `SwarmAction::ProposeStrategy` variant (with `strategy_id`, `strategy`, and `fitness` fields); the `AgentDispatcher::apply_actions()` handler routes `ProposeStrategy` through the safety gate (SAFETY-01) and then to the existing `EvolutionProposalReviewState::AcceptedForCanary` handoff; canary failure returns the candidate to the population with a failure record
+- **KITTEN-05**: The Kitten's population of candidate strategy genomes is serialized to the durable substrate on each generation and restored on restart, preventing loss of evolutionary progress; a configurable `max_proposals_per_hour` throttle prevents flooding the canary pipeline
 
 #### Formal Safety Gate
 
-- **Z3-01**: A `FormalSafetyGate` validates evolved detection strategies against Z3-encoded safety invariants before canary admission; strategies that weaken proven detection invariants (e.g., removing coverage for a known-bad pattern) are rejected with a structured proof of the violated invariant
-- **Z3-02**: Safety invariants are defined as repo-owned `.z3` specification files in `rulesets/safety/` with versioned schema; operators can add domain-specific invariants without modifying Rust code
-- **Z3-03**: The formal verification step runs as a synchronous gate in the evolution pipeline; verification results are persisted as signed evidence artifacts in the existing spine audit trail
+- **SAFETY-01**: A `FormalSafetyGate` trait with `fn verify(&self, candidate: &StrategyGenome) -> Result<VerificationReport>` validates evolved strategies before canary admission using a two-tier approach: Tier 1 is a deterministic property checker that runs the candidate against known-bad and benign corpora and verifies coverage floors, FP ceilings, and latency budgets (matching the 5 invariant types in `EvolutionProofInvariant`); Tier 2 is optional Z3 SMT verification behind a `z3` feature flag for operators who want formal universal-quantification proofs
+- **SAFETY-02**: Safety invariants are defined as repo-owned YAML files in `rulesets/safety/` with `schema_version: u32`; each invariant specifies `type` (coverage_floor, fp_ceiling, latency_budget, parameter_bounds, custom_z3), target corpus path, and threshold; operators can add domain-specific invariants without modifying Rust code
+- **SAFETY-03**: The safety gate runs asynchronously via a background task (not blocking the Kitten's tick loop); the Kitten checks for verification results on subsequent ticks; verification results are persisted as signed `EvolutionProofReport` artifacts in the existing spine audit trail with strategy genome hash, invariant file hash, and counterexamples on failure
 
-#### Sphinx Memory
+#### Evolution Observability
 
-- **SPHINX-01**: `SphinxAgent` implements `SwarmAgent` with `AgentRole::Sphinx` and maintains a persistent knowledge graph of threat patterns, ATT&CK technique observations, and cross-engagement correlations using the durable substrate
-- **SPHINX-02**: The knowledge graph supports temporal, causal, entity, and semantic edge types following the MAGMA multi-graph architecture for multi-dimensional threat correlation
-- **SPHINX-03**: `SphinxAgent` responds to queries from other agents via `SwarmAction::QueryMemory` and `SwarmAction::MemoryResult`, providing historical context for active investigations and detection decisions
-- **SPHINX-04**: Strategy fitness evaluation in `KittenAgent` incorporates Sphinx memory via Q-value-based retrieval (past strategy effectiveness in similar threat contexts) rather than similarity-only matching
+- **EVOLVE-OBS-01**: Evolution metrics are emitted as `RuntimeEvent` types on the existing SSE broadcaster: generation count, population diversity (mean pairwise distance), best/mean fitness per objective, verification pass/fail rate, and canary admission rate
+- **EVOLVE-OBS-02**: `swarmctl evolution status` displays current generation, population size, drift detector state, latest fitness scores, and pending/completed verification results
+
+### Swarm Memory And Adversarial Pressure (v1.43)
+
+#### Sphinx Memory Agent
+
+- **SPHINX-01**: `SphinxAgent` implements `SwarmAgent` with `AgentRole::Sphinx` and maintains a persistent knowledge graph of threat patterns, ATT&CK technique observations, and cross-engagement correlations; storage uses a `FileKnowledgeGraphStore` following the pattern of `FileStrategyMemoryStore`, not the pheromone substrate (which is designed for time-decaying signals, not persistent knowledge)
+- **SPHINX-02**: The knowledge graph uses typed nodes (`ThreatPattern`, `ATTACKTechnique`, `Entity`, `Engagement`) and typed edges (`Temporal` with configurable window, `Causal` from process parent-child and network flow origin, `Entity` linking by shared host/user/process, `Semantic` linking by shared ATT&CK kill chain stage); start with this concrete graph model and iterate toward the full MAGMA multi-dimensional traversal in later milestones
+- **SPHINX-03**: Other agents query Sphinx indirectly through pheromone substrate deposits: agents deposit `QueryPheromone` entries with a query type and parameters; `SphinxAgent` reads these deposits on its tick and responds with `AnswerPheromone` deposits containing results; this preserves the indirect stigmergic communication model rather than adding direct inter-agent request/response messaging
+- **SPHINX-04**: Strategy fitness evaluation in `KittenAgent` incorporates Sphinx knowledge via Q-value-based retrieval: `Q(strategy, context) = sum(relevance * outcome_reward * recency_decay)` using the existing `RECENCY_HALF_LIFE_HOURS` from `strategy.rs`; falls back to pure replay fitness when Sphinx is unavailable or has insufficient data for the context
+- **SPHINX-05**: The knowledge graph implements TTL-based garbage collection for stale entries (configurable `knowledge_retention_days`, default 90) to prevent unbounded growth, following the existing `gc_expired_threat_intel()` pattern
 
 #### Adversarial Co-Evolution
 
-- **HELLCAT-01**: A `RedSwarmAdapter` integrates with the Hellcat attack planner to generate adversarial telemetry sequences representing multi-step attack chains with evasion techniques
-- **HELLCAT-02**: `KittenAgent` fitness evaluation includes adversarial pressure from Hellcat-generated evasion attempts; blue detection fitness declines when red evasion succeeds and vice versa, creating an open-ended co-evolutionary arms race
-- **HELLCAT-03**: Red swarm attack patterns and blue swarm detection responses are logged as paired evolution episodes with ATT&CK technique coverage tracking
+- **HELLCAT-01**: A `RedSwarmAdapter` trait (`async fn generate_adversarial_sequence(&self, context: &ThreatContext) -> Vec<TelemetryEvent>`) generates adversarial telemetry sequences; the default implementation reads and parameterizes scenario files from `scenario-suites/` (extending the existing `hellcat-office-v1.yaml` pattern) without requiring the full Hellcat Python system; a `MockRedSwarm` implementation exists for testing with static scenarios
+- **HELLCAT-02**: `KittenAgent` fitness evaluation includes adversarial pressure from `RedSwarmAdapter`-generated sequences; blue detection fitness is measured against the latest adversarial corpus snapshot (frozen per-generation for reproducibility); the adversarial corpus is regenerated between generations; fitness artifacts record the adversarial corpus version used
+- **HELLCAT-03**: Red-blue evolution episodes are logged as `EvolutionEpisode` records persisted in a `FileEvolutionEpisodeStore` (following the existing store pattern) containing: episode_id, generation, adversarial corpus version, blue strategy genome hash, per-`ThreatClass` detection and evasion coverage, and fitness vectors for both sides
 
-### Distributed Governance (v1.43)
+### Agent Identity And Distributed Governance (v1.44)
+
+_Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed red-swarm work." This milestone marks the architectural evolution from single-node to distributed operation. The constraint is updated with a key decision entry documenting the rationale: single-node operations are now proven through v1.43, evolution and memory are established, and the project is ready for multi-instance governance._
+
+#### Agent Identity Lifecycle
+
+- **IDENTITY-01**: Agent keys are generated at first startup and persisted to a configurable `agent_key_dir` path; keys survive restarts and are loaded on startup with identity derived from the Ed25519 public key (`swarm:ed25519:<hex>`)
+- **IDENTITY-02**: An `AgentIdentityRegistry` maintains the set of known agent identities; agents register on startup and are admitted to the registry after identity verification; unknown agent identities are logged and rejected from governance participation
+- **IDENTITY-03**: Agent key rotation generates a new keypair, creates a continuity proof (old key signs a handoff message containing the new public key), and updates the registry; the old key is retained for verification of historical signed artifacts
 
 #### Consensus Protocol
 
-- **CONSENSUS-01**: `swarm-consensus` implements a Tendermint-style propose-prevote-precommit BFT protocol tolerating f Byzantine agents in a 2f+1 committee, with round-based progress and view-change on proposer timeout
-- **CONSENSUS-02**: VRF-based committee rotation selects proposers fairly across agent identities, preventing proposer monopolization and enabling verifiable random leader election
-- **CONSENSUS-03**: Consensus protocol messages are signed with Ed25519 agent keys and verified before processing; Byzantine message detection (equivocation, invalid signatures) triggers automatic agent exclusion from the current round
+- **CONSENSUS-01**: `swarm-consensus` implements a Tendermint-style propose-prevote-precommit BFT protocol tolerating f Byzantine agents in a 2f+1 committee, with round-based progress and view-change on proposer timeout; inter-instance communication uses NATS JetStream subjects (reusing the existing pheromone substrate connection)
+- **CONSENSUS-02**: Committee rotation uses a deterministic seed derived from the previous round's commit hash combined with agent identity hashes, providing verifiable fair proposer selection without requiring a separate VRF cryptographic dependency
+- **CONSENSUS-03**: Consensus protocol messages are signed with persistent Ed25519 agent keys (IDENTITY-01) and verified before processing; Byzantine message detection (equivocation via conflicting signed messages, invalid signatures) triggers automatic agent exclusion from the current round with a signed exclusion receipt
 
 #### Multi-Instance Governance
 
-- **GOVERN-01**: `TomAgent` consensus extends from single-instance synchronous veto to multi-instance BFT agreement; response actions requiring governance approval are proposed to the consensus committee and executed only after 2f+1 prevote-precommit confirmation
-- **GOVERN-02**: Multi-instance pheromone deposits are validated against consensus-agreed agent identities; deposits from excluded or unknown agents are rejected by the substrate
+- **GOVERN-01**: `TomAgent` consensus extends from single-instance synchronous veto to multi-instance BFT agreement; response actions requiring governance approval are proposed to the consensus committee and executed only after 2f+1 prevote-precommit confirmation; single-instance mode continues to work via degenerate 1-of-1 consensus
+- **GOVERN-02**: Multi-instance pheromone deposits are validated against the `AgentIdentityRegistry`; deposits from agents not in the registry are rejected by the substrate with a structured error; the registry is synchronized across instances via consensus
 - **GOVERN-03**: Governance decisions (approve, veto, timeout) are persisted as signed consensus receipts in the spine audit trail with round number, committee composition, and vote tally
 
 #### Partition Authority
 
-- **PARTITION-01**: A partition detector identifies network splits using heartbeat timeout and quorum loss signals; partition state transitions (healthy → degraded → partitioned → healing) are logged as structured events
-- **PARTITION-02**: Contingency leases pre-authorize bounded action sets during healthy periods for redemption during partition; leases specify action type, blast radius cap, and maximum duration
-- **PARTITION-03**: During partition, detection and reporting continue (fail-open for observability) while destructive response actions are denied unless covered by a valid contingency lease (fail-closed for safety)
-- **PARTITION-04**: Partition reconciliation on healing merges divergent decisions from sub-swarms, preserving authorized actions and flagging unauthorized actions for operator review
+- **PARTITION-01**: A partition detector identifies network splits using heartbeat timeout and quorum loss signals; partition state transitions (healthy → degraded → partitioned → healing) are logged as structured events and emitted on the runtime event broadcaster
+- **PARTITION-02**: Contingency leases pre-authorize bounded action sets during healthy periods for redemption during partition; leases specify action type, blast radius cap (max affected hosts), and maximum duration; leases are issued by consensus and signed by the issuing committee
+- **PARTITION-03**: During partition, detection and reporting continue (fail-open for observability) while destructive response actions are denied unless covered by a valid contingency lease (fail-closed for safety); expired contingency leases are never redeemed
+- **PARTITION-04**: Partition reconciliation on healing merges divergent decisions from sub-swarms; authorized actions (covered by valid leases) are preserved; unauthorized actions (no lease or expired lease) are flagged for operator review with a reconciliation report
 
 #### Resilience Testing
 
-- **CHAOS-01**: A chaos testing harness injects Byzantine agent behavior (equivocation, delayed responses, invalid signatures) into the consensus protocol and verifies safety properties hold
+- **CHAOS-01**: A chaos testing harness injects Byzantine agent behavior (equivocation, delayed responses, invalid signatures) into the consensus protocol and verifies safety properties hold (no unauthorized response execution, no equivocation acceptance)
 - **CHAOS-02**: Network partition simulation tests verify that detection continues, unauthorized responses are blocked, and contingency leases are correctly redeemed and expired
-- **CHAOS-03**: Cascading failure scenarios (agent crash → health degradation → mode transition → recovery) are tested end-to-end with deterministic replay
+- **CHAOS-03**: Cascading failure scenarios (agent crash → health degradation → mode transition → recovery) are tested end-to-end with deterministic replay against multi-instance configurations
 
-### Providence Native (v1.44)
+### Providence Native (v1.45)
 
-#### Bidirectional Integration
+_Depends on: v1.42 (KittenAgent for PROVFB-02). PROVFB-02 is gated on KittenAgent availability and falls back to persisting feedback as pending entries when KittenAgent is not deployed._
 
-- **PROVBI-01**: Providence webhook delivery is validated against a live Providence API instance with schema conformance tests and error handling for Providence-side rejections
-- **PROVBI-02**: A Providence incident lifecycle adapter synchronizes incident state (create → update → resolve) bidirectionally; Swarm escalation creates Providence incidents, de-escalation updates severity, and mode return to Normal resolves the incident
-- **PROVBI-03**: Providence incident IDs are stored in the Swarm substrate and linked to `CorrelatedIncident` records, enabling cross-system incident correlation
+#### Contract And Auth
+
+- **PROVAUTH-01**: A shared `SwarmProvidenceWebhookContract` schema defines the inbound and outbound payload formats; Swarm's outbound `swarm_providence_webhook` envelope maps to Providence's `CreateIncidentBody` (title, severity, status, source, description) with the rich context (finding, aggregate, runtime, links) in the description field; the contract includes `schema_version` for forward compatibility
+- **PROVAUTH-02**: Service-to-service authentication: Swarm stores a Providence API bearer token via `@secret:providence_api_token`; Providence verifies inbound Swarm webhooks via HMAC-SHA256 signature in a `X-Swarm-Signature` header using a shared secret
+
+#### Incident Lifecycle
+
+- **PROVBI-01**: A `ProvidenceIncidentAdapter` manages outbound lifecycle: Swarm escalation to Alert or Incident creates a Providence incident via `POST /incidents` with the mapped payload; severity changes issue `PUT /incidents/:id`; mode return to Normal resolves with `status: 'resolved'`; the adapter stores Providence incident IDs in the substrate linked to the triggering `EscalationRecord` via a generic `ExternalReference { system: String, id: String, url: Option<String> }` on `IncidentRecord`
+- **PROVBI-02**: Failed Providence API calls are retried with exponential backoff and dead-lettered after 3 attempts, consistent with existing `NotificationRouter` resilience patterns; idempotent create-by-key (using `strategy_id:threat_class:finding_id` as the incident key) prevents duplicate incidents on retry
+- **PROVBI-03**: `/healthz` and `/readyz` include Providence integration health when the adapter is configured: reachable, authenticated, and accepting writes
 
 #### Analyst Feedback Loop
 
-- **PROVFB-01**: Providence analyst triage actions (confirm threat, dismiss false positive, request investigation) are received via webhook callback and translated into pheromone substrate operations (confidence boost, deposit suppression, investigation trigger)
-- **PROVFB-02**: Analyst feedback on false positives feeds into `KittenAgent` evolution pressure, reducing false-positive fitness cost for patterns matching dismissed findings
-- **PROVFB-03**: Feedback actions are persisted as signed audit entries linking the Providence analyst identity, action type, and affected finding/incident IDs
+- **PROVFB-01**: Swarm exposes `POST /v1/providence/feedback` accepting `{ action: "confirm" | "dismiss" | "investigate", incident_id: string, finding_id?: string, analyst_id: string, reason?: string }` with HMAC-SHA256 signature verification; `confirm` boosts deposit confidence for matching findings, `dismiss` suppresses matching deposits and tags as false-positive, `investigate` enqueues a StalkerAgent investigation
+- **PROVFB-02**: False-positive dismissals from PROVFB-01 are forwarded to `KittenAgent` as negative fitness signals via `SwarmAction::FeedbackSignal`, penalizing strategy configurations that produce findings matching dismissed patterns; when KittenAgent is not deployed, feedback is persisted as pending entries for later consumption
+- **PROVFB-03**: Feedback actions are persisted as signed audit entries in the spine audit trail linking the Providence analyst identity (stored as opaque string), action type, affected finding/incident IDs, the full feedback payload, and the resulting substrate operation outcome
 
 #### Dashboard Integration
 
-- **PROVDASH-01**: Providence dashboard embeds the Swarm runtime timeline via an iframe-compatible widget endpoint with CORS and CSP headers configured for cross-origin embedding
-- **PROVDASH-02**: The embedded widget displays real-time agent activity, pheromone concentrations, and escalation timeline scoped to the Providence incident context
-- **PROVDASH-03**: Deep links from Providence incident views navigate directly to Swarm finding drilldown, replay bundle, and approval proof surfaces with pre-authenticated context tokens
+- **PROVDASH-01**: A dedicated `/v1/demo/widget` endpoint serves a minimal embeddable dashboard (no full chrome) with `Content-Security-Policy: frame-ancestors` and `X-Frame-Options` headers configured via `operator.allowed_embed_origins` in `SwarmConfig` (default: same-origin only); the widget HTML is self-contained and does not require Swarm auth to render
+- **PROVDASH-02**: The embedded widget displays real-time agent activity, pheromone concentrations, and escalation timeline scoped to a specific context via URL parameters (e.g., `?strategy_id=...&threat_class=...` or `?hunt_id=...`); it connects to `/v1/events/stream` with the appropriate type filter
+- **PROVDASH-03**: Swarm generates short-lived read-only context tokens (configurable TTL, default 15 minutes) scoped to a specific `hunt_id` or incident context; tokens are Ed25519-signed using the operator signing key with expiry, scope, and anti-replay nonce; they are included in Providence webhook drilldown links as URL query parameters and validated as an alternative to bearer auth for read-only access
 
-### Future: Detection Breadth (v1.45+)
+### Future: Detection Breadth (v1.46+)
 
-#### Fileless Execution And Behavioral Baselines (v1.45)
+#### Fileless Execution And Behavioral Baselines (v1.46)
 
 - **FILELESS-01**: A `FilelessExecutionDetector` implements `DetectionStrategy` and identifies indicators of reflective DLL injection, encoded PowerShell execution with multi-stage deobfuscation hints, and raw syscall gadget patterns from a new `TelemetryPayload::ProcessMemoryAccess` variant and existing `ProcessStart` events
 - **FILELESS-02**: A `BehavioralAnomalyDetector` implements `DetectionStrategy` and maintains per-host process ancestry baselines; it flags deviations such as unusual parent-child pairs, first-seen binaries, or atypical tool usage for a user role as medium-confidence findings
@@ -289,22 +315,24 @@
 - **FILELESS-05**: `ThreatClass::DefenseEvasion` is used for fileless execution findings; `ThreatClass::PrivilegeEscalation` is used when the detector observes memory manipulation targeting a higher-privilege process
 - **FILELESS-06**: Both detectors ship with configurable profiles; integration tests cover evasion scenarios through detection to pheromone deposit
 
-#### Adversarial Robustness And Evasion Bench (v1.46)
+#### Adversarial Robustness And Evasion Bench (v1.47)
 
 - **EVASION-01**: An evasion test corpus provides at least 10 curated payloads per `ThreatClass` representing real-world evasion techniques
 - **EVASION-02**: A coverage metrics module computes per-detector evasion catch rates via `/metrics` and `/api/v1/evasion/coverage`
-- **EVASION-03**: An automated strategy mutation module proposes threshold adjustments and validates through the canary pipeline
+- **EVASION-03**: KittenAgent's existing mutation loop (from KITTEN-01) proposes threshold adjustments in response to evasion corpus gaps and validates through the canary pipeline; no separate mutation module
 - **EVASION-04**: An evasion catalog documents intentionally uncovered ATT&CK techniques per detector with rationale
-- **EVASION-05**: Integration tests execute the full evasion corpus → gap identification → mutation → canary validation cycle
+- **EVASION-05**: Integration tests execute the full evasion corpus → gap identification → KittenAgent mutation → canary validation cycle
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| OpenTelemetry distributed tracing | Structured logging with trace IDs is sufficient for v1.30; full OTEL is future |
+| OpenTelemetry distributed tracing | OTLP export is optional behind feature flag in v1.41 HARD-04; full OTEL ecosystem integration is future |
 | Grafana dashboard or alerting rules | Metrics export is the deliverable; visualization is downstream |
 | APM integration (Sentry, Datadog) | Structured logs feed into any APM; vendor-specific integration is future |
 | Adapter-specific retry policies per action type | Uniform retry policy first; per-action tuning is future |
+| Inbound Providence-to-Swarm state sync | v1.45 implements outbound Swarm→Providence lifecycle; bidirectional state reconciliation is deferred pending Providence callback infrastructure |
+| Full Hellcat Python integration | v1.43 uses a Rust-native adversarial scenario generator; deep Hellcat integration via PyO3 or subprocess is a future milestone |
 
 ## Traceability
 
@@ -398,78 +426,90 @@
 | PROV-01 | Phase 131 | Complete |
 | PROV-02 | Phase 131 | Complete |
 | PROV-03 | Phase 131 | Complete |
-| API-01 | Queued milestone v1.41 | Queued |
-| API-02 | Queued milestone v1.41 | Queued |
-| API-03 | Queued milestone v1.41 | Queued |
-| API-04 | Queued milestone v1.41 | Queued |
-| HELM-01 | Queued milestone v1.41 | Queued |
-| HELM-02 | Queued milestone v1.41 | Queued |
-| CLI-01 | Queued milestone v1.41 | Queued |
-| CLI-02 | Queued milestone v1.41 | Queued |
-| HARD-01 | Queued milestone v1.41 | Queued |
-| HARD-02 | Queued milestone v1.41 | Queued |
-| HARD-03 | Queued milestone v1.41 | Queued |
-| HARD-04 | Queued milestone v1.41 | Queued |
-| KITTEN-01 | Queued milestone v1.42 | Queued |
-| KITTEN-02 | Queued milestone v1.42 | Queued |
-| KITTEN-03 | Queued milestone v1.42 | Queued |
-| KITTEN-04 | Queued milestone v1.42 | Queued |
-| Z3-01 | Queued milestone v1.42 | Queued |
-| Z3-02 | Queued milestone v1.42 | Queued |
-| Z3-03 | Queued milestone v1.42 | Queued |
-| SPHINX-01 | Queued milestone v1.42 | Queued |
-| SPHINX-02 | Queued milestone v1.42 | Queued |
-| SPHINX-03 | Queued milestone v1.42 | Queued |
-| SPHINX-04 | Queued milestone v1.42 | Queued |
-| HELLCAT-01 | Queued milestone v1.42 | Queued |
-| HELLCAT-02 | Queued milestone v1.42 | Queued |
-| HELLCAT-03 | Queued milestone v1.42 | Queued |
-| CONSENSUS-01 | Queued milestone v1.43 | Queued |
-| CONSENSUS-02 | Queued milestone v1.43 | Queued |
-| CONSENSUS-03 | Queued milestone v1.43 | Queued |
-| GOVERN-01 | Queued milestone v1.43 | Queued |
-| GOVERN-02 | Queued milestone v1.43 | Queued |
-| GOVERN-03 | Queued milestone v1.43 | Queued |
-| PARTITION-01 | Queued milestone v1.43 | Queued |
-| PARTITION-02 | Queued milestone v1.43 | Queued |
-| PARTITION-03 | Queued milestone v1.43 | Queued |
-| PARTITION-04 | Queued milestone v1.43 | Queued |
-| CHAOS-01 | Queued milestone v1.43 | Queued |
-| CHAOS-02 | Queued milestone v1.43 | Queued |
-| CHAOS-03 | Queued milestone v1.43 | Queued |
-| PROVBI-01 | Queued milestone v1.44 | Queued |
-| PROVBI-02 | Queued milestone v1.44 | Queued |
-| PROVBI-03 | Queued milestone v1.44 | Queued |
-| PROVFB-01 | Queued milestone v1.44 | Queued |
-| PROVFB-02 | Queued milestone v1.44 | Queued |
-| PROVFB-03 | Queued milestone v1.44 | Queued |
-| PROVDASH-01 | Queued milestone v1.44 | Queued |
-| PROVDASH-02 | Queued milestone v1.44 | Queued |
-| PROVDASH-03 | Queued milestone v1.44 | Queued |
-| FILELESS-01 | Queued future v1.45 | Queued |
-| FILELESS-02 | Queued future v1.45 | Queued |
-| FILELESS-03 | Queued future v1.45 | Queued |
-| FILELESS-04 | Queued future v1.45 | Queued |
-| FILELESS-05 | Queued future v1.45 | Queued |
-| FILELESS-06 | Queued future v1.45 | Queued |
-| EVASION-01 | Queued future v1.46 | Queued |
-| EVASION-02 | Queued future v1.46 | Queued |
-| EVASION-03 | Queued future v1.46 | Queued |
-| EVASION-04 | Queued future v1.46 | Queued |
-| EVASION-05 | Queued future v1.46 | Queued |
+| API-01 | Queued v1.41 | Queued |
+| API-02 | Queued v1.41 | Queued |
+| API-03 | Queued v1.41 | Queued |
+| API-04 | Queued v1.41 | Queued |
+| HELM-01a | Queued v1.41 | Queued |
+| HELM-01b | Queued v1.41 | Queued |
+| HELM-02 | Queued v1.41 | Queued |
+| CLI-01 | Queued v1.41 | Queued |
+| CLI-02 | Queued v1.41 | Queued |
+| HARD-01 | Queued v1.41 | Queued |
+| HARD-02 | Queued v1.41 | Queued |
+| HARD-03a | Queued v1.41 | Queued |
+| HARD-03b | Queued v1.41 | Queued |
+| HARD-04 | Queued v1.41 | Queued |
+| KITTEN-01 | Queued v1.42 | Queued |
+| KITTEN-02 | Queued v1.42 | Queued |
+| KITTEN-03 | Queued v1.42 | Queued |
+| KITTEN-04 | Queued v1.42 | Queued |
+| KITTEN-05 | Queued v1.42 | Queued |
+| SAFETY-01 | Queued v1.42 | Queued |
+| SAFETY-02 | Queued v1.42 | Queued |
+| SAFETY-03 | Queued v1.42 | Queued |
+| EVOLVE-OBS-01 | Queued v1.42 | Queued |
+| EVOLVE-OBS-02 | Queued v1.42 | Queued |
+| SPHINX-01 | Queued v1.43 | Queued |
+| SPHINX-02 | Queued v1.43 | Queued |
+| SPHINX-03 | Queued v1.43 | Queued |
+| SPHINX-04 | Queued v1.43 | Queued |
+| SPHINX-05 | Queued v1.43 | Queued |
+| HELLCAT-01 | Queued v1.43 | Queued |
+| HELLCAT-02 | Queued v1.43 | Queued |
+| HELLCAT-03 | Queued v1.43 | Queued |
+| IDENTITY-01 | Queued v1.44 | Queued |
+| IDENTITY-02 | Queued v1.44 | Queued |
+| IDENTITY-03 | Queued v1.44 | Queued |
+| CONSENSUS-01 | Queued v1.44 | Queued |
+| CONSENSUS-02 | Queued v1.44 | Queued |
+| CONSENSUS-03 | Queued v1.44 | Queued |
+| GOVERN-01 | Queued v1.44 | Queued |
+| GOVERN-02 | Queued v1.44 | Queued |
+| GOVERN-03 | Queued v1.44 | Queued |
+| PARTITION-01 | Queued v1.44 | Queued |
+| PARTITION-02 | Queued v1.44 | Queued |
+| PARTITION-03 | Queued v1.44 | Queued |
+| PARTITION-04 | Queued v1.44 | Queued |
+| CHAOS-01 | Queued v1.44 | Queued |
+| CHAOS-02 | Queued v1.44 | Queued |
+| CHAOS-03 | Queued v1.44 | Queued |
+| PROVAUTH-01 | Queued v1.45 | Queued |
+| PROVAUTH-02 | Queued v1.45 | Queued |
+| PROVBI-01 | Queued v1.45 | Queued |
+| PROVBI-02 | Queued v1.45 | Queued |
+| PROVBI-03 | Queued v1.45 | Queued |
+| PROVFB-01 | Queued v1.45 | Queued |
+| PROVFB-02 | Queued v1.45 | Queued |
+| PROVFB-03 | Queued v1.45 | Queued |
+| PROVDASH-01 | Queued v1.45 | Queued |
+| PROVDASH-02 | Queued v1.45 | Queued |
+| PROVDASH-03 | Queued v1.45 | Queued |
+| FILELESS-01 | Queued future v1.46 | Queued |
+| FILELESS-02 | Queued future v1.46 | Queued |
+| FILELESS-03 | Queued future v1.46 | Queued |
+| FILELESS-04 | Queued future v1.46 | Queued |
+| FILELESS-05 | Queued future v1.46 | Queued |
+| FILELESS-06 | Queued future v1.46 | Queued |
+| EVASION-01 | Queued future v1.47 | Queued |
+| EVASION-02 | Queued future v1.47 | Queued |
+| EVASION-03 | Queued future v1.47 | Queued |
+| EVASION-04 | Queued future v1.47 | Queued |
+| EVASION-05 | Queued future v1.47 | Queued |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
 - v1.38 complete: 10 satisfied (COMPOSE-01-05 -> Phases 120,122; NETWORK-01-05 -> Phases 121,123)
 - v1.39 complete: 13 satisfied (POUNCE-01-05 -> Phase 124; POLICY-01 -> Phase 124; POLICY-02-04 -> Phase 125; DEESC-01-02 -> Phase 124; TOM-01-02 -> Phase 126)
 - v1.40 implementation complete: 8 satisfied (DEMO-01-02 -> Phase 128; DEMO-03 -> Phase 129; DEMO-04-05 -> Phase 130; PROV-01-03 -> Phase 131)
-- v1.41 queued: 12 (API-01-04, HELM-01-02, CLI-01-02, HARD-01-04)
-- v1.42 queued: 14 (KITTEN-01-04, Z3-01-03, SPHINX-01-04, HELLCAT-01-03)
-- v1.43 queued: 13 (CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
-- v1.44 queued: 9 (PROVBI-01-03, PROVFB-01-03, PROVDASH-01-03)
-- v1.45-v1.46 future: 11 (FILELESS-01-06, EVASION-01-05)
-- Total queued: 59 (v1.41-v1.46)
+- v1.41 queued: 14 (API-01-04, HELM-01a/01b/02, CLI-01-02, HARD-01/02/03a/03b/04)
+- v1.42 queued: 10 (KITTEN-01-05, SAFETY-01-03, EVOLVE-OBS-01-02)
+- v1.43 queued: 8 (SPHINX-01-05, HELLCAT-01-03)
+- v1.44 queued: 16 (IDENTITY-01-03, CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
+- v1.45 queued: 11 (PROVAUTH-01-02, PROVBI-01-03, PROVFB-01-03, PROVDASH-01-03)
+- v1.46-v1.47 future: 11 (FILELESS-01-06, EVASION-01-05)
+- Total queued: 70 (v1.41-v1.47)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-08 after completing Phase 131*
+*Last updated: 2026-04-08 — milestones refined after code-grounded review by 5 parallel agents*

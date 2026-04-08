@@ -17,12 +17,13 @@
 
 | Milestone | Name | Requirements | Tier |
 |-----------|------|--------------|------|
-| v1.41 | Deployment And Hardening | API-01–04, HELM-01–02, CLI-01–02, HARD-01–04 (12) | Deployment & Hardening |
-| v1.42 | Evolution Engine | KITTEN-01–04, Z3-01–03, SPHINX-01–04, HELLCAT-01–03 (14) | Evolution & Differentiation |
-| v1.43 | Distributed Governance | CONSENSUS-01–03, GOVERN-01–03, PARTITION-01–04, CHAOS-01–03 (13) | Distributed Governance |
-| v1.44 | Providence Native | PROVBI-01–03, PROVFB-01–03, PROVDASH-01–03 (9) | Deep Providence Integration |
-| v1.45 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
-| v1.46 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
+| v1.41 | Deployment And Hardening | API-01–04, HELM-01a/01b/02, CLI-01–02, HARD-01/02/03a/03b/04 (14) | Deployment & Hardening |
+| v1.42 | Evolution Engine Core | KITTEN-01–05, SAFETY-01–03, EVOLVE-OBS-01–02 (10) | Evolution Engine |
+| v1.43 | Swarm Memory And Adversarial Pressure | SPHINX-01–05, HELLCAT-01–03 (8) | Memory & Adversarial |
+| v1.44 | Agent Identity And Distributed Governance | IDENTITY-01–03, CONSENSUS-01–03, GOVERN-01–03, PARTITION-01–04, CHAOS-01–03 (16) | Distributed Governance |
+| v1.45 | Providence Native | PROVAUTH-01–02, PROVBI-01–03, PROVFB-01–03, PROVDASH-01–03 (11) | Deep Providence Integration |
+| v1.46 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
+| v1.47 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
 
 ## History
 

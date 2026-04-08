@@ -27,12 +27,13 @@ Detect real threats quickly enough to take safe action before the window to resp
 - TomAgent governance can now synchronously veto destructive autonomous actions and persist typed audit receipts.
 
 **Next queued milestones:**
-- `v1.41 Deployment And Hardening` — Platform APIs, Helm chart, panic elimination, runtime split, mTLS, structured tracing
-- `v1.42 Evolution Engine` — Kitten GP mutation, Z3 formal safety gate, Sphinx memory, Hellcat co-evolution
-- `v1.43 Distributed Governance` — Tendermint BFT, multi-instance Tom consensus, partition authority, chaos testing
-- `v1.44 Providence Native` — Bidirectional incident lifecycle, analyst feedback loop, dashboard embedding
-- `v1.45 Fileless Execution And Behavioral Baselines`
-- `v1.46 Adversarial Robustness And Evasion Bench`
+- `v1.41 Deployment And Hardening` — Platform API, Helm chart, panic elimination, swarm-evolution/swarm-cli crate extraction, TLS, structured tracing (14 reqs)
+- `v1.42 Evolution Engine Core` — KittenAgent genetic algorithm, two-tier formal safety gate, evolution observability (10 reqs)
+- `v1.43 Swarm Memory And Adversarial Pressure` — SphinxAgent knowledge graph, stigmergic queries, Rust-native adversarial scenarios (8 reqs)
+- `v1.44 Agent Identity And Distributed Governance` — Persistent keys, Tendermint BFT, multi-instance Tom, partition authority, chaos testing (16 reqs)
+- `v1.45 Providence Native` — Webhook contract, incident lifecycle, analyst feedback, embeddable widget (11 reqs)
+- `v1.46 Fileless Execution And Behavioral Baselines` (6 reqs)
+- `v1.47 Adversarial Robustness And Evasion Bench` (5 reqs)
 
 ## Current State
 
@@ -189,10 +190,11 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.40 Killer Demo And Providence Integration` is active.
 - This milestone will deliver live replay injection, streamed runtime visibility, approval-in-the-loop demo response, signed proof export, and Providence delivery.
 - `v1.41 Deployment And Hardening` is next after v1.40 closeout.
-- `v1.42 Evolution Engine` follows with the self-evolving detection moat (Kitten, Z3, Sphinx, Hellcat).
-- `v1.43 Distributed Governance` enables multi-instance BFT consensus and partition authority.
-- `v1.44 Providence Native` completes bidirectional Providence integration with analyst feedback.
-- Detection breadth expansion (Fileless, Evasion) is pushed to v1.45-v1.46 after the core differentiators ship.
+- `v1.42 Evolution Engine Core` delivers KittenAgent with formal safety gate — the core differentiator.
+- `v1.43 Swarm Memory And Adversarial Pressure` adds SphinxAgent knowledge graph and adversarial fitness pressure.
+- `v1.44 Agent Identity And Distributed Governance` adds persistent agent keys, BFT consensus, and partition authority — marking the evolution from single-node to distributed. PROJECT.md constraints will be updated with a key decision entry when this milestone begins.
+- `v1.45 Providence Native` completes outbound incident lifecycle, analyst feedback, and embeddable widget.
+- Detection breadth expansion (Fileless, Evasion) is pushed to v1.46-v1.47 after the core differentiators ship.
 
 ### Out of Scope
 

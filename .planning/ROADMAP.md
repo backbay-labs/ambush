@@ -107,24 +107,28 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 ### Tier 2: Deployment And Hardening
 
-- `v1.41 Deployment And Hardening` -- Versioned platform API, Helm chart, config validation CLI, panic elimination, runtime monolith split, mTLS, structured tracing (12 requirements: API-01-04, HELM-01-02, CLI-01-02, HARD-01-04)
+- `v1.41 Deployment And Hardening` -- Platform API on detect server, Helm chart with NATS subchart, panic elimination in swarm-whisker, evolution/CLI crate extraction from runtime monolith, TLS+bearer auth, structured tracing instrumentation (14 requirements: API-01-04, HELM-01a/01b/02, CLI-01-02, HARD-01/02/03a/03b/04)
 
-### Tier 3: Evolution And Differentiation
+### Tier 3: Evolution Engine
 
-- `v1.42 Evolution Engine` -- Self-evolving detection via Kitten agent with GP mutation, Z3 formal safety gate, Sphinx persistent memory, Hellcat adversarial co-evolution (14 requirements: KITTEN-01-04, Z3-01-03, SPHINX-01-04, HELLCAT-01-03)
+- `v1.42 Evolution Engine Core` -- KittenAgent genetic algorithm with multi-tick state machine, multi-objective Pareto fitness, concept drift activation, two-tier formal safety gate (deterministic + optional Z3), evolution observability via SSE and CLI (10 requirements: KITTEN-01-05, SAFETY-01-03, EVOLVE-OBS-01-02)
 
-### Tier 4: Distributed Governance
+### Tier 4: Swarm Memory And Adversarial Pressure
 
-- `v1.43 Distributed Governance` -- Tendermint BFT consensus, multi-instance Tom agreement, partition authority with contingency leases, chaos/failure injection testing (13 requirements: CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
+- `v1.43 Swarm Memory And Adversarial Pressure` -- SphinxAgent persistent knowledge graph with typed edges, stigmergic query/answer via pheromone deposits, Q-value strategy fitness, Rust-native adversarial scenario generation, paired evolution episode logging (8 requirements: SPHINX-01-05, HELLCAT-01-03)
 
-### Tier 5: Deep Providence Integration
+### Tier 5: Agent Identity And Distributed Governance
 
-- `v1.44 Providence Native` -- Bidirectional incident lifecycle sync, analyst feedback loop into pheromone substrate and evolution, Providence dashboard widget embedding (9 requirements: PROVBI-01-03, PROVFB-01-03, PROVDASH-01-03)
+- `v1.44 Agent Identity And Distributed Governance` -- Persistent agent keys with rotation, identity registry, Tendermint BFT consensus over JetStream, multi-instance Tom governance with degenerate single-node fallback, partition authority with contingency leases, chaos/failure injection (16 requirements: IDENTITY-01-03, CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
 
-### Tier 6: Detection Breadth (v1.45+)
+### Tier 6: Deep Providence Integration
 
-- `v1.45 Fileless Execution And Behavioral Baselines` -- Memory-based detection, behavioral anomaly baselines (6 requirements: FILELESS-01-06)
-- `v1.46 Adversarial Robustness And Evasion Bench` -- Evasion test corpus, coverage metrics, strategy mutation (5 requirements: EVASION-01-05)
+- `v1.45 Providence Native` -- Shared webhook contract, service-to-service auth, outbound incident lifecycle adapter, analyst feedback loop with KittenAgent fitness signals, embeddable widget with context tokens (11 requirements: PROVAUTH-01-02, PROVBI-01-03, PROVFB-01-03, PROVDASH-01-03)
+
+### Tier 7: Detection Breadth (v1.46+)
+
+- `v1.46 Fileless Execution And Behavioral Baselines` -- Memory-based detection, behavioral anomaly baselines (6 requirements: FILELESS-01-06)
+- `v1.47 Adversarial Robustness And Evasion Bench` -- Evasion test corpus, coverage metrics, KittenAgent-driven mutation (5 requirements: EVASION-01-05)
 
 ## Progress
 
