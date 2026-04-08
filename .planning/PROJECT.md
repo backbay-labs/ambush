@@ -8,9 +8,27 @@ Swarm Team Six is a Rust-first threat detection and controlled live-response run
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
+## Current Milestone: v1.38 Multi-Detector Composition And Network Detection
+
+**Goal:** Run all detector strategies simultaneously per event via CompositeDetector, add NetworkConnectDetector for C2 beaconing and threat-intel IP matching, and enable cross-strategy pheromone escalation so the swarm metaphor actually works.
+
+**Target features:**
+- CompositeDetector replaces single SupportedDetector dispatch — all configured strategies evaluate every event
+- Per-strategy profile overrides in config (strategies list replaces strategy scalar)
+- Cross-strategy deposits count as distinct sources for min_sources_for_escalation
+- WeaverAgent weights cross-strategy correlation higher than same-strategy
+- NetworkConnectDetector for C2 beaconing, anomalous ports, threat-intel IP matching
+- ThreatClass::CommandAndControl findings from network detection
+- Multi-strategy canary/promotion scoping
+
+**Queued after this:**
+- `v1.39 PounceAgent And Policy Gate Hardening`
+- `v1.40 Killer Demo And Providence Integration`
+- `v1.41 Platform APIs And Deployment Experience`
+
 ## Current State
 
-`v1.37.1 Runtime Hardening And Audit Debt` shipped on 2026-04-08. The runtime now enforces signed pheromone deposits, bounded agent ticks, threat-intel GC, bridge resilience, independent secret rotation, dead-letter rotation, and has focused substrate test coverage. The roadmap is ready for `v1.38 Fileless Execution And Behavioral Baselines`.
+`v1.37.1 Runtime Hardening And Audit Debt` shipped on 2026-04-08. The runtime now enforces signed pheromone deposits, bounded agent ticks, threat-intel GC, bridge resilience, independent secret rotation, dead-letter rotation, and has focused substrate test coverage.
 
 **What v1.37.1 hardened:**
 - Pheromone deposits are now Ed25519-signed by agents and validated by the substrate on all backends
