@@ -132,7 +132,7 @@
 #### Network Detection
 
 - **NETWORK-01**: A `NetworkConnectDetector` implements `DetectionStrategy`, matches `TelemetryPayload::NetworkConnect` events, and detects C2 beaconing patterns (periodic connections with low inter-arrival jitter to the same destination from the same process)
-- **NETWORK-02**: `NetworkConnectDetector::evaluate()` queries `PheromoneSubstrate::query_threat_intel_entry()` with `ThreatIntelIndicatorType::IpAddress` for each destination IP and boosts `DetectionFinding.confidence` when matches are found
+- **NETWORK-02**: The runtime-owned detection pipeline queries `PheromoneSubstrate::query_threat_intel_entry()` with `ThreatIntelIndicatorType::IpAddress` for `TelemetryPayload::NetworkConnect` destination IPs, annotates matching findings with threat-intel evidence, and boosts `DetectionFinding.confidence` without changing the synchronous detector contract
 - **NETWORK-03**: A `NetworkConnectProfile` defines `suspicious_ports: Vec<u16>` and `process_port_allowlist: HashMap<String, Vec<u16>>` for anomalous port and process-to-port mismatch detection
 - **NETWORK-04**: `NetworkConnectDetector` sets findings to `ThreatClass::CommandAndControl`; integration tests prove NetworkConnect telemetry through detection to signed pheromone deposit
 - **NETWORK-05**: A cross-strategy integration test configures `CompositeDetector` with 3+ strategies, feeds a multi-stage attack sequence, and asserts `PheromoneConcentration.distinct_sources >= 3` triggers escalation via `min_sources_for_escalation`
@@ -145,12 +145,14 @@
 - **POUNCE-02**: `PounceAgent::tick()` checks `SwarmEnvironment.peer_findings` to skip emitting responses whose target scope matches an existing `AgentFinding` in the same tick cycle
 - **POUNCE-03**: A `ResponsePlaybookConfig` maps `(ThreatClass, Severity, confidence_range)` tuples to ordered `ResponseAction` sequences with per-step `escalation_timeout_secs`
 - **POUNCE-04**: `AgentDispatcher::apply_actions()` routes `SwarmAction::RequestResponse` through `SwarmRuntime::authorize_and_execute()` so PounceAgent actions flow through the policy gate and guard pipeline
+- **POUNCE-05**: PounceAgent supports a dry-run mode that routes through the identical code path as live mode, passing `ExecutionMode::DryRun` to the executor, producing receipts with `status: Simulated`
 
 #### Policy Hardening
 
 - **POLICY-01**: `SwarmRuntime::authorize_and_execute()` validates `CapabilityLease.expires_at_ms > ApprovalContext.now_ms` before executing; expired leases return `ApprovalError::Denied("capability lease expired")`
 - **POLICY-02**: `StaticApprovalGate` tracks recent actions per scope and denies requests exceeding a configurable `max_actions_per_scope_per_minute` rate limit
 - **POLICY-03**: A `ConfigurableApprovalGate` loads YAML rules with action allow/deny by threat class, severity thresholds, time-of-day restrictions, and per-agent rate limits
+- **POLICY-04**: Every policy verdict carries the matched rule name and verdict reason in structured logs and `ResponseReceipt` audit records
 
 #### Mode De-escalation
 
@@ -160,6 +162,7 @@
 #### Agent Governance
 
 - **TOM-01**: `TomAgent` implements `SwarmAgent` with `AgentRole::Tom`, monitors agent health summaries, and emits `RoleShift` for degraded agents and `HealthReport { status: Failed }` for agents degraded beyond a configurable tick threshold
+- **TOM-02**: `TomAgent` provides pre-execution synchronous veto authority over destructive PounceAgent actions via a shared `GovernancePolicy`; vetoed actions produce auditable veto receipts with the rejected action and reason
 
 ### Killer Demo And Providence Integration (v1.40)
 
@@ -284,14 +287,14 @@
 | HARDEN-10 | Phase 119, Plan 01 | Complete |
 | COMPOSE-01 | Phase 120 | Complete |
 | COMPOSE-02 | Phase 120 | Complete |
-| COMPOSE-03 | Phase 122 | Pending |
-| COMPOSE-04 | Phase 122 | Pending |
-| COMPOSE-05 | Phase 122 | Pending |
-| NETWORK-01 | Phase 121 | Pending |
-| NETWORK-02 | Phase 121 | Pending |
-| NETWORK-03 | Phase 121 | Pending |
-| NETWORK-04 | Phase 123 | Pending |
-| NETWORK-05 | Phase 123 | Pending |
+| COMPOSE-03 | Phase 122 | Satisfied |
+| COMPOSE-04 | Phase 122 | Satisfied |
+| COMPOSE-05 | Phase 122 | Satisfied |
+| NETWORK-01 | Phase 121 | Satisfied |
+| NETWORK-02 | Phase 121 | Satisfied |
+| NETWORK-03 | Phase 121 | Satisfied |
+| NETWORK-04 | Phase 123 | Satisfied |
+| NETWORK-05 | Phase 123 | Satisfied |
 | POUNCE-01 | Queued milestone v1.39 | Queued |
 | POUNCE-02 | Queued milestone v1.39 | Queued |
 | POUNCE-03 | Queued milestone v1.39 | Queued |
@@ -302,6 +305,9 @@
 | DEESC-01 | Queued milestone v1.39 | Queued |
 | DEESC-02 | Queued milestone v1.39 | Queued |
 | TOM-01 | Queued milestone v1.39 | Queued |
+| TOM-02 | Queued milestone v1.39 | Queued |
+| POUNCE-05 | Queued milestone v1.39 | Queued |
+| POLICY-04 | Queued milestone v1.39 | Queued |
 | DEMO-01 | Queued milestone v1.40 | Queued |
 | DEMO-02 | Queued milestone v1.40 | Queued |
 | DEMO-03 | Queued milestone v1.40 | Queued |
@@ -332,13 +338,13 @@
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
-- v1.38 active: 10 (COMPOSE-01-05 -> Phases 120,122; NETWORK-01-05 -> Phases 121,122,123)
-- v1.39 queued: 10 (POUNCE-01-04, POLICY-01-03, DEESC-01-02, TOM-01)
+- v1.38 complete: 10 satisfied (COMPOSE-01-05 -> Phases 120,122; NETWORK-01-05 -> Phases 121,123)
+- v1.39 queued: 13 (POUNCE-01-05, POLICY-01-04, DEESC-01-02, TOM-01-02)
 - v1.40 queued: 8 (DEMO-01-05, PROV-01-03)
 - v1.41 queued: 8 (API-01-04, HELM-01-02, CLI-01-02)
 - v1.42+ future: 11 (FILELESS-01-06, EVASION-01-05)
-- Total queued: 37 (v1.39-v1.43)
+- Total queued: 40 (v1.39-v1.43)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-08 after v1.38 roadmap creation (phases 120-123)*
+*Last updated: 2026-04-08 after v1.39 milestone requirements definition*
