@@ -31,14 +31,14 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 ## Active Milestone
 
-`v1.39 PounceAgent And Policy Gate Hardening` -- Close the detect-to-respond loop with an autonomous PounceAgent that consumes escalation pheromones and executes safe response actions through the guard-gated adapter pipeline, while hardening policy leases, adding mode de-escalation, and introducing TomAgent for governance oversight. Phases 124-127.
+`v1.39 PounceAgent And Policy Gate Hardening` -- Close the detect-to-respond loop with an autonomous PounceAgent that consumes escalation pheromones and executes safe response actions through the guard-gated adapter pipeline, while hardening policy leases, adding mode de-escalation, and introducing TomAgent for governance oversight. All executable phases are complete; milestone audit is green and archival is next. Phases 124-127.
 
 ## Phases
 
 - [x] **Phase 124: PounceAgent Core And De-escalation** - PounceAgent implements SwarmAgent with guard-gated autonomous response, dry-run mode, and de-escalation closes the response loop; lease expiration enforcement fails closed before any adapter call (completed 2026-04-08)
 - [x] **Phase 125: Configurable Policy Rules And Audit Trail** - ConfigurableApprovalGate loads YAML rules with per-threat-class and per-severity allow/deny logic, rate limiting, and verdict reason in every structured log and receipt
-- [ ] **Phase 126: TomAgent Governance** - TomAgent monitors agent health and provides synchronous pre-execution veto over destructive PounceAgent actions via shared GovernancePolicy with auditable veto receipts; implementation landed on 2026-04-08, package-wide verification is currently blocked by unrelated evolution/drafting fixture regressions
-- [ ] **Phase 127: Integration Hardening** - End-to-end integration tests prove all seven correctness pitfalls are guarded: no double-trigger, synchronous veto, fail-closed policy, TOCTOU-safe lease check, flap-resistant de-escalation, dry-run parity, and audit lineage
+- [x] **Phase 126: TomAgent Governance** - TomAgent monitors agent health and provides synchronous pre-execution veto over destructive PounceAgent actions via shared GovernancePolicy with auditable veto receipts (completed 2026-04-08)
+- [x] **Phase 127: Integration Hardening** - End-to-end integration tests prove all seven correctness pitfalls are guarded: no double-trigger, synchronous veto, fail-closed policy, TOCTOU-safe lease check, flap-resistant de-escalation, dry-run parity, and audit lineage (completed 2026-04-08)
 
 ## Phase Details
 
@@ -97,14 +97,19 @@ Plans:
 **Depends on**: Phase 126
 **Requirements**: POUNCE-01, POUNCE-02, POUNCE-03, POUNCE-04, POUNCE-05, DEESC-01, DEESC-02, POLICY-01, POLICY-02, POLICY-03, POLICY-04, TOM-01, TOM-02
 **Note**: This phase does not own exclusive requirements — it adds integration-level test coverage proving the correctness properties of all 13 v1.39 requirements working together. Individual requirements are assigned to their delivery phases above; this phase verifies their integration.
+**Plans**: 2 plans
 **Success Criteria** (what must be TRUE):
   1. A test injects the same escalation pheromone twice into a running PounceAgent and asserts `authorize_and_execute()` is called exactly once (no double-trigger)
-  2. A test advances the clock past `lease_ttl_ms` and asserts the executor returns an error receipt, not a successful response (TOCTOU-safe lease check)
+  2. A test advances the clock past `lease_ttl_ms` and asserts the routed path persists a failure-shaped audit artifact and never executes the response adapter (TOCTOU-safe lease check)
   3. A test configures an empty YAML ruleset and asserts `ConfigurableApprovalGate` returns `Deny`, not `Allow` (fail-closed policy)
   4. A test wires a TomAgent veto and asserts `execute()` is never called for the vetoed action (synchronous veto gate)
   5. A test runs a burst-decay-burst pheromone sequence and asserts no second response fires within the cooldown window (flap-resistant de-escalation)
-  6. `cargo test --workspace` and `cargo clippy --workspace -- -D warnings` remain green after all v1.39 changes land
-**Plans**: TBD
+  6. The existing routed dry-run parity and audit-lineage proofs remain green alongside the new hardening tests
+  7. `cargo test --workspace` and `cargo clippy --workspace -- -D warnings` remain green after all v1.39 changes land
+
+Plans:
+- [x] 127-01-PLAN.md — Harden routed execution proofs and stabilize the canonical office verification budget
+- [x] 127-02-PLAN.md — Add cooldown reset proof and clear the final workspace test and lint gates
 
 ## Queued Milestones
 
@@ -144,10 +149,10 @@ Plans:
 | 123. Multi-Strategy Integration Proof | v1.38 | 1/1 | Complete | 2026-04-08 |
 | 124. PounceAgent Core And De-escalation | v1.39 | 5/5 | Complete | 2026-04-08 |
 | 125. Configurable Policy Rules And Audit Trail | v1.39 | 4/4 | Complete | 2026-04-08 |
-| 126. TomAgent Governance | v1.39 | 4/4 | Verification blocked | - |
-| 127. Integration Hardening | v1.39 | 0/TBD | Not started | - |
+| 126. TomAgent Governance | v1.39 | 4/4 | Complete | 2026-04-08 |
+| 127. Integration Hardening | v1.39 | 2/2 | Complete | 2026-04-08 |
 
 ---
 *Last shipped milestone: v1.38 Multi-Detector Composition And Network Detection on 2026-04-08*
-*Active milestone: v1.39 PounceAgent And Policy Gate Hardening*
-*Last updated: 2026-04-08 during Phase 126 verification*
+*Active milestone: v1.39 PounceAgent And Policy Gate Hardening (all phases complete; audit passed)*
+*Last updated: 2026-04-08 after Phase 127 verification*

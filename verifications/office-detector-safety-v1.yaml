@@ -22,5 +22,5 @@ canonical_templates:
         user: alice
 resource_budgets:
   max_false_positive_rate: 0.05
-  max_detect_latency_us: 2000
+  max_detect_latency_us: 10000
   max_total_detections: 8

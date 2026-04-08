@@ -7,7 +7,7 @@
 //! `nats://127.0.0.1:4222`.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
+use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
 use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
 use swarm_core::types::{AgentId, Severity};
 use swarm_pheromone::{DepositQuery, JetStreamPheromoneSubstrate, PheromoneSubstrate};
@@ -23,6 +23,8 @@ fn test_config() -> PheromoneConfig {
         min_sources_for_escalation: 2,
         alert_threshold: 2.0,
         incident_threshold: 5.0,
+        deescalation_cooldown_secs: 300,
+        response_playbook: ResponsePlaybookConfig::default(),
         backend: PheromoneBackendConfig::JetStream {
             url: nats_url(),
             connect_timeout_ms: 5_000,

@@ -1110,7 +1110,9 @@ mod tests {
     use crate::PheromoneSubstrate;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::agent::SwarmMode;
-    use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
+    use swarm_core::config::{
+        PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig,
+    };
     use swarm_core::pheromone::{
         EscalationRecord, PheromoneDeposit, ThreatClass, ThreatClassConfig, ThreatIntelEntry,
         ThreatIntelIndicatorType,
@@ -1124,6 +1126,8 @@ mod tests {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: ResponsePlaybookConfig::default(),
             backend: PheromoneBackendConfig::JetStream {
                 url: nats_url(),
                 connect_timeout_ms: DEFAULT_NATS_CONNECT_TIMEOUT_MS,

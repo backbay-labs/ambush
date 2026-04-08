@@ -30,7 +30,10 @@ pub struct GovernancePolicy {
 
 impl GovernancePolicy {
     pub fn observe_health(&self, governing_agent_id: &AgentId, entries: &[AgentHealthEntry]) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.governing_agent_id = Some(governing_agent_id.clone());
         state.unhealthy_agents = entries
             .iter()
@@ -44,7 +47,10 @@ impl GovernancePolicy {
             return GovernanceDecision::Allow;
         }
 
-        let state = self.state.lock().unwrap();
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.unhealthy_agents.is_empty() {
             return GovernanceDecision::Allow;
         }

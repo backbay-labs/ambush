@@ -337,41 +337,85 @@ where
                         )
                     } else {
                         let lease = self.policy.issue_lease(request, context)?;
-                        ensure_active_lease(&lease, context.now_ms)?;
-                        let response_started = Instant::now();
-                        let response = match self
-                            .response
-                            .execute(request, &lease, self.execution_mode())
-                            .await
-                        {
-                            Ok(receipt) if receipt.status.indicates_success() => {
-                                AuditResponseRecord::Success(receipt.with_policy_audit(
+                        match ensure_active_lease(&lease, context.now_ms) {
+                            Ok(()) => {
+                                let response_started = Instant::now();
+                                let response = match self
+                                    .response
+                                    .execute(request, &lease, self.execution_mode())
+                                    .await
+                                {
+                                    Ok(receipt) if receipt.status.indicates_success() => {
+                                        AuditResponseRecord::Success(receipt.with_policy_audit(
+                                            decision.verdict,
+                                            decision.rule_name.clone(),
+                                            decision.reason.clone(),
+                                        ))
+                                    }
+                                    Ok(receipt) => AuditResponseRecord::Failure(
+                                        receipt
+                                            .with_policy_audit(
+                                                decision.verdict,
+                                                decision.rule_name.clone(),
+                                                decision.reason.clone(),
+                                            )
+                                            .into_failure(),
+                                    ),
+                                    Err(error) => AuditResponseRecord::Failure(error.failure),
+                                };
+                                let response_elapsed_us =
+                                    response_started.elapsed().as_micros() as u64;
+                                let response_succeeded =
+                                    matches!(response, AuditResponseRecord::Success(_));
+                                (
+                                    Some(lease),
+                                    response,
+                                    Some(response_elapsed_us),
+                                    true,
+                                    response_succeeded,
+                                )
+                            }
+                            Err(ApprovalError::Denied(reason)) => {
+                                let receipt = ResponseReceipt {
+                                    receipt_id: format!(
+                                        "lease-denied:{}:{}:{}",
+                                        request.hunt_id.0,
+                                        request.action.kind(),
+                                        context.now_ms
+                                    ),
+                                    action: request.action.kind().to_string(),
+                                    mode: self.execution_mode(),
+                                    status: ResponseStatus::Failed,
+                                    summary: reason.clone(),
+                                    details: serde_json::json!({
+                                        "status": "lease_expired",
+                                        "reason": reason,
+                                        "lineage": request.evidence.get("lineage").cloned(),
+                                        "requested_by": request.requested_by,
+                                        "lease": {
+                                            "capability_id": lease.capability_id.clone(),
+                                            "expires_at_ms": lease.expires_at_ms,
+                                            "scope": lease.scope.clone(),
+                                        },
+                                        "evidence": request.evidence.clone(),
+                                    }),
+                                    audit: Default::default(),
+                                }
+                                .with_policy_audit(
                                     decision.verdict,
                                     decision.rule_name.clone(),
                                     decision.reason.clone(),
-                                ))
+                                );
+                                (
+                                    Some(lease),
+                                    AuditResponseRecord::Failure(receipt.into_failure()),
+                                    None,
+                                    false,
+                                    false,
+                                )
                             }
-                            Ok(receipt) => AuditResponseRecord::Failure(
-                                receipt
-                                    .with_policy_audit(
-                                        decision.verdict,
-                                        decision.rule_name.clone(),
-                                        decision.reason.clone(),
-                                    )
-                                    .into_failure(),
-                            ),
-                            Err(error) => AuditResponseRecord::Failure(error.failure),
-                        };
-                        let response_elapsed_us = response_started.elapsed().as_micros() as u64;
-                        let response_succeeded =
-                            matches!(response, AuditResponseRecord::Success(_));
-                        (
-                            Some(lease),
-                            response,
-                            Some(response_elapsed_us),
-                            true,
-                            response_succeeded,
-                        )
+                            Err(error) => return Err(error.into()),
+                        }
                     }
                 }
             };

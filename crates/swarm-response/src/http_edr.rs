@@ -47,7 +47,7 @@ impl HttpEdrAdapter {
         &self,
         request: &ActionRequest,
         lease: &CapabilityLease,
-    ) -> Result<Value, ResponseReceipt> {
+    ) -> Result<Value, Box<ResponseReceipt>> {
         let base = json!({
             "action": request.action.kind(),
             "hunt_id": request.hunt_id.0,
@@ -72,7 +72,7 @@ impl HttpEdrAdapter {
                 }
                 Ok(payload)
             }
-            _ => Err(ResponseReceipt {
+            _ => Err(Box::new(ResponseReceipt {
                 receipt_id: self.receipt_id(request, lease),
                 action: request.action.kind().to_string(),
                 mode: ExecutionMode::Enforced,
@@ -87,7 +87,7 @@ impl HttpEdrAdapter {
                     "lease_id": lease.capability_id,
                 }),
                 audit: Default::default(),
-            }),
+            })),
         }
     }
 }
@@ -112,7 +112,7 @@ impl ResponseExecutor for HttpEdrAdapter {
         let receipt_id = self.receipt_id(request, lease);
         let payload = match self.payload(request, lease) {
             Ok(payload) => payload,
-            Err(receipt) => return Ok(receipt),
+            Err(receipt) => return Ok(*receipt),
         };
 
         if mode == ExecutionMode::DryRun {

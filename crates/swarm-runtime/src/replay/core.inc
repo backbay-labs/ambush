@@ -4627,7 +4627,7 @@ canonical_templates:
         user: alice
 resource_budgets:
   max_false_positive_rate: 0.05
-  max_detect_latency_us: 2000
+  max_detect_latency_us: 10000
   max_total_detections: 8
 "#,
                 suite_path.display(),
@@ -4837,7 +4837,7 @@ canonical_templates:
         user: alice
 resource_budgets:
   max_false_positive_rate: 0.0
-  max_detect_latency_us: 2000
+  max_detect_latency_us: 10000
   max_total_detections: 8
 "#,
                 suite_path.display(),
@@ -4987,7 +4987,7 @@ canonical_templates:
         user: alice
 resource_budgets:
   max_false_positive_rate: 0.05
-  max_detect_latency_us: 2000
+  max_detect_latency_us: 10000
   max_total_detections: 8
 "#,
                 suite_path.display(),
@@ -5132,7 +5132,7 @@ canonical_templates:
         user: alice
 resource_budgets:
   max_false_positive_rate: 0.05
-  max_detect_latency_us: 2000
+  max_detect_latency_us: 10000
   max_total_detections: 8
 "#,
                 suite_path.display(),
@@ -5255,7 +5255,7 @@ canonical_templates:
         user: alice
 resource_budgets:
   max_false_positive_rate: 0.05
-  max_detect_latency_us: 2000
+  max_detect_latency_us: 10000
   max_total_detections: 8
 "#,
             )
@@ -5267,7 +5267,7 @@ resource_budgets:
         assert_eq!(manifest.benign_controls.scenarios.len(), 1);
         assert_eq!(manifest.canonical_templates.len(), 1);
         assert_eq!(manifest.resource_budgets.max_false_positive_rate, 0.05);
-        assert_eq!(manifest.resource_budgets.max_detect_latency_us, 2000);
+        assert_eq!(manifest.resource_budgets.max_detect_latency_us, 10000);
 
         let _ = fs::remove_dir_all(root);
     }

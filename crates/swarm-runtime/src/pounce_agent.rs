@@ -106,7 +106,7 @@ impl PounceAgent {
                     .timestamp
                     .cmp(&left.timestamp)
                     .then_with(|| right.confidence.total_cmp(&left.confidence))
-                    .then_with(|| extract_lineage_id(left).cmp(&extract_lineage_id(right)))
+                    .then_with(|| extract_lineage_id(left).cmp(extract_lineage_id(right)))
             });
 
             let Some(deposit) = deposits.into_iter().next() else {

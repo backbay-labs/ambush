@@ -55,7 +55,9 @@ mod tests {
         DetectionFinding, ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent,
         TelemetryPayload,
     };
-    use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
+    use swarm_core::config::{
+        PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig,
+    };
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::{AgentId, Severity};
 
@@ -66,6 +68,8 @@ mod tests {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: ResponsePlaybookConfig::default(),
             backend: PheromoneBackendConfig::InMemory,
         }
     }
