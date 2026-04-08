@@ -132,7 +132,7 @@ Plans:
 | 121. Network Connect Detector | v1.38 | 2/2 | Complete | 2026-04-08 |
 | 122. Cross-Strategy Pheromone Signals And Rollout Scoping | v1.38 | 2/2 | Complete | 2026-04-08 |
 | 123. Multi-Strategy Integration Proof | v1.38 | 1/1 | Complete | 2026-04-08 |
-| 124. PounceAgent Core And De-escalation | v1.39 | 0/5 | Not started | - |
+| 124. PounceAgent Core And De-escalation | v1.39 | 5/5 | Planned | - |
 | 125. Configurable Policy Rules And Audit Trail | v1.39 | 0/TBD | Not started | - |
 | 126. TomAgent Governance | v1.39 | 0/TBD | Not started | - |
 | 127. Integration Hardening | v1.39 | 0/TBD | Not started | - |
@@ -140,4 +140,4 @@ Plans:
 ---
 *Last shipped milestone: v1.38 Multi-Detector Composition And Network Detection on 2026-04-08*
 *Active milestone: v1.39 PounceAgent And Policy Gate Hardening*
-*Last updated: 2026-04-08 after v1.39 roadmap creation*
+*Last updated: 2026-04-08 after Phase 124 planning*
