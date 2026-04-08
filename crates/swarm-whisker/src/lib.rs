@@ -7,6 +7,7 @@
 //!
 //! No LLM per signal. LLM only for ambiguous signals routed to Stalkers.
 
+pub mod composite;
 pub mod credential_access;
 pub mod detector;
 pub mod dns_exfiltration;
@@ -60,6 +61,7 @@ pub(crate) fn validate_confidence_thresholds(
     Ok(())
 }
 
+pub use composite::CompositeDetector;
 pub use credential_access::{CredentialAccessDetector, CredentialAccessProfile};
 pub use detector::{
     AuthenticationEventData, DetectionFinding, DetectionStrategy, DnsQueryEvent,

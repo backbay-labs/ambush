@@ -251,10 +251,22 @@ pub enum GenericJsonPayloadMappingConfig {
 #[serde(deny_unknown_fields)]
 pub struct DetectionConfig {
     pub strategy: String,
+    #[serde(default)]
+    pub strategies: Vec<String>,
     pub high_confidence_threshold: f64,
     pub medium_confidence_threshold: f64,
     #[serde(default)]
     pub profiles: DetectorProfilesConfig,
+}
+
+impl DetectionConfig {
+    pub fn active_strategies(&self) -> Vec<String> {
+        if self.strategies.is_empty() {
+            vec![self.strategy.clone()]
+        } else {
+            self.strategies.clone()
+        }
+    }
 }
 
 /// Optional raw detector profile configuration payloads keyed by strategy family.
@@ -2079,6 +2091,7 @@ mod tests {
             },
             detection: super::DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
+                strategies: Vec::new(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
                 profiles: super::DetectorProfilesConfig::default(),
@@ -2185,6 +2198,38 @@ mod tests {
                 connect_timeout_ms: 2_500,
                 gc_page_size: 64,
             }
+        );
+    }
+
+    #[test]
+    fn detection_config_active_strategies_uses_legacy_strategy_when_list_missing() {
+        let config: super::DetectionConfig = serde_json::from_value(serde_json::json!({
+            "strategy": "suspicious_process_tree",
+            "high_confidence_threshold": 0.9,
+            "medium_confidence_threshold": 0.7
+        }))
+        .unwrap();
+
+        assert!(config.strategies.is_empty());
+        assert_eq!(config.active_strategies(), vec!["suspicious_process_tree"]);
+    }
+
+    #[test]
+    fn detection_config_active_strategies_prefers_explicit_list() {
+        let config: super::DetectionConfig = serde_json::from_value(serde_json::json!({
+            "strategy": "suspicious_process_tree",
+            "strategies": ["suspicious_process_tree", "dns_exfiltration"],
+            "high_confidence_threshold": 0.9,
+            "medium_confidence_threshold": 0.7
+        }))
+        .unwrap();
+
+        assert_eq!(
+            config.active_strategies(),
+            vec![
+                "suspicious_process_tree".to_string(),
+                "dns_exfiltration".to_string()
+            ]
         );
     }
 }
