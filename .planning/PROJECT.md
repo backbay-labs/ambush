@@ -8,27 +8,29 @@ Swarm Team Six is a Rust-first threat detection and controlled live-response run
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## Current Milestone: v1.38 Multi-Detector Composition And Network Detection
+## Current Milestone: v1.39 PounceAgent And Policy Gate Hardening
 
-**Goal:** Run all detector strategies simultaneously per event via CompositeDetector, add NetworkConnectDetector for C2 beaconing and threat-intel IP matching, and enable cross-strategy pheromone escalation so the swarm metaphor actually works.
+**Goal:** Close the detect-to-respond loop with an autonomous PounceAgent that consumes escalation pheromones and executes safe response actions through the existing guard-gated adapter pipeline, while hardening policy leases, adding mode de-escalation, and introducing TomAgent for governance oversight.
 
 **Target features:**
-- CompositeDetector replaces single SupportedDetector dispatch — all configured strategies evaluate every event
-- Per-strategy profile overrides in config (strategies list replaces strategy scalar)
-- Cross-strategy deposits count as distinct sources for min_sources_for_escalation
-- WeaverAgent weights cross-strategy correlation higher than same-strategy
-- NetworkConnectDetector for C2 beaconing, anomalous ports, threat-intel IP matching
-- ThreatClass::CommandAndControl findings from network detection
-- Multi-strategy canary/promotion scoping
+- PounceAgent consumes escalation pheromones and triggers response actions through the guard pipeline
+- PounceAgent respects policy verdicts, scoped leases, and runtime mode before acting
+- PounceAgent produces auditable response receipts linked to detection lineage
+- PounceAgent dry-run mode for operators to preview response behavior without execution
+- Policy lease expiration enforcement with fail-closed semantics
+- Configurable policy rules beyond the current hardcoded verdicts
+- Policy audit trail for verdict explanations
+- Mode de-escalation from Incident/Alert back to Normal when pheromone pressure drops
+- De-escalation cooldown to prevent rapid mode flapping
+- TomAgent governance oversight with veto authority over PounceAgent actions
 
 **Queued after this:**
-- `v1.39 PounceAgent And Policy Gate Hardening`
 - `v1.40 Killer Demo And Providence Integration`
 - `v1.41 Platform APIs And Deployment Experience`
 
 ## Current State
 
-`v1.37.1 Runtime Hardening And Audit Debt` shipped on 2026-04-08. The runtime now enforces signed pheromone deposits, bounded agent ticks, threat-intel GC, bridge resilience, independent secret rotation, dead-letter rotation, and has focused substrate test coverage.
+`v1.38 Multi-Detector Composition And Network Detection` shipped on 2026-04-08. The runtime now runs all configured detector strategies simultaneously per event via CompositeDetector, detects C2 beaconing through NetworkConnectDetector with threat-intel IP enrichment, and enables cross-strategy pheromone escalation through distinct-source deposit identity.
 
 **What v1.37.1 hardened:**
 - Pheromone deposits are now Ed25519-signed by agents and validated by the substrate on all backends
@@ -269,4 +271,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-07 after activating v1.37*
+*Last updated: 2026-04-08 after activating v1.39*
