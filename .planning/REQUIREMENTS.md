@@ -119,22 +119,98 @@
 
 - **HARDEN-10**: `swarm-pheromone` gains a focused test suite covering deposit, query, evaporation GC, escalation record persistence, threat-intel CRUD with TTL expiry, and `ThreatClassConfig` store/query across the `InMemoryPheromoneSubstrate`; at least 15 tests that exercise the substrate trait contract independently of the runtime
 
-### Fileless Execution And Behavioral Baselines (v1.38)
+### Multi-Detector Composition And Network Detection (v1.38)
+
+#### Composition
+
+- **COMPOSE-01**: A `CompositeDetector` implements `DetectionStrategy` by holding a `Vec<Box<dyn DetectionStrategy>>` and calling `evaluate()` on every contained strategy for each `TelemetryEvent`, returning merged findings, replacing the single-variant `SupportedDetector` dispatch
+- **COMPOSE-02**: `DetectionConfig` gains an optional `strategies: Vec<String>` field that takes precedence over the existing `strategy: String` scalar, with per-strategy profile overrides in `DetectorProfilesConfig`
+- **COMPOSE-03**: Deposits from different strategies on the same event use distinct `PheromoneDeposit.agent_id` values incorporating the `strategy_id`, so `PheromoneConcentration.distinct_sources` reflects independent strategy signals toward `min_sources_for_escalation`
+- **COMPOSE-04**: `CorrelationEngine::assemble_incident_at()` applies higher correlation weight to `IncidentMemberDecision` pairs with different `strategy_id` values than same-strategy pairs
+- **COMPOSE-05**: `CanaryConfig` and `PromotionConfig` gain an optional `strategy_id` field to scope canary/promotion observation to a single strategy within the `CompositeDetector`
+
+#### Network Detection
+
+- **NETWORK-01**: A `NetworkConnectDetector` implements `DetectionStrategy`, matches `TelemetryPayload::NetworkConnect` events, and detects C2 beaconing patterns (periodic connections with low inter-arrival jitter to the same destination from the same process)
+- **NETWORK-02**: `NetworkConnectDetector::evaluate()` queries `PheromoneSubstrate::query_threat_intel_entry()` with `ThreatIntelIndicatorType::IpAddress` for each destination IP and boosts `DetectionFinding.confidence` when matches are found
+- **NETWORK-03**: A `NetworkConnectProfile` defines `suspicious_ports: Vec<u16>` and `process_port_allowlist: HashMap<String, Vec<u16>>` for anomalous port and process-to-port mismatch detection
+- **NETWORK-04**: `NetworkConnectDetector` sets findings to `ThreatClass::CommandAndControl`; integration tests prove NetworkConnect telemetry through detection to signed pheromone deposit
+- **NETWORK-05**: A cross-strategy integration test configures `CompositeDetector` with 3+ strategies, feeds a multi-stage attack sequence, and asserts `PheromoneConcentration.distinct_sources >= 3` triggers escalation via `min_sources_for_escalation`
+
+### PounceAgent And Policy Gate Hardening (v1.39)
+
+#### Autonomous Response
+
+- **POUNCE-01**: `PounceAgent` implements `SwarmAgent` with `AgentRole::Pouncer`, reads `SwarmEnvironment.mode` and `pheromones`, and emits `SwarmAction::RequestResponse` with `ResponseAction` variants when mode is `Alert` or `Incident`
+- **POUNCE-02**: `PounceAgent::tick()` checks `SwarmEnvironment.peer_findings` to skip emitting responses whose target scope matches an existing `AgentFinding` in the same tick cycle
+- **POUNCE-03**: A `ResponsePlaybookConfig` maps `(ThreatClass, Severity, confidence_range)` tuples to ordered `ResponseAction` sequences with per-step `escalation_timeout_secs`
+- **POUNCE-04**: `AgentDispatcher::apply_actions()` routes `SwarmAction::RequestResponse` through `SwarmRuntime::authorize_and_execute()` so PounceAgent actions flow through the policy gate and guard pipeline
+
+#### Policy Hardening
+
+- **POLICY-01**: `SwarmRuntime::authorize_and_execute()` validates `CapabilityLease.expires_at_ms > ApprovalContext.now_ms` before executing; expired leases return `ApprovalError::Denied("capability lease expired")`
+- **POLICY-02**: `StaticApprovalGate` tracks recent actions per scope and denies requests exceeding a configurable `max_actions_per_scope_per_minute` rate limit
+- **POLICY-03**: A `ConfigurableApprovalGate` loads YAML rules with action allow/deny by threat class, severity thresholds, time-of-day restrictions, and per-agent rate limits
+
+#### Mode De-escalation
+
+- **DEESC-01**: `SwarmModeState` gains `transition_down()` that de-escalates mode when the new mode is lower than current, updating `last_transition_at` and clearing `triggering_threat_class`
+- **DEESC-02**: `ConcentrationMonitor::evaluate_all()` calls `transition_down()` when all threat-class concentrations stay below alert threshold for a configurable `deescalation_cooldown_secs`
+
+#### Agent Governance
+
+- **TOM-01**: `TomAgent` implements `SwarmAgent` with `AgentRole::Tom`, monitors agent health summaries, and emits `RoleShift` for degraded agents and `HealthReport { status: Failed }` for agents degraded beyond a configurable tick threshold
+
+### Killer Demo And Providence Integration (v1.40)
+
+#### Demo Infrastructure
+
+- **DEMO-01**: `POST /v1/demo/replay` (gated behind `demo_mode` config) accepts a scenario YAML path and injects events into the running telemetry channel with configurable inter-event delay, driving the full agent swarm
+- **DEMO-02**: `GET /v1/events/stream` emits Server-Sent Events for agent actions (pheromone deposits, investigation claims, correlation publishes, escalation transitions, policy decisions, response executions) with event-type filtering
+- **DEMO-03**: The review workbench includes a real-time dashboard showing `SwarmMode`, per-agent health, per-`ThreatClass` pheromone concentrations, and a scrolling escalation timeline
+- **DEMO-04**: Demo flow pauses at `RequireHuman` policy verdicts; operator approves via approval-set vote endpoint; response executes with signed receipt proving the approval chain
+- **DEMO-05**: `GET /v1/demo/proof` exports a JSON document with all signed receipts, Merkle proofs, the final `CorrelatedIncident`, and full decision timeline
+
+#### Providence Integration
+
+- **PROV-01**: A `providence_webhook` notification channel delivers `SwarmFindingEnvelope` payloads to a Providence API endpoint, mapping threat_class and severity to Providence incident fields
+- **PROV-02**: Providence webhook payloads include stable URL references back to Swarm operator API for finding drilldown, replay bundle access, and audit trail inspection
+- **PROV-03**: Providence webhook payloads include current `SwarmMode`, active agent count, and bridge health summary for runtime status display
+
+### Platform APIs And Deployment Experience (v1.41)
+
+#### Platform API
+
+- **API-01**: A `/v2/api/` route group serves paginated, filterable endpoints for findings, incidents, and runtime status, separate from the `/v1/operator/` surface
+- **API-02**: `GET /v2/api/assets/{host_id}/posture` returns per-`ThreatClass` pheromone concentration summaries, active investigations, escalation level, and recent findings for a host
+- **API-03**: `GET /v2/api/stream/findings` emits Server-Sent Events of `SwarmFindingEnvelope` payloads as they are produced
+- **API-04**: Platform API authenticates via separate API keys in `SwarmConfig.platform_api.keys` with read-only scope that cannot invoke operator maintenance or approval actions
+
+#### Deployment
+
+- **HELM-01**: A Helm chart parameterizes runtime mode, detection strategies, pheromone backend, response adapter, SIEM target, and notification channels, mapping to `SwarmConfig` sections with sensible defaults
+- **HELM-02**: The Helm chart wires `/startupz`, `/readyz`, `/livez`, `/prestop` to K8s probes and lifecycle hooks with `PodDisruptionBudget` and resource requests
+- **CLI-01**: `swarmctl validate --config <path>` performs full config validation including schema version, secret resolution, endpoint reachability, and detector profile thresholds
+- **CLI-02**: `swarmctl init` runs an interactive wizard generating a complete `rulesets/custom.yaml` with inline comments
+
+### Future: Detection Breadth (v1.42+)
+
+#### Fileless Execution And Behavioral Baselines
 
 - **FILELESS-01**: A `FilelessExecutionDetector` implements `DetectionStrategy` and identifies indicators of reflective DLL injection, encoded PowerShell execution with multi-stage deobfuscation hints, and raw syscall gadget patterns from a new `TelemetryPayload::ProcessMemoryAccess` variant and existing `ProcessStart` events
 - **FILELESS-02**: A `BehavioralAnomalyDetector` implements `DetectionStrategy` and maintains per-host process ancestry baselines; it flags deviations such as unusual parent-child pairs, first-seen binaries, or atypical tool usage for a user role as medium-confidence findings
 - **FILELESS-03**: `TelemetryPayload` includes a `ProcessMemoryAccess` variant carrying `source_process`, `target_process`, `allocation_type`, `protection_flags`, `region_size`, and optional `call_stack_hint` for memory-based detection
 - **FILELESS-04**: `BehavioralAnomalyDetector` baselines persist across runtime restarts via the durable `PheromoneSubstrate` and decay with a configurable `baseline_half_life_secs`
 - **FILELESS-05**: `ThreatClass::DefenseEvasion` is used for fileless execution findings; `ThreatClass::PrivilegeEscalation` is used when the detector observes memory manipulation targeting a higher-privilege process
-- **FILELESS-06**: Both detectors ship with configurable profiles (`FilelessExecutionProfile` and `BehavioralAnomalyProfile`); integration tests cover reflective injection, encoded PowerShell, first-seen binary, and unusual parent-child scenarios through detection to pheromone deposit
+- **FILELESS-06**: Both detectors ship with configurable profiles; integration tests cover evasion scenarios through detection to pheromone deposit
 
-### Adversarial Robustness And Evasion Bench (v1.39)
+#### Adversarial Robustness And Evasion Bench
 
-- **EVASION-01**: An evasion test corpus under `tests/evasion/` provides at least 10 curated `TelemetryEvent` payloads per `ThreatClass` representing real-world evasion techniques including command-line obfuscation, parameter reordering, timing manipulation, tool substitution, and case/encoding variation
-- **EVASION-02**: A coverage metrics module computes per-detector evasion catch rates and exposes results via `/metrics` as `swarm_evasion_catch_rate{detector, threat_class}` gauge metrics and via `/api/v1/evasion/coverage` as structured JSON
-- **EVASION-03**: An automated strategy mutation module consumes evasion test failures, proposes `DetectorProfilesConfig` threshold adjustments as serialized profile diffs, and validates each mutation through the existing canary pipeline to confirm false-positive rates remain below a configurable `max_fp_rate` before marking it promotable
-- **EVASION-04**: An evasion catalog at `rulesets/evasion_catalog.toml` documents, for each `DetectionStrategy`, which ATT&CK technique IDs the detector intentionally does not cover with a required `rationale` field per entry
-- **EVASION-05**: Integration tests execute the full cycle: load evasion corpus, identify coverage gaps, trigger strategy mutation proposals, validate through the canary pipeline, and assert at least one mutation proposal passes canary validation for each gap identified
+- **EVASION-01**: An evasion test corpus provides at least 10 curated payloads per `ThreatClass` representing real-world evasion techniques
+- **EVASION-02**: A coverage metrics module computes per-detector evasion catch rates via `/metrics` and `/api/v1/evasion/coverage`
+- **EVASION-03**: An automated strategy mutation module proposes threshold adjustments and validates through the canary pipeline
+- **EVASION-04**: An evasion catalog documents intentionally uncovered ATT&CK techniques per detector with rationale
+- **EVASION-05**: Integration tests execute the full evasion corpus → gap identification → mutation → canary validation cycle
 
 ## Out of Scope
 
@@ -206,33 +282,63 @@
 | HARDEN-08 | Phase 118, Plan 01 | Complete |
 | HARDEN-09 | Phase 118, Plan 02 | Complete |
 | HARDEN-10 | Phase 119, Plan 01 | Complete |
-| FILELESS-01 | Queued milestone v1.38 | Queued |
-| FILELESS-02 | Queued milestone v1.38 | Queued |
-| FILELESS-03 | Queued milestone v1.38 | Queued |
-| FILELESS-04 | Queued milestone v1.38 | Queued |
-| FILELESS-05 | Queued milestone v1.38 | Queued |
-| FILELESS-06 | Queued milestone v1.38 | Queued |
-| EVASION-01 | Queued milestone v1.39 | Queued |
-| EVASION-02 | Queued milestone v1.39 | Queued |
-| EVASION-03 | Queued milestone v1.39 | Queued |
-| EVASION-04 | Queued milestone v1.39 | Queued |
-| EVASION-05 | Queued milestone v1.39 | Queued |
+| COMPOSE-01 | Queued milestone v1.38 | Queued |
+| COMPOSE-02 | Queued milestone v1.38 | Queued |
+| COMPOSE-03 | Queued milestone v1.38 | Queued |
+| COMPOSE-04 | Queued milestone v1.38 | Queued |
+| COMPOSE-05 | Queued milestone v1.38 | Queued |
+| NETWORK-01 | Queued milestone v1.38 | Queued |
+| NETWORK-02 | Queued milestone v1.38 | Queued |
+| NETWORK-03 | Queued milestone v1.38 | Queued |
+| NETWORK-04 | Queued milestone v1.38 | Queued |
+| NETWORK-05 | Queued milestone v1.38 | Queued |
+| POUNCE-01 | Queued milestone v1.39 | Queued |
+| POUNCE-02 | Queued milestone v1.39 | Queued |
+| POUNCE-03 | Queued milestone v1.39 | Queued |
+| POUNCE-04 | Queued milestone v1.39 | Queued |
+| POLICY-01 | Queued milestone v1.39 | Queued |
+| POLICY-02 | Queued milestone v1.39 | Queued |
+| POLICY-03 | Queued milestone v1.39 | Queued |
+| DEESC-01 | Queued milestone v1.39 | Queued |
+| DEESC-02 | Queued milestone v1.39 | Queued |
+| TOM-01 | Queued milestone v1.39 | Queued |
+| DEMO-01 | Queued milestone v1.40 | Queued |
+| DEMO-02 | Queued milestone v1.40 | Queued |
+| DEMO-03 | Queued milestone v1.40 | Queued |
+| DEMO-04 | Queued milestone v1.40 | Queued |
+| DEMO-05 | Queued milestone v1.40 | Queued |
+| PROV-01 | Queued milestone v1.40 | Queued |
+| PROV-02 | Queued milestone v1.40 | Queued |
+| PROV-03 | Queued milestone v1.40 | Queued |
+| API-01 | Queued milestone v1.41 | Queued |
+| API-02 | Queued milestone v1.41 | Queued |
+| API-03 | Queued milestone v1.41 | Queued |
+| API-04 | Queued milestone v1.41 | Queued |
+| HELM-01 | Queued milestone v1.41 | Queued |
+| HELM-02 | Queued milestone v1.41 | Queued |
+| CLI-01 | Queued milestone v1.41 | Queued |
+| CLI-02 | Queued milestone v1.41 | Queued |
+| FILELESS-01 | Queued future v1.42+ | Queued |
+| FILELESS-02 | Queued future v1.42+ | Queued |
+| FILELESS-03 | Queued future v1.42+ | Queued |
+| FILELESS-04 | Queued future v1.42+ | Queued |
+| FILELESS-05 | Queued future v1.42+ | Queued |
+| FILELESS-06 | Queued future v1.42+ | Queued |
+| EVASION-01 | Queued future v1.42+ | Queued |
+| EVASION-02 | Queued future v1.42+ | Queued |
+| EVASION-03 | Queued future v1.42+ | Queued |
+| EVASION-04 | Queued future v1.42+ | Queued |
+| EVASION-05 | Queued future v1.42+ | Queued |
 
 **Coverage:**
-- v1.30 requirements: 6 satisfied
-- v1.31 requirements: 5 satisfied
-- v1.32 requirements: 7 satisfied
-- v1.33 requirements: 6 satisfied
-- v1.34 complete: 6 satisfied, 0 remaining
-- v1.35 complete: 6 satisfied, 0 remaining
-- v1.36 complete: 6 satisfied, 0 remaining
-- v1.37 complete: 5 satisfied, 0 remaining
-- v1.37.1 complete: 10 satisfied (HARDEN-01 through HARDEN-10)
-- v1.38 queued: 6 (FILELESS-01 through FILELESS-06)
-- v1.39 queued: 5 (EVASION-01 through EVASION-05)
-- Total queued future requirements: 21
+- v1.30–v1.37.1: 56 requirements satisfied across 10 milestones
+- v1.38 queued: 10 (COMPOSE-01–05, NETWORK-01–05)
+- v1.39 queued: 10 (POUNCE-01–04, POLICY-01–03, DEESC-01–02, TOM-01)
+- v1.40 queued: 8 (DEMO-01–05, PROV-01–03)
+- v1.41 queued: 8 (API-01–04, HELM-01–02, CLI-01–02)
+- v1.42+ future: 11 (FILELESS-01–06, EVASION-01–05)
+- Total queued: 47
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-07 after v1.31-v1.37 audit and hardening milestone definition*
-*Last updated: 2026-04-07 after closing v1.37*
+*Last updated: 2026-04-08 after v1.38-v1.41 milestone definition (post-v1.37.1 brainstorm)*

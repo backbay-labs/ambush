@@ -151,10 +151,20 @@ Plans:
 
 ## Queued Milestones
 
-### Then: Detection Breadth
+### Tier 1: Core Value Delivery
 
-- `v1.38 Fileless Execution And Behavioral Baselines` — Memory-based detection, behavioral anomaly baselines, pheromone-backed baseline persistence (6 requirements: FILELESS-01–06)
-- `v1.39 Adversarial Robustness And Evasion Bench` — Evasion test corpus, coverage metrics, automated strategy mutation, evasion catalog (5 requirements: EVASION-01–05)
+- `v1.38 Multi-Detector Composition And Network Detection` — Run all strategies simultaneously, add C2/network detection, cross-strategy pheromone escalation (10 requirements: COMPOSE-01–05, NETWORK-01–05)
+- `v1.39 PounceAgent And Policy Gate Hardening` — Autonomous response agent, lease expiration fix, mode de-escalation, configurable policy, TomAgent governance (10 requirements: POUNCE-01–04, POLICY-01–03, DEESC-01–02, TOM-01)
+
+### Tier 2: Product Visibility
+
+- `v1.40 Killer Demo And Providence Integration` — Scenario replay injector, SSE event stream, Providence live feed, approval-in-the-loop demo, signed proof export (8 requirements: DEMO-01–05, PROV-01–03)
+- `v1.41 Platform APIs And Deployment Experience` — Versioned platform API, Helm chart, config validation CLI, guided setup wizard (8 requirements: API-01–04, HELM-01–02, CLI-01–02)
+
+### Tier 3: Detection Breadth (v1.42+)
+
+- `v1.42 Fileless Execution And Behavioral Baselines` — Memory-based detection, behavioral anomaly baselines (6 requirements: FILELESS-01–06)
+- `v1.43 Adversarial Robustness And Evasion Bench` — Evasion test corpus, coverage metrics, strategy mutation (5 requirements: EVASION-01–05)
 
 ## Progress
 

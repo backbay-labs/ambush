@@ -14,8 +14,12 @@ No active milestone.
 
 | Milestone | Name | Requirements | Tier |
 |-----------|------|--------------|------|
-| v1.38 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
-| v1.39 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
+| v1.38 | Multi-Detector Composition And Network Detection | COMPOSE-01–05, NETWORK-01–05 (10) | Core Value Delivery |
+| v1.39 | PounceAgent And Policy Gate Hardening | POUNCE-01–04, POLICY-01–03, DEESC-01–02, TOM-01 (10) | Core Value Delivery |
+| v1.40 | Killer Demo And Providence Integration | DEMO-01–05, PROV-01–03 (8) | Product Visibility |
+| v1.41 | Platform APIs And Deployment Experience | API-01–04, HELM-01–02, CLI-01–02 (8) | Product Visibility |
+| v1.42 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
+| v1.43 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
 
 ## History
 
