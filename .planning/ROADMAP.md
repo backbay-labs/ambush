@@ -52,12 +52,13 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
   3. `SwarmRuntime::authorize_and_execute()` returns `ApprovalError::Denied("capability lease expired")` for any request where `CapabilityLease.expires_at_ms <= now_ms`, failing closed before any adapter is called
   4. PounceAgent skips emitting responses whose target scope already matches an `AgentFinding` in `peer_findings` for the same tick cycle, preventing double-trigger on the same escalation signal
   5. `ConcentrationMonitor::evaluate_all()` calls `transition_down()` when all threat-class concentrations remain below alert threshold for `deescalation_cooldown_secs`, and `SwarmModeState::transition_down()` updates `last_transition_at` and clears `triggering_threat_class`
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
-- [ ] 124-01-PLAN.md — Add de-escalation foundation, cooldown config, and compile-safe Phase 124 config seams
-- [ ] 124-02-PLAN.md — Implement PounceAgent playbook selection, elevated-session dedupe, and focused agent integration tests
-- [ ] 124-03-PLAN.md — Route `RequestResponse` through the runtime path, register PounceAgent, and enforce fail-closed lease expiry
+- [ ] 124-01-PLAN.md — Add Phase 124 config/playbook seams, shared scope helper, and compile-safe constructor migration
+- [ ] 124-02-PLAN.md — Implement explicit downward transitions and cooldown-gated de-escalation
+- [ ] 124-03-PLAN.md — Build PounceAgent emission, playbook selection, and same-tick dedupe around focused agent tests
+- [ ] 124-04-PLAN.md — Route `RequestResponse` through runtime execution, enforce fail-closed lease expiry, and prove receipt lineage
 
 ### Phase 125: Configurable Policy Rules And Audit Trail
 **Goal**: Operators can tune response authorization per deployment by writing YAML rules without code changes; every policy verdict carries the matched rule name and reason in structured logs and receipt audit records
@@ -130,7 +131,7 @@ Plans:
 | 121. Network Connect Detector | v1.38 | 2/2 | Complete | 2026-04-08 |
 | 122. Cross-Strategy Pheromone Signals And Rollout Scoping | v1.38 | 2/2 | Complete | 2026-04-08 |
 | 123. Multi-Strategy Integration Proof | v1.38 | 1/1 | Complete | 2026-04-08 |
-| 124. PounceAgent Core And De-escalation | v1.39 | 0/TBD | Not started | - |
+| 124. PounceAgent Core And De-escalation | v1.39 | 0/4 | Not started | - |
 | 125. Configurable Policy Rules And Audit Trail | v1.39 | 0/TBD | Not started | - |
 | 126. TomAgent Governance | v1.39 | 0/TBD | Not started | - |
 | 127. Integration Hardening | v1.39 | 0/TBD | Not started | - |

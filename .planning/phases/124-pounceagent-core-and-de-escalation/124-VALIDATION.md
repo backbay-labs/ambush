@@ -38,14 +38,15 @@ created: 2026-04-08
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 124-v0-01 | TBD | 0 | POUNCE-01 | integration | `cargo test -p swarm-runtime --test pounceagent_integration pounceagent_emits_request_response_for_alert_and_incident -- --exact` | ❌ W0 | ⬜ pending |
-| 124-v0-02 | TBD | 0 | POUNCE-02 | integration | `cargo test -p swarm-runtime --test pounceagent_integration pounceagent_skips_scope_present_in_peer_findings -- --exact` | ❌ W0 | ⬜ pending |
-| 124-v0-03 | TBD | 0 | POUNCE-03 | unit/integration | `cargo test -p swarm-runtime --test pounceagent_integration response_playbook_selects_actions_by_threat_severity_and_confidence -- --exact` | ❌ W0 | ⬜ pending |
-| 124-v0-04 | TBD | 0 | POUNCE-04 | integration | `cargo test -p swarm-runtime --test dispatch_integration request_response_routes_through_authorize_and_execute -- --exact` | ✅ extend | ⬜ pending |
-| 124-v0-05 | TBD | 0 | POUNCE-05 | integration | `cargo test -p swarm-runtime --test dispatch_integration pounceagent_dry_run_routes_through_runtime_path -- --exact` | ✅ extend | ⬜ pending |
-| 124-v0-06 | TBD | 0 | POLICY-01 | integration | `cargo test -p swarm-runtime --test dispatch_integration expired_capability_lease_fails_closed_before_execution -- --exact` | ✅ extend | ⬜ pending |
-| 124-v0-07 | TBD | 0 | DEESC-01 | unit | `cargo test -p swarm-core mode_state_transition_down_clears_triggering_threat_class -- --exact` | ✅ extend | ⬜ pending |
-| 124-v0-08 | TBD | 0 | DEESC-02 | integration | `cargo test -p swarm-runtime --test escalation_integration concentration_monitor_deescalates_after_cooldown -- --exact` | ✅ extend | ⬜ pending |
+| 124-v0-01 | 124-03 | 2 | POUNCE-01 | integration | `cargo test -p swarm-runtime --test pounceagent_integration pounceagent_emits_request_response_for_alert_and_incident -- --exact` | ❌ W0 | ⬜ pending |
+| 124-v0-02 | 124-03 | 2 | POUNCE-02 | integration | `cargo test -p swarm-runtime --test pounceagent_integration pounceagent_skips_scope_present_in_peer_findings -- --exact` | ❌ W0 | ⬜ pending |
+| 124-v0-03 | 124-03 | 2 | POUNCE-03 | unit/integration | `cargo test -p swarm-runtime --test pounceagent_integration response_playbook_selects_actions_by_threat_severity_and_confidence -- --exact` | ❌ W0 | ⬜ pending |
+| 124-v0-04 | 124-04 | 3 | POUNCE-04 | integration | `cargo test -p swarm-runtime --test dispatch_integration request_response_routes_through_authorize_and_execute -- --exact` | ✅ extend | ⬜ pending |
+| 124-v0-05 | 124-04 | 3 | POUNCE-05 | integration | `cargo test -p swarm-runtime --test dispatch_integration pounceagent_dry_run_routes_through_runtime_path -- --exact` | ✅ extend | ⬜ pending |
+| 124-v0-06 | 124-04 | 3 | POLICY-01 | integration | `cargo test -p swarm-runtime --test dispatch_integration expired_capability_lease_fails_closed_before_execution -- --exact` | ✅ extend | ⬜ pending |
+| 124-v0-07 | 124-02 | 2 | DEESC-01 | unit | `cargo test -p swarm-core mode_state_transition_down_clears_triggering_threat_class -- --exact` | ✅ extend | ⬜ pending |
+| 124-v0-08 | 124-02 | 2 | DEESC-02 | integration | `cargo test -p swarm-runtime --test escalation_integration concentration_monitor_deescalates_after_cooldown -- --exact` | ✅ extend | ⬜ pending |
+| 124-v0-09 | 124-04 | 3 | POUNCE-04 | integration | `cargo test -p swarm-runtime --test dispatch_integration receipt_preserves_original_hunt_id_and_lineage_evidence -- --exact` | ✅ extend | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
