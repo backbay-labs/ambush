@@ -1818,4 +1818,195 @@ mod tests {
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_file(threat_intel_path);
     }
+
+    // --- Deposit, query, concentration, GC, and escalation tests ---
+
+    #[tokio::test]
+    async fn deposit_round_trip_preserves_all_fields() {
+        let substrate = in_memory();
+        let key = test_signing_key();
+        let mut deposit = PheromoneDeposit {
+            indicator: serde_json::json!({"cmd": "whoami"}),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.95,
+            timestamp: 500,
+            decay_half_life: 3600.0,
+            agent_id: AgentId("rt-agent".to_string()),
+            signature: Vec::new(),
+            agent_key: Vec::new(),
+        };
+        sign_deposit(&mut deposit, &key);
+        substrate.deposit(deposit).await.unwrap();
+
+        let deposits = substrate.recent_deposits(1).await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        let d = &deposits[0];
+        assert_eq!(d.indicator, serde_json::json!({"cmd": "whoami"}));
+        assert_eq!(d.threat_class, ThreatClass::Execution);
+        assert_eq!(d.severity, Severity::High);
+        assert!((d.confidence - 0.95).abs() < f64::EPSILON);
+        assert_eq!(d.timestamp, 500);
+        assert!((d.decay_half_life - 3600.0).abs() < f64::EPSILON);
+        assert!(!d.signature.is_empty());
+        assert!(!d.agent_key.is_empty());
+    }
+
+    #[tokio::test]
+    async fn concentration_decays_with_half_life() {
+        let substrate = in_memory();
+        let mut deposit = sample_deposit("decay-agent", 0, 1.0);
+        deposit.decay_half_life = 3600.0;
+        let key = test_signing_key();
+        sign_deposit(&mut deposit, &key);
+        substrate.deposit(deposit).await.unwrap();
+
+        let c0 = substrate
+            .query_concentration(&ThreatClass::Execution, 0)
+            .await
+            .unwrap();
+        assert!((c0.total_strength - 1.0).abs() < 0.01);
+
+        let c1 = substrate
+            .query_concentration(&ThreatClass::Execution, 3600)
+            .await
+            .unwrap();
+        assert!(
+            (c1.total_strength - 0.5).abs() < 0.01,
+            "expected ~0.5 at one half-life, got {}",
+            c1.total_strength
+        );
+
+        let c2 = substrate
+            .query_concentration(&ThreatClass::Execution, 7200)
+            .await
+            .unwrap();
+        assert!(
+            (c2.total_strength - 0.25).abs() < 0.01,
+            "expected ~0.25 at two half-lives, got {}",
+            c2.total_strength
+        );
+    }
+
+    #[tokio::test]
+    async fn gc_evaporated_preserves_fresh_deposits() {
+        let substrate = in_memory();
+        substrate
+            .deposit(sample_deposit("old-agent", 0, 0.001))
+            .await
+            .unwrap();
+        substrate
+            .deposit(sample_deposit("fresh-agent", 99_000, 0.9))
+            .await
+            .unwrap();
+
+        let removed = substrate.gc_evaporated(100_000).await.unwrap();
+        assert_eq!(removed, 1);
+
+        let remaining = substrate.recent_deposits(10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].timestamp, 99_000);
+    }
+
+    #[tokio::test]
+    async fn query_deposits_no_filters_returns_all() {
+        let substrate = in_memory();
+        substrate
+            .deposit(sample_deposit("agent-1", 100, 0.9))
+            .await
+            .unwrap();
+        substrate
+            .deposit(sample_deposit("agent-2", 200, 0.8))
+            .await
+            .unwrap();
+        substrate
+            .deposit(sample_deposit("agent-3", 300, 0.7))
+            .await
+            .unwrap();
+
+        let deposits = substrate
+            .query_deposits(DepositQuery {
+                threat_class: None,
+                since_timestamp: None,
+                limit: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(deposits.len(), 3);
+        assert_eq!(deposits[0].timestamp, 300);
+        assert_eq!(deposits[1].timestamp, 200);
+        assert_eq!(deposits[2].timestamp, 100);
+    }
+
+    #[tokio::test]
+    async fn empty_substrate_returns_zero_concentration() {
+        let substrate = in_memory();
+        let c = substrate
+            .query_concentration(&ThreatClass::Execution, 100)
+            .await
+            .unwrap();
+        assert!((c.total_strength - 0.0).abs() < f64::EPSILON);
+        assert_eq!(c.distinct_sources, 0);
+        assert!((c.peak_confidence - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn query_escalations_empty_returns_empty_vec() {
+        let substrate = in_memory();
+        let escalations = substrate.query_escalations(0).await.unwrap();
+        assert!(escalations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn escalation_records_full_lifecycle() {
+        let substrate = in_memory();
+        substrate
+            .record_escalation(sample_escalation(SwarmMode::Normal, 100))
+            .await
+            .unwrap();
+        substrate
+            .record_escalation(sample_escalation(SwarmMode::Alert, 200))
+            .await
+            .unwrap();
+        substrate
+            .record_escalation(sample_escalation(SwarmMode::Incident, 300))
+            .await
+            .unwrap();
+
+        let all = substrate.query_escalations(0).await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].mode, SwarmMode::Normal);
+        assert_eq!(all[1].mode, SwarmMode::Alert);
+        assert_eq!(all[2].mode, SwarmMode::Incident);
+
+        let since_150 = substrate.query_escalations(150).await.unwrap();
+        assert_eq!(since_150.len(), 2);
+        assert_eq!(since_150[0].mode, SwarmMode::Alert);
+        assert_eq!(since_150[1].mode, SwarmMode::Incident);
+
+        let since_400 = substrate.query_escalations(400).await.unwrap();
+        assert!(since_400.is_empty());
+    }
+
+    #[tokio::test]
+    async fn health_reports_deposit_count() {
+        let substrate = in_memory();
+
+        let h0 = substrate.health().await.unwrap();
+        assert_eq!(h0.deposit_count, 0);
+        assert_eq!(h0.backend, "in_memory");
+        assert!(h0.ready);
+
+        substrate
+            .deposit(sample_deposit("h-agent-1", 100, 0.9))
+            .await
+            .unwrap();
+        substrate
+            .deposit(sample_deposit("h-agent-2", 200, 0.8))
+            .await
+            .unwrap();
+
+        let h2 = substrate.health().await.unwrap();
+        assert_eq!(h2.deposit_count, 2);
+    }
 }
