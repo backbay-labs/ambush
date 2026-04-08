@@ -9,8 +9,9 @@
 ## Active Milestone
 
 ### v1.40 Killer Demo And Providence Integration
+**Executable phases:** 128-131
 **Requirements:** DEMO-01-05, PROV-01-03
-**Status:** Active on 2026-04-08; requirements and roadmap are being finalized
+**Status:** Active on 2026-04-08; Phase 128 is next
 
 ## Queued Milestones
 

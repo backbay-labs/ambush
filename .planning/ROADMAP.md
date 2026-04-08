@@ -31,8 +31,63 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 ## Active Milestone
 
-No active milestone. `v1.39 PounceAgent And Policy Gate Hardening` shipped on 2026-04-08 and is archived in `.planning/milestones/v1.39-ROADMAP.md`.
-Start `v1.40 Killer Demo And Providence Integration` with `$gsd-new-milestone`.
+### v1.40 Killer Demo And Providence Integration
+
+**Goal:** Turn the shipped runtime into a compelling live demo surface with replay injection, streamed swarm visibility, approval-in-the-loop response, signed proof export, and Providence delivery.
+**Executable phases:** 128-131
+
+- [ ] **Phase 128: Demo Replay Injector And Event Stream Backbone** - Add the demo replay entrypoint and typed SSE stream so the running swarm can be driven and observed from one operator-facing lane.
+- [ ] **Phase 129: Live Demo Dashboard And Runtime Timeline** - Build the real-time workbench view for mode, agent health, pheromone pressure, and escalation timeline updates.
+- [ ] **Phase 130: Approval-In-The-Loop Demo And Signed Proof Export** - Turn `RequireHuman` response flow and signed proof packaging into a coherent demo path.
+- [ ] **Phase 131: Providence Webhook Delivery And Drilldown Context** - Deliver enriched Swarm findings to Providence with runtime context and stable drilldown links.
+
+### Phase 128: Demo Replay Injector And Event Stream Backbone
+
+**Goal:** Add the operator-facing replay injector and streamed event backbone needed to drive a live demo against the real runtime.
+**Requirements:** DEMO-01, DEMO-02
+**Depends on:** None
+**Status:** Planned
+**Plans:** 0
+**Success Criteria**:
+1. `POST /v1/demo/replay` is gated behind `demo_mode`, accepts a scenario YAML path plus replay pacing, and injects events into the running telemetry lane instead of a mock side channel.
+2. Replay injection produces real swarm activity across detection, investigation, correlation, escalation, and response surfaces.
+3. `GET /v1/events/stream` emits typed Server-Sent Events for agent actions with event-type filtering so downstream demo surfaces can subscribe selectively.
+
+### Phase 129: Live Demo Dashboard And Runtime Timeline
+
+**Goal:** Expose the live runtime state as a purpose-built demo dashboard on top of the streamed event backbone.
+**Requirements:** DEMO-03
+**Depends on:** Phase 128
+**Status:** Planned
+**Plans:** 0
+**Success Criteria**:
+1. The review workbench renders a live dashboard backed by the event stream rather than polling raw storage or logs.
+2. The dashboard shows current `SwarmMode`, per-agent health, and per-`ThreatClass` pheromone concentrations in one operator-facing view.
+3. The dashboard maintains a scrolling escalation timeline derived from streamed runtime events.
+
+### Phase 130: Approval-In-The-Loop Demo And Signed Proof Export
+
+**Goal:** Make the human-gated response path demoable end to end and exportable as one signed evidence package.
+**Requirements:** DEMO-04, DEMO-05
+**Depends on:** Phase 128
+**Status:** Planned
+**Plans:** 0
+**Success Criteria**:
+1. Demo execution pauses cleanly on `RequireHuman` policy verdicts and persists a resumable approval target instead of executing immediately.
+2. The operator approval-set vote endpoint can approve the paused action and resume execution with signed receipt evidence for the approval chain.
+3. `GET /v1/demo/proof` exports a JSON proof package containing signed receipts, Merkle proofs, the final `CorrelatedIncident`, and the full decision timeline for the demo run.
+
+### Phase 131: Providence Webhook Delivery And Drilldown Context
+
+**Goal:** Push Swarm findings into Providence with enough runtime and drilldown context to support an external live-demo story.
+**Requirements:** PROV-01, PROV-02, PROV-03
+**Depends on:** Phase 128
+**Status:** Planned
+**Plans:** 0
+**Success Criteria**:
+1. A `providence_webhook` notification channel delivers `SwarmFindingEnvelope` payloads to Providence with threat class and severity mapped into Providence incident fields.
+2. Providence payloads include stable links back to Swarm finding drilldown, replay-bundle access, and audit-trail inspection surfaces.
+3. Providence payloads include current `SwarmMode`, active agent count, and bridge health summary for runtime status display.
 
 <details>
 <summary>Shipped: v1.39 PounceAgent And Policy Gate Hardening (Phases 124-127)</summary>
@@ -52,7 +107,6 @@ Start `v1.40 Killer Demo And Providence Integration` with `$gsd-new-milestone`.
 
 ### Tier 2: Product Visibility
 
-- `v1.40 Killer Demo And Providence Integration` -- Scenario replay injector, SSE event stream, Providence live feed, approval-in-the-loop demo, signed proof export (8 requirements: DEMO-01-05, PROV-01-03)
 - `v1.41 Platform APIs And Deployment Experience` -- Versioned platform API, Helm chart, config validation CLI, guided setup wizard (8 requirements: API-01-04, HELM-01-02, CLI-01-02)
 
 ### Tier 3: Detection Breadth (v1.42+)
@@ -65,6 +119,8 @@ Start `v1.40 Killer Demo And Providence Integration` with `$gsd-new-milestone`.
 **v1.38 execution order:** 120 -> 121 || 122 -> 123
 
 **v1.39 execution order:** 124 -> 125 -> 126 -> 127
+
+**v1.40 execution order:** 128 -> 129 -> 130 -> 131
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -84,8 +140,12 @@ Start `v1.40 Killer Demo And Providence Integration` with `$gsd-new-milestone`.
 | 125. Configurable Policy Rules And Audit Trail | v1.39 | 4/4 | Complete | 2026-04-08 |
 | 126. TomAgent Governance | v1.39 | 4/4 | Complete | 2026-04-08 |
 | 127. Integration Hardening | v1.39 | 2/2 | Complete | 2026-04-08 |
+| 128. Demo Replay Injector And Event Stream Backbone | v1.40 | 0/0 | Planned | — |
+| 129. Live Demo Dashboard And Runtime Timeline | v1.40 | 0/0 | Planned | — |
+| 130. Approval-In-The-Loop Demo And Signed Proof Export | v1.40 | 0/0 | Planned | — |
+| 131. Providence Webhook Delivery And Drilldown Context | v1.40 | 0/0 | Planned | — |
 
 ---
 *Last shipped milestone: v1.39 PounceAgent And Policy Gate Hardening on 2026-04-08*
-*Active milestone: none*
-*Last updated: 2026-04-08 after v1.39 archival*
+*Active milestone: v1.40 Killer Demo And Providence Integration*
+*Last updated: 2026-04-08 after activating v1.40*

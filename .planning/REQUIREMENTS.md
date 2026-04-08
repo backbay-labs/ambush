@@ -308,14 +308,14 @@
 | DEESC-02 | Phase 124 | Complete |
 | TOM-01 | Phase 126 | Complete |
 | TOM-02 | Phase 126 | Complete |
-| DEMO-01 | Active milestone v1.40 | Pending |
-| DEMO-02 | Active milestone v1.40 | Pending |
-| DEMO-03 | Active milestone v1.40 | Pending |
-| DEMO-04 | Active milestone v1.40 | Pending |
-| DEMO-05 | Active milestone v1.40 | Pending |
-| PROV-01 | Active milestone v1.40 | Pending |
-| PROV-02 | Active milestone v1.40 | Pending |
-| PROV-03 | Active milestone v1.40 | Pending |
+| DEMO-01 | Phase 128 | Pending |
+| DEMO-02 | Phase 128 | Pending |
+| DEMO-03 | Phase 129 | Pending |
+| DEMO-04 | Phase 130 | Pending |
+| DEMO-05 | Phase 130 | Pending |
+| PROV-01 | Phase 131 | Pending |
+| PROV-02 | Phase 131 | Pending |
+| PROV-03 | Phase 131 | Pending |
 | API-01 | Queued milestone v1.41 | Queued |
 | API-02 | Queued milestone v1.41 | Queued |
 | API-03 | Queued milestone v1.41 | Queued |
@@ -340,11 +340,11 @@
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
 - v1.38 complete: 10 satisfied (COMPOSE-01-05 -> Phases 120,122; NETWORK-01-05 -> Phases 121,123)
 - v1.39 complete: 13 satisfied (POUNCE-01-05 -> Phase 124; POLICY-01 -> Phase 124; POLICY-02-04 -> Phase 125; DEESC-01-02 -> Phase 124; TOM-01-02 -> Phase 126)
-- v1.40 active: 8 pending roadmap mapping (DEMO-01-05, PROV-01-03)
+- v1.40 active: 8 mapped to phases 128-131 (DEMO-01-02 -> Phase 128; DEMO-03 -> Phase 129; DEMO-04-05 -> Phase 130; PROV-01-03 -> Phase 131)
 - v1.41 queued: 8 (API-01-04, HELM-01-02, CLI-01-02)
 - v1.42+ future: 11 (FILELESS-01-06, EVASION-01-05)
 - Total queued: 19 (v1.41-v1.43)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-08 after activating v1.40 requirements*
+*Last updated: 2026-04-08 after creating the v1.40 roadmap*
