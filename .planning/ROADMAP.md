@@ -25,7 +25,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 ## Phases
 
-- [ ] **Phase 120: Composite Detector And Config Migration** - CompositeDetector replaces single-variant SupportedDetector dispatch; config gains multi-strategy selection with per-strategy profile overrides
+- [x] **Phase 120: Composite Detector And Config Migration** - CompositeDetector replaces single-variant SupportedDetector dispatch; config gains multi-strategy selection with per-strategy profile overrides (completed 2026-04-08)
 - [ ] **Phase 121: Network Connect Detector** - NetworkConnectDetector detects C2 beaconing, anomalous ports, and threat-intel IP matches from NetworkConnect telemetry
 - [ ] **Phase 122: Cross-Strategy Pheromone Signals And Rollout Scoping** - Deposits carry strategy-specific identity for distinct-source escalation, WeaverAgent weights cross-strategy correlation higher, and canary/promotion scope to individual strategies
 - [ ] **Phase 123: Multi-Strategy Integration Proof** - NetworkConnect findings produce CommandAndControl deposits, and a 3+ strategy composite triggers escalation via distinct_sources
@@ -41,10 +41,10 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
   2. `DetectionConfig.strategies` (a `Vec<String>`) takes precedence over the legacy `strategy` scalar when present; both parse paths remain valid
   3. Per-strategy profile overrides in `DetectorProfilesConfig` are resolved correctly when multiple strategies are active simultaneously
   4. Existing single-strategy configs continue to work without modification (backward compatibility)
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [x] 120-01-PLAN.md -- CompositeDetector type, DetectionConfig migration, and detector factory
-- [ ] 120-02-PLAN.md -- Runtime integration (IngestState, WhiskerAgent), SupportedDetector removal, and integration tests
+- [x] 120-02-PLAN.md -- Runtime integration (IngestState, WhiskerAgent), SupportedDetector removal, and integration tests
 
 ### Phase 121: Network Connect Detector
 **Goal**: NetworkConnect telemetry events are evaluated for C2 beaconing patterns, anomalous port usage, and threat-intel IP matches through a dedicated detector with a validated profile
@@ -113,7 +113,7 @@ Plans:
 | 117. Substrate Durability And Bridge Resilience | v1.37.1 | 2/2 | Complete | 2026-04-08 |
 | 118. Operational Hardening | v1.37.1 | 3/3 | Complete | 2026-04-07 |
 | 119. Pheromone Test Suite | v1.37.1 | 1/1 | Complete | 2026-04-08 |
-| 120. Composite Detector And Config Migration | v1.38 | 1/2 | In Progress | - |
+| 120. Composite Detector And Config Migration | 2/2 | Complete   | 2026-04-08 | - |
 | 121. Network Connect Detector | v1.38 | 0/? | Not started | - |
 | 122. Cross-Strategy Pheromone Signals And Rollout Scoping | v1.38 | 0/? | Not started | - |
 | 123. Multi-Strategy Integration Proof | v1.38 | 0/? | Not started | - |
@@ -121,4 +121,4 @@ Plans:
 ---
 *Last shipped milestone: v1.37.1 Runtime Hardening And Audit Debt on 2026-04-08*
 *Active milestone: v1.38 Multi-Detector Composition And Network Detection*
-*Last updated: 2026-04-08 after Phase 120 Plan 01 execution*
+*Last updated: 2026-04-08 after Phase 120 Plan 02 execution*

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.38
 milestone_name: Multi-Detector Composition And Network Detection
 status: active
-last_updated: "2026-04-08T01:36:04Z"
-last_activity: 2026-04-08 -- Completed Phase 120 Plan 01 (composite detector foundation and config migration)
+last_updated: "2026-04-08T01:46:07.938Z"
+last_activity: 2026-04-08 -- Completed Phase 120 Plan 02 (runtime composite detector migration and integration coverage)
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # State
@@ -24,30 +24,30 @@ See: `.planning/PROJECT.md` (updated 2026-04-08)
 
 ## Current Position
 
-Phase: 120 of 123 (Composite Detector And Config Migration)
-Plan: 02 of 02
-Status: Ready to execute Phase 120 Plan 02
-Last activity: 2026-04-08 -- Completed Plan 01 with composite detector construction and config migration
+Phase: 121 of 123 (Network Connect Detector)
+Plan: TBD
+Status: Phase 120 complete; Phase 121 ready to plan or execute
+Last activity: 2026-04-08 -- Completed Phase 120 Plan 02 with runtime composite detector migration and integration coverage
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## Memory
 
 - `v1.37.1` shipped signed deposits, tick timeout, threat-intel GC, bridge resilience, secret hot-rotation, dead-letter rotation, and pheromone test suite.
 - v1.38 has 10 requirements across 4 phases: composition foundation (120), network detector (121), cross-strategy signals (122), integration proof (123).
 - Phase 121 and 122 can execute in parallel after 120 completes. Phase 123 depends on both 121 and 122.
-- Currently `SupportedDetector` in control.rs dispatches a single strategy. CompositeDetector will hold Vec<Box<dyn DetectionStrategy>>.
 - `DetectionConfig.active_strategies()` now prefers `strategies` and falls back to legacy `strategy` for backward compatibility.
-- `DefaultControlPlane` now builds `CompositeDetector`; legacy `SupportedDetector` remains available for runtime callers not yet migrated.
+- Runtime ingest, CLI, replay, and whisker paths now all construct detectors through `build_composite_detector()`.
+- `IngestState` status now reports joined active strategy names so reload/readiness surfaces reflect multi-strategy configs accurately.
 - `TelemetryPayload::NetworkConnect` exists but zero detectors evaluate it -- C2 beaconing is completely blind.
 - `ThreatClass::CommandAndControl` exists in the enum but nothing emits it.
 - `PheromoneConcentration.distinct_sources` already counts unique agent_ids -- cross-strategy deposits need distinct agent_id per strategy.
 
 ## Issues
 
-- `cargo clippy --workspace -- -D warnings` passed after Plan 01.
-- `cargo test --workspace` still reports unrelated high-level runtime failures in `evolution`, `portfolio`, and `selection` tied to `office_baseline_control` verification state; detector/config task work was committed with that verification gap documented in the summary.
+- `cargo clippy --workspace -- -D warnings` passed after Plan 02.
+- `cargo test --workspace` still reports an unrelated high-level runtime failure in `evolution::tests::evolution_handoff_persists_pending_launch_packet`, which remains outside the detector migration scope.
 
 ## Next Command
 
-`/gsd:execute-phase 120`
+`/gsd:execute-phase 121`
