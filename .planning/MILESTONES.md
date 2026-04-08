@@ -8,13 +8,15 @@
 
 ## Active Milestone
 
-No active milestone.
+### v1.38 Multi-Detector Composition And Network Detection
+**Executable phases:** 120-123
+**Goal:** Run all detector strategies simultaneously per event via CompositeDetector, add NetworkConnectDetector for C2 beaconing and threat-intel IP matching, and enable cross-strategy pheromone escalation so the swarm metaphor actually works.
+**Requirements:** COMPOSE-01-05, NETWORK-01-05 (10)
 
 ## Queued Milestones
 
 | Milestone | Name | Requirements | Tier |
 |-----------|------|--------------|------|
-| v1.38 | Multi-Detector Composition And Network Detection | COMPOSE-01–05, NETWORK-01–05 (10) | Core Value Delivery |
 | v1.39 | PounceAgent And Policy Gate Hardening | POUNCE-01–04, POLICY-01–03, DEESC-01–02, TOM-01 (10) | Core Value Delivery |
 | v1.40 | Killer Demo And Providence Integration | DEMO-01–05, PROV-01–03 (8) | Product Visibility |
 | v1.41 | Platform APIs And Deployment Experience | API-01–04, HELM-01–02, CLI-01–02 (8) | Product Visibility |

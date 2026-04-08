@@ -282,16 +282,16 @@
 | HARDEN-08 | Phase 118, Plan 01 | Complete |
 | HARDEN-09 | Phase 118, Plan 02 | Complete |
 | HARDEN-10 | Phase 119, Plan 01 | Complete |
-| COMPOSE-01 | Queued milestone v1.38 | Queued |
-| COMPOSE-02 | Queued milestone v1.38 | Queued |
-| COMPOSE-03 | Queued milestone v1.38 | Queued |
-| COMPOSE-04 | Queued milestone v1.38 | Queued |
-| COMPOSE-05 | Queued milestone v1.38 | Queued |
-| NETWORK-01 | Queued milestone v1.38 | Queued |
-| NETWORK-02 | Queued milestone v1.38 | Queued |
-| NETWORK-03 | Queued milestone v1.38 | Queued |
-| NETWORK-04 | Queued milestone v1.38 | Queued |
-| NETWORK-05 | Queued milestone v1.38 | Queued |
+| COMPOSE-01 | Phase 120 | Pending |
+| COMPOSE-02 | Phase 120 | Pending |
+| COMPOSE-03 | Phase 122 | Pending |
+| COMPOSE-04 | Phase 122 | Pending |
+| COMPOSE-05 | Phase 122 | Pending |
+| NETWORK-01 | Phase 121 | Pending |
+| NETWORK-02 | Phase 121 | Pending |
+| NETWORK-03 | Phase 121 | Pending |
+| NETWORK-04 | Phase 123 | Pending |
+| NETWORK-05 | Phase 123 | Pending |
 | POUNCE-01 | Queued milestone v1.39 | Queued |
 | POUNCE-02 | Queued milestone v1.39 | Queued |
 | POUNCE-03 | Queued milestone v1.39 | Queued |
@@ -331,14 +331,14 @@
 | EVASION-05 | Queued future v1.42+ | Queued |
 
 **Coverage:**
-- v1.30–v1.37.1: 56 requirements satisfied across 10 milestones
-- v1.38 queued: 10 (COMPOSE-01–05, NETWORK-01–05)
-- v1.39 queued: 10 (POUNCE-01–04, POLICY-01–03, DEESC-01–02, TOM-01)
-- v1.40 queued: 8 (DEMO-01–05, PROV-01–03)
-- v1.41 queued: 8 (API-01–04, HELM-01–02, CLI-01–02)
-- v1.42+ future: 11 (FILELESS-01–06, EVASION-01–05)
-- Total queued: 47
+- v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
+- v1.38 active: 10 (COMPOSE-01-05 -> Phases 120,122; NETWORK-01-05 -> Phases 121,122,123)
+- v1.39 queued: 10 (POUNCE-01-04, POLICY-01-03, DEESC-01-02, TOM-01)
+- v1.40 queued: 8 (DEMO-01-05, PROV-01-03)
+- v1.41 queued: 8 (API-01-04, HELM-01-02, CLI-01-02)
+- v1.42+ future: 11 (FILELESS-01-06, EVASION-01-05)
+- Total queued: 37 (v1.39-v1.43)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-08 after v1.38-v1.41 milestone definition (post-v1.37.1 brainstorm)*
+*Last updated: 2026-04-08 after v1.38 roadmap creation (phases 120-123)*
