@@ -8,29 +8,25 @@ Swarm Team Six is a Rust-first threat detection and controlled live-response run
 
 Detect real threats quickly enough to take safe action before the window to respond closes.
 
-## Current Milestone: v1.39 PounceAgent And Policy Gate Hardening
+## Milestone Status
 
-**Goal:** Close the detect-to-respond loop with an autonomous PounceAgent that consumes escalation pheromones and executes safe response actions through the existing guard-gated adapter pipeline, while hardening policy leases, adding mode de-escalation, and introducing TomAgent for governance oversight.
+`v1.39 PounceAgent And Policy Gate Hardening` shipped on 2026-04-08.
 
-**Target features:**
-- PounceAgent consumes escalation pheromones and triggers response actions through the guard pipeline
-- PounceAgent respects policy verdicts, scoped leases, and runtime mode before acting
-- PounceAgent produces auditable response receipts linked to detection lineage
-- PounceAgent dry-run mode for operators to preview response behavior without execution
-- Policy lease expiration enforcement with fail-closed semantics
-- Configurable policy rules beyond the current hardcoded verdicts
-- Policy audit trail for verdict explanations
-- Mode de-escalation from Incident/Alert back to Normal when pheromone pressure drops
-- De-escalation cooldown to prevent rapid mode flapping
-- TomAgent governance oversight with veto authority over PounceAgent actions
+**Latest milestone outcomes:**
+- PounceAgent now routes autonomous responses through the canonical policy, guard, and executor path with dry-run parity and lineage-bearing receipts.
+- Policy is now repo-owned and fail-closed, with configurable YAML rules, scoped rate limiting, and durable verdict attribution.
+- TomAgent now provides synchronous governance veto over destructive autonomous actions, with receipt-bearing audit artifacts.
+- Routed integration coverage now proves the v1.39 correctness pitfalls end to end, and the settled tree is green under full workspace tests and warnings-as-errors lint.
 
-**Queued after this:**
+**Next queued milestone:**
 - `v1.40 Killer Demo And Providence Integration`
+
+**Queued after that:**
 - `v1.41 Platform APIs And Deployment Experience`
 
 ## Current State
 
-`v1.38 Multi-Detector Composition And Network Detection` shipped on 2026-04-08. The runtime now runs all configured detector strategies simultaneously per event via CompositeDetector, detects C2 beaconing through NetworkConnectDetector with threat-intel IP enrichment, and enables cross-strategy pheromone escalation through distinct-source deposit identity.
+`v1.39 PounceAgent And Policy Gate Hardening` shipped on 2026-04-08. The runtime now closes the detect-to-respond loop with an autonomous PounceAgent, repo-owned fail-closed policy control, cooldown-driven de-escalation, and synchronous TomAgent governance veto over destructive autonomous actions.
 
 **What v1.37.1 hardened:**
 - Pheromone deposits are now Ed25519-signed by agents and validated by the substrate on all backends
@@ -79,7 +75,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.36 SIEM/SOAR Forward And Alert Routing` is complete.
 - `v1.37 Persistence And Supply Chain Detection` is complete.
 - `v1.38 Multi-Detector Composition And Network Detection` is complete.
-- `v1.39 PounceAgent And Policy Gate Hardening` is active.
+- `v1.39 PounceAgent And Policy Gate Hardening` is complete.
 - Phase 104 added bounded drain control, PreStop coordination, and `/startupz` startup-probe semantics for serve mode.
 - Phase 105 added schema-aware config migration and `@secret:` resolution for live response adapters with secret-directory reload.
 - Phase 106 added live heap metrics and readiness shedding before the runtime reaches an OOM boundary.
@@ -271,4 +267,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-08 after activating v1.39*
+*Last updated: 2026-04-08 after completing v1.39*

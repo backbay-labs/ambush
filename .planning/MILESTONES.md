@@ -2,16 +2,14 @@
 
 ## Latest Completed Milestone
 
-### v1.38 Multi-Detector Composition And Network Detection
-**Executable phases:** 120-123
+### v1.39 PounceAgent And Policy Gate Hardening
+**Executable phases:** 124-127
 **Shipped:** 2026-04-08
 
 ## Active Milestone
 
-### v1.39 PounceAgent And Policy Gate Hardening
-**Executable phases:** 124-127
-**Goal:** Close the detect-to-respond loop with an autonomous PounceAgent that consumes escalation pheromones and executes safe response actions through the existing guard-gated adapter pipeline, while hardening policy leases, adding mode de-escalation, and introducing TomAgent for governance oversight.
-**Requirements:** POUNCE-01-05, POLICY-01-04, DEESC-01-02, TOM-01-02 (13)
+None. `v1.39 PounceAgent And Policy Gate Hardening` shipped on 2026-04-08.
+The next queued milestone is `v1.40 Killer Demo And Providence Integration`.
 
 ## Queued Milestones
 
@@ -23,6 +21,19 @@
 | v1.43 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
 
 ## History
+
+## v1.39 PounceAgent And Policy Gate Hardening (Shipped: 2026-04-08)
+
+**Phases completed:** 4 phases, 15 plans, 0 tasks
+
+**Key accomplishments:**
+- PounceAgent now consumes escalation pheromones and routes autonomous responses through the canonical policy, guard, and executor path with dry-run parity.
+- Policy control is now repo-owned and fail-closed, with configurable YAML rules, static same-scope burst limiting, and durable rule attribution in logs, audit trails, and receipts.
+- TomAgent now provides synchronous governance veto over destructive autonomous actions, and vetoes persist receipt-bearing failure artifacts without touching the executor.
+- Routed integration coverage now pins the v1.39 correctness pitfalls: no double-trigger, fail-closed empty rules, auditable lease expiry, cooldown-gated re-trigger resistance, dry-run parity, and audit lineage.
+- The settled v1.39 tree passes `cargo test --workspace` and `cargo clippy --workspace -- -D warnings`.
+
+---
 
 ## v1.37.1 Runtime Hardening And Audit Debt (Shipped: 2026-04-08)
 
