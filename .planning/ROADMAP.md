@@ -35,9 +35,9 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 ## Phases
 
-- [ ] **Phase 124: PounceAgent Core And De-escalation** - PounceAgent implements SwarmAgent with guard-gated autonomous response, dry-run mode, and de-escalation closes the response loop; lease expiration enforcement fails closed before any adapter call
-- [ ] **Phase 125: Configurable Policy Rules And Audit Trail** - ConfigurableApprovalGate loads YAML rules with per-threat-class and per-severity allow/deny logic, rate limiting, and verdict reason in every structured log and receipt
-- [ ] **Phase 126: TomAgent Governance** - TomAgent monitors agent health and provides synchronous pre-execution veto over destructive PounceAgent actions via shared GovernancePolicy with auditable veto receipts
+- [x] **Phase 124: PounceAgent Core And De-escalation** - PounceAgent implements SwarmAgent with guard-gated autonomous response, dry-run mode, and de-escalation closes the response loop; lease expiration enforcement fails closed before any adapter call (completed 2026-04-08)
+- [x] **Phase 125: Configurable Policy Rules And Audit Trail** - ConfigurableApprovalGate loads YAML rules with per-threat-class and per-severity allow/deny logic, rate limiting, and verdict reason in every structured log and receipt
+- [ ] **Phase 126: TomAgent Governance** - TomAgent monitors agent health and provides synchronous pre-execution veto over destructive PounceAgent actions via shared GovernancePolicy with auditable veto receipts; implementation landed on 2026-04-08, package-wide verification is currently blocked by unrelated evolution/drafting fixture regressions
 - [ ] **Phase 127: Integration Hardening** - End-to-end integration tests prove all seven correctness pitfalls are guarded: no double-trigger, synchronous veto, fail-closed policy, TOCTOU-safe lease check, flap-resistant de-escalation, dry-run parity, and audit lineage
 
 ## Phase Details
@@ -55,11 +55,11 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Plans**: 5 plans
 
 Plans:
-- [ ] 124-01-PLAN.md — Add Phase 124 config/playbook seams, shared scope helper, and repository-ruleset load proof
-- [ ] 124-02-PLAN.md — Implement explicit downward transitions and cooldown-gated de-escalation
-- [ ] 124-03-PLAN.md — Build PounceAgent emission, playbook selection, and same-tick dedupe around focused agent tests
-- [ ] 124-04-PLAN.md — Route `RequestResponse` through runtime execution, enforce fail-closed lease expiry, and prove receipt lineage
-- [ ] 124-05-PLAN.md — Normalize owned `swarm-runtime` config literals to the expanded `PheromoneConfig` shape
+- [x] 124-01-PLAN.md — Add Phase 124 config/playbook seams, shared scope helper, and repository-ruleset load proof
+- [x] 124-02-PLAN.md — Implement explicit downward transitions and cooldown-gated de-escalation
+- [x] 124-03-PLAN.md — Build PounceAgent emission, playbook selection, and same-tick dedupe around focused agent tests
+- [x] 124-04-PLAN.md — Route `RequestResponse` through runtime execution, enforce fail-closed lease expiry, and prove receipt lineage
+- [x] 124-05-PLAN.md — Normalize owned `swarm-runtime` config literals to the expanded `PheromoneConfig` shape
 
 ### Phase 125: Configurable Policy Rules And Audit Trail
 **Goal**: Operators can tune response authorization per deployment by writing YAML rules without code changes; every policy verdict carries the matched rule name and reason in structured logs and receipt audit records
@@ -70,7 +70,11 @@ Plans:
   2. `ConfigurableApprovalGate` loads YAML rules specifying action allow/deny by threat class, severity thresholds, time-of-day restrictions, and per-agent rate limits; an empty or parse-error ruleset defaults to deny, not allow
   3. Every policy verdict (allow or deny) records the matched rule name and verdict reason in structured logs and in the `ResponseReceipt` audit field
   4. `ConfigurableApprovalGate` falls through to `StaticApprovalGate` when no YAML rule matches, preserving invariant enforcement as the last line of defense
-**Plans**: TBD
+Plans:
+- [x] 125-01-PLAN.md — Extend the repository policy config contract and validate ordered YAML rules
+- [x] 125-02-PLAN.md — Add static per-scope rate limiting and stable fallback rule attribution
+- [x] 125-03-PLAN.md — Implement `ConfigurableApprovalGate` and wire configured runtime builders to it
+- [x] 125-04-PLAN.md — Persist policy rule attribution into runtime logs, audit trails, and response receipts
 
 ### Phase 126: TomAgent Governance
 **Goal**: TomAgent monitors the health of all registered agents and provides synchronous pre-execution veto authority over destructive PounceAgent actions, with every vetoed action producing an auditable veto receipt
@@ -80,7 +84,13 @@ Plans:
   1. TomAgent implements `SwarmAgent` with `AgentRole::Tom`, monitors agent health summaries each tick, emits `RoleShift` for degraded agents, and emits `HealthReport { status: Failed }` for agents that remain degraded beyond a configurable tick threshold
   2. TomAgent's `GovernancePolicy::can_act()` is evaluated synchronously inside PounceAgent's tick, before `authorize_and_execute()` is called, so a veto always prevents execution rather than annotating it after the fact
   3. Vetoed actions produce durable veto receipts carrying the rejected action type, the veto reason, and the governing agent ID, queryable from the operator surface
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [x] 126-01-PLAN.md — Widen core contracts for agent-health summaries, targeted lifecycle actions, and governance-veto intent
+- [x] 126-02-PLAN.md — Implement `TomAgent`, targeted dispatcher lifecycle handling, and serve-mode registration
+- [x] 126-03-PLAN.md — Add shared `GovernancePolicy` and synchronous destructive-action veto inside `PounceAgent::tick()`
+- [x] 126-04-PLAN.md — Route governance vetoes into synthetic audited receipts without executor calls
 
 ### Phase 127: Integration Hardening
 **Goal**: The full autonomous response pipeline from escalation through governance to execution is proven correct against all seven identified pitfalls via deterministic integration tests that cover the complete Phases 124-126 pipeline
@@ -132,12 +142,12 @@ Plans:
 | 121. Network Connect Detector | v1.38 | 2/2 | Complete | 2026-04-08 |
 | 122. Cross-Strategy Pheromone Signals And Rollout Scoping | v1.38 | 2/2 | Complete | 2026-04-08 |
 | 123. Multi-Strategy Integration Proof | v1.38 | 1/1 | Complete | 2026-04-08 |
-| 124. PounceAgent Core And De-escalation | v1.39 | 5/5 | Planned | - |
-| 125. Configurable Policy Rules And Audit Trail | v1.39 | 0/TBD | Not started | - |
-| 126. TomAgent Governance | v1.39 | 0/TBD | Not started | - |
+| 124. PounceAgent Core And De-escalation | v1.39 | 5/5 | Complete | 2026-04-08 |
+| 125. Configurable Policy Rules And Audit Trail | v1.39 | 4/4 | Complete | 2026-04-08 |
+| 126. TomAgent Governance | v1.39 | 4/4 | Verification blocked | - |
 | 127. Integration Hardening | v1.39 | 0/TBD | Not started | - |
 
 ---
 *Last shipped milestone: v1.38 Multi-Detector Composition And Network Detection on 2026-04-08*
 *Active milestone: v1.39 PounceAgent And Policy Gate Hardening*
-*Last updated: 2026-04-08 after Phase 124 planning*
+*Last updated: 2026-04-08 during Phase 126 verification*

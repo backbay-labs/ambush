@@ -41,6 +41,7 @@ fn whisker_env() -> SwarmEnvironment {
         mode_transition_at: None,
         now: 1_700_000_500,
         peer_findings: Vec::new(),
+        agent_health: Vec::new(),
     }
 }
 

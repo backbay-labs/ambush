@@ -51,6 +51,7 @@ impl ResponseExecutor for SandboxExecutor {
                 "scope": lease.scope,
                 "requested_by": request.requested_by,
             }),
+            audit: Default::default(),
         })
     }
 }

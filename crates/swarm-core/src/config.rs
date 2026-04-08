@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 
-use crate::types::Severity;
+use crate::pheromone::ThreatClass;
+use crate::types::{ResponseAction, Severity};
 
 /// Top-level repository-owned configuration for the v1 Rust runtime slice.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +91,10 @@ pub struct RuntimeSettings {
     /// marks the agent Degraded and skips that cycle.
     #[serde(default = "default_agent_tick_timeout_ms")]
     pub agent_tick_timeout_ms: u64,
+    /// Number of consecutive degraded dispatcher ticks TomAgent tolerates before
+    /// escalating an agent to Failed.
+    #[serde(default = "default_governance_degraded_tick_threshold")]
+    pub governance_degraded_tick_threshold: usize,
     /// Maximum size in bytes for dead-letter journal files before rotation.
     /// When set, journals exceeding this size are renamed with a timestamp
     /// suffix and a fresh file is started. When `None` (default), no rotation.
@@ -267,6 +272,69 @@ impl DetectionConfig {
             self.strategies.clone()
         }
     }
+
+    pub fn validate_rollout_strategy_id(
+        &self,
+        field: &'static str,
+        strategy_id: Option<&str>,
+    ) -> Result<Option<String>, ConfigValidationError> {
+        let Some(strategy_id) = strategy_id else {
+            return Ok(None);
+        };
+
+        let strategy_id = strategy_id.trim();
+        if strategy_id.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field,
+                reason: "must not be empty when provided".to_string(),
+            });
+        }
+
+        if !self
+            .active_strategies()
+            .iter()
+            .any(|entry| entry == strategy_id)
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field,
+                reason: format!(
+                    "must match one of detection.active_strategies(): {}",
+                    self.active_strategies().join(", ")
+                ),
+            });
+        }
+
+        Ok(Some(strategy_id.to_string()))
+    }
+
+    pub fn resolve_rollout_strategy_id(
+        &self,
+        field: &'static str,
+        strategy_id: Option<&str>,
+        require_explicit_in_multi_strategy: bool,
+    ) -> Result<String, ConfigValidationError> {
+        if let Some(strategy_id) = self.validate_rollout_strategy_id(field, strategy_id)? {
+            return Ok(strategy_id);
+        }
+
+        let active = self.active_strategies();
+        if active.len() == 1 {
+            return Ok(active[0].clone());
+        }
+
+        let reason = if require_explicit_in_multi_strategy {
+            format!(
+                "is required when multiple detection.strategies are active: {}",
+                active.join(", ")
+            )
+        } else {
+            format!(
+                "could not be resolved because multiple detection.strategies are active: {}",
+                active.join(", ")
+            )
+        };
+        Err(ConfigValidationError::InvalidField { field, reason })
+    }
 }
 
 /// Optional raw detector profile configuration payloads keyed by strategy family.
@@ -280,6 +348,7 @@ pub struct DetectorProfilesConfig {
     pub suspicious_scripting: Option<serde_json::Value>,
     pub persistence: Option<serde_json::Value>,
     pub supply_chain: Option<serde_json::Value>,
+    pub network_connect: Option<serde_json::Value>,
 }
 
 /// Pheromone substrate tuning.
@@ -296,9 +365,39 @@ pub struct PheromoneConfig {
     pub alert_threshold: f64,
     /// Strength threshold for incident mode transition.
     pub incident_threshold: f64,
+    /// Cooldown dwell time before the runtime de-escalates back to normal mode.
+    #[serde(default = "default_deescalation_cooldown_secs")]
+    pub deescalation_cooldown_secs: i64,
+    /// Deterministic playbook rules used by PounceAgent action selection.
+    #[serde(default)]
+    pub response_playbook: ResponsePlaybookConfig,
     /// Backend used to store and recover deposits.
     #[serde(default)]
     pub backend: PheromoneBackendConfig,
+}
+
+/// Deterministic action-selection rules for autonomous response.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResponsePlaybookConfig {
+    /// Ordered matching rules evaluated by PounceAgent.
+    pub rules: Vec<ResponsePlaybookRule>,
+}
+
+/// One threat/severity/confidence band mapped to an ordered action sequence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponsePlaybookRule {
+    /// Threat class this rule applies to.
+    pub threat_class: ThreatClass,
+    /// Severity this rule applies to.
+    pub severity: Severity,
+    /// Inclusive lower confidence bound for the rule.
+    pub min_confidence: f64,
+    /// Inclusive upper confidence bound for the rule.
+    pub max_confidence: f64,
+    /// Ordered response actions emitted when the rule matches.
+    pub actions: Vec<ResponseAction>,
 }
 
 /// Pheromone substrate backend selection.
@@ -320,13 +419,113 @@ pub enum PheromoneBackendConfig {
 }
 
 /// Deterministic policy settings for live response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PolicyConfig {
     /// Severity at or above which destructive actions require human approval.
     pub human_gate_severity: Severity,
     /// Capability lease lifetime.
     pub lease_ttl_ms: i64,
+    /// Maximum number of actions a single scope may receive inside one minute
+    /// before the static fallback gate denies additional requests.
+    #[serde(default = "default_max_actions_per_scope_per_minute")]
+    pub max_actions_per_scope_per_minute: usize,
+    /// Ordered configurable policy rules evaluated before static fallback.
+    #[serde(default)]
+    pub rules: Vec<PolicyRuleConfig>,
+}
+
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self {
+            human_gate_severity: Severity::High,
+            lease_ttl_ms: 60_000,
+            max_actions_per_scope_per_minute: default_max_actions_per_scope_per_minute(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+/// One ordered configurable policy rule loaded from repository YAML.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyRuleConfig {
+    /// Stable rule identifier emitted into logs and audit records.
+    pub name: String,
+    /// Final verdict emitted when this rule matches and its constraints pass.
+    pub decision: PolicyRuleDecision,
+    /// Threat class selector for the rule.
+    pub threat_class: ThreatClass,
+    /// Optional action selector list. Empty means all actions for the threat class.
+    #[serde(default)]
+    pub actions: Vec<PolicyActionSelector>,
+    /// Inclusive lower severity bound for the rule.
+    #[serde(default = "default_policy_rule_min_severity")]
+    pub min_severity: Severity,
+    /// Inclusive upper severity bound for the rule.
+    #[serde(default = "default_policy_rule_max_severity")]
+    pub max_severity: Severity,
+    /// Optional UTC hour window. Requests outside the window are denied by the rule.
+    #[serde(default)]
+    pub time_window_utc: Option<PolicyTimeWindowConfig>,
+    /// Optional per-agent one-minute burst limit scoped to this rule.
+    #[serde(default)]
+    pub max_actions_per_agent_per_minute: Option<usize>,
+    /// Optional human-readable rationale attached to the rule verdict.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Final verdict supported by repository-owned policy rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyRuleDecision {
+    Allow,
+    Deny,
+}
+
+/// Action selector used by configurable policy rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyActionSelector {
+    BlockEgress,
+    IsolateHost,
+    RevokeCredential,
+    DeployDecoy,
+    Escalate,
+}
+
+impl PolicyActionSelector {
+    pub fn matches(self, action: &ResponseAction) -> bool {
+        matches!(
+            (self, action),
+            (Self::BlockEgress, ResponseAction::BlockEgress { .. })
+                | (Self::IsolateHost, ResponseAction::IsolateHost { .. })
+                | (Self::RevokeCredential, ResponseAction::RevokeCredential { .. })
+                | (Self::DeployDecoy, ResponseAction::DeployDecoy { .. })
+                | (Self::Escalate, ResponseAction::Escalate { .. })
+        )
+    }
+}
+
+/// Optional UTC hour restriction for one configurable policy rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyTimeWindowConfig {
+    /// Inclusive start hour in UTC.
+    pub start_hour_utc: u8,
+    /// Exclusive end hour in UTC.
+    pub end_hour_utc: u8,
+}
+
+impl PolicyTimeWindowConfig {
+    pub fn contains_hour(self, hour_utc: u8) -> bool {
+        if self.start_hour_utc < self.end_hour_utc {
+            hour_utc >= self.start_hour_utc && hour_utc < self.end_hour_utc
+        } else {
+            hour_utc >= self.start_hour_utc || hour_utc < self.end_hour_utc
+        }
+    }
 }
 
 /// Configuration for the HTTP EDR response adapter.
@@ -586,6 +785,9 @@ pub struct CanaryConfig {
     /// Stable slot identifier for the active canary lane.
     #[serde(default = "default_canary_slot_id")]
     pub slot_id: String,
+    /// Optional baseline strategy scope used for rollout comparisons.
+    #[serde(default)]
+    pub strategy_id: Option<String>,
     /// Number of live events observed before a canary can complete normally.
     #[serde(default = "default_canary_observation_window_events")]
     pub observation_window_events: usize,
@@ -613,6 +815,9 @@ pub struct PromotionConfig {
     /// Stable window identifier for the active production observation window.
     #[serde(default = "default_promotion_window_id")]
     pub window_id: String,
+    /// Optional fallback baseline strategy scope for production rollout.
+    #[serde(default)]
+    pub strategy_id: Option<String>,
     /// Number of live events observed before a promotion can complete normally.
     #[serde(default = "default_promotion_observation_window_events")]
     pub observation_window_events: usize,
@@ -1107,6 +1312,22 @@ impl SwarmConfig {
                 reason: "must not be empty".to_string(),
             });
         }
+        let mut active_strategy_ids = BTreeSet::new();
+        for strategy_id in self.detection.active_strategies() {
+            let strategy_id = strategy_id.trim();
+            if strategy_id.is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "detection.strategies",
+                    reason: "entries must not be empty".to_string(),
+                });
+            }
+            if !active_strategy_ids.insert(strategy_id.to_string()) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "detection.strategies",
+                    reason: format!("duplicate detector strategy `{strategy_id}`"),
+                });
+            }
+        }
         if !(0.0..=1.0).contains(&self.detection.medium_confidence_threshold) {
             return Err(ConfigValidationError::InvalidField {
                 field: "detection.medium_confidence_threshold",
@@ -1125,6 +1346,14 @@ impl SwarmConfig {
                 reason: "must be greater than or equal to medium_confidence_threshold".to_string(),
             });
         }
+        self.detection.validate_rollout_strategy_id(
+            "canary.strategy_id",
+            self.canary.strategy_id.as_deref(),
+        )?;
+        self.detection.validate_rollout_strategy_id(
+            "promotion.strategy_id",
+            self.promotion.strategy_id.as_deref(),
+        )?;
 
         if self.pheromone.default_half_life_secs <= 0.0 {
             return Err(ConfigValidationError::InvalidField {
@@ -1156,6 +1385,13 @@ impl SwarmConfig {
                 reason: "must be greater than or equal to alert_threshold".to_string(),
             });
         }
+        if self.pheromone.deescalation_cooldown_secs <= 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.deescalation_cooldown_secs",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        self.pheromone.response_playbook.validate()?;
         match &self.pheromone.backend {
             PheromoneBackendConfig::InMemory => {
                 if self.runtime.mode == RuntimeMode::LiveResponse
@@ -1205,6 +1441,22 @@ impl SwarmConfig {
         if self.policy.lease_ttl_ms <= 0 {
             return Err(ConfigValidationError::InvalidField {
                 field: "policy.lease_ttl_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.policy.max_actions_per_scope_per_minute == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "policy.max_actions_per_scope_per_minute",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        for (index, rule) in self.policy.rules.iter().enumerate() {
+            rule.validate(index)?;
+        }
+
+        if self.runtime.governance_degraded_tick_threshold == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.governance_degraded_tick_threshold",
                 reason: "must be greater than zero".to_string(),
             });
         }
@@ -1344,6 +1596,15 @@ impl SwarmConfig {
                     reason: "must be greater than zero when canary is enabled".to_string(),
                 });
             }
+            if self.detection.active_strategies().len() > 1 && self.canary.strategy_id.is_none() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "canary.strategy_id",
+                    reason: format!(
+                        "is required when multiple detection.strategies are active: {}",
+                        self.detection.active_strategies().join(", ")
+                    ),
+                });
+            }
         }
 
         if self.promotion.enabled {
@@ -1435,6 +1696,47 @@ impl PheromoneBackendConfig {
 impl BundleStoreConfig {
     pub fn is_durable(&self) -> bool {
         matches!(self, Self::LocalFiles { .. })
+    }
+}
+
+impl ResponsePlaybookConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        for (index, rule) in self.rules.iter().enumerate() {
+            rule.validate(index)?;
+        }
+        Ok(())
+    }
+}
+
+impl ResponsePlaybookRule {
+    fn validate(&self, index: usize) -> Result<(), ConfigValidationError> {
+        if !(0.0..=1.0).contains(&self.min_confidence) {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!("rule {index} min_confidence must be between 0.0 and 1.0"),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.max_confidence) {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!("rule {index} max_confidence must be between 0.0 and 1.0"),
+            });
+        }
+        if self.max_confidence < self.min_confidence {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!(
+                    "rule {index} max_confidence must be greater than or equal to min_confidence"
+                ),
+            });
+        }
+        if self.actions.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!("rule {index} must declare at least one response action"),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -1764,6 +2066,7 @@ impl Default for CanaryConfig {
         Self {
             enabled: false,
             slot_id: default_canary_slot_id(),
+            strategy_id: None,
             observation_window_events: default_canary_observation_window_events(),
             max_candidate_only_rate: default_canary_max_candidate_only_rate(),
             max_baseline_miss_rate: default_canary_max_baseline_miss_rate(),
@@ -1778,6 +2081,7 @@ impl Default for PromotionConfig {
         Self {
             enabled: false,
             window_id: default_promotion_window_id(),
+            strategy_id: None,
             observation_window_events: default_promotion_observation_window_events(),
             max_promoted_only_rate: default_promotion_max_promoted_only_rate(),
             max_fallback_recovery_rate: default_promotion_max_fallback_recovery_rate(),
@@ -1831,6 +2135,10 @@ const fn default_recent_decisions_limit() -> usize {
 
 const fn default_agent_tick_timeout_ms() -> u64 {
     500
+}
+
+const fn default_governance_degraded_tick_threshold() -> usize {
+    3
 }
 
 const fn default_drain_timeout_ms() -> u64 {
@@ -1911,6 +2219,10 @@ const fn default_tetragon_max_reconnect_backoff_ms() -> u64 {
 
 const fn default_tetragon_event_timeout_secs() -> u64 {
     30
+}
+
+const fn default_deescalation_cooldown_secs() -> i64 {
+    300
 }
 
 const fn default_jetstream_gc_page_size() -> usize {
@@ -2059,15 +2371,82 @@ const fn default_promotion_max_total_detections() -> usize {
     12
 }
 
+const fn default_max_actions_per_scope_per_minute() -> usize {
+    5
+}
+
+const fn default_policy_rule_min_severity() -> Severity {
+    Severity::Low
+}
+
+const fn default_policy_rule_max_severity() -> Severity {
+    Severity::Critical
+}
+
+impl PolicyRuleConfig {
+    fn validate(&self, index: usize) -> Result<(), ConfigValidationError> {
+        if self.name.trim().is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "policy.rules",
+                reason: format!("rule {index} name must not be empty"),
+            });
+        }
+        if self.max_severity < self.min_severity {
+            return Err(ConfigValidationError::InvalidField {
+                field: "policy.rules",
+                reason: format!(
+                    "rule {index} max_severity must be greater than or equal to min_severity"
+                ),
+            });
+        }
+        if let Some(limit) = self.max_actions_per_agent_per_minute
+            && limit == 0
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "policy.rules",
+                reason: format!(
+                    "rule {index} max_actions_per_agent_per_minute must be greater than zero"
+                ),
+            });
+        }
+        if let Some(window) = self.time_window_utc {
+            if window.start_hour_utc > 23 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "policy.rules",
+                    reason: format!("rule {index} start_hour_utc must be between 0 and 23"),
+                });
+            }
+            if window.end_hour_utc == 0 || window.end_hour_utc > 24 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "policy.rules",
+                    reason: format!("rule {index} end_hour_utc must be between 1 and 24"),
+                });
+            }
+            if window.start_hour_utc == window.end_hour_utc {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "policy.rules",
+                    reason: format!(
+                        "rule {index} time_window_utc must span at least one UTC hour"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, InvestigationConfig,
-        OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PromotionConfig, RuntimeMode, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PolicyActionSelector,
+        PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PolicyTimeWindowConfig,
+        PromotionConfig, ResponsePlaybookConfig, ResponsePlaybookRule, RuntimeMode,
+        RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
     };
-    use crate::types::Severity;
+    use crate::ThreatClass;
+    use crate::types::{ResponseAction, Severity};
 
     fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
         SwarmConfig {
@@ -2087,6 +2466,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: super::DetectionConfig {
@@ -2102,12 +2482,11 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: ResponsePlaybookConfig::default(),
                 backend,
             },
-            policy: PolicyConfig {
-                human_gate_severity: Severity::High,
-                lease_ttl_ms: 60_000,
-            },
+            policy: PolicyConfig::default(),
             response_adapter: Default::default(),
             siem_forward: None,
             notification_channels: std::collections::BTreeMap::new(),
@@ -2230,6 +2609,314 @@ mod tests {
                 "suspicious_process_tree".to_string(),
                 "dns_exfiltration".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn rollout_scopes_remain_optional_for_single_strategy_configs() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.canary.enabled = true;
+        config.promotion.enabled = true;
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn multi_strategy_canary_requires_explicit_scope() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.detection.strategies = vec![
+            "suspicious_process_tree".to_string(),
+            "dns_exfiltration".to_string(),
+        ];
+        config.canary.enabled = true;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `canary.strategy_id`: is required when multiple detection.strategies are active: suspicious_process_tree, dns_exfiltration"
+        );
+    }
+
+    #[test]
+    fn unknown_rollout_strategy_ids_are_rejected() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.detection.strategies = vec![
+            "suspicious_process_tree".to_string(),
+            "dns_exfiltration".to_string(),
+        ];
+        config.canary.enabled = true;
+        config.canary.strategy_id = Some("unknown".to_string());
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `canary.strategy_id`: must match one of detection.active_strategies(): suspicious_process_tree, dns_exfiltration"
+        );
+
+        config.canary.strategy_id = Some("dns_exfiltration".to_string());
+        config.promotion.strategy_id = Some("unknown".to_string());
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `promotion.strategy_id`: must match one of detection.active_strategies(): suspicious_process_tree, dns_exfiltration"
+        );
+    }
+
+    #[test]
+    fn valid_rollout_scopes_parse_and_validate() {
+        let config: SwarmConfig = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "name": "test",
+            "description": "test config",
+            "runtime": {
+                "mode": "live_response",
+                "telemetry_sources": [
+                    {
+                        "name": "synthetic",
+                        "subject": "telemetry.synthetic.process"
+                    }
+                ],
+                "max_in_flight_actions": 4,
+                "drain_timeout_ms": 30000,
+                "require_durable_live_response": true,
+                "max_heap_pressure": 0.90,
+                "agent_tick_timeout_ms": 500,
+                "governance_degraded_tick_threshold": 3
+            },
+            "detection": {
+                "strategy": "suspicious_process_tree",
+                "strategies": ["suspicious_process_tree", "dns_exfiltration"],
+                "high_confidence_threshold": 0.9,
+                "medium_confidence_threshold": 0.7
+            },
+            "pheromone": {
+                "default_half_life_secs": 3600.0,
+                "evaporation_threshold": 0.01,
+                "min_sources_for_escalation": 2,
+                "alert_threshold": 2.0,
+                "incident_threshold": 5.0,
+                "backend": {
+                    "kind": "local_journal",
+                    "path": "./journal.jsonl"
+                }
+            },
+            "policy": {
+                "human_gate_severity": "HIGH",
+                "lease_ttl_ms": 60000
+            },
+            "canary": {
+                "enabled": true,
+                "slot_id": "canary-primary",
+                "strategy_id": "dns_exfiltration",
+                "observation_window_events": 2,
+                "max_candidate_only_rate": 0.25,
+                "max_baseline_miss_rate": 0.25,
+                "max_detect_latency_us": 10000,
+                "max_total_detections": 8
+            },
+            "promotion": {
+                "enabled": true,
+                "window_id": "production-primary",
+                "strategy_id": "dns_exfiltration",
+                "observation_window_events": 2,
+                "max_promoted_only_rate": 0.20,
+                "max_fallback_recovery_rate": 0.20,
+                "max_detect_latency_us": 10000,
+                "max_total_detections": 12
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            config.canary.strategy_id.as_deref(),
+            Some("dns_exfiltration")
+        );
+        assert_eq!(
+            config.promotion.strategy_id.as_deref(),
+            Some("dns_exfiltration")
+        );
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn duplicate_detection_strategy_ids_are_rejected() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.detection.strategies = vec![
+            "suspicious_process_tree".to_string(),
+            "dns_exfiltration".to_string(),
+            "dns_exfiltration".to_string(),
+        ];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `detection.strategies`: duplicate detector strategy `dns_exfiltration`"
+        );
+    }
+
+    #[test]
+    fn empty_explicit_detection_strategy_ids_are_rejected() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.detection.strategies = vec!["  ".to_string()];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `detection.strategies`: entries must not be empty"
+        );
+    }
+
+    #[test]
+    fn response_playbook_rules_validate_confidence_ranges() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.pheromone.response_playbook = ResponsePlaybookConfig {
+            rules: vec![ResponsePlaybookRule {
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+                min_confidence: 0.8,
+                max_confidence: 0.5,
+                actions: vec![ResponseAction::Escalate {
+                    summary: "review required".to_string(),
+                    urgency: Severity::High,
+                }],
+            }],
+        };
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `pheromone.response_playbook`: rule 0 max_confidence must be greater than or equal to min_confidence"
+        );
+    }
+
+    #[test]
+    fn response_playbook_rules_deserialize_from_config_shape() {
+        let config: SwarmConfig = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "name": "test",
+            "description": "test config",
+            "runtime": {
+                "mode": "live_response",
+                "telemetry_sources": [
+                    {
+                        "name": "synthetic",
+                        "subject": "telemetry.synthetic.process"
+                    }
+                ],
+                "max_in_flight_actions": 4,
+                "drain_timeout_ms": 30000,
+                "require_durable_live_response": true,
+                "max_heap_pressure": 0.90,
+                "agent_tick_timeout_ms": 500,
+                "governance_degraded_tick_threshold": 3
+            },
+            "detection": {
+                "strategy": "suspicious_process_tree",
+                "high_confidence_threshold": 0.9,
+                "medium_confidence_threshold": 0.7
+            },
+            "pheromone": {
+                "default_half_life_secs": 3600.0,
+                "evaporation_threshold": 0.01,
+                "min_sources_for_escalation": 2,
+                "alert_threshold": 2.0,
+                "incident_threshold": 5.0,
+                "deescalation_cooldown_secs": 300,
+                "response_playbook": {
+                    "rules": [
+                        {
+                            "threat_class": "execution",
+                            "severity": "HIGH",
+                            "min_confidence": 0.9,
+                            "max_confidence": 1.0,
+                            "actions": [
+                                {
+                                    "type": "deploy_decoy",
+                                    "decoy_type": "honeypot",
+                                    "target_zone": "dmz"
+                                },
+                                {
+                                    "type": "escalate",
+                                    "summary": "execution spike requires review",
+                                    "urgency": "HIGH"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "backend": {
+                    "kind": "local_journal",
+                    "path": "./journal.jsonl"
+                }
+            },
+            "policy": {
+                "human_gate_severity": "HIGH",
+                "lease_ttl_ms": 60000,
+                "max_actions_per_scope_per_minute": 4,
+                "rules": [
+                    {
+                        "name": "execution-after-hours-review",
+                        "decision": "allow",
+                        "threat_class": "execution",
+                        "actions": ["deploy_decoy", "escalate"],
+                        "min_severity": "HIGH",
+                        "max_severity": "CRITICAL",
+                        "time_window_utc": {
+                            "start_hour_utc": 18,
+                            "end_hour_utc": 24
+                        },
+                        "max_actions_per_agent_per_minute": 2,
+                        "reason": "execution playbook enabled after hours"
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(config.pheromone.deescalation_cooldown_secs, 300);
+        assert_eq!(config.pheromone.response_playbook.rules.len(), 1);
+        assert_eq!(config.policy.max_actions_per_scope_per_minute, 4);
+        assert_eq!(config.policy.rules.len(), 1);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn policy_rules_reject_zero_per_agent_limit() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.policy.rules = vec![PolicyRuleConfig {
+            name: "deny-execution".to_string(),
+            decision: PolicyRuleDecision::Deny,
+            threat_class: ThreatClass::Execution,
+            actions: vec![PolicyActionSelector::DeployDecoy],
+            min_severity: Severity::Medium,
+            max_severity: Severity::Critical,
+            time_window_utc: Some(PolicyTimeWindowConfig {
+                start_hour_utc: 18,
+                end_hour_utc: 24,
+            }),
+            max_actions_per_agent_per_minute: Some(0),
+            reason: None,
+        }];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `policy.rules`: rule 0 max_actions_per_agent_per_minute must be greater than zero"
         );
     }
 }

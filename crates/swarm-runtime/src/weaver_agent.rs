@@ -207,6 +207,7 @@ mod tests {
             mode_transition_at: Some(1_700_000_050),
             now: 1_700_000_100,
             peer_findings: Vec::new(),
+            agent_health: Vec::new(),
         }
     }
 

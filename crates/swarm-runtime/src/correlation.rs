@@ -30,6 +30,16 @@ pub struct CorrelationEngine {
     config: CorrelationConfig,
 }
 
+const STRATEGY_KEY_PREFIX: &str = "strategy:";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CandidatePairScore {
+    shared_keys: Vec<String>,
+    shared_non_strategy_keys: usize,
+    cross_strategy: bool,
+    weighted_score: usize,
+}
+
 impl CorrelationEngine {
     pub fn new(config: CorrelationConfig) -> Self {
         Self { config }
@@ -120,27 +130,30 @@ impl CorrelationEngine {
                 continue;
             }
 
-            let shared_keys = shared_keys(seed, candidate);
+            let pair_score = weighted_score(seed, candidate);
             let time_delta_ms = (candidate.last_updated_ms() - seed.last_updated_ms()).abs();
 
             let decision = if candidate.status != InvestigationStatus::Completed {
                 Err("investigation not completed".to_string())
-            } else if shared_keys.len() < self.config.min_shared_keys {
-                Err("insufficient shared correlation keys".to_string())
+            } else if pair_score.shared_non_strategy_keys == 0 {
+                Err(zero_non_strategy_overlap_reason(&pair_score))
             } else if time_delta_ms > self.config.time_window_ms {
                 Err("outside correlation time window".to_string())
-            } else {
-                Ok(format!(
-                    "shared {} within correlation window",
-                    shared_keys.join(", ")
+            } else if pair_score.weighted_score < self.config.min_shared_keys {
+                Err(insufficient_weighted_score_reason(
+                    &pair_score,
+                    self.config.min_shared_keys,
                 ))
+            } else {
+                Ok(included_reason(&pair_score))
             };
 
             match decision {
                 Ok(reason) => {
                     window_start_ms = window_start_ms.min(candidate.queued_at_ms);
                     window_end_ms = window_end_ms.max(candidate.last_updated_ms());
-                    let new_correlation_keys = shared_keys
+                    let new_correlation_keys = pair_score
+                        .shared_keys
                         .iter()
                         .filter(|key| !correlation_keys.iter().any(|existing| existing == *key))
                         .cloned()
@@ -158,7 +171,7 @@ impl CorrelationEngine {
                         hunt_id: candidate.hunt_id.clone(),
                         finding_id: candidate.finding_id.clone(),
                         reason,
-                        shared_keys,
+                        shared_keys: pair_score.shared_keys,
                     });
                 }
                 Err(reason) => rejected.push(IncidentMemberDecision {
@@ -166,7 +179,7 @@ impl CorrelationEngine {
                     hunt_id: candidate.hunt_id.clone(),
                     finding_id: candidate.finding_id.clone(),
                     reason,
-                    shared_keys,
+                    shared_keys: pair_score.shared_keys,
                 }),
             }
         }
@@ -202,6 +215,84 @@ fn shared_keys(seed: &InvestigationBundle, candidate: &InvestigationBundle) -> V
     shared.sort();
     shared.dedup();
     shared
+}
+
+fn weighted_score(
+    seed: &InvestigationBundle,
+    candidate: &InvestigationBundle,
+) -> CandidatePairScore {
+    let shared_keys = shared_keys(seed, candidate);
+    let shared_non_strategy_keys = shared_keys
+        .iter()
+        .filter(|key| !key.starts_with(STRATEGY_KEY_PREFIX))
+        .count();
+    let cross_strategy = seed.strategy_id != candidate.strategy_id;
+    let weighted_score = shared_non_strategy_keys + usize::from(cross_strategy);
+
+    CandidatePairScore {
+        shared_keys,
+        shared_non_strategy_keys,
+        cross_strategy,
+        weighted_score,
+    }
+}
+
+fn shared_keys_summary(shared_keys: &[String]) -> String {
+    if shared_keys.is_empty() {
+        "no shared keys".to_string()
+    } else {
+        shared_keys.join(", ")
+    }
+}
+
+fn score_breakdown(score: &CandidatePairScore) -> String {
+    if score.cross_strategy {
+        format!(
+            "{} non-strategy key(s) + cross-strategy bonus",
+            score.shared_non_strategy_keys
+        )
+    } else {
+        format!(
+            "{} non-strategy key(s), no cross-strategy bonus",
+            score.shared_non_strategy_keys
+        )
+    }
+}
+
+fn zero_non_strategy_overlap_reason(score: &CandidatePairScore) -> String {
+    if score.cross_strategy {
+        format!(
+            "requires at least one shared non-strategy correlation key; {}",
+            score_breakdown(score)
+        )
+    } else {
+        format!(
+            "requires at least one shared non-strategy correlation key; shared {}",
+            shared_keys_summary(&score.shared_keys)
+        )
+    }
+}
+
+fn insufficient_weighted_score_reason(
+    score: &CandidatePairScore,
+    min_shared_keys: usize,
+) -> String {
+    format!(
+        "weighted_score={} below threshold {} from shared {} ({})",
+        score.weighted_score,
+        min_shared_keys,
+        shared_keys_summary(&score.shared_keys),
+        score_breakdown(score)
+    )
+}
+
+fn included_reason(score: &CandidatePairScore) -> String {
+    format!(
+        "shared {} within correlation window with weighted_score={} ({})",
+        shared_keys_summary(&score.shared_keys),
+        score.weighted_score,
+        score_breakdown(score)
+    )
 }
 
 fn summarize_incident(
@@ -247,10 +338,14 @@ mod tests {
     };
 
     fn config() -> CorrelationConfig {
+        config_with_min_shared_keys(1)
+    }
+
+    fn config_with_min_shared_keys(min_shared_keys: usize) -> CorrelationConfig {
         CorrelationConfig {
             enabled: true,
             time_window_ms: 5_000,
-            min_shared_keys: 1,
+            min_shared_keys,
             candidate_limit: 16,
             incident_store: BundleStoreConfig::Memory,
         }
@@ -260,6 +355,7 @@ mod tests {
         investigation_id: &str,
         hunt_id: &str,
         queued_at_ms: i64,
+        strategy_id: &str,
         correlation_keys: &[&str],
         status: InvestigationStatus,
     ) -> InvestigationBundle {
@@ -272,7 +368,7 @@ mod tests {
             finding_id: format!("finding:{hunt_id}"),
             threat_class: ThreatClass::Execution,
             severity: Severity::Critical,
-            strategy_id: "summary_investigator".to_string(),
+            strategy_id: strategy_id.to_string(),
             response_kind: "success".to_string(),
             related_receipt_ids: vec![format!("receipt:{hunt_id}")],
             host_id: Some("host-1".to_string()),
@@ -289,29 +385,53 @@ mod tests {
         }
     }
 
+    fn default_investigation(
+        investigation_id: &str,
+        hunt_id: &str,
+        queued_at_ms: i64,
+        correlation_keys: &[&str],
+        status: InvestigationStatus,
+    ) -> InvestigationBundle {
+        investigation(
+            investigation_id,
+            hunt_id,
+            queued_at_ms,
+            "summary_investigator",
+            correlation_keys,
+            status,
+        )
+    }
+
     #[test]
     fn correlate_hunt_includes_matching_candidates_and_rejects_others() {
         let investigations = MemoryInvestigationBundleStore::default();
         let incidents = MemoryIncidentStore::default();
         let engine = CorrelationEngine::new(config());
 
-        let seed = investigation(
+        let seed = default_investigation(
             "investigation:hunt-1:1",
             "hunt-1",
             1_700_000_000_000,
             &["host:host-1", "user:alice", "strategy:summary"],
             InvestigationStatus::Completed,
         );
-        let related = investigation(
+        let related = default_investigation(
             "investigation:hunt-2:1",
             "hunt-2",
             1_700_000_003_000,
             &["host:host-1", "user:alice"],
             InvestigationStatus::Completed,
         );
-        let outside_window = investigation(
+        let incomplete = default_investigation(
             "investigation:hunt-3:1",
             "hunt-3",
+            1_700_000_003_500,
+            &["host:host-1", "user:alice"],
+            InvestigationStatus::Running,
+        );
+        let outside_window = default_investigation(
+            "investigation:hunt-4:1",
+            "hunt-4",
             1_700_000_010_500,
             &["host:host-1"],
             InvestigationStatus::Completed,
@@ -319,6 +439,7 @@ mod tests {
 
         investigations.persist(&seed).unwrap();
         investigations.persist(&related).unwrap();
+        investigations.persist(&incomplete).unwrap();
         investigations.persist(&outside_window).unwrap();
 
         let outcome = engine
@@ -327,18 +448,169 @@ mod tests {
             .unwrap();
 
         assert_eq!(outcome.incident.included_members.len(), 2);
-        assert_eq!(outcome.incident.rejected_members.len(), 1);
+        assert_eq!(outcome.incident.rejected_members.len(), 2);
         assert!(
             outcome
                 .incident
                 .rejected_members
-                .first()
+                .iter()
+                .find(|member| member.hunt_id == "hunt-4")
                 .unwrap()
                 .reason
                 .contains("outside correlation time window")
         );
+        assert_eq!(
+            outcome
+                .incident
+                .rejected_members
+                .iter()
+                .find(|member| member.hunt_id == "hunt-3")
+                .unwrap()
+                .reason,
+            "investigation not completed"
+        );
 
         let loaded = incidents.load_by_hunt_id("hunt-2").unwrap().unwrap();
         assert_eq!(loaded.incident.incident_id, outcome.incident.incident_id);
+    }
+
+    #[test]
+    fn cross_strategy_bonus_allows_one_real_overlap_to_meet_threshold() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config_with_min_shared_keys(2));
+
+        let seed = investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            "summary_investigator",
+            &["host:host-1", "strategy:summary_investigator"],
+            InvestigationStatus::Completed,
+        );
+        let related = investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            "dns_exfiltration",
+            &["host:host-1", "strategy:dns_exfiltration"],
+            InvestigationStatus::Completed,
+        );
+
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&related).unwrap();
+
+        let outcome = engine
+            .correlate_hunt(&investigations, &incidents, "hunt-1")
+            .unwrap()
+            .unwrap();
+
+        let included = outcome
+            .incident
+            .included_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .unwrap();
+
+        assert_eq!(included.shared_keys, vec!["host:host-1".to_string()]);
+        assert!(included.reason.contains("weighted_score=2"));
+        assert!(included.reason.contains("cross-strategy bonus"));
+    }
+
+    #[test]
+    fn cross_strategy_bonus_is_rejected_without_real_overlap() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config_with_min_shared_keys(2));
+
+        let seed = investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            "summary_investigator",
+            &["host:host-1", "strategy:summary_investigator"],
+            InvestigationStatus::Completed,
+        );
+        let related = investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            "dns_exfiltration",
+            &["user:bob", "strategy:dns_exfiltration"],
+            InvestigationStatus::Completed,
+        );
+
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&related).unwrap();
+
+        let outcome = engine
+            .correlate_hunt(&investigations, &incidents, "hunt-1")
+            .unwrap()
+            .unwrap();
+
+        let rejected = outcome
+            .incident
+            .rejected_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .unwrap();
+
+        assert!(rejected.shared_keys.is_empty());
+        assert!(
+            rejected
+                .reason
+                .contains("requires at least one shared non-strategy correlation key")
+        );
+        assert!(rejected.reason.contains("cross-strategy bonus"));
+    }
+
+    #[test]
+    fn same_strategy_strategy_only_overlap_is_rejected() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config_with_min_shared_keys(1));
+
+        let seed = investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            "summary_investigator",
+            &["host:host-1", "strategy:summary_investigator"],
+            InvestigationStatus::Completed,
+        );
+        let related = investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            "summary_investigator",
+            &["user:bob", "strategy:summary_investigator"],
+            InvestigationStatus::Completed,
+        );
+
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&related).unwrap();
+
+        let outcome = engine
+            .correlate_hunt(&investigations, &incidents, "hunt-1")
+            .unwrap()
+            .unwrap();
+
+        let rejected = outcome
+            .incident
+            .rejected_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .unwrap();
+
+        assert_eq!(
+            rejected.shared_keys,
+            vec!["strategy:summary_investigator".to_string()]
+        );
+        assert!(
+            rejected
+                .reason
+                .contains("requires at least one shared non-strategy correlation key")
+        );
+        assert!(rejected.reason.contains("strategy:summary_investigator"));
     }
 }

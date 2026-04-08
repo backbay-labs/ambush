@@ -1,7 +1,7 @@
-use crate::config::{
-    DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
-    lateral_movement_profile, load_config, persistence_profile, supply_chain_profile,
-    suspicious_process_tree_profile, suspicious_scripting_profile,
+use crate::config::{DetectorProfileError, RuntimeConfigError, load_config};
+use crate::detector_factory::{
+    DetectorFactoryError, RuntimeDetector, build_detector_from_candidate,
+    build_detector_from_strategy,
 };
 use crate::replay::{
     DetectorCandidateManifest, DetectorExperimentManifest, ExperimentLineage, FileShadowStore,
@@ -12,17 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use swarm_core::config::CanaryConfig;
-use swarm_core::config::SwarmConfig;
+use swarm_core::config::{CanaryConfig, ConfigValidationError, SwarmConfig};
 use swarm_core::types::Severity;
 use swarm_whisker::stream::{evaluate_event, findings_to_deposits};
-use swarm_whisker::{
-    CredentialAccessDetector, CredentialAccessProfile, DetectionFinding, DetectionStrategy,
-    DnsExfiltrationDetector, DnsExfiltrationProfile, LateralMovementDetector,
-    LateralMovementProfile, PersistenceDetector, PersistenceProfile, SupplyChainDetector,
-    SupplyChainProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
-    SuspiciousScriptingDetector, SuspiciousScriptingProfile, TelemetryEvent,
-};
+use swarm_whisker::{DetectionFinding, TelemetryEvent};
 
 /// Errors surfaced by the bounded canary lane.
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +25,9 @@ pub enum CanaryError {
 
     #[error(transparent)]
     Replay(#[from] ReplayHarnessError),
+
+    #[error(transparent)]
+    ConfigValidation(#[from] ConfigValidationError),
 
     #[error(transparent)]
     DetectorProfile(#[from] DetectorProfileError),
@@ -79,6 +75,20 @@ pub enum CanaryError {
 
     #[error("artifact mismatch for {artifact}: expected experiment `{expected}`, found `{actual}`")]
     ExperimentMismatch {
+        artifact: &'static str,
+        expected: String,
+        actual: String,
+    },
+
+    #[error("{artifact} lineage mismatch: expected `{expected}`, found `{actual}`")]
+    LineageMismatch {
+        artifact: &'static str,
+        expected: String,
+        actual: String,
+    },
+
+    #[error("{artifact} baseline mismatch: expected `{expected}`, found `{actual}`")]
+    BaselineMismatch {
         artifact: &'static str,
         expected: String,
         actual: String,
@@ -502,6 +512,14 @@ impl DefaultCanaryHarness {
 
         let experiment_path = experiment_path.as_ref().to_path_buf();
         let experiment = load_detector_experiment_manifest(&experiment_path)?;
+        let baseline_strategy_id = resolve_canary_rollout_strategy_id(&self.config)?;
+        if experiment.lineage.parent_strategy_id != baseline_strategy_id {
+            return Err(CanaryError::LineageMismatch {
+                artifact: "experiment",
+                expected: baseline_strategy_id,
+                actual: experiment.lineage.parent_strategy_id.clone(),
+            });
+        }
         let experiment_id = experiment_id_for_manifest(&experiment);
 
         let verification_store = FileVerificationStore::open(verification_results_dir)?;
@@ -520,6 +538,13 @@ impl DefaultCanaryHarness {
         if !verification.report.passed {
             return Err(CanaryError::VerificationFailed {
                 verification_id: verification_id.to_string(),
+            });
+        }
+        if verification.report.lineage != experiment.lineage {
+            return Err(CanaryError::LineageMismatch {
+                artifact: "verification",
+                expected: lineage_label(&experiment.lineage),
+                actual: lineage_label(&verification.report.lineage),
             });
         }
 
@@ -541,6 +566,21 @@ impl DefaultCanaryHarness {
                 shadow_id: shadow_id.to_string(),
             });
         }
+        if shadow.report.lineage != experiment.lineage {
+            return Err(CanaryError::LineageMismatch {
+                artifact: "shadow",
+                expected: lineage_label(&experiment.lineage),
+                actual: lineage_label(&shadow.report.lineage),
+            });
+        }
+        let baseline_strategy_id = resolve_canary_rollout_strategy_id(&self.config)?;
+        if shadow.report.baseline_strategy_id != baseline_strategy_id {
+            return Err(CanaryError::BaselineMismatch {
+                artifact: "shadow",
+                expected: baseline_strategy_id.clone(),
+                actual: shadow.report.baseline_strategy_id.clone(),
+            });
+        }
 
         let now_ms = now_ms();
         let assignment = CanaryAssignment {
@@ -549,7 +589,7 @@ impl DefaultCanaryHarness {
             experiment_path: experiment_path.display().to_string(),
             suite_name: shadow.report.suite_name.clone(),
             corpus_version: shadow.report.corpus_version.clone(),
-            baseline_strategy_id: self.config.detection.strategy.clone(),
+            baseline_strategy_id,
             candidate_strategy_id: experiment.candidate.strategy_id().to_string(),
             candidate_description: experiment.candidate.description().to_string(),
             candidate: experiment.candidate.clone(),
@@ -616,7 +656,8 @@ impl DefaultCanaryHarness {
             });
         }
 
-        let baseline = baseline_detector(&self.config)?;
+        let baseline =
+            baseline_detector(&lookup.report.assignment.baseline_strategy_id, &self.config)?;
         let candidate = candidate_detector(&lookup.report.assignment.candidate)?;
 
         let baseline_started = Instant::now();
@@ -838,233 +879,41 @@ pub fn render_canary_run_report(report: &CanaryRunReport) -> String {
     lines.join("\n")
 }
 
-#[derive(Debug, Clone)]
-enum SupportedCanaryDetector {
-    SuspiciousProcessTree {
-        strategy_id: String,
-        detector: SuspiciousProcessTreeDetector,
-    },
-    DnsExfiltration {
-        strategy_id: String,
-        detector: DnsExfiltrationDetector,
-    },
-    LateralMovement {
-        strategy_id: String,
-        detector: LateralMovementDetector,
-    },
-    CredentialAccess {
-        strategy_id: String,
-        detector: CredentialAccessDetector,
-    },
-    SuspiciousScripting {
-        strategy_id: String,
-        detector: SuspiciousScriptingDetector,
-    },
-    Persistence {
-        strategy_id: String,
-        detector: PersistenceDetector,
-    },
-    SupplyChain {
-        strategy_id: String,
-        detector: SupplyChainDetector,
-    },
-}
-
-impl DetectionStrategy for SupportedCanaryDetector {
-    fn id(&self) -> &str {
-        match self {
-            Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
-            Self::DnsExfiltration { strategy_id, .. } => strategy_id.as_str(),
-            Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
-            Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
-            Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
-            Self::Persistence { strategy_id, .. } => strategy_id.as_str(),
-            Self::SupplyChain { strategy_id, .. } => strategy_id.as_str(),
-        }
-    }
-
-    fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
-        match self {
-            Self::SuspiciousProcessTree { detector, .. } => detector.evaluate(event),
-            Self::DnsExfiltration { detector, .. } => detector.evaluate(event),
-            Self::LateralMovement { detector, .. } => detector.evaluate(event),
-            Self::CredentialAccess { detector, .. } => detector.evaluate(event),
-            Self::SuspiciousScripting { detector, .. } => detector.evaluate(event),
-            Self::Persistence { detector, .. } => detector.evaluate(event),
-            Self::SupplyChain { detector, .. } => detector.evaluate(event),
-        }
-    }
-}
-
-impl SupportedCanaryDetector {
-    fn suspicious_process_tree(
-        strategy_id: impl Into<String>,
-        profile: SuspiciousProcessTreeProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SuspiciousProcessTree {
-            strategy_id: strategy_id.into(),
-            detector: SuspiciousProcessTreeDetector::from_profile(profile)?,
-        })
-    }
-
-    fn dns_exfiltration(
-        strategy_id: impl Into<String>,
-        profile: DnsExfiltrationProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::DnsExfiltration {
-            strategy_id: strategy_id.into(),
-            detector: DnsExfiltrationDetector::from_profile(profile)?,
-        })
-    }
-
-    fn lateral_movement(
-        strategy_id: impl Into<String>,
-        profile: LateralMovementProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::LateralMovement {
-            strategy_id: strategy_id.into(),
-            detector: LateralMovementDetector::from_profile(profile)?,
-        })
-    }
-
-    fn credential_access(
-        strategy_id: impl Into<String>,
-        profile: CredentialAccessProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::CredentialAccess {
-            strategy_id: strategy_id.into(),
-            detector: CredentialAccessDetector::from_profile(profile)?,
-        })
-    }
-
-    fn suspicious_scripting(
-        strategy_id: impl Into<String>,
-        profile: SuspiciousScriptingProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SuspiciousScripting {
-            strategy_id: strategy_id.into(),
-            detector: SuspiciousScriptingDetector::from_profile(profile)?,
-        })
-    }
-
-    fn persistence(
-        strategy_id: impl Into<String>,
-        profile: PersistenceProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::Persistence {
-            strategy_id: strategy_id.into(),
-            detector: PersistenceDetector::from_profile(profile)?,
-        })
-    }
-
-    fn supply_chain(
-        strategy_id: impl Into<String>,
-        profile: SupplyChainProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SupplyChain {
-            strategy_id: strategy_id.into(),
-            detector: SupplyChainDetector::from_profile(profile)?,
-        })
-    }
-}
-
-fn baseline_detector(config: &SwarmConfig) -> Result<SupportedCanaryDetector, CanaryError> {
-    match config.detection.strategy.as_str() {
-        "suspicious_process_tree" => Ok(SupportedCanaryDetector::suspicious_process_tree(
-            config.detection.strategy.clone(),
-            suspicious_process_tree_profile(&config.detection)?,
-        )?),
-        "dns_exfiltration" => Ok(SupportedCanaryDetector::dns_exfiltration(
-            config.detection.strategy.clone(),
-            dns_exfiltration_profile(&config.detection)?,
-        )?),
-        "lateral_movement" => Ok(SupportedCanaryDetector::lateral_movement(
-            config.detection.strategy.clone(),
-            lateral_movement_profile(&config.detection)?,
-        )?),
-        "credential_access" => Ok(SupportedCanaryDetector::credential_access(
-            config.detection.strategy.clone(),
-            credential_access_profile(&config.detection)?,
-        )?),
-        "suspicious_scripting" => Ok(SupportedCanaryDetector::suspicious_scripting(
-            config.detection.strategy.clone(),
-            suspicious_scripting_profile(&config.detection)?,
-        )?),
-        "persistence" => Ok(SupportedCanaryDetector::persistence(
-            config.detection.strategy.clone(),
-            persistence_profile(&config.detection)?,
-        )?),
-        "supply_chain" => Ok(SupportedCanaryDetector::supply_chain(
-            config.detection.strategy.clone(),
-            supply_chain_profile(&config.detection)?,
-        )?),
-        other => Err(CanaryError::UnsupportedDetector {
-            strategy: other.to_string(),
-        }),
-    }
+fn baseline_detector(
+    strategy_id: &str,
+    config: &SwarmConfig,
+) -> Result<RuntimeDetector, CanaryError> {
+    build_detector_from_strategy(strategy_id, &config.detection).map_err(detector_factory_error)
 }
 
 fn candidate_detector(
     candidate: &DetectorCandidateManifest,
-) -> Result<SupportedCanaryDetector, CanaryError> {
-    match candidate {
-        DetectorCandidateManifest::SuspiciousProcessTree {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedCanaryDetector::suspicious_process_tree(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::DnsExfiltration {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedCanaryDetector::dns_exfiltration(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::LateralMovement {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedCanaryDetector::lateral_movement(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::CredentialAccess {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedCanaryDetector::credential_access(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::SuspiciousScripting {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedCanaryDetector::suspicious_scripting(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::Persistence {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedCanaryDetector::persistence(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::SupplyChain {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedCanaryDetector::supply_chain(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
+) -> Result<RuntimeDetector, CanaryError> {
+    build_detector_from_candidate(candidate).map_err(detector_factory_error)
+}
+
+fn resolve_canary_rollout_strategy_id(config: &SwarmConfig) -> Result<String, CanaryError> {
+    Ok(config.detection.resolve_rollout_strategy_id(
+        "canary.strategy_id",
+        config.canary.strategy_id.as_deref(),
+        true,
+    )?)
+}
+
+fn detector_factory_error(error: DetectorFactoryError) -> CanaryError {
+    match error {
+        DetectorFactoryError::DetectorProfile(source) => CanaryError::DetectorProfile(source),
+        DetectorFactoryError::UnsupportedDetector { strategy } => {
+            CanaryError::UnsupportedDetector { strategy }
+        }
     }
+}
+
+fn lineage_label(lineage: &ExperimentLineage) -> String {
+    format!(
+        "parent_strategy_id={} mutation={} rationale={}",
+        lineage.parent_strategy_id, lineage.mutation, lineage.rationale
+    )
 }
 
 fn evaluate_thresholds(
@@ -1216,8 +1065,8 @@ struct CanaryIndex {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        CanaryRecommendation, CanaryRollbackTrigger, CanaryRunStatus, DefaultCanaryHarness,
-        render_canary_run_report,
+        CanaryError, CanaryRecommendation, CanaryRollbackTrigger, CanaryRunStatus,
+        DefaultCanaryHarness, render_canary_run_report,
     };
     use crate::config::RuntimeMode;
     use crate::replay::{
@@ -1237,7 +1086,8 @@ mod tests {
     };
     use swarm_core::types::Severity;
     use swarm_whisker::{
-        ProcessStartEvent, SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
+        DetectionStrategy, NetworkConnectProfile, ProcessStartEvent, SuspiciousProcessTreeProfile,
+        TelemetryEvent, TelemetryPayload,
     };
 
     fn unique_temp_dir(label: &str) -> PathBuf {
@@ -1270,6 +1120,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
@@ -1285,11 +1136,14 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: Default::default(),
                 backend: PheromoneBackendConfig::InMemory,
             },
             policy: PolicyConfig {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
+                ..PolicyConfig::default()
             },
             response_adapter: ResponseAdapterConfig::Sandbox,
             siem_forward: None,
@@ -1304,6 +1158,7 @@ mod tests {
             canary: CanaryConfig {
                 enabled: true,
                 slot_id: "canary-primary".to_string(),
+                strategy_id: Some("suspicious_process_tree".to_string()),
                 observation_window_events: 2,
                 max_candidate_only_rate: 0.0,
                 max_baseline_miss_rate: 0.0,
@@ -1341,6 +1196,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn network_connect_baseline_and_candidate_detectors_are_supported()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = canary_config();
+        config.detection.strategy = "network_connect".to_string();
+        config.canary.strategy_id = Some("network_connect".to_string());
+
+        let baseline = super::baseline_detector("network_connect", &config)?;
+        assert_eq!(baseline.id(), "network_connect");
+
+        let candidate = super::candidate_detector(&DetectorCandidateManifest::NetworkConnect {
+            strategy_id: "network_connect_candidate".to_string(),
+            description: "network connect candidate".to_string(),
+            profile: NetworkConnectProfile {
+                suspicious_ports: vec![4444],
+                ..NetworkConnectProfile::default()
+            },
+        })?;
+        assert_eq!(candidate.id(), "network_connect_candidate");
+        Ok(())
+    }
+
     fn experiment_manifest(
         name: &str,
         candidate: DetectorCandidateManifest,
@@ -1374,6 +1251,16 @@ mod tests {
         root: &Path,
         manifest: &DetectorExperimentManifest,
     ) -> (PathBuf, PathBuf, String, String) {
+        persist_supporting_artifacts_with_overrides(root, manifest, None, None, None)
+    }
+
+    fn persist_supporting_artifacts_with_overrides(
+        root: &Path,
+        manifest: &DetectorExperimentManifest,
+        verification_lineage: Option<ExperimentLineage>,
+        shadow_lineage: Option<ExperimentLineage>,
+        shadow_baseline_strategy_id: Option<&str>,
+    ) -> (PathBuf, PathBuf, String, String) {
         let verifications_dir = root.join("verifications");
         let shadows_dir = root.join("shadows");
         let experiment_id = format!(
@@ -1392,7 +1279,7 @@ mod tests {
             corpus_name: "office_detector_safety_v1".to_string(),
             corpus_path: "../verifications/office-detector-safety-v1.yaml".to_string(),
             created_at_ms: 1_700_000_000_000,
-            lineage: manifest.lineage.clone(),
+            lineage: verification_lineage.unwrap_or_else(|| manifest.lineage.clone()),
             candidate_strategy_id: manifest.candidate.strategy_id().to_string(),
             candidate_description: manifest.candidate.description().to_string(),
             invariants: vec![],
@@ -1411,8 +1298,10 @@ mod tests {
             suite_name: "hellcat_office_v1".to_string(),
             suite_path: manifest.corpus.suite.clone(),
             corpus_version: "office_detector_safety_v1".to_string(),
-            lineage: manifest.lineage.clone(),
-            baseline_strategy_id: "suspicious_process_tree".to_string(),
+            lineage: shadow_lineage.unwrap_or_else(|| manifest.lineage.clone()),
+            baseline_strategy_id: shadow_baseline_strategy_id
+                .unwrap_or(&manifest.lineage.parent_strategy_id)
+                .to_string(),
             candidate_strategy_id: manifest.candidate.strategy_id().to_string(),
             candidate_description: manifest.candidate.description().to_string(),
             comparison: StrategyExperimentComparison {
@@ -1499,6 +1388,92 @@ mod tests {
                 signature_valid: None,
             }),
         }
+    }
+
+    #[test]
+    fn canary_start_rejects_verification_lineage_mismatch() {
+        let root = unique_temp_dir("verification-lineage-mismatch");
+        let results_dir = root.join("canaries");
+        let config = canary_config();
+        let manifest = experiment_manifest("control", control_candidate());
+        let experiment_path = write_experiment(&root, &manifest);
+        let stale_lineage = ExperimentLineage {
+            parent_strategy_id: manifest.lineage.parent_strategy_id.clone(),
+            mutation: "stale".to_string(),
+            rationale: "artifact drift".to_string(),
+        };
+        let (verifications_dir, shadows_dir, verification_id, shadow_id) =
+            persist_supporting_artifacts_with_overrides(
+                &root,
+                &manifest,
+                Some(stale_lineage),
+                None,
+                None,
+            );
+
+        let harness =
+            DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
+                .unwrap();
+        let error = harness
+            .start_run(
+                &experiment_path,
+                &verifications_dir,
+                &verification_id,
+                &shadows_dir,
+                &shadow_id,
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CanaryError::LineageMismatch {
+                artifact: "verification",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn canary_start_rejects_shadow_baseline_scope_mismatch() {
+        let root = unique_temp_dir("shadow-baseline-mismatch");
+        let results_dir = root.join("canaries");
+        let mut config = canary_config();
+        config.detection.strategies = vec![
+            "suspicious_process_tree".to_string(),
+            "dns_exfiltration".to_string(),
+        ];
+        config.canary.strategy_id = Some("suspicious_process_tree".to_string());
+        let manifest = experiment_manifest("control", control_candidate());
+        let experiment_path = write_experiment(&root, &manifest);
+        let (verifications_dir, shadows_dir, verification_id, shadow_id) =
+            persist_supporting_artifacts_with_overrides(
+                &root,
+                &manifest,
+                None,
+                None,
+                Some("dns_exfiltration"),
+            );
+
+        let harness =
+            DefaultCanaryHarness::from_config("rulesets/default.yaml", config, &results_dir)
+                .unwrap();
+        let error = harness
+            .start_run(
+                &experiment_path,
+                &verifications_dir,
+                &verification_id,
+                &shadows_dir,
+                &shadow_id,
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CanaryError::BaselineMismatch {
+                artifact: "shadow",
+                ..
+            }
+        ));
     }
 
     #[test]

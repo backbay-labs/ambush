@@ -6,6 +6,7 @@
 //! - evaluate those requests against a static policy gate
 //! - mint short-lived capability leases for authorized execution
 
+pub mod configurable_gate;
 pub mod static_gate;
 
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,8 @@ pub struct ApprovalContext {
 pub struct PolicyDecision {
     /// Deterministic policy verdict.
     pub verdict: PolicyVerdict,
+    /// Stable rule identifier responsible for the final verdict.
+    pub rule_name: String,
     /// Human-readable explanation for audit logs and operators.
     pub reason: String,
 }
@@ -60,22 +63,40 @@ pub enum PolicyVerdict {
 
 impl PolicyDecision {
     pub fn deny(reason: impl Into<String>) -> Self {
+        Self::deny_with_rule("policy.unknown", reason)
+    }
+
+    pub fn deny_with_rule(rule_name: impl Into<String>, reason: impl Into<String>) -> Self {
         Self {
             verdict: PolicyVerdict::Deny,
+            rule_name: rule_name.into(),
             reason: reason.into(),
         }
     }
 
     pub fn allow(reason: impl Into<String>) -> Self {
+        Self::allow_with_rule("policy.unknown", reason)
+    }
+
+    pub fn allow_with_rule(rule_name: impl Into<String>, reason: impl Into<String>) -> Self {
         Self {
             verdict: PolicyVerdict::Allow,
+            rule_name: rule_name.into(),
             reason: reason.into(),
         }
     }
 
     pub fn require_human(reason: impl Into<String>) -> Self {
+        Self::require_human_with_rule("policy.unknown", reason)
+    }
+
+    pub fn require_human_with_rule(
+        rule_name: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
         Self {
             verdict: PolicyVerdict::RequireHuman,
+            rule_name: rule_name.into(),
             reason: reason.into(),
         }
     }

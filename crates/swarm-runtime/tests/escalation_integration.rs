@@ -12,7 +12,22 @@ use swarm_core::types::{AgentId, EscalationEvent, Severity};
 use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
 use swarm_runtime::detection::detect_and_deposit;
 use swarm_runtime::escalation::ConcentrationMonitor;
-use swarm_whisker::DnsExfiltrationDetector;
+use swarm_whisker::{DetectionFinding, DetectionStrategy, DnsExfiltrationDetector};
+
+#[derive(Clone)]
+struct StaticDetector {
+    findings: Vec<DetectionFinding>,
+}
+
+impl DetectionStrategy for StaticDetector {
+    fn id(&self) -> &str {
+        "static"
+    }
+
+    fn evaluate(&self, _event: &TelemetryEvent) -> Vec<DetectionFinding> {
+        self.findings.clone()
+    }
+}
 
 fn test_signing_key() -> SigningKey {
     SigningKey::from_bytes(&[42u8; 32])
@@ -25,6 +40,8 @@ fn test_config() -> PheromoneConfig {
         min_sources_for_escalation: 2,
         alert_threshold: 2.0,
         incident_threshold: 5.0,
+        deescalation_cooldown_secs: 300,
+        response_playbook: Default::default(),
         backend: PheromoneBackendConfig::InMemory,
     }
 }
@@ -70,7 +87,37 @@ fn threat_intel_alert_config() -> PheromoneConfig {
         min_sources_for_escalation: 1,
         alert_threshold: 0.9,
         incident_threshold: 1.5,
+        deescalation_cooldown_secs: 300,
+        response_playbook: Default::default(),
         backend: PheromoneBackendConfig::InMemory,
+    }
+}
+
+fn synthetic_event(event_id: &str) -> TelemetryEvent {
+    TelemetryEvent {
+        source: "synthetic".to_string(),
+        event_id: event_id.to_string(),
+        timestamp: 1_700_000_000,
+        host_id: Some("host-a".to_string()),
+        payload: TelemetryPayload::DnsQuery(DnsQueryEvent {
+            query_name: "abcdefghijklabcdefghijkl.evil.com".to_string(),
+            query_type: "A".to_string(),
+            source_ip: Some("10.0.0.4".to_string()),
+            process_name: Some("powershell".to_string()),
+            response_code: Some("NOERROR".to_string()),
+        }),
+    }
+}
+
+fn finding(strategy_id: &str, finding_id: &str) -> DetectionFinding {
+    DetectionFinding {
+        finding_id: finding_id.to_string(),
+        event_id: "evt-cross-strategy".to_string(),
+        threat_class: ThreatClass::Execution,
+        severity: Severity::High,
+        confidence: 1.0,
+        evidence: serde_json::json!({"strategy_id": strategy_id}),
+        strategy_id: strategy_id.to_string(),
     }
 }
 
@@ -281,9 +328,62 @@ async fn mode_progression_normal_to_alert_to_incident() {
         mode_transition_at: monitor.mode_state().last_transition_at,
         now: 1_700_000_010,
         peer_findings: Vec::<AgentFinding>::new(),
+        agent_health: Vec::new(),
     };
     assert_eq!(env.current_mode(), SwarmMode::Incident);
     assert_eq!(env.mode_transition_at(), Some(1_700_000_010));
+}
+
+#[tokio::test]
+async fn concentration_monitor_deescalates_after_cooldown() {
+    let config = test_config();
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let mut monitor = ConcentrationMonitor::new(config.clone(), Arc::clone(&substrate));
+    let start = 1_700_000_000;
+
+    for agent in ["agent-a", "agent-b"] {
+        substrate
+            .deposit(make_deposit(agent, ThreatClass::Execution, 1.1, start))
+            .await
+            .unwrap();
+    }
+
+    let alert = monitor.evaluate_all(start).await.unwrap();
+    assert_eq!(alert.current_mode, SwarmMode::Alert);
+    assert!(alert.mode_changed);
+    assert_eq!(
+        monitor.mode_state().triggering_threat_class,
+        Some(ThreatClass::Execution)
+    );
+
+    let quiet_start = start + 3_601;
+    let first_quiet = monitor.evaluate_all(quiet_start).await.unwrap();
+    assert!(first_quiet.events.is_empty());
+    assert!(!first_quiet.mode_changed);
+    assert_eq!(first_quiet.current_mode, SwarmMode::Alert);
+    assert_eq!(monitor.mode_state().current, SwarmMode::Alert);
+
+    let before_cooldown = monitor
+        .evaluate_all(quiet_start + config.deescalation_cooldown_secs - 1)
+        .await
+        .unwrap();
+    assert!(before_cooldown.events.is_empty());
+    assert!(!before_cooldown.mode_changed);
+    assert_eq!(before_cooldown.current_mode, SwarmMode::Alert);
+
+    let deescalated = monitor
+        .evaluate_all(quiet_start + config.deescalation_cooldown_secs)
+        .await
+        .unwrap();
+    assert!(deescalated.events.is_empty());
+    assert!(deescalated.mode_changed);
+    assert_eq!(deescalated.current_mode, SwarmMode::Normal);
+    assert_eq!(monitor.mode_state().current, SwarmMode::Normal);
+    assert_eq!(monitor.mode_state().triggering_threat_class, None);
+    assert_eq!(
+        monitor.mode_state().last_transition_at,
+        Some(quiet_start + config.deescalation_cooldown_secs)
+    );
 }
 
 #[tokio::test]
@@ -347,4 +447,85 @@ async fn threat_intel_enriched_dns_detection_triggers_alert_escalation() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].mode, SwarmMode::Alert);
     assert_eq!(records[0].threat_class, ThreatClass::DataExfiltration);
+}
+
+#[tokio::test]
+async fn cross_strategy_findings_from_one_agent_trigger_alert_escalation() {
+    let config = test_config();
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let detector = StaticDetector {
+        findings: vec![
+            finding("suspicious_process_tree", "finding-1"),
+            finding("dns_exfiltration", "finding-2"),
+        ],
+    };
+    let event = synthetic_event("evt-cross-strategy");
+
+    let outcome = detect_and_deposit(
+        &detector,
+        substrate.as_ref(),
+        &event,
+        &AgentId("whisker-primary".to_string()),
+        &config,
+        &test_signing_key(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.deposits.len(), 2);
+    assert_ne!(outcome.deposits[0].agent_id, outcome.deposits[1].agent_id);
+
+    let mut monitor = ConcentrationMonitor::new(config, Arc::clone(&substrate));
+    let escalation = monitor.evaluate_all(event.timestamp).await.unwrap();
+    assert_eq!(escalation.current_mode, SwarmMode::Alert);
+    assert!(matches!(
+        escalation.events[0],
+        EscalationEvent::Alert {
+            threat_class: ThreatClass::Execution,
+            ..
+        }
+    ));
+
+    let records = substrate.query_escalations(0).await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].mode, SwarmMode::Alert);
+    assert_eq!(records[0].distinct_sources, 2);
+}
+
+#[tokio::test]
+async fn repeated_same_strategy_findings_from_one_agent_do_not_trigger_cross_strategy_alert() {
+    let config = test_config();
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let detector = StaticDetector {
+        findings: vec![
+            finding("suspicious_process_tree", "finding-1"),
+            finding("suspicious_process_tree", "finding-2"),
+        ],
+    };
+    let event = synthetic_event("evt-same-strategy");
+
+    let outcome = detect_and_deposit(
+        &detector,
+        substrate.as_ref(),
+        &event,
+        &AgentId("whisker-primary".to_string()),
+        &config,
+        &test_signing_key(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.deposits.len(), 2);
+    assert_eq!(outcome.deposits[0].agent_id, outcome.deposits[1].agent_id);
+
+    let mut monitor = ConcentrationMonitor::new(config, Arc::clone(&substrate));
+    let escalation = monitor.evaluate_all(event.timestamp).await.unwrap();
+    assert!(escalation.events.is_empty());
+    assert_eq!(escalation.current_mode, SwarmMode::Normal);
+
+    let concentration = substrate
+        .query_concentration(&ThreatClass::Execution, event.timestamp)
+        .await
+        .unwrap();
+    assert_eq!(concentration.distinct_sources, 1);
 }

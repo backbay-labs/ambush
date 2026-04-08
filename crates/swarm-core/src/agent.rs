@@ -51,6 +51,14 @@ pub struct AgentFinding {
     pub summary: String,
 }
 
+/// Read-only health summary for one registered agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentHealthEntry {
+    pub id: String,
+    pub role: AgentRole,
+    pub health: AgentHealth,
+}
+
 /// Broadcast event emitted inside the swarm runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -74,6 +82,8 @@ pub struct SwarmEnvironment {
     pub now: i64,
     /// Read-only view of recent findings emitted by peer agents.
     pub peer_findings: Vec<AgentFinding>,
+    /// Read-only health summary for registered agents visible this tick.
+    pub agent_health: Vec<AgentHealthEntry>,
 }
 
 impl SwarmEnvironment {
@@ -85,6 +95,11 @@ impl SwarmEnvironment {
     /// Timestamp of the most recent upward swarm-mode transition.
     pub fn mode_transition_at(&self) -> Option<i64> {
         self.mode_transition_at
+    }
+
+    /// Agent-health summary visible to this agent for the current tick.
+    pub fn agent_health_summary(&self) -> &[AgentHealthEntry] {
+        &self.agent_health
     }
 }
 
@@ -124,6 +139,17 @@ impl SwarmModeState {
         self.current = mode;
         self.last_transition_at = Some(now);
         self.triggering_threat_class = Some(threat_class);
+        true
+    }
+
+    pub fn transition_down(&mut self, mode: SwarmMode, now: i64) -> bool {
+        if mode >= self.current {
+            return false;
+        }
+
+        self.current = mode;
+        self.last_transition_at = Some(now);
+        self.triggering_threat_class = None;
         true
     }
 }
@@ -222,6 +248,20 @@ mod tests {
     }
 
     #[test]
+    fn mode_state_transition_down_clears_triggering_threat_class() {
+        let mut state = SwarmModeState::new();
+        assert!(state.transition_to(SwarmMode::Alert, ThreatClass::Execution, 1_700_000_001));
+
+        assert!(state.transition_down(SwarmMode::Normal, 1_700_000_050));
+        assert_eq!(state.current, SwarmMode::Normal);
+        assert_eq!(state.last_transition_at, Some(1_700_000_050));
+        assert_eq!(state.triggering_threat_class, None);
+
+        assert!(!state.transition_down(SwarmMode::Normal, 1_700_000_060));
+        assert!(!state.transition_down(SwarmMode::Incident, 1_700_000_070));
+    }
+
+    #[test]
     fn environment_exposes_mode_helpers() {
         let env = SwarmEnvironment {
             pheromones: Vec::new(),
@@ -229,9 +269,11 @@ mod tests {
             mode_transition_at: Some(1_700_000_100),
             now: 1_700_000_200,
             peer_findings: Vec::<AgentFinding>::new(),
+            agent_health: Vec::new(),
         };
 
         assert_eq!(env.current_mode(), SwarmMode::Alert);
         assert_eq!(env.mode_transition_at(), Some(1_700_000_100));
+        assert!(env.agent_health_summary().is_empty());
     }
 }

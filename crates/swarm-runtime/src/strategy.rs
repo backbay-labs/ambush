@@ -1369,6 +1369,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
@@ -1384,11 +1385,14 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: Default::default(),
                 backend: PheromoneBackendConfig::InMemory,
             },
             policy: PolicyConfig {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
+                ..PolicyConfig::default()
             },
             response_adapter: ResponseAdapterConfig::Sandbox,
             siem_forward: None,
@@ -1403,6 +1407,7 @@ mod tests {
             canary: CanaryConfig {
                 enabled: true,
                 slot_id: "canary-primary".to_string(),
+                strategy_id: Some("suspicious_process_tree".to_string()),
                 observation_window_events: 2,
                 max_candidate_only_rate: 0.25,
                 max_baseline_miss_rate: 0.25,
@@ -1412,6 +1417,7 @@ mod tests {
             promotion: PromotionConfig {
                 enabled: true,
                 window_id: "production-primary".to_string(),
+                strategy_id: None,
                 observation_window_events: 2,
                 max_promoted_only_rate: 0.20,
                 max_fallback_recovery_rate: 0.20,
@@ -1420,6 +1426,14 @@ mod tests {
             },
             operator: swarm_core::config::OperatorSurfaceConfig::default(),
         }
+    }
+
+    fn rollout_baseline_strategy_id(config: &SwarmConfig) -> String {
+        config
+            .canary
+            .strategy_id
+            .clone()
+            .unwrap_or_else(|| config.detection.strategy.clone())
     }
 
     fn control_candidate() -> DetectorCandidateManifest {
@@ -1435,6 +1449,7 @@ mod tests {
         candidate: &DetectorCandidateManifest,
         updated_at_ms: i64,
     ) -> CanaryRunReport {
+        let baseline_strategy_id = rollout_baseline_strategy_id(config);
         CanaryRunReport {
             run_id: format!(
                 "canary:{}:{}:1700000000000",
@@ -1452,12 +1467,12 @@ mod tests {
                 experiment_path: "experiments/test.yaml".to_string(),
                 suite_name: "hellcat_office_v1".to_string(),
                 corpus_version: "2026-04-03".to_string(),
-                baseline_strategy_id: config.detection.strategy.clone(),
+                baseline_strategy_id: baseline_strategy_id.clone(),
                 candidate_strategy_id: candidate.strategy_id().to_string(),
                 candidate_description: candidate.description().to_string(),
                 candidate: candidate.clone(),
                 lineage: ExperimentLineage {
-                    parent_strategy_id: config.detection.strategy.clone(),
+                    parent_strategy_id: baseline_strategy_id,
                     mutation: "control".to_string(),
                     rationale: "test rollout".to_string(),
                 },
@@ -1496,6 +1511,7 @@ mod tests {
         updated_at_ms: i64,
     ) -> ProductionPromotionReport {
         let canary_report = ready_canary_report(config, candidate, updated_at_ms - 500);
+        let baseline_strategy_id = rollout_baseline_strategy_id(config);
         ProductionPromotionReport {
             promotion_id: format!(
                 "promotion:{}:{}:{}",
@@ -1515,17 +1531,17 @@ mod tests {
                 experiment_name: "test".to_string(),
                 suite_name: "hellcat_office_v1".to_string(),
                 corpus_version: "2026-04-03".to_string(),
-                previous_production_strategy_id: config.detection.strategy.clone(),
+                previous_production_strategy_id: baseline_strategy_id.clone(),
                 promoted_strategy_id: candidate.strategy_id().to_string(),
                 promoted_description: candidate.description().to_string(),
                 previous_production_candidate: DetectorCandidateManifest::SuspiciousProcessTree {
-                    strategy_id: config.detection.strategy.clone(),
+                    strategy_id: baseline_strategy_id.clone(),
                     description: "current production baseline".to_string(),
                     profile: SuspiciousProcessTreeProfile::default(),
                 },
                 promoted_candidate: candidate.clone(),
                 lineage: ExperimentLineage {
-                    parent_strategy_id: config.detection.strategy.clone(),
+                    parent_strategy_id: baseline_strategy_id,
                     mutation: "control".to_string(),
                     rationale: "test rollout".to_string(),
                 },

@@ -216,7 +216,11 @@ mod tests {
 
         // After rotation, the active journal should only have the new entry
         let entries = journal.read_entries(None).unwrap();
-        assert_eq!(entries.len(), 1, "active journal should have 1 entry after rotation");
+        assert_eq!(
+            entries.len(),
+            1,
+            "active journal should have 1 entry after rotation"
+        );
         assert_eq!(entries[0].receipt_id, "receipt-rot-final");
 
         // A rotated file should exist with a numeric timestamp suffix
@@ -230,10 +234,17 @@ mod tests {
                 name.starts_with(prefix) && name != prefix
             })
             .collect();
-        assert_eq!(rotated_files.len(), 1, "should have exactly one rotated file");
+        assert_eq!(
+            rotated_files.len(),
+            1,
+            "should have exactly one rotated file"
+        );
         let rotated_name = rotated_files[0].file_name().to_string_lossy().to_string();
         let suffix = rotated_name.strip_prefix(&format!("{prefix}.")).unwrap();
-        assert!(suffix.parse::<u128>().is_ok(), "suffix should be a numeric timestamp");
+        assert!(
+            suffix.parse::<u128>().is_ok(),
+            "suffix should be a numeric timestamp"
+        );
 
         // Cleanup
         let _ = fs::remove_file(&path);

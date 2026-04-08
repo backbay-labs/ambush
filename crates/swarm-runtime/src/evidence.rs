@@ -1967,6 +1967,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
@@ -1982,11 +1983,14 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: Default::default(),
                 backend: PheromoneBackendConfig::InMemory,
             },
             policy: PolicyConfig {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
+                ..PolicyConfig::default()
             },
             response_adapter: swarm_core::config::ResponseAdapterConfig::Sandbox,
             siem_forward: None,

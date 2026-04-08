@@ -173,6 +173,8 @@ mod tests {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: Default::default(),
             backend: PheromoneBackendConfig::InMemory,
         }
     }
@@ -206,6 +208,7 @@ mod tests {
             mode_transition_at: None,
             now: 1_700_000_000,
             peer_findings: Vec::new(),
+            agent_health: Vec::new(),
         }
     }
 

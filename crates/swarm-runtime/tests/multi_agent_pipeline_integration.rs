@@ -21,6 +21,10 @@ use swarm_runtime::whisker_agent::WhiskerAgent;
 use swarm_spine::IncidentStore;
 use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
+fn is_strategy_scoped_whisker_deposit(agent_id: &str) -> bool {
+    agent_id.starts_with("whisker-primary:") && agent_id.ends_with("suspicious_process_tree")
+}
+
 fn integration_config() -> SwarmConfig {
     SwarmConfig {
         schema_version: 1,
@@ -39,6 +43,7 @@ fn integration_config() -> SwarmConfig {
             max_heap_pressure: 0.90,
             secret_dir: None,
             agent_tick_timeout_ms: 500,
+            governance_degraded_tick_threshold: 3,
             max_dead_letter_bytes: None,
         },
         detection: DetectionConfig {
@@ -54,11 +59,14 @@ fn integration_config() -> SwarmConfig {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: Default::default(),
             backend: PheromoneBackendConfig::InMemory,
         },
         policy: PolicyConfig {
             human_gate_severity: Severity::High,
             lease_ttl_ms: 60_000,
+            ..PolicyConfig::default()
         },
         response_adapter: swarm_core::config::ResponseAdapterConfig::Sandbox,
         siem_forward: None,
@@ -201,7 +209,7 @@ async fn full_multi_agent_pipeline() -> Result<(), Box<dyn Error>> {
     assert!(
         deposits
             .iter()
-            .any(|deposit| deposit.agent_id.0 == "whisker-primary")
+            .any(|deposit| is_strategy_scoped_whisker_deposit(&deposit.agent_id.0))
     );
     assert!(
         deposits

@@ -4,10 +4,10 @@ use serde_json::Value;
 use serde_yaml::Value as YamlValue;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use swarm_whisker::{
-    CredentialAccessProfile, DnsExfiltrationProfile, LateralMovementProfile, PersistenceProfile,
-    ProfileValidationError, SupplyChainProfile, SuspiciousProcessTreeProfile,
+    CredentialAccessProfile, DnsExfiltrationProfile, LateralMovementProfile, NetworkConnectProfile,
+    PersistenceProfile, ProfileValidationError, SupplyChainProfile, SuspiciousProcessTreeProfile,
     SuspiciousScriptingProfile,
 };
 
@@ -101,13 +101,15 @@ impl SwarmSecretProvider for FileEnvSecretProvider {
                 reason: "file secret name must not be empty".to_string(),
             });
         }
+        validate_secret_name(secret_name, &format!("{PREFIX}{reference}"))?;
         let Some(secret_dir) = &self.secret_dir else {
             return Err(SecretResolutionError::InvalidReference {
                 reference: format!("{PREFIX}{reference}"),
                 reason: "runtime.secret_dir must be configured for file-backed secrets".to_string(),
             });
         };
-        let path = secret_dir.join(secret_name);
+        let path =
+            canonical_secret_file_path(secret_dir, secret_name, &format!("{PREFIX}{reference}"))?;
         let value =
             fs::read_to_string(&path).map_err(|source| SecretResolutionError::ReadFile {
                 path: path.clone(),
@@ -122,6 +124,51 @@ impl SwarmSecretProvider for FileEnvSecretProvider {
         }
         Ok(trimmed.to_string())
     }
+}
+
+fn validate_secret_name(secret_name: &str, reference: &str) -> Result<(), SecretResolutionError> {
+    let path = Path::new(secret_name);
+    if path.is_absolute() {
+        return Err(SecretResolutionError::InvalidReference {
+            reference: reference.to_string(),
+            reason: "file secret name must be relative to runtime.secret_dir".to_string(),
+        });
+    }
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(SecretResolutionError::InvalidReference {
+            reference: reference.to_string(),
+            reason: "file secret name must not contain path traversal or non-normal components"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn canonical_secret_file_path(
+    secret_dir: &Path,
+    secret_name: &str,
+    reference: &str,
+) -> Result<PathBuf, SecretResolutionError> {
+    let root = fs::canonicalize(secret_dir).map_err(|source| SecretResolutionError::ReadFile {
+        path: secret_dir.to_path_buf(),
+        source,
+    })?;
+    let candidate = secret_dir.join(secret_name);
+    let resolved =
+        fs::canonicalize(&candidate).map_err(|source| SecretResolutionError::ReadFile {
+            path: candidate.clone(),
+            source,
+        })?;
+    if !resolved.starts_with(&root) {
+        return Err(SecretResolutionError::InvalidReference {
+            reference: reference.to_string(),
+            reason: "resolved secret path escapes runtime.secret_dir".to_string(),
+        });
+    }
+    Ok(resolved)
 }
 
 /// Errors raised while parsing and validating detector profile payloads.
@@ -564,6 +611,21 @@ pub(crate) fn supply_chain_profile(
     )
 }
 
+pub(crate) fn network_connect_profile(
+    config: &DetectionConfig,
+) -> Result<NetworkConnectProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "network_connect",
+        NetworkConnectProfile {
+            high_confidence_threshold: config.high_confidence_threshold,
+            medium_confidence_threshold: config.medium_confidence_threshold,
+            ..NetworkConnectProfile::default()
+        },
+        config.profiles.network_connect.as_ref(),
+        NetworkConnectProfile::validate,
+    )
+}
+
 pub(crate) fn validate_detector_profiles(
     config: &DetectionConfig,
 ) -> Result<(), DetectorProfileError> {
@@ -587,6 +649,9 @@ pub(crate) fn validate_detector_profiles(
     }
     if config.profiles.supply_chain.is_some() {
         supply_chain_profile(config)?;
+    }
+    if config.profiles.network_connect.is_some() {
+        network_connect_profile(config)?;
     }
     Ok(())
 }
@@ -616,6 +681,9 @@ pub(crate) fn validate_all_detector_profiles(
             }
             "supply_chain" => {
                 supply_chain_profile(config)?;
+            }
+            "network_connect" => {
+                network_connect_profile(config)?;
             }
             _ => {}
         }
@@ -664,7 +732,8 @@ fn merge_json_value(target: &mut Value, overlay: Value) {
 mod tests {
     use super::{
         CURRENT_SCHEMA_VERSION, GenericJsonPayloadMappingConfig, RuntimeConfigError, RuntimeMode,
-        TelemetryBridgeConfig, load_config, parse_config, suspicious_process_tree_profile,
+        TelemetryBridgeConfig, load_config, network_connect_profile, parse_config,
+        suspicious_process_tree_profile,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -678,6 +747,7 @@ mod tests {
         assert_eq!(config.runtime.mode, RuntimeMode::DetectOnly);
         assert_eq!(config.runtime.telemetry_sources.len(), 1);
         assert!(config.runtime.require_durable_live_response);
+        assert_eq!(config.runtime.governance_degraded_tick_threshold, 3);
         assert!(config.canary.enabled);
         assert!(config.promotion.enabled);
     }
@@ -861,6 +931,105 @@ canary:
     }
 
     #[test]
+    fn multi_strategy_canary_scope_parses_from_yaml() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  strategies:
+    - suspicious_process_tree
+    - dns_exfiltration
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+canary:
+  enabled: true
+  slot_id: canary-primary
+  strategy_id: dns_exfiltration
+  observation_window_events: 2
+  max_candidate_only_rate: 0.25
+  max_baseline_miss_rate: 0.25
+  max_detect_latency_us: 10000
+  max_total_detections: 4
+promotion:
+  enabled: true
+  window_id: production-primary
+  observation_window_events: 2
+  max_promoted_only_rate: 0.2
+  max_fallback_recovery_rate: 0.25
+  max_detect_latency_us: 10000
+  max_total_detections: 4
+"#;
+
+        let config = parse_config(yaml, "inline").unwrap();
+        assert_eq!(config.detection.active_strategies().len(), 2);
+        assert_eq!(
+            config.canary.strategy_id.as_deref(),
+            Some("dns_exfiltration")
+        );
+        assert_eq!(config.promotion.strategy_id, None);
+    }
+
+    #[test]
+    fn multi_strategy_canary_without_scope_is_rejected() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  strategies:
+    - suspicious_process_tree
+    - dns_exfiltration
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+canary:
+  enabled: true
+  slot_id: canary-primary
+  observation_window_events: 2
+  max_candidate_only_rate: 0.25
+  max_baseline_miss_rate: 0.25
+  max_detect_latency_us: 10000
+  max_total_detections: 4
+"#;
+
+        let error = parse_config(yaml, "inline").unwrap_err();
+        match error {
+            RuntimeConfigError::Validation { source_name, .. } => assert_eq!(source_name, "inline"),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn invalid_promotion_rate_is_rejected() {
         let yaml = r#"
 name: test
@@ -1017,6 +1186,65 @@ policy:
         assert_eq!(profile.suspicious_children, vec!["curl".to_string()]);
         assert_eq!(profile.high_confidence_threshold, 0.95);
         assert_eq!(profile.medium_confidence_threshold, 0.85);
+    }
+
+    #[test]
+    fn network_connect_profile_merges_overrides() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: network_connect
+  high_confidence_threshold: 0.92
+  medium_confidence_threshold: 0.81
+  profiles:
+    suspicious_process_tree:
+      suspicious_parents: ["python"]
+      suspicious_children: ["curl"]
+    network_connect:
+      suspicious_ports: [8080, 8443]
+      process_port_allowlist:
+        curl: [443, 8443]
+      beacon_min_sample_count: 5
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#;
+
+        let config = parse_config(yaml, "inline").unwrap();
+        let network_profile = network_connect_profile(&config.detection).unwrap();
+        assert_eq!(network_profile.suspicious_ports, vec![8080, 8443]);
+        assert_eq!(
+            network_profile.process_port_allowlist.get("curl"),
+            Some(&vec![443, 8443])
+        );
+        assert_eq!(network_profile.beacon_min_sample_count, 5);
+        assert_eq!(network_profile.high_confidence_threshold, 0.92);
+        assert_eq!(network_profile.medium_confidence_threshold, 0.81);
+
+        let process_tree_profile = suspicious_process_tree_profile(&config.detection).unwrap();
+        assert_eq!(
+            process_tree_profile.suspicious_parents,
+            vec!["python".to_string()]
+        );
+        assert_eq!(
+            process_tree_profile.suspicious_children,
+            vec!["curl".to_string()]
+        );
+        assert_eq!(process_tree_profile.high_confidence_threshold, 0.92);
+        assert_eq!(process_tree_profile.medium_confidence_threshold, 0.81);
     }
 
     #[test]
@@ -1359,6 +1587,187 @@ response_adapter:
             }
             other => panic!("expected http edr config, got {other:?}"),
         }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn secret_file_reference_rejects_path_traversal() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "swarm-runtime-config-secret-traversal-{}-{unique}",
+            std::process::id()
+        ));
+        let secret_dir = root.join("secrets");
+        fs::create_dir_all(&secret_dir).unwrap();
+        fs::write(root.join("outside-token"), "outside-secret\n").unwrap();
+        let config_path = root.join("runtime.yaml");
+        let yaml = r#"
+schema_version: 1
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+  secret_dir: secrets
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+response_adapter:
+  kind: http_edr
+  endpoint: http://127.0.0.1:9000/actions
+  auth_token: "@secret:../outside-token"
+"#;
+        fs::write(&config_path, yaml).unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(matches!(
+            error,
+            RuntimeConfigError::Validation {
+                source_name: _,
+                source: _
+            }
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("file secret name must not contain path traversal")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn secret_file_reference_rejects_absolute_paths() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "swarm-runtime-config-secret-absolute-{}-{unique}",
+            std::process::id()
+        ));
+        let secret_dir = root.join("secrets");
+        fs::create_dir_all(&secret_dir).unwrap();
+        let absolute_secret = root.join("absolute-token");
+        fs::write(&absolute_secret, "absolute-secret\n").unwrap();
+        let config_path = root.join("runtime.yaml");
+        let yaml = format!(
+            r#"
+schema_version: 1
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+  secret_dir: secrets
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+response_adapter:
+  kind: http_edr
+  endpoint: http://127.0.0.1:9000/actions
+  auth_token: "@secret:{}"
+"#,
+            absolute_secret.display()
+        );
+        fs::write(&config_path, yaml).unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("file secret name must be relative to runtime.secret_dir")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_reference_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "swarm-runtime-config-secret-symlink-{}-{unique}",
+            std::process::id()
+        ));
+        let secret_dir = root.join("secrets");
+        fs::create_dir_all(&secret_dir).unwrap();
+        let outside = root.join("outside-token");
+        fs::write(&outside, "outside-secret\n").unwrap();
+        symlink(&outside, secret_dir.join("edr-token")).unwrap();
+        let config_path = root.join("runtime.yaml");
+        let yaml = r#"
+schema_version: 1
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+  secret_dir: secrets
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+response_adapter:
+  kind: http_edr
+  endpoint: http://127.0.0.1:9000/actions
+  auth_token: "@secret:edr-token"
+"#;
+        fs::write(&config_path, yaml).unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("resolved secret path escapes runtime.secret_dir")
+        );
 
         let _ = fs::remove_dir_all(root);
     }

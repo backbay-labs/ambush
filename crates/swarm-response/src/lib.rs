@@ -15,7 +15,8 @@ pub mod webhook;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use swarm_policy::{ActionRequest, CapabilityLease};
+use swarm_core::types::AgentId;
+use swarm_policy::{ActionRequest, CapabilityLease, PolicyVerdict};
 
 pub use config::{
     CircuitBreakerConfig, HttpEdrConfig, NotificationChannelConfig, NotificationRateLimitConfig,
@@ -55,6 +56,33 @@ pub struct ResponseReceipt {
     pub summary: String,
     /// Adapter-specific evidence, status, or metadata.
     pub details: serde_json::Value,
+    /// Runtime-owned audit metadata layered on top of adapter output.
+    #[serde(default)]
+    pub audit: ResponseReceiptAudit,
+}
+
+/// Runtime-owned audit metadata attached to successful response receipts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResponseReceiptAudit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ResponsePolicyAudit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance: Option<ResponseGovernanceAudit>,
+}
+
+/// Policy attribution captured on a successful response receipt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponsePolicyAudit {
+    pub verdict: PolicyVerdict,
+    pub rule_name: String,
+    pub reason: String,
+}
+
+/// Governance attribution captured on response receipts and synthetic veto receipts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseGovernanceAudit {
+    pub governing_agent_id: AgentId,
+    pub reason: String,
 }
 
 /// Normalized response status.
@@ -135,6 +163,32 @@ impl ResponseStatus {
 }
 
 impl ResponseReceipt {
+    pub fn with_policy_audit(
+        mut self,
+        verdict: PolicyVerdict,
+        rule_name: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        self.audit.policy = Some(ResponsePolicyAudit {
+            verdict,
+            rule_name: rule_name.into(),
+            reason: reason.into(),
+        });
+        self
+    }
+
+    pub fn with_governance_audit(
+        mut self,
+        governing_agent_id: AgentId,
+        reason: impl Into<String>,
+    ) -> Self {
+        self.audit.governance = Some(ResponseGovernanceAudit {
+            governing_agent_id,
+            reason: reason.into(),
+        });
+        self
+    }
+
     pub fn into_failure(self) -> ResponseFailure {
         ResponseFailure {
             receipt_id: self.receipt_id,
@@ -144,6 +198,7 @@ impl ResponseReceipt {
             details: serde_json::json!({
                 "status": self.status,
                 "details": self.details,
+                "audit": self.audit,
             }),
         }
     }

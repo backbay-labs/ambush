@@ -774,6 +774,7 @@ mod tests {
                 },
                 policy: PolicyRecord {
                     verdict: PolicyVerdict::Allow,
+                    rule_name: "test.allow".to_string(),
                     reason: "allowed".to_string(),
                     lease: None,
                 },
@@ -784,6 +785,7 @@ mod tests {
                     status: ResponseStatus::Executed,
                     summary: "egress blocked".to_string(),
                     details: serde_json::json!({"target": "203.0.113.10"}),
+                    audit: Default::default(),
                 }),
                 created_at_ms: 1_700_000_000_123,
             },

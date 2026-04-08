@@ -1,8 +1,7 @@
 use crate::config::{
-    DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
-    lateral_movement_profile, load_config, persistence_profile, supply_chain_profile,
-    suspicious_process_tree_profile, suspicious_scripting_profile, validate_all_detector_profiles,
+    DetectorProfileError, RuntimeConfigError, load_config, validate_all_detector_profiles,
 };
+use crate::detector_factory::{DetectorFactoryError, build_detector_from_strategy};
 use crate::investigation::SummaryInvestigator;
 use crate::service::{ConfiguredRuntimeStack, OperatorStatusReport, ServiceError};
 use serde::{Deserialize, Serialize};
@@ -18,11 +17,7 @@ use swarm_spine::{
     CorrelatedIncident, IncidentRecord, InvestigationBundle, InvestigationBundleRecord,
     ReplayBundle, ReplayBundleRecord, ReplayPreview,
 };
-use swarm_whisker::{
-    CompositeDetector, CredentialAccessDetector, DetectionStrategy, DnsExfiltrationDetector,
-    LateralMovementDetector, PersistenceDetector, SupplyChainDetector, SuspiciousProcessTreeDetector,
-    SuspiciousScriptingDetector,
-};
+use swarm_whisker::{CompositeDetector, DetectionStrategy};
 
 /// Errors surfaced by the repo-owned operator control surface.
 #[derive(Debug, thiserror::Error)]
@@ -129,7 +124,7 @@ pub enum IncidentLookupSelector<'a> {
 pub struct DefaultControlPlane {
     pub config_path: PathBuf,
     pub stack: ConfiguredRuntimeStack<
-        swarm_policy::static_gate::StaticApprovalGate,
+        swarm_policy::configurable_gate::ConfigurableApprovalGate,
         DispatchingExecutor,
         SummaryInvestigator,
     >,
@@ -415,65 +410,14 @@ fn build_single_detector(
     strategy_name: &str,
     config: &DetectionConfig,
 ) -> Result<Box<dyn DetectionStrategy>, ControlError> {
-    match strategy_name {
-        "suspicious_process_tree" => Ok(Box::new(
-            SuspiciousProcessTreeDetector::from_profile(suspicious_process_tree_profile(config)?)
-                .map_err(|source| DetectorProfileError::Validation {
-                strategy: "suspicious_process_tree",
-                source,
-            })?,
-        )),
-        "dns_exfiltration" => Ok(Box::new(
-            DnsExfiltrationDetector::from_profile(dns_exfiltration_profile(config)?).map_err(
-                |source| DetectorProfileError::Validation {
-                    strategy: "dns_exfiltration",
-                    source,
-                },
-            )?,
-        )),
-        "lateral_movement" => Ok(Box::new(
-            LateralMovementDetector::from_profile(lateral_movement_profile(config)?).map_err(
-                |source| DetectorProfileError::Validation {
-                    strategy: "lateral_movement",
-                    source,
-                },
-            )?,
-        )),
-        "credential_access" => Ok(Box::new(
-            CredentialAccessDetector::from_profile(credential_access_profile(config)?).map_err(
-                |source| DetectorProfileError::Validation {
-                    strategy: "credential_access",
-                    source,
-                },
-            )?,
-        )),
-        "suspicious_scripting" => Ok(Box::new(
-            SuspiciousScriptingDetector::from_profile(suspicious_scripting_profile(config)?)
-                .map_err(|source| DetectorProfileError::Validation {
-                    strategy: "suspicious_scripting",
-                    source,
-                })?,
-        )),
-        "persistence" => Ok(Box::new(
-            PersistenceDetector::from_profile(persistence_profile(config)?).map_err(|source| {
-                DetectorProfileError::Validation {
-                    strategy: "persistence",
-                    source,
-                }
-            })?,
-        )),
-        "supply_chain" => Ok(Box::new(
-            SupplyChainDetector::from_profile(supply_chain_profile(config)?).map_err(|source| {
-                DetectorProfileError::Validation {
-                    strategy: "supply_chain",
-                    source,
-                }
-            })?,
-        )),
-        other => Err(ControlError::UnsupportedDetector {
-            strategy: other.to_string(),
-        }),
-    }
+    Ok(Box::new(
+        build_detector_from_strategy(strategy_name, config).map_err(|error| match error {
+            DetectorFactoryError::DetectorProfile(source) => ControlError::DetectorProfile(source),
+            DetectorFactoryError::UnsupportedDetector { strategy } => {
+                ControlError::UnsupportedDetector { strategy }
+            }
+        })?,
+    ))
 }
 
 fn render_status(envelope: &ControlEnvelope<OperatorStatusReport>) -> String {
@@ -619,8 +563,9 @@ mod tests {
     use std::sync::Arc;
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, InvestigationConfig,
-        PheromoneBackendConfig, PheromoneConfig, PolicyConfig, PromotionConfig,
-        ResponseAdapterConfig, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        PheromoneBackendConfig, PheromoneConfig, PolicyConfig, PolicyRuleConfig,
+        PolicyRuleDecision, PromotionConfig, ResponseAdapterConfig, RuntimeSettings, SwarmConfig,
+        TelemetrySourceConfig,
     };
     use swarm_core::pheromone::{
         ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
@@ -629,6 +574,20 @@ mod tests {
     use swarm_pheromone::PheromoneSubstrate;
     use swarm_policy::ApprovalContext;
     use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
+
+    fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
+        vec![PolicyRuleConfig {
+            name: "control-test-allow-execution".to_string(),
+            decision: PolicyRuleDecision::Allow,
+            threat_class: ThreatClass::Execution,
+            actions: Vec::new(),
+            min_severity: Severity::Low,
+            max_severity: Severity::Critical,
+            time_window_utc: None,
+            max_actions_per_agent_per_minute: None,
+            reason: Some("control-plane tests allow execution responses".to_string()),
+        }]
+    }
 
     fn control_config() -> SwarmConfig {
         SwarmConfig {
@@ -648,6 +607,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: swarm_core::config::DetectionConfig {
@@ -663,11 +623,15 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: Default::default(),
                 backend: PheromoneBackendConfig::InMemory,
             },
             policy: PolicyConfig {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
+                rules: permissive_policy_rules(),
+                ..PolicyConfig::default()
             },
             response_adapter: ResponseAdapterConfig::Sandbox,
             siem_forward: None,

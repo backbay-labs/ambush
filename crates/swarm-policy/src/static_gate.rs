@@ -1,6 +1,9 @@
 use crate::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
 };
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, MutexGuard};
+use swarm_core::config::PolicyConfig;
 use swarm_core::types::{ResponseAction, Severity};
 
 /// Minimal deterministic gate for the first live-response slice.
@@ -10,18 +13,27 @@ pub struct StaticApprovalGate {
     pub human_gate_severity: Severity,
     /// Lease TTL for authorized requests.
     pub lease_ttl_ms: i64,
+    /// Per-scope one-minute action budget.
+    pub max_actions_per_scope_per_minute: usize,
+    scope_windows: Arc<Mutex<HashMap<String, VecDeque<i64>>>>,
 }
 
 impl Default for StaticApprovalGate {
     fn default() -> Self {
-        Self {
-            human_gate_severity: Severity::High,
-            lease_ttl_ms: 60_000,
-        }
+        Self::from_config(&PolicyConfig::default())
     }
 }
 
 impl StaticApprovalGate {
+    pub fn from_config(config: &PolicyConfig) -> Self {
+        Self {
+            human_gate_severity: config.human_gate_severity,
+            lease_ttl_ms: config.lease_ttl_ms,
+            max_actions_per_scope_per_minute: config.max_actions_per_scope_per_minute,
+            scope_windows: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
     fn destructive_action(request: &ActionRequest) -> bool {
         matches!(
             request.action,
@@ -31,7 +43,7 @@ impl StaticApprovalGate {
         )
     }
 
-    fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
+    pub(crate) fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
         if request.evidence.is_null() {
             return Err(ApprovalError::InvalidRequest(
                 "evidence bundle must not be null".to_string(),
@@ -84,14 +96,56 @@ impl StaticApprovalGate {
         }
     }
 
-    fn scope_for_action(&self, action: &ResponseAction) -> Option<String> {
-        match action {
-            ResponseAction::BlockEgress { target } => Some(target.clone()),
-            ResponseAction::IsolateHost { host_id } => Some(host_id.clone()),
-            ResponseAction::RevokeCredential { credential_id } => Some(credential_id.clone()),
-            ResponseAction::DeployDecoy { target_zone, .. } => Some(target_zone.clone()),
-            ResponseAction::Escalate { .. } => None,
+    fn scope_bucket(request: &ActionRequest) -> String {
+        scope_for_response_action(&request.action)
+            .unwrap_or_else(|| format!("unscoped:{}", request.action.kind()))
+    }
+
+    fn lock_windows(&self) -> MutexGuard<'_, HashMap<String, VecDeque<i64>>> {
+        self.scope_windows
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn prune_window(window: &mut VecDeque<i64>, now_ms: i64) {
+        while window
+            .front()
+            .is_some_and(|timestamp| *timestamp <= now_ms.saturating_sub(60_000))
+        {
+            window.pop_front();
         }
+    }
+
+    fn scope_rate_limit_decision(
+        &self,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+    ) -> Option<PolicyDecision> {
+        let scope = Self::scope_bucket(request);
+        let mut windows = self.lock_windows();
+        let window = windows.entry(scope.clone()).or_default();
+        Self::prune_window(window, context.now_ms);
+        if window.len() >= self.max_actions_per_scope_per_minute {
+            return Some(PolicyDecision::deny_with_rule(
+                "static.scope_rate_limit",
+                format!(
+                    "scope `{scope}` exceeded {} actions per minute",
+                    self.max_actions_per_scope_per_minute
+                ),
+            ));
+        }
+        window.push_back(context.now_ms);
+        None
+    }
+}
+
+pub fn scope_for_response_action(action: &ResponseAction) -> Option<String> {
+    match action {
+        ResponseAction::BlockEgress { target } => Some(target.clone()),
+        ResponseAction::IsolateHost { host_id } => Some(host_id.clone()),
+        ResponseAction::RevokeCredential { credential_id } => Some(credential_id.clone()),
+        ResponseAction::DeployDecoy { target_zone, .. } => Some(target_zone.clone()),
+        ResponseAction::Escalate { .. } => None,
     }
 }
 
@@ -99,12 +153,13 @@ impl ApprovalGate for StaticApprovalGate {
     fn evaluate(
         &self,
         request: &ActionRequest,
-        _context: &ApprovalContext,
+        context: &ApprovalContext,
     ) -> Result<PolicyDecision, ApprovalError> {
         self.validate_request(request)?;
 
         if Self::destructive_action(request) && request.severity == Severity::Low {
-            return Ok(PolicyDecision::deny(
+            return Ok(PolicyDecision::deny_with_rule(
+                "static.minimum_severity",
                 "destructive actions require at least medium severity",
             ));
         }
@@ -112,18 +167,27 @@ impl ApprovalGate for StaticApprovalGate {
         if matches!(request.action, ResponseAction::DeployDecoy { .. })
             && request.severity == Severity::Low
         {
-            return Ok(PolicyDecision::deny(
+            return Ok(PolicyDecision::deny_with_rule(
+                "static.deploy_decoy_min_severity",
                 "deploy_decoy requires at least medium severity",
             ));
         }
 
+        if let Some(decision) = self.scope_rate_limit_decision(request, context) {
+            return Ok(decision);
+        }
+
         if Self::destructive_action(request) && request.severity >= self.human_gate_severity {
-            return Ok(PolicyDecision::require_human(
+            return Ok(PolicyDecision::require_human_with_rule(
+                "static.human_gate",
                 "authorized but held for human approval",
             ));
         }
 
-        Ok(PolicyDecision::allow("authorized for immediate execution"))
+        Ok(PolicyDecision::allow_with_rule(
+            "static.default_allow",
+            "authorized for immediate execution",
+        ))
     }
 
     fn issue_lease(
@@ -141,7 +205,7 @@ impl ApprovalGate for StaticApprovalGate {
             ),
             expires_at_ms: context.now_ms + self.lease_ttl_ms,
             action: self.action_name(&request.action).to_string(),
-            scope: self.scope_for_action(&request.action),
+            scope: scope_for_response_action(&request.action),
         })
     }
 }
@@ -150,6 +214,7 @@ impl ApprovalGate for StaticApprovalGate {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::StaticApprovalGate;
+    use swarm_core::config::PolicyConfig;
     use crate::{ActionRequest, ApprovalContext, ApprovalGate, PolicyVerdict};
     use serde_json::json;
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
@@ -165,11 +230,15 @@ mod tests {
     }
 
     fn sample_context() -> ApprovalContext {
+        sample_context_at(1_700_000_000_000)
+    }
+
+    fn sample_context_at(now_ms: i64) -> ApprovalContext {
         ApprovalContext {
             live_mode: true,
             receipt_chain: vec!["receipt-1".to_string()],
             correlation_id: None,
-            now_ms: 1_700_000_000_000,
+            now_ms,
         }
     }
 
@@ -185,6 +254,7 @@ mod tests {
 
         let decision = gate.evaluate(&request, &sample_context()).unwrap();
         assert_eq!(decision.verdict, PolicyVerdict::RequireHuman);
+        assert_eq!(decision.rule_name, "static.human_gate");
     }
 
     #[test]
@@ -200,6 +270,7 @@ mod tests {
 
         let decision = gate.evaluate(&request, &sample_context()).unwrap();
         assert_eq!(decision.verdict, PolicyVerdict::Allow);
+        assert_eq!(decision.rule_name, "static.default_allow");
     }
 
     #[test]
@@ -214,6 +285,7 @@ mod tests {
 
         let decision = gate.evaluate(&request, &sample_context()).unwrap();
         assert_eq!(decision.verdict, PolicyVerdict::Deny);
+        assert_eq!(decision.rule_name, "static.minimum_severity");
     }
 
     #[test]
@@ -245,5 +317,54 @@ mod tests {
         request.evidence = serde_json::Value::Null;
 
         assert!(gate.evaluate(&request, &sample_context()).is_err());
+    }
+
+    #[test]
+    fn scope_rate_limit_denies_burst_for_same_scope() {
+        let gate = StaticApprovalGate::from_config(&PolicyConfig {
+            max_actions_per_scope_per_minute: 1,
+            ..PolicyConfig::default()
+        });
+        let request = sample_request(
+            ResponseAction::BlockEgress {
+                target: "203.0.113.10".to_string(),
+            },
+            Severity::Medium,
+        );
+
+        let first = gate
+            .evaluate(&request, &sample_context_at(1_700_000_000_000))
+            .unwrap();
+        let second = gate
+            .evaluate(&request, &sample_context_at(1_700_000_000_100))
+            .unwrap();
+
+        assert_eq!(first.verdict, PolicyVerdict::Allow);
+        assert_eq!(second.verdict, PolicyVerdict::Deny);
+        assert_eq!(second.rule_name, "static.scope_rate_limit");
+    }
+
+    #[test]
+    fn scope_rate_limit_prunes_old_entries() {
+        let gate = StaticApprovalGate::from_config(&PolicyConfig {
+            max_actions_per_scope_per_minute: 1,
+            ..PolicyConfig::default()
+        });
+        let request = sample_request(
+            ResponseAction::BlockEgress {
+                target: "203.0.113.10".to_string(),
+            },
+            Severity::Medium,
+        );
+
+        let first = gate
+            .evaluate(&request, &sample_context_at(1_700_000_000_000))
+            .unwrap();
+        let second = gate
+            .evaluate(&request, &sample_context_at(1_700_000_060_001))
+            .unwrap();
+
+        assert_eq!(first.verdict, PolicyVerdict::Allow);
+        assert_eq!(second.verdict, PolicyVerdict::Allow);
     }
 }

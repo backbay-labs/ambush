@@ -5,7 +5,7 @@ use swarm_core::pheromone::{PheromoneDeposit, ThreatIntelEntry, ThreatIntelIndic
 use swarm_core::telemetry::TelemetryPayload;
 use swarm_core::types::AgentId;
 use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate, SubstrateError};
-use swarm_whisker::stream::evaluate_event;
+use swarm_whisker::stream::{evaluate_event, strategy_scoped_agent_id};
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 
 /// Output of the fast detection lane for a single event.
@@ -261,7 +261,7 @@ where
             confidence: finding.confidence,
             timestamp: event.timestamp,
             decay_half_life: policy.half_life_secs,
-            agent_id: agent_id.clone(),
+            agent_id: strategy_scoped_agent_id(agent_id, &finding.strategy_id),
             signature: Vec::new(),
             agent_key: Vec::new(),
         });
@@ -275,13 +275,32 @@ mod tests {
     use super::detect_and_deposit;
     use ed25519_dalek::SigningKey;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
-    use swarm_core::pheromone::{ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType};
-    use swarm_core::types::AgentId;
+    use swarm_core::pheromone::{
+        ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
+    };
+    use swarm_core::types::{AgentId, Severity};
+    use swarm_pheromone::substrate::validate_deposit_signature;
     use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
     use swarm_whisker::{
-        DnsExfiltrationDetector, DnsQueryEvent, ProcessStartEvent, SuspiciousProcessTreeDetector,
-        TelemetryEvent, TelemetryPayload,
+        DetectionFinding, DetectionStrategy, DnsExfiltrationDetector, DnsQueryEvent,
+        NetworkConnectDetector, NetworkConnectEvent, NetworkConnectProfile, ProcessStartEvent,
+        SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
     };
+
+    #[derive(Clone)]
+    struct StaticDetector {
+        findings: Vec<DetectionFinding>,
+    }
+
+    impl DetectionStrategy for StaticDetector {
+        fn id(&self) -> &str {
+            "static"
+        }
+
+        fn evaluate(&self, _event: &TelemetryEvent) -> Vec<DetectionFinding> {
+            self.findings.clone()
+        }
+    }
 
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[42u8; 32])
@@ -294,7 +313,40 @@ mod tests {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: Default::default(),
             backend: PheromoneBackendConfig::InMemory,
+        }
+    }
+
+    fn finding(strategy_id: &str, finding_id: &str) -> DetectionFinding {
+        DetectionFinding {
+            finding_id: finding_id.to_string(),
+            event_id: "evt-1".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::Critical,
+            confidence: 0.9,
+            evidence: serde_json::json!({"strategy_id": strategy_id}),
+            strategy_id: strategy_id.to_string(),
+        }
+    }
+
+    fn network_event(
+        event_id: &str,
+        destination_ip: &str,
+        destination_port: u16,
+    ) -> TelemetryEvent {
+        TelemetryEvent {
+            source: "network".to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::NetworkConnect(NetworkConnectEvent {
+                process_name: "curl".to_string(),
+                destination_ip: destination_ip.to_string(),
+                destination_port,
+                protocol: "TCP".to_string(),
+            }),
         }
     }
 
@@ -428,5 +480,102 @@ mod tests {
             0.25
         );
         assert!((outcome.deposits[0].confidence - 0.95).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn network_findings_are_enriched_by_matching_ip_threat_intel() {
+        let detector = NetworkConnectDetector::from_profile(NetworkConnectProfile {
+            suspicious_ports: vec![4444],
+            ..NetworkConnectProfile::default()
+        })
+        .unwrap();
+        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        substrate
+            .store_threat_intel_entry(ThreatIntelEntry {
+                indicator_type: ThreatIntelIndicatorType::IpAddress,
+                value: "198.51.100.42".to_string(),
+                confidence: 0.15,
+                expires_at: 1_700_000_000_500,
+            })
+            .await
+            .unwrap();
+        let event = network_event("evt-network-intel", "198.51.100.42", 4444);
+
+        let outcome = detect_and_deposit(
+            &detector,
+            &substrate,
+            &event,
+            &AgentId("whisker-network".to_string()),
+            &pheromone_config(),
+            &test_signing_key(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert!((outcome.findings[0].confidence - 0.85).abs() < 1e-9);
+        assert_eq!(
+            outcome.findings[0].evidence["threat_intel_matches"][0]["value"],
+            "198.51.100.42"
+        );
+        assert_eq!(
+            outcome.findings[0].evidence["threat_intel_confidence_boost"],
+            0.15
+        );
+        assert!((outcome.deposits[0].confidence - 0.85).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn multi_strategy_runtime_deposits_are_scoped_before_signing() {
+        let detector = StaticDetector {
+            findings: vec![
+                finding("suspicious_process_tree", "finding-1"),
+                finding("dns_exfiltration", "finding-2"),
+            ],
+        };
+        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let event = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-1".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "winword".to_string(),
+                process_name: "powershell".to_string(),
+                command_line: "powershell.exe -enc AAA=".to_string(),
+                user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
+            }),
+        };
+
+        let outcome = detect_and_deposit(
+            &detector,
+            &substrate,
+            &event,
+            &AgentId("whisker-primary".to_string()),
+            &pheromone_config(),
+            &test_signing_key(),
+        )
+        .await
+        .unwrap();
+
+        let persisted = substrate.recent_deposits(10).await.unwrap();
+
+        assert_eq!(outcome.deposits.len(), 2);
+        assert_eq!(persisted.len(), 2);
+        assert_ne!(outcome.deposits[0].agent_id, outcome.deposits[1].agent_id);
+        assert_eq!(
+            outcome.deposits[0].agent_id.0,
+            "whisker-primary:suspicious_process_tree"
+        );
+        assert_eq!(
+            outcome.deposits[1].agent_id.0,
+            "whisker-primary:dns_exfiltration"
+        );
+        for deposit in &outcome.deposits {
+            validate_deposit_signature(deposit).unwrap();
+        }
     }
 }

@@ -291,9 +291,13 @@ fn composite_detector_factory_covers_all_runtime_strategies()
         "suspicious_scripting",
         "persistence",
         "supply_chain",
+        "network_connect",
     ] {
         let cfg = config_with_strategy(strategy)?;
-        assert!(build_composite_detector(&cfg.detection).is_ok(), "{strategy}");
+        assert!(
+            build_composite_detector(&cfg.detection).is_ok(),
+            "{strategy}"
+        );
     }
     Ok(())
 }

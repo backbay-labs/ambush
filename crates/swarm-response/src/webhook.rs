@@ -138,6 +138,7 @@ impl ResponseExecutor for WebhookAdapter {
                     "url": self.config.url,
                     "payload": payload,
                 }),
+                audit: Default::default(),
             });
         }
 
@@ -187,6 +188,7 @@ impl ResponseExecutor for WebhookAdapter {
                         "response_body": response_body,
                         "elapsed_ms": elapsed_ms,
                     }),
+                    audit: Default::default(),
                 })
             }
             Err(error) if error.is_timeout() => Ok(ResponseReceipt {
@@ -201,6 +203,7 @@ impl ResponseExecutor for WebhookAdapter {
                     "payload": payload,
                     "elapsed_ms": elapsed_ms,
                 }),
+                audit: Default::default(),
             }),
             Err(error) => Ok(ResponseReceipt {
                 receipt_id,
@@ -215,6 +218,7 @@ impl ResponseExecutor for WebhookAdapter {
                     "elapsed_ms": elapsed_ms,
                     "error": error.to_string(),
                 }),
+                audit: Default::default(),
             }),
         }
     }

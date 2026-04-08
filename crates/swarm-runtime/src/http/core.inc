@@ -3888,8 +3888,8 @@ mod tests {
         DetectorProfilesConfig, InvestigationConfig, NotificationChannelConfig,
         NotificationRateLimitConfig, NotificationRoutingConfig, OperatorAuthConfig,
         OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PromotionConfig, QuietHoursConfig, RoutingRule, RuntimeSettings, SwarmConfig,
-        TelemetrySourceConfig,
+        PolicyRuleConfig, PolicyRuleDecision, PromotionConfig, QuietHoursConfig, RoutingRule,
+        RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
     };
     use swarm_core::pheromone::{
         ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
@@ -3923,6 +3923,20 @@ mod tests {
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
+        vec![PolicyRuleConfig {
+            name: "operator-http-allow-execution".to_string(),
+            decision: PolicyRuleDecision::Allow,
+            threat_class: ThreatClass::Execution,
+            actions: Vec::new(),
+            min_severity: Severity::Low,
+            max_severity: Severity::Critical,
+            time_window_utc: None,
+            max_actions_per_agent_per_minute: None,
+            reason: Some("operator surface tests allow execution responses".to_string()),
+        }]
+    }
+
     fn operator_config() -> SwarmConfig {
         SwarmConfig {
             schema_version: 1,
@@ -3941,6 +3955,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
@@ -3956,11 +3971,15 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: Default::default(),
                 backend: PheromoneBackendConfig::InMemory,
             },
             policy: PolicyConfig {
                 human_gate_severity: swarm_core::types::Severity::High,
                 lease_ttl_ms: 60_000,
+                rules: permissive_policy_rules(),
+                ..PolicyConfig::default()
             },
             response_adapter: swarm_core::config::ResponseAdapterConfig::Sandbox,
             siem_forward: None,

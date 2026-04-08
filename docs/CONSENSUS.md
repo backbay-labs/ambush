@@ -231,7 +231,10 @@ Confidence gate: actions are autonomous-with-reporting when confidence exceeds `
 
 **Tier 3: Human-Approved**
 
-Actions that require explicit consensus from the Tom committee and, for critical-severity threats, human operator approval. These are high-risk, irreversible, or environment-modifying operations.
+Actions that require explicit consensus from the Tom committee and, in the
+current repo defaults, human operator approval for High and Critical severity
+threats. These are high-risk, irreversible, or environment-modifying
+operations.
 
 Examples:
 - Blocking network egress (`BlockEgress`)
@@ -239,11 +242,16 @@ Examples:
 - Revoking credentials (`RevokeCredential`)
 - Deploying evolved detection strategies to production (evolution commit)
 - Admitting or revoking swarm agents (trust decisions)
-- Any response action when severity is Critical (governed by `require_human_above_severity`)
+- Any response action when severity is High or Critical (governed by `require_human_above_severity`)
 
 Default population at Tier 3: Pouncer, Tom
 
-The `require_human_above_severity` parameter (default: `critical`) adds a human-in-the-loop gate on top of BFT consensus. Even if the Tom committee unanimously approves a response action for a Critical-severity threat, the action is held pending human confirmation. This is the ultimate safety valve.
+The `require_human_above_severity` parameter (current repo default: `high`, as
+reflected in `rulesets/default.yaml` and `StaticApprovalGate`) adds a
+human-in-the-loop gate on top of BFT consensus. Even if the Tom committee
+unanimously approves a response action for a High- or Critical-severity threat,
+the action is held pending human confirmation. This is the ultimate safety
+valve.
 
 ### Tier Assignment
 
@@ -279,10 +287,12 @@ The tier system interacts with threat severity to create a decision matrix:
 |---|---|---|---|
 | Low | Autonomous | Autonomous + report | BFT consensus |
 | Medium | Autonomous | Autonomous + report | BFT consensus |
-| High | Autonomous | Autonomous + report | BFT consensus |
+| High | Autonomous | Autonomous + report | BFT consensus + **human approval** |
 | Critical | Autonomous | Autonomous + report | BFT consensus + **human approval** |
 
-The `require_human_above_severity: critical` parameter governs the last row. Setting it to `high` would require human approval for both High and Critical severity Tier 3 actions.
+The `require_human_above_severity: high` parameter governs the last two rows in
+the current repo defaults. Raising it to `critical` would require human
+approval only for Critical severity Tier 3 actions.
 
 ---
 
@@ -403,7 +413,7 @@ Autonomy parameters are in the `autonomy` block:
 autonomy:
   tier1_confidence: 0.9
   tier2_confidence: 0.7
-  require_human_above_severity: critical
+  require_human_above_severity: high
 ```
 
 ### Consensus Parameters
@@ -420,7 +430,7 @@ autonomy:
 |---|---|---|---|
 | `tier1_confidence` | `f64` | `0.9` | Minimum confidence threshold for fully autonomous action. Actions above this confidence operate without consensus or reporting. |
 | `tier2_confidence` | `f64` | `0.7` | Minimum confidence threshold for autonomous-with-reporting action. Actions above this confidence but below `tier1_confidence` execute autonomously but are reported for human review. |
-| `require_human_above_severity` | `String` | `"critical"` | Severity level at or above which Tier 3 actions require human approval in addition to BFT consensus. Valid values: `low`, `medium`, `high`, `critical`. |
+| `require_human_above_severity` | `String` | `"high"` | Severity level at or above which Tier 3 actions require human approval in addition to BFT consensus. Valid values: `low`, `medium`, `high`, `critical`. |
 
 ### Rust Types
 

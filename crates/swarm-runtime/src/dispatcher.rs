@@ -1,22 +1,21 @@
+use crate::RuntimeError;
 use crate::detection::metrics::CriticalPathMetrics;
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use swarm_core::agent::{
-    AgentFinding, AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmEvent, SwarmModeState,
+    AgentFinding, AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment,
+    SwarmEvent, SwarmModeState,
 };
-use swarm_core::types::{AgentId, SwarmAction};
+use swarm_core::types::{AgentId, Severity, SwarmAction};
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+use swarm_policy::static_gate::scope_for_response_action;
+use swarm_policy::{ActionRequest, ApprovalContext};
+use swarm_spine::AuditTrail;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct AgentHealthEntry {
-    pub id: String,
-    pub role: AgentRole,
-    pub health: AgentHealth,
-}
 
 #[derive(Debug, Clone)]
 pub struct AgentDispatcherConfig {
@@ -95,9 +94,27 @@ struct CompletedAgentTick {
 }
 
 struct PendingRoleShift {
+    requested_by: AgentId,
     agent_id: AgentId,
     from_role: AgentRole,
     to_role: AgentRole,
+}
+
+#[derive(Debug, Clone)]
+pub struct GovernanceVetoRoute {
+    pub request: ActionRequest,
+    pub governing_agent_id: AgentId,
+    pub reason: String,
+}
+
+#[async_trait]
+pub trait RequestResponseRouter: Send + Sync {
+    async fn route_request(&self, request: ActionRequest) -> Result<AuditTrail, RuntimeError>;
+
+    async fn route_governance_veto(
+        &self,
+        veto: GovernanceVetoRoute,
+    ) -> Result<AuditTrail, RuntimeError>;
 }
 
 pub struct AgentDispatcher {
@@ -110,6 +127,7 @@ pub struct AgentDispatcher {
     mode_state: Arc<ArcSwap<SwarmModeState>>,
     recent_findings: HashMap<AgentId, AgentFinding>,
     metrics: Option<CriticalPathMetrics>,
+    request_response_router: Option<Arc<dyn RequestResponseRouter>>,
 }
 
 impl AgentDispatcher {
@@ -129,6 +147,7 @@ impl AgentDispatcher {
             mode_state: Arc::new(ArcSwap::from_pointee(SwarmModeState::new())),
             recent_findings: HashMap::new(),
             metrics: None,
+            request_response_router: None,
         }
     }
 
@@ -139,6 +158,11 @@ impl AgentDispatcher {
 
     pub fn with_metrics(mut self, metrics: CriticalPathMetrics) -> Self {
         self.metrics = Some(metrics);
+        self
+    }
+
+    pub fn with_request_response_router(mut self, router: Arc<dyn RequestResponseRouter>) -> Self {
+        self.request_response_router = Some(router);
         self
     }
 
@@ -218,6 +242,10 @@ impl AgentDispatcher {
         self.refresh_health_snapshot();
     }
 
+    pub async fn tick_once(&mut self) {
+        self.tick_agents().await;
+    }
+
     async fn tick_agents(&mut self) {
         let before_health = self.current_health_map();
         let now = unix_timestamp_secs();
@@ -226,6 +254,7 @@ impl AgentDispatcher {
         let mode = mode_state.current;
         let mode_transition_at = mode_state.last_transition_at;
         let peer_findings_snapshot = self.recent_findings.values().cloned().collect::<Vec<_>>();
+        let agent_health_snapshot = self.agent_health_summary();
         let mut completed_ticks = Vec::new();
 
         for (agent_id, agent) in self.registry.iter_mut() {
@@ -239,6 +268,7 @@ impl AgentDispatcher {
                     .filter(|finding| finding.agent_id != *agent_id)
                     .cloned()
                     .collect(),
+                agent_health: agent_health_snapshot.clone(),
             };
             let tick_role = agent.role();
             let tick_timeout = Duration::from_millis(self.config.agent_tick_timeout_ms);
@@ -287,12 +317,12 @@ impl AgentDispatcher {
             }
         }
 
-        self.apply_actions(completed_ticks, now);
+        self.apply_actions(completed_ticks, now).await;
         self.log_health_transitions(before_health);
         self.refresh_health_snapshot();
     }
 
-    fn apply_actions(&mut self, completed_ticks: Vec<CompletedAgentTick>, now: i64) {
+    async fn apply_actions(&mut self, completed_ticks: Vec<CompletedAgentTick>, now: i64) {
         let mut pending_role_shifts = Vec::new();
 
         for completed in completed_ticks {
@@ -305,24 +335,168 @@ impl AgentDispatcher {
                 }
 
                 match action {
-                    SwarmAction::RoleShift { new_role } => {
+                    SwarmAction::RoleShift {
+                        target_agent_id,
+                        new_role,
+                    } => {
+                        let Some(from_role) =
+                            self.registry.get(&target_agent_id).map(SwarmAgent::role)
+                        else {
+                            tracing::warn!(
+                                requested_by = %completed.agent_id,
+                                target_agent_id = %target_agent_id,
+                                new_role = agent_role_label(new_role),
+                                module = module_path!(),
+                                "role shift targeted an unknown agent"
+                            );
+                            continue;
+                        };
                         pending_role_shifts.push(PendingRoleShift {
-                            agent_id: completed.agent_id.clone(),
-                            from_role: completed.role,
+                            requested_by: completed.agent_id.clone(),
+                            agent_id: target_agent_id,
+                            from_role,
                             to_role: new_role,
                         })
                     }
-                    SwarmAction::HealthReport { status } => {
-                        self.health_overrides
-                            .insert(completed.agent_id.clone(), status);
+                    SwarmAction::HealthReport {
+                        target_agent_id,
+                        status,
+                    } => {
+                        if self.registry.get(&target_agent_id).is_none() {
+                            tracing::warn!(
+                                requested_by = %completed.agent_id,
+                                target_agent_id = %target_agent_id,
+                                status = agent_health_label(status),
+                                module = module_path!(),
+                                "health report targeted an unknown agent"
+                            );
+                            continue;
+                        }
+                        self.health_overrides.insert(target_agent_id, status);
                     }
                     // Agent-direct: deposits are submitted to the substrate by the
                     // agent itself during tick(). The action is recorded as an
                     // AgentFinding for peer visibility but requires no dispatcher routing.
                     SwarmAction::DepositPheromone { .. } => {}
-                    // Agent-direct: the response executor pipeline handles these.
-                    // Recorded as an AgentFinding for peer visibility.
-                    SwarmAction::RequestResponse { .. } => {}
+                    SwarmAction::RequestResponse {
+                        hunt_id,
+                        action,
+                        evidence,
+                    } => {
+                        let hunt_id_value = hunt_id.0.clone();
+                        let action_kind = action.kind().to_string();
+                        let Some(router) = self.request_response_router.as_ref() else {
+                            tracing::warn!(
+                                agent_id = %completed.agent_id,
+                                hunt_id = %hunt_id_value,
+                                action = %action_kind,
+                                module = module_path!(),
+                                "request_response action dropped because no router is configured"
+                            );
+                            continue;
+                        };
+
+                        let Some(request) =
+                            request_from_action(&completed.agent_id, hunt_id, action, evidence)
+                        else {
+                            tracing::warn!(
+                                agent_id = %completed.agent_id,
+                                hunt_id = %hunt_id_value,
+                                action = %action_kind,
+                                module = module_path!(),
+                                "request_response action missing routable severity metadata"
+                            );
+                            continue;
+                        };
+
+                        match router.route_request(request).await {
+                            Ok(audit) => {
+                                tracing::info!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %audit.hunt_id,
+                                    response_kind = audit.response_kind(),
+                                    module = module_path!(),
+                                    "request_response action routed through runtime"
+                                );
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %hunt_id_value,
+                                    action = %action_kind,
+                                    reason = %error,
+                                    module = module_path!(),
+                                    "request_response action failed during runtime routing"
+                                );
+                            }
+                        }
+                    }
+                    SwarmAction::GovernanceVeto {
+                        hunt_id,
+                        action,
+                        evidence,
+                        governing_agent_id,
+                        reason,
+                    } => {
+                        let hunt_id_value = hunt_id.0.clone();
+                        let action_kind = action.kind().to_string();
+                        let Some(router) = self.request_response_router.as_ref() else {
+                            tracing::warn!(
+                                agent_id = %completed.agent_id,
+                                hunt_id = %hunt_id_value,
+                                action = %action_kind,
+                                governing_agent_id = %governing_agent_id,
+                                module = module_path!(),
+                                "governance veto dropped because no router is configured"
+                            );
+                            continue;
+                        };
+
+                        let Some(request) =
+                            request_from_action(&completed.agent_id, hunt_id, action, evidence)
+                        else {
+                            tracing::warn!(
+                                agent_id = %completed.agent_id,
+                                hunt_id = %hunt_id_value,
+                                action = %action_kind,
+                                governing_agent_id = %governing_agent_id,
+                                module = module_path!(),
+                                "governance veto missing routable severity metadata"
+                            );
+                            continue;
+                        };
+
+                        match router
+                            .route_governance_veto(GovernanceVetoRoute {
+                                request,
+                                governing_agent_id: governing_agent_id.clone(),
+                                reason: reason.clone(),
+                            })
+                            .await
+                        {
+                            Ok(audit) => {
+                                tracing::info!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %audit.hunt_id,
+                                    response_kind = audit.response_kind(),
+                                    governing_agent_id = %governing_agent_id,
+                                    module = module_path!(),
+                                    "governance veto routed through runtime"
+                                );
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %hunt_id_value,
+                                    action = %action_kind,
+                                    governing_agent_id = %governing_agent_id,
+                                    reason = %error,
+                                    module = module_path!(),
+                                    "governance veto failed during runtime routing"
+                                );
+                            }
+                        }
+                    }
                     // Agent-direct: the stalker agent manages investigation state
                     // internally. These exist in SwarmAction so they can be recorded
                     // as AgentFindings for peer visibility.
@@ -336,7 +510,9 @@ impl AgentDispatcher {
                         );
                     }
                     SwarmAction::PublishFindings {
-                        hunt_id, confidence, ..
+                        hunt_id,
+                        confidence,
+                        ..
                     } => {
                         tracing::debug!(
                             agent_id = %completed.agent_id,
@@ -397,6 +573,7 @@ impl AgentDispatcher {
 
         tracing::info!(
             agent_id = %role_shift.agent_id,
+            requested_by = %role_shift.requested_by,
             from_role = agent_role_label(role_shift.from_role),
             to_role = agent_role_label(role_shift.to_role),
             module = module_path!(),
@@ -512,10 +689,54 @@ fn agent_finding_from_action(
             agent_id: agent_id.clone(),
             role,
             kind: "request_response".to_string(),
-            summary: format!("hunt_id={} action={}", hunt_id.0, action.kind()),
+            summary: format!(
+                "hunt_id={} action={}{}",
+                hunt_id.0,
+                action.kind(),
+                scope_for_response_action(action)
+                    .map(|scope| format!(" scope={scope}"))
+                    .unwrap_or_default()
+            ),
+        }),
+        SwarmAction::GovernanceVeto {
+            hunt_id,
+            action,
+            governing_agent_id,
+            ..
+        } => Some(AgentFinding {
+            agent_id: agent_id.clone(),
+            role,
+            kind: "governance_veto".to_string(),
+            summary: format!(
+                "hunt_id={} action={} governing_agent_id={}",
+                hunt_id.0,
+                action.kind(),
+                governing_agent_id
+            ),
         }),
         _ => None,
     }
+}
+
+fn request_from_action(
+    agent_id: &AgentId,
+    hunt_id: swarm_core::types::HuntId,
+    action: swarm_core::types::ResponseAction,
+    evidence: serde_json::Value,
+) -> Option<ActionRequest> {
+    let severity = evidence
+        .get("escalation")
+        .and_then(|value| value.get("severity"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Severity>(value).ok())?;
+
+    Some(ActionRequest {
+        hunt_id,
+        requested_by: agent_id.clone(),
+        action,
+        severity,
+        evidence,
+    })
 }
 
 fn agent_role_label(role: AgentRole) -> &'static str {
@@ -554,10 +775,26 @@ fn unix_timestamp_secs() -> i64 {
         .unwrap_or_default()
 }
 
+pub(crate) fn approval_context_now(live_mode: bool) -> ApprovalContext {
+    ApprovalContext {
+        live_mode,
+        receipt_chain: Vec::new(),
+        correlation_id: None,
+        now_ms: unix_timestamp_millis(),
+    }
+}
+
+fn unix_timestamp_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{AgentDispatcher, AgentDispatcherConfig, AgentHealthEntry, agent_role_label};
+    use super::{AgentDispatcher, AgentDispatcherConfig, agent_role_label};
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use arc_swap::ArcSwap;
     use async_trait::async_trait;
@@ -567,7 +804,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use swarm_core::agent::{
-        AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmEvent,
+        AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
+        SwarmEvent,
     };
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::types::{AgentId, HuntId, SwarmAction};
@@ -677,6 +915,8 @@ mod tests {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: Default::default(),
             backend: PheromoneBackendConfig::InMemory,
         }
     }
@@ -851,7 +1091,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatcher_broadcasts_role_shift_events_and_updates_roles() {
+    async fn dispatcher_applies_targeted_role_shift_from_tom_agent() {
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let observer_events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut dispatcher = AgentDispatcher::new(
@@ -863,13 +1103,14 @@ mod tests {
         dispatcher
             .register(Box::new(
                 MockAgent::new(
-                    "whisker-primary",
-                    AgentRole::Whisker,
+                    "tom-primary",
+                    AgentRole::Tom,
                     AgentHealth::Healthy,
                     Arc::new(AtomicUsize::new(0)),
                     false,
                 )
                 .with_actions(vec![vec![SwarmAction::RoleShift {
+                    target_agent_id: AgentId::new("whisker", "primary"),
                     new_role: AgentRole::Tom,
                 }]]),
             ))
@@ -877,8 +1118,8 @@ mod tests {
         dispatcher
             .register(Box::new(
                 MockAgent::new(
-                    "stalker-primary",
-                    AgentRole::Stalker,
+                    "whisker-primary",
+                    AgentRole::Whisker,
                     AgentHealth::Healthy,
                     Arc::new(AtomicUsize::new(0)),
                     false,
@@ -900,6 +1141,51 @@ mod tests {
                 ..
             } if agent_id.0 == "whisker-primary"
         )));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_applies_targeted_failed_health_report_from_tom_agent() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        );
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "tom-primary",
+                    AgentRole::Tom,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_actions(vec![vec![SwarmAction::HealthReport {
+                    target_agent_id: AgentId::new("whisker", "primary"),
+                    status: AgentHealth::Failed,
+                }]]),
+            ))
+            .unwrap();
+        dispatcher
+            .register(Box::new(MockAgent::new(
+                "whisker-primary",
+                AgentRole::Whisker,
+                AgentHealth::Healthy,
+                Arc::new(AtomicUsize::new(0)),
+                false,
+            )))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+
+        let summary = health_state.load_full();
+        assert!(
+            summary.iter().any(|entry| {
+                entry.id == "whisker-primary" && entry.health == AgentHealth::Failed
+            })
+        );
     }
 
     #[tokio::test]
@@ -973,9 +1259,11 @@ mod tests {
                 )
                 .with_actions(vec![vec![
                     SwarmAction::RoleShift {
+                        target_agent_id: AgentId::new("whisker", "primary"),
                         new_role: AgentRole::Stalker,
                     },
                     SwarmAction::HealthReport {
+                        target_agent_id: AgentId::new("whisker", "primary"),
                         status: AgentHealth::Degraded,
                     },
                 ]]),

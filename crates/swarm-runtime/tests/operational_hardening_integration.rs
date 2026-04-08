@@ -14,8 +14,8 @@ use swarm_core::config::{
     RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
 };
 use swarm_core::types::Severity;
-use swarm_response::dead_letter::{DeadLetterEntry, DeadLetterJournal};
 use swarm_response::ExecutionMode;
+use swarm_response::dead_letter::{DeadLetterEntry, DeadLetterJournal};
 use swarm_runtime::ingest::IngestState;
 
 fn unique_suffix() -> String {
@@ -47,6 +47,7 @@ fn base_config() -> SwarmConfig {
             max_heap_pressure: 0.90,
             secret_dir: None,
             agent_tick_timeout_ms: 500,
+            governance_degraded_tick_threshold: 3,
             max_dead_letter_bytes: None,
         },
         detection: DetectionConfig {
@@ -62,11 +63,14 @@ fn base_config() -> SwarmConfig {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: Default::default(),
             backend: PheromoneBackendConfig::InMemory,
         },
         policy: PolicyConfig {
             human_gate_severity: Severity::High,
             lease_ttl_ms: 60_000,
+            ..PolicyConfig::default()
         },
         response_adapter: ResponseAdapterConfig::Sandbox,
         siem_forward: None,
@@ -178,8 +182,7 @@ fn secret_rotation_and_dead_letter_rotation_cycle_without_data_loss() {
     // Use DeadLetterJournal directly with the same max_bytes the runtime would configure.
     // Use a fresh path for the dead-letter rotation test so the file starts empty.
     let rotation_dl_path = dl_dir.join("rotation-test.jsonl");
-    let journal =
-        DeadLetterJournal::new(&rotation_dl_path, Some(max_dead_letter_bytes)).unwrap();
+    let journal = DeadLetterJournal::new(&rotation_dl_path, Some(max_dead_letter_bytes)).unwrap();
 
     // Write entries one at a time, tracking when rotation triggers.
     // rotation_if_needed runs at the start of write(), so the file grows
@@ -252,7 +255,8 @@ fn secret_rotation_and_dead_letter_rotation_cycle_without_data_loss() {
     // Total entries across rotated files + active journal must equal total_written
     let total_preserved = all_rotated_entries.len() + active_entries.len();
     assert_eq!(
-        total_preserved, total_written,
+        total_preserved,
+        total_written,
         "no entries should be lost during rotation ({} rotated + {} active != {} written)",
         all_rotated_entries.len(),
         active_entries.len(),

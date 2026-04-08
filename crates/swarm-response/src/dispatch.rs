@@ -27,15 +27,16 @@ impl DispatchingExecutor {
         let inner = match config {
             ResponseAdapterConfig::Sandbox => AdapterInner::Sandbox(SandboxExecutor),
             ResponseAdapterConfig::HttpEdr { config } => {
-                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path, max_dead_letter_bytes).map_err(
-                    |error| {
-                        ResponseError::unavailable(
-                            "http_edr",
-                            ExecutionMode::Enforced,
-                            format!("failed to initialize dead-letter journal: {error}"),
-                        )
-                    },
-                )?);
+                let journal = Arc::new(
+                    DeadLetterJournal::new(&config.dead_letter_path, max_dead_letter_bytes)
+                        .map_err(|error| {
+                            ResponseError::unavailable(
+                                "http_edr",
+                                ExecutionMode::Enforced,
+                                format!("failed to initialize dead-letter journal: {error}"),
+                            )
+                        })?,
+                );
                 let adapter = HttpEdrAdapter::new(config.clone())?;
                 AdapterInner::HttpEdr(ResilientExecutor::new(
                     adapter,
@@ -46,15 +47,16 @@ impl DispatchingExecutor {
                 ))
             }
             ResponseAdapterConfig::Webhook { config } => {
-                let journal = Arc::new(DeadLetterJournal::new(&config.dead_letter_path, max_dead_letter_bytes).map_err(
-                    |error| {
-                        ResponseError::unavailable(
-                            "webhook",
-                            ExecutionMode::Enforced,
-                            format!("failed to initialize dead-letter journal: {error}"),
-                        )
-                    },
-                )?);
+                let journal = Arc::new(
+                    DeadLetterJournal::new(&config.dead_letter_path, max_dead_letter_bytes)
+                        .map_err(|error| {
+                            ResponseError::unavailable(
+                                "webhook",
+                                ExecutionMode::Enforced,
+                                format!("failed to initialize dead-letter journal: {error}"),
+                            )
+                        })?,
+                );
                 let adapter = WebhookAdapter::new(config.clone())?;
                 AdapterInner::Webhook(ResilientExecutor::new(
                     adapter,
@@ -175,7 +177,8 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_config_dispatches_to_simulated_receipt() {
-        let executor = DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox, None).unwrap();
+        let executor =
+            DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox, None).unwrap();
         let request = ActionRequest {
             hunt_id: HuntId("hunt-1".to_string()),
             requested_by: AgentId("agent-1".to_string()),
@@ -202,16 +205,19 @@ mod tests {
     #[tokio::test]
     async fn http_edr_config_dispatches_to_http_adapter() {
         let (endpoint, state, shutdown_tx, handle) = spawn_server(StatusCode::OK).await;
-        let executor = DispatchingExecutor::from_config(ResponseAdapterConfig::HttpEdr {
-            config: HttpEdrConfig {
-                endpoint,
-                auth_token: "secret".to_string(),
-                timeout_ms: 500,
-                retry: RetryConfig::default(),
-                circuit_breaker: CircuitBreakerConfig::default(),
-                dead_letter_path: "./dead-letter.jsonl".to_string(),
+        let executor = DispatchingExecutor::from_config(
+            ResponseAdapterConfig::HttpEdr {
+                config: HttpEdrConfig {
+                    endpoint,
+                    auth_token: "secret".to_string(),
+                    timeout_ms: 500,
+                    retry: RetryConfig::default(),
+                    circuit_breaker: CircuitBreakerConfig::default(),
+                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                },
             },
-        }, None)
+            None,
+        )
         .unwrap();
         let request = ActionRequest {
             hunt_id: HuntId("hunt-edr".to_string()),
@@ -251,17 +257,20 @@ mod tests {
     #[tokio::test]
     async fn webhook_config_dispatches_to_webhook_adapter() {
         let (url, state, shutdown_tx, handle) = spawn_server(StatusCode::OK).await;
-        let executor = DispatchingExecutor::from_config(ResponseAdapterConfig::Webhook {
-            config: WebhookConfig {
-                url,
-                timeout_ms: 500,
-                channel: Some("#soc".to_string()),
-                auth_token: Some("secret".to_string()),
-                retry: RetryConfig::default(),
-                circuit_breaker: CircuitBreakerConfig::default(),
-                dead_letter_path: "./dead-letter.jsonl".to_string(),
+        let executor = DispatchingExecutor::from_config(
+            ResponseAdapterConfig::Webhook {
+                config: WebhookConfig {
+                    url,
+                    timeout_ms: 500,
+                    channel: Some("#soc".to_string()),
+                    auth_token: Some("secret".to_string()),
+                    retry: RetryConfig::default(),
+                    circuit_breaker: CircuitBreakerConfig::default(),
+                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                },
             },
-        }, None)
+            None,
+        )
         .unwrap();
         let request = ActionRequest {
             hunt_id: HuntId("hunt-webhook".to_string()),

@@ -50,6 +50,7 @@ pub use store::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyRecord {
     pub verdict: PolicyVerdict,
+    pub rule_name: String,
     pub reason: String,
     pub lease: Option<CapabilityLease>,
 }

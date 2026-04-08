@@ -558,6 +558,7 @@ mod tests {
                 },
                 policy: PolicyRecord {
                     verdict: PolicyVerdict::Allow,
+                    rule_name: "test.allow".to_string(),
                     reason: "allowed".to_string(),
                     lease: None,
                 },
@@ -568,6 +569,7 @@ mod tests {
                     status: ResponseStatus::Executed,
                     summary: "decoy deployed".to_string(),
                     details: serde_json::json!({"zone": "dmz"}),
+                    audit: Default::default(),
                 }),
                 created_at_ms: 1_700_000_000_123,
             },

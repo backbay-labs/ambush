@@ -1,9 +1,9 @@
-use crate::config::{
-    DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
-    lateral_movement_profile, load_config, persistence_profile, supply_chain_profile,
-    suspicious_process_tree_profile, suspicious_scripting_profile,
-};
+use crate::config::{DetectorProfileError, RuntimeConfigError, load_config};
 use crate::correlation::{CorrelationEngine, CorrelationError, CorrelationOutcome};
+use crate::detector_factory::{
+    DetectorFactoryError, RuntimeDetector, build_detector_from_candidate,
+    build_detector_from_strategy,
+};
 use crate::investigation::{InvestigationStrategy, SummaryInvestigator};
 use crate::service::{EventExecutionContext, RuntimeMetricsSnapshot, RuntimeService, ServiceError};
 use crate::{RuntimeMode, SwarmRuntime};
@@ -18,7 +18,7 @@ use swarm_core::config::{CorrelationConfig, SwarmConfig};
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{AgentId, ResponseAction};
 use swarm_pheromone::InMemoryPheromoneSubstrate;
-use swarm_policy::static_gate::StaticApprovalGate;
+use swarm_policy::configurable_gate::ConfigurableApprovalGate;
 use swarm_policy::{ApprovalContext, PolicyVerdict};
 use swarm_response::adapters::SandboxExecutor;
 use swarm_spine::{
@@ -26,11 +26,9 @@ use swarm_spine::{
     InvestigationStoreError, MemoryIncidentStore, MemoryInvestigationBundleStore, ReplayBundle,
 };
 use swarm_whisker::{
-    CredentialAccessDetector, CredentialAccessProfile, DetectionFinding, DetectionStrategy,
-    DnsExfiltrationDetector, DnsExfiltrationProfile, LateralMovementDetector,
-    LateralMovementProfile, PersistenceDetector, PersistenceProfile, SupplyChainDetector,
-    SupplyChainProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
-    SuspiciousScriptingDetector, SuspiciousScriptingProfile, TelemetryEvent,
+    CredentialAccessProfile, DetectionStrategy, DnsExfiltrationProfile, LateralMovementProfile,
+    NetworkConnectProfile, PersistenceProfile, SupplyChainProfile, SuspiciousProcessTreeProfile,
+    SuspiciousScriptingProfile, TelemetryEvent,
 };
 
 /// Errors surfaced by offline replay and evaluation flows.
@@ -159,213 +157,6 @@ pub enum ReplayHarnessError {
 
     #[error("unsupported detector strategy `{strategy}`")]
     UnsupportedDetector { strategy: String },
-}
-
-#[derive(Debug, Clone)]
-enum ReplayDetector {
-    SuspiciousProcessTree {
-        strategy_id: String,
-        detector: SuspiciousProcessTreeDetector,
-    },
-    DnsExfiltration {
-        strategy_id: String,
-        detector: DnsExfiltrationDetector,
-    },
-    LateralMovement {
-        strategy_id: String,
-        detector: LateralMovementDetector,
-    },
-    CredentialAccess {
-        strategy_id: String,
-        detector: CredentialAccessDetector,
-    },
-    SuspiciousScripting {
-        strategy_id: String,
-        detector: SuspiciousScriptingDetector,
-    },
-    Persistence {
-        strategy_id: String,
-        detector: PersistenceDetector,
-    },
-    SupplyChain {
-        strategy_id: String,
-        detector: SupplyChainDetector,
-    },
-}
-
-impl DetectionStrategy for ReplayDetector {
-    fn id(&self) -> &str {
-        match self {
-            Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
-            Self::DnsExfiltration { strategy_id, .. } => strategy_id.as_str(),
-            Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
-            Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
-            Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
-            Self::Persistence { strategy_id, .. } => strategy_id.as_str(),
-            Self::SupplyChain { strategy_id, .. } => strategy_id.as_str(),
-        }
-    }
-
-    fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
-        match self {
-            Self::SuspiciousProcessTree {
-                strategy_id,
-                detector,
-            } => detector
-                .evaluate(event)
-                .into_iter()
-                .map(|mut finding| {
-                    finding.strategy_id = strategy_id.clone();
-                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
-                    finding
-                })
-                .collect(),
-            Self::DnsExfiltration {
-                strategy_id,
-                detector,
-            } => detector
-                .evaluate(event)
-                .into_iter()
-                .map(|mut finding| {
-                    finding.strategy_id = strategy_id.clone();
-                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
-                    finding
-                })
-                .collect(),
-            Self::LateralMovement {
-                strategy_id,
-                detector,
-            } => detector
-                .evaluate(event)
-                .into_iter()
-                .map(|mut finding| {
-                    finding.strategy_id = strategy_id.clone();
-                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
-                    finding
-                })
-                .collect(),
-            Self::CredentialAccess {
-                strategy_id,
-                detector,
-            } => detector
-                .evaluate(event)
-                .into_iter()
-                .map(|mut finding| {
-                    finding.strategy_id = strategy_id.clone();
-                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
-                    finding
-                })
-                .collect(),
-            Self::SuspiciousScripting {
-                strategy_id,
-                detector,
-            } => detector
-                .evaluate(event)
-                .into_iter()
-                .map(|mut finding| {
-                    finding.strategy_id = strategy_id.clone();
-                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
-                    finding
-                })
-                .collect(),
-            Self::Persistence {
-                strategy_id,
-                detector,
-            } => detector
-                .evaluate(event)
-                .into_iter()
-                .map(|mut finding| {
-                    finding.strategy_id = strategy_id.clone();
-                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
-                    finding
-                })
-                .collect(),
-            Self::SupplyChain {
-                strategy_id,
-                detector,
-            } => detector
-                .evaluate(event)
-                .into_iter()
-                .map(|mut finding| {
-                    finding.strategy_id = strategy_id.clone();
-                    finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
-                    finding
-                })
-                .collect(),
-        }
-    }
-}
-
-impl ReplayDetector {
-    fn suspicious_process_tree(
-        strategy_id: impl Into<String>,
-        profile: SuspiciousProcessTreeProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SuspiciousProcessTree {
-            strategy_id: strategy_id.into(),
-            detector: SuspiciousProcessTreeDetector::from_profile(profile)?,
-        })
-    }
-
-    fn dns_exfiltration(
-        strategy_id: impl Into<String>,
-        profile: DnsExfiltrationProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::DnsExfiltration {
-            strategy_id: strategy_id.into(),
-            detector: DnsExfiltrationDetector::from_profile(profile)?,
-        })
-    }
-
-    fn lateral_movement(
-        strategy_id: impl Into<String>,
-        profile: LateralMovementProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::LateralMovement {
-            strategy_id: strategy_id.into(),
-            detector: LateralMovementDetector::from_profile(profile)?,
-        })
-    }
-
-    fn credential_access(
-        strategy_id: impl Into<String>,
-        profile: CredentialAccessProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::CredentialAccess {
-            strategy_id: strategy_id.into(),
-            detector: CredentialAccessDetector::from_profile(profile)?,
-        })
-    }
-
-    fn suspicious_scripting(
-        strategy_id: impl Into<String>,
-        profile: SuspiciousScriptingProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SuspiciousScripting {
-            strategy_id: strategy_id.into(),
-            detector: SuspiciousScriptingDetector::from_profile(profile)?,
-        })
-    }
-
-    fn persistence(
-        strategy_id: impl Into<String>,
-        profile: PersistenceProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::Persistence {
-            strategy_id: strategy_id.into(),
-            detector: PersistenceDetector::from_profile(profile)?,
-        })
-    }
-
-    fn supply_chain(
-        strategy_id: impl Into<String>,
-        profile: SupplyChainProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SupplyChain {
-            strategy_id: strategy_id.into(),
-            detector: SupplyChainDetector::from_profile(profile)?,
-        })
-    }
 }
 
 /// Whether one replay scenario represents adversarial coverage or benign control traffic.
@@ -953,7 +744,7 @@ pub struct ExperimentCorpusTarget {
 }
 
 /// Repo-owned lineage metadata for one detector experiment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExperimentLineage {
     pub parent_strategy_id: String,
@@ -1022,6 +813,11 @@ pub enum DetectorCandidateManifest {
         description: String,
         profile: SupplyChainProfile,
     },
+    NetworkConnect {
+        strategy_id: String,
+        description: String,
+        profile: NetworkConnectProfile,
+    },
 }
 
 impl DetectorCandidateManifest {
@@ -1034,6 +830,7 @@ impl DetectorCandidateManifest {
             Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
             Self::Persistence { strategy_id, .. } => strategy_id.as_str(),
             Self::SupplyChain { strategy_id, .. } => strategy_id.as_str(),
+            Self::NetworkConnect { strategy_id, .. } => strategy_id.as_str(),
         }
     }
 
@@ -1046,6 +843,7 @@ impl DetectorCandidateManifest {
             Self::SuspiciousScripting { description, .. } => description.as_str(),
             Self::Persistence { description, .. } => description.as_str(),
             Self::SupplyChain { description, .. } => description.as_str(),
+            Self::NetworkConnect { description, .. } => description.as_str(),
         }
     }
 }
@@ -1897,7 +1695,7 @@ pub struct DefaultReplayHarness {
     pub config_path: PathBuf,
     pub config: SwarmConfig,
     pub results_dir: PathBuf,
-    detector: ReplayDetector,
+    detector: RuntimeDetector,
     result_store: FileReplayRunStore,
 }
 
@@ -2354,8 +2152,17 @@ impl DefaultReplayHarness {
             corpus_version: Some(loaded_suite.manifest.corpus_version.clone()),
         };
 
+        let baseline_strategy_id =
+            resolve_experiment_baseline_strategy_id(&self.config, loaded_experiment)?;
+        let baseline_detector =
+            build_detector_from_strategy(&baseline_strategy_id, &self.config.detection)
+                .map_err(detector_factory_error)?;
         let baseline_report = self
-            .evaluate_suite_selection(&self.detector, scenario_paths.clone(), selection.clone())
+            .evaluate_suite_selection(
+                &baseline_detector,
+                scenario_paths.clone(),
+                selection.clone(),
+            )
             .await?;
         let candidate_detector = detector_from_candidate(&loaded_experiment.manifest.candidate)?;
         let candidate_report = self
@@ -2373,7 +2180,7 @@ impl DefaultReplayHarness {
             suite_path: loaded_suite.path.display().to_string(),
             corpus_version: loaded_suite.manifest.corpus_version.clone(),
             lineage: loaded_experiment.manifest.lineage.clone(),
-            baseline_strategy_id: self.detector.id().to_string(),
+            baseline_strategy_id,
             candidate_strategy_id: loaded_experiment
                 .manifest
                 .candidate
@@ -2397,6 +2204,8 @@ impl DefaultReplayHarness {
         &self,
         loaded_experiment: &LoadedDetectorExperiment,
     ) -> Result<DetectorVerificationReport, ReplayHarnessError> {
+        let _baseline_strategy_id =
+            resolve_experiment_baseline_strategy_id(&self.config, loaded_experiment)?;
         let verification_path = resolve_relative_path(
             &loaded_experiment.path,
             &loaded_experiment.manifest.verification.corpus,
@@ -2500,7 +2309,7 @@ impl DefaultReplayHarness {
 
     async fn evaluate_suite_selection(
         &self,
-        detector: &ReplayDetector,
+        detector: &RuntimeDetector,
         scenario_paths: Vec<PathBuf>,
         selection: ReplaySuiteSelection,
     ) -> Result<ReplaySuiteReport, ReplayHarnessError> {
@@ -2540,7 +2349,7 @@ impl DefaultReplayHarness {
 
     async fn run_loaded_scenario(
         &self,
-        detector: &ReplayDetector,
+        detector: &RuntimeDetector,
         loaded: &LoadedReplayScenario,
     ) -> Result<ReplayRunBundle, ReplayHarnessError> {
         let steps = self.materialize_steps(loaded)?;
@@ -2605,16 +2414,13 @@ impl DefaultReplayHarness {
         })
     }
 
-    fn build_service(&self) -> RuntimeService<StaticApprovalGate, SandboxExecutor> {
+    fn build_service(&self) -> RuntimeService<ConfigurableApprovalGate, SandboxExecutor> {
         let mut offline_config = self.config.clone();
         offline_config.runtime.mode = RuntimeMode::DetectOnly;
         offline_config.runtime.require_durable_live_response = false;
         let runtime = SwarmRuntime::new(
             RuntimeMode::DetectOnly,
-            StaticApprovalGate {
-                human_gate_severity: offline_config.policy.human_gate_severity,
-                lease_ttl_ms: offline_config.policy.lease_ttl_ms,
-            },
+            ConfigurableApprovalGate::from_config(&offline_config.policy),
             SandboxExecutor,
         );
         RuntimeService::new(offline_config, runtime)
@@ -3062,102 +2868,52 @@ pub fn render_promotion_review_packet(packet: &PromotionReviewPacket) -> String 
     lines.join("\n")
 }
 
-fn replay_detector(config: &SwarmConfig) -> Result<ReplayDetector, ReplayHarnessError> {
-    match config.detection.strategy.as_str() {
-        "suspicious_process_tree" => Ok(ReplayDetector::suspicious_process_tree(
-            config.detection.strategy.clone(),
-            suspicious_process_tree_profile(&config.detection)?,
-        )?),
-        "dns_exfiltration" => Ok(ReplayDetector::dns_exfiltration(
-            config.detection.strategy.clone(),
-            dns_exfiltration_profile(&config.detection)?,
-        )?),
-        "lateral_movement" => Ok(ReplayDetector::lateral_movement(
-            config.detection.strategy.clone(),
-            lateral_movement_profile(&config.detection)?,
-        )?),
-        "credential_access" => Ok(ReplayDetector::credential_access(
-            config.detection.strategy.clone(),
-            credential_access_profile(&config.detection)?,
-        )?),
-        "suspicious_scripting" => Ok(ReplayDetector::suspicious_scripting(
-            config.detection.strategy.clone(),
-            suspicious_scripting_profile(&config.detection)?,
-        )?),
-        "persistence" => Ok(ReplayDetector::persistence(
-            config.detection.strategy.clone(),
-            persistence_profile(&config.detection)?,
-        )?),
-        "supply_chain" => Ok(ReplayDetector::supply_chain(
-            config.detection.strategy.clone(),
-            supply_chain_profile(&config.detection)?,
-        )?),
-        other => Err(ReplayHarnessError::UnsupportedDetector {
-            strategy: other.to_string(),
-        }),
-    }
+fn replay_detector(config: &SwarmConfig) -> Result<RuntimeDetector, ReplayHarnessError> {
+    build_detector_from_strategy(&config.detection.strategy, &config.detection)
+        .map_err(detector_factory_error)
 }
 
 fn detector_from_candidate(
     candidate: &DetectorCandidateManifest,
-) -> Result<ReplayDetector, ReplayHarnessError> {
-    match candidate {
-        DetectorCandidateManifest::SuspiciousProcessTree {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(ReplayDetector::suspicious_process_tree(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::DnsExfiltration {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(ReplayDetector::dns_exfiltration(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::LateralMovement {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(ReplayDetector::lateral_movement(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::CredentialAccess {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(ReplayDetector::credential_access(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::SuspiciousScripting {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(ReplayDetector::suspicious_scripting(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::Persistence {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(ReplayDetector::persistence(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::SupplyChain {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(ReplayDetector::supply_chain(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
+) -> Result<RuntimeDetector, ReplayHarnessError> {
+    build_detector_from_candidate(candidate).map_err(detector_factory_error)
+}
+
+fn resolve_experiment_baseline_strategy_id(
+    config: &SwarmConfig,
+    loaded_experiment: &LoadedDetectorExperiment,
+) -> Result<String, ReplayHarnessError> {
+    let baseline_strategy_id = config
+        .detection
+        .resolve_rollout_strategy_id(
+            "canary.strategy_id",
+            config.canary.strategy_id.as_deref(),
+            true,
+        )
+        .map_err(|source| ReplayHarnessError::ExperimentValidation {
+            path: loaded_experiment.path.clone(),
+            reason: source.to_string(),
+        })?;
+    if loaded_experiment.manifest.lineage.parent_strategy_id != baseline_strategy_id {
+        return Err(ReplayHarnessError::ExperimentValidation {
+            path: loaded_experiment.path.clone(),
+            reason: format!(
+                "lineage.parent_strategy_id `{}` must match resolved rollout baseline `{}`",
+                loaded_experiment.manifest.lineage.parent_strategy_id, baseline_strategy_id
+            ),
+        });
+    }
+    Ok(baseline_strategy_id)
+}
+
+fn detector_factory_error(error: DetectorFactoryError) -> ReplayHarnessError {
+    match error {
+        DetectorFactoryError::DetectorProfile(source) => {
+            ReplayHarnessError::DetectorProfile(source)
+        }
+        DetectorFactoryError::UnsupportedDetector { strategy } => {
+            ReplayHarnessError::UnsupportedDetector { strategy }
+        }
     }
 }
 
@@ -3490,6 +3246,11 @@ fn validate_experiment_manifest(
             ..
         }
         | DetectorCandidateManifest::SupplyChain {
+            strategy_id,
+            description,
+            ..
+        }
+        | DetectorCandidateManifest::NetworkConnect {
             strategy_id,
             description,
             ..
@@ -3897,7 +3658,7 @@ fn verify_known_bad_coverage(report: &ReplaySuiteReport) -> VerificationInvarian
 }
 
 fn verify_canonical_templates(
-    detector: &ReplayDetector,
+    detector: &RuntimeDetector,
     templates: &[VerificationThreatClassTemplate],
 ) -> VerificationInvariantResult {
     let counterexamples = templates
@@ -4198,70 +3959,67 @@ fn default_max_detect_latency_delta_us() -> u64 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        DefaultReplayHarness, DetectorExperimentManifest, PromotionReviewRecommendation,
-        ReplayEvaluationReport, ReplayRunBundle, ReplayScenarioClass, ReplayScenarioInput,
-        ReplayScenarioManifest, ReplayScenarioMetadata, ReplayScenarioStep, ReplaySuiteManifest,
-        ReplaySuiteMetadata, VerificationCorpusManifest, load_verification_manifest,
-        render_evaluation_report, render_experiment_report, render_promotion_review_packet,
-        render_replay_run, render_shadow_report, render_suite_report, render_verification_report,
+        DefaultReplayHarness, DetectorCandidateManifest, DetectorExperimentManifest,
+        PromotionReviewRecommendation, ReplayEvaluationReport, ReplayRunBundle,
+        ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest, ReplayScenarioMetadata,
+        ReplayScenarioStep, ReplaySuiteManifest, ReplaySuiteMetadata, VerificationCorpusManifest,
+        load_detector_experiment_manifest, load_verification_manifest, render_evaluation_report,
+        render_experiment_report, render_promotion_review_packet, render_replay_run,
+        render_shadow_report, render_suite_report, render_verification_report,
     };
-    use crate::config::parse_config;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use swarm_core::ThreatClass;
+    use swarm_core::config::{PolicyRuleConfig, PolicyRuleDecision};
     use swarm_core::types::{ResponseAction, Severity};
-    use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
+    use swarm_whisker::{
+        DetectionStrategy, NetworkConnectProfile, ProcessStartEvent, TelemetryEvent,
+        TelemetryPayload,
+    };
+
+    fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
+        use ThreatClass::{
+            CommandAndControl, CredentialAccess, DataExfiltration, DefenseEvasion, Discovery,
+            Execution, Impact, InitialAccess, LateralMovement, Persistence, PrivilegeEscalation,
+            SupplyChain,
+        };
+
+        [
+            Execution,
+            CommandAndControl,
+            CredentialAccess,
+            DataExfiltration,
+            DefenseEvasion,
+            Discovery,
+            Impact,
+            InitialAccess,
+            LateralMovement,
+            Persistence,
+            PrivilegeEscalation,
+            SupplyChain,
+        ]
+        .into_iter()
+        .map(|threat_class| PolicyRuleConfig {
+            name: format!("replay-test-allow-{threat_class:?}"),
+            decision: PolicyRuleDecision::Allow,
+            threat_class,
+            actions: Vec::new(),
+            min_severity: Severity::Low,
+            max_severity: Severity::Critical,
+            time_window_utc: None,
+            max_actions_per_agent_per_minute: None,
+            reason: Some("replay tests allow configured response actions".to_string()),
+        })
+        .collect()
+    }
 
     fn sample_config() -> swarm_core::config::SwarmConfig {
-        parse_config(
-            r#"
-name: replay-tests
-description: replay test config
-runtime:
-  mode: live_response
-  telemetry_sources:
-    - name: synthetic-process
-      subject: telemetry.synthetic.process
-  max_in_flight_actions: 4
-  require_durable_live_response: false
-detection:
-  strategy: suspicious_process_tree
-  high_confidence_threshold: 0.90
-  medium_confidence_threshold: 0.70
-pheromone:
-  default_half_life_secs: 3600.0
-  evaporation_threshold: 0.01
-  min_sources_for_escalation: 2
-  alert_threshold: 2.0
-  incident_threshold: 5.0
-  backend:
-    kind: in_memory
-policy:
-  human_gate_severity: HIGH
-  lease_ttl_ms: 60000
-audit:
-  bundle_store:
-    kind: memory
-  recent_decisions_limit: 20
-investigation:
-  enabled: false
-  worker_count: 1
-  max_pending_jobs: 16
-  time_budget_ms: 250
-  bundle_store:
-    kind: memory
-correlation:
-  enabled: false
-  time_window_ms: 300000
-  min_shared_keys: 1
-  candidate_limit: 32
-  incident_store:
-    kind: memory
-"#,
-            "inline",
-        )
-        .unwrap()
+        let mut config: swarm_core::config::SwarmConfig =
+            serde_yaml::from_str(include_str!("../../../../rulesets/default.yaml")).unwrap();
+        config.policy.rules = permissive_policy_rules();
+        config
     }
 
     fn suspicious_event(
@@ -4957,6 +4715,60 @@ gates:
         assert_eq!(reloaded.record.experiment_id, lookup.record.experiment_id);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn replay_manifest_and_switchboard_accept_network_connect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = unique_temp_dir("network-connect-manifest");
+        let experiments_dir = root.join("experiments");
+        fs::create_dir_all(&experiments_dir)?;
+
+        let mut config = sample_config();
+        config.detection.strategy = "network_connect".to_string();
+        config.detection.profiles.network_connect = Some(serde_json::json!({
+            "suspicious_ports": [4444],
+        }));
+        let baseline = super::replay_detector(&config)?;
+        assert_eq!(baseline.id(), "network_connect");
+
+        let manifest = DetectorExperimentManifest {
+            name: "network-connect-candidate".to_string(),
+            description: "network connect replay candidate".to_string(),
+            corpus: super::ExperimentCorpusTarget {
+                suite: "../scenario-suites/hellcat-office-v1.yaml".to_string(),
+            },
+            verification: super::ExperimentVerificationTarget {
+                corpus: "../verifications/office-detector-safety-v1.yaml".to_string(),
+            },
+            candidate: DetectorCandidateManifest::NetworkConnect {
+                strategy_id: "network_connect_candidate".to_string(),
+                description: "network connect candidate".to_string(),
+                profile: NetworkConnectProfile {
+                    suspicious_ports: vec![4444],
+                    ..NetworkConnectProfile::default()
+                },
+            },
+            lineage: super::ExperimentLineage {
+                parent_strategy_id: "network_connect".to_string(),
+                mutation: "test".to_string(),
+                rationale: "test".to_string(),
+            },
+            gates: Default::default(),
+        };
+        let manifest_path = write_experiment(
+            &experiments_dir,
+            "network-connect-candidate.yaml",
+            &manifest,
+        );
+
+        let loaded = load_detector_experiment_manifest(&manifest_path)?;
+        assert_eq!(loaded.candidate.strategy_id(), "network_connect_candidate");
+        let candidate = super::detector_from_candidate(&loaded.candidate)?;
+        assert_eq!(candidate.id(), "network_connect_candidate");
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
     }
 
     #[tokio::test]

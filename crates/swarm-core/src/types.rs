@@ -66,10 +66,25 @@ pub enum SwarmAction {
     },
 
     /// Shift to a different agent role.
-    RoleShift { new_role: super::agent::AgentRole },
+    RoleShift {
+        target_agent_id: AgentId,
+        new_role: super::agent::AgentRole,
+    },
 
     /// Report health status change.
-    HealthReport { status: super::agent::AgentHealth },
+    HealthReport {
+        target_agent_id: AgentId,
+        status: super::agent::AgentHealth,
+    },
+
+    /// Record a governance veto over a destructive autonomous response.
+    GovernanceVeto {
+        hunt_id: HuntId,
+        action: ResponseAction,
+        evidence: serde_json::Value,
+        governing_agent_id: AgentId,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -22,7 +22,7 @@ use swarm_pheromone::{
     ConfiguredPheromoneSubstrate, PheromoneSubstrate, SubstrateError, SubstrateHealth,
 };
 use swarm_policy::ApprovalGate;
-use swarm_policy::static_gate::StaticApprovalGate;
+use swarm_policy::configurable_gate::ConfigurableApprovalGate;
 use swarm_policy::{ActionRequest, ApprovalContext, PolicyVerdict};
 use swarm_response::{
     DispatchingExecutor, NotificationRouter, ResponseExecutor, SiemFindingForwarder,
@@ -1352,7 +1352,7 @@ where
     }
 }
 
-impl<Strategy> ConfiguredRuntimeStack<StaticApprovalGate, DispatchingExecutor, Strategy>
+impl<Strategy> ConfiguredRuntimeStack<ConfigurableApprovalGate, DispatchingExecutor, Strategy>
 where
     Strategy: InvestigationStrategy,
 {
@@ -1363,7 +1363,8 @@ where
             config.runtime.max_dead_letter_bytes,
         )
         .map_err(|error| ServiceError::Runtime(crate::RuntimeError::Response(error)))?;
-        Self::from_components(config, StaticApprovalGate::default(), response, strategy)
+        let gate = ConfigurableApprovalGate::from_config(&config.policy);
+        Self::from_components(config, gate, response, strategy)
     }
 }
 
@@ -1466,6 +1467,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: swarm_core::config::DetectionConfig {
@@ -1481,11 +1483,14 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: Default::default(),
                 backend,
             },
             policy: PolicyConfig {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
+                ..PolicyConfig::default()
             },
             response_adapter: swarm_core::config::ResponseAdapterConfig::Sandbox,
             siem_forward: None,
@@ -1647,6 +1652,7 @@ mod tests {
                     "adapter": "timeout_test",
                     "status": "timeout",
                 }),
+                audit: Default::default(),
             })
         }
     }

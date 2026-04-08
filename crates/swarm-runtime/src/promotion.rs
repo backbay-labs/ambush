@@ -1,29 +1,22 @@
 use crate::canary::{
     CanaryRecommendation, CanaryRunReport, CanaryRunStatus, CanaryStoreError, FileCanaryStore,
 };
-use crate::config::{
-    DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
-    lateral_movement_profile, load_config, persistence_profile, supply_chain_profile,
-    suspicious_process_tree_profile, suspicious_scripting_profile,
+use crate::config::{DetectorProfileError, RuntimeConfigError, load_config};
+use crate::detector_factory::{
+    DetectorFactoryError, build_candidate_manifest_from_strategy, build_detector_from_candidate,
 };
 use crate::replay::{DetectorCandidateManifest, ExperimentLineage};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use swarm_core::config::{PromotionConfig, SwarmConfig};
+use swarm_core::config::{ConfigValidationError, PromotionConfig, SwarmConfig};
 use swarm_core::types::Severity;
 use swarm_crypto::{
     DetachedSignature, PublicKey, Signature, canonical_json_bytes, verify_detached_signature,
 };
 use swarm_whisker::stream::{evaluate_event, findings_to_deposits};
-use swarm_whisker::{
-    CredentialAccessDetector, CredentialAccessProfile, DetectionFinding, DetectionStrategy,
-    DnsExfiltrationDetector, DnsExfiltrationProfile, LateralMovementDetector,
-    LateralMovementProfile, PersistenceDetector, PersistenceProfile, SupplyChainDetector,
-    SupplyChainProfile, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
-    SuspiciousScriptingDetector, SuspiciousScriptingProfile, TelemetryEvent,
-};
+use swarm_whisker::{DetectionFinding, TelemetryEvent};
 
 /// Errors surfaced by the controlled production-promotion lane.
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +26,9 @@ pub enum ProductionPromotionError {
 
     #[error(transparent)]
     CanaryStore(#[from] CanaryStoreError),
+
+    #[error(transparent)]
+    ConfigValidation(#[from] ConfigValidationError),
 
     #[error(transparent)]
     DetectorProfile(#[from] DetectorProfileError),
@@ -74,6 +70,9 @@ pub enum ProductionPromotionError {
 
     #[error("canary baseline mismatch: expected current production `{expected}`, found `{actual}`")]
     BaselineMismatch { expected: String, actual: String },
+
+    #[error("promotion baseline `{strategy_id}` is not active in detection.active_strategies()")]
+    InactiveBaselineScope { strategy_id: String },
 
     #[error(
         "an active production promotion already exists for window `{window_id}`: `{promotion_id}`"
@@ -646,15 +645,11 @@ impl DefaultProductionPromotionHarness {
             });
         }
 
-        if canary.report.assignment.baseline_strategy_id != self.config.detection.strategy {
-            return Err(ProductionPromotionError::BaselineMismatch {
-                expected: self.config.detection.strategy.clone(),
-                actual: canary.report.assignment.baseline_strategy_id.clone(),
-            });
-        }
-
         let now_ms = now_ms();
-        let previous_production_candidate = baseline_candidate_from_config(&self.config)?;
+        let previous_production_strategy_id =
+            resolve_promotion_rollout_strategy_id(&self.config, &canary.report)?;
+        let previous_production_candidate =
+            baseline_candidate_from_config(&self.config, &previous_production_strategy_id)?;
         let assignment = ProductionPromotionAssignment {
             canary_run_id: canary.report.run_id.clone(),
             canary_report: canary.report.clone(),
@@ -662,7 +657,7 @@ impl DefaultProductionPromotionHarness {
             experiment_name: canary.report.assignment.experiment_name.clone(),
             suite_name: canary.report.assignment.suite_name.clone(),
             corpus_version: canary.report.assignment.corpus_version.clone(),
-            previous_production_strategy_id: canary.report.assignment.baseline_strategy_id.clone(),
+            previous_production_strategy_id,
             promoted_strategy_id: canary.report.assignment.candidate_strategy_id.clone(),
             promoted_description: canary.report.assignment.candidate_description.clone(),
             previous_production_candidate,
@@ -1210,136 +1205,6 @@ pub fn verify_consensus_receipt_signature(receipt: &PromotionConsensusReceipt) -
     verify_detached_signature(&payload, &detached).is_ok()
 }
 
-#[derive(Debug, Clone)]
-enum SupportedPromotionDetector {
-    SuspiciousProcessTree {
-        strategy_id: String,
-        detector: SuspiciousProcessTreeDetector,
-    },
-    DnsExfiltration {
-        strategy_id: String,
-        detector: DnsExfiltrationDetector,
-    },
-    LateralMovement {
-        strategy_id: String,
-        detector: LateralMovementDetector,
-    },
-    CredentialAccess {
-        strategy_id: String,
-        detector: CredentialAccessDetector,
-    },
-    SuspiciousScripting {
-        strategy_id: String,
-        detector: SuspiciousScriptingDetector,
-    },
-    Persistence {
-        strategy_id: String,
-        detector: PersistenceDetector,
-    },
-    SupplyChain {
-        strategy_id: String,
-        detector: SupplyChainDetector,
-    },
-}
-
-impl DetectionStrategy for SupportedPromotionDetector {
-    fn id(&self) -> &str {
-        match self {
-            Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
-            Self::DnsExfiltration { strategy_id, .. } => strategy_id.as_str(),
-            Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
-            Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
-            Self::SuspiciousScripting { strategy_id, .. } => strategy_id.as_str(),
-            Self::Persistence { strategy_id, .. } => strategy_id.as_str(),
-            Self::SupplyChain { strategy_id, .. } => strategy_id.as_str(),
-        }
-    }
-
-    fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
-        match self {
-            Self::SuspiciousProcessTree { detector, .. } => detector.evaluate(event),
-            Self::DnsExfiltration { detector, .. } => detector.evaluate(event),
-            Self::LateralMovement { detector, .. } => detector.evaluate(event),
-            Self::CredentialAccess { detector, .. } => detector.evaluate(event),
-            Self::SuspiciousScripting { detector, .. } => detector.evaluate(event),
-            Self::Persistence { detector, .. } => detector.evaluate(event),
-            Self::SupplyChain { detector, .. } => detector.evaluate(event),
-        }
-    }
-}
-
-impl SupportedPromotionDetector {
-    fn suspicious_process_tree(
-        strategy_id: impl Into<String>,
-        profile: SuspiciousProcessTreeProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SuspiciousProcessTree {
-            strategy_id: strategy_id.into(),
-            detector: SuspiciousProcessTreeDetector::from_profile(profile)?,
-        })
-    }
-
-    fn dns_exfiltration(
-        strategy_id: impl Into<String>,
-        profile: DnsExfiltrationProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::DnsExfiltration {
-            strategy_id: strategy_id.into(),
-            detector: DnsExfiltrationDetector::from_profile(profile)?,
-        })
-    }
-
-    fn lateral_movement(
-        strategy_id: impl Into<String>,
-        profile: LateralMovementProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::LateralMovement {
-            strategy_id: strategy_id.into(),
-            detector: LateralMovementDetector::from_profile(profile)?,
-        })
-    }
-
-    fn credential_access(
-        strategy_id: impl Into<String>,
-        profile: CredentialAccessProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::CredentialAccess {
-            strategy_id: strategy_id.into(),
-            detector: CredentialAccessDetector::from_profile(profile)?,
-        })
-    }
-
-    fn suspicious_scripting(
-        strategy_id: impl Into<String>,
-        profile: SuspiciousScriptingProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SuspiciousScripting {
-            strategy_id: strategy_id.into(),
-            detector: SuspiciousScriptingDetector::from_profile(profile)?,
-        })
-    }
-
-    fn persistence(
-        strategy_id: impl Into<String>,
-        profile: PersistenceProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::Persistence {
-            strategy_id: strategy_id.into(),
-            detector: PersistenceDetector::from_profile(profile)?,
-        })
-    }
-
-    fn supply_chain(
-        strategy_id: impl Into<String>,
-        profile: SupplyChainProfile,
-    ) -> Result<Self, swarm_whisker::ProfileValidationError> {
-        Ok(Self::SupplyChain {
-            strategy_id: strategy_id.into(),
-            detector: SupplyChainDetector::from_profile(profile)?,
-        })
-    }
-}
-
 #[derive(Serialize)]
 struct PromotionApprovalVotePayload<'a> {
     promotion_id: &'a str,
@@ -1371,109 +1236,70 @@ fn promotion_severity(report: &CanaryRunReport) -> Severity {
 
 fn baseline_candidate_from_config(
     config: &SwarmConfig,
+    strategy_id: &str,
 ) -> Result<DetectorCandidateManifest, ProductionPromotionError> {
-    match config.detection.strategy.as_str() {
-        "suspicious_process_tree" => Ok(DetectorCandidateManifest::SuspiciousProcessTree {
-            strategy_id: config.detection.strategy.clone(),
-            description: "production baseline at promotion start".to_string(),
-            profile: suspicious_process_tree_profile(&config.detection)?,
-        }),
-        "dns_exfiltration" => Ok(DetectorCandidateManifest::DnsExfiltration {
-            strategy_id: config.detection.strategy.clone(),
-            description: "production baseline at promotion start".to_string(),
-            profile: dns_exfiltration_profile(&config.detection)?,
-        }),
-        "lateral_movement" => Ok(DetectorCandidateManifest::LateralMovement {
-            strategy_id: config.detection.strategy.clone(),
-            description: "production baseline at promotion start".to_string(),
-            profile: lateral_movement_profile(&config.detection)?,
-        }),
-        "credential_access" => Ok(DetectorCandidateManifest::CredentialAccess {
-            strategy_id: config.detection.strategy.clone(),
-            description: "production baseline at promotion start".to_string(),
-            profile: credential_access_profile(&config.detection)?,
-        }),
-        "suspicious_scripting" => Ok(DetectorCandidateManifest::SuspiciousScripting {
-            strategy_id: config.detection.strategy.clone(),
-            description: "production baseline at promotion start".to_string(),
-            profile: suspicious_scripting_profile(&config.detection)?,
-        }),
-        "persistence" => Ok(DetectorCandidateManifest::Persistence {
-            strategy_id: config.detection.strategy.clone(),
-            description: "production baseline at promotion start".to_string(),
-            profile: persistence_profile(&config.detection)?,
-        }),
-        "supply_chain" => Ok(DetectorCandidateManifest::SupplyChain {
-            strategy_id: config.detection.strategy.clone(),
-            description: "production baseline at promotion start".to_string(),
-            profile: supply_chain_profile(&config.detection)?,
-        }),
-        other => Err(ProductionPromotionError::UnsupportedDetector {
-            strategy: other.to_string(),
-        }),
-    }
+    build_candidate_manifest_from_strategy(
+        strategy_id,
+        &config.detection,
+        "production baseline at promotion start",
+    )
+    .map_err(detector_factory_error)
 }
 
 fn detector_from_candidate(
     candidate: &DetectorCandidateManifest,
-) -> Result<SupportedPromotionDetector, ProductionPromotionError> {
-    match candidate {
-        DetectorCandidateManifest::SuspiciousProcessTree {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedPromotionDetector::suspicious_process_tree(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::DnsExfiltration {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedPromotionDetector::dns_exfiltration(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::LateralMovement {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedPromotionDetector::lateral_movement(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::CredentialAccess {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedPromotionDetector::credential_access(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::SuspiciousScripting {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedPromotionDetector::suspicious_scripting(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::Persistence {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedPromotionDetector::persistence(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
-        DetectorCandidateManifest::SupplyChain {
-            strategy_id,
-            profile,
-            ..
-        } => Ok(SupportedPromotionDetector::supply_chain(
-            strategy_id.clone(),
-            profile.clone(),
-        )?),
+) -> Result<crate::detector_factory::RuntimeDetector, ProductionPromotionError> {
+    build_detector_from_candidate(candidate).map_err(detector_factory_error)
+}
+
+fn resolve_promotion_rollout_strategy_id(
+    config: &SwarmConfig,
+    canary: &CanaryRunReport,
+) -> Result<String, ProductionPromotionError> {
+    if let Some(strategy_id) = config.promotion.strategy_id.as_deref() {
+        let Some(strategy_id) = config
+            .detection
+            .validate_rollout_strategy_id("promotion.strategy_id", Some(strategy_id))?
+        else {
+            return Err(ProductionPromotionError::ConfigValidation(
+                ConfigValidationError::InvalidField {
+                    field: "promotion.strategy_id",
+                    reason: "must not be empty when provided".to_string(),
+                },
+            ));
+        };
+        if strategy_id != canary.assignment.baseline_strategy_id {
+            return Err(ProductionPromotionError::BaselineMismatch {
+                expected: strategy_id,
+                actual: canary.assignment.baseline_strategy_id.clone(),
+            });
+        }
+        return Ok(strategy_id);
+    }
+
+    let inherited = canary.assignment.baseline_strategy_id.trim().to_string();
+    if config
+        .detection
+        .active_strategies()
+        .iter()
+        .any(|entry| entry == &inherited)
+    {
+        Ok(inherited)
+    } else {
+        Err(ProductionPromotionError::InactiveBaselineScope {
+            strategy_id: inherited,
+        })
+    }
+}
+
+fn detector_factory_error(error: DetectorFactoryError) -> ProductionPromotionError {
+    match error {
+        DetectorFactoryError::DetectorProfile(source) => {
+            ProductionPromotionError::DetectorProfile(source)
+        }
+        DetectorFactoryError::UnsupportedDetector { strategy } => {
+            ProductionPromotionError::UnsupportedDetector { strategy }
+        }
     }
 }
 
@@ -1622,10 +1448,11 @@ struct ProductionPromotionIndex {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        DefaultProductionPromotionHarness, ProductionPromotionRecommendation,
-        ProductionPromotionRollbackTrigger, ProductionPromotionStatus, PromotionApprovalVoteRef,
-        PromotionConsensusReceipt, PromotionQuorumGateConfig, render_production_promotion_report,
-        validate_quorum_gate, verify_consensus_receipt_signature, verify_vote_signature,
+        DefaultProductionPromotionHarness, ProductionPromotionError,
+        ProductionPromotionRecommendation, ProductionPromotionRollbackTrigger,
+        ProductionPromotionStatus, PromotionApprovalVoteRef, PromotionConsensusReceipt,
+        PromotionQuorumGateConfig, render_production_promotion_report, validate_quorum_gate,
+        verify_consensus_receipt_signature, verify_vote_signature,
     };
     use crate::canary::{
         CanaryAssignment, CanaryFindingPreview, CanaryRecommendation, CanaryRunReport,
@@ -1644,7 +1471,8 @@ mod tests {
     use swarm_core::types::Severity;
     use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
     use swarm_whisker::{
-        ProcessStartEvent, SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
+        DetectionStrategy, NetworkConnectProfile, ProcessStartEvent, SuspiciousProcessTreeProfile,
+        TelemetryEvent, TelemetryPayload,
     };
 
     fn unique_temp_dir(label: &str) -> PathBuf {
@@ -1677,6 +1505,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
@@ -1692,11 +1521,14 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: Default::default(),
                 backend: PheromoneBackendConfig::InMemory,
             },
             policy: PolicyConfig {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
+                ..PolicyConfig::default()
             },
             response_adapter: ResponseAdapterConfig::Sandbox,
             siem_forward: None,
@@ -1711,6 +1543,7 @@ mod tests {
             canary: CanaryConfig {
                 enabled: true,
                 slot_id: "canary-primary".to_string(),
+                strategy_id: Some("suspicious_process_tree".to_string()),
                 observation_window_events: 2,
                 max_candidate_only_rate: 0.0,
                 max_baseline_miss_rate: 0.0,
@@ -1720,6 +1553,7 @@ mod tests {
             promotion: PromotionConfig {
                 enabled: true,
                 window_id: "production-primary".to_string(),
+                strategy_id: None,
                 observation_window_events: 2,
                 max_promoted_only_rate: 0.0,
                 max_fallback_recovery_rate: 0.0,
@@ -1756,10 +1590,106 @@ mod tests {
         }
     }
 
+    #[test]
+    fn network_connect_promotion_baselines_and_candidates_are_supported()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = promotion_config();
+        config.detection.strategy = "network_connect".to_string();
+        config.canary.strategy_id = Some("network_connect".to_string());
+
+        let baseline = super::baseline_candidate_from_config(&config, "network_connect")?;
+        assert_eq!(baseline.strategy_id(), "network_connect");
+
+        let promoted =
+            super::detector_from_candidate(&DetectorCandidateManifest::NetworkConnect {
+                strategy_id: "network_connect_candidate".to_string(),
+                description: "network connect candidate".to_string(),
+                profile: NetworkConnectProfile {
+                    suspicious_ports: vec![4444],
+                    ..NetworkConnectProfile::default()
+                },
+            })?;
+        assert_eq!(promoted.id(), "network_connect_candidate");
+        Ok(())
+    }
+
+    #[test]
+    fn promotion_start_rejects_configured_scope_mismatch() {
+        let root = unique_temp_dir("scope-mismatch");
+        let results_dir = root.join("promotions");
+        let mut config = promotion_config();
+        config.detection.strategies = vec![
+            "suspicious_process_tree".to_string(),
+            "dns_exfiltration".to_string(),
+        ];
+        config.promotion.strategy_id = Some("dns_exfiltration".to_string());
+        let ready_canary = ready_canary_report(&config, control_candidate());
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let error = harness
+            .start_run(&canaries_dir, &canary_run_id)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProductionPromotionError::BaselineMismatch {
+                expected,
+                actual,
+            } if expected == "dns_exfiltration" && actual == "suspicious_process_tree"
+        ));
+    }
+
+    #[test]
+    fn promotion_start_rejects_inherited_scope_that_is_no_longer_active() {
+        let root = unique_temp_dir("inactive-inherited-scope");
+        let results_dir = root.join("promotions");
+        let mut config = promotion_config();
+        config.detection.strategy = "dns_exfiltration".to_string();
+        config.detection.strategies = vec![
+            "dns_exfiltration".to_string(),
+            "network_connect".to_string(),
+        ];
+        config.canary.strategy_id = Some("dns_exfiltration".to_string());
+        let mut ready_canary = ready_canary_report(&config, control_candidate());
+        ready_canary.assignment.baseline_strategy_id = "suspicious_process_tree".to_string();
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let error = harness
+            .start_run(&canaries_dir, &canary_run_id)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProductionPromotionError::InactiveBaselineScope { strategy_id }
+                if strategy_id == "suspicious_process_tree"
+        ));
+    }
+
+    fn rollout_baseline_strategy_id(config: &SwarmConfig) -> String {
+        config
+            .canary
+            .strategy_id
+            .clone()
+            .unwrap_or_else(|| config.detection.strategy.clone())
+    }
+
     fn ready_canary_report(
         config: &SwarmConfig,
         candidate: DetectorCandidateManifest,
     ) -> CanaryRunReport {
+        let baseline_strategy_id = rollout_baseline_strategy_id(config);
         CanaryRunReport {
             run_id: format!(
                 "canary:canary-primary:{}:1700000000000",
@@ -1776,12 +1706,12 @@ mod tests {
                 experiment_path: "experiments/test.yaml".to_string(),
                 suite_name: "hellcat_office_v1".to_string(),
                 corpus_version: "2026-04-03".to_string(),
-                baseline_strategy_id: config.detection.strategy.clone(),
+                baseline_strategy_id: baseline_strategy_id.clone(),
                 candidate_strategy_id: candidate.strategy_id().to_string(),
                 candidate_description: candidate.description().to_string(),
                 candidate: candidate.clone(),
                 lineage: ExperimentLineage {
-                    parent_strategy_id: config.detection.strategy.clone(),
+                    parent_strategy_id: baseline_strategy_id,
                     mutation: "test".to_string(),
                     rationale: "test rationale".to_string(),
                 },

@@ -86,6 +86,7 @@ impl HttpEdrAdapter {
                     "endpoint": self.config.endpoint,
                     "lease_id": lease.capability_id,
                 }),
+                audit: Default::default(),
             }),
         }
     }
@@ -127,6 +128,7 @@ impl ResponseExecutor for HttpEdrAdapter {
                     "payload": payload,
                     "authorization_header": "Bearer <redacted>",
                 }),
+                audit: Default::default(),
             });
         }
 
@@ -178,6 +180,7 @@ impl ResponseExecutor for HttpEdrAdapter {
                         "response_body": response_body,
                         "elapsed_ms": elapsed_ms,
                     }),
+                    audit: Default::default(),
                 })
             }
             Err(error) if error.is_timeout() => Ok(ResponseReceipt {
@@ -192,6 +195,7 @@ impl ResponseExecutor for HttpEdrAdapter {
                     "payload": payload,
                     "elapsed_ms": elapsed_ms,
                 }),
+                audit: Default::default(),
             }),
             Err(error) => Ok(ResponseReceipt {
                 receipt_id,
@@ -206,6 +210,7 @@ impl ResponseExecutor for HttpEdrAdapter {
                     "elapsed_ms": elapsed_ms,
                     "error": error.to_string(),
                 }),
+                audit: Default::default(),
             }),
         }
     }

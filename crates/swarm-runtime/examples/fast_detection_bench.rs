@@ -23,6 +23,8 @@ fn pheromone_config() -> PheromoneConfig {
         min_sources_for_escalation: 2,
         alert_threshold: 2.0,
         incident_threshold: 5.0,
+        deescalation_cooldown_secs: 300,
+        response_playbook: Default::default(),
         backend: PheromoneBackendConfig::InMemory,
     }
 }

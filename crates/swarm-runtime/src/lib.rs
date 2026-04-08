@@ -12,6 +12,7 @@ pub mod config;
 pub mod control;
 pub mod correlation;
 pub mod detection;
+pub mod detector_factory;
 pub mod dispatcher;
 pub mod drafting;
 pub mod escalation;
@@ -25,6 +26,7 @@ pub mod mutation;
 pub mod operator_http;
 pub mod operator_maintenance;
 pub mod portfolio;
+pub mod pounce_agent;
 pub mod promotion;
 pub mod replay;
 pub mod review_workbench;
@@ -32,15 +34,19 @@ pub mod selection;
 pub mod service;
 pub mod stalker_agent;
 pub mod strategy;
+pub mod tom_agent;
 pub mod weaver_agent;
 pub mod whisker_agent;
 pub mod workbench;
 
 use std::time::Instant;
 pub use swarm_core::config::RuntimeMode;
+use swarm_core::types::AgentId;
 use swarm_guard::{GuardAction, GuardContext, GuardPipeline};
 use swarm_policy::{ActionRequest, ApprovalContext, ApprovalError, ApprovalGate};
-use swarm_response::{ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt};
+use swarm_response::{
+    ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt, ResponseStatus,
+};
 use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
 use swarm_whisker::DetectionFinding;
 
@@ -97,6 +103,57 @@ impl<P, E> SwarmRuntime<P, E> {
         self
     }
 
+    pub fn audit_governance_veto(
+        &self,
+        detection: &DetectionFinding,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+        governing_agent_id: &AgentId,
+        reason: impl Into<String>,
+    ) -> AuditTrail {
+        let reason = reason.into();
+        let receipt = ResponseReceipt {
+            receipt_id: format!(
+                "veto:{}:{}:{}",
+                request.hunt_id.0,
+                request.action.kind(),
+                context.now_ms
+            ),
+            action: request.action.kind().to_string(),
+            mode: self.execution_mode(),
+            status: ResponseStatus::Failed,
+            summary: format!("governance veto: {reason}"),
+            details: serde_json::json!({
+                "status": "vetoed",
+                "lineage": request.evidence.get("lineage").cloned(),
+                "requested_by": request.requested_by,
+                "evidence": request.evidence.clone(),
+            }),
+            audit: Default::default(),
+        }
+        .with_policy_audit(
+            swarm_policy::PolicyVerdict::Deny,
+            "governance.veto",
+            reason.clone(),
+        )
+        .with_governance_audit(governing_agent_id.clone(), reason.clone());
+
+        AuditTrail {
+            trail_id: format!("trail:{}:{}", request.hunt_id.0, context.now_ms),
+            hunt_id: request.hunt_id.0.clone(),
+            related_receipt_ids: context.receipt_chain.clone(),
+            detection: detection.clone(),
+            policy: PolicyRecord {
+                verdict: swarm_policy::PolicyVerdict::Deny,
+                rule_name: "governance.veto".to_string(),
+                reason,
+                lease: None,
+            },
+            response: AuditResponseRecord::Failure(receipt.into_failure()),
+            created_at_ms: context.now_ms,
+        }
+    }
+
     fn evaluate_guard_rejection(&self, request: &ActionRequest) -> Option<(String, String)> {
         let pipeline = self.guard_pipeline.as_ref()?;
         let context = GuardContext::new()
@@ -117,6 +174,13 @@ impl<P, E> SwarmRuntime<P, E> {
     fn correlation_id(context: &ApprovalContext) -> &str {
         context.correlation_id.as_deref().unwrap_or("unknown")
     }
+
+    fn execution_mode(&self) -> ExecutionMode {
+        match self.mode {
+            RuntimeMode::DetectOnly => ExecutionMode::DryRun,
+            RuntimeMode::LiveResponse => ExecutionMode::Enforced,
+        }
+    }
 }
 
 impl<P, E> SwarmRuntime<P, E>
@@ -135,6 +199,8 @@ where
             correlation_id = %Self::correlation_id(context),
             hunt_id = %request.hunt_id.0,
             verdict = ?decision.verdict,
+            rule_name = %decision.rule_name,
+            reason = %decision.reason,
             mode = ?self.mode,
             module = module_path!(),
             "policy evaluated response request"
@@ -142,10 +208,10 @@ where
 
         match decision.verdict {
             swarm_policy::PolicyVerdict::Deny => {
-                return Err(ApprovalError::Denied(decision.reason).into());
+                return Err(ApprovalError::Denied(decision.reason.clone()).into());
             }
             swarm_policy::PolicyVerdict::RequireHuman if self.mode == RuntimeMode::LiveResponse => {
-                return Err(ApprovalError::Denied(decision.reason).into());
+                return Err(ApprovalError::Denied(decision.reason.clone()).into());
             }
             swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {}
         }
@@ -163,16 +229,17 @@ where
         }
 
         let lease = self.policy.issue_lease(request, context)?;
-        let execution_mode = match self.mode {
-            RuntimeMode::DetectOnly => ExecutionMode::DryRun,
-            RuntimeMode::LiveResponse => ExecutionMode::Enforced,
-        };
-
+        ensure_active_lease(&lease, context.now_ms)?;
         let receipt = self
             .response
-            .execute(request, &lease, execution_mode)
+            .execute(request, &lease, self.execution_mode())
             .await
-            .map_err(RuntimeError::from)?;
+            .map_err(RuntimeError::from)?
+            .with_policy_audit(
+                decision.verdict,
+                decision.rule_name.clone(),
+                decision.reason.clone(),
+            );
         if !receipt.status.indicates_success() {
             return Err(RuntimeError::Response(ResponseError {
                 failure: receipt.into_failure(),
@@ -184,6 +251,8 @@ where
             action = %receipt.action,
             mode = ?receipt.mode,
             status = ?receipt.status,
+            rule_name = %decision.rule_name,
+            reason = %decision.reason,
             module = module_path!(),
             "response executed"
         );
@@ -218,15 +287,12 @@ where
             hunt_id = %request.hunt_id.0,
             event_id = %detection.event_id,
             verdict = ?decision.verdict,
+            rule_name = %decision.rule_name,
+            reason = %decision.reason,
             mode = ?self.mode,
             module = module_path!(),
             "building audit trail for response decision"
         );
-
-        let execution_mode = match self.mode {
-            RuntimeMode::DetectOnly => ExecutionMode::DryRun,
-            RuntimeMode::LiveResponse => ExecutionMode::Enforced,
-        };
 
         let (lease, response, response_elapsed_us, response_attempted, response_succeeded) =
             match decision.verdict {
@@ -271,15 +337,31 @@ where
                         )
                     } else {
                         let lease = self.policy.issue_lease(request, context)?;
+                        ensure_active_lease(&lease, context.now_ms)?;
                         let response_started = Instant::now();
-                        let response =
-                            match self.response.execute(request, &lease, execution_mode).await {
-                                Ok(receipt) if receipt.status.indicates_success() => {
-                                    AuditResponseRecord::Success(receipt)
-                                }
-                                Ok(receipt) => AuditResponseRecord::Failure(receipt.into_failure()),
-                                Err(error) => AuditResponseRecord::Failure(error.failure),
-                            };
+                        let response = match self
+                            .response
+                            .execute(request, &lease, self.execution_mode())
+                            .await
+                        {
+                            Ok(receipt) if receipt.status.indicates_success() => {
+                                AuditResponseRecord::Success(receipt.with_policy_audit(
+                                    decision.verdict,
+                                    decision.rule_name.clone(),
+                                    decision.reason.clone(),
+                                ))
+                            }
+                            Ok(receipt) => AuditResponseRecord::Failure(
+                                receipt
+                                    .with_policy_audit(
+                                        decision.verdict,
+                                        decision.rule_name.clone(),
+                                        decision.reason.clone(),
+                                    )
+                                    .into_failure(),
+                            ),
+                            Err(error) => AuditResponseRecord::Failure(error.failure),
+                        };
                         let response_elapsed_us = response_started.elapsed().as_micros() as u64;
                         let response_succeeded =
                             matches!(response, AuditResponseRecord::Success(_));
@@ -319,6 +401,7 @@ where
                 detection: detection.clone(),
                 policy: PolicyRecord {
                     verdict: decision.verdict,
+                    rule_name: decision.rule_name,
                     reason: decision.reason,
                     lease,
                 },
@@ -331,6 +414,18 @@ where
             response_succeeded,
         })
     }
+}
+
+fn ensure_active_lease(
+    lease: &swarm_policy::CapabilityLease,
+    now_ms: i64,
+) -> Result<(), ApprovalError> {
+    if lease.expires_at_ms <= now_ms {
+        return Err(ApprovalError::Denied(
+            "capability lease expired".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -379,6 +474,7 @@ mod tests {
                 },
                 summary: "executed".to_string(),
                 details: serde_json::json!({}),
+                audit: Default::default(),
             })
         }
     }

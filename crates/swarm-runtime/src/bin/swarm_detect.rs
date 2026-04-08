@@ -15,9 +15,11 @@ use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::escalation::ConcentrationMonitor;
 use swarm_runtime::ingest::{IngestState, detect_http_router};
 use swarm_runtime::investigation::SummaryInvestigator;
+use swarm_runtime::pounce_agent::PounceAgent;
 use swarm_runtime::replay::{ReplayScenarioInput, load_scenario_manifest, scenario_paths_in_dir};
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
 use swarm_runtime::stalker_agent::StalkerAgent;
+use swarm_runtime::tom_agent::{GovernancePolicy, TomAgent};
 use swarm_runtime::weaver_agent::WeaverAgent;
 use swarm_runtime::whisker_agent::WhiskerAgent;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -56,6 +58,100 @@ enum ReloadTrigger {
     FileChange,
     SecretChange,
     Signal(&'static str),
+}
+
+struct RetargetableWatcher {
+    path: PathBuf,
+    stop_tx: tokio::sync::watch::Sender<bool>,
+    join_handle: tokio::task::JoinHandle<()>,
+}
+
+impl RetargetableWatcher {
+    fn stop(self) {
+        let _ = self.stop_tx.send(true);
+        self.join_handle.abort();
+    }
+}
+
+fn watch_paths_differ(current: Option<&PathBuf>, next: Option<&PathBuf>) -> bool {
+    current != next
+}
+
+fn spawn_secret_reload_watcher(
+    secret_dir: PathBuf,
+    reload_tx: tokio::sync::mpsc::UnboundedSender<ReloadTrigger>,
+    mut global_shutdown: tokio::sync::watch::Receiver<bool>,
+) -> RetargetableWatcher {
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    let watched_path = secret_dir.clone();
+    let join_handle = tokio::spawn(async move {
+        let callback_tx = reload_tx.clone();
+        let mut watcher = match notify::recommended_watcher(
+            move |result: Result<notify::Event, notify::Error>| match result {
+                Ok(event)
+                    if matches!(
+                        event.kind,
+                        EventKind::Create(_)
+                            | EventKind::Modify(_)
+                            | EventKind::Remove(_)
+                            | EventKind::Any
+                    ) =>
+                {
+                    let _ = callback_tx.send(ReloadTrigger::SecretChange);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(
+                        module = module_path!(),
+                        reason = %error,
+                        "secret watcher error"
+                    );
+                }
+            },
+        ) {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                tracing::error!(
+                    module = module_path!(),
+                    secret_dir = %watched_path.display(),
+                    reason = %error,
+                    "failed to create secret watcher"
+                );
+                return;
+            }
+        };
+
+        if let Err(error) = watcher.watch(&watched_path, RecursiveMode::Recursive) {
+            tracing::error!(
+                module = module_path!(),
+                secret_dir = %watched_path.display(),
+                reason = %error,
+                "failed to watch secret directory"
+            );
+            return;
+        }
+
+        loop {
+            tokio::select! {
+                changed = global_shutdown.changed() => {
+                    if changed.is_err() || *global_shutdown.borrow() {
+                        break;
+                    }
+                }
+                changed = stop_rx.changed() => {
+                    if changed.is_err() || *stop_rx.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    RetargetableWatcher {
+        path: secret_dir,
+        stop_tx,
+        join_handle,
+    }
 }
 
 fn spawn_reload_tasks(
@@ -118,60 +214,6 @@ fn spawn_reload_tasks(
         let _ = watcher_shutdown.changed().await;
     }));
 
-    if let Some(secret_dir) = state.secret_dir_path() {
-        let secret_tx = reload_tx.clone();
-        let mut secret_shutdown = shutdown.subscribe();
-        handles.push(tokio::spawn(async move {
-            let callback_tx = secret_tx.clone();
-            let mut watcher = match notify::recommended_watcher(
-                move |result: Result<notify::Event, notify::Error>| match result {
-                    Ok(event)
-                        if matches!(
-                            event.kind,
-                            EventKind::Create(_)
-                                | EventKind::Modify(_)
-                                | EventKind::Remove(_)
-                                | EventKind::Any
-                        ) =>
-                    {
-                        let _ = callback_tx.send(ReloadTrigger::SecretChange);
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::error!(
-                            module = module_path!(),
-                            reason = %error,
-                            "secret watcher error"
-                        );
-                    }
-                },
-            ) {
-                Ok(watcher) => watcher,
-                Err(error) => {
-                    tracing::error!(
-                        module = module_path!(),
-                        secret_dir = %secret_dir.display(),
-                        reason = %error,
-                        "failed to create secret watcher"
-                    );
-                    return;
-                }
-            };
-
-            if let Err(error) = watcher.watch(&secret_dir, RecursiveMode::Recursive) {
-                tracing::error!(
-                    module = module_path!(),
-                    secret_dir = %secret_dir.display(),
-                    reason = %error,
-                    "failed to watch secret directory"
-                );
-                return;
-            }
-
-            let _ = secret_shutdown.changed().await;
-        }));
-    }
-
     #[cfg(unix)]
     {
         let sighup_tx = reload_tx.clone();
@@ -202,6 +244,12 @@ fn spawn_reload_tasks(
 
     let mut reload_shutdown = shutdown.subscribe();
     handles.push(tokio::spawn(async move {
+        let mut secret_watcher = state
+            .secret_dir_path()
+            .map(|secret_dir| {
+                spawn_secret_reload_watcher(secret_dir, reload_tx.clone(), shutdown.subscribe())
+            });
+
         loop {
             tokio::select! {
                 _ = reload_shutdown.changed() => break,
@@ -271,6 +319,21 @@ fn spawn_reload_tasks(
 
                     match state.reload_from_disk() {
                         Ok(()) => {
+                            let next_secret_dir = state.secret_dir_path();
+                            let current_secret_dir =
+                                secret_watcher.as_ref().map(|watcher| &watcher.path);
+                            if watch_paths_differ(current_secret_dir, next_secret_dir.as_ref()) {
+                                if let Some(watcher) = secret_watcher.take() {
+                                    watcher.stop();
+                                }
+                                secret_watcher = next_secret_dir.map(|secret_dir| {
+                                    spawn_secret_reload_watcher(
+                                        secret_dir,
+                                        reload_tx.clone(),
+                                        shutdown.subscribe(),
+                                    )
+                                });
+                            }
                             tracing::info!(
                                 module = module_path!(),
                                 trigger = %reason,
@@ -288,6 +351,10 @@ fn spawn_reload_tasks(
                     }
                 }
             }
+        }
+
+        if let Some(watcher) = secret_watcher {
+            watcher.stop();
         }
     }));
 
@@ -446,6 +513,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mode_state = Arc::new(arc_swap::ArcSwap::from_pointee(SwarmModeState::new()));
         let bridge_registry = BridgeRuntimeRegistry::from_config(&config)?;
         let bridge_health = bridge_registry.shared_health();
+        let governance_policy = Arc::new(GovernancePolicy::default());
         let state = state
             .with_telemetry_channel(telemetry_tx.clone())
             .with_agent_health(Arc::clone(&agent_health))
@@ -459,7 +527,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             state.current_substrate(),
             Arc::clone(&agent_health),
         )
-        .with_mode_state(Arc::clone(&mode_state));
+        .with_mode_state(Arc::clone(&mode_state))
+        .with_request_response_router(state.current_request_response_router());
         if let Some(metrics) = state.current_prometheus_metrics() {
             dispatcher = dispatcher.with_metrics(metrics);
         }
@@ -471,6 +540,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state.current_substrate(),
                 state.current_pheromone_config(),
             )))
+            .map_err(std::io::Error::other)?;
+        dispatcher
+            .register(Box::new(TomAgent::new(
+                AgentId::new("tom", "primary"),
+                config.runtime.governance_degraded_tick_threshold,
+                Arc::clone(&governance_policy),
+            )))
+            .map_err(std::io::Error::other)?;
+        dispatcher
+            .register(Box::new(
+                PounceAgent::new(
+                    AgentId::new("pounce", "primary"),
+                    state.current_pheromone_config().response_playbook.clone(),
+                )
+                .with_governance_policy(Arc::clone(&governance_policy)),
+            ))
             .map_err(std::io::Error::other)?;
         if config.investigation.enabled {
             dispatcher
@@ -717,4 +802,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::watch_paths_differ;
+    use std::path::PathBuf;
+
+    #[test]
+    fn watch_paths_differ_detects_secret_dir_retargets() {
+        let left = Some(PathBuf::from("/tmp/a"));
+        let right = Some(PathBuf::from("/tmp/b"));
+
+        assert!(watch_paths_differ(left.as_ref(), right.as_ref()));
+        assert!(watch_paths_differ(left.as_ref(), None));
+        assert!(!watch_paths_differ(left.as_ref(), left.as_ref()));
+        assert!(!watch_paths_differ(None, None));
+    }
 }

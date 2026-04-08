@@ -20,6 +20,7 @@ pub struct ConcentrationMonitor<S: PheromoneSubstrate> {
     config: PheromoneConfig,
     substrate: Arc<S>,
     mode_state: SwarmModeState,
+    below_threshold_since: Option<i64>,
     shared_mode_state: Option<Arc<ArcSwap<SwarmModeState>>>,
 }
 
@@ -29,6 +30,7 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
             config,
             substrate,
             mode_state: SwarmModeState::new(),
+            below_threshold_since: None,
             shared_mode_state: None,
         }
     }
@@ -125,6 +127,28 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
 
                 events.push(event);
             }
+        }
+
+        if events.is_empty() {
+            if self.mode_state.current != SwarmMode::Normal {
+                let quiet_since = self.below_threshold_since.get_or_insert(now);
+                if now - *quiet_since >= self.config.deescalation_cooldown_secs
+                    && self.mode_state.transition_down(SwarmMode::Normal, now)
+                {
+                    mode_changed = true;
+                    self.below_threshold_since = None;
+                    tracing::info!(
+                        module = module_path!(),
+                        to_mode = ?SwarmMode::Normal,
+                        timestamp = now,
+                        "swarm mode de-escalated after cooldown"
+                    );
+                }
+            } else {
+                self.below_threshold_since = None;
+            }
+        } else {
+            self.below_threshold_since = None;
         }
 
         self.sync_shared_mode_state();
@@ -293,6 +317,8 @@ mod tests {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: Default::default(),
             backend: PheromoneBackendConfig::InMemory,
         }
     }

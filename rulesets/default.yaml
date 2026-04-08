@@ -12,13 +12,14 @@ runtime:
   drain_timeout_ms: 30000
   require_durable_live_response: true
   max_heap_pressure: 0.90
+  governance_degraded_tick_threshold: 3
   # Set secret_dir when using @secret:file-name adapter references.
   secret_dir:
 
 detection:
   # Supported strategies: suspicious_process_tree, dns_exfiltration,
   # lateral_movement, credential_access, suspicious_scripting,
-  # persistence, supply_chain
+  # persistence, supply_chain, network_connect
   strategy: suspicious_process_tree
   # Multi-strategy mode (takes precedence over `strategy` when present):
   # strategies:
@@ -26,6 +27,12 @@ detection:
   #   - dns_exfiltration
   high_confidence_threshold: 0.90
   medium_confidence_threshold: 0.70
+  # Optional per-strategy profile overrides:
+  # profiles:
+  #   network_connect:
+  #     suspicious_ports: [4444, 5555]
+  #     process_port_allowlist:
+  #       curl: [80, 443]
 
 pheromone:
   default_half_life_secs: 3600.0
@@ -33,6 +40,30 @@ pheromone:
   min_sources_for_escalation: 2
   alert_threshold: 2.0
   incident_threshold: 5.0
+  deescalation_cooldown_secs: 300
+  response_playbook:
+    rules:
+      - threat_class: execution
+        severity: HIGH
+        min_confidence: 0.90
+        max_confidence: 1.00
+        actions:
+          - type: deploy_decoy
+            decoy_type: honeypot
+            target_zone: dmz
+          - type: escalate
+            summary: execution spike crossed the high-confidence autonomous threshold
+            urgency: HIGH
+      - threat_class: command_and_control
+        severity: CRITICAL
+        min_confidence: 0.95
+        max_confidence: 1.00
+        actions:
+          - type: block_egress
+            target: 203.0.113.10
+          - type: escalate
+            summary: critical C2 activity matched the emergency response playbook
+            urgency: CRITICAL
   # For a durable shared substrate, switch backend.kind to jet_stream
   # and add:
   #   url: nats://127.0.0.1:4222
@@ -44,6 +75,37 @@ pheromone:
 policy:
   human_gate_severity: HIGH
   lease_ttl_ms: 60000
+  max_actions_per_scope_per_minute: 5
+  rules:
+    - name: execution-after-hours-autorespond
+      decision: allow
+      threat_class: execution
+      actions: [deploy_decoy, escalate]
+      min_severity: HIGH
+      max_severity: CRITICAL
+      time_window_utc:
+        start_hour_utc: 0
+        end_hour_utc: 24
+      max_actions_per_agent_per_minute: 4
+      reason: execution playbook actions are allowed for elevated execution findings
+    - name: command-and-control-emergency-block
+      decision: allow
+      threat_class: command_and_control
+      actions: [block_egress, escalate]
+      min_severity: CRITICAL
+      max_severity: CRITICAL
+      time_window_utc:
+        start_hour_utc: 0
+        end_hour_utc: 24
+      max_actions_per_agent_per_minute: 2
+      reason: critical C2 traffic can trigger immediate containment and escalation
+    - name: credential-access-destructive-deny
+      decision: deny
+      threat_class: credential_access
+      actions: [revoke_credential]
+      min_severity: LOW
+      max_severity: HIGH
+      reason: low-confidence credential access findings stay operator-driven by default
 
 response_adapter:
   kind: sandbox
@@ -101,6 +163,9 @@ correlation:
 canary:
   enabled: true
   slot_id: canary-primary
+  # Optional rollout baseline scope. This becomes required when
+  # detection.strategies enables more than one active strategy.
+  strategy_id:
   observation_window_events: 2
   max_candidate_only_rate: 0.25
   max_baseline_miss_rate: 0.25
@@ -110,6 +175,9 @@ canary:
 promotion:
   enabled: true
   window_id: production-primary
+  # Optional production fallback scope. When omitted, promotion inherits
+  # the completed canary baseline strategy after validating it is still active.
+  strategy_id:
   observation_window_events: 2
   max_promoted_only_rate: 0.20
   max_fallback_recovery_rate: 0.20

@@ -95,6 +95,7 @@ impl<E> ResilientExecutor<E> {
                 "consecutive_failures": self.state.consecutive_failures.load(Ordering::SeqCst),
                 "cooldown_ms": self.circuit_breaker.cooldown_ms,
             }),
+            audit: Default::default(),
         }
     }
 
@@ -352,6 +353,7 @@ mod tests {
                         status: ResponseStatus::Timeout,
                         summary: "timed out".to_string(),
                         details: serde_json::json!({"status": "timeout"}),
+                        audit: Default::default(),
                     }),
                     Ok(ResponseReceipt {
                         receipt_id: "receipt-2".to_string(),
@@ -360,6 +362,7 @@ mod tests {
                         status: ResponseStatus::Executed,
                         summary: "ok".to_string(),
                         details: serde_json::json!({}),
+                        audit: Default::default(),
                     }),
                 ]),
             },
@@ -398,6 +401,7 @@ mod tests {
                     status: ResponseStatus::Failed,
                     summary: "server error".to_string(),
                     details: serde_json::json!({"status_code": 503}),
+                    audit: Default::default(),
                 })]),
             },
             "http_edr",

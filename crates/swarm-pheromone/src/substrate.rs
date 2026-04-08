@@ -1236,6 +1236,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_counts_strategy_scoped_agent_ids_as_distinct_sources() {
+        let substrate = in_memory();
+        substrate
+            .deposit(sample_deposit(
+                "whisker-primary:suspicious_process_tree",
+                100,
+                0.9,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .deposit(sample_deposit("whisker-primary:dns_exfiltration", 100, 0.9))
+            .await
+            .unwrap();
+
+        let concentration = substrate
+            .query_concentration(&ThreatClass::Execution, 100)
+            .await
+            .unwrap();
+
+        assert!(concentration.distinct_sources == 2);
+    }
+
+    #[tokio::test]
+    async fn query_collapses_repeated_strategy_scoped_agent_ids_to_one_source() {
+        let substrate = in_memory();
+        substrate
+            .deposit(sample_deposit(
+                "whisker-primary:suspicious_process_tree",
+                100,
+                0.9,
+            ))
+            .await
+            .unwrap();
+        substrate
+            .deposit(sample_deposit(
+                "whisker-primary:suspicious_process_tree",
+                100,
+                0.8,
+            ))
+            .await
+            .unwrap();
+
+        let concentration = substrate
+            .query_concentration(&ThreatClass::Execution, 100)
+            .await
+            .unwrap();
+
+        assert_eq!(concentration.distinct_sources, 1);
+    }
+
+    #[tokio::test]
     async fn recent_deposits_support_replay() {
         let substrate = in_memory();
         substrate
@@ -1657,10 +1709,7 @@ mod tests {
         let key = test_signing_key();
         let mut deposit = sample_deposit("whisker-test", 100, 0.9);
         // Corrupt the signature
-        deposit.signature = key
-            .sign(b"wrong content entirely")
-            .to_bytes()
-            .to_vec();
+        deposit.signature = key.sign(b"wrong content entirely").to_bytes().to_vec();
         deposit.agent_key = key.verifying_key().to_bytes().to_vec();
 
         let err = substrate.deposit(deposit).await.unwrap_err();
@@ -1723,11 +1772,7 @@ mod tests {
         assert_eq!(purged, 1);
 
         let expired = substrate
-            .query_threat_intel_entry(
-                &ThreatIntelIndicatorType::Domain,
-                "expired.example.com",
-                0,
-            )
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::Domain, "expired.example.com", 0)
             .await
             .unwrap();
         assert!(expired.is_none());
@@ -1798,11 +1843,7 @@ mod tests {
         let reopened = LocalJournalPheromoneSubstrate::open(config, &path).unwrap();
 
         let expired = reopened
-            .query_threat_intel_entry(
-                &ThreatIntelIndicatorType::Domain,
-                "expired.example.com",
-                0,
-            )
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::Domain, "expired.example.com", 0)
             .await
             .unwrap();
         assert!(expired.is_none());
@@ -2026,11 +2067,7 @@ mod tests {
             .unwrap();
 
         let entry = substrate
-            .query_threat_intel_entry(
-                &ThreatIntelIndicatorType::IpAddress,
-                "192.168.1.1",
-                0,
-            )
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::IpAddress, "192.168.1.1", 0)
             .await
             .unwrap()
             .unwrap();
@@ -2051,11 +2088,7 @@ mod tests {
             .unwrap();
 
         let entry = substrate
-            .query_threat_intel_entry(
-                &ThreatIntelIndicatorType::FileHash,
-                "aabbccdd",
-                0,
-            )
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::FileHash, "aabbccdd", 0)
             .await
             .unwrap()
             .unwrap();

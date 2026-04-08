@@ -1474,14 +1474,10 @@ mod tests {
         wait_until(|| {
             let sub = substrate.clone();
             async move {
-                sub.query_threat_intel_entry(
-                    &ThreatIntelIndicatorType::IpAddress,
-                    "10.0.0.1",
-                    now,
-                )
-                .await
-                .unwrap()
-                .is_some()
+                sub.query_threat_intel_entry(&ThreatIntelIndicatorType::IpAddress, "10.0.0.1", now)
+                    .await
+                    .unwrap()
+                    .is_some()
             }
         })
         .await;
@@ -1491,11 +1487,7 @@ mod tests {
 
         // Expired entry should be gone
         let expired = substrate
-            .query_threat_intel_entry(
-                &ThreatIntelIndicatorType::Domain,
-                "expired.example.com",
-                0,
-            )
+            .query_threat_intel_entry(&ThreatIntelIndicatorType::Domain, "expired.example.com", 0)
             .await
             .unwrap();
         assert!(expired.is_none());

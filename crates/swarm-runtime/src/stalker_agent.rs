@@ -156,8 +156,7 @@ impl SwarmAgent for StalkerAgent {
                 decay_half_life: deposit.decay_half_life,
                 agent_id: &deposit.agent_id,
             };
-            let payload_bytes =
-                serde_json::to_vec(&signing_payload).map_err(internal_error)?;
+            let payload_bytes = serde_json::to_vec(&signing_payload).map_err(internal_error)?;
             let sig = self.signing_key.sign(&payload_bytes);
             deposit.signature = sig.to_bytes().to_vec();
             deposit.agent_key = self.signing_key.verifying_key().to_bytes().to_vec();
@@ -264,6 +263,8 @@ mod tests {
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
             incident_threshold: 5.0,
+            deescalation_cooldown_secs: 300,
+            response_playbook: Default::default(),
             backend: PheromoneBackendConfig::InMemory,
         }
     }
@@ -345,6 +346,7 @@ mod tests {
                 },
                 policy: PolicyRecord {
                     verdict: PolicyVerdict::Allow,
+                    rule_name: "test.allow".to_string(),
                     reason: "test".to_string(),
                     lease: Some(CapabilityLease {
                         capability_id: "lease:test".to_string(),
@@ -360,6 +362,7 @@ mod tests {
                     status: ResponseStatus::Simulated,
                     summary: "simulated".to_string(),
                     details: serde_json::json!({"status": "simulated"}),
+                    audit: Default::default(),
                 }),
                 created_at_ms: 1_700_000_000_100,
             },
@@ -383,6 +386,7 @@ mod tests {
             mode_transition_at: Some(1_700_000_050),
             now: 1_700_000_100,
             peer_findings: Vec::new(),
+            agent_health: Vec::new(),
         }
     }
 

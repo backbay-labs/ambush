@@ -1,15 +1,17 @@
+use crate::RuntimeError;
 use crate::bridge_runtime::{SharedBridgeHealth, bridge_health_report};
 use crate::config::{
-    CURRENT_SCHEMA_VERSION, RuntimeConfigError, load_config_unresolved,
-    resolve_outbound_secrets, resolve_secret_dir_path,
+    CURRENT_SCHEMA_VERSION, RuntimeConfigError, load_config_unresolved, resolve_outbound_secrets,
+    resolve_secret_dir_path,
 };
 use crate::control::{ControlError, build_composite_detector};
 use crate::correlation::CorrelationEngine;
 use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
-use crate::dispatcher::AgentHealthEntry;
+use crate::dispatcher::{GovernanceVetoRoute, RequestResponseRouter, approval_context_now};
 use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use crate::service::{ConfiguredRuntimeStack, ServiceError};
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use axum::extract::{Json, State, rejection::JsonRejection};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -21,25 +23,66 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
+use swarm_core::ThreatClass;
+use swarm_core::agent::AgentHealthEntry;
 use swarm_core::config::{ResponseAdapterConfig, RuntimeMode, SwarmConfig};
 use swarm_core::types::AgentId;
 use swarm_pheromone::PheromoneSubstrate;
-use swarm_policy::ApprovalContext;
-use swarm_policy::static_gate::StaticApprovalGate;
+use swarm_policy::configurable_gate::ConfigurableApprovalGate;
+use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::DispatchingExecutor;
 use swarm_spine::{
     ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, ConfiguredReplayBundleStore,
     ReplayBundleStore,
 };
-use swarm_whisker::{CompositeDetector, TelemetryEvent};
+use swarm_whisker::{CompositeDetector, DetectionFinding, TelemetryEvent};
 use sysinfo::{ProcessesToUpdate, System, get_current_pid};
 use tracing::Instrument;
 use uuid::Uuid;
 
 type IngestRuntimeStack =
-    ConfiguredRuntimeStack<StaticApprovalGate, DispatchingExecutor, SummaryInvestigator>;
+    ConfiguredRuntimeStack<ConfigurableApprovalGate, DispatchingExecutor, SummaryInvestigator>;
 
 type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send + Sync>;
+
+struct IngestRuntimeRequestResponseRouter {
+    stack: Arc<ArcSwap<IngestRuntimeStack>>,
+}
+
+#[async_trait]
+impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
+    async fn route_request(
+        &self,
+        request: ActionRequest,
+    ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
+        let stack = self.stack.load_full();
+        let context =
+            approval_context_now(stack.service.runtime.mode() == RuntimeMode::LiveResponse);
+        let detection = routed_detection_from_request(&request);
+        stack
+            .service
+            .runtime
+            .audit_authorize_and_execute(&detection, &request, &context)
+            .await
+    }
+
+    async fn route_governance_veto(
+        &self,
+        veto: GovernanceVetoRoute,
+    ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
+        let stack = self.stack.load_full();
+        let context =
+            approval_context_now(stack.service.runtime.mode() == RuntimeMode::LiveResponse);
+        let detection = routed_detection_from_request(&veto.request);
+        Ok(stack.service.runtime.audit_governance_veto(
+            &detection,
+            &veto.request,
+            &context,
+            &veto.governing_agent_id,
+            veto.reason,
+        ))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct HeapPressureSnapshot {
@@ -259,14 +302,11 @@ impl IngestState {
     pub fn reload_secrets_only(&self) -> Result<(), IngestBuildError> {
         // Clone the unresolved template -- no YAML file read, no parsing.
         let template = self.config_template.load_full();
-        let config = resolve_outbound_secrets(
-            template.as_ref().clone(),
-            Some(self.config_path()),
-        )
-        .map_err(|source| RuntimeConfigError::Validation {
-            source_name: self.config_path().display().to_string(),
-            source,
-        })?;
+        let config = resolve_outbound_secrets(template.as_ref().clone(), Some(self.config_path()))
+            .map_err(|source| RuntimeConfigError::Validation {
+                source_name: self.config_path().display().to_string(),
+                source,
+            })?;
 
         self.reload(config)?;
 
@@ -347,7 +387,18 @@ impl IngestState {
     }
 
     pub fn current_response_adapter_config(&self) -> ResponseAdapterConfig {
-        self.stack.load_full().service.config.response_adapter.clone()
+        self.stack
+            .load_full()
+            .service
+            .config
+            .response_adapter
+            .clone()
+    }
+
+    pub fn current_request_response_router(&self) -> Arc<dyn RequestResponseRouter> {
+        Arc::new(IngestRuntimeRequestResponseRouter {
+            stack: Arc::clone(&self.stack),
+        })
     }
 
     pub fn detector_strategy_name(&self) -> String {
@@ -430,6 +481,46 @@ impl IngestState {
 
 fn strategy_status_label(config: &SwarmConfig) -> String {
     config.detection.active_strategies().join(", ")
+}
+
+fn routed_detection_from_request(request: &ActionRequest) -> DetectionFinding {
+    let event_id = request
+        .evidence
+        .get("lineage")
+        .and_then(|value| value.get("event_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(request.hunt_id.0.as_str())
+        .to_string();
+    let threat_class = request
+        .evidence
+        .get("escalation")
+        .and_then(|value| value.get("threat_class"))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or(ThreatClass::Execution);
+    let severity = request
+        .evidence
+        .get("escalation")
+        .and_then(|value| value.get("severity"))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or(request.severity);
+    let confidence = request
+        .evidence
+        .get("escalation")
+        .and_then(|value| value.get("confidence"))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(1.0);
+
+    DetectionFinding {
+        finding_id: format!("pounceagent:{event_id}"),
+        event_id,
+        threat_class,
+        severity,
+        confidence,
+        evidence: request.evidence.clone(),
+        strategy_id: "pounce_agent".to_string(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1046,7 +1137,6 @@ mod tests {
     };
     use crate::bridge_runtime::{BridgeStatusSnapshot, SharedBridgeHealth};
     use crate::config::CURRENT_SCHEMA_VERSION;
-    use crate::dispatcher::AgentHealthEntry;
     use arc_swap::ArcSwap;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
@@ -1055,6 +1145,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use swarm_core::agent::AgentHealthEntry;
     use swarm_core::agent::{AgentHealth, AgentRole};
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CircuitBreakerConfig, CorrelationConfig,
@@ -1085,6 +1176,7 @@ mod tests {
                 max_heap_pressure: 0.90,
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
+                governance_degraded_tick_threshold: 3,
                 max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
@@ -1100,11 +1192,14 @@ mod tests {
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
                 incident_threshold: 5.0,
+                deescalation_cooldown_secs: 300,
+                response_playbook: Default::default(),
                 backend: PheromoneBackendConfig::InMemory,
             },
             policy: PolicyConfig {
                 human_gate_severity: Severity::High,
                 lease_ttl_ms: 60_000,
+                ..PolicyConfig::default()
             },
             response_adapter: ResponseAdapterConfig::Sandbox,
             siem_forward: None,

@@ -12,6 +12,7 @@ pub mod credential_access;
 pub mod detector;
 pub mod dns_exfiltration;
 pub mod lateral_movement;
+pub mod network_connect;
 pub mod persistence;
 pub mod stream;
 pub mod supply_chain;
@@ -71,6 +72,7 @@ pub use detector::{
 };
 pub use dns_exfiltration::{DnsExfiltrationDetector, DnsExfiltrationProfile};
 pub use lateral_movement::{LateralMovementDetector, LateralMovementProfile};
+pub use network_connect::{NetworkConnectDetector, NetworkConnectProfile};
 pub use persistence::{PersistenceDetector, PersistenceProfile};
 pub use supply_chain::{SupplyChainDetector, SupplyChainProfile};
 pub use suspicious_scripting::{SuspiciousScriptingDetector, SuspiciousScriptingProfile};

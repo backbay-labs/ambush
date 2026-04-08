@@ -1612,7 +1612,8 @@ impl DefaultEvolutionDraftingHarness {
             | DetectorCandidateManifest::CredentialAccess { strategy_id, .. }
             | DetectorCandidateManifest::SuspiciousScripting { strategy_id, .. }
             | DetectorCandidateManifest::Persistence { strategy_id, .. }
-            | DetectorCandidateManifest::SupplyChain { strategy_id, .. } => {
+            | DetectorCandidateManifest::SupplyChain { strategy_id, .. }
+            | DetectorCandidateManifest::NetworkConnect { strategy_id, .. } => {
                 return Err(ReplayHarnessError::UnsupportedDetector {
                     strategy: format!(
                         "pressure-mutation not yet supported for detector `{strategy_id}`"
@@ -3120,10 +3121,51 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use swarm_core::config::SwarmConfig;
+    use swarm_core::ThreatClass;
+    use swarm_core::config::{PolicyRuleConfig, PolicyRuleDecision, SwarmConfig};
+    use swarm_core::types::Severity;
 
     fn sample_config() -> SwarmConfig {
-        serde_yaml::from_str(include_str!("../../../rulesets/default.yaml")).unwrap()
+        let mut config: SwarmConfig =
+            serde_yaml::from_str(include_str!("../../../rulesets/default.yaml")).unwrap();
+        config.policy.rules = permissive_policy_rules();
+        config
+    }
+
+    fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
+        use ThreatClass::{
+            CommandAndControl, CredentialAccess, DataExfiltration, DefenseEvasion, Discovery,
+            Execution, Impact, InitialAccess, LateralMovement, Persistence, PrivilegeEscalation,
+            SupplyChain,
+        };
+
+        [
+            Execution,
+            CommandAndControl,
+            CredentialAccess,
+            DataExfiltration,
+            DefenseEvasion,
+            Discovery,
+            Impact,
+            InitialAccess,
+            LateralMovement,
+            Persistence,
+            PrivilegeEscalation,
+            SupplyChain,
+        ]
+        .into_iter()
+        .map(|threat_class| PolicyRuleConfig {
+            name: format!("drafting-test-allow-{threat_class:?}"),
+            decision: PolicyRuleDecision::Allow,
+            threat_class,
+            actions: Vec::new(),
+            min_severity: Severity::Low,
+            max_severity: Severity::Critical,
+            time_window_utc: None,
+            max_actions_per_agent_per_minute: None,
+            reason: None,
+        })
+        .collect()
     }
 
     fn repo_root() -> PathBuf {

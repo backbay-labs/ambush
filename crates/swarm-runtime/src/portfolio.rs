@@ -1413,6 +1413,9 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use swarm_core::ThreatClass;
+    use swarm_core::config::{PolicyRuleConfig, PolicyRuleDecision, SwarmConfig};
+    use swarm_core::types::Severity;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1424,8 +1427,47 @@ mod tests {
             .to_path_buf()
     }
 
-    fn ruleset_path() -> PathBuf {
-        repo_root().join("rulesets/default.yaml")
+    fn sample_config() -> SwarmConfig {
+        let mut config: SwarmConfig =
+            serde_yaml::from_str(include_str!("../../../rulesets/default.yaml")).unwrap();
+        config.policy.rules = permissive_policy_rules();
+        config
+    }
+
+    fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
+        use ThreatClass::{
+            CommandAndControl, CredentialAccess, DataExfiltration, DefenseEvasion, Discovery,
+            Execution, Impact, InitialAccess, LateralMovement, Persistence, PrivilegeEscalation,
+            SupplyChain,
+        };
+
+        [
+            Execution,
+            CommandAndControl,
+            CredentialAccess,
+            DataExfiltration,
+            DefenseEvasion,
+            Discovery,
+            Impact,
+            InitialAccess,
+            LateralMovement,
+            Persistence,
+            PrivilegeEscalation,
+            SupplyChain,
+        ]
+        .into_iter()
+        .map(|threat_class| PolicyRuleConfig {
+            name: format!("portfolio-test-allow-{threat_class:?}"),
+            decision: PolicyRuleDecision::Allow,
+            threat_class,
+            actions: Vec::new(),
+            min_severity: Severity::Low,
+            max_severity: Severity::Critical,
+            time_window_utc: None,
+            max_actions_per_agent_per_minute: None,
+            reason: Some("portfolio tests allow replay and verification responses".to_string()),
+        })
+        .collect()
     }
 
     fn office_control_experiment() -> PathBuf {
@@ -1504,17 +1546,26 @@ mod tests {
         let queue_dir = root.join("queue");
         let base_experiment = copy_experiment_fixture(&root, "office-control-portfolio");
 
-        let replay = DefaultReplayHarness::from_path(ruleset_path(), &replay_dir).unwrap();
+        let config = sample_config();
+        let replay =
+            DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
         let verification = replay
             .evaluate_verification_path(&base_experiment, &verification_dir)
             .await
             .unwrap();
-        let proofs =
-            crate::evolution::DefaultEvolutionProofHarness::from_path(ruleset_path(), &proof_dir)
-                .unwrap();
-        let scorecards =
-            DefaultStrategyScorecardHarness::from_path(ruleset_path(), &memory_dir, &scorecard_dir)
-                .unwrap();
+        let proofs = crate::evolution::DefaultEvolutionProofHarness::from_config(
+            "inline",
+            config.clone(),
+            &proof_dir,
+        )
+        .unwrap();
+        let scorecards = DefaultStrategyScorecardHarness::from_config(
+            "inline",
+            config.clone(),
+            &memory_dir,
+            &scorecard_dir,
+        )
+        .unwrap();
         let scorecard = scorecards
             .create_scorecard(
                 &replay,
@@ -1525,8 +1576,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let drafting = DefaultEvolutionDraftingHarness::from_path(
-            ruleset_path(),
+        let drafting = DefaultEvolutionDraftingHarness::from_config(
+            "inline",
+            config,
             &pressure_dir,
             &draft_dir,
             &promotion_dir,
@@ -1541,7 +1593,7 @@ mod tests {
         let draft = drafting
             .create_draft(EvolutionDraftCreateRequest {
                 pressure_id: pressure.report.pressure_id.clone(),
-                strategy_id: "office_portfolio_parent_v1".to_string(),
+                strategy_id: "suspicious_process_tree".to_string(),
                 strategy_description: "portfolio parent".to_string(),
                 mutation: "guided_portfolio_seed".to_string(),
                 rationale: "compare ranked selections across cohorts".to_string(),
