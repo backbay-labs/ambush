@@ -41,7 +41,10 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
   2. `DetectionConfig.strategies` (a `Vec<String>`) takes precedence over the legacy `strategy` scalar when present; both parse paths remain valid
   3. Per-strategy profile overrides in `DetectorProfilesConfig` are resolved correctly when multiple strategies are active simultaneously
   4. Existing single-strategy configs continue to work without modification (backward compatibility)
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 120-01-PLAN.md -- CompositeDetector type, DetectionConfig migration, and detector factory
+- [ ] 120-02-PLAN.md -- Runtime integration (IngestState, WhiskerAgent), SupportedDetector removal, and integration tests
 
 ### Phase 121: Network Connect Detector
 **Goal**: NetworkConnect telemetry events are evaluated for C2 beaconing patterns, anomalous port usage, and threat-intel IP matches through a dedicated detector with a validated profile
@@ -110,7 +113,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 | 117. Substrate Durability And Bridge Resilience | v1.37.1 | 2/2 | Complete | 2026-04-08 |
 | 118. Operational Hardening | v1.37.1 | 3/3 | Complete | 2026-04-07 |
 | 119. Pheromone Test Suite | v1.37.1 | 1/1 | Complete | 2026-04-08 |
-| 120. Composite Detector And Config Migration | v1.38 | 0/? | Not started | - |
+| 120. Composite Detector And Config Migration | v1.38 | 0/2 | Not started | - |
 | 121. Network Connect Detector | v1.38 | 0/? | Not started | - |
 | 122. Cross-Strategy Pheromone Signals And Rollout Scoping | v1.38 | 0/? | Not started | - |
 | 123. Multi-Strategy Integration Proof | v1.38 | 0/? | Not started | - |
