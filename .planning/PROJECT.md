@@ -78,8 +78,8 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.35 Production Hardening And Kubernetes Lifecycle` is complete.
 - `v1.36 SIEM/SOAR Forward And Alert Routing` is complete.
 - `v1.37 Persistence And Supply Chain Detection` is complete.
-- No milestone is active right now.
-- The roadmap is ready for `v1.38 Fileless Execution And Behavioral Baselines`.
+- `v1.38 Multi-Detector Composition And Network Detection` is complete.
+- `v1.39 PounceAgent And Policy Gate Hardening` is active.
 - Phase 104 added bounded drain control, PreStop coordination, and `/startupz` startup-probe semantics for serve mode.
 - Phase 105 added schema-aware config migration and `@secret:` resolution for live response adapters with secret-directory reload.
 - Phase 106 added live heap metrics and readiness shedding before the runtime reaches an OOM boundary.

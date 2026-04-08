@@ -2,22 +2,21 @@
 
 ## Latest Completed Milestone
 
-### v1.37.1 Runtime Hardening And Audit Debt
-**Executable phases:** 116-119
+### v1.38 Multi-Detector Composition And Network Detection
+**Executable phases:** 120-123
 **Shipped:** 2026-04-08
 
 ## Active Milestone
 
-### v1.38 Multi-Detector Composition And Network Detection
-**Executable phases:** 120-123
-**Goal:** Run all detector strategies simultaneously per event via CompositeDetector, add NetworkConnectDetector for C2 beaconing and threat-intel IP matching, and enable cross-strategy pheromone escalation so the swarm metaphor actually works.
-**Requirements:** COMPOSE-01-05, NETWORK-01-05 (10)
+### v1.39 PounceAgent And Policy Gate Hardening
+**Executable phases:** 124-127
+**Goal:** Close the detect-to-respond loop with an autonomous PounceAgent that consumes escalation pheromones and executes safe response actions through the existing guard-gated adapter pipeline, while hardening policy leases, adding mode de-escalation, and introducing TomAgent for governance oversight.
+**Requirements:** POUNCE-01-05, POLICY-01-04, DEESC-01-02, TOM-01-02 (13)
 
 ## Queued Milestones
 
 | Milestone | Name | Requirements | Tier |
 |-----------|------|--------------|------|
-| v1.39 | PounceAgent And Policy Gate Hardening | POUNCE-01–04, POLICY-01–03, DEESC-01–02, TOM-01 (10) | Core Value Delivery |
 | v1.40 | Killer Demo And Providence Integration | DEMO-01–05, PROV-01–03 (8) | Product Visibility |
 | v1.41 | Platform APIs And Deployment Experience | API-01–04, HELM-01–02, CLI-01–02 (8) | Product Visibility |
 | v1.42 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
