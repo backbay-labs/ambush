@@ -1470,6 +1470,7 @@ mod tests {
             },
             detection: swarm_core::config::DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
+                strategies: Vec::new(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
                 profiles: swarm_core::config::DetectorProfilesConfig::default(),

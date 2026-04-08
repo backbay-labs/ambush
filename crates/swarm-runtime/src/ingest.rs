@@ -1084,6 +1084,7 @@ mod tests {
             },
             detection: DetectionConfig {
                 strategy: strategy.to_string(),
+                strategies: Vec::new(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
                 profiles: DetectorProfilesConfig::default(),

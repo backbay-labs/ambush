@@ -591,6 +591,38 @@ pub(crate) fn validate_detector_profiles(
     Ok(())
 }
 
+pub(crate) fn validate_all_detector_profiles(
+    config: &DetectionConfig,
+) -> Result<(), DetectorProfileError> {
+    for strategy in config.active_strategies() {
+        match strategy.as_str() {
+            "suspicious_process_tree" => {
+                suspicious_process_tree_profile(config)?;
+            }
+            "dns_exfiltration" => {
+                dns_exfiltration_profile(config)?;
+            }
+            "lateral_movement" => {
+                lateral_movement_profile(config)?;
+            }
+            "credential_access" => {
+                credential_access_profile(config)?;
+            }
+            "suspicious_scripting" => {
+                suspicious_scripting_profile(config)?;
+            }
+            "persistence" => {
+                persistence_profile(config)?;
+            }
+            "supply_chain" => {
+                supply_chain_profile(config)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn resolve_detector_profile<T>(
     strategy: &'static str,
     base_profile: T,

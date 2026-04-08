@@ -1,7 +1,7 @@
 use crate::config::{
     DetectorProfileError, RuntimeConfigError, credential_access_profile, dns_exfiltration_profile,
     lateral_movement_profile, load_config, persistence_profile, supply_chain_profile,
-    suspicious_process_tree_profile, suspicious_scripting_profile,
+    suspicious_process_tree_profile, suspicious_scripting_profile, validate_all_detector_profiles,
 };
 use crate::investigation::SummaryInvestigator;
 use crate::service::{ConfiguredRuntimeStack, OperatorStatusReport, ServiceError};
@@ -19,8 +19,8 @@ use swarm_spine::{
     ReplayBundle, ReplayBundleRecord, ReplayPreview,
 };
 use swarm_whisker::{
-    CredentialAccessDetector, DetectionStrategy, DnsExfiltrationDetector, LateralMovementDetector,
-    PersistenceDetector, SupplyChainDetector, SuspiciousProcessTreeDetector,
+    CompositeDetector, CredentialAccessDetector, DetectionStrategy, DnsExfiltrationDetector,
+    LateralMovementDetector, PersistenceDetector, SupplyChainDetector, SuspiciousProcessTreeDetector,
     SuspiciousScriptingDetector,
 };
 
@@ -173,7 +173,7 @@ pub struct DefaultControlPlane {
         DispatchingExecutor,
         SummaryInvestigator,
     >,
-    detector: SupportedDetector,
+    detector: CompositeDetector,
 }
 
 impl DefaultControlPlane {
@@ -189,7 +189,7 @@ impl DefaultControlPlane {
         config_path: impl Into<PathBuf>,
         config: swarm_core::config::SwarmConfig,
     ) -> Result<Self, ControlError> {
-        let detector = supported_detector(&config.detection)?;
+        let detector = build_composite_detector(&config.detection)?;
         let stack = ConfiguredRuntimeStack::from_config(config, SummaryInvestigator)?;
 
         Ok(Self {
@@ -440,7 +440,33 @@ pub fn render_output(output: &OperatorControlOutput) -> String {
 }
 
 pub fn supported_detector(config: &DetectionConfig) -> Result<SupportedDetector, ControlError> {
-    match config.strategy.as_str() {
+    build_supported_detector(config.strategy.as_str(), config)
+}
+
+pub fn build_composite_detector(
+    config: &DetectionConfig,
+) -> Result<CompositeDetector, ControlError> {
+    validate_all_detector_profiles(config)?;
+    let detectors = config
+        .active_strategies()
+        .into_iter()
+        .map(|strategy| build_single_detector(strategy.as_str(), config))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CompositeDetector::new(detectors))
+}
+
+fn build_single_detector(
+    strategy_name: &str,
+    config: &DetectionConfig,
+) -> Result<Box<dyn DetectionStrategy>, ControlError> {
+    Ok(Box::new(build_supported_detector(strategy_name, config)?))
+}
+
+fn build_supported_detector(
+    strategy_name: &str,
+    config: &DetectionConfig,
+) -> Result<SupportedDetector, ControlError> {
+    match strategy_name {
         "suspicious_process_tree" => Ok(SupportedDetector::SuspiciousProcessTree(
             SuspiciousProcessTreeDetector::from_profile(suspicious_process_tree_profile(config)?)
                 .map_err(|source| DetectorProfileError::Validation {
@@ -677,6 +703,7 @@ mod tests {
             },
             detection: swarm_core::config::DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),
+                strategies: Vec::new(),
                 high_confidence_threshold: 0.9,
                 medium_confidence_threshold: 0.7,
                 profiles: swarm_core::config::DetectorProfilesConfig::default(),
