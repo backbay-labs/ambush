@@ -205,7 +205,7 @@
 | HARDEN-07 | 117-02 | Complete |
 | HARDEN-08 | Phase 118, Plan 01 | Complete |
 | HARDEN-09 | Phase 118, Plan 02 | Complete |
-| HARDEN-10 | Queued milestone v1.37.1 | Queued |
+| HARDEN-10 | Phase 119, Plan 01 | Complete |
 | FILELESS-01 | Queued milestone v1.38 | Queued |
 | FILELESS-02 | Queued milestone v1.38 | Queued |
 | FILELESS-03 | Queued milestone v1.38 | Queued |
@@ -227,7 +227,7 @@
 - v1.35 complete: 6 satisfied, 0 remaining
 - v1.36 complete: 6 satisfied, 0 remaining
 - v1.37 complete: 5 satisfied, 0 remaining
-- v1.37.1 queued: 10 (HARDEN-01 through HARDEN-10)
+- v1.37.1 complete: 10 satisfied (HARDEN-01 through HARDEN-10)
 - v1.38 queued: 6 (FILELESS-01 through FILELESS-06)
 - v1.39 queued: 5 (EVASION-01 through EVASION-05)
 - Total queued future requirements: 21

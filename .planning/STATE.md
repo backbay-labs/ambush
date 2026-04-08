@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.37
 milestone_name: milestone
 status: completed
-last_updated: "2026-04-08T00:01:12.542Z"
-last_activity: "2026-04-07 — Completed 118-03 (gap closure: production dead-letter threading + rotation integration test)"
+last_updated: "2026-04-08T00:17:35.492Z"
+last_activity: "2026-04-08 — Completed 119-01 (pheromone test suite: 16 new substrate tests closing HARDEN-10)"
 progress:
   total_phases: 8
-  completed_phases: 7
-  total_plans: 15
-  completed_plans: 15
-  percent: 75
+  completed_phases: 8
+  total_plans: 16
+  completed_plans: 16
+  percent: 100
 ---
 
 # State
@@ -24,12 +24,12 @@ See: `.planning/PROJECT.md` (updated 2026-04-07)
 
 ## Current Position
 
-Phase: 118 (Operational Hardening) — complete
-Plan: 3/3
-Status: Phase 118 complete (including gap closure 118-03), ready for Phase 119
-Last activity: 2026-04-07 — Completed 118-03 (gap closure: production dead-letter threading + rotation integration test)
+Phase: 119 (Pheromone Test Suite) — complete
+Plan: 1/1
+Status: All v1.37.1 phases complete (116-119), milestone finished
+Last activity: 2026-04-08 — Completed 119-01 (pheromone test suite: 16 new substrate tests closing HARDEN-10)
 
-Progress: [########░░] 75% (3/4 phases)
+Progress: [##########] 100% (4/4 phases)
 
 ## Memory
 
@@ -58,6 +58,9 @@ Progress: [########░░] 75% (3/4 phases)
 - Phase 118 complete: HARDEN-08 and HARDEN-09 both closed.
 - 118-03 gap closure: threaded max_dead_letter_bytes from RuntimeSettings through DispatchingExecutor::from_config and NotificationRouter::new to production DeadLetterJournal constructors.
 - Integration test proves secret rotation (reload_secrets_only) and dead-letter journal rotation work together without data loss in the same runtime context.
+- Phase 119 complete: 16 new substrate tests added covering deposit round-trip, concentration decay, evaporation GC preservation, query-all ordering, empty substrate edge cases, escalation lifecycle, threat-intel CRUD with normalization (IP/domain/hash), overwrite semantics, GC preservation across types, ThreatClassConfig overwrite/dedup/missing-key, and health reporting (HARDEN-10).
+- Total swarm-pheromone test count: 50 (37 substrate::tests + integration tests), all passing, clippy clean.
+- v1.37.1 milestone complete: all 10 HARDEN requirements (HARDEN-01 through HARDEN-10) satisfied across phases 116-119.
 
 ## Phase Map
 
@@ -66,8 +69,13 @@ Progress: [########░░] 75% (3/4 phases)
 | 116 | Agent Safety Hardening | HARDEN-01, HARDEN-02, HARDEN-03 | Complete |
 | 117 | Substrate Durability And Bridge Resilience | HARDEN-04, HARDEN-05, HARDEN-06, HARDEN-07 | Complete |
 | 118 | Operational Hardening | HARDEN-08, HARDEN-09 | Complete |
-| 119 | Pheromone Test Suite | HARDEN-10 | Not started |
+| 119 | Pheromone Test Suite | HARDEN-10 | Complete |
+
+## Decisions
+
+- [Phase 119]: All 16 pheromone tests exercise InMemoryPheromoneSubstrate directly without importing swarm-runtime
+- [Phase 119]: Tests placed after existing threat-intel GC tests block with section comment headers for logical grouping
 
 ## Next Command
 
-`/gsd:plan-phase 119` or `/gsd:execute-phase 119` (final phase remaining)
+v1.37.1 milestone complete. All HARDEN-01 through HARDEN-10 requirements satisfied.

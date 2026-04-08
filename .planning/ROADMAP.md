@@ -22,7 +22,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [x] **Phase 116: Agent Safety Hardening** - Signed pheromone deposits, configurable tick timeout, and explicit action-handling warnings close the three agent-safety audit findings (completed 2026-04-07)
 - [x] **Phase 117: Substrate Durability And Bridge Resilience** - Threat-intel GC on all three backends, journal rewrite on GC, gRPC stream timeout, and empty-parent schema fix close the four substrate and bridge audit findings (completed 2026-04-07)
 - [x] **Phase 118: Operational Hardening** - Independent secret-dir file-watch for hot rotation and size-based dead-letter rotation close the two operational-gap audit findings (completed 2026-04-07)
-- [ ] **Phase 119: Pheromone Test Suite** - A focused `swarm-pheromone` test suite with 15+ tests covering the substrate trait contract closes the test-coverage audit finding
+- [x] **Phase 119: Pheromone Test Suite** - A focused `swarm-pheromone` test suite with 15+ tests covering the substrate trait contract closes the test-coverage audit finding (completed 2026-04-08)
 
 ## Phase Details
 
@@ -171,7 +171,7 @@ Plans:
 | 116. Agent Safety Hardening | 2/2 | Complete    | 2026-04-07 | - |
 | 117. Substrate Durability And Bridge Resilience | 2/2 | Complete    | 2026-04-08 | - |
 | 118. Operational Hardening | v1.37.1 | 3/3 | Complete | 2026-04-07 |
-| 119. Pheromone Test Suite | v1.37.1 | 0/? | Not started | - |
+| 119. Pheromone Test Suite | 1/1 | Complete   | 2026-04-08 | - |
 
 ---
 *Last shipped milestone: v1.37 Persistence And Supply Chain Detection on 2026-04-07*
