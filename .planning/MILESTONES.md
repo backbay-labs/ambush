@@ -2,13 +2,13 @@
 
 ## Latest Completed Milestone
 
-### v1.37 Persistence And Supply Chain Detection
-**Executable phases:** 112-115
-**Shipped:** 2026-04-07
+### v1.37.1 Runtime Hardening And Audit Debt
+**Executable phases:** 116-119
+**Shipped:** 2026-04-08
 
 ## Active Milestone
 
-No active milestone. `v1.37 Persistence And Supply Chain Detection` shipped on 2026-04-07, and the roadmap is ready for `v1.38 Fileless Execution And Behavioral Baselines`.
+No active milestone.
 
 ## Queued Milestones
 
@@ -18,6 +18,19 @@ No active milestone. `v1.37 Persistence And Supply Chain Detection` shipped on 2
 | v1.39 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
 
 ## History
+
+## v1.37.1 Runtime Hardening And Audit Debt (Shipped: 2026-04-08)
+
+**Phases completed:** 4 phases, 8 plans, 0 tasks
+
+**Key accomplishments:**
+- PheromoneSubstrate now rejects deposits with empty signatures or invalid Ed25519 keys; WhiskerAgent and StalkerAgent sign every deposit before submission.
+- AgentDispatcher wraps every tick() in configurable timeout (default 500ms) and marks timed-out agents Degraded; apply_actions() has exhaustive match arms with structured warnings.
+- gc_expired_threat_intel() runs on all three substrate backends and LocalJournal rewrites the threat-intel journal during GC to prevent unbounded disk growth.
+- TetragonBridge wraps stream.next() in configurable timeout (default 30s) with reconnect-backoff and accepts init-spawned processes with `<none>` sentinel.
+- SwarmSecretProvider file-watch monitors secret_dir independently and re-resolves @secret: references without full config reload.
+- Dead-letter journals rotate when exceeding configurable max_dead_letter_bytes; production wiring threads config through all dispatch and notification constructors.
+- swarm-pheromone now has 37+ focused substrate tests covering deposit, query, GC, escalation, threat-intel CRUD, and ThreatClassConfig — up from zero before this milestone.
 
 ## v1.37 Persistence And Supply Chain Detection (Shipped: 2026-04-07)
 
@@ -420,6 +433,43 @@ No active milestone. `v1.37 Persistence And Supply Chain Detection` shipped on 2
 - `swarmctl` now exposes runtime status plus stable-ID lookup for replay bundles, investigation bundles, and incidents
 - offline replay now executes tracked scenarios or replay-bundle fixtures in forced `detect_only` mode and persists durable replay-run bundles
 - replay evaluation now gates single runs or the full tracked `scenarios/` directory, and the runtime tests execute that corpus as a regression baseline
+
+---
+
+## v1.2 Async Investigation And Correlation (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- replay bundles now seed a config-backed background investigation queue with durable queued, completed, failed, and timed-out investigation artifacts
+- durable incidents now assemble from investigation bundles with explicit inclusion and rejection reasons
+- one operator review report now combines hot-path decisions, async investigation state, incidents, and freshness markers
+
+---
+
+## v1.1 Durability And Operators (Shipped: 2026-04-03)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- self-contained local-journal substrate durability now survives restart and live-response mode fails closed when durability is required
+- replay bundles now persist to configurable stores and can be reloaded by hunt or receipt ID without re-executing actions
+- runtime stage metrics, component readiness, and recent decision correlation now ship in one operator status report
+
+---
+
+## v1.0 (Shipped: 2026-04-03)
+
+**Phases completed:** 4 phases, 8 plans, 0 tasks
+
+**Key accomplishments:**
+- strict repository-owned runtime config loading with explicit `detect_only` and `live_response` modes
+- concrete suspicious process-tree detector with an in-memory pheromone substrate and published hot-path benchmarks
+- deterministic policy verdicts, scoped capability leases, and normalized sandbox response records
+- typed audit trails, replay bundles, and an end-to-end tested detect -> authorize -> execute flow
+
+---
+
 
 ---
 
