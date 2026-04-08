@@ -282,8 +282,8 @@
 | HARDEN-08 | Phase 118, Plan 01 | Complete |
 | HARDEN-09 | Phase 118, Plan 02 | Complete |
 | HARDEN-10 | Phase 119, Plan 01 | Complete |
-| COMPOSE-01 | Phase 120 | Pending |
-| COMPOSE-02 | Phase 120 | Pending |
+| COMPOSE-01 | Phase 120 | Complete |
+| COMPOSE-02 | Phase 120 | Complete |
 | COMPOSE-03 | Phase 122 | Pending |
 | COMPOSE-04 | Phase 122 | Pending |
 | COMPOSE-05 | Phase 122 | Pending |
