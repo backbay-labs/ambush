@@ -295,19 +295,19 @@
 | NETWORK-03 | Phase 121 | Satisfied |
 | NETWORK-04 | Phase 123 | Satisfied |
 | NETWORK-05 | Phase 123 | Satisfied |
-| POUNCE-01 | Queued milestone v1.39 | Queued |
-| POUNCE-02 | Queued milestone v1.39 | Queued |
-| POUNCE-03 | Queued milestone v1.39 | Queued |
-| POUNCE-04 | Queued milestone v1.39 | Queued |
-| POLICY-01 | Queued milestone v1.39 | Queued |
-| POLICY-02 | Queued milestone v1.39 | Queued |
-| POLICY-03 | Queued milestone v1.39 | Queued |
-| DEESC-01 | Queued milestone v1.39 | Queued |
-| DEESC-02 | Queued milestone v1.39 | Queued |
-| TOM-01 | Queued milestone v1.39 | Queued |
-| TOM-02 | Queued milestone v1.39 | Queued |
-| POUNCE-05 | Queued milestone v1.39 | Queued |
-| POLICY-04 | Queued milestone v1.39 | Queued |
+| POUNCE-01 | Phase 124 | Pending |
+| POUNCE-02 | Phase 124 | Pending |
+| POUNCE-03 | Phase 124 | Pending |
+| POUNCE-04 | Phase 124 | Pending |
+| POUNCE-05 | Phase 124 | Pending |
+| POLICY-01 | Phase 124 | Pending |
+| POLICY-02 | Phase 125 | Pending |
+| POLICY-03 | Phase 125 | Pending |
+| POLICY-04 | Phase 125 | Pending |
+| DEESC-01 | Phase 124 | Pending |
+| DEESC-02 | Phase 124 | Pending |
+| TOM-01 | Phase 126 | Pending |
+| TOM-02 | Phase 126 | Pending |
 | DEMO-01 | Queued milestone v1.40 | Queued |
 | DEMO-02 | Queued milestone v1.40 | Queued |
 | DEMO-03 | Queued milestone v1.40 | Queued |
@@ -339,12 +339,12 @@
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
 - v1.38 complete: 10 satisfied (COMPOSE-01-05 -> Phases 120,122; NETWORK-01-05 -> Phases 121,123)
-- v1.39 queued: 13 (POUNCE-01-05, POLICY-01-04, DEESC-01-02, TOM-01-02)
+- v1.39 active: 13 mapped (POUNCE-01-05 -> Phase 124; POLICY-01 -> Phase 124; POLICY-02-04 -> Phase 125; DEESC-01-02 -> Phase 124; TOM-01-02 -> Phase 126)
 - v1.40 queued: 8 (DEMO-01-05, PROV-01-03)
 - v1.41 queued: 8 (API-01-04, HELM-01-02, CLI-01-02)
 - v1.42+ future: 11 (FILELESS-01-06, EVASION-01-05)
-- Total queued: 40 (v1.39-v1.43)
+- Total queued: 27 (v1.40-v1.43)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-08 after v1.39 milestone requirements definition*
+*Last updated: 2026-04-08 after v1.39 roadmap creation — phases 124-127 assigned*

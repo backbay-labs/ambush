@@ -19,71 +19,81 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 </details>
 
+<details>
+<summary>Shipped: v1.38 Multi-Detector Composition And Network Detection (Phases 120-123)</summary>
+
+- [x] **Phase 120: Composite Detector And Config Migration** - CompositeDetector replaces single-variant SupportedDetector dispatch; config gains multi-strategy selection with per-strategy profile overrides (completed 2026-04-08)
+- [x] **Phase 121: Network Connect Detector** - NetworkConnectDetector detects C2 beaconing and anomalous ports, while the runtime pipeline applies threat-intel IP enrichment to NetworkConnect findings (completed 2026-04-08)
+- [x] **Phase 122: Cross-Strategy Pheromone Signals And Rollout Scoping** - Deposits carry strategy-specific identity for distinct-source escalation, WeaverAgent weights cross-strategy correlation higher, and canary/promotion scope to individual strategies (completed 2026-04-08)
+- [x] **Phase 123: Multi-Strategy Integration Proof** - NetworkConnect findings produce CommandAndControl deposits, and a 3+ strategy composite triggers escalation via distinct_sources (completed 2026-04-08)
+
+</details>
+
 ## Active Milestone
 
-`v1.38 Multi-Detector Composition And Network Detection` -- Run all detector strategies simultaneously per event via CompositeDetector, add NetworkConnectDetector for C2 beaconing and threat-intel IP matching, and enable cross-strategy pheromone escalation so the swarm metaphor actually works. Phases 120-123.
+`v1.39 PounceAgent And Policy Gate Hardening` -- Close the detect-to-respond loop with an autonomous PounceAgent that consumes escalation pheromones and executes safe response actions through the guard-gated adapter pipeline, while hardening policy leases, adding mode de-escalation, and introducing TomAgent for governance oversight. Phases 124-127.
 
 ## Phases
 
-- [x] **Phase 120: Composite Detector And Config Migration** - CompositeDetector replaces single-variant SupportedDetector dispatch; config gains multi-strategy selection with per-strategy profile overrides (completed 2026-04-08)
-- [ ] **Phase 121: Network Connect Detector** - NetworkConnectDetector detects C2 beaconing, anomalous ports, and threat-intel IP matches from NetworkConnect telemetry
-- [ ] **Phase 122: Cross-Strategy Pheromone Signals And Rollout Scoping** - Deposits carry strategy-specific identity for distinct-source escalation, WeaverAgent weights cross-strategy correlation higher, and canary/promotion scope to individual strategies
-- [ ] **Phase 123: Multi-Strategy Integration Proof** - NetworkConnect findings produce CommandAndControl deposits, and a 3+ strategy composite triggers escalation via distinct_sources
+- [ ] **Phase 124: PounceAgent Core And De-escalation** - PounceAgent implements SwarmAgent with guard-gated autonomous response, dry-run mode, and de-escalation closes the response loop; lease expiration enforcement fails closed before any adapter call
+- [ ] **Phase 125: Configurable Policy Rules And Audit Trail** - ConfigurableApprovalGate loads YAML rules with per-threat-class and per-severity allow/deny logic, rate limiting, and verdict reason in every structured log and receipt
+- [ ] **Phase 126: TomAgent Governance** - TomAgent monitors agent health and provides synchronous pre-execution veto over destructive PounceAgent actions via shared GovernancePolicy with auditable veto receipts
+- [ ] **Phase 127: Integration Hardening** - End-to-end integration tests prove all seven correctness pitfalls are guarded: no double-trigger, synchronous veto, fail-closed policy, TOCTOU-safe lease check, flap-resistant de-escalation, dry-run parity, and audit lineage
 
 ## Phase Details
 
-### Phase 120: Composite Detector And Config Migration
-**Goal**: Every configured detection strategy evaluates every telemetry event through a single CompositeDetector, and operators select active strategies via config instead of a single-strategy scalar
-**Depends on**: Phase 119 (v1.37.1 complete)
-**Requirements**: COMPOSE-01, COMPOSE-02
+### Phase 124: PounceAgent Core And De-escalation
+**Goal**: Operators can observe PounceAgent autonomously consuming escalation pheromones, routing through the policy gate and guard pipeline, and emitting signed receipts with detection lineage; mode de-escalation returns the runtime to Normal when threat pressure drops
+**Depends on**: Phase 123 (v1.38 complete)
+**Requirements**: POUNCE-01, POUNCE-02, POUNCE-03, POUNCE-04, POUNCE-05, DEESC-01, DEESC-02, POLICY-01
 **Success Criteria** (what must be TRUE):
-  1. `CompositeDetector` holds multiple `DetectionStrategy` implementations and returns merged findings from all contained strategies for a single `TelemetryEvent`
-  2. `DetectionConfig.strategies` (a `Vec<String>`) takes precedence over the legacy `strategy` scalar when present; both parse paths remain valid
-  3. Per-strategy profile overrides in `DetectorProfilesConfig` are resolved correctly when multiple strategies are active simultaneously
-  4. Existing single-strategy configs continue to work without modification (backward compatibility)
-**Plans:** 2/2 plans complete
-Plans:
-- [x] 120-01-PLAN.md -- CompositeDetector type, DetectionConfig migration, and detector factory
-- [x] 120-02-PLAN.md -- Runtime integration (IngestState, WhiskerAgent), SupportedDetector removal, and integration tests
-
-### Phase 121: Network Connect Detector
-**Goal**: NetworkConnect telemetry events are evaluated for C2 beaconing patterns, anomalous port usage, and threat-intel IP matches through a dedicated detector with a validated profile
-**Depends on**: Phase 120
-**Requirements**: NETWORK-01, NETWORK-02, NETWORK-03
-**Success Criteria** (what must be TRUE):
-  1. `NetworkConnectDetector` implements `DetectionStrategy` and evaluates `TelemetryPayload::NetworkConnect` events for periodic same-destination connections with low inter-arrival jitter (C2 beaconing)
-  2. `NetworkConnectDetector::evaluate()` queries the substrate threat-intel cache for destination IP matches and boosts finding confidence when matches are found
-  3. `NetworkConnectProfile` defines `suspicious_ports` and `process_port_allowlist` and validates consistently with existing detector profiles
-  4. Anomalous port usage and process-to-port mismatches produce medium-confidence findings even without threat-intel matches
+  1. PounceAgent emits `SwarmAction::RequestResponse` when mode is Alert or Incident, and the dispatcher routes it through `authorize_and_execute()` so PounceAgent actions flow through the policy gate and guard pipeline
+  2. PounceAgent dry-run mode produces `ResponseReceipt` records with `status: Simulated`, routing through the identical code path as live mode so the policy gate and guard pipeline are both exercised
+  3. `SwarmRuntime::authorize_and_execute()` returns `ApprovalError::Denied("capability lease expired")` for any request where `CapabilityLease.expires_at_ms <= now_ms`, failing closed before any adapter is called
+  4. PounceAgent skips emitting responses whose target scope already matches an `AgentFinding` in `peer_findings` for the same tick cycle, preventing double-trigger on the same escalation signal
+  5. `ConcentrationMonitor::evaluate_all()` calls `transition_down()` when all threat-class concentrations remain below alert threshold for `deescalation_cooldown_secs`, and `SwarmModeState::transition_down()` updates `last_transition_at` and clears `triggering_threat_class`
 **Plans**: TBD
 
-### Phase 122: Cross-Strategy Pheromone Signals And Rollout Scoping
-**Goal**: Deposits from different strategies count as independent signals for escalation, correlation weights cross-strategy evidence higher, and canary/promotion runs can target a single strategy within the composite
-**Depends on**: Phase 120
-**Requirements**: COMPOSE-03, COMPOSE-04, COMPOSE-05
+### Phase 125: Configurable Policy Rules And Audit Trail
+**Goal**: Operators can tune response authorization per deployment by writing YAML rules without code changes; every policy verdict carries the matched rule name and reason in structured logs and receipt audit records
+**Depends on**: Phase 124
+**Requirements**: POLICY-02, POLICY-03, POLICY-04
 **Success Criteria** (what must be TRUE):
-  1. Pheromone deposits from different strategies on the same event carry distinct `agent_id` values that incorporate the `strategy_id`, so `PheromoneConcentration.distinct_sources` reflects independent strategy signals
-  2. `CorrelationEngine::assemble_incident_at()` applies higher weight to `IncidentMemberDecision` pairs with different `strategy_id` values than same-strategy pairs
-  3. `CanaryConfig` and `PromotionConfig` accept an optional `strategy_id` field that scopes observation to a single strategy within the `CompositeDetector`
-  4. A multi-strategy deposit burst from distinct strategies satisfies `min_sources_for_escalation` where the same number of same-strategy deposits would not
+  1. `StaticApprovalGate` tracks recent actions per scope and denies requests that exceed `max_actions_per_scope_per_minute`, with the rate-limit denial reason appearing in structured logs
+  2. `ConfigurableApprovalGate` loads YAML rules specifying action allow/deny by threat class, severity thresholds, time-of-day restrictions, and per-agent rate limits; an empty or parse-error ruleset defaults to deny, not allow
+  3. Every policy verdict (allow or deny) records the matched rule name and verdict reason in structured logs and in the `ResponseReceipt` audit field
+  4. `ConfigurableApprovalGate` falls through to `StaticApprovalGate` when no YAML rule matches, preserving invariant enforcement as the last line of defense
 **Plans**: TBD
 
-### Phase 123: Multi-Strategy Integration Proof
-**Goal**: End-to-end integration tests prove NetworkConnect detection through to CommandAndControl deposits, and a multi-stage attack across 3+ strategies triggers escalation via cross-strategy distinct sources
-**Depends on**: Phases 121, 122
-**Requirements**: NETWORK-04, NETWORK-05
+### Phase 126: TomAgent Governance
+**Goal**: TomAgent monitors the health of all registered agents and provides synchronous pre-execution veto authority over destructive PounceAgent actions, with every vetoed action producing an auditable veto receipt
+**Depends on**: Phase 125
+**Requirements**: TOM-01, TOM-02
 **Success Criteria** (what must be TRUE):
-  1. `NetworkConnectDetector` sets all findings to `ThreatClass::CommandAndControl`; an integration test proves NetworkConnect telemetry through detection to signed pheromone deposit
-  2. A cross-strategy integration test configures `CompositeDetector` with 3+ strategies, feeds a multi-stage attack sequence, and asserts `PheromoneConcentration.distinct_sources >= 3`
-  3. The multi-strategy escalation test proves `min_sources_for_escalation` triggers an `Alert` or `Incident` transition in the substrate
-  4. `cargo test --workspace` and `cargo clippy --workspace -- -D warnings` remain green after all v1.38 changes land
+  1. TomAgent implements `SwarmAgent` with `AgentRole::Tom`, monitors agent health summaries each tick, emits `RoleShift` for degraded agents, and emits `HealthReport { status: Failed }` for agents that remain degraded beyond a configurable tick threshold
+  2. TomAgent's `GovernancePolicy::can_act()` is evaluated synchronously inside PounceAgent's tick, before `authorize_and_execute()` is called, so a veto always prevents execution rather than annotating it after the fact
+  3. Vetoed actions produce durable veto receipts carrying the rejected action type, the veto reason, and the governing agent ID, queryable from the operator surface
+**Plans**: TBD
+
+### Phase 127: Integration Hardening
+**Goal**: The full autonomous response pipeline from escalation through governance to execution is proven correct against all seven identified pitfalls via deterministic integration tests that cover the complete Phases 124-126 pipeline
+**Depends on**: Phase 126
+**Requirements**: POUNCE-01, POUNCE-02, POUNCE-03, POUNCE-04, POUNCE-05, DEESC-01, DEESC-02, POLICY-01, POLICY-02, POLICY-03, POLICY-04, TOM-01, TOM-02
+**Note**: This phase does not own exclusive requirements — it adds integration-level test coverage proving the correctness properties of all 13 v1.39 requirements working together. Individual requirements are assigned to their delivery phases above; this phase verifies their integration.
+**Success Criteria** (what must be TRUE):
+  1. A test injects the same escalation pheromone twice into a running PounceAgent and asserts `authorize_and_execute()` is called exactly once (no double-trigger)
+  2. A test advances the clock past `lease_ttl_ms` and asserts the executor returns an error receipt, not a successful response (TOCTOU-safe lease check)
+  3. A test configures an empty YAML ruleset and asserts `ConfigurableApprovalGate` returns `Deny`, not `Allow` (fail-closed policy)
+  4. A test wires a TomAgent veto and asserts `execute()` is never called for the vetoed action (synchronous veto gate)
+  5. A test runs a burst-decay-burst pheromone sequence and asserts no second response fires within the cooldown window (flap-resistant de-escalation)
+  6. `cargo test --workspace` and `cargo clippy --workspace -- -D warnings` remain green after all v1.39 changes land
 **Plans**: TBD
 
 ## Queued Milestones
 
 ### Tier 1: Core Value Delivery
 
-- `v1.39 PounceAgent And Policy Gate Hardening` -- Autonomous response agent, lease expiration fix, mode de-escalation, configurable policy, TomAgent governance (10 requirements: POUNCE-01-04, POLICY-01-03, DEESC-01-02, TOM-01)
+(none remaining after v1.39)
 
 ### Tier 2: Product Visibility
 
@@ -97,11 +107,9 @@ Plans:
 
 ## Progress
 
-**v1.37 execution order:** 112 -> 113 -> 114 -> 115
-
-**v1.37.1 execution order:** 116 -> 117 || 118 -> 119
-
 **v1.38 execution order:** 120 -> 121 || 122 -> 123
+
+**v1.39 execution order:** 124 -> 125 -> 126 -> 127
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -113,12 +121,16 @@ Plans:
 | 117. Substrate Durability And Bridge Resilience | v1.37.1 | 2/2 | Complete | 2026-04-08 |
 | 118. Operational Hardening | v1.37.1 | 3/3 | Complete | 2026-04-07 |
 | 119. Pheromone Test Suite | v1.37.1 | 1/1 | Complete | 2026-04-08 |
-| 120. Composite Detector And Config Migration | 2/2 | Complete   | 2026-04-08 | - |
-| 121. Network Connect Detector | v1.38 | 0/? | Not started | - |
-| 122. Cross-Strategy Pheromone Signals And Rollout Scoping | v1.38 | 0/? | Not started | - |
-| 123. Multi-Strategy Integration Proof | v1.38 | 0/? | Not started | - |
+| 120. Composite Detector And Config Migration | v1.38 | 2/2 | Complete | 2026-04-08 |
+| 121. Network Connect Detector | v1.38 | 2/2 | Complete | 2026-04-08 |
+| 122. Cross-Strategy Pheromone Signals And Rollout Scoping | v1.38 | 2/2 | Complete | 2026-04-08 |
+| 123. Multi-Strategy Integration Proof | v1.38 | 1/1 | Complete | 2026-04-08 |
+| 124. PounceAgent Core And De-escalation | v1.39 | 0/TBD | Not started | - |
+| 125. Configurable Policy Rules And Audit Trail | v1.39 | 0/TBD | Not started | - |
+| 126. TomAgent Governance | v1.39 | 0/TBD | Not started | - |
+| 127. Integration Hardening | v1.39 | 0/TBD | Not started | - |
 
 ---
-*Last shipped milestone: v1.37.1 Runtime Hardening And Audit Debt on 2026-04-08*
-*Active milestone: v1.38 Multi-Detector Composition And Network Detection*
-*Last updated: 2026-04-08 after Phase 120 Plan 02 execution*
+*Last shipped milestone: v1.38 Multi-Detector Composition And Network Detection on 2026-04-08*
+*Active milestone: v1.39 PounceAgent And Policy Gate Hardening*
+*Last updated: 2026-04-08 after v1.39 roadmap creation*
