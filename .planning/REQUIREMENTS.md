@@ -242,9 +242,7 @@
 - **HELLCAT-02**: `KittenAgent` fitness evaluation includes adversarial pressure from `RedSwarmAdapter`-generated sequences; blue detection fitness is measured against the latest adversarial corpus snapshot (frozen per-generation for reproducibility); the adversarial corpus is regenerated between generations; fitness artifacts record the adversarial corpus version used
 - **HELLCAT-03**: Red-blue evolution episodes are logged as `EvolutionEpisode` records persisted in a `FileEvolutionEpisodeStore` (following the existing store pattern) containing: episode_id, generation, adversarial corpus version, blue strategy genome hash, per-`ThreatClass` detection and evasion coverage, and fitness vectors for both sides
 
-### Agent Identity And Distributed Governance (v1.44)
-
-_Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed red-swarm work." This milestone marks the architectural evolution from single-node to distributed operation. The constraint is updated with a key decision entry documenting the rationale: single-node operations are now proven through v1.43, evolution and memory are established, and the project is ready for multi-instance governance._
+### Agent Identity And Infrastructure Signals (v1.44)
 
 #### Agent Identity Lifecycle
 
@@ -252,30 +250,12 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - **IDENTITY-02**: An `AgentIdentityRegistry` maintains the set of known agent identities; agents register on startup and are admitted to the registry after identity verification; unknown agent identities are logged and rejected from governance participation
 - **IDENTITY-03**: Agent key rotation generates a new keypair, creates a continuity proof (old key signs a handoff message containing the new public key), and updates the registry; the old key is retained for verification of historical signed artifacts
 
-#### Consensus Protocol
+#### Infrastructure Signal Detection
 
-- **CONSENSUS-01**: `swarm-consensus` implements a Tendermint-style propose-prevote-precommit BFT protocol tolerating f Byzantine agents in a 2f+1 committee, with round-based progress and view-change on proposer timeout; inter-instance communication uses NATS JetStream subjects (reusing the existing pheromone substrate connection)
-- **CONSENSUS-02**: Committee rotation uses a deterministic seed derived from the previous round's commit hash combined with agent identity hashes, providing verifiable fair proposer selection without requiring a separate VRF cryptographic dependency
-- **CONSENSUS-03**: Consensus protocol messages are signed with persistent Ed25519 agent keys (IDENTITY-01) and verified before processing; Byzantine message detection (equivocation via conflicting signed messages, invalid signatures) triggers automatic agent exclusion from the current round with a signed exclusion receipt
-
-#### Multi-Instance Governance
-
-- **GOVERN-01**: `TomAgent` consensus extends from single-instance synchronous veto to multi-instance BFT agreement; response actions requiring governance approval are proposed to the consensus committee and executed only after 2f+1 prevote-precommit confirmation; single-instance mode continues to work via degenerate 1-of-1 consensus
-- **GOVERN-02**: Multi-instance pheromone deposits are validated against the `AgentIdentityRegistry`; deposits from agents not in the registry are rejected by the substrate with a structured error; the registry is synchronized across instances via consensus
-- **GOVERN-03**: Governance decisions (approve, veto, timeout) are persisted as signed consensus receipts in the spine audit trail with round number, committee composition, and vote tally
-
-#### Partition Authority
-
-- **PARTITION-01**: A partition detector identifies network splits using heartbeat timeout and quorum loss signals; partition state transitions (healthy → degraded → partitioned → healing) are logged as structured events and emitted on the runtime event broadcaster
-- **PARTITION-02**: Contingency leases pre-authorize bounded action sets during healthy periods for redemption during partition; leases specify action type, blast radius cap (max affected hosts), and maximum duration; leases are issued by consensus and signed by the issuing committee
-- **PARTITION-03**: During partition, detection and reporting continue (fail-open for observability) while destructive response actions are denied unless covered by a valid contingency lease (fail-closed for safety); expired contingency leases are never redeemed
-- **PARTITION-04**: Partition reconciliation on healing merges divergent decisions from sub-swarms; authorized actions (covered by valid leases) are preserved; unauthorized actions (no lease or expired lease) are flagged for operator review with a reconciliation report
-
-#### Resilience Testing
-
-- **CHAOS-01**: A chaos testing harness injects Byzantine agent behavior (equivocation, delayed responses, invalid signatures) into the consensus protocol and verifies safety properties hold (no unauthorized response execution, no equivocation acceptance)
-- **CHAOS-02**: Network partition simulation tests verify that detection continues, unauthorized responses are blocked, and contingency leases are correctly redeemed and expired
-- **CHAOS-03**: Cascading failure scenarios (agent crash → health degradation → mode transition → recovery) are tested end-to-end with deterministic replay against multi-instance configurations
+- **INFRA-01**: A `swarm-ingest-sentinel` crate implements the `TelemetryBridge` trait for Sentinel-derived infrastructure telemetry; it maps the three payload types from sentinel-convergence doc 05 (`InfrastructureHealth` with CPU/memory/thermal metrics, `ThermalAnomaly` with temperature spike data, `ResourceExhaustion` with trending resource usage) into new `TelemetryPayload` variants consumable by the detection pipeline
+- **INFRA-02**: An `InfrastructureAnomalyDetector` implements `DetectionStrategy` and detects infrastructure-signal threats: cryptominer activity via sustained CPU/thermal anomalies, resource exhaustion from fork bombs or disk wipers, and memory pressure spikes correlating with fileless malware; risk weights map domain-specific signals to threat classes (`ThreatClass::ResourceAbuse`, `ThreatClass::DefenseEvasion`)
+- **INFRA-03**: Infrastructure anomaly findings flow through the existing pheromone deposit, escalation, and notification pipelines; cross-signal correlation between infrastructure anomalies and behavioral detections (e.g., CPU spike + suspicious process tree) boosts escalation confidence via `distinct_sources` diversity
+- **INFRA-04**: `SwarmConfig.runtime.telemetry_sources` accepts `"sentinel"` as a named bridge; the bridge exposes event-count, error-count, and lag-seconds metrics on `/healthz` and `/metrics` consistent with the existing Tetragon and JSON bridge patterns
 
 ### Providence Native (v1.45)
 
@@ -304,9 +284,45 @@ _Depends on: v1.42 (KittenAgent for PROVFB-02). PROVFB-02 is gated on KittenAgen
 - **PROVDASH-02**: The embedded widget displays real-time agent activity, pheromone concentrations, and escalation timeline scoped to a specific context via URL parameters (e.g., `?strategy_id=...&threat_class=...` or `?hunt_id=...`); it connects to `/v1/events/stream` with the appropriate type filter
 - **PROVDASH-03**: Swarm generates short-lived read-only context tokens (configurable TTL, default 15 minutes) scoped to a specific `hunt_id` or incident context; tokens are Ed25519-signed using the operator signing key with expiry, scope, and anti-replay nonce; they are included in Providence webhook drilldown links as URL query parameters and validated as an alternative to bearer auth for read-only access
 
-### Future: Detection Breadth (v1.46+)
+### Distributed Governance (v1.46)
 
-#### Fileless Execution And Behavioral Baselines (v1.46)
+_Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed red-swarm work." This milestone marks the architectural evolution from single-node to distributed operation. The constraint is updated with a key decision entry: single-node operations are proven through v1.43, evolution and memory are established, agent identity is durable (v1.44), and the project is ready for multi-instance governance._
+
+#### Consensus Protocol
+
+- **CONSENSUS-01**: `swarm-consensus` implements a Tendermint-style propose-prevote-precommit BFT protocol tolerating f Byzantine agents in a 2f+1 committee, with round-based progress and view-change on proposer timeout; inter-instance communication uses NATS JetStream subjects (reusing the existing pheromone substrate connection)
+- **CONSENSUS-02**: Committee rotation uses a deterministic seed derived from the previous round's commit hash combined with agent identity hashes, providing verifiable fair proposer selection without requiring a separate VRF cryptographic dependency
+- **CONSENSUS-03**: Consensus protocol messages are signed with persistent Ed25519 agent keys (IDENTITY-01) and verified before processing; Byzantine message detection (equivocation via conflicting signed messages, invalid signatures) triggers automatic agent exclusion from the current round with a signed exclusion receipt
+
+#### Multi-Instance Governance
+
+- **GOVERN-01**: `TomAgent` consensus extends from single-instance synchronous veto to multi-instance BFT agreement; response actions requiring governance approval are proposed to the consensus committee and executed only after 2f+1 prevote-precommit confirmation; single-instance mode continues to work via degenerate 1-of-1 consensus
+- **GOVERN-02**: Multi-instance pheromone deposits are validated against the `AgentIdentityRegistry` (from IDENTITY-02); deposits from agents not in the registry are rejected by the substrate with a structured error; the registry is synchronized across instances via consensus
+- **GOVERN-03**: Governance decisions (approve, veto, timeout) are persisted as signed consensus receipts in the spine audit trail with round number, committee composition, and vote tally
+
+#### Partition Authority
+
+- **PARTITION-01**: A partition detector identifies network splits using heartbeat timeout and quorum loss signals; partition state transitions (healthy → degraded → partitioned → healing) are logged as structured events and emitted on the runtime event broadcaster
+- **PARTITION-02**: Contingency leases pre-authorize bounded action sets during healthy periods for redemption during partition; leases specify action type, blast radius cap (max affected hosts), and maximum duration; leases are issued by consensus and signed by the issuing committee
+- **PARTITION-03**: During partition, detection and reporting continue (fail-open for observability) while destructive response actions are denied unless covered by a valid contingency lease (fail-closed for safety); expired contingency leases are never redeemed
+- **PARTITION-04**: Partition reconciliation on healing merges divergent decisions from sub-swarms; authorized actions (covered by valid leases) are preserved; unauthorized actions (no lease or expired lease) are flagged for operator review with a reconciliation report
+
+#### Resilience Testing
+
+- **CHAOS-01**: A chaos testing harness injects Byzantine agent behavior (equivocation, delayed responses, invalid signatures) into the consensus protocol and verifies safety properties hold (no unauthorized response execution, no equivocation acceptance)
+- **CHAOS-02**: Network partition simulation tests verify that detection continues, unauthorized responses are blocked, and contingency leases are correctly redeemed and expired
+- **CHAOS-03**: Cascading failure scenarios (agent crash → health degradation → mode transition → recovery) are tested end-to-end with deterministic replay against multi-instance configurations
+
+### Calico And Detection Breadth (v1.47)
+
+#### Calico Deception Agent
+
+- **CALICO-01**: `CalicoAgent` implements `SwarmAgent` with `AgentRole::Calico` and manages deception infrastructure: deploying honeypot services that match legitimate host profiles and canary tokens on monitored file paths; the agent maintains a `DeceptionPlaybook` loaded from repo-owned YAML defining decoy types, placement strategies, and monitoring rules
+- **CALICO-02**: Canary token interactions (file access, network connection to honeypot port, credential use) generate high-fidelity `DetectionFinding` entries with `ThreatClass::InitialAccess` or `ThreatClass::LateralMovement` and confidence ≥ 0.95; any interaction with a decoy is inherently suspicious
+- **CALICO-03**: Decoy lifecycle (deploy → monitor → rotate → cleanup) is managed by CalicoAgent's tick loop; deployed decoys are registered in SphinxAgent's knowledge graph for cross-agent correlation; decoy metadata (type, placement, creation time) is persisted for forensic attribution
+- **CALICO-04**: Deception interactions feed into `KittenAgent` evolution as high-weight positive signals; an attacker engaging a decoy validates the detection strategy that placed it, boosting that strategy's fitness in subsequent generations
+
+#### Fileless Execution And Behavioral Baselines
 
 - **FILELESS-01**: A `FilelessExecutionDetector` implements `DetectionStrategy` and identifies indicators of reflective DLL injection, encoded PowerShell execution with multi-stage deobfuscation hints, and raw syscall gadget patterns from a new `TelemetryPayload::ProcessMemoryAccess` variant and existing `ProcessStart` events
 - **FILELESS-02**: A `BehavioralAnomalyDetector` implements `DetectionStrategy` and maintains per-host process ancestry baselines; it flags deviations such as unusual parent-child pairs, first-seen binaries, or atypical tool usage for a user role as medium-confidence findings
@@ -315,13 +331,20 @@ _Depends on: v1.42 (KittenAgent for PROVFB-02). PROVFB-02 is gated on KittenAgen
 - **FILELESS-05**: `ThreatClass::DefenseEvasion` is used for fileless execution findings; `ThreatClass::PrivilegeEscalation` is used when the detector observes memory manipulation targeting a higher-privilege process
 - **FILELESS-06**: Both detectors ship with configurable profiles; integration tests cover evasion scenarios through detection to pheromone deposit
 
-#### Adversarial Robustness And Evasion Bench (v1.47)
+### Adversarial Robustness (v1.48)
+
+#### Evasion Bench
 
 - **EVASION-01**: An evasion test corpus provides at least 10 curated payloads per `ThreatClass` representing real-world evasion techniques
 - **EVASION-02**: A coverage metrics module computes per-detector evasion catch rates via `/metrics` and `/api/v1/evasion/coverage`
 - **EVASION-03**: KittenAgent's existing mutation loop (from KITTEN-01) proposes threshold adjustments in response to evasion corpus gaps and validates through the canary pipeline; no separate mutation module
 - **EVASION-04**: An evasion catalog documents intentionally uncovered ATT&CK techniques per detector with rationale
 - **EVASION-05**: Integration tests execute the full evasion corpus → gap identification → KittenAgent mutation → canary validation cycle
+
+#### Z3 Formal Verification
+
+- **Z3-01**: The optional Z3 SMT verification tier (behind the `z3` feature flag referenced in SAFETY-01) is implemented using the `z3` Rust crate; `FormalSafetyGate` Tier 2 compiles strategy invariants from `rulesets/safety/*.yaml` into Z3 assertions and proves universal properties (e.g., `∀ indicator ∈ known_bad_set, detector(indicator) = ALERT`) that the deterministic Tier 1 checker cannot verify by enumeration alone
+- **Z3-02**: Z3 verification results include machine-readable counterexamples on failure; the solver timeout is configurable (default 30s per invariant) with fail-closed semantics (timeout = rejection); verification artifacts are signed and persisted in the spine audit trail alongside Tier 1 results
 
 ## Out of Scope
 
@@ -426,54 +449,45 @@ _Depends on: v1.42 (KittenAgent for PROVFB-02). PROVFB-02 is gated on KittenAgen
 | PROV-01 | Phase 131 | Complete |
 | PROV-02 | Phase 131 | Complete |
 | PROV-03 | Phase 131 | Complete |
-| API-01 | Queued v1.41 | Queued |
-| API-02 | Queued v1.41 | Queued |
-| API-03 | Queued v1.41 | Queued |
-| API-04 | Queued v1.41 | Queued |
-| HELM-01a | Queued v1.41 | Queued |
-| HELM-01b | Queued v1.41 | Queued |
-| HELM-02 | Queued v1.41 | Queued |
-| CLI-01 | Queued v1.41 | Queued |
-| CLI-02 | Queued v1.41 | Queued |
-| HARD-01 | Queued v1.41 | Queued |
-| HARD-02 | Queued v1.41 | Queued |
-| HARD-03a | Queued v1.41 | Queued |
-| HARD-03b | Queued v1.41 | Queued |
-| HARD-04 | Queued v1.41 | Queued |
-| KITTEN-01 | Queued v1.42 | Queued |
-| KITTEN-02 | Queued v1.42 | Queued |
-| KITTEN-03 | Queued v1.42 | Queued |
-| KITTEN-04 | Queued v1.42 | Queued |
-| KITTEN-05 | Queued v1.42 | Queued |
-| SAFETY-01 | Queued v1.42 | Queued |
-| SAFETY-02 | Queued v1.42 | Queued |
-| SAFETY-03 | Queued v1.42 | Queued |
-| EVOLVE-OBS-01 | Queued v1.42 | Queued |
-| EVOLVE-OBS-02 | Queued v1.42 | Queued |
-| SPHINX-01 | Queued v1.43 | Queued |
-| SPHINX-02 | Queued v1.43 | Queued |
-| SPHINX-03 | Queued v1.43 | Queued |
-| SPHINX-04 | Queued v1.43 | Queued |
-| SPHINX-05 | Queued v1.43 | Queued |
-| HELLCAT-01 | Queued v1.43 | Queued |
-| HELLCAT-02 | Queued v1.43 | Queued |
-| HELLCAT-03 | Queued v1.43 | Queued |
+| API-01 | Phase 132 | Complete |
+| API-02 | Phase 133 | Complete |
+| API-03 | Phase 133 | Complete |
+| API-04 | Phase 132 | Complete |
+| HELM-01a | Phase 134 | Complete |
+| HELM-01b | Phase 134 | Complete |
+| HELM-02 | Phase 134 | Complete |
+| CLI-01 | Phase 134 | Complete |
+| CLI-02 | Phase 134 | Complete |
+| HARD-01 | Phase 135 | Complete |
+| HARD-02 | Phase 136 | Complete |
+| HARD-03a | Phase 135 | Complete |
+| HARD-03b | Phase 135 | Complete |
+| HARD-04 | Phase 136 | Complete |
+| KITTEN-01 | Phase 137 | Complete |
+| KITTEN-02 | Phase 138 | Complete |
+| KITTEN-03 | Phase 137 | Complete |
+| KITTEN-04 | Phase 139 | Complete |
+| KITTEN-05 | Phase 138 | Complete |
+| SAFETY-01 | Phase 139 | Complete |
+| SAFETY-02 | Phase 139 | Complete |
+| SAFETY-03 | Phase 139 | Complete |
+| EVOLVE-OBS-01 | Phase 140 | Complete |
+| EVOLVE-OBS-02 | Phase 140 | Complete |
+| SPHINX-01 | Phase 141 | Complete |
+| SPHINX-02 | Phase 141 | Complete |
+| SPHINX-03 | Phase 142 | Complete |
+| SPHINX-04 | Phase 142 | Complete |
+| SPHINX-05 | Phase 143 | Complete |
+| HELLCAT-01 | Phase 143 | Complete |
+| HELLCAT-02 | Phase 144 | Complete |
+| HELLCAT-03 | Phase 144 | Complete |
 | IDENTITY-01 | Queued v1.44 | Queued |
 | IDENTITY-02 | Queued v1.44 | Queued |
 | IDENTITY-03 | Queued v1.44 | Queued |
-| CONSENSUS-01 | Queued v1.44 | Queued |
-| CONSENSUS-02 | Queued v1.44 | Queued |
-| CONSENSUS-03 | Queued v1.44 | Queued |
-| GOVERN-01 | Queued v1.44 | Queued |
-| GOVERN-02 | Queued v1.44 | Queued |
-| GOVERN-03 | Queued v1.44 | Queued |
-| PARTITION-01 | Queued v1.44 | Queued |
-| PARTITION-02 | Queued v1.44 | Queued |
-| PARTITION-03 | Queued v1.44 | Queued |
-| PARTITION-04 | Queued v1.44 | Queued |
-| CHAOS-01 | Queued v1.44 | Queued |
-| CHAOS-02 | Queued v1.44 | Queued |
-| CHAOS-03 | Queued v1.44 | Queued |
+| INFRA-01 | Queued v1.44 | Queued |
+| INFRA-02 | Queued v1.44 | Queued |
+| INFRA-03 | Queued v1.44 | Queued |
+| INFRA-04 | Queued v1.44 | Queued |
 | PROVAUTH-01 | Queued v1.45 | Queued |
 | PROVAUTH-02 | Queued v1.45 | Queued |
 | PROVBI-01 | Queued v1.45 | Queued |
@@ -485,31 +499,52 @@ _Depends on: v1.42 (KittenAgent for PROVFB-02). PROVFB-02 is gated on KittenAgen
 | PROVDASH-01 | Queued v1.45 | Queued |
 | PROVDASH-02 | Queued v1.45 | Queued |
 | PROVDASH-03 | Queued v1.45 | Queued |
-| FILELESS-01 | Queued future v1.46 | Queued |
-| FILELESS-02 | Queued future v1.46 | Queued |
-| FILELESS-03 | Queued future v1.46 | Queued |
-| FILELESS-04 | Queued future v1.46 | Queued |
-| FILELESS-05 | Queued future v1.46 | Queued |
-| FILELESS-06 | Queued future v1.46 | Queued |
-| EVASION-01 | Queued future v1.47 | Queued |
-| EVASION-02 | Queued future v1.47 | Queued |
-| EVASION-03 | Queued future v1.47 | Queued |
-| EVASION-04 | Queued future v1.47 | Queued |
-| EVASION-05 | Queued future v1.47 | Queued |
+| CONSENSUS-01 | Queued v1.46 | Queued |
+| CONSENSUS-02 | Queued v1.46 | Queued |
+| CONSENSUS-03 | Queued v1.46 | Queued |
+| GOVERN-01 | Queued v1.46 | Queued |
+| GOVERN-02 | Queued v1.46 | Queued |
+| GOVERN-03 | Queued v1.46 | Queued |
+| PARTITION-01 | Queued v1.46 | Queued |
+| PARTITION-02 | Queued v1.46 | Queued |
+| PARTITION-03 | Queued v1.46 | Queued |
+| PARTITION-04 | Queued v1.46 | Queued |
+| CHAOS-01 | Queued v1.46 | Queued |
+| CHAOS-02 | Queued v1.46 | Queued |
+| CHAOS-03 | Queued v1.46 | Queued |
+| CALICO-01 | Queued v1.47 | Queued |
+| CALICO-02 | Queued v1.47 | Queued |
+| CALICO-03 | Queued v1.47 | Queued |
+| CALICO-04 | Queued v1.47 | Queued |
+| FILELESS-01 | Queued v1.47 | Queued |
+| FILELESS-02 | Queued v1.47 | Queued |
+| FILELESS-03 | Queued v1.47 | Queued |
+| FILELESS-04 | Queued v1.47 | Queued |
+| FILELESS-05 | Queued v1.47 | Queued |
+| FILELESS-06 | Queued v1.47 | Queued |
+| EVASION-01 | Queued v1.48 | Queued |
+| EVASION-02 | Queued v1.48 | Queued |
+| EVASION-03 | Queued v1.48 | Queued |
+| EVASION-04 | Queued v1.48 | Queued |
+| EVASION-05 | Queued v1.48 | Queued |
+| Z3-01 | Queued v1.48 | Queued |
+| Z3-02 | Queued v1.48 | Queued |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
 - v1.38 complete: 10 satisfied (COMPOSE-01-05 -> Phases 120,122; NETWORK-01-05 -> Phases 121,123)
 - v1.39 complete: 13 satisfied (POUNCE-01-05 -> Phase 124; POLICY-01 -> Phase 124; POLICY-02-04 -> Phase 125; DEESC-01-02 -> Phase 124; TOM-01-02 -> Phase 126)
-- v1.40 implementation complete: 8 satisfied (DEMO-01-02 -> Phase 128; DEMO-03 -> Phase 129; DEMO-04-05 -> Phase 130; PROV-01-03 -> Phase 131)
-- v1.41 queued: 14 (API-01-04, HELM-01a/01b/02, CLI-01-02, HARD-01/02/03a/03b/04)
-- v1.42 queued: 10 (KITTEN-01-05, SAFETY-01-03, EVOLVE-OBS-01-02)
-- v1.43 queued: 8 (SPHINX-01-05, HELLCAT-01-03)
-- v1.44 queued: 16 (IDENTITY-01-03, CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
+- v1.40 complete: 8 satisfied (DEMO-01-02 -> Phase 128; DEMO-03 -> Phase 129; DEMO-04-05 -> Phase 130; PROV-01-03 -> Phase 131)
+- v1.41 complete: 14 satisfied across phases 132-136
+- v1.42 complete: 10 satisfied across phases 137-140
+- v1.43 complete: 8 satisfied across phases 141-144
+- v1.44 queued: 7 (IDENTITY-01-03, INFRA-01-04)
 - v1.45 queued: 11 (PROVAUTH-01-02, PROVBI-01-03, PROVFB-01-03, PROVDASH-01-03)
-- v1.46-v1.47 future: 11 (FILELESS-01-06, EVASION-01-05)
-- Total queued: 70 (v1.41-v1.47)
+- v1.46 queued: 13 (CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
+- v1.47 queued: 10 (CALICO-01-04, FILELESS-01-06)
+- v1.48 queued: 7 (EVASION-01-05, Z3-01-02)
+- Total queued: 48 (v1.44-v1.48)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-08 — milestones refined after code-grounded review by 5 parallel agents*
+*Last updated: 2026-04-09 — milestones restructured after post-v1.43 review (hybrid sequence)*

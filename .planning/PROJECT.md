@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can already detect multiple threat families, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, surface the full chain in one operator review report, execute offline replay plus regression evaluation over a tracked scenario corpus, and ingest real telemetry through HTTP plus Tetragon-derived process events.
+Swarm Team Six is a Rust-first threat detection and controlled live-response runtime for operators who need to act within the response window. The shipped system can already detect multiple threat families, evaluate narrow response actions through deterministic policy, survive restart with durable local storage, attach async investigation to persisted replay bundles, assemble explainable incidents, surface the full chain in one operator review report, execute offline replay plus regression evaluation over a tracked scenario corpus, ingest real telemetry through HTTP plus Tetragon-derived process events, and now drive a live demo path with streamed operator visibility, approval-in-the-loop proof export, and Providence delivery.
 
 ## Core Value
 
@@ -10,34 +10,34 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.40 Killer Demo And Providence Integration` is now active as of 2026-04-08.
+`v1.43 Swarm Memory And Adversarial Pressure` shipped on 2026-04-09.
 
 **Goal:**
-- Turn the shipped runtime into a compelling operator demo with replay injection, streamed swarm visibility, approval-in-the-loop response, signed proof export, and Providence delivery.
+- Add SphinxAgent’s durable memory substrate, indirect swarm-memory retrieval, and the first Rust-native adversarial pressure seam so long-lived swarm knowledge and red-blue pressure become first-class runtime capabilities.
 
 **Target features:**
-- Scenario replay injection into the live telemetry lane with configurable pacing
-- Server-Sent Events and a live dashboard for mode, agent health, pheromone pressure, and escalation timeline
-- Human approval checkpoints with signed approval-chain receipts
-- Demo proof export and Providence webhook delivery with drilldown context
+- A real `SphinxAgent` registered in serve mode with a durable typed knowledge graph backing store
+- Repo-owned memory config covering graph persistence and temporal correlation windows
+- Indirect pheromone-mediated query and retrieval seams that preserve the swarm’s stigmergic coordination model
+- Follow-on phases for adversarial pressure generation, memory-aware fitness, and retention-safe graph garbage collection
 
-**Recently shipped foundation:**
+**Supporting foundation:**
 - v1.39 closed the detect-to-respond loop with autonomous PounceAgent execution through the canonical policy, guard, and executor path.
 - Policy is now repo-owned and fail-closed, with configurable YAML rules, scope-aware burst limiting, and durable verdict attribution.
 - TomAgent governance can now synchronously veto destructive autonomous actions and persist typed audit receipts.
 
-**Next queued milestones:**
-- `v1.41 Deployment And Hardening` — Platform API, Helm chart, panic elimination, swarm-evolution/swarm-cli crate extraction, TLS, structured tracing (14 reqs)
-- `v1.42 Evolution Engine Core` — KittenAgent genetic algorithm, two-tier formal safety gate, evolution observability (10 reqs)
-- `v1.43 Swarm Memory And Adversarial Pressure` — SphinxAgent knowledge graph, stigmergic queries, Rust-native adversarial scenarios (8 reqs)
-- `v1.44 Agent Identity And Distributed Governance` — Persistent keys, Tendermint BFT, multi-instance Tom, partition authority, chaos testing (16 reqs)
-- `v1.45 Providence Native` — Webhook contract, incident lifecycle, analyst feedback, embeddable widget (11 reqs)
-- `v1.46 Fileless Execution And Behavioral Baselines` (6 reqs)
-- `v1.47 Adversarial Robustness And Evasion Bench` (5 reqs)
+**Next activated milestone:**
+- `v1.44 Agent Identity And Infrastructure Signals` — persistent keys, identity registry, key rotation, Sentinel infrastructure telemetry bridge, anomaly detection (7 reqs)
+
+**Queued after that:**
+- `v1.45 Providence Native` — webhook contract, incident lifecycle, analyst feedback, embeddable widget (11 reqs)
+- `v1.46 Distributed Governance` — Tendermint BFT consensus, multi-instance Tom, partition authority, chaos testing (13 reqs)
+- `v1.47 Calico And Detection Breadth` — CalicoAgent deception, fileless execution, behavioral baselines (10 reqs)
+- `v1.48 Adversarial Robustness` — evasion bench, Z3 formal verification (7 reqs)
 
 ## Current State
 
-`v1.40 Killer Demo And Providence Integration` is now active. This cycle turns the shipped detection, correlation, response, and governance runtime into a demoable operator surface: replay-driven live swarm activity, streamed event observability, human approval checkpoints, signed proof export, and Providence delivery on top of the v1.39 response foundation.
+`v1.43 Swarm Memory And Adversarial Pressure` is complete. Phases 141-144 now cover the durable Sphinx graph, stigmergic query and answer flow, retention-safe graph GC, deterministic Rust-native adversarial corpus generation, generation-scoped red pressure in Kitten fitness, durable red-blue episode history, and operator-visible corpus plus best-genome status. The next step is `$gsd-new-milestone` to activate `v1.44 Agent Identity And Infrastructure Signals`.
 
 **What v1.37.1 hardened:**
 - Pheromone deposits are now Ed25519-signed by agents and validated by the substrate on all backends
@@ -49,6 +49,10 @@ Detect real threats quickly enough to take safe action before the window to resp
 - swarm-pheromone has 37+ focused substrate tests (was zero before)
 
 **What is now real:**
+- `POST /v1/demo/replay` injects repo-owned scenarios into the live telemetry lane, and `GET /v1/events/stream` exposes typed runtime events for downstream demo surfaces.
+- The operator review workbench now boots from runtime snapshot plus SSE and renders live swarm mode, agent health, pheromone pressure, and escalation timeline state.
+- Human-gated demo actions now pause cleanly, resume through the canonical signed approval flow, and export one proof package with the full decision chain.
+- `providence_webhook` notifications now carry Providence-shaped finding payloads with absolute Swarm drilldown links, runtime status, and bridge-health summary.
 - `swarm-detect` now runs a keyed multi-agent registry during serve mode with runtime role-shift propagation, peer-finding snapshots, and shared lifecycle telemetry.
 - `whisker-primary`, `stalker-primary`, and `weaver-primary` now execute against the same live dispatcher and shared runtime stack when investigation and correlation are enabled.
 - `StalkerAgent` now consumes Whisker pheromones, submits replay bundles into the async investigation pipeline, and republishes completed investigation results back into the substrate.
@@ -87,6 +91,14 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.37 Persistence And Supply Chain Detection` is complete.
 - `v1.38 Multi-Detector Composition And Network Detection` is complete.
 - `v1.39 PounceAgent And Policy Gate Hardening` is complete.
+- `v1.40 Killer Demo And Providence Integration` is complete.
+- `v1.41 Deployment And Hardening` is complete.
+- `v1.42 Evolution Engine Core` is complete with phases 137-140.
+- `v1.43 Swarm Memory And Adversarial Pressure` is complete with phases 141-144.
+- Phase 142 added signed Sphinx memory query and answer pheromone contracts, dispatcher-shared substrate wiring for Kitten and Sphinx, Q-value-style retrieval scoring over the durable graph, and bounded replay fallback when no usable memory answer arrives.
+- Phase 143 added repo-owned `knowledge_retention_days`, Sphinx graph garbage collection with stale bundle cleanup, and a deterministic `RedSwarmAdapter` plus `MockRedSwarm` seam backed by the tracked `scenario-suites/` corpus.
+- Phase 144 added generation-scoped adversarial corpus freezing in Kitten, durable `EvolutionEpisode` persistence with corpus and genome metadata, and adversarial corpus plus best-genome visibility through the evolution status surface.
+- Phase 137 added a runtime-owned `KittenAgent`, repo-owned evolution config, a concept-drift detector over durable evidence, and bounded proposal emission backed by the extracted evolution harnesses.
 - Phase 104 added bounded drain control, PreStop coordination, and `/startupz` startup-probe semantics for serve mode.
 - Phase 105 added schema-aware config migration and `@secret:` resolution for live response adapters with secret-directory reload.
 - Phase 106 added live heap metrics and readiness shedding before the runtime reaches an OOM boundary.
@@ -187,11 +199,10 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.37 Persistence And Supply Chain Detection` is complete.
 - `v1.38 Multi-Detector Composition And Network Detection` is complete.
 - `v1.39 PounceAgent And Policy Gate Hardening` is complete.
-- `v1.40 Killer Demo And Providence Integration` is active.
-- This milestone will deliver live replay injection, streamed runtime visibility, approval-in-the-loop demo response, signed proof export, and Providence delivery.
-- `v1.41 Deployment And Hardening` is next after v1.40 closeout.
-- `v1.42 Evolution Engine Core` delivers KittenAgent with formal safety gate — the core differentiator.
-- `v1.43 Swarm Memory And Adversarial Pressure` adds SphinxAgent knowledge graph and adversarial fitness pressure.
+- `v1.40 Killer Demo And Providence Integration` is shipped with replay injection, live dashboard visibility, approval-in-the-loop demo response, signed proof export, and Providence delivery.
+- `v1.41 Deployment And Hardening` is complete with platform APIs, deployment experience, serve-surface hardening, crate extraction, and tracing shipped.
+- `v1.42 Evolution Engine Core` is complete with phases 137-140 for KittenAgent, formal safety, and operator-visible evolution observability.
+- `v1.43 Swarm Memory And Adversarial Pressure` is complete with phases 141-144 for SphinxAgent, durable swarm memory, and Rust-native adversarial pressure.
 - `v1.44 Agent Identity And Distributed Governance` adds persistent agent keys, BFT consensus, and partition authority — marking the evolution from single-node to distributed. PROJECT.md constraints will be updated with a key decision entry when this milestone begins.
 - `v1.45 Providence Native` completes outbound incident lifecycle, analyst feedback, and embeddable widget.
 - Detection breadth expansion (Fileless, Evasion) is pushed to v1.46-v1.47 after the core differentiators ship.
@@ -286,4 +297,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-08 after starting v1.40*
+*Last updated: 2026-04-09 after completing Phase 144 and closing out v1.43*

@@ -2,30 +2,80 @@
 
 ## Latest Completed Milestone
 
-### v1.39 PounceAgent And Policy Gate Hardening
-**Executable phases:** 124-127
-**Shipped:** 2026-04-08
+### v1.43 Swarm Memory And Adversarial Pressure
+**Executable phases:** 141-144
+**Shipped:** 2026-04-09
 
 ## Active Milestone
 
-### v1.40 Killer Demo And Providence Integration
-**Executable phases:** 128-131
-**Requirements:** DEMO-01-05, PROV-01-03
-**Status:** Active on 2026-04-08; Phase 128 is next
+No active milestone is currently phase-defined. Next step: `$gsd-new-milestone` to activate `v1.44 Agent Identity And Infrastructure Signals`.
 
 ## Queued Milestones
 
 | Milestone | Name | Requirements | Tier |
 |-----------|------|--------------|------|
-| v1.41 | Deployment And Hardening | API-01–04, HELM-01a/01b/02, CLI-01–02, HARD-01/02/03a/03b/04 (14) | Deployment & Hardening |
-| v1.42 | Evolution Engine Core | KITTEN-01–05, SAFETY-01–03, EVOLVE-OBS-01–02 (10) | Evolution Engine |
-| v1.43 | Swarm Memory And Adversarial Pressure | SPHINX-01–05, HELLCAT-01–03 (8) | Memory & Adversarial |
-| v1.44 | Agent Identity And Distributed Governance | IDENTITY-01–03, CONSENSUS-01–03, GOVERN-01–03, PARTITION-01–04, CHAOS-01–03 (16) | Distributed Governance |
+| v1.44 | Agent Identity And Infrastructure Signals | IDENTITY-01–03, INFRA-01–04 (7) | Identity & Infrastructure |
 | v1.45 | Providence Native | PROVAUTH-01–02, PROVBI-01–03, PROVFB-01–03, PROVDASH-01–03 (11) | Deep Providence Integration |
-| v1.46 | Fileless Execution And Behavioral Baselines | FILELESS-01–06 (6) | Detection Breadth |
-| v1.47 | Adversarial Robustness And Evasion Bench | EVASION-01–05 (5) | Detection Breadth |
+| v1.46 | Distributed Governance | CONSENSUS-01–03, GOVERN-01–03, PARTITION-01–04, CHAOS-01–03 (13) | Distributed Governance |
+| v1.47 | Calico And Detection Breadth | CALICO-01–04, FILELESS-01–06 (10) | Deception & Detection Breadth |
+| v1.48 | Adversarial Robustness | EVASION-01–05, Z3-01–02 (7) | Evasion & Formal Verification |
 
 ## History
+
+## v1.43 Swarm Memory And Adversarial Pressure (Shipped: 2026-04-09)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `SphinxAgent` now owns a durable typed knowledge graph with repo-owned persistence, temporal correlation, and restart-safe storage.
+- Other agents can query Sphinx indirectly through signed pheromone query and answer deposits, and Kitten now blends that Q-value retrieval into proposal fitness with replay-only fallback when memory is sparse.
+- Memory retention is now bounded by repo-owned TTL controls, and Sphinx removes stale bundle files as part of garbage collection instead of only dropping them from in-memory state.
+- The runtime now owns a deterministic Rust-native red-swarm adapter, generation-scoped adversarial corpus freezing, and durable `EvolutionEpisode` history with corpus metadata, genome hashes, per-threat-class coverage, and red-blue fitness vectors.
+- `swarmctl evolution status` and the runtime `evolution_status` event lane now surface current generation, latest episode, corpus version, and best genome state from the same durable evolution artifacts.
+
+---
+
+## v1.42 Evolution Engine Core
+**Executable phases:** 137-140
+**Shipped:** 2026-04-09
+
+## v1.42 Evolution Engine Core (Shipped: 2026-04-09)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `KittenAgent` now runs in serve mode with repo-owned drift detection, bounded mutation orchestration, and durable proposal emission.
+- Replay-backed population scoring, Pareto survivor selection, restart-safe restore, and persisted hourly proposal throttling now make evolution state durable across process restarts.
+- Verified Kitten winners now flow through formal safety bundles, ranked selection, selection-bridge handoff, and bounded canary admission without leaving the runtime-owned lane.
+- Operators can now watch the evolution subsystem through typed SSE `evolution_status` events and `swarmctl evolution status`, with population, verification, admission, and Kitten-cycle summaries derived from durable artifacts.
+
+---
+
+## v1.41 Deployment And Hardening (Shipped: 2026-04-09)
+
+**Phases completed:** 5 phases, 5 plans, 0 tasks
+
+**Key accomplishments:**
+- The detect server now exposes authenticated `/v2/api/*` platform reads with stable envelopes, host posture summaries, and live findings SSE.
+- The repo now ships a deployable Helm chart plus `swarmctl validate` and `swarmctl init` operator workflows.
+- Production serve surfaces now enforce the hardened bearer plus TLS/mTLS contract and no longer rely on panic-prone detector defaults or demo-proof `expect()` calls.
+- Evolution and CLI ownership now live in dedicated workspace crates, and the runtime hot path carries structured `trace_id` fields with optional OTLP export.
+- Control-candidate evolution validation is now stable because experiment and shadow artifacts are derived from a single replay evaluation instead of divergent double runs.
+
+---
+
+## v1.40 Killer Demo And Providence Integration (Shipped: 2026-04-08)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Demo replay can inject repo-owned scenarios into the live telemetry lane behind runtime-owned demo-mode gating.
+- The operator review surface now boots a live dashboard from runtime snapshot plus SSE, showing swarm mode, agent health, pheromone pressure, and the escalation timeline.
+- Human-gated demo responses now pause, collect signed approval votes, resume through the canonical runtime authorization path, and export a signed proof package.
+- Providence webhook delivery now ships Providence-shaped finding envelopes with absolute drilldown links, runtime status, and bridge-health context through the existing notification router.
+- Milestone-closeout regression reruns passed for replay injection, dashboard snapshot, approval resume and proof export, and Providence runtime-context delivery.
+
+---
 
 ## v1.39 PounceAgent And Policy Gate Hardening (Shipped: 2026-04-08)
 
