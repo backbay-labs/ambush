@@ -1,12 +1,12 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.45
-milestone_name: Providence Native
-current_phase: 149
-current_phase_name: Providence Contract And Service Auth
+milestone: v1.46
+milestone_name: Distributed Governance
+current_phase: 153
+current_phase_name: Consensus Protocol Core
 status: phase_defined
-last_updated: "2026-04-09T16:00:00Z"
-last_activity: 2026-04-09 — v1.45 activated after v1.44 completion
+last_updated: "2026-04-09T19:00:00Z"
+last_activity: 2026-04-09 — v1.46 activated after v1.45 completion
 progress:
   total_phases: 4
   completed_phases: 0
@@ -22,15 +22,15 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-09)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** v1.45 Providence Native — phases 149-152 defined, ready for planning
+**Current focus:** v1.46 Distributed Governance — phases 153-156 defined, ready for planning
 
 ## Current Position
 
-Phase: 149 Providence Contract And Service Auth
-Current Phase: 149
-Current Phase Name: Providence Contract And Service Auth
-Status: Phases 149-152 defined for v1.45; planning not yet started
-Last activity: 2026-04-09 — v1.45 activated after v1.44 shipped
+Phase: 153 Consensus Protocol Core
+Current Phase: 153
+Current Phase Name: Consensus Protocol Core
+Status: Phases 153-156 defined for v1.46; planning not yet started
+Last activity: 2026-04-09 — v1.46 activated after v1.45 shipped
 Total Phases: 4
 Total Plans in Phase: 0
 
@@ -80,11 +80,16 @@ Progress: [..........] 0%
 - Phase 146 is complete: serve mode now admits persisted identities through a durable registry, governance actions fail closed for unadmitted agent IDs, and `swarmctl identity rotate` persists continuity proofs plus retired-key history for historical verification.
 - Phase 147 is complete: the shared telemetry schema now includes infrastructure health, thermal anomaly, and resource-exhaustion events, the repo owns Sentinel bridge config, and `BridgeRuntimeRegistry` can run Sentinel through the same health and metrics path as other bridges.
 - Phase 148 is complete: `InfrastructureAnomalyDetector` now turns the Sentinel infrastructure lane into live execution, impact, and defense-evasion findings, and infrastructure plus behavioral execution signals can converge through the existing distinct-source escalation path.
+- Phase 149 is complete: Providence delivery now uses a shared `SwarmProvidenceWebhookContract`, `providence_webhook` can sign canonical JSON with `X-Swarm-Signature`, and both Providence bearer and HMAC secrets resolve through the existing `@secret:` config path.
+- Phase 150 is complete: correlated incidents now persist generic Providence external references, a dedicated `ProvidenceIncidentAdapter` owns signed create/update/resolve lifecycle sync with retry and dead-letter, and `/healthz` plus `/readyz` now expose Providence reachability/auth/write health.
+- Phase 151 is complete: signed Providence analyst feedback now lands on `POST /v1/providence/feedback`, persists durable incident-linked audit evidence, and forwards false-positive dismissals into Kitten or pending durable storage.
+- Phase 152 is complete: Providence can now embed `/v1/demo/widget`, consume scoped runtime SSE, and open read-only findings/incidents drilldowns through short-lived signed context tokens.
+- The v1.45 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots live in `.planning/milestones/`, and phase directories `149` through `152` now live in `.planning/milestones/v1.45-phases/`.
 
 ## Issues
 
-- None active. v1.45 phases defined; ready for planning.
+- None active. v1.46 phases defined; ready for planning.
 
 ## Next Command
 
-`/gsd:plan-phase 149`
+`/gsd:plan-phase 153`

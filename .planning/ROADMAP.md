@@ -95,66 +95,17 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 </details>
 
+<details>
+<summary>Shipped: v1.45 Providence Native (Phases 149-152)</summary>
+
+- [x] **Phase 149: Providence Contract And Service Auth** - Shared webhook contract, HMAC signing, bearer service auth. (completed 2026-04-09)
+- [x] **Phase 150: Incident Lifecycle Adapter** - Outbound create/update/resolve with retry, dead-letter, health reporting. (completed 2026-04-09)
+- [x] **Phase 151: Analyst Feedback Loop** - Feedback endpoint, KittenAgent fitness signals, audit trail. (completed 2026-04-09)
+- [x] **Phase 152: Embeddable Dashboard Widget And Context Tokens** - Widget embedding, scoped SSE, signed context tokens. (completed 2026-04-09)
+
+</details>
+
 ## Active Milestone
-
-### v1.45 Providence Native
-
-**Goal:** Complete the Providence ecosystem integration with bidirectional incident lifecycle, analyst feedback, and embeddable dashboard widget.
-**Executable phases:** 149-152
-
-- [ ] **Phase 149: Providence Contract And Service Auth** - Define shared webhook schema, implement HMAC signature verification, and configure service-to-service bearer token. (PROVAUTH-01, PROVAUTH-02)
-- [ ] **Phase 150: Incident Lifecycle Adapter** - Build outbound incident create/update/resolve adapter with retry, dead-letter, idempotent create-by-key, and health reporting. (PROVBI-01, PROVBI-02, PROVBI-03)
-- [ ] **Phase 151: Analyst Feedback Loop** - Expose feedback endpoint for confirm/dismiss/investigate actions, forward dismissals to KittenAgent fitness, persist audit trail. (PROVFB-01, PROVFB-02, PROVFB-03)
-- [ ] **Phase 152: Embeddable Dashboard Widget And Context Tokens** - Serve minimal embeddable widget with CSP headers, context-scoped display, and short-lived Ed25519-signed access tokens. (PROVDASH-01, PROVDASH-02, PROVDASH-03)
-
-## Queued Milestones With Defined Phases
-
-### Phase 149: Providence Contract And Service Auth
-
-**Goal:** Define the shared webhook payload contract and establish authenticated service-to-service communication between Swarm and Providence.
-**Requirements:** PROVAUTH-01, PROVAUTH-02
-**Depends on:** Phase 148
-**Status:** Queued
-**Plans:** 0
-**Success Criteria**:
-1. A `SwarmProvidenceWebhookContract` schema maps Swarm's outbound envelope to Providence's `CreateIncidentBody` with `schema_version` for forward compatibility.
-2. Swarm stores a Providence API bearer token via `@secret:providence_api_token` and Providence verifies inbound webhooks via HMAC-SHA256 signature in `X-Swarm-Signature`.
-
-### Phase 150: Incident Lifecycle Adapter
-
-**Goal:** Synchronize Swarm escalation state with Providence incident lifecycle including resilience and health reporting.
-**Requirements:** PROVBI-01, PROVBI-02, PROVBI-03
-**Depends on:** Phase 149
-**Status:** Queued
-**Plans:** 0
-**Success Criteria**:
-1. `ProvidenceIncidentAdapter` creates, updates, and resolves Providence incidents on Swarm mode transitions with stored incident IDs linked to `EscalationRecord`.
-2. Failed API calls are retried with backoff and dead-lettered; idempotent create-by-key prevents duplicates.
-3. `/healthz` and `/readyz` report Providence integration health when configured.
-
-### Phase 151: Analyst Feedback Loop
-
-**Goal:** Accept analyst triage actions from Providence and feed them into the detection and evolution pipelines.
-**Requirements:** PROVFB-01, PROVFB-02, PROVFB-03
-**Depends on:** Phase 150
-**Status:** Queued
-**Plans:** 0
-**Success Criteria**:
-1. `POST /v1/providence/feedback` accepts confirm/dismiss/investigate actions with HMAC verification and translates them into substrate operations.
-2. False-positive dismissals forward to KittenAgent as negative fitness signals (with fallback to pending storage).
-3. All feedback actions are persisted as signed audit entries in the spine trail.
-
-### Phase 152: Embeddable Dashboard Widget And Context Tokens
-
-**Goal:** Enable Providence to embed a live Swarm dashboard and deep-link into Swarm surfaces with scoped access.
-**Requirements:** PROVDASH-01, PROVDASH-02, PROVDASH-03
-**Depends on:** Phase 149
-**Status:** Queued
-**Plans:** 0
-**Success Criteria**:
-1. `/v1/demo/widget` serves a minimal self-contained dashboard with configurable `frame-ancestors` CSP.
-2. The widget displays context-scoped agent activity, concentrations, and timeline via SSE filters.
-3. Short-lived Ed25519-signed context tokens with TTL, scope, and anti-replay nonce enable read-only deep links.
 
 ### v1.46 Distributed Governance
 
@@ -367,8 +318,12 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 | 146. Identity Registry And Key Rotation | v1.44 | 1/1 | Complete | 2026-04-09 |
 | 147. Sentinel Infrastructure Telemetry Bridge | v1.44 | 1/1 | Complete | 2026-04-09 |
 | 148. Infrastructure Anomaly Detection And Cross-Signal Correlation | v1.44 | 1/1 | Complete | 2026-04-09 |
+| 149. Providence Contract And Service Auth | v1.45 | 1/1 | Complete | 2026-04-09 |
+| 150. Incident Lifecycle Adapter | v1.45 | 1/1 | Complete | 2026-04-09 |
+| 151. Analyst Feedback Loop | v1.45 | 1/1 | Complete | 2026-04-09 |
+| 152. Embeddable Dashboard Widget And Context Tokens | v1.45 | 1/1 | Complete | 2026-04-09 |
 
 ---
-*Last shipped milestone: v1.44 Agent Identity And Infrastructure Signals on 2026-04-09*
+*Last shipped milestone: v1.45 Providence Native on 2026-04-09*
 *Next step: `$gsd-new-milestone`*
-*Last updated: 2026-04-09 — Phase 148 completed and v1.44 archived*
+*Last updated: 2026-04-09 — v1.45 completed and archived*
