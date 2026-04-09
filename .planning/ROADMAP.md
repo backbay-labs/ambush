@@ -66,7 +66,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Expose a versioned, read-only platform API on the detect server with stable pagination envelopes and scoped API key authentication.
 **Requirements:** API-01, API-04
 **Depends on:** Phase 131
-**Status:** Completed 2026-04-08
+**Status:** Complete 2026-04-08
 **Plans:** 1
 **Success Criteria**:
 1. A `/v2/api/` route group on the detect server serves findings, incidents, and runtime status through a `{ data: [...], cursor: Option<String> }` envelope with cursor pagination and filter support.
@@ -78,7 +78,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Make the new platform API useful for operator and downstream consumers by exposing host posture and live findings streams.
 **Requirements:** API-02, API-03
 **Depends on:** Phase 132
-**Status:** Completed 2026-04-08
+**Status:** Complete 2026-04-08
 **Plans:** 1
 **Success Criteria**:
 1. `GET /v2/api/assets/{host_id}/posture` returns per-`ThreatClass` pheromone concentrations, active investigations, escalation level, and recent findings for a host using substrate-backed host filtering.
@@ -90,7 +90,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Turn the runtime into a repeatable deployment target with a repo-owned Helm chart and operator-friendly config bootstrapping commands.
 **Requirements:** HELM-01a, HELM-01b, HELM-02, CLI-01, CLI-02
 **Depends on:** Phase 132
-**Status:** Completed 2026-04-08
+**Status:** Complete 2026-04-08
 **Plans:** 1
 **Success Criteria**:
 1. A base Helm chart deploys `swarm_detect --serve` with ConfigMap-mounted config, Secret-backed `@secret:` references, configurable resources, and an optional NATS subchart for JetStream mode.
@@ -103,7 +103,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Harden the production-facing runtime by eliminating known panic paths and securing the versioned platform API with bearer auth and TLS.
 **Requirements:** HARD-01, HARD-03a, HARD-03b
 **Depends on:** Phase 133, Phase 134
-**Status:** Completed 2026-04-08
+**Status:** Complete 2026-04-08
 **Plans:** 1
 **Success Criteria**:
 1. Panic-prone `Default::default()` detector profiles in `swarm-whisker` and the remaining `.expect()` demo-proof path in `swarm-runtime` are replaced with safe defaults or fallible `Result`-based construction.
@@ -115,7 +115,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Reduce runtime monolith pressure and improve observability by extracting the evolution and CLI code into dedicated crates and instrumenting the critical path.
 **Requirements:** HARD-02, HARD-04
 **Depends on:** Phase 135
-**Status:** Completed 2026-04-09
+**Status:** Complete 2026-04-09
 **Plans:** 1
 **Success Criteria**:
 1. The evolution subsystem is extracted into a `swarm-evolution` crate and the CLI is extracted into a `swarm-cli` crate, while `swarm-runtime` retains agents, HTTP, ingest, and dispatcher ownership.
@@ -235,7 +235,7 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **Goal:** Close the loop between swarm memory and evolution by scoring candidate strategies under adversarial pressure and preserving full episode history.
 **Requirements:** HELLCAT-02, HELLCAT-03
 **Depends on:** Phase 142, Phase 143
-**Status:** Completed 2026-04-09
+**Status:** Complete 2026-04-09
 **Plans:** 1
 **Success Criteria**:
 1. Kitten fitness evaluates candidates against the latest adversarial corpus snapshot, freezing the corpus version per generation and regenerating between generations.
@@ -314,6 +314,53 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [ ] **Phase 151: Analyst Feedback Loop** - Expose feedback endpoint for confirm/dismiss/investigate actions, forward dismissals to KittenAgent fitness, persist audit trail. (PROVFB-01, PROVFB-02, PROVFB-03)
 - [ ] **Phase 152: Embeddable Dashboard Widget And Context Tokens** - Serve minimal embeddable widget with CSP headers, context-scoped display, and short-lived Ed25519-signed access tokens. (PROVDASH-01, PROVDASH-02, PROVDASH-03)
 
+### Phase 149: Providence Contract And Service Auth
+
+**Goal:** Define the shared webhook payload contract and establish authenticated service-to-service communication between Swarm and Providence.
+**Requirements:** PROVAUTH-01, PROVAUTH-02
+**Depends on:** Phase 148
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. A `SwarmProvidenceWebhookContract` schema maps Swarm's outbound envelope to Providence's `CreateIncidentBody` with `schema_version` for forward compatibility.
+2. Swarm stores a Providence API bearer token via `@secret:providence_api_token` and Providence verifies inbound webhooks via HMAC-SHA256 signature in `X-Swarm-Signature`.
+
+### Phase 150: Incident Lifecycle Adapter
+
+**Goal:** Synchronize Swarm escalation state with Providence incident lifecycle including resilience and health reporting.
+**Requirements:** PROVBI-01, PROVBI-02, PROVBI-03
+**Depends on:** Phase 149
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. `ProvidenceIncidentAdapter` creates, updates, and resolves Providence incidents on Swarm mode transitions with stored incident IDs linked to `EscalationRecord`.
+2. Failed API calls are retried with backoff and dead-lettered; idempotent create-by-key prevents duplicates.
+3. `/healthz` and `/readyz` report Providence integration health when configured.
+
+### Phase 151: Analyst Feedback Loop
+
+**Goal:** Accept analyst triage actions from Providence and feed them into the detection and evolution pipelines.
+**Requirements:** PROVFB-01, PROVFB-02, PROVFB-03
+**Depends on:** Phase 150
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. `POST /v1/providence/feedback` accepts confirm/dismiss/investigate actions with HMAC verification and translates them into substrate operations.
+2. False-positive dismissals forward to KittenAgent as negative fitness signals (with fallback to pending storage).
+3. All feedback actions are persisted as signed audit entries in the spine trail.
+
+### Phase 152: Embeddable Dashboard Widget And Context Tokens
+
+**Goal:** Enable Providence to embed a live Swarm dashboard and deep-link into Swarm surfaces with scoped access.
+**Requirements:** PROVDASH-01, PROVDASH-02, PROVDASH-03
+**Depends on:** Phase 149
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. `/v1/demo/widget` serves a minimal self-contained dashboard with configurable `frame-ancestors` CSP.
+2. The widget displays context-scoped agent activity, concentrations, and timeline via SSE filters.
+3. Short-lived Ed25519-signed context tokens with TTL, scope, and anti-replay nonce enable read-only deep links.
+
 ### v1.46 Distributed Governance
 
 **Goal:** Implement multi-instance BFT consensus, extend TomAgent to distributed agreement, add partition authority with contingency leases, and validate with chaos testing.
@@ -323,6 +370,55 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [ ] **Phase 154: Byzantine Safety And Multi-Instance Governance** - Add signed message validation, equivocation detection, agent exclusion receipts; extend TomAgent to BFT agreement with 1-of-1 fallback; wire registry-backed deposit validation and governance receipts. (CONSENSUS-03, GOVERN-01, GOVERN-02, GOVERN-03)
 - [ ] **Phase 155: Partition Authority And Contingency Leases** - Build partition detector with heartbeat/quorum signals, contingency lease pre-staging and redemption, fail-open detection / fail-closed response, and partition reconciliation on healing. (PARTITION-01, PARTITION-02, PARTITION-03, PARTITION-04)
 - [ ] **Phase 156: Chaos And Resilience Testing** - Inject Byzantine agent behavior, simulate network partitions, and run cascading failure scenarios with deterministic replay. (CHAOS-01, CHAOS-02, CHAOS-03)
+
+### Phase 153: Consensus Protocol Core
+
+**Goal:** Implement the core BFT state machine with round-based progress and deterministic proposer rotation.
+**Requirements:** CONSENSUS-01, CONSENSUS-02
+**Depends on:** Phase 148
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. `swarm-consensus` implements propose-prevote-precommit with round-based progress and view-change on timeout over JetStream.
+2. Committee rotation uses a deterministic seed from the previous commit hash combined with agent identity hashes.
+3. A 3-node in-process test reaches consensus on 10 sequential proposals without Byzantine behavior.
+
+### Phase 154: Byzantine Safety And Multi-Instance Governance
+
+**Goal:** Add Byzantine fault detection and extend TomAgent from single-node veto to distributed BFT agreement.
+**Requirements:** CONSENSUS-03, GOVERN-01, GOVERN-02, GOVERN-03
+**Depends on:** Phase 153
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. Consensus messages are Ed25519-signed; equivocation triggers agent exclusion with signed receipts.
+2. TomAgent routes governance decisions through BFT agreement with degenerate 1-of-1 fallback for single-node mode.
+3. Deposits from unregistered agents are rejected; governance decisions are persisted as signed consensus receipts.
+
+### Phase 155: Partition Authority And Contingency Leases
+
+**Goal:** Enable safe bounded autonomy during network partitions with pre-authorized contingency leases.
+**Requirements:** PARTITION-01, PARTITION-02, PARTITION-03, PARTITION-04
+**Depends on:** Phase 154
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. Partition detector identifies splits via heartbeat timeout and quorum loss with structured state transitions.
+2. Contingency leases pre-authorize bounded actions with blast radius caps and are issued by consensus.
+3. During partition, detection continues fail-open while destructive response is fail-closed unless lease-covered.
+4. Partition reconciliation on healing preserves authorized actions and flags unauthorized ones.
+
+### Phase 156: Chaos And Resilience Testing
+
+**Goal:** Validate consensus safety and partition authority correctness under adversarial conditions.
+**Requirements:** CHAOS-01, CHAOS-02, CHAOS-03
+**Depends on:** Phase 155
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. Byzantine injection harness verifies no unauthorized execution and no equivocation acceptance.
+2. Partition simulation tests verify detection continuity, response blocking, and lease redemption/expiry.
+3. Cascading failure scenarios run end-to-end with deterministic replay against multi-instance configs.
 
 ### v1.47 Calico And Detection Breadth
 
@@ -334,6 +430,52 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [ ] **Phase 159: Fileless Execution Detection** - Add `FilelessExecutionDetector` for reflective DLL injection, encoded PowerShell, and syscall gadget patterns via new `ProcessMemoryAccess` telemetry payload. (FILELESS-01, FILELESS-03, FILELESS-05)
 - [ ] **Phase 160: Behavioral Anomaly Baselines** - Add `BehavioralAnomalyDetector` with per-host process ancestry baselines, configurable decay, and substrate-backed persistence. (FILELESS-02, FILELESS-04, FILELESS-06)
 
+### Phase 157: Calico Agent Core And Deception Playbook
+
+**Goal:** Implement the deception agent with honeypot deployment and canary token placement.
+**Requirements:** CALICO-01, CALICO-02
+**Depends on:** Phase 152
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. `CalicoAgent` implements `SwarmAgent` with repo-owned `DeceptionPlaybook` YAML defining decoy types and placement strategies.
+2. Canary token interactions generate high-fidelity findings with confidence >= 0.95.
+
+### Phase 158: Calico Lifecycle And Evolution Integration
+
+**Goal:** Manage decoy lifecycle and feed deception signals into the evolution and memory systems.
+**Requirements:** CALICO-03, CALICO-04
+**Depends on:** Phase 157
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. Decoy deploy/monitor/rotate/cleanup lifecycle managed by CalicoAgent with Sphinx graph registration.
+2. Deception interactions boost associated detection strategy fitness in KittenAgent evolution.
+
+### Phase 159: Fileless Execution Detection
+
+**Goal:** Add detection for memory-based attack techniques that bypass file-system indicators.
+**Requirements:** FILELESS-01, FILELESS-03, FILELESS-05
+**Depends on:** Phase 152
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. `FilelessExecutionDetector` identifies reflective DLL injection, encoded PowerShell, and syscall gadgets.
+2. `TelemetryPayload::ProcessMemoryAccess` variant carries source/target process, allocation type, and protection flags.
+3. Findings use `ThreatClass::DefenseEvasion` or `ThreatClass::PrivilegeEscalation` as appropriate.
+
+### Phase 160: Behavioral Anomaly Baselines
+
+**Goal:** Detect anomalous process behavior by maintaining per-host baselines that adapt over time.
+**Requirements:** FILELESS-02, FILELESS-04, FILELESS-06
+**Depends on:** Phase 159
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. `BehavioralAnomalyDetector` maintains per-host process ancestry baselines with configurable decay.
+2. Baselines persist across restarts via durable substrate.
+3. Both detectors ship with configurable profiles and integration tests covering evasion scenarios.
+
 ### v1.48 Adversarial Robustness
 
 **Goal:** Validate detection coverage against curated evasion techniques and add optional Z3 formal verification for evolved strategies.
@@ -342,6 +484,40 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [ ] **Phase 161: Evasion Test Corpus And Coverage Metrics** - Build curated evasion corpus (10+ payloads per ThreatClass), coverage metrics module, and evasion technique catalog. (EVASION-01, EVASION-02, EVASION-04)
 - [ ] **Phase 162: KittenAgent Evasion Mutation Cycle** - Wire evasion corpus gaps into KittenAgent mutation loop and run end-to-end evasion-to-canary integration tests. (EVASION-03, EVASION-05)
 - [ ] **Phase 163: Z3 Formal Verification** - Implement Z3 SMT verification tier behind `z3` feature flag with strategy-to-assertion compilation, counterexample generation, configurable timeout, and signed proof artifacts. (Z3-01, Z3-02)
+
+### Phase 161: Evasion Test Corpus And Coverage Metrics
+
+**Goal:** Build a curated evasion corpus and measure per-detector catch rates.
+**Requirements:** EVASION-01, EVASION-02, EVASION-04
+**Depends on:** Phase 160
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. Evasion corpus provides 10+ curated payloads per ThreatClass representing real-world evasion techniques.
+2. Coverage metrics module computes per-detector catch rates exposed via `/metrics`.
+3. Evasion catalog documents intentionally uncovered ATT&CK techniques with rationale.
+
+### Phase 162: KittenAgent Evasion Mutation Cycle
+
+**Goal:** Close the loop between evasion gaps and automated strategy improvement.
+**Requirements:** EVASION-03, EVASION-05
+**Depends on:** Phase 161
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. KittenAgent proposes threshold adjustments in response to evasion corpus gaps.
+2. Integration tests execute the full evasion → gap identification → mutation → canary validation cycle.
+
+### Phase 163: Z3 Formal Verification
+
+**Goal:** Add optional Z3 SMT verification for strategy invariants that cannot be checked by enumeration.
+**Requirements:** Z3-01, Z3-02
+**Depends on:** Phase 161
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. Z3 SMT tier compiles YAML invariants into Z3 assertions and proves universal properties behind `z3` feature flag.
+2. Verification includes counterexamples, configurable timeout (30s default), fail-closed semantics, and signed proof artifacts.
 
 ## Progress
 
