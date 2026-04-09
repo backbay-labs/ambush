@@ -1,12 +1,12 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.44
-milestone_name: Agent Identity And Infrastructure Signals
-current_phase: 145
-current_phase_name: Agent Key Persistence And Identity Derivation
+milestone: v1.45
+milestone_name: Providence Native
+current_phase: 149
+current_phase_name: Providence Contract And Service Auth
 status: phase_defined
-last_updated: "2026-04-09T12:00:00Z"
-last_activity: 2026-04-09 — milestones v1.44-v1.48 restructured and all phases defined
+last_updated: "2026-04-09T16:00:00Z"
+last_activity: 2026-04-09 — v1.45 activated after v1.44 completion
 progress:
   total_phases: 4
   completed_phases: 0
@@ -22,15 +22,15 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-09)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** v1.44 phases defined; ready for `/gsd:discuss-phase` or `/gsd:plan-phase` on Phase 145
+**Current focus:** v1.45 Providence Native — phases 149-152 defined, ready for planning
 
 ## Current Position
 
-Phase: 145 Agent Key Persistence And Identity Derivation
-Current Phase: 145
-Current Phase Name: Agent Key Persistence And Identity Derivation
-Status: Phases 145-148 defined for v1.44; planning not yet started
-Last activity: 2026-04-09 — milestones v1.44-v1.48 restructured with 19 phases across 5 milestones
+Phase: 149 Providence Contract And Service Auth
+Current Phase: 149
+Current Phase Name: Providence Contract And Service Auth
+Status: Phases 149-152 defined for v1.45; planning not yet started
+Last activity: 2026-04-09 — v1.45 activated after v1.44 shipped
 Total Phases: 4
 Total Plans in Phase: 0
 
@@ -76,11 +76,15 @@ Progress: [..........] 0%
 - Phase 142 is complete: Sphinx now answers signed memory-query pheromones with Q-value-style retrieval results, Kitten can enrich proposal fitness from those answers, and replay-only fallback remains bounded when memory is unavailable or sparse.
 - Phase 143 is complete: Sphinx now enforces repo-owned knowledge retention with stale bundle-file cleanup, and the runtime owns a deterministic `RedSwarmAdapter` plus `MockRedSwarm` seam backed directly by `scenario-suites/` manifests.
 - Phase 144 is complete: Kitten now freezes one adversarial corpus snapshot per generation, applies red-side pressure after replay and memory fitness, persists durable `EvolutionEpisode` history, and surfaces corpus plus best-genome status through the existing evolution status lane.
+- Phase 145 is complete: runtime agents now persist one Ed25519 seed per slot under repo-owned `identity.agent_key_dir`, serve mode reuses those keys across restart, runtime-facing serve identities derive as `swarm:ed25519:<hex>`, and signed deposits now bind explicit `agent_identity` plus `agent_role` metadata into the canonical signature payload.
+- Phase 146 is complete: serve mode now admits persisted identities through a durable registry, governance actions fail closed for unadmitted agent IDs, and `swarmctl identity rotate` persists continuity proofs plus retired-key history for historical verification.
+- Phase 147 is complete: the shared telemetry schema now includes infrastructure health, thermal anomaly, and resource-exhaustion events, the repo owns Sentinel bridge config, and `BridgeRuntimeRegistry` can run Sentinel through the same health and metrics path as other bridges.
+- Phase 148 is complete: `InfrastructureAnomalyDetector` now turns the Sentinel infrastructure lane into live execution, impact, and defense-evasion findings, and infrastructure plus behavioral execution signals can converge through the existing distinct-source escalation path.
 
 ## Issues
 
-- None active. v1.44 phases defined; ready for planning.
+- None active. v1.45 phases defined; ready for planning.
 
 ## Next Command
 
-`/gsd:plan-phase 145`
+`/gsd:plan-phase 149`

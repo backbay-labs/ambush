@@ -85,67 +85,17 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 2. A `FileEvolutionEpisodeStore` persists episode IDs, generation numbers, corpus versions, genome hashes, per-threat-class coverage, and red/blue fitness vectors.
 3. Red-blue episode logging integrates with the evolution loop introduced in v1.42 without bypassing the existing safety and canary controls.
 
+<details>
+<summary>Shipped: v1.44 Agent Identity And Infrastructure Signals (Phases 145-148)</summary>
+
+- [x] **Phase 145: Agent Key Persistence And Identity Derivation** - Durable Ed25519 keypair persistence and `swarm:ed25519:<hex>` identity derivation. (completed 2026-04-09)
+- [x] **Phase 146: Identity Registry And Key Rotation** - Registry-backed identity admission and continuity-proof key rotation. (completed 2026-04-09)
+- [x] **Phase 147: Sentinel Infrastructure Telemetry Bridge** - `swarm-ingest-sentinel` crate with health, thermal, and resource exhaustion payloads. (completed 2026-04-09)
+- [x] **Phase 148: Infrastructure Anomaly Detection And Cross-Signal Correlation** - `InfrastructureAnomalyDetector` with cross-signal escalation. (completed 2026-04-09)
+
+</details>
+
 ## Active Milestone
-
-### v1.44 Agent Identity And Infrastructure Signals
-
-**Goal:** Ship durable agent identity lifecycle (prerequisite for all future governance work) plus Sentinel-derived infrastructure telemetry bridge for a new detection dimension.
-**Executable phases:** 145-148
-
-- [ ] **Phase 145: Agent Key Persistence And Identity Derivation** - Persist Ed25519 keypairs to configurable directory, derive stable identity strings, load on restart. (IDENTITY-01)
-- [ ] **Phase 146: Identity Registry And Key Rotation** - Maintain known-agent registry with admission verification, implement key rotation with continuity proofs and old-key retention. (IDENTITY-02, IDENTITY-03)
-- [ ] **Phase 147: Sentinel Infrastructure Telemetry Bridge** - Implement `swarm-ingest-sentinel` crate with `TelemetryBridge` trait for infrastructure health, thermal anomaly, and resource exhaustion payloads. (INFRA-01, INFRA-04)
-- [ ] **Phase 148: Infrastructure Anomaly Detection And Cross-Signal Correlation** - Add `InfrastructureAnomalyDetector` for cryptomining, resource exhaustion, and thermal threats; wire cross-signal correlation with behavioral detectors. (INFRA-02, INFRA-03)
-
-### Phase 145: Agent Key Persistence And Identity Derivation
-
-**Goal:** Give every agent a durable Ed25519 identity that survives restarts and can be verified across the swarm.
-**Requirements:** IDENTITY-01
-**Depends on:** Phase 144
-**Status:** Queued
-**Plans:** 0
-**Success Criteria**:
-1. Agent keypairs are generated at first startup and persisted to `agent_key_dir` as PEM or raw-bytes files.
-2. On subsequent starts, the agent loads existing keys instead of generating new ones.
-3. Agent identity is derived as `swarm:ed25519:<hex-encoded-public-key>` and used consistently in deposits, receipts, and audit entries.
-
-### Phase 146: Identity Registry And Key Rotation
-
-**Goal:** Track which agent identities are legitimate and support safe key rotation without breaking historical verification.
-**Requirements:** IDENTITY-02, IDENTITY-03
-**Depends on:** Phase 145
-**Status:** Queued
-**Plans:** 0
-**Success Criteria**:
-1. An `AgentIdentityRegistry` admits agents after identity verification on startup; unknown identities are logged and rejected from governance participation.
-2. Key rotation generates a new keypair, the old key signs a handoff message containing the new public key, and the continuity proof is persisted.
-3. Old keys are retained with `active_until` timestamps for verification of historical signed artifacts.
-
-### Phase 147: Sentinel Infrastructure Telemetry Bridge
-
-**Goal:** Add a new telemetry source that ingests infrastructure-level signals from Sentinel for threat detection.
-**Requirements:** INFRA-01, INFRA-04
-**Depends on:** Phase 144
-**Status:** Queued
-**Plans:** 0
-**Success Criteria**:
-1. A `swarm-ingest-sentinel` crate implements `TelemetryBridge` and maps `InfrastructureHealth`, `ThermalAnomaly`, and `ResourceExhaustion` payloads into new `TelemetryPayload` variants.
-2. `SwarmConfig.runtime.telemetry_sources` accepts `"sentinel"` as a named bridge with event-count, error-count, and lag-seconds metrics on `/healthz` and `/metrics`.
-3. The bridge follows the same health reporting and lifecycle patterns as existing Tetragon and JSON bridges.
-
-### Phase 148: Infrastructure Anomaly Detection And Cross-Signal Correlation
-
-**Goal:** Detect infrastructure-signal threats and boost escalation confidence when infrastructure and behavioral signals converge.
-**Requirements:** INFRA-02, INFRA-03
-**Depends on:** Phase 147
-**Status:** Queued
-**Plans:** 0
-**Success Criteria**:
-1. `InfrastructureAnomalyDetector` detects cryptominer activity (sustained CPU/thermal), resource exhaustion (fork bomb, disk wiper), and memory pressure correlated with fileless malware.
-2. Infrastructure findings flow through the existing pheromone deposit, escalation, and notification pipelines.
-3. Cross-signal correlation between infrastructure anomalies and behavioral detections boosts escalation confidence via `distinct_sources` diversity.
-
-## Queued Milestones With Defined Phases
 
 ### v1.45 Providence Native
 
@@ -156,6 +106,8 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [ ] **Phase 150: Incident Lifecycle Adapter** - Build outbound incident create/update/resolve adapter with retry, dead-letter, idempotent create-by-key, and health reporting. (PROVBI-01, PROVBI-02, PROVBI-03)
 - [ ] **Phase 151: Analyst Feedback Loop** - Expose feedback endpoint for confirm/dismiss/investigate actions, forward dismissals to KittenAgent fitness, persist audit trail. (PROVFB-01, PROVFB-02, PROVFB-03)
 - [ ] **Phase 152: Embeddable Dashboard Widget And Context Tokens** - Serve minimal embeddable widget with CSP headers, context-scoped display, and short-lived Ed25519-signed access tokens. (PROVDASH-01, PROVDASH-02, PROVDASH-03)
+
+## Queued Milestones With Defined Phases
 
 ### Phase 149: Providence Contract And Service Auth
 
@@ -411,8 +363,12 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 | 142. Stigmergic Memory Queries And Fitness Retrieval | v1.43 | 1/1 | Complete | 2026-04-09 |
 | 143. Knowledge Retention And Adversarial Corpus Adapter | v1.43 | 1/1 | Complete | 2026-04-09 |
 | 144. Red-Blue Pressure And Episode Logging | v1.43 | 1/1 | Complete | 2026-04-09 |
+| 145. Agent Key Persistence And Identity Derivation | v1.44 | 1/1 | Complete | 2026-04-09 |
+| 146. Identity Registry And Key Rotation | v1.44 | 1/1 | Complete | 2026-04-09 |
+| 147. Sentinel Infrastructure Telemetry Bridge | v1.44 | 1/1 | Complete | 2026-04-09 |
+| 148. Infrastructure Anomaly Detection And Cross-Signal Correlation | v1.44 | 1/1 | Complete | 2026-04-09 |
 
 ---
-*Last shipped milestone: v1.43 Swarm Memory And Adversarial Pressure on 2026-04-09*
-*Next step: `$gsd-new-milestone` to activate v1.44 Agent Identity And Infrastructure Signals*
-*Last updated: 2026-04-09 — milestones restructured after post-v1.43 review (hybrid sequence: identity+infra → Providence → governance → Calico → evasion)*
+*Last shipped milestone: v1.44 Agent Identity And Infrastructure Signals on 2026-04-09*
+*Next step: `$gsd-new-milestone`*
+*Last updated: 2026-04-09 — Phase 148 completed and v1.44 archived*
