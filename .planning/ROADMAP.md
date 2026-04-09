@@ -242,27 +242,106 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 2. A `FileEvolutionEpisodeStore` persists episode IDs, generation numbers, corpus versions, genome hashes, per-threat-class coverage, and red/blue fitness vectors.
 3. Red-blue episode logging integrates with the evolution loop introduced in v1.42 without bypassing the existing safety and canary controls.
 
-## Queued Milestones
+## Active Milestone
 
-### Tier 5: Agent Identity And Infrastructure Signals
+### v1.44 Agent Identity And Infrastructure Signals
 
-- `v1.44 Agent Identity And Infrastructure Signals` -- Persistent agent keys with rotation and identity registry, plus Sentinel-derived infrastructure telemetry bridge with anomaly detection for cryptomining, resource exhaustion, and thermal threats (7 requirements: IDENTITY-01-03, INFRA-01-04)
+**Goal:** Ship durable agent identity lifecycle (prerequisite for all future governance work) plus Sentinel-derived infrastructure telemetry bridge for a new detection dimension.
+**Executable phases:** 145-148
 
-### Tier 6: Deep Providence Integration
+- [ ] **Phase 145: Agent Key Persistence And Identity Derivation** - Persist Ed25519 keypairs to configurable directory, derive stable identity strings, load on restart. (IDENTITY-01)
+- [ ] **Phase 146: Identity Registry And Key Rotation** - Maintain known-agent registry with admission verification, implement key rotation with continuity proofs and old-key retention. (IDENTITY-02, IDENTITY-03)
+- [ ] **Phase 147: Sentinel Infrastructure Telemetry Bridge** - Implement `swarm-ingest-sentinel` crate with `TelemetryBridge` trait for infrastructure health, thermal anomaly, and resource exhaustion payloads. (INFRA-01, INFRA-04)
+- [ ] **Phase 148: Infrastructure Anomaly Detection And Cross-Signal Correlation** - Add `InfrastructureAnomalyDetector` for cryptomining, resource exhaustion, and thermal threats; wire cross-signal correlation with behavioral detectors. (INFRA-02, INFRA-03)
 
-- `v1.45 Providence Native` -- Shared webhook contract, service-to-service auth, outbound incident lifecycle adapter, analyst feedback loop with KittenAgent fitness signals, embeddable widget with context tokens (11 requirements: PROVAUTH-01-02, PROVBI-01-03, PROVFB-01-03, PROVDASH-01-03)
+### Phase 145: Agent Key Persistence And Identity Derivation
 
-### Tier 7: Distributed Governance
+**Goal:** Give every agent a durable Ed25519 identity that survives restarts and can be verified across the swarm.
+**Requirements:** IDENTITY-01
+**Depends on:** Phase 144
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. Agent keypairs are generated at first startup and persisted to `agent_key_dir` as PEM or raw-bytes files.
+2. On subsequent starts, the agent loads existing keys instead of generating new ones.
+3. Agent identity is derived as `swarm:ed25519:<hex-encoded-public-key>` and used consistently in deposits, receipts, and audit entries.
 
-- `v1.46 Distributed Governance` -- Tendermint BFT consensus over JetStream with identity-backed signing, multi-instance Tom governance with degenerate single-node fallback, partition authority with contingency leases, chaos/failure injection testing (13 requirements: CONSENSUS-01-03, GOVERN-01-03, PARTITION-01-04, CHAOS-01-03)
+### Phase 146: Identity Registry And Key Rotation
 
-### Tier 8: Calico And Detection Breadth
+**Goal:** Track which agent identities are legitimate and support safe key rotation without breaking historical verification.
+**Requirements:** IDENTITY-02, IDENTITY-03
+**Depends on:** Phase 145
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. An `AgentIdentityRegistry` admits agents after identity verification on startup; unknown identities are logged and rejected from governance participation.
+2. Key rotation generates a new keypair, the old key signs a handoff message containing the new public key, and the continuity proof is persisted.
+3. Old keys are retained with `active_until` timestamps for verification of historical signed artifacts.
 
-- `v1.47 Calico And Detection Breadth` -- CalicoAgent deception with honeypot orchestration and canary tokens, fileless execution detection, behavioral anomaly baselines (10 requirements: CALICO-01-04, FILELESS-01-06)
+### Phase 147: Sentinel Infrastructure Telemetry Bridge
 
-### Tier 9: Adversarial Robustness
+**Goal:** Add a new telemetry source that ingests infrastructure-level signals from Sentinel for threat detection.
+**Requirements:** INFRA-01, INFRA-04
+**Depends on:** Phase 144
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. A `swarm-ingest-sentinel` crate implements `TelemetryBridge` and maps `InfrastructureHealth`, `ThermalAnomaly`, and `ResourceExhaustion` payloads into new `TelemetryPayload` variants.
+2. `SwarmConfig.runtime.telemetry_sources` accepts `"sentinel"` as a named bridge with event-count, error-count, and lag-seconds metrics on `/healthz` and `/metrics`.
+3. The bridge follows the same health reporting and lifecycle patterns as existing Tetragon and JSON bridges.
 
-- `v1.48 Adversarial Robustness` -- Evasion test corpus, coverage metrics, KittenAgent-driven mutation, optional Z3 formal verification behind feature flag (7 requirements: EVASION-01-05, Z3-01-02)
+### Phase 148: Infrastructure Anomaly Detection And Cross-Signal Correlation
+
+**Goal:** Detect infrastructure-signal threats and boost escalation confidence when infrastructure and behavioral signals converge.
+**Requirements:** INFRA-02, INFRA-03
+**Depends on:** Phase 147
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. `InfrastructureAnomalyDetector` detects cryptominer activity (sustained CPU/thermal), resource exhaustion (fork bomb, disk wiper), and memory pressure correlated with fileless malware.
+2. Infrastructure findings flow through the existing pheromone deposit, escalation, and notification pipelines.
+3. Cross-signal correlation between infrastructure anomalies and behavioral detections boosts escalation confidence via `distinct_sources` diversity.
+
+## Queued Milestones With Defined Phases
+
+### v1.45 Providence Native
+
+**Goal:** Complete the Providence ecosystem integration with bidirectional incident lifecycle, analyst feedback, and embeddable dashboard widget.
+**Executable phases:** 149-152
+
+- [ ] **Phase 149: Providence Contract And Service Auth** - Define shared webhook schema, implement HMAC signature verification, and configure service-to-service bearer token. (PROVAUTH-01, PROVAUTH-02)
+- [ ] **Phase 150: Incident Lifecycle Adapter** - Build outbound incident create/update/resolve adapter with retry, dead-letter, idempotent create-by-key, and health reporting. (PROVBI-01, PROVBI-02, PROVBI-03)
+- [ ] **Phase 151: Analyst Feedback Loop** - Expose feedback endpoint for confirm/dismiss/investigate actions, forward dismissals to KittenAgent fitness, persist audit trail. (PROVFB-01, PROVFB-02, PROVFB-03)
+- [ ] **Phase 152: Embeddable Dashboard Widget And Context Tokens** - Serve minimal embeddable widget with CSP headers, context-scoped display, and short-lived Ed25519-signed access tokens. (PROVDASH-01, PROVDASH-02, PROVDASH-03)
+
+### v1.46 Distributed Governance
+
+**Goal:** Implement multi-instance BFT consensus, extend TomAgent to distributed agreement, add partition authority with contingency leases, and validate with chaos testing.
+**Executable phases:** 153-156
+
+- [ ] **Phase 153: Consensus Protocol Core** - Implement Tendermint-style propose-prevote-precommit state machine with deterministic committee rotation over JetStream. (CONSENSUS-01, CONSENSUS-02)
+- [ ] **Phase 154: Byzantine Safety And Multi-Instance Governance** - Add signed message validation, equivocation detection, agent exclusion receipts; extend TomAgent to BFT agreement with 1-of-1 fallback; wire registry-backed deposit validation and governance receipts. (CONSENSUS-03, GOVERN-01, GOVERN-02, GOVERN-03)
+- [ ] **Phase 155: Partition Authority And Contingency Leases** - Build partition detector with heartbeat/quorum signals, contingency lease pre-staging and redemption, fail-open detection / fail-closed response, and partition reconciliation on healing. (PARTITION-01, PARTITION-02, PARTITION-03, PARTITION-04)
+- [ ] **Phase 156: Chaos And Resilience Testing** - Inject Byzantine agent behavior, simulate network partitions, and run cascading failure scenarios with deterministic replay. (CHAOS-01, CHAOS-02, CHAOS-03)
+
+### v1.47 Calico And Detection Breadth
+
+**Goal:** Complete the 8th agent archetype (deception) and expand detection coverage to fileless execution and behavioral anomalies.
+**Executable phases:** 157-160
+
+- [ ] **Phase 157: Calico Agent Core And Deception Playbook** - Implement CalicoAgent with honeypot service deployment and canary token placement driven by repo-owned YAML playbooks. (CALICO-01, CALICO-02)
+- [ ] **Phase 158: Calico Lifecycle And Evolution Integration** - Manage decoy deploy/monitor/rotate/cleanup lifecycle, register decoys in Sphinx knowledge graph, and feed deception interactions into KittenAgent fitness. (CALICO-03, CALICO-04)
+- [ ] **Phase 159: Fileless Execution Detection** - Add `FilelessExecutionDetector` for reflective DLL injection, encoded PowerShell, and syscall gadget patterns via new `ProcessMemoryAccess` telemetry payload. (FILELESS-01, FILELESS-03, FILELESS-05)
+- [ ] **Phase 160: Behavioral Anomaly Baselines** - Add `BehavioralAnomalyDetector` with per-host process ancestry baselines, configurable decay, and substrate-backed persistence. (FILELESS-02, FILELESS-04, FILELESS-06)
+
+### v1.48 Adversarial Robustness
+
+**Goal:** Validate detection coverage against curated evasion techniques and add optional Z3 formal verification for evolved strategies.
+**Executable phases:** 161-163
+
+- [ ] **Phase 161: Evasion Test Corpus And Coverage Metrics** - Build curated evasion corpus (10+ payloads per ThreatClass), coverage metrics module, and evasion technique catalog. (EVASION-01, EVASION-02, EVASION-04)
+- [ ] **Phase 162: KittenAgent Evasion Mutation Cycle** - Wire evasion corpus gaps into KittenAgent mutation loop and run end-to-end evasion-to-canary integration tests. (EVASION-03, EVASION-05)
+- [ ] **Phase 163: Z3 Formal Verification** - Implement Z3 SMT verification tier behind `z3` feature flag with strategy-to-assertion compilation, counterexample generation, configurable timeout, and signed proof artifacts. (Z3-01, Z3-02)
 
 ## Progress
 
