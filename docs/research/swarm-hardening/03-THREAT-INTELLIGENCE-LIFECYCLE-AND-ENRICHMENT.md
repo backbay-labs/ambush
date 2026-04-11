@@ -1,7 +1,7 @@
 ---
 title: "03 -- Threat Intelligence Lifecycle and Enrichment"
 series: Swarm Hardening (3 of 8)
-version: "0.1"
+version: "0.3"
 date: 2026-04-08
 status: Draft
 authors: Swarm Team Six Research
@@ -12,7 +12,7 @@ authors: Swarm Team Six Research
 | | |
 |---|---|
 | **Series** | Swarm Hardening (Document 03 of 08) |
-| **Version** | 0.1 |
+| **Version** | 0.3 |
 | **Date** | 2026-04-08 |
 | **Status** | Draft |
 | **Primary Crate** | `crates/swarm-pheromone` -- substrate-resident threat intel cache |
@@ -36,8 +36,10 @@ authors: Swarm Team Six Research
 11. [Privacy and Legal Considerations](#11-privacy-and-legal-considerations)
 12. [Proposed Architecture](#12-proposed-architecture)
 13. [Open Questions and Future Work](#13-open-questions-and-future-work)
-14. [Cross-References](#14-cross-references)
-15. [References](#15-references)
+14. [Enrichment Quality Metrics](#14-enrichment-quality-metrics)
+15. [Deployment Profiles](#15-deployment-profiles)
+16. [Cross-References](#16-cross-references)
+17. [References](#17-references)
 
 ---
 
@@ -502,6 +504,101 @@ Rate limiting must be enforced per-feed to respect API quotas. The polling
 scheduler should use exponential backoff on failure and circuit-breaker
 patterns to avoid hammering a degraded feed.
 
+### 5.5 Feed Reliability and Degraded-Mode Operation
+
+Feed infrastructure is inherently unreliable. TAXII servers go down, rate
+limits are exceeded, TLS certificates expire, and API endpoints are
+decommissioned without notice. The system must define explicit behavior for
+every failure scenario.
+
+**Single-feed failure with cache retention.** When one feed becomes
+unreachable, the system continues operating on cached IOCs from that feed.
+The decay model (Section 4.3) naturally handles staleness: IOCs from the
+failed feed decay toward zero confidence at their type-specific half-life
+rate. For a C2 IP feed with a 4-day half-life, detection quality degrades
+gradually over days, not instantly. The operator impact is a slow increase
+in false negatives for that feed's coverage area, not a cliff.
+
+**All-feeds-down (cache-only operation).** When all feeds are unreachable,
+the system operates entirely on cached IOCs. The critical question is
+whether the decay model creates a simultaneous expiration cliff. It does
+not, because entries arrive at different times with different TTLs. However,
+after approximately `2 * max_half_life` without any feed refresh, the
+effective confidence of the oldest entries will be negligible (below 25% of
+original). The system should emit a `feed_all_stale` health event when no
+feed has been successfully polled within `max(feed_half_lives) / 2`,
+alerting operators that detection quality is degrading.
+
+**Feed poisoning (false IOCs injected).** A compromised feed may inject
+false positives (benign IPs flagged as malicious) or false negatives
+(known-bad IOCs removed). Mitigations:
+
+- **Cross-feed consistency checks:** Flag IOCs reported by only one
+  low-reputation feed. Require `min_independent_sources >= 2` before
+  applying full confidence weighting for feeds below reputation 0.5.
+- **Velocity limits:** Cap the number of new IOCs accepted per feed per
+  poll interval (e.g., 10,000). A sudden spike in IOC volume from a
+  single feed should trigger a circuit breaker and operator alert.
+- **Retroactive audit:** When a feed is identified as compromised, the
+  system must be able to purge all IOCs sourced exclusively from that
+  feed and re-evaluate recent findings that were enriched by those IOCs.
+
+**Circuit breaker implementation.** Each feed client should implement a
+three-state circuit breaker (closed/open/half-open):
+
+| State | Behavior | Transition |
+|-------|----------|------------|
+| Closed | Normal polling at configured interval | Open after N consecutive failures (default: 5) |
+| Open | No polling; emit `feed_circuit_open` event | Half-open after cooldown (default: 5 minutes) |
+| Half-open | Single probe request | Closed on success; open on failure |
+
+The `governor` crate's rate-limiter combined with a manual state machine
+provides this pattern without external dependencies.
+
+**Feed freshness monitoring.** The system should expose per-feed health
+metrics:
+
+- `feed_last_success_timestamp` -- wall-clock time of last successful poll
+- `feed_staleness_seconds` -- `now - feed_last_success_timestamp`
+- `feed_consecutive_failures` -- count of sequential poll failures
+- `feed_circuit_state` -- current circuit breaker state
+
+Alert thresholds: warn when `feed_staleness_seconds > 2 * poll_interval`,
+critical when `feed_staleness_seconds > max_half_life / 2`.
+
+### 5.6 Cache Warmup and Cold-Start Behavior
+
+On first startup with an empty threat-intel cache, the system has zero
+enrichment capability. The cold-start protocol:
+
+1. **Feed bootstrap phase.** The FeedScheduler performs an initial full
+   pull from all configured feeds before the runtime begins accepting
+   telemetry. For TAXII feeds, this means paginating from `added_after=0`
+   until all available indicators are ingested. Typical TAXII servers
+   paginate at 1000-5000 objects per page with ~200ms per page. A feed
+   with 50,000 indicators requires ~10-50 pages, taking 2-10 seconds.
+
+2. **Parallel feed ingestion.** Multiple feeds should be bootstrapped
+   concurrently. With 5 feeds bootstrapping in parallel, total warmup
+   time is bounded by the slowest feed, typically 5-15 seconds.
+
+3. **Readiness gating.** The runtime should expose a readiness probe that
+   reports `not_ready` until at least one feed has been successfully
+   ingested. In Kubernetes deployments, this prevents the pod from
+   receiving traffic before enrichment is available. Configuration:
+   `min_feeds_for_ready: usize` (default: 1).
+
+4. **Graceful degradation during warmup.** If the operator configures
+   `allow_unenriched_detection: true` (default), the system accepts
+   events during warmup at reduced enrichment quality. Events processed
+   before the cache is populated receive no threat-intel enrichment but
+   are still evaluated by detectors. Batch enrichment (Mode 2, Section
+   6.2) retroactively enriches these early events once the cache is warm.
+
+Estimated warmup time for the recommended feed portfolio (Section 5.3)
+is 10-30 seconds from cold start, assuming typical TAXII server response
+times and 5 concurrent feed connections.
+
 ---
 
 ## 6. Enrichment Pipeline Architecture
@@ -567,6 +664,39 @@ mode introduces latency and external dependencies, so it must be:
   enrichment; external results arrive asynchronously and trigger
   supplementary deposits)
 
+**Supplementary deposit lifecycle.** External enrichment results must not
+block the detection pipeline. The concrete mechanism:
+
+1. The detection pipeline completes normally with L1/L2 enrichment only.
+   Findings are deposited as signed pheromones immediately.
+2. For cache-miss indicators, the pipeline enqueues an
+   `ExternalEnrichmentRequest { indicator_type, value, original_finding_id,
+   event_id }` to a bounded async channel (capacity: 1,000).
+3. A dedicated `ExternalEnrichmentWorker` task drains this channel,
+   queries external services (VirusTotal, AbuseIPDB) with rate limiting,
+   and on a hit:
+   a. Stores the result in L2 (substrate) via `store_threat_intel_entry`
+   b. Creates a **supplementary deposit** -- a new `PheromoneDeposit` with
+      `agent_id = "enrichment-external:{service_name}"`, carrying the
+      external enrichment result as evidence. This deposit is signed with
+      a dedicated "enrichment agent" signing key provisioned at startup.
+   c. The supplementary deposit references `original_finding_id` in its
+      `indicator` JSON, enabling correlation with the original detection.
+4. The original finding's confidence is **not retroactively modified**
+   (that would invalidate its signature). Instead, the supplementary
+   deposit adds to the threat-class concentration, indirectly increasing
+   the swarm's aggregate signal for that threat class.
+
+This design means external enrichment latency (10-500ms) never appears in
+the critical detection path. The trade-off is that external enrichment
+contributes to concentration-based escalation (which may trigger alerts)
+rather than directly boosting individual finding confidence.
+
+**Impact on substrate write pressure.** At 10K events/sec with a 5% L2
+cache miss rate and 20% external hit rate, external enrichment produces
+~100 supplementary deposits/sec -- negligible relative to the 3,000
+deposits/sec from direct detection (Section 3.2 of Doc 04)
+
 ### 6.3 Caching Strategy
 
 The threat-intel cache should be layered:
@@ -602,6 +732,67 @@ types, and per-polarity cache TTLs (positive hits cached longer than negative
 misses). A token-bucket rate limiter (e.g., `governor` crate) is instantiated
 per service. When the bucket is empty, queries are queued rather than dropped,
 with a maximum queue depth to prevent unbounded memory growth.
+
+### 6.5 Enrichment Latency Impact Analysis
+
+The current enrichment implementation (Section 6.1) operates within Doc 04's
+latency budget of 2-10us per event, because it performs at most 0-3
+`BTreeMap` lookups against a small cache. The enhancements proposed in this
+document significantly increase enrichment cost. This section models the
+impact explicitly.
+
+**Current state (2 event types, exact-match only):**
+
+| Component | Cost | Frequency |
+|-----------|------|-----------|
+| Read-lock acquisition on `threat_intel_entries` | ~0.5us | Per query |
+| `BTreeMap::get` (exact key) | ~0.3us | Per query |
+| `.cloned()` on `ThreatIntelEntry` | ~0.2us | Per hit |
+| Candidate query generation | ~0.5us | Per event |
+| **Total per event (0-3 queries)** | **~2-4us** | |
+
+**Proposed state (7 event types, CIDR + parent-domain + noisy-OR):**
+
+| Component | Cost | Frequency |
+|-----------|------|-----------|
+| Read-lock acquisition | ~0.5us | Per query |
+| `BTreeMap::get` (exact key) | ~0.3us | Per exact query |
+| CIDR trie traversal (Patricia trie, 32-bit depth) | ~2-5us | Per IP query |
+| Parent-domain expansion (avg 2.5 labels) | ~1.5us | Per DNS query |
+| Noisy-OR scoring iteration | ~0.5us per source | Per match |
+| `.cloned()` on expanded `ThreatIntelEntry` (with `Vec<ThreatIntelSource>`) | ~0.5us | Per hit |
+| Candidate query generation (URL/hash extraction from command lines) | ~2-5us | Per ProcessStart event |
+| **Total per event (3-10 queries, with 1-3 matches)** | **~15-50us** | |
+
+The enriched enrichment path pushes the per-event cost from 2-10us to
+15-50us -- a 5-10x increase. This remains within Doc 04's 10ms p99 SLO
+with substantial headroom, but it is no longer negligible relative to
+detection (10-50us) and must be accounted for in the latency budget.
+
+**Tiered enrichment strategy.** To bound worst-case enrichment latency,
+the pipeline should implement two enrichment tiers:
+
+- **Fast-path (inline, <10us target):** Exact-match lookups in L1/L2
+  for the primary indicator extracted from the event (destination IP for
+  NetworkConnect, query domain for DNS). This is the current model
+  applied to the dominant indicator.
+- **Supplementary (async, unbounded):** CIDR range matching, parent-domain
+  expansion beyond the registrable domain, command-line URL/hash extraction,
+  and noisy-OR multi-source scoring. These run in a post-deposit enrichment
+  task that produces supplementary deposits (same mechanism as Mode 3
+  external enrichment, Section 6.2).
+
+This tiered approach preserves the current 2-10us inline enrichment budget
+while still achieving comprehensive enrichment. The configuration knob
+`enrichment_inline_max_queries: usize` (default: 3) caps the number of
+substrate queries in the fast path.
+
+**Batch query optimization.** Whether enrichment runs inline or async,
+multiple lookups against the same `BTreeMap` should acquire the read-lock
+once. A `query_threat_intel_entries_batch` method on the substrate trait
+would accept a `&[(ThreatIntelIndicatorType, &str)]` slice and return
+results for all queries under a single lock acquisition, reducing lock
+overhead from O(queries) to O(1) per event.
 
 ---
 
@@ -671,6 +862,32 @@ Note that this is a semantically different formula from the current additive
 model (`base + max_match`). The transition should be gated behind a
 configuration flag so operators can A/B test the scoring models against
 their environment's false-positive baseline before committing to the switch.
+
+**Migration validation requirements.** Changing the confidence model affects
+downstream pheromone concentration thresholds (`alert_threshold: 2.0`,
+`incident_threshold: 5.0` in default `PheromoneConfig`) which were tuned
+for the current additive scoring model. Before enabling the noisy-OR model
+in production:
+
+1. **Baseline capture:** Record the distribution of finding confidence
+   values under the current additive model using production-representative
+   telemetry (minimum 24 hours of representative traffic). Key metrics:
+   mean finding confidence, p50/p95/p99 confidence, escalation trigger
+   rate, false-positive rate.
+2. **Shadow scoring:** Run the noisy-OR model in parallel (shadow mode)
+   against the same telemetry, logging the alternative confidence values
+   without applying them. Compare distributions.
+3. **Threshold retuning guide:** Quantify the expected impact on
+   escalation rates. The noisy-OR model generally produces lower single-
+   match boosts (e.g., one source at 0.8 confidence yields 0.8 with
+   additive vs. 0.8 with noisy-OR for a single source -- identical) but
+   higher multi-match boosts (two sources at 0.8 yield 0.8 additive vs.
+   0.96 noisy-OR). This means alert storms are more likely when multiple
+   feeds corroborate an IOC. Operators may need to raise
+   `alert_threshold` by 10-20% to maintain the same alert volume.
+4. **Rollback plan:** The configuration flag must support runtime
+   switching without restart, so operators can revert immediately if the
+   new model produces unacceptable false-positive rates.
 
 ### 7.3 Source Reputation Weighting
 
@@ -1144,7 +1361,17 @@ L1 hot cache. Add provenance tracking and multi-source corroboration.
    key), or should they influence concentration through a separate aggregation
    path?
 
-6. **Substrate backend scalability**: The current `BTreeMap`-based storage
+6. **Timestamp normalization inconsistency**: Both `pipeline.rs` and
+   `network_connect.rs` contain identical `normalized_timestamp_ms` functions
+   that heuristically convert seconds to milliseconds when
+   `timestamp.abs() < 100_000_000_000`. This heuristic can produce incorrect
+   results for edge-case timestamps. Since the decay model (Section 4.3)
+   requires precise elapsed-time computation, inconsistent normalization would
+   produce incorrect decay curves. The function should be centralized in
+   `swarm-core` with explicit validation rejecting timestamps outside a
+   reasonable range (e.g., 2000-2100).
+
+7. **Substrate backend scalability**: The current `BTreeMap`-based storage
    performs O(log n) lookup by exact key. With millions of entries and CIDR
    range queries, should the system adopt an embedded database (e.g., `redb`,
    `sled`) or maintain the current approach with a specialized index overlay?
@@ -1166,19 +1393,130 @@ L1 hot cache. Add provenance tracking and multi-source corroboration.
 
 ---
 
-## 14. Cross-References
+## 14. Enrichment Quality Metrics
+
+Operators need quantitative feedback on whether threat-intel enrichment is
+contributing to detection quality. Without metrics, enrichment is a black
+box that consumes resources with unmeasured benefit.
+
+### 14.1 Core Enrichment Metrics
+
+The following metrics should be exposed via the existing Prometheus pipeline
+(`CriticalPathMetrics`):
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `enrichment_hit_rate` | Gauge (0.0-1.0) | Fraction of processed events that matched at least one IOC in the last measurement window (1 minute). |
+| `enrichment_boost_mean` | Gauge | Mean confidence increase from enrichment across all enriched findings in the window. |
+| `enrichment_boost_p99` | Histogram | 99th percentile confidence boost, to detect outlier enrichment events. |
+| `enrichment_age_p50_seconds` | Gauge | Median age (in seconds since ingestion) of IOCs that produced matches. High values indicate stale cache. |
+| `enrichment_latency_us` | Histogram | Per-event enrichment latency in microseconds, bucketed at [1, 5, 10, 25, 50, 100, 500]. |
+| `feed_hit_rate_by_id` | Gauge (per feed label) | Fraction of enrichment hits attributable to each feed. Identifies which feeds deliver value. |
+| `feed_exclusive_hit_rate` | Gauge (per feed label) | Fraction of hits attributable to *only* this feed (no other feed corroborates). High values may indicate either unique coverage or false-positive noise. |
+| `enrichment_match_count` | Counter | Total IOC matches since startup, partitioned by `indicator_type`. |
+| `enrichment_miss_count` | Counter | Total enrichment queries that returned no match, partitioned by `indicator_type`. |
+
+### 14.2 Operational Dashboards
+
+These metrics enable three operator-facing views:
+
+1. **Feed value assessment:** Compare `feed_hit_rate_by_id` across feeds.
+   Feeds with near-zero hit rates after 30 days of operation should be
+   reviewed for relevance to the deployment's threat profile. Feeds with
+   high exclusive hit rates but low overall confidence boosts may be
+   producing noise.
+
+2. **Enrichment health:** Monitor `enrichment_latency_us` against the
+   budget defined in Section 6.5. Alert if p99 enrichment latency exceeds
+   25us (fast-path) or if `enrichment_hit_rate` drops below a configured
+   floor (suggesting feed failure or cache expiration).
+
+3. **Cache freshness:** Track `enrichment_age_p50_seconds` over time. A
+   rising trend indicates feeds are not refreshing frequently enough or
+   the decay model is retaining stale entries too long.
+
+---
+
+## 15. Deployment Profiles
+
+Threat-intel cache sizing, feed polling strategy, and enrichment mode
+must adapt to the deployment target. This section defines three profiles
+that operators can select via `deployment_profile` in the runtime
+configuration.
+
+### 15.1 Edge Profile (Raspberry Pi 4 / ARM64, 256MB memory)
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `threat_intel_max_entries` | 10,000 | 10K entries at ~300 bytes each = ~3MB, fitting within the 256MB budget |
+| `feed_polling` | Disabled | Edge nodes should not poll feeds directly. IOC snapshots are pushed from a central coordinator via the operator API. |
+| `enrichment_mode` | Inline only (Mode 1) | No batch enrichment, no external queries. Minimize background CPU/memory. |
+| `enrichment_inline_max_queries` | 2 | Cap at IP + domain lookups. No URL/hash/email enrichment. |
+| `gc_threat_intel_interval_ms` | 60,000 | GC every 60 seconds (vs. default 10 seconds). Reduce GC CPU overhead. |
+| `l1_hot_cache_entries` | 1,000 | Small LRU cache for repeated beaconing patterns. |
+
+Edge nodes receive a pre-filtered IOC snapshot containing only high-
+confidence (>0.7) indicators relevant to their monitored network segment.
+The central coordinator runs the full feed pipeline and distributes
+snapshots on a configurable schedule (default: every 4 hours).
+
+### 15.2 Standard Profile (4-8 core server, 2GB memory)
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `threat_intel_max_entries` | 100,000 | ~30MB, well within budget |
+| `feed_polling` | Tier 1 + Tier 2 feeds | Open-source and community feeds |
+| `enrichment_mode` | Inline + Batch (Modes 1-2) | Batch enrichment for retroactive coverage |
+| `enrichment_inline_max_queries` | 5 | Full indicator extraction for common event types |
+| `gc_threat_intel_interval_ms` | 10,000 | Default 10-second GC interval |
+| `l1_hot_cache_entries` | 10,000 | Moderate LRU cache |
+
+### 15.3 Enterprise Profile (16+ core, 4GB+ memory)
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `threat_intel_max_entries` | 1,000,000 | ~300MB, acceptable with 4GB+ budget |
+| `feed_polling` | All tiers including commercial | Full feed portfolio |
+| `enrichment_mode` | Inline + Batch + External (Modes 1-3) | Complete enrichment pipeline |
+| `enrichment_inline_max_queries` | 10 | All indicator types including CIDR and parent-domain expansion |
+| `gc_threat_intel_interval_ms` | 5,000 | Aggressive 5-second GC to keep cache lean |
+| `l1_hot_cache_entries` | 100,000 | Large LRU cache for high-throughput environments |
+| `external_enrichment_enabled` | true | External API queries for cache misses |
+
+### 15.4 Air-Gapped Environments
+
+Air-gapped deployments cannot poll external feeds. The operating model:
+
+- **IOC import via operator API.** Threat-intel analysts prepare IOC
+  bundles (STIX JSON or CSV) on an internet-connected workstation, review
+  them, and import via the `POST /v1/operator/threat-intel/entries`
+  endpoint (or a future bulk-import endpoint).
+- **Sneakernet feed refresh.** Periodic manual transfer of IOC snapshots
+  via removable media. The system should support a `POST /v1/operator/
+  threat-intel/import-bundle` endpoint that accepts a STIX 2.1 Bundle
+  JSON file.
+- **Extended TTLs.** IOC half-lives should be increased 2-4x in
+  air-gapped environments to account for infrequent refresh. A C2 IP
+  with a 4-day half-life in connected environments should use a 16-day
+  half-life in air-gapped deployments.
+- **No external enrichment (Mode 3 disabled).** L3 cache is permanently
+  unavailable.
+
+---
+
+## 16. Cross-References
 
 | Document | Relevance |
 |----------|-----------|
 | **02 -- ATT&CK Coverage Analysis** | Threat intel entries should be tagged with MITRE ATT&CK technique IDs. The coverage analysis identifies detection gaps that threat intel can partially compensate for -- if we lack a detector for T1071.001 (Application Layer Protocol: Web), high-confidence domain IOCs tagged with that technique provide a fallback signal. |
-| **04 -- Performance Benchmarking** | Enrichment pipeline latency is a critical performance metric. The L1/L2/L3 cache hierarchy proposed here directly affects the P99 detection latency analyzed in the performance document. Inline enrichment must complete within the detection SLA (target: <5ms per event including enrichment). |
+| **04 -- Performance Characterization Under Load** | Enrichment pipeline latency is a critical performance metric. Doc 04 Section 4.2 allocates 3us (p50) / 10us (p99) for threat-intel enrichment, which reflects the current 0-3 query exact-match model. The expanded enrichment proposed here (Section 6.5) pushes inline enrichment to 15-50us. This is reconciled by the tiered enrichment strategy: the fast-path inline tier stays within Doc 04's 10us budget by limiting to the primary indicator query; supplementary enrichment (CIDR, parent-domain expansion, noisy-OR scoring) runs asynchronously and does not appear in Doc 04's critical-path latency budget. The L3 external enrichment mode (10-500ms per lookup) is explicitly excluded from the detection hot path via the supplementary deposit mechanism (Section 6.2). See also Doc 04 Section 5.3a for enrichment read-lock vs. GC write-lock contention modeling and Section 5.7 for threat-intel entry memory pressure analysis. |
 | **05 -- Kill Chain Integration** | IOC types map to kill chain stages: phishing email addresses to Initial Access, C2 IPs/domains to Command and Control, exfiltration domains to Actions on Objectives. The kill chain document should reference the IOC taxonomy defined here for stage-specific enrichment strategies. |
 | **06 -- Behavioral Baseline and Anomaly Detection** | The IOC-as-pheromone mapping proposed in Section 9 extends the stigmergic model underlying behavioral baselines. Threat intel concentration contributes to the swarm's collective awareness, priming anomaly detectors to lower thresholds when external intelligence indicates heightened risk for a threat class. |
 | **07 -- Secure Update and Self-Protection** | Feed ingestion must be resilient to network partitions and feed compromise. During partition, the system operates on cached intel only; upon reconnection, it performs catch-up polling using `added_after` timestamps. Feed authentication and integrity verification align with the secure-update patterns analyzed in that document. |
 
 ---
 
-## 15. References
+## 17. References
 
 [1] Mandiant, "M-Trends 2024: Special Report," Mandiant/Google Cloud, 2024.
 Accessed: Apr. 2026. Available: https://www.mandiant.com/m-trends

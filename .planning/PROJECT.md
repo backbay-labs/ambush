@@ -10,34 +10,29 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.43 Swarm Memory And Adversarial Pressure` shipped on 2026-04-09.
+`v1.51 Assurance-Gated Evolution And Counterexample Loop` shipped on 2026-04-11.
 
 **Goal:**
-- Add SphinxAgent’s durable memory substrate, indirect swarm-memory retrieval, and the first Rust-native adversarial pressure seam so long-lived swarm knowledge and red-blue pressure become first-class runtime capabilities.
+- Turn `v1.48` artifacts into real gate inputs by feeding evasion coverage, solver proofs, and counterexamples into queue, canary, promotion, and mutation decisions.
 
 **Target features:**
-- A real `SphinxAgent` registered in serve mode with a durable typed knowledge graph backing store
-- Repo-owned memory config covering graph persistence and temporal correlation windows
-- Indirect pheromone-mediated query and retrieval seams that preserve the swarm’s stigmergic coordination model
-- Follow-on phases for adversarial pressure generation, memory-aware fitness, and retention-safe graph garbage collection
+- Shared repo-owned assurance policy over evasion coverage floors and solver proof outcomes
+- Durable harvested replay cases from solver counterexamples and measured evasion misses
+- Fail-closed assurance enforcement across queue, canary, and promotion
+- Signed, bounded waivers and exported assurance lineage through the shipped review and status surfaces
 
 **Supporting foundation:**
-- v1.39 closed the detect-to-respond loop with autonomous PounceAgent execution through the canonical policy, guard, and executor path.
-- Policy is now repo-owned and fail-closed, with configurable YAML rules, scope-aware burst limiting, and durable verdict attribution.
-- TomAgent governance can now synchronously veto destructive autonomous actions and persist typed audit receipts.
-
-**Next activated milestone:**
-- `v1.44 Agent Identity And Infrastructure Signals` — persistent keys, identity registry, key rotation, Sentinel infrastructure telemetry bridge, anomaly detection (7 reqs)
+- `v1.48` already ships evasion coverage, solver proofs, and machine-readable counterexamples, but those artifacts are still mostly advisory.
+- `v1.50` made the async lane first-class and operator-visible, so assurance decisions can now build on stronger correlation, scheduling, and evidence quality.
+- `v1.52` and `v1.53` both benefit from a fail-closed rollout and review contract before Providence reconciliation and production packaging add more operator surface area.
 
 **Queued after that:**
-- `v1.45 Providence Native` — webhook contract, incident lifecycle, analyst feedback, embeddable widget (11 reqs)
-- `v1.46 Distributed Governance` — Tendermint BFT consensus, multi-instance Tom, partition authority, chaos testing (13 reqs)
-- `v1.47 Calico And Detection Breadth` — CalicoAgent deception, fileless execution, behavioral baselines (10 reqs)
-- `v1.48 Adversarial Robustness` — evasion bench, Z3 formal verification (7 reqs)
+- `v1.52 Providence Reconciliation And Response Rehearsal`
+- `v1.53 Production Packaging, Recovery, And Operator Access`
 
 ## Current State
 
-`v1.43 Swarm Memory And Adversarial Pressure` is complete. Phases 141-144 now cover the durable Sphinx graph, stigmergic query and answer flow, retention-safe graph GC, deterministic Rust-native adversarial corpus generation, generation-scoped red pressure in Kitten fitness, durable red-blue episode history, and operator-visible corpus plus best-genome status. The next step is `$gsd-new-milestone` to activate `v1.44 Agent Identity And Infrastructure Signals`.
+No milestone is active right now. `v1.51 Assurance-Gated Evolution And Counterexample Loop` is complete with phases `172` through `175` shipped, and `v1.52 Providence Reconciliation And Response Rehearsal` remains queued awaiting explicit activation.
 
 **What v1.37.1 hardened:**
 - Pheromone deposits are now Ed25519-signed by agents and validated by the substrate on all backends
@@ -84,17 +79,26 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Current Milestone
 
-- `v1.33 Telemetry Bridge Architecture` is complete.
-- `v1.34 Queryable Substrate And Threat Intel Cache` is complete.
-- `v1.35 Production Hardening And Kubernetes Lifecycle` is complete.
-- `v1.36 SIEM/SOAR Forward And Alert Routing` is complete.
-- `v1.37 Persistence And Supply Chain Detection` is complete.
-- `v1.38 Multi-Detector Composition And Network Detection` is complete.
-- `v1.39 PounceAgent And Policy Gate Hardening` is complete.
+- `v1.47 Calico And Detection Breadth` is complete.
+- `v1.48 Adversarial Robustness` is complete.
+- Phase 161 `Evasion Test Corpus And Coverage Metrics` is complete.
+- Phase 162 `KittenAgent Evasion Mutation Cycle` is complete.
+- Phase 163 `Z3 Formal Verification` is complete with optional Z3-backed proof persistence and shared status surfacing.
 - `v1.40 Killer Demo And Providence Integration` is complete.
 - `v1.41 Deployment And Hardening` is complete.
 - `v1.42 Evolution Engine Core` is complete with phases 137-140.
 - `v1.43 Swarm Memory And Adversarial Pressure` is complete with phases 141-144.
+- `v1.44 Agent Identity And Infrastructure Signals` is complete with phases 145-148.
+- Phase 145 added repo-owned `identity.agent_key_dir`, restart-stable Ed25519 key persistence for serve-mode agents, `swarm:ed25519:<hex>` identity derivation, and signed pheromone metadata carrying explicit `agent_identity` plus `agent_role`.
+- Phase 146 added repo-owned `identity.registry_dir`, durable serve-mode identity admission, dispatcher fail-closed governance checks for unadmitted identities, and `swarmctl identity rotate` continuity-proof rotation with retired-key retention.
+- Phase 147 added shared infrastructure telemetry payloads, repo-owned Sentinel bridge config, the `swarm-ingest-sentinel` crate, and runtime bridge-health integration for Sentinel sources.
+- Phase 148 added `InfrastructureAnomalyDetector`, runtime config/factory wiring for `infrastructure_anomaly`, and cross-signal execution escalation proof through the existing distinct-source pheromone lane.
+- Phase 157 added repo-owned deception playbooks, `CalicoAgent` baseline decoy deployment, and signed high-confidence decoy-interaction pheromones for canary files, honeypot ports, and credential lures.
+- Phase 158 added durable Calico lifecycle state, typed Sphinx deception-asset registration, and deception-weighted Kitten fitness that now persists through the existing evolution episode artifacts.
+- Phase 153 added the reusable `swarm-consensus` protocol core with deterministic proposer rotation, JetStream subject layout, timeout-driven round advance, and an in-process three-node sequential consensus proof.
+- Phase 154 bound governance and substrate trust to signer-derived Ed25519 identities, added signed governance/exclusion receipts, and moved destructive response routing onto receipt-backed Tom consensus with registry-backed deposit admission.
+- Phase 155 added durable partition-state tracking, consensus-issued contingency lease pre-staging, partition-aware destructive-response enforcement, runtime partition/reconciliation events, and governance health visibility through the serve-mode status surfaces.
+- Phase 156 added deterministic resilience proof for the distributed-governance lane: Byzantine invalid-signature and equivocation rejection in `swarm-consensus`, expired-lease fail-closed routing on the live dispatcher path, and persisted reconciliation across partition recovery and restart.
 - Phase 142 added signed Sphinx memory query and answer pheromone contracts, dispatcher-shared substrate wiring for Kitten and Sphinx, Q-value-style retrieval scoring over the durable graph, and bounded replay fallback when no usable memory answer arrives.
 - Phase 143 added repo-owned `knowledge_retention_days`, Sphinx graph garbage collection with stale bundle cleanup, and a deterministic `RedSwarmAdapter` plus `MockRedSwarm` seam backed by the tracked `scenario-suites/` corpus.
 - Phase 144 added generation-scoped adversarial corpus freezing in Kitten, durable `EvolutionEpisode` persistence with corpus and genome metadata, and adversarial corpus plus best-genome visibility through the evolution status surface.
@@ -192,20 +196,27 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ### Current Milestone
 
-- `v1.33 Telemetry Bridge Architecture` is complete.
-- `v1.34 Queryable Substrate And Threat Intel Cache` is complete.
-- `v1.35 Production Hardening And Kubernetes Lifecycle` is complete.
-- `v1.36 SIEM/SOAR Forward And Alert Routing` is complete.
-- `v1.37 Persistence And Supply Chain Detection` is complete.
-- `v1.38 Multi-Detector Composition And Network Detection` is complete.
+- `v1.48 Adversarial Robustness` is complete.
+- `v1.49 Canonical Runtime Contract And Governance Modes` is complete.
+- `v1.50 Async Enrichment And Correlation Depth` is complete.
+- `v1.51 Assurance-Gated Evolution And Counterexample Loop` is complete.
+- Phase 164 completed the source-of-truth reset across `docs/REFERENCE-STATUS.md`, `docs/ARCHITECTURE.md`, `docs/AGENTS.md`, `docs/CONSENSUS.md`, `docs/EVOLUTION.md`, `docs/INTEGRATION.md`, and `docs/CONFIGURATION.md`.
+- Phase 165 completed the bounded governance vocabulary across architecture, governance, config, and agent docs, including maintenance-only behavior, receipt lineage, and identity admission continuity.
+- Phase 166 completed the fail-closed degraded-governance and partition-recovery contract across the canonical docs and the disaster-recovery runbook.
+- Phase 167 completed the bounded queue-to-proof-to-canary-to-promotion-to-review contract across the architecture doc, evolution doc, config reference, and project summary.
+- Phase 172 is complete: the repo now owns one shared assurance policy over evasion coverage floors and solver proof outcomes, queue proposals persist durable assurance summaries, and the shared evolution status surface now exposes the latest assurance decision.
+- Phase 173 is complete: blocked queue proposals now harvest replay-ready assurance cases from coverage misses and solver counterexamples, and mutation ranking now carries assurance-case lineage into candidate summaries and review packets.
+- Phase 174 is complete: queue review, handoff creation, assurance-aware canary admission, promotion start, and shared evolution status now all fail closed on missing or blocked assurance lineage.
+- Phase 175 is complete: signed bounded waivers now attach directly to blocked assurance lineage, and the shipped proof, review, canary, promotion, and runtime-status surfaces all preserve the resulting waiver lineage without bypassing fail-closed rollout policy.
+- `v1.52` and `v1.53` remain phase-defined and queued for explicit activation.
 - `v1.39 PounceAgent And Policy Gate Hardening` is complete.
 - `v1.40 Killer Demo And Providence Integration` is shipped with replay injection, live dashboard visibility, approval-in-the-loop demo response, signed proof export, and Providence delivery.
 - `v1.41 Deployment And Hardening` is complete with platform APIs, deployment experience, serve-surface hardening, crate extraction, and tracing shipped.
 - `v1.42 Evolution Engine Core` is complete with phases 137-140 for KittenAgent, formal safety, and operator-visible evolution observability.
 - `v1.43 Swarm Memory And Adversarial Pressure` is complete with phases 141-144 for SphinxAgent, durable swarm memory, and Rust-native adversarial pressure.
-- `v1.44 Agent Identity And Distributed Governance` adds persistent agent keys, BFT consensus, and partition authority — marking the evolution from single-node to distributed. PROJECT.md constraints will be updated with a key decision entry when this milestone begins.
-- `v1.45 Providence Native` completes outbound incident lifecycle, analyst feedback, and embeddable widget.
-- Detection breadth expansion (Fileless, Evasion) is pushed to v1.46-v1.47 after the core differentiators ship.
+- `v1.44 Agent Identity And Infrastructure Signals` is complete with persistent agent keys, registry-backed admission, Sentinel bridge ownership, and infrastructure anomaly detection.
+- `v1.45 Providence Native` is complete with outbound incident lifecycle, analyst feedback, and the embeddable widget.
+- `v1.46 Distributed Governance` is complete with consensus core, signed Tom governance, partition authority, and resilience proof across phases 153-156.
 
 ### Out of Scope
 
@@ -215,7 +226,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 - Fleet-wide or partial-fleet rollout of evolved strategies — the runtime still supports only a bounded single-node promotion path
 - Automatic ranked-candidate or portfolio promotion from batch scores — portfolio curation remains explicit and operator-reviewed
 - Automatic canary or production launch from portfolio entries — rollout gates remain explicit and separate from offline ranking
-- Automatic quorum voting or signed promotion receipts — governance is still deferred until independent trust boundaries become real
+- Automatic expansion of governance beyond the current bounded receipt-backed model — broader independent trust-boundary quorum remains deferred until real multi-operator deployment needs exist
 - Direct rollout, promotion, or governance actions from the review surface — any browser-triggered writes must stay bounded to the existing maintenance scope and audit trail
 - Automatic strategy mutation or self-evolution in the runtime hot path — the production lane remains deterministic and operator-controlled
 - Response-action evolution — response behavior remains static and policy-controlled
@@ -231,7 +242,7 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 
 - **Tech stack**: Production runtime remains pure Rust — adversarial replay and strategy experiments must extend the same type system and CLI path
 - **Security**: Replay and candidate evaluation must stay offline and non-destructive — no live-response side effects
-- **Architecture**: Keep the runtime single-node and composition-friendly — no BFT, gossip, or distributed red-swarm work
+- **Architecture**: Keep the critical lane composition-friendly and Rust-first — bounded multi-instance governance is shipped, but gossip meshes, distributed red-swarm work, and uncontrolled coordination expansion remain out of scope
 - **Operations**: Prefer repo-owned manifests and CLI workflows over external services
 - **Performance**: Strategy memory extraction and scoring must stay off the hot path and preserve the fast-detection proof point through comparable latency measurements
 
@@ -297,4 +308,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-09 after completing Phase 144 and closing out v1.43*
+*Last updated: 2026-04-11 after completing Phase 175 and closing v1.51 Assurance-Gated Evolution And Counterexample Loop*

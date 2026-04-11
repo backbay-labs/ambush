@@ -1,19 +1,26 @@
 # Swarm Team Six: Configuration Reference
 
-> Hunt mission YAML format, tuning parameters, and environment variables.  
-> Last updated: 2026-04-07
+> Canonical runtime configuration surface, tuning parameters, and environment
+> variables.  
+> Last updated: 2026-04-10
 
 ---
 
 ## Hunt Mission YAML Format
 
-Hunt missions are defined in YAML files under `rulesets/`. The swarm assembles from config, not code -- which archetypes participate, how many, what autonomy tiers, pheromone tuning, consensus rules, and NATS connectivity are all declared in the mission file.
+This document is part of the active contract set defined in
+`docs/REFERENCE-STATUS.md`.
+
+Hunt missions are defined in YAML files under `rulesets/`. The runtime
+assembles from config, not code: telemetry inputs, detector selection,
+pheromone policy, response and notification adapters, async lanes, identity,
+operator surfaces, and rollout paths are all declared in repo-owned YAML.
 
 The config is loaded at startup and validated fail-closed: invalid configuration rejects at load time, not at runtime. Unknown fields are rejected (`deny_unknown_fields`).
 
-## Rust-First Runtime Additions
+## Canonical Runtime Configuration Surface
 
-The current production slice is much narrower than the historical mission schema below. The live Rust runtime reads these repository-owned sections today:
+The live Rust runtime reads these repository-owned sections today:
 
 ```yaml
 schema_version: 1
@@ -44,14 +51,27 @@ runtime:
   drain_timeout_ms: 30000
   require_durable_live_response: true
   max_heap_pressure: 0.90
+  governance_degraded_tick_threshold: 3
+  partition_contingency_lease_ttl_ms: 300000
+  partition_contingency_blast_radius_cap: 1
   secret_dir: /var/run/swarm-secrets
 
 detection:
   strategy: suspicious_process_tree  # or dns_exfiltration, lateral_movement,
                                      # credential_access, suspicious_scripting,
-                                     # persistence, supply_chain
+                                     # persistence, supply_chain, network_connect,
+                                     # infrastructure_anomaly, fileless_execution,
+                                     # behavioral_anomaly
   high_confidence_threshold: 0.90
   medium_confidence_threshold: 0.70
+  profiles:
+    fileless_execution:
+      min_region_size_bytes: 8192
+      privileged_target_processes: [lsass, winlogon]
+    behavioral_anomaly:
+      min_host_observations: 6
+      baseline_half_life_secs: 7200
+      rare_role_tools: [powershell.exe, wmic.exe]
 
 pheromone:
   default_half_life_secs: 3600.0
@@ -88,6 +108,9 @@ notification_channels:
   pager:
     target_url: https://hooks.example/swarm/pager
     auth_token: "@secret:notify-token"
+    request_signature:                    # optional HMAC-SHA256 signing
+      header: X-Swarm-Signature
+      secret: "@secret:notify-hmac"
     timeout_ms: 5000
     rate_limit:
       max_notifications: 5
@@ -127,6 +150,26 @@ correlation:
   incident_store:
     kind: memory | local_files
     directory: data/incidents
+
+deception:
+  enabled: false
+  lifecycle_results_dir: data/deception-lifecycle
+  rotation_interval_secs: 86400
+  cleanup_grace_secs: 3600
+  interaction_fitness_weight: 0.15
+  playbook:
+    entries:
+      - name: finance-canary-file
+        decoy_type: canary_token
+        target_zone: finance
+        host_profile: linux-app
+        placement_strategy: high_value_path
+        monitoring:
+          file_paths:
+            - /srv/data/finance/payroll.xlsx
+          threat_class: initial_access
+          severity: HIGH
+          confidence: 0.99
 ```
 
 ### Investigation
@@ -145,6 +188,18 @@ correlation:
 - `candidate_limit`: how many recent investigation bundles to scan when assembling one incident.
 - `incident_store`: where correlated incidents are persisted for operator review.
 
+### Deception / Calico
+
+- `deception.enabled`: registers `CalicoAgent` in serve mode and enables baseline decoy deployment plus decoy-hit pheromone publication.
+- `deception.lifecycle_results_dir`: root directory for the durable Calico decoy inventory and lifecycle snapshot.
+- `deception.rotation_interval_secs` and `deception.cleanup_grace_secs`: how long one decoy generation remains active before rotation, and how long rotated assets remain tracked before cleanup.
+- `deception.interaction_fitness_weight`: bounded positive blend weight Kitten applies when live decoy interactions should raise candidate fitness.
+- `deception.playbook.entries[*].decoy_type`: the asset type routed through the existing `DeployDecoy` response action.
+- `target_zone` and `host_profile`: capture where the decoy should be placed and what legitimate workload profile it should emulate.
+- `placement_strategy`: repo-owned intent for why the decoy exists. Current values are `baseline`, `high_value_path`, `network_segment`, and `investigation_zone`.
+- `monitoring.file_paths`, `monitoring.honeypot_ports`, and `monitoring.canary_credentials`: monitored tripwires. At least one is required per playbook entry.
+- `monitoring.threat_class`, `monitoring.severity`, and `monitoring.confidence`: the signed high-confidence Calico finding emitted when a decoy interaction matches. Confidence must stay between `0.95` and `1.0`, and those interactions now feed the durable Kitten evolution score path.
+
 ### Schema Versioning
 
 - `schema_version` is now required for repo-owned runtime config. The current compiled schema is `1`.
@@ -155,6 +210,9 @@ correlation:
 
 - `drain_timeout_ms`: maximum time the serve-mode runtime waits for accepted ingest work to finish after entering drain mode.
 - `max_heap_pressure`: readiness threshold for `swarm_heap_pressure_ratio`. When the measured ratio exceeds this value, `/readyz` returns HTTP 503.
+- `governance_degraded_tick_threshold`: number of consecutive degraded governance-health observations before Tom marks the committee as degraded instead of healthy.
+- `partition_contingency_lease_ttl_ms`: default lifetime for pre-staged contingency leases that can be redeemed only while the committee is partitioned.
+- `partition_contingency_blast_radius_cap`: maximum number of distinct scopes or hosts one contingency lease can authorize before further destructive actions fail closed.
 - `secret_dir`: optional directory used for file-backed `@secret:` references. Relative paths resolve relative to the config file location.
 
 Serve mode now exposes separate lifecycle routes:
@@ -164,6 +222,8 @@ Serve mode now exposes separate lifecycle routes:
 - `/livez`: simple liveness that stays green while the process is running
 - `/healthz`: legacy readiness-compatible status surface with component detail
 - `/prestop`: Kubernetes-friendly drain hook that stops new ingest work, waits for in-flight work up to `drain_timeout_ms`, and then triggers clean shutdown
+
+When multi-instance governance is active, `/healthz` and `/readyz` also expose a `governance` component that reports partition state, quorum counts, active contingency leases, and the latest reconciliation report marker. The partition-authority state is persisted under `data/governance-partition-state.json` relative to the repo or config root so restart and healing paths can reconcile redeemed versus unauthorized partition-era actions.
 
 ### Bridge-Backed Telemetry Sources
 
@@ -175,12 +235,18 @@ Serve mode now exposes separate lifecycle routes:
 
 ### Adapter Secrets
 
-`http_edr.auth_token`, `webhook.auth_token`, `siem_forward.auth_token`, and `notification_channels.*.auth_token` support direct values or `@secret:` references:
+`http_edr.auth_token`, `webhook.auth_token`, `siem_forward.auth_token`, `notification_channels.*.auth_token`, and `notification_channels.*.request_signature.secret` support direct values or `@secret:` references:
 
 - `@secret:file-name` reads `file-name` from `runtime.secret_dir`
 - `@secret:env:VARIABLE_NAME` reads the token from the named environment variable
 
 Mounted secret files are trimmed for trailing newlines so Kubernetes-style projected secrets work without wrapper scripts. When `runtime.secret_dir` is configured, serve mode watches that directory and reloads adapter secrets without process restart.
+
+For Providence-native delivery, configure the `providence_webhook` notification channel with both a bearer token and an HMAC secret. In Phase 150, that channel is no longer treated as a generic one-shot notification sink: Swarm uses it as the Providence incidents endpoint, sends signed `POST /incidents` and `PUT /incidents/:id` lifecycle requests, retries failed writes with exponential backoff, dead-letters terminal failures, and reports Providence readiness on `/healthz` and `/readyz`.
+
+Swarm signs the canonical JSON request body as `X-Swarm-Signature: sha256=<hex>`, and Providence verifies that header before accepting the request.
+
+Phase 152 extends that integration with an embeddable `/v1/demo/widget` surface and short-lived context tokens. Swarm signs those read-only drilldown tokens with the operator bearer-token secret from `operator_surface.auth.token_env`, embeds them in Providence links, and accepts them as an alternative to bearer+API-key auth only for scoped `GET /v2/api/findings` and `GET /v2/api/incidents` reads.
 
 Example:
 
@@ -245,6 +311,10 @@ cargo run -p swarm-runtime --bin swarmctl -- status --config rulesets/default.ya
 cargo run -p swarm-runtime --bin swarmctl -- --json replay --receipt-id receipt-123 --config rulesets/default.yaml
 cargo run -p swarm-runtime --bin swarmctl -- investigation --hunt-id evt-123 --config rulesets/default.yaml
 cargo run -p swarm-runtime --bin swarmctl -- incident --incident-id incident:evt-123:1 --config rulesets/default.yaml
+cargo run -p swarm-runtime --bin swarmctl -- validate --config rulesets/default.yaml
+cargo run -p swarm-runtime --bin swarmctl -- validate --config rulesets/default.yaml --check-endpoints --json
+cargo run -p swarm-runtime --bin swarmctl -- init --mode detect_only
+cargo run -p swarm-runtime --bin swarmctl -- init --mode live_response --output rulesets/custom-live.yaml
 ```
 
 The CLI labels output by origin:
@@ -252,6 +322,113 @@ The CLI labels output by origin:
 - `live_runtime_status`: current operator review report from the configured runtime stack
 - `persisted_runtime_artifact`: replay, investigation, or incident artifacts loaded from durable runtime stores
 - `offline_replay_artifact`: reserved for the offline replay workflows added in later milestones
+
+Deployment bootstrap commands:
+
+- `swarmctl validate` reuses the runtime config loader, including schema migration, detector-profile validation, and `@secret:` resolution.
+- `--check-endpoints` adds 5-second TCP reachability probes for configured response-adapter, SIEM, and notification-channel URLs.
+- `--json` emits one structured validation report suitable for CI gates.
+- `swarmctl init --mode detect_only|live_response` writes a complete `rulesets/custom.yaml` template with inline comments. The live-response template defaults to a durable local-journal pheromone backend.
+
+### Helm Deployment
+
+The repo now ships a base Helm chart at `deploy/helm/swarm-team-six/` for `swarm_detect --serve`.
+
+The chart renders the runtime config from `values.yaml`, mounts secret files into `runtime.secret_dir`, wires the existing `/startupz`, `/readyz`, `/livez`, and `/prestop` surfaces, and includes an optional `charts/nats` subchart for JetStream-backed pheromone storage.
+
+Typical workflow:
+
+```bash
+helm template swarm-team-six deploy/helm/swarm-team-six
+helm install swarm-team-six deploy/helm/swarm-team-six \
+  --set image.repository=ghcr.io/example/swarm-team-six \
+  --set image.tag=latest
+```
+
+Key value surfaces:
+
+- `swarmConfig.runtime.mode`
+- `swarmConfig.detection.strategy` or `swarmConfig.detection.strategies`
+- `swarmConfig.pheromone.backend`
+- `swarmConfig.response_adapter`
+- `swarmConfig.siem_forward`
+- `swarmConfig.notification_channels`
+- `secrets.files`
+- `nats.enabled`
+
+### Durable Agent Identity
+
+Serve mode now persists one Ed25519 seed per runtime agent slot and derives the runtime-facing identity from the public key.
+
+```yaml
+identity:
+  agent_key_dir: data/agent-keys
+```
+
+- Relative paths resolve from the active config file, so checked-in configs remain portable.
+- `swarm_detect --serve` reuses the same persisted keys after restart.
+- Runtime agent IDs use the stable `swarm:ed25519:<hex>` format in serve mode, while signed pheromone deposits also carry explicit `agent_identity` and `agent_role` metadata.
+
+### Governance And Identity Admission
+
+The active governance contract is defined by a small set of repo-owned config
+keys rather than a broad abstract autonomy schema:
+
+- `policy.human_gate_severity`: severity threshold where destructive actions
+  must stop for human approval even after runtime authorization.
+- `policy.lease_ttl_ms`: lifetime of ordinary capability leases minted by the
+  policy gate.
+- `runtime.governance_degraded_tick_threshold`: number of degraded-health
+  observations before governance is reported as degraded.
+- `runtime.partition_contingency_lease_ttl_ms` and
+  `runtime.partition_contingency_blast_radius_cap`: the bounded contingency
+  lease contract for partition-era destructive response.
+- `identity.agent_key_dir`: persisted Ed25519 key root for runtime-owned agent
+  identities.
+- `identity.registry_dir`: persisted admission registry and rotation continuity
+  root.
+
+These keys map directly onto the governance states surfaced by `/healthz` and
+`/readyz`. They do not create a second operator-only governance model.
+
+### Governance Degradation And Partition Signals
+
+When multi-instance governance is active, the serve surfaces report a dedicated
+`governance` component with:
+
+- current partition state
+- total and healthy governor counts
+- quorum threshold
+- active contingency lease count
+- unauthorized partition-action count
+- last reconciliation report marker
+
+Interpretation rules:
+
+- `degraded` means quorum still exists, but governors are unhealthy
+- `partitioned` means destructive actions fail closed unless a staged lease is
+  redeemed successfully
+- `healing` means quorum has returned and reconciliation is still in progress
+
+These signals are operator-facing contract, not implementation detail.
+
+### Evolution And Rollout Contract
+
+The active rollout ladder is anchored by four config families:
+
+- `evolution.*` for drafting, mutation, validation, proof, ranking, and durable
+  status paths
+- `canary.*` for the bounded live canary lane
+- `promotion.*` for the bounded production observation lane
+- `operator_surface.*` for the local read, review, widget, and export surfaces
+  that inspect these artifacts
+
+Read these keys as one state machine:
+
+`evolution -> proof -> canary -> promotion -> review`
+
+The config does not imply automatic fleet rollout or review-surface authority.
+It defines where the bounded runtime stores and surfaces each stage.
 
 ### Authenticated Local Operator Surface
 
@@ -268,10 +445,39 @@ Enable it in repo config:
 operator_surface:
   enabled: true
   bind_addr: "127.0.0.1:7766"
+  runtime_base_url: "http://127.0.0.1:9090"
+  public_base_url: "http://127.0.0.1:7766"
+  allowed_embed_origins:
+    - https://providence.example
   max_list_results: 50
+  widget_token_ttl_secs: 900
   auth:
     operator_id: local-operator
     token_env: SWARM_OPERATOR_TOKEN
+```
+
+- `runtime_base_url` is the detect-server base URL used by the Providence widget and scoped drilldown links.
+- `public_base_url` remains the operator-surface base URL for replay, audit-trail, and review links.
+- `allowed_embed_origins` drives `Content-Security-Policy: frame-ancestors` and `X-Frame-Options` for `/v1/demo/widget`.
+- `widget_token_ttl_secs` controls the lifetime of the signed read-only context tokens included in Providence links.
+
+Optional TLS for both `swarm_detect --serve` and `swarmctl serve` is configured once at the top level:
+
+```yaml
+tls:
+  cert_path: /etc/swarm/tls/server-cert.pem
+  key_path: /etc/swarm/tls/server-key.pem
+  client_ca_cert: /etc/swarm/tls/client-ca.pem # optional; enables mTLS when set
+```
+
+The versioned detect-server platform API now requires both the operator bearer token and a scoped platform API key:
+
+```yaml
+platform_api:
+  keys:
+    - name: primary-reader
+      key_hash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      scopes: ["read"]
 ```
 
 Start it through the existing repo-owned binary:
@@ -328,7 +534,14 @@ curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
 
 curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
   http://127.0.0.1:7766/v1/operator/review
+
+curl \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "x-api-key: ${SWARM_PLATFORM_API_KEY}" \
+  https://127.0.0.1:9090/v2/api/runtime/status
 ```
+
+When `tls.client_ca_cert` is set, both HTTP servers require a client certificate signed by that CA before any request reaches the router.
 
 Example authenticated maintenance flow:
 
@@ -1501,9 +1714,14 @@ Failure behavior:
 
 This lane does not replace the existing bounded canary gates. It only preserves and reuses the reviewed queue evidence so operators can launch canary from one durable handoff artifact.
 
-### Complete Field Reference
+### Historical Field Reference Appendix
 
-Below is the full schema, documented field by field. The reference configuration is `rulesets/default.yaml`.
+The appendix below preserves the older broad mission-schema reference. It is
+useful background, but it is not the canonical source of truth for the active
+runtime contract. When the appendix conflicts with the active sections above,
+the active sections and `rulesets/default.yaml` win.
+
+Below is the older full-schema reference, documented field by field.
 
 ```yaml
 # ─── Mission Identity ───────────────────────────────────────────────

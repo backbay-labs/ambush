@@ -1,21 +1,75 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use swarm_core::config::BundleStoreConfig;
+use swarm_core::pheromone::ThreatClass;
+use swarm_core::types::{ProvidenceFeedbackAction, Severity};
+
+/// Generic outbound-system reference linked to a correlated incident.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalReference {
+    pub system: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// Durable analyst feedback audit entry attached to an incident.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalystFeedbackAuditEntry {
+    pub feedback_id: String,
+    pub received_at_ms: i64,
+    pub action: ProvidenceFeedbackAction,
+    pub analyst_id: String,
+    pub incident_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub request_signature: String,
+    pub payload: Value,
+    pub outcome: Value,
+}
 
 /// One candidate investigation evaluated during incident assembly.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IncidentMemberDecision {
     pub investigation_id: String,
     pub hunt_id: String,
     pub finding_id: String,
     pub reason: String,
     pub shared_keys: Vec<String>,
+    #[serde(default)]
+    pub evidence_links: Vec<IncidentEvidenceLink>,
+    #[serde(default)]
+    pub confidence_score: f64,
+}
+
+/// Graph dimensions used to explain correlated incident stitching.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IncidentGraphDimension {
+    Temporal,
+    Causal,
+    Entity,
+    Semantic,
+}
+
+/// One explainable link in the evidence chain between investigations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IncidentEvidenceLink {
+    pub dimension: IncidentGraphDimension,
+    pub explanation: String,
+    #[serde(default)]
+    pub shared_values: Vec<String>,
+    #[serde(default)]
+    pub weight: usize,
 }
 
 /// Durable incident artifact assembled from persisted investigation bundles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CorrelatedIncident {
     pub incident_id: String,
     pub summary: String,
@@ -26,6 +80,24 @@ pub struct CorrelatedIncident {
     pub related_receipt_ids: Vec<String>,
     pub included_members: Vec<IncidentMemberDecision>,
     pub rejected_members: Vec<IncidentMemberDecision>,
+    #[serde(default)]
+    pub graph_dimensions: Vec<IncidentGraphDimension>,
+    #[serde(default)]
+    pub confidence_score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_finding_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_strategy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threat_class: Option<ThreatClass>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<Severity>,
+    #[serde(default)]
+    pub external_references: Vec<ExternalReference>,
+    #[serde(default)]
+    pub feedback_audit_entries: Vec<AnalystFeedbackAuditEntry>,
 }
 
 impl CorrelatedIncident {
@@ -47,7 +119,7 @@ impl CorrelatedIncident {
 }
 
 /// Metadata surfaced for recent incidents and operator review.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IncidentRecord {
     pub incident_id: String,
     pub summary: String,
@@ -57,6 +129,24 @@ pub struct IncidentRecord {
     pub related_receipt_ids: Vec<String>,
     pub correlation_keys: Vec<String>,
     pub bundle_path: String,
+    #[serde(default)]
+    pub graph_dimensions: Vec<IncidentGraphDimension>,
+    #[serde(default)]
+    pub confidence_score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_finding_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_strategy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threat_class: Option<ThreatClass>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<Severity>,
+    #[serde(default)]
+    pub external_references: Vec<ExternalReference>,
+    #[serde(default)]
+    pub feedback_audit_entries: Vec<AnalystFeedbackAuditEntry>,
 }
 
 impl IncidentRecord {
@@ -70,6 +160,15 @@ impl IncidentRecord {
             related_receipt_ids: incident.related_receipt_ids.clone(),
             correlation_keys: incident.correlation_keys.clone(),
             bundle_path,
+            graph_dimensions: incident.graph_dimensions.clone(),
+            confidence_score: incident.confidence_score,
+            trigger_event_id: incident.trigger_event_id.clone(),
+            trigger_finding_id: incident.trigger_finding_id.clone(),
+            trigger_strategy_id: incident.trigger_strategy_id.clone(),
+            threat_class: incident.threat_class.clone(),
+            severity: incident.severity,
+            external_references: incident.external_references.clone(),
+            feedback_audit_entries: incident.feedback_audit_entries.clone(),
         }
     }
 }
@@ -122,6 +221,16 @@ pub enum IncidentStoreError {
 /// Store contract for durable incident artifacts.
 pub trait IncidentStore: Send + Sync {
     fn persist(&self, incident: &CorrelatedIncident) -> Result<IncidentRecord, IncidentStoreError>;
+    fn upsert_external_reference(
+        &self,
+        incident_id: &str,
+        external_reference: ExternalReference,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError>;
+    fn append_feedback_audit(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError>;
     fn load_by_incident_id(
         &self,
         incident_id: &str,
@@ -154,6 +263,30 @@ impl IncidentStore for ConfiguredIncidentStore {
         match self {
             Self::Memory(store) => store.persist(incident),
             Self::LocalFiles(store) => store.persist(incident),
+        }
+    }
+
+    fn upsert_external_reference(
+        &self,
+        incident_id: &str,
+        external_reference: ExternalReference,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        match self {
+            Self::Memory(store) => store.upsert_external_reference(incident_id, external_reference),
+            Self::LocalFiles(store) => {
+                store.upsert_external_reference(incident_id, external_reference)
+            }
+        }
+    }
+
+    fn append_feedback_audit(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        match self {
+            Self::Memory(store) => store.append_feedback_audit(incident_id, entry),
+            Self::LocalFiles(store) => store.append_feedback_audit(incident_id, entry),
         }
     }
 
@@ -207,6 +340,50 @@ impl IncidentStore for MemoryIncidentStore {
             incident,
             "memory".to_string(),
         ))
+    }
+
+    fn upsert_external_reference(
+        &self,
+        incident_id: &str,
+        external_reference: ExternalReference,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        let mut guard = self
+            .incidents
+            .write()
+            .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        let Some(incident) = guard
+            .iter_mut()
+            .find(|incident| incident.incident_id == incident_id)
+        else {
+            return Ok(None);
+        };
+        upsert_external_reference_list(&mut incident.external_references, external_reference);
+        Ok(Some(IncidentRecord::from_incident(
+            incident,
+            "memory".to_string(),
+        )))
+    }
+
+    fn append_feedback_audit(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        let mut guard = self
+            .incidents
+            .write()
+            .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        let Some(incident) = guard
+            .iter_mut()
+            .find(|incident| incident.incident_id == incident_id)
+        else {
+            return Ok(None);
+        };
+        incident.feedback_audit_entries.push(entry);
+        Ok(Some(IncidentRecord::from_incident(
+            incident,
+            "memory".to_string(),
+        )))
     }
 
     fn load_by_incident_id(
@@ -368,6 +545,55 @@ impl IncidentStore for FileIncidentStore {
         Ok(record)
     }
 
+    fn upsert_external_reference(
+        &self,
+        incident_id: &str,
+        external_reference: ExternalReference,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        let mut index = self.read_index()?;
+        let Some(entry_index) = index
+            .entries
+            .iter()
+            .position(|entry| entry.incident_id == incident_id)
+        else {
+            return Ok(None);
+        };
+        let record = index.entries[entry_index].clone();
+        let mut lookup = self.read_incident(record)?;
+        upsert_external_reference_list(
+            &mut lookup.incident.external_references,
+            external_reference,
+        );
+        let bundle_path = self.write_incident(&lookup.incident)?;
+        let updated = IncidentRecord::from_incident(&lookup.incident, bundle_path);
+        index.entries[entry_index] = updated.clone();
+        self.write_index(&index)?;
+        Ok(Some(updated))
+    }
+
+    fn append_feedback_audit(
+        &self,
+        incident_id: &str,
+        entry: AnalystFeedbackAuditEntry,
+    ) -> Result<Option<IncidentRecord>, IncidentStoreError> {
+        let mut index = self.read_index()?;
+        let Some(entry_index) = index
+            .entries
+            .iter()
+            .position(|candidate| candidate.incident_id == incident_id)
+        else {
+            return Ok(None);
+        };
+        let record = index.entries[entry_index].clone();
+        let mut lookup = self.read_incident(record)?;
+        lookup.incident.feedback_audit_entries.push(entry);
+        let bundle_path = self.write_incident(&lookup.incident)?;
+        let updated = IncidentRecord::from_incident(&lookup.incident, bundle_path);
+        index.entries[entry_index] = updated.clone();
+        self.write_index(&index)?;
+        Ok(Some(updated))
+    }
+
     fn load_by_incident_id(
         &self,
         incident_id: &str,
@@ -456,14 +682,31 @@ where
     output
 }
 
+fn upsert_external_reference_list(
+    references: &mut Vec<ExternalReference>,
+    external_reference: ExternalReference,
+) {
+    if let Some(existing) = references
+        .iter_mut()
+        .find(|existing| existing.system == external_reference.system)
+    {
+        *existing = external_reference;
+    } else {
+        references.push(external_reference);
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConfiguredIncidentStore, CorrelatedIncident, FileIncidentStore, IncidentMemberDecision,
+        AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
+        FileIncidentStore, IncidentEvidenceLink, IncidentGraphDimension, IncidentMemberDecision,
         IncidentStore, IncidentStoreHealth,
     };
     use swarm_core::config::BundleStoreConfig;
+    use swarm_core::pheromone::ThreatClass;
+    use swarm_core::types::{ProvidenceFeedbackAction, Severity};
 
     fn sample_incident() -> CorrelatedIncident {
         CorrelatedIncident {
@@ -484,6 +727,8 @@ mod tests {
                     finding_id: "finding-1".to_string(),
                     reason: "seed investigation".to_string(),
                     shared_keys: vec!["host:host-1".to_string(), "user:alice".to_string()],
+                    evidence_links: Vec::new(),
+                    confidence_score: 1.0,
                 },
                 IncidentMemberDecision {
                     investigation_id: "investigation:hunt-2:1".to_string(),
@@ -491,6 +736,13 @@ mod tests {
                     finding_id: "finding-2".to_string(),
                     reason: "shared host and user within correlation window".to_string(),
                     shared_keys: vec!["host:host-1".to_string(), "user:alice".to_string()],
+                    evidence_links: vec![IncidentEvidenceLink {
+                        dimension: IncidentGraphDimension::Entity,
+                        explanation: "shared host and user context".to_string(),
+                        shared_values: vec!["host:host-1".to_string(), "user:alice".to_string()],
+                        weight: 2,
+                    }],
+                    confidence_score: 0.9,
                 },
             ],
             rejected_members: vec![IncidentMemberDecision {
@@ -499,7 +751,27 @@ mod tests {
                 finding_id: "finding-3".to_string(),
                 reason: "outside correlation time window".to_string(),
                 shared_keys: vec!["host:host-1".to_string()],
+                evidence_links: vec![IncidentEvidenceLink {
+                    dimension: IncidentGraphDimension::Temporal,
+                    explanation: "time delta exceeded the configured correlation window"
+                        .to_string(),
+                    shared_values: vec!["host:host-1".to_string()],
+                    weight: 1,
+                }],
+                confidence_score: 0.1,
             }],
+            graph_dimensions: vec![
+                IncidentGraphDimension::Entity,
+                IncidentGraphDimension::Temporal,
+            ],
+            confidence_score: 0.9,
+            trigger_event_id: Some("evt:hunt-1".to_string()),
+            trigger_finding_id: Some("finding-1".to_string()),
+            trigger_strategy_id: Some("summary_investigator".to_string()),
+            threat_class: Some(ThreatClass::Execution),
+            severity: Some(Severity::Critical),
+            external_references: Vec::new(),
+            feedback_audit_entries: Vec::new(),
         }
     }
 
@@ -542,6 +814,90 @@ mod tests {
         })
         .unwrap();
         assert_eq!(local.health().unwrap().backend, "local_files");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_store_upserts_external_reference_and_persists_it() {
+        let root = std::env::temp_dir().join("swarm-spine-incidents-refs");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+        let incident = sample_incident();
+        let record = store.persist(&incident).unwrap();
+
+        let updated = store
+            .upsert_external_reference(
+                &record.incident_id,
+                ExternalReference {
+                    system: "providence".to_string(),
+                    id: "prov-incident-1".to_string(),
+                    url: Some("https://providence.example/incidents/prov-incident-1".to_string()),
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.external_references.len(), 1);
+        assert_eq!(updated.trigger_finding_id.as_deref(), Some("finding-1"));
+
+        let reloaded = FileIncidentStore::open(&root)
+            .unwrap()
+            .load_by_incident_id(&record.incident_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.record.external_references.len(), 1);
+        assert_eq!(reloaded.incident.external_references.len(), 1);
+        assert_eq!(reloaded.record.external_references[0].system, "providence");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_store_appends_feedback_audit_and_persists_it() {
+        let root = std::env::temp_dir().join("swarm-spine-incidents-feedback");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+        let incident = sample_incident();
+        let record = store.persist(&incident).unwrap();
+
+        let updated = store
+            .append_feedback_audit(
+                &record.incident_id,
+                AnalystFeedbackAuditEntry {
+                    feedback_id: "feedback-1".to_string(),
+                    received_at_ms: 1_700_000_000_600,
+                    action: ProvidenceFeedbackAction::Dismiss,
+                    analyst_id: "analyst-7".to_string(),
+                    incident_id: record.incident_id.clone(),
+                    finding_id: Some("finding-1".to_string()),
+                    reason: Some("false positive".to_string()),
+                    request_signature: "sha256=test".to_string(),
+                    payload: serde_json::json!({
+                        "action": "dismiss",
+                        "incident_id": record.incident_id,
+                        "finding_id": "finding-1"
+                    }),
+                    outcome: serde_json::json!({
+                        "status": "pending_feedback"
+                    }),
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.feedback_audit_entries.len(), 1);
+        assert_eq!(updated.feedback_audit_entries[0].analyst_id, "analyst-7");
+
+        let reloaded = FileIncidentStore::open(&root)
+            .unwrap()
+            .load_by_incident_id(&record.incident_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.record.feedback_audit_entries.len(), 1);
+        assert_eq!(reloaded.incident.feedback_audit_entries.len(), 1);
+        assert_eq!(
+            reloaded.incident.feedback_audit_entries[0].action,
+            ProvidenceFeedbackAction::Dismiss
+        );
+
         let _ = std::fs::remove_dir_all(root);
     }
 }

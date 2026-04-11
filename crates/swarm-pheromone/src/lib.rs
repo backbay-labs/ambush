@@ -1,7 +1,9 @@
 //! Pheromone substrate — the swarm's stigmergic communication layer.
 //!
-//! Backed by NATS JetStream for persistence and replay.
-//! Subject hierarchy: `swarm.pheromone.{threat_class}.{severity}`
+//! Backed by NATS JetStream KV for persistence and replay.
+//! Deposit keys are segmented primarily by threat class
+//! (`exp.<gc_page>.<threat_class>...` for deposits,
+//! `esc.<timestamp>.<mode>.<threat_class>...` for escalations).
 //!
 //! Responsibilities:
 //! - Deposit signed pheromones

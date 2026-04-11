@@ -95,6 +95,25 @@ impl ResponseExecutor for DispatchingExecutor {
         lease: &CapabilityLease,
         mode: ExecutionMode,
     ) -> Result<ResponseReceipt, ResponseError> {
+        let trace_id = request
+            .evidence
+            .get("trace_id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string)
+            .or_else(swarm_core::observability::current_trace_id)
+            .unwrap_or_else(|| "unknown".to_string());
+        let span = tracing::info_span!(
+            "response.dispatch.execute",
+            trace_id = %trace_id,
+            hunt_id = %request.hunt_id.0,
+            requested_by = %request.requested_by.0,
+            action = %request.action.kind(),
+            adapter = self.kind(),
+            mode = ?mode,
+            capability = %lease.capability_id
+        );
+        let _guard = span.enter();
+
         match &self.inner {
             AdapterInner::Sandbox(executor) => executor.execute(request, lease, mode).await,
             AdapterInner::HttpEdr(executor) => executor.execute(request, lease, mode).await,

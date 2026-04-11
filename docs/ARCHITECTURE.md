@@ -1,215 +1,191 @@
 # Architecture
 
-Canonical architecture for the Rust-first rebuild of Swarm Team Six.
+Canonical architecture for the Rust runtime that ships today.
 
-This document supersedes the earlier Python control-plane design as the primary implementation target.
+This document is part of the active contract set described in
+`docs/REFERENCE-STATUS.md`. It should describe current runtime behavior, current
+lane boundaries, and current operator surfaces, not milestone history.
 
 ## Executive Summary
 
-STS is no longer being optimized for a broad multi-agent platform as its first milestone. It is being optimized for:
+Swarm Team Six ships as a Rust-first detection and controlled-response runtime.
+The runtime already includes:
 
-- fast detection
-- safe live response
-- deterministic policy enforcement
-- a self-contained Rust codebase
+- a critical detection and response lane
+- optional async investigation and correlation lanes
+- optional memory, deception, and evolution lanes
+- receipt-backed governance and identity-admission surfaces
+- local operator, demo, and platform API surfaces
 
-The system now has two lanes:
+The active contract is no longer a comparison against the removed Python
+control-plane design. The question for later milestones is how the current Rust
+runtime evolves, not whether it still plans to become Rust-first.
 
-- a **critical lane** in Rust for telemetry, detection, policy, response, and receipts
-- an **async enrichment lane** for investigation, correlation, and operator context
+## Source-Of-Truth Boundary
 
-Only the critical lane is required for the first release.
+Read the runtime in this order:
 
-## Canonical Runtime
+1. `rulesets/default.yaml` and config types under `crates/swarm-core`
+2. this document plus `docs/AGENTS.md`, `docs/CONSENSUS.md`,
+   `docs/EVOLUTION.md`, and `docs/CONFIGURATION.md`
+3. planning docs under `.planning/`
+
+Historical material stays reference-only. `docs/INTEGRATION.md` is preserved for
+upstream and mixed-runtime context, but it is not part of the active contract.
+
+## Current Runtime Shape
 
 ```text
-telemetry bridges
+telemetry subjects and bridge-backed sources
     |
     v
-swarm-whisker
+bridge runtime registry
     |
     v
-swarm-pheromone
-    |
-    +--> async investigation/enrichment lane
+WhiskerAgent -> swarm-whisker detection strategies
     |
     v
-swarm-policy
+configured pheromone substrate + mode/escalation state
+    |
+    +--> StalkerAgent investigation lane (optional)
+    |       |
+    |       v
+    |   replay and investigation bundles
+    |       |
+    |       v
+    |   WeaverAgent incident correlation lane (optional)
+    |
+    +--> SphinxAgent memory lane (optional)
+    |
+    +--> CalicoAgent deception lane (optional)
+    |
+    +--> KittenAgent evolution lane (optional)
     |
     v
-swarm-response
+TomAgent governance checks + approval and consensus receipts
     |
     v
-swarm-spine + swarm-crypto
+PounceAgent response routing through configured adapters
+    |
+    v
+swarm-spine + swarm-crypto audit and proof artifacts
 ```
 
-## Component Roles
-
-### `swarm-whisker`
-
-Owns the hot path.
-
-- consumes telemetry
-- applies fast detection strategies
-- scores confidence and severity
-- emits pheromone deposits and action proposals
-
-No LLMs, no Python, no slow graph work.
-
-### `swarm-pheromone`
-
-Owns stigmergic state.
-
-- stores deposits
-- computes concentration
-- enforces source diversity
-- supports replay and later NATS-backed durability
-
-The first implementation can be in-memory. JetStream is phase-two hardening, not phase-one proof.
-
-### `swarm-policy`
-
-Owns live-response authorization.
-
-- evaluates whether an action may run
-- determines whether human approval is required
-- mints short-lived capability leases
-- fails closed on malformed or weak requests
-
-This replaces the earlier idea of a Python-heavy governance layer on the critical path.
-
-### `swarm-response`
-
-Owns external side effects.
-
-- executes dry-run or live adapters
-- scopes execution to an authorization lease
-- emits structured response receipts
-- remains small and explicit
-
-The first adapter should be sandboxed or mocked.
-
-### `swarm-spine` and `swarm-crypto`
-
-Own the audit trail.
-
-- canonical serialization
-- signing and verification
-- merkle/checkpoint support
-- envelope and receipt plumbing
-
-### `swarm-runtime`
-
-Owns composition.
-
-- wires detector, substrate, policy, and response together
-- defines runtime mode (`detect-only` vs `live-response`)
-- keeps the first deployable slice small enough to benchmark and test
-
-## Critical Lane vs Async Lane
+## Active Lanes
 
 ### Critical lane
 
-Must stay predictable and benchmarkable.
+The critical lane is the path that must remain deterministic and safe enough to
+ship in live runtime:
 
-- telemetry ingest
-- detection
-- pheromone update/query
-- policy check
-- response execution
-- receipt emission
+- telemetry ingress from direct subjects and configured bridges
+- Whisker detection
+- pheromone deposit, concentration, escalation, and mode state
+- deterministic policy checks and human-gate rules
+- Pounce response execution through configured adapters
+- signed receipts and audit persistence
 
 ### Async lane
 
-May lag the hot path.
+The async lane is shipped, but remains optional and bounded:
 
-- richer investigation
-- evidence summarization
-- multi-signal correlation
-- operator-facing context
-- replay/evaluation
+- Stalker investigation over replay and investigation bundles
+- Weaver correlation into durable incidents
+- Sphinx memory retrieval and retention when memory is enabled
+- Calico deception lifecycle and high-confidence tripwire findings when
+  deception is enabled
 
-This work may later live in Rust as well, but it is not required for the first safe-response milestone.
+Async features enrich operator understanding and later decisions, but they do
+not redefine the critical-lane safety boundary.
 
-## Why Pure Rust
+### Governance lane
 
-The old Rust/Python split had two structural problems for the new goal:
+The runtime already exposes bounded governance surfaces:
 
-1. it put the runtime boundary in the middle of the system
-2. it made live-response authorization depend on a fragile cross-language contract
+- persisted Ed25519 identities for runtime agents
+- registry-backed identity admission
+- Tom governance health and degraded-state tracking
+- human approval thresholds from repo-owned policy config
+- receipt-backed multi-instance response authorization and partition-era lease
+  handling
 
-Pure Rust fixes the part that matters most now:
+Detailed semantics live in `docs/CONSENSUS.md`.
 
-- one type system
-- one concurrency model
-- one packaging story
-- simpler testing
-- simpler latency measurement
+### Governance modes
 
-Python is still useful as reference and experimentation space, but it is no longer part of the target runtime architecture.
+The active architecture uses four governance modes across that lane:
 
-## Upstream Assimilation Strategy
+| Mode | Applies when | Result |
+| --- | --- | --- |
+| Observation | Detection, investigation, correlation, memory, deception, and ordinary status publication | No governance receipt is required |
+| Guarded response | Non-destructive response work such as escalation or decoy deployment | Policy and audit apply, but destructive-governance semantics do not |
+| Receipt-backed response | Destructive response work such as block, isolate, and revoke | Signed governance receipt plus any required human approval |
+| Maintenance-only | Local operator maintenance, review, export, replay, and bounded upkeep actions | Does not widen live-response authority or bypass the response path |
 
-STS should absorb code from upstreams, not orbit them.
+This is the shipped architecture boundary. A broader multi-operator governance
+plane is still deferred.
 
-### ClawdStrike
+Across those modes, the active safety rule is:
 
-Primary inspiration for:
+- fail closed for destructive response when quorum is unavailable
+- fail open for observability, health reporting, and recovery inspection
+- use staged contingency leases only as bounded partition-era exceptions
+- persist reconciliation markers so healing does not erase partition history
 
-- guards
-- broker/capability ideas
-- receipts
-- signing
-- spine/envelope concepts
-- telemetry bridge patterns
+### Evolution lane
 
-### Hellcat
+The runtime already owns a real evolution path:
 
-Primary inspiration for:
+- replay and experiment artifacts
+- proof and counterexample artifacts
+- durable proposal and selection state
+- canary and promotion handoff surfaces
+- evolution status events and operator-visible outputs
 
-- operator decomposition
-- replay/evaluation loops
-- offensive scenario modeling
+Detailed semantics live in `docs/EVOLUTION.md`.
 
-### Cyntra
+### Evolution state machine
 
-Primary inspiration for:
+The active evolution lane is one bounded operator-facing state machine:
 
-- scheduler ideas
-- dispatcher/workcell patterns
-- verifier patterns
-- memory concepts
+`pressure -> mutation -> validation -> proof -> canary -> promotion -> review`
 
-Copied reference trees live under `vendor/reference/`. They are temporary and are not active dependencies.
+Interpretation rules:
 
-## Deferred Features
+- pressure, mutation, validation, and status publication can run automatically
+  inside the bounded evolution lane
+- proof, canary, and promotion are persisted as explicit artifacts rather than
+  silent in-memory transitions
+- operator review and export inspect the same artifacts and do not create a
+  second rollout path
 
-These are explicitly out of the first production slice:
+### Operator surfaces
 
-- PyO3-first bridging
-- Python governance on the hot path
-- Tendermint-style BFT
-- VRF committee rotation
-- SWIM/CRDT gossip
-- live red-swarm distribution
-- formal-proof driven release gates
+Operators interact with the runtime through shipped local and HTTP surfaces:
 
-They may return later if the Rust-first runtime proves a real need.
+- lifecycle and readiness endpoints such as `/startupz`, `/readyz`, `/livez`,
+  `/healthz`, and `/prestop`
+- demo and event-stream surfaces under `/v1/demo/*` and `/v1/events/stream`
+- authenticated local review routes under `/v1/operator/review*`
+- versioned platform APIs under `/v2/api/*`
+- repo-owned CLI and deployment surfaces such as `swarmctl` and Helm manifests
 
-## First Vertical Slice
+## Bounded And Deferred
 
-The first milestone is complete only when this works end to end:
+The active contract should mark these as out of scope or reference-only unless a
+later phase explicitly promotes them:
 
-1. synthetic telemetry enters the runtime
-2. `swarm-whisker` detects a condition
-3. `swarm-pheromone` stores the signal
-4. `swarm-policy` authorizes or denies action
-5. `swarm-response` executes in sandbox or dry-run mode
-6. `swarm-spine` and `swarm-crypto` emit a reconstructable receipt chain
-7. benchmark results are captured for latency and throughput
+- revived Python control-plane or PyO3 bridge architecture
+- external upstream kernels as live runtime dependencies
+- governance or rollout semantics that exceed the current bounded receipt-backed
+  runtime model
+- gossip meshes, broader fleet-wide autonomy, or other distributed coordination
+  expansion not described by the current runtime and config surfaces
 
-## What Is No Longer Canonical
+## Related Documents
 
-The legacy Python control-plane stubs, `pyproject.toml`, and `swarm-bridge` were removed in `v1.28`.
-What remains as non-canonical material is the historical documentation centered on Python agents,
-BFT governance, or co-evolution as near-term scope.
+- `docs/AGENTS.md` for runtime role definitions and config gates
+- `docs/CONSENSUS.md` for governance and response authorization
+- `docs/EVOLUTION.md` for replay, proof, queue, canary, and promotion semantics
+- `docs/CONFIGURATION.md` for the live config surface
+- `docs/REFERENCE-STATUS.md` for the active-versus-historical policy

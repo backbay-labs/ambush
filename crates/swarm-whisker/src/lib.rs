@@ -7,10 +7,13 @@
 //!
 //! No LLM per signal. LLM only for ambiguous signals routed to Stalkers.
 
+pub mod behavioral_anomaly;
 pub mod composite;
 pub mod credential_access;
 pub mod detector;
 pub mod dns_exfiltration;
+pub mod fileless_execution;
+pub mod infrastructure_anomaly;
 pub mod lateral_movement;
 pub mod network_connect;
 pub mod persistence;
@@ -62,17 +65,46 @@ pub(crate) fn validate_confidence_thresholds(
     Ok(())
 }
 
+pub use behavioral_anomaly::{BehavioralAnomalyDetector, BehavioralAnomalyProfile};
 pub use composite::CompositeDetector;
 pub use credential_access::{CredentialAccessDetector, CredentialAccessProfile};
 pub use detector::{
-    AuthenticationEventData, DetectionFinding, DetectionStrategy, DnsQueryEvent,
-    FilePersistenceEvent, NetworkConnectEvent, ProcessStartEvent, RegistryAccessEvent,
-    RegistryPersistenceEvent, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
-    TelemetryEvent, TelemetryPayload,
+    AuthenticationEventData, DetectionFinding, DetectionStrategy, DnsQueryEvent, ExhaustedResource,
+    FilePersistenceEvent, InfrastructureHealthEvent, NetworkConnectEvent, ProcessMemoryAccessEvent,
+    ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent,
+    SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
+    ThermalAnomalyEvent, ThermalSeverity,
 };
 pub use dns_exfiltration::{DnsExfiltrationDetector, DnsExfiltrationProfile};
+pub use fileless_execution::{FilelessExecutionDetector, FilelessExecutionProfile};
+pub use infrastructure_anomaly::{InfrastructureAnomalyDetector, InfrastructureAnomalyProfile};
 pub use lateral_movement::{LateralMovementDetector, LateralMovementProfile};
 pub use network_connect::{NetworkConnectDetector, NetworkConnectProfile};
 pub use persistence::{PersistenceDetector, PersistenceProfile};
 pub use supply_chain::{SupplyChainDetector, SupplyChainProfile};
 pub use suspicious_scripting::{SuspiciousScriptingDetector, SuspiciousScriptingProfile};
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BehavioralAnomalyDetector, CredentialAccessDetector, DnsExfiltrationDetector,
+        FilelessExecutionDetector, InfrastructureAnomalyDetector, LateralMovementDetector,
+        NetworkConnectDetector, PersistenceDetector, SupplyChainDetector,
+        SuspiciousProcessTreeDetector, SuspiciousScriptingDetector,
+    };
+
+    #[test]
+    fn default_detectors_construct_without_panic() {
+        let _ = SuspiciousProcessTreeDetector::default();
+        let _ = DnsExfiltrationDetector::default();
+        let _ = FilelessExecutionDetector::default();
+        let _ = BehavioralAnomalyDetector::default();
+        let _ = LateralMovementDetector::default();
+        let _ = CredentialAccessDetector::default();
+        let _ = SuspiciousScriptingDetector::default();
+        let _ = PersistenceDetector::default();
+        let _ = SupplyChainDetector::default();
+        let _ = NetworkConnectDetector::default();
+        let _ = InfrastructureAnomalyDetector::default();
+    }
+}

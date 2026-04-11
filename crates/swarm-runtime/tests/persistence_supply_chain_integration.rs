@@ -69,7 +69,7 @@ async fn persistence_strategy_detects_registry_run_key_and_deposits()
         &detector,
         &substrate,
         &persistence_event(),
-        &AgentId("whisker-persistence".to_string()),
+        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
         &config.pheromone,
         &test_signing_key(),
     )
@@ -100,7 +100,7 @@ async fn supply_chain_strategy_detects_unsigned_trusted_path_execution_and_depos
         &detector,
         &substrate,
         &supply_chain_event(),
-        &AgentId("whisker-supply".to_string()),
+        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
         &config.pheromone,
         &test_signing_key(),
     )

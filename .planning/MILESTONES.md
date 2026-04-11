@@ -2,25 +2,106 @@
 
 ## Latest Completed Milestone
 
-### v1.43 Swarm Memory And Adversarial Pressure
-**Executable phases:** 141-144
-**Shipped:** 2026-04-09
-
-## Active Milestone
-
-No active milestone is currently phase-defined. Next step: `$gsd-new-milestone` to activate `v1.44 Agent Identity And Infrastructure Signals`.
+### v1.51 Assurance-Gated Evolution And Counterexample Loop
+**Executable phases:** 172-175
+**Status:** Complete
+**Shipped:** 2026-04-11
+**Goal:** Turn evasion coverage, solver proofs, and counterexamples into explicit gate inputs for queue, canary, promotion, and mutation decisions.
+**Progress:** Phases 172-175 complete
 
 ## Queued Milestones
 
-| Milestone | Name | Requirements | Tier |
-|-----------|------|--------------|------|
-| v1.44 | Agent Identity And Infrastructure Signals | IDENTITY-01–03, INFRA-01–04 (7) | Identity & Infrastructure |
-| v1.45 | Providence Native | PROVAUTH-01–02, PROVBI-01–03, PROVFB-01–03, PROVDASH-01–03 (11) | Deep Providence Integration |
-| v1.46 | Distributed Governance | CONSENSUS-01–03, GOVERN-01–03, PARTITION-01–04, CHAOS-01–03 (13) | Distributed Governance |
-| v1.47 | Calico And Detection Breadth | CALICO-01–04, FILELESS-01–06 (10) | Deception & Detection Breadth |
-| v1.48 | Adversarial Robustness | EVASION-01–05, Z3-01–02 (7) | Evasion & Formal Verification |
+### v1.52 Providence Reconciliation And Response Rehearsal
+**Executable phases:** 176-179
+**Status:** Queued
+**Goal:** Close the Providence loop with bounded inbound reconciliation and add response rehearsal plus blast-radius proof before live action approval.
+
+### v1.53 Production Packaging, Recovery, And Operator Access
+**Executable phases:** 180-183
+**Status:** Queued
+**Goal:** Make the system credibly deployable with secure packaging, recovery drills, measured capacity guidance, and a real operator access model.
 
 ## History
+
+## v1.51 Assurance-Gated Evolution And Counterexample Loop (Shipped: 2026-04-11)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Swarm now owns one repo-defined assurance policy that turns evasion coverage floors and solver proof outcomes into explicit rollout gate inputs instead of advisory evidence only.
+- Blocked assurance outcomes now harvest durable replay-ready cases from coverage misses and solver counterexamples and feed that lineage into mutation ranking and review summaries.
+- Queue review, handoff creation, canary admission, and promotion start now fail closed on unsatisfied assurance lineage through one shared rollout contract.
+- Signed bounded operator waivers now attach directly to the assurance decision they override and surface through the normal proof, review, canary, promotion, and runtime-status lanes.
+
+## v1.50 Async Enrichment And Correlation Depth (Shipped: 2026-04-10)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Weaver now correlates across temporal, causal, entity, and semantic graph dimensions and persists explainable incident evidence with bounded confidence.
+- The async investigation lane now schedules by bounded priority, queue budget, starvation protection, and durable ambiguity-vote lineage instead of FIFO-only ordering.
+- Behavioral anomaly detection now learns and persists host, identity, and peer-group baselines independently with readable scope attribution on findings.
+- Shared runtime, control, and platform status surfaces now expose async backlog, pressure, degradation, and correlation outcomes, and the full detect -> investigate -> correlate path is integration-proven.
+
+## v1.48 Adversarial Robustness (Shipped: 2026-04-10)
+
+**Phases completed:** 3 phases, 3 plans, 0 tasks
+
+**Key accomplishments:**
+- Swarm now owns a repo-tracked evasion corpus, threat-technique catalog, and shared coverage metrics surfaced through both API and Prometheus lanes.
+- Kitten now converts measured evasion gaps into bounded mutation pressure, persists replay-vs-evasion fitness through durable evolution artifacts, and proves the evasion-gap-to-canary flow end to end.
+- The formal safety gate now has an optional Z3-backed `custom_z3` tier with signed proof artifacts, machine-readable counterexamples, fail-closed timeout handling, and shared evolution-status visibility.
+
+---
+
+## v1.47 Calico And Detection Breadth (Shipped: 2026-04-09)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `CalicoAgent` now owns repo-configured deception playbooks, baseline decoy deployment, and high-confidence tripwire findings for canary file, port, and credential interactions.
+- Calico lifecycle state now persists across restart, deception assets register in Sphinx, and attacker interactions feed durable positive fitness into Kitten evolution artifacts.
+- The runtime now owns a first-class `ProcessMemoryAccess` telemetry payload plus a `FilelessExecutionDetector` that maps reflective injection, encoded PowerShell, and syscall gadget activity into the normal pheromone lane.
+- Swarm now has a restart-safe `BehavioralAnomalyDetector` backed by durable substrate snapshots, runtime hydration, configurable decay, and strategy-scoped durable deposit validation that still honors the signer-derived Ed25519 identity.
+
+---
+
+## v1.46 Distributed Governance (Shipped: 2026-04-09)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarm-consensus` now owns deterministic committee rotation, signed message verification, exclusion receipts, and round-driven consensus proof over a reusable JetStream subject layout.
+- Tom governance now routes destructive decisions through signed committee receipts, binds runtime and substrate trust to admitted Ed25519 identities, and fail-closes unadmitted governance participation.
+- The runtime now tracks durable partition state, pre-stages bounded contingency leases, exposes governance status on serve-mode health surfaces, and reconciles partition-era activity when quorum returns.
+- The milestone now closes with deterministic resilience proof covering Byzantine invalid-signature plus equivocation rejection, expired-lease fail-closed routing, and persisted reconciliation across partition recovery and restart.
+
+---
+
+## v1.45 Providence Native (Shipped: 2026-04-09)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Swarm now owns a typed Providence webhook contract with bearer-token service auth and canonical JSON HMAC signing.
+- Correlated incidents now synchronize through a dedicated `ProvidenceIncidentAdapter` that creates, updates, and resolves incidents with retry, dead-lettering, and runtime health reporting.
+- Providence analysts can now send signed confirm, dismiss, and investigate actions back into Swarm, and those actions persist durable incident-linked audit evidence while feeding false-positive dismissals into Kitten or pending durable storage.
+- Providence can now embed a minimal live `/v1/demo/widget` surface, stream scoped runtime activity, and open read-only findings and incidents drilldowns through short-lived signed context tokens.
+
+---
+
+## v1.44 Agent Identity And Infrastructure Signals (Shipped: 2026-04-09)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Serve-mode agents now persist durable Ed25519 identities, derive stable `swarm:ed25519:<hex>` IDs, and sign canonical `agent_identity` plus `agent_role` metadata into deposits and receipts.
+- The runtime now enforces registry-backed identity admission, fail-closed governance action gating for unadmitted identities, and continuity-proof key rotation through `swarmctl identity rotate`.
+- Swarm now owns a first-class Sentinel infrastructure bridge with normalized health, thermal, and resource-exhaustion payloads surfaced through the existing bridge runtime health and metrics path.
+- A stateful `InfrastructureAnomalyDetector` now turns those normalized Sentinel payloads into live execution, impact, and defense-evasion findings.
+- Infrastructure execution pressure can now combine with behavioral execution findings through the existing distinct-source pheromone concentration and escalation model.
+
+---
 
 ## v1.43 Swarm Memory And Adversarial Pressure (Shipped: 2026-04-09)
 

@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod observability;
 pub mod pheromone;
 pub mod telemetry;
 pub mod types;
@@ -19,13 +20,21 @@ pub use agent::{
     SwarmModeState,
 };
 pub use pheromone::{
-    EscalationRecord, Pheromone, PheromoneDeposit, ThreatClass, ThreatClassConfig,
-    ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
+    BehavioralBaselineSnapshot, BehavioralFrequencyEntry, BehavioralHostBaseline,
+    BehavioralRoleToolFrequencyEntry, EscalationRecord, Pheromone, PheromoneDeposit, ThreatClass,
+    ThreatClassConfig, ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
 pub use telemetry::{
-    AuthenticationEventData, BridgeHealth, DnsQueryEvent, FilePersistenceEvent,
-    NetworkConnectEvent, ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent,
-    TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult, TelemetryEvent, TelemetryPayload,
+    AuthenticationEventData, BridgeHealth, DnsQueryEvent, ExhaustedResource, FilePersistenceEvent,
+    InfrastructureHealthEvent, NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent,
+    RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent, TelemetryBridge,
+    TelemetryBridgeError, TelemetryBridgeResult, TelemetryEvent, TelemetryPayload,
+    ThermalAnomalyEvent, ThermalSeverity,
 };
-pub use types::{AgentId, EscalationEvent, HuntId, SwarmAction};
+pub use types::{
+    AgentId, EscalationEvent, HuntId, ProvidenceCreateIncidentBody, ProvidenceIncidentStatus,
+    SwarmAction, SwarmProvidenceAggregateContext, SwarmProvidenceFindingContext,
+    SwarmProvidenceLinks, SwarmProvidenceRuntimeBridgeHealth, SwarmProvidenceRuntimeContext,
+    SwarmProvidenceWebhookContract,
+};
 pub use verdict::{ConsensusResult, ThreatVerdict};

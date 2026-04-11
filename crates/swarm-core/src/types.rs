@@ -1,6 +1,7 @@
 //! Fundamental types used across the swarm.
 
 use crate::pheromone::ThreatClass;
+use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
 /// Unique identifier for a swarm agent.
@@ -10,6 +11,14 @@ pub struct AgentId(pub String);
 impl AgentId {
     pub fn new(role: &str, short_id: &str) -> Self {
         Self(format!("{role}-{short_id}"))
+    }
+
+    pub fn from_public_key_hex(public_key_hex: &str) -> Self {
+        Self(format!("swarm:ed25519:{public_key_hex}"))
+    }
+
+    pub fn from_verifying_key(key: &VerifyingKey) -> Self {
+        Self::from_public_key_hex(&hex::encode(key.to_bytes()))
     }
 }
 
@@ -27,6 +36,178 @@ impl std::fmt::Display for HuntId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
+}
+
+pub const SPHINX_MEMORY_PHEROMONE_SCHEMA_VERSION: u32 = 1;
+pub const SPHINX_MEMORY_THREAT_CLASS: &str = "sphinx_memory";
+pub const SWARM_PROVIDENCE_WEBHOOK_SCHEMA: &str = "swarm_providence_webhook";
+pub const SWARM_PROVIDENCE_WEBHOOK_SCHEMA_VERSION: u32 = 1;
+pub const SWARM_PROVIDENCE_FEEDBACK_SCHEMA: &str = "swarm_providence_feedback";
+pub const SWARM_PROVIDENCE_FEEDBACK_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SphinxMemoryPayloadKind {
+    Query,
+    Answer,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SphinxMemoryQuery {
+    pub schema_version: u32,
+    pub kind: SphinxMemoryPayloadKind,
+    pub query_id: String,
+    pub requested_by_agent_id: String,
+    pub strategy_id: String,
+    pub selection_source: String,
+    pub observation_count: usize,
+    pub base_fitness: f64,
+    pub requested_at_ms: i64,
+    pub threat_classes: Vec<String>,
+    pub attack_technique_ids: Vec<String>,
+    pub entity_values: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SphinxMemoryContribution {
+    pub engagement_id: String,
+    pub threat_class: String,
+    pub observed_at_ms: i64,
+    pub matched_technique_ids: Vec<String>,
+    pub matched_entity_values: Vec<String>,
+    pub relevance: f64,
+    pub outcome_reward: f64,
+    pub recency_decay: f64,
+    pub q_value: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SphinxMemoryAnswer {
+    pub schema_version: u32,
+    pub kind: SphinxMemoryPayloadKind,
+    pub query_id: String,
+    pub strategy_id: String,
+    pub answered_by_agent_id: String,
+    pub answered_at_ms: i64,
+    pub matching_engagement_count: usize,
+    pub retrieval_score: f64,
+    pub sparse: bool,
+    pub contributions: Vec<SphinxMemoryContribution>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvidenceIncidentStatus {
+    Open,
+    Investigating,
+    Resolved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvidenceFeedbackAction {
+    Confirm,
+    Dismiss,
+    Investigate,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmProvidenceFeedbackRequest {
+    pub action: ProvidenceFeedbackAction,
+    pub incident_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding_id: Option<String>,
+    pub analyst_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmFeedbackSignal {
+    pub action: ProvidenceFeedbackAction,
+    pub incident_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threat_class: Option<ThreatClass>,
+    pub analyst_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub recorded_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProvidenceCreateIncidentBody {
+    pub title: String,
+    pub severity: Severity,
+    pub status: ProvidenceIncidentStatus,
+    pub source: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmProvidenceFindingContext {
+    pub schema: String,
+    pub finding_id: String,
+    pub event_id: String,
+    pub strategy_id: String,
+    pub threat_class: ThreatClass,
+    pub severity: Severity,
+    pub confidence: f64,
+    pub evidence: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmProvidenceAggregateContext {
+    pub first_seen_ms: i64,
+    pub last_seen_ms: i64,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmProvidenceRuntimeBridgeHealth {
+    pub status: String,
+    pub configured: usize,
+    pub ok: usize,
+    pub degraded: usize,
+    pub idle: usize,
+    pub entries: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmProvidenceRuntimeContext {
+    pub mode: super::agent::SwarmMode,
+    pub registered_agent_count: usize,
+    pub active_agent_count: usize,
+    pub degraded_agent_count: usize,
+    pub failed_agent_count: usize,
+    pub bridge_health: SwarmProvidenceRuntimeBridgeHealth,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmProvidenceLinks {
+    pub dashboard: String,
+    pub event_stream: String,
+    pub finding_drilldown: String,
+    pub replay_bundle: String,
+    pub audit_trail: String,
+    pub incident: String,
+    pub review_home: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmProvidenceWebhookContract {
+    pub schema: String,
+    pub schema_version: u32,
+    pub channel: String,
+    pub incident_key: String,
+    pub create_incident: ProvidenceCreateIncidentBody,
+    pub finding: SwarmProvidenceFindingContext,
+    pub aggregate: SwarmProvidenceAggregateContext,
+    pub runtime: SwarmProvidenceRuntimeContext,
+    pub links: SwarmProvidenceLinks,
 }
 
 /// Actions an agent can emit from its tick loop.
@@ -64,6 +245,9 @@ pub enum SwarmAction {
         strategy: serde_json::Value,
         fitness: f64,
     },
+
+    /// Deliver analyst feedback into the evolution loop.
+    FeedbackSignal { signal: SwarmFeedbackSignal },
 
     /// Shift to a different agent role.
     RoleShift {

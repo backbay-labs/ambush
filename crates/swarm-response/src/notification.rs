@@ -7,9 +7,10 @@ use crate::siem::SwarmFindingEnvelope;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use swarm_core::pheromone::ThreatClass;
+use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
 use swarm_whisker::DetectionFinding;
 use tokio::sync::Mutex;
 
@@ -55,11 +56,15 @@ pub struct NotificationRouter {
     inner: Arc<NotificationRouterInner>,
 }
 
+type ChannelPayloadBuilder =
+    dyn Fn(&str, &AggregatedNotification) -> Option<Value> + Send + Sync + 'static;
+
 struct NotificationRouterInner {
     routing: NotificationRoutingConfig,
     channels: BTreeMap<String, NotificationChannelState>,
     aggregates: Mutex<HashMap<NotificationAggregateKey, NotificationAggregateState>>,
     rate_limits: Mutex<HashMap<String, VecDeque<i64>>>,
+    payload_builder: RwLock<Option<Arc<ChannelPayloadBuilder>>>,
 }
 
 #[derive(Clone)]
@@ -115,8 +120,21 @@ impl NotificationRouter {
                 channels,
                 aggregates: Mutex::new(HashMap::new()),
                 rate_limits: Mutex::new(HashMap::new()),
+                payload_builder: RwLock::new(None),
             }),
         }
+    }
+
+    pub fn set_payload_builder<F>(&self, builder: F)
+    where
+        F: Fn(&str, &AggregatedNotification) -> Option<Value> + Send + Sync + 'static,
+    {
+        let mut guard = self
+            .inner
+            .payload_builder
+            .write()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *guard = Some(Arc::new(builder));
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -267,12 +285,16 @@ impl NotificationRouter {
             sample_finding: aggregate.sample_finding.clone(),
         };
 
+        let payload = self
+            .channel_payload(&aggregate.key.channel, &payload)
+            .unwrap_or_else(|| json!(payload));
+
         if self.channel_in_quiet_hours(&aggregate.key.channel, aggregate.last_seen_ms)? {
             self.write_dead_letter(
                 &aggregate.key.channel,
                 aggregate.last_seen_ms,
                 "quiet hours active".to_string(),
-                json!(payload),
+                payload,
             );
             return Ok(());
         }
@@ -285,24 +307,35 @@ impl NotificationRouter {
                 &aggregate.key.channel,
                 aggregate.last_seen_ms,
                 "notification rate limit exceeded".to_string(),
-                json!(payload),
+                payload,
             );
             return Ok(());
         }
 
         if let Err(summary) = self
-            .send_payload(&aggregate.key.channel, json!(payload), false)
+            .send_payload(&aggregate.key.channel, payload.clone(), false)
             .await
         {
             self.write_dead_letter(
                 &aggregate.key.channel,
                 aggregate.last_seen_ms,
                 summary,
-                json!(payload),
+                payload,
             );
         }
 
         Ok(())
+    }
+
+    fn channel_payload(&self, channel: &str, aggregate: &AggregatedNotification) -> Option<Value> {
+        let guard = self
+            .inner
+            .payload_builder
+            .read()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard
+            .as_ref()
+            .and_then(|builder| builder(channel, aggregate))
     }
 
     async fn rate_limit_allows(
@@ -364,13 +397,25 @@ impl NotificationRouter {
             .channels
             .get(channel)
             .ok_or_else(|| format!("unknown notification channel `{channel}`"))?;
+        let payload_bytes = canonical_json_bytes(&payload)
+            .map_err(|error| format!("failed to encode notification payload: {error}"))?;
         let mut request = state
             .client
             .post(&state.config.target_url)
             .timeout(Duration::from_millis(state.config.timeout_ms))
-            .json(&payload);
+            .header("content-type", "application/json")
+            .body(payload_bytes.clone());
         if let Some(auth_token) = &state.config.auth_token {
             request = request.bearer_auth(auth_token);
+        }
+        if let Some(signature) = &state.config.request_signature {
+            request = request.header(
+                signature.header.as_str(),
+                format!(
+                    "sha256={}",
+                    hmac_sha256_hex(signature.secret.as_bytes(), &payload_bytes)
+                ),
+            );
         }
         if bypass_limits {
             request = request.header("x-swarm-replay", "true");
@@ -489,6 +534,7 @@ mod tests {
     struct CaptureState {
         payloads: Arc<Mutex<Vec<Value>>>,
         auth: Arc<Mutex<Option<String>>>,
+        signature: Arc<Mutex<Option<String>>>,
     }
 
     async fn handler(
@@ -504,6 +550,13 @@ mod tests {
             let mut auth = state.auth.lock().await;
             *auth = headers
                 .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string);
+        }
+        {
+            let mut signature = state.signature.lock().await;
+            *signature = headers
+                .get("x-swarm-signature")
                 .and_then(|value| value.to_str().ok())
                 .map(ToString::to_string);
         }
@@ -553,6 +606,7 @@ mod tests {
             NotificationChannelConfig {
                 target_url,
                 auth_token: Some("notify-secret".to_string()),
+                request_signature: None,
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig {
                     max_notifications: 10,
@@ -613,6 +667,7 @@ mod tests {
             NotificationChannelConfig {
                 target_url,
                 auth_token: None,
+                request_signature: None,
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig {
                     max_notifications: 1,
@@ -657,6 +712,145 @@ mod tests {
         assert_eq!(payloads.len(), 2);
 
         let _ = std::fs::remove_file(dead_letter_path);
+        let _ = shutdown_tx.send(());
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn router_uses_channel_specific_payload_builder_when_present() {
+        let (target_url, state, shutdown_tx, handle) = spawn_server().await;
+        let mut channels = BTreeMap::new();
+        channels.insert(
+            "providence_webhook".to_string(),
+            NotificationChannelConfig {
+                target_url,
+                auth_token: None,
+                request_signature: None,
+                timeout_ms: 500,
+                rate_limit: NotificationRateLimitConfig {
+                    max_notifications: 10,
+                    window_ms: 1_000,
+                },
+                quiet_hours: None,
+                dead_letter_path: std::env::temp_dir()
+                    .join(format!("notify-providence-{}.jsonl", current_time_ms()))
+                    .display()
+                    .to_string(),
+            },
+        );
+        let router = NotificationRouter::new(
+            channels,
+            NotificationRoutingConfig {
+                dedup_window_ms: 10,
+                rules: vec![RoutingRule {
+                    min_severity: Some(Severity::Medium),
+                    threat_class: Some(ThreatClass::Execution),
+                    utc_start_hour: None,
+                    utc_end_hour: None,
+                    channels: vec!["providence_webhook".to_string()],
+                }],
+            },
+            None,
+        );
+        router.set_payload_builder(|channel, aggregate| {
+            (channel == "providence_webhook").then(|| {
+                json!({
+                    "schema": "swarm_providence_webhook",
+                    "finding_id": &aggregate.sample_finding.finding_id,
+                    "count": aggregate.count,
+                })
+            })
+        });
+
+        router
+            .route_finding(&finding("event-1", "suspicious_process_tree"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+
+        let payloads = state.payloads.lock().await.clone();
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0]["schema"], "swarm_providence_webhook");
+        assert_eq!(payloads[0]["finding_id"], "finding-event-1");
+        assert_eq!(payloads[0]["count"], 1);
+
+        let _ = shutdown_tx.send(());
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn router_signs_notifications_with_hmac_header() {
+        let (target_url, state, shutdown_tx, handle) = spawn_server().await;
+        let mut channels = BTreeMap::new();
+        channels.insert(
+            "providence_webhook".to_string(),
+            NotificationChannelConfig {
+                target_url,
+                auth_token: Some("providence-bearer".to_string()),
+                request_signature: Some(swarm_core::config::RequestSignatureConfig {
+                    header: "X-Swarm-Signature".to_string(),
+                    secret: "shared-providence-secret".to_string(),
+                }),
+                timeout_ms: 500,
+                rate_limit: NotificationRateLimitConfig {
+                    max_notifications: 10,
+                    window_ms: 1_000,
+                },
+                quiet_hours: None,
+                dead_letter_path: std::env::temp_dir()
+                    .join(format!(
+                        "notify-providence-signed-{}.jsonl",
+                        current_time_ms()
+                    ))
+                    .display()
+                    .to_string(),
+            },
+        );
+        let router = NotificationRouter::new(
+            channels,
+            NotificationRoutingConfig {
+                dedup_window_ms: 10,
+                rules: vec![RoutingRule {
+                    min_severity: Some(Severity::Medium),
+                    threat_class: Some(ThreatClass::Execution),
+                    utc_start_hour: None,
+                    utc_end_hour: None,
+                    channels: vec!["providence_webhook".to_string()],
+                }],
+            },
+            None,
+        );
+        router.set_payload_builder(|channel, aggregate| {
+            (channel == "providence_webhook").then(|| {
+                json!({
+                    "schema": "swarm_providence_webhook",
+                    "schema_version": 1,
+                    "finding_id": &aggregate.sample_finding.finding_id,
+                    "count": aggregate.count,
+                })
+            })
+        });
+
+        router
+            .route_finding(&finding("event-9", "suspicious_process_tree"))
+            .await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+
+        let payloads = state.payloads.lock().await.clone();
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(
+            state.auth.lock().await.clone(),
+            Some("Bearer providence-bearer".to_string())
+        );
+        let signature = state.signature.lock().await.clone();
+        let expected = format!(
+            "sha256={}",
+            swarm_crypto::hmac_sha256_hex(
+                b"shared-providence-secret",
+                &swarm_crypto::canonical_json_bytes(&payloads[0]).unwrap()
+            )
+        );
+        assert_eq!(signature, Some(expected));
+
         let _ = shutdown_tx.send(());
         handle.abort();
     }

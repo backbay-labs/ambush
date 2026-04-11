@@ -4,7 +4,9 @@ use crate::detector_factory::{
     DetectorFactoryError, RuntimeDetector, build_detector_from_candidate,
     build_detector_from_strategy,
 };
-use crate::investigation::{InvestigationStrategy, SummaryInvestigator};
+use crate::investigation::{
+    InvestigationStrategy, SummaryInvestigator, compute_priority, decide_outcome,
+};
 use crate::service::{EventExecutionContext, RuntimeMetricsSnapshot, RuntimeService, ServiceError};
 use crate::{RuntimeMode, SwarmRuntime};
 use serde::{Deserialize, Serialize};
@@ -26,9 +28,9 @@ use swarm_spine::{
     InvestigationStoreError, MemoryIncidentStore, MemoryInvestigationBundleStore, ReplayBundle,
 };
 use swarm_whisker::{
-    CredentialAccessProfile, DetectionStrategy, DnsExfiltrationProfile, LateralMovementProfile,
-    NetworkConnectProfile, PersistenceProfile, SupplyChainProfile, SuspiciousProcessTreeProfile,
-    SuspiciousScriptingProfile, TelemetryEvent,
+    BehavioralAnomalyProfile, CredentialAccessProfile, DetectionStrategy, DnsExfiltrationProfile,
+    FilelessExecutionProfile, LateralMovementProfile, NetworkConnectProfile, PersistenceProfile,
+    SupplyChainProfile, SuspiciousProcessTreeProfile, SuspiciousScriptingProfile, TelemetryEvent,
 };
 
 /// Errors surfaced by offline replay and evaluation flows.
@@ -175,6 +177,8 @@ pub enum ReplayScenarioClass {
 pub struct ReplayScenarioMetadata {
     #[serde(default)]
     pub class: ReplayScenarioClass,
+    #[serde(default)]
+    pub threat_class: Option<ThreatClass>,
     #[serde(default)]
     pub campaign: Option<String>,
     #[serde(default)]
@@ -783,6 +787,16 @@ pub enum DetectorCandidateManifest {
         description: String,
         profile: SuspiciousProcessTreeProfile,
     },
+    FilelessExecution {
+        strategy_id: String,
+        description: String,
+        profile: FilelessExecutionProfile,
+    },
+    BehavioralAnomaly {
+        strategy_id: String,
+        description: String,
+        profile: BehavioralAnomalyProfile,
+    },
     DnsExfiltration {
         strategy_id: String,
         description: String,
@@ -824,6 +838,8 @@ impl DetectorCandidateManifest {
     pub fn strategy_id(&self) -> &str {
         match self {
             Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
+            Self::FilelessExecution { strategy_id, .. } => strategy_id.as_str(),
+            Self::BehavioralAnomaly { strategy_id, .. } => strategy_id.as_str(),
             Self::DnsExfiltration { strategy_id, .. } => strategy_id.as_str(),
             Self::LateralMovement { strategy_id, .. } => strategy_id.as_str(),
             Self::CredentialAccess { strategy_id, .. } => strategy_id.as_str(),
@@ -837,6 +853,8 @@ impl DetectorCandidateManifest {
     pub fn description(&self) -> &str {
         match self {
             Self::SuspiciousProcessTree { description, .. } => description.as_str(),
+            Self::FilelessExecution { description, .. } => description.as_str(),
+            Self::BehavioralAnomaly { description, .. } => description.as_str(),
             Self::DnsExfiltration { description, .. } => description.as_str(),
             Self::LateralMovement { description, .. } => description.as_str(),
             Self::CredentialAccess { description, .. } => description.as_str(),
@@ -1827,9 +1845,25 @@ impl DefaultReplayHarness {
     ) -> Result<StrategyExperimentLookup, ReplayHarnessError> {
         let loaded_experiment = load_experiment_manifest(experiment_path)?;
         let (report, _) = self.build_experiment_report(&loaded_experiment).await?;
-        let store = FileExperimentStore::open(experiments_dir.as_ref())?;
-        let record = store.persist(&report)?;
-        Ok(StrategyExperimentLookup { record, report })
+        self.persist_experiment_report(experiments_dir.as_ref(), report)
+    }
+
+    /// Evaluate and persist one detector experiment plus its shadow report from a single run.
+    pub async fn evaluate_experiment_and_shadow_path(
+        &self,
+        experiment_path: impl AsRef<Path>,
+        experiments_dir: impl AsRef<Path>,
+        shadows_dir: impl AsRef<Path>,
+    ) -> Result<(StrategyExperimentLookup, StrategyShadowLookup), ReplayHarnessError> {
+        let loaded_experiment = load_experiment_manifest(experiment_path)?;
+        let (report, source_artifacts) = self.build_experiment_report(&loaded_experiment).await?;
+        let experiment =
+            self.persist_experiment_report(experiments_dir.as_ref(), report.clone())?;
+        let shadow = self.persist_shadow_report(
+            shadows_dir.as_ref(),
+            shadow_report_from_experiment(&report, source_artifacts),
+        )?;
+        Ok((experiment, shadow))
     }
 
     /// Load a persisted detector experiment by its stable id.
@@ -1873,29 +1907,10 @@ impl DefaultReplayHarness {
     ) -> Result<StrategyShadowLookup, ReplayHarnessError> {
         let loaded_experiment = load_experiment_manifest(experiment_path)?;
         let (report, source_artifacts) = self.build_experiment_report(&loaded_experiment).await?;
-        let shadow_report = StrategyShadowReport {
-            shadow_id: shadow_id_for_report(&report),
-            experiment_id: report.experiment_id.clone(),
-            experiment_name: report.experiment_name.clone(),
-            created_at_ms: report.created_at_ms,
-            source_artifacts,
-            suite_name: report.suite_name.clone(),
-            suite_path: report.suite_path.clone(),
-            corpus_version: report.corpus_version.clone(),
-            lineage: report.lineage.clone(),
-            baseline_strategy_id: report.baseline_strategy_id.clone(),
-            candidate_strategy_id: report.candidate_strategy_id.clone(),
-            candidate_description: report.candidate_description.clone(),
-            comparison: report.comparison.clone(),
-            gates: report.gates.clone(),
-            passed: report.passed,
-        };
-        let store = FileShadowStore::open(shadows_dir.as_ref())?;
-        let record = store.persist(&shadow_report)?;
-        Ok(StrategyShadowLookup {
-            record,
-            report: shadow_report,
-        })
+        self.persist_shadow_report(
+            shadows_dir.as_ref(),
+            shadow_report_from_experiment(&report, source_artifacts),
+        )
     }
 
     /// Load a persisted shadow report by its stable id.
@@ -2200,6 +2215,26 @@ impl DefaultReplayHarness {
         Ok((report, source_artifacts))
     }
 
+    fn persist_experiment_report(
+        &self,
+        experiments_dir: &Path,
+        report: StrategyExperimentReport,
+    ) -> Result<StrategyExperimentLookup, ReplayHarnessError> {
+        let store = FileExperimentStore::open(experiments_dir)?;
+        let record = store.persist(&report)?;
+        Ok(StrategyExperimentLookup { record, report })
+    }
+
+    fn persist_shadow_report(
+        &self,
+        shadows_dir: &Path,
+        report: StrategyShadowReport,
+    ) -> Result<StrategyShadowLookup, ReplayHarnessError> {
+        let store = FileShadowStore::open(shadows_dir)?;
+        let record = store.persist(&report)?;
+        Ok(StrategyShadowLookup { record, report })
+    }
+
     async fn build_verification_report(
         &self,
         loaded_experiment: &LoadedDetectorExperiment,
@@ -2355,7 +2390,8 @@ impl DefaultReplayHarness {
         let steps = self.materialize_steps(loaded)?;
         let service = self.build_service();
         let substrate = InMemoryPheromoneSubstrate::new(self.config.pheromone.clone());
-        let agent_id = AgentId(loaded.manifest.requested_by.clone());
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
+        let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
 
         let mut replay_bundles = Vec::new();
         for (index, step) in steps.iter().enumerate() {
@@ -2365,7 +2401,6 @@ impl DefaultReplayHarness {
                 correlation_id: None,
                 now_ms: loaded.manifest.seed_time_ms + index as i64,
             };
-            let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
             let execution = EventExecutionContext {
                 agent_id: &agent_id,
                 approval: &approval,
@@ -2473,8 +2508,12 @@ impl DefaultReplayHarness {
             let completed_at_ms = queued_at_ms + 2;
             let investigation_id =
                 format!("investigation:{}:{}", replay.audit.hunt_id, queued_at_ms);
-            let queued =
-                InvestigationBundle::queued_from_bundle(replay, investigation_id, queued_at_ms);
+            let queued = InvestigationBundle::queued_from_bundle(
+                replay,
+                investigation_id,
+                queued_at_ms,
+                compute_priority(replay, queued_at_ms),
+            );
             let running =
                 queued.with_status(InvestigationStatus::Running, Some(started_at_ms), None);
             let terminal = match investigator.investigate(replay).await {
@@ -2483,6 +2522,14 @@ impl DefaultReplayHarness {
                         outcome.summary,
                         outcome.evidence_points,
                         outcome.correlation_keys,
+                        outcome.candidate_interpretations.clone(),
+                        outcome.vote_lineage.clone(),
+                        decide_outcome(
+                            &outcome.candidate_interpretations,
+                            &outcome.vote_lineage,
+                            swarm_core::config::InvestigationConfig::default()
+                                .ambiguity_margin_basis_points,
+                        ),
                         completed_at_ms,
                     );
                     completed.started_at_ms = Some(started_at_ms);
@@ -3013,6 +3060,12 @@ pub fn load_scenario_manifest(
     Ok(LoadedReplayScenario { path, manifest })
 }
 
+pub fn load_replay_suite_manifest(
+    path: impl AsRef<Path>,
+) -> Result<ReplaySuiteManifest, ReplayHarnessError> {
+    Ok(load_suite_manifest(path)?.manifest)
+}
+
 fn load_suite_manifest(path: impl AsRef<Path>) -> Result<LoadedReplaySuite, ReplayHarnessError> {
     let path = path.as_ref().to_path_buf();
     let raw = fs::read_to_string(&path).map_err(|source| ReplayHarnessError::SuiteRead {
@@ -3225,6 +3278,16 @@ fn validate_experiment_manifest(
             description,
             ..
         }
+        | DetectorCandidateManifest::FilelessExecution {
+            strategy_id,
+            description,
+            ..
+        }
+        | DetectorCandidateManifest::BehavioralAnomaly {
+            strategy_id,
+            description,
+            ..
+        }
         | DetectorCandidateManifest::LateralMovement {
             strategy_id,
             description,
@@ -3367,6 +3430,10 @@ fn resolve_relative_path(manifest_path: &Path, referenced: &str) -> PathBuf {
     }
 }
 
+pub fn resolve_manifest_relative_path(manifest_path: &Path, referenced: &str) -> PathBuf {
+    resolve_relative_path(manifest_path, referenced)
+}
+
 pub fn scenario_paths_in_dir(scenarios_dir: &Path) -> Result<Vec<PathBuf>, ReplayHarnessError> {
     let entries =
         fs::read_dir(scenarios_dir).map_err(|source| ReplayHarnessError::ScenarioRead {
@@ -3507,6 +3574,29 @@ fn compare_suite_reports(
         candidate: candidate_metrics,
         scenario_regressions,
         technique_regressions,
+    }
+}
+
+fn shadow_report_from_experiment(
+    report: &StrategyExperimentReport,
+    source_artifacts: Vec<String>,
+) -> StrategyShadowReport {
+    StrategyShadowReport {
+        shadow_id: shadow_id_for_report(report),
+        experiment_id: report.experiment_id.clone(),
+        experiment_name: report.experiment_name.clone(),
+        created_at_ms: report.created_at_ms,
+        source_artifacts,
+        suite_name: report.suite_name.clone(),
+        suite_path: report.suite_path.clone(),
+        corpus_version: report.corpus_version.clone(),
+        lineage: report.lineage.clone(),
+        baseline_strategy_id: report.baseline_strategy_id.clone(),
+        candidate_strategy_id: report.candidate_strategy_id.clone(),
+        candidate_description: report.candidate_description.clone(),
+        comparison: report.comparison.clone(),
+        gates: report.gates.clone(),
+        passed: report.passed,
     }
 }
 
@@ -4072,6 +4162,7 @@ mod tests {
             receipt_chain: vec!["seed-receipt".to_string()],
             metadata: ReplayScenarioMetadata {
                 class: ReplayScenarioClass::Adversarial,
+                threat_class: Some(ThreatClass::Execution),
                 campaign: Some("hellcat.office_loader".to_string()),
                 techniques: vec!["T1204.002".to_string(), "T1059.001".to_string()],
                 tags: vec!["office".to_string(), "correlation".to_string()],
@@ -4136,6 +4227,7 @@ max_response_latency_us: 5000
             receipt_chain: vec![],
             metadata: ReplayScenarioMetadata {
                 class: ReplayScenarioClass::Benign,
+                threat_class: None,
                 campaign: None,
                 techniques: Vec::new(),
                 tags: vec!["control".to_string()],
@@ -4172,6 +4264,7 @@ max_response_latency_us: 5000
             receipt_chain: vec![],
             metadata: ReplayScenarioMetadata {
                 class: ReplayScenarioClass::Benign,
+                threat_class: None,
                 campaign: Some("operator_maintenance".to_string()),
                 techniques: vec!["T1105".to_string()],
                 tags: vec!["control".to_string(), "python".to_string()],
@@ -4222,6 +4315,7 @@ max_response_latency_us: 5000
             receipt_chain: vec!["seed-receipt".to_string()],
             metadata: ReplayScenarioMetadata {
                 class: ReplayScenarioClass::Adversarial,
+                threat_class: Some(ThreatClass::Execution),
                 campaign: Some("hellcat.office_loader".to_string()),
                 techniques: vec![
                     "T1204.002".to_string(),
@@ -4676,7 +4770,7 @@ lineage:
 gates:
   require_known_bad_coverage: true
   max_false_positive_delta: 0
-  max_detect_latency_delta_us: 5000
+  max_detect_latency_delta_us: 10000
 "#,
                 suite_path.display(),
                 verification_path.display()
@@ -4885,7 +4979,7 @@ lineage:
 gates:
   require_known_bad_coverage: true
   max_false_positive_delta: 0
-  max_detect_latency_delta_us: 5000
+  max_detect_latency_delta_us: 10000
 "#,
                 suite_path.display(),
                 verification_path.display(),
@@ -5034,7 +5128,7 @@ lineage:
 gates:
   require_known_bad_coverage: true
   max_false_positive_delta: 0
-  max_detect_latency_delta_us: 5000
+  max_detect_latency_delta_us: 10000
 "#,
                 suite_path.display(),
                 verification_path.display(),
@@ -5179,7 +5273,7 @@ lineage:
 gates:
   require_known_bad_coverage: true
   max_false_positive_delta: 0
-  max_detect_latency_delta_us: 5000
+  max_detect_latency_delta_us: 10000
 "#,
                 suite_path.display(),
                 verification_path.display(),

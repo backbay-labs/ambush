@@ -1,28 +1,36 @@
 use clap::Parser;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde_json::json;
-use std::future::IntoFuture;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use swarm_core::agent::SwarmModeState;
+use swarm_core::agent::{AgentRole, SwarmModeState};
 use swarm_core::types::AgentId;
 use swarm_policy::ApprovalContext;
+use swarm_runtime::agent_identity::{
+    FileAgentIdentityRegistry, FileAgentKeyStore, PersistedAgentIdentity, RegistryAdmission,
+    resolve_agent_key_dir, resolve_identity_registry_dir,
+};
+use swarm_runtime::approval::DefaultApprovalHarness;
 use swarm_runtime::bridge_runtime::BridgeRuntimeRegistry;
+use swarm_runtime::calico_agent::CalicoAgent;
 use swarm_runtime::config::load_config;
 use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::escalation::ConcentrationMonitor;
 use swarm_runtime::ingest::{IngestState, detect_http_router};
 use swarm_runtime::investigation::SummaryInvestigator;
+use swarm_runtime::kitten_agent::KittenAgent;
 use swarm_runtime::pounce_agent::PounceAgent;
 use swarm_runtime::replay::{ReplayScenarioInput, load_scenario_manifest, scenario_paths_in_dir};
+use swarm_runtime::runtime_events::{DEFAULT_RUNTIME_EVENT_CAPACITY, RuntimeEventBroadcaster};
+use swarm_runtime::serve::serve_with_listener;
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
+use swarm_runtime::sphinx_agent::SphinxAgent;
 use swarm_runtime::stalker_agent::StalkerAgent;
-use swarm_runtime::tom_agent::{GovernancePolicy, TomAgent};
+use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
 use swarm_runtime::weaver_agent::WeaverAgent;
 use swarm_runtime::whisker_agent::WhiskerAgent;
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 const RELOAD_DEBOUNCE_MS: u64 = 500;
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
@@ -39,9 +47,15 @@ struct Cli {
     #[arg(long)]
     json: bool,
     #[arg(long)]
+    otlp_endpoint: Option<String>,
+    #[arg(long)]
     serve: bool,
     #[arg(long, default_value = "127.0.0.1:9090")]
     bind: String,
+    #[arg(long, default_value = "data/approval-sets")]
+    approval_set_results_dir: PathBuf,
+    #[arg(long, default_value = "data/approval-ledgers")]
+    approval_ledger_results_dir: PathBuf,
 }
 
 fn response_kind(value: &swarm_spine::AuditResponseRecord) -> &'static str {
@@ -51,6 +65,80 @@ fn response_kind(value: &swarm_spine::AuditResponseRecord) -> &'static str {
         swarm_spine::AuditResponseRecord::Skipped { .. } => "skipped",
         swarm_spine::AuditResponseRecord::GuardRejected { .. } => "guard_rejected",
     }
+}
+
+fn register_optional_sphinx_agent(
+    dispatcher: &mut AgentDispatcher,
+    config_path: &std::path::Path,
+    config: &swarm_core::config::SwarmConfig,
+    substrate: swarm_pheromone::ConfiguredPheromoneSubstrate,
+    identity_store: &FileAgentKeyStore,
+    identity_registry: &FileAgentIdentityRegistry,
+    now_ms: i64,
+) -> Result<Option<AgentId>, std::io::Error> {
+    if !config.memory.enabled {
+        return Ok(None);
+    }
+    let identity = load_persisted_agent_identity(identity_store, AgentRole::Sphinx, "primary")?;
+    if !admit_runtime_identity(
+        identity_registry,
+        AgentRole::Sphinx,
+        "primary",
+        &identity,
+        now_ms,
+    )? {
+        return Ok(None);
+    }
+    let agent_id = identity.id.clone();
+    let agent = SphinxAgent::new_with_signing_key(
+        identity.id,
+        identity.signing_key,
+        config_path.to_path_buf(),
+        config.clone(),
+        substrate,
+    )
+    .map_err(std::io::Error::other)?;
+    dispatcher
+        .register(Box::new(agent))
+        .map_err(std::io::Error::other)?;
+    Ok(Some(agent_id))
+}
+
+fn register_optional_calico_agent(
+    dispatcher: &mut AgentDispatcher,
+    config_path: &std::path::Path,
+    config: &swarm_core::config::SwarmConfig,
+    substrate: swarm_pheromone::ConfiguredPheromoneSubstrate,
+    identity_store: &FileAgentKeyStore,
+    identity_registry: &FileAgentIdentityRegistry,
+    now_ms: i64,
+) -> Result<Option<AgentId>, std::io::Error> {
+    if !config.deception.enabled {
+        return Ok(None);
+    }
+    let identity = load_persisted_agent_identity(identity_store, AgentRole::Calico, "primary")?;
+    if !admit_runtime_identity(
+        identity_registry,
+        AgentRole::Calico,
+        "primary",
+        &identity,
+        now_ms,
+    )? {
+        return Ok(None);
+    }
+    let agent_id = identity.id.clone();
+    let agent = CalicoAgent::new_with_signing_key(
+        identity.id,
+        identity.signing_key,
+        config_path.to_path_buf(),
+        config.clone(),
+        substrate,
+    )
+    .map_err(std::io::Error::other)?;
+    dispatcher
+        .register(Box::new(agent))
+        .map_err(std::io::Error::other)?;
+    Ok(Some(agent_id))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +163,59 @@ impl RetargetableWatcher {
 
 fn watch_paths_differ(current: Option<&PathBuf>, next: Option<&PathBuf>) -> bool {
     current != next
+}
+
+fn load_persisted_agent_identity(
+    store: &FileAgentKeyStore,
+    role: AgentRole,
+    slot: &str,
+) -> Result<PersistedAgentIdentity, std::io::Error> {
+    store
+        .load_or_create(role, slot)
+        .map_err(std::io::Error::other)
+}
+
+fn default_partition_governance_state_path(config_path: &std::path::Path) -> PathBuf {
+    let config_dir = config_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    if config_dir
+        .file_name()
+        .is_some_and(|name| name == "rulesets")
+    {
+        config_dir
+            .parent()
+            .unwrap_or(config_dir)
+            .join("data/governance-partition-state.json")
+    } else {
+        config_dir.join("governance-partition-state.json")
+    }
+}
+
+fn admit_runtime_identity(
+    registry: &FileAgentIdentityRegistry,
+    role: AgentRole,
+    slot: &str,
+    identity: &PersistedAgentIdentity,
+    now_ms: i64,
+) -> Result<bool, std::io::Error> {
+    match registry.admit_persisted_identity(role, slot, identity, now_ms) {
+        Ok(RegistryAdmission::Added | RegistryAdmission::Refreshed) => Ok(true),
+        Err(swarm_runtime::agent_identity::AgentIdentityError::UnregisteredIdentity {
+            agent_id,
+            ..
+        }) => {
+            tracing::warn!(
+                role = ?role,
+                slot,
+                agent_id,
+                module = module_path!(),
+                "persisted runtime identity is not admitted; skipping agent registration"
+            );
+            Ok(false)
+        }
+        Err(error) => Err(std::io::Error::other(error)),
+    }
 }
 
 fn spawn_secret_reload_watcher(
@@ -450,24 +591,11 @@ async fn await_background_tasks(name: &str, handles: Vec<tokio::task::JoinHandle
     }
 }
 
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(
-            fmt::layer()
-                .json()
-                .flatten_event(true)
-                .with_current_span(true)
-                .with_span_list(false),
-        )
-        .init();
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing();
     let cli = Cli::parse();
+    let _tracing =
+        swarm_runtime::cli::tracing::init_tracing("swarm_detect", cli.otlp_endpoint.as_deref())?;
     let config = load_config(&cli.config)?;
 
     if cli.json {
@@ -507,18 +635,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if cli.serve {
         let state = IngestState::from_config(cli.config.clone(), config.clone())?;
+        let approval_harness = DefaultApprovalHarness::from_paths(
+            &cli.approval_set_results_dir,
+            &cli.approval_ledger_results_dir,
+        )?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::channel(10_000);
         let agent_health = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
         let mode_state = Arc::new(arc_swap::ArcSwap::from_pointee(SwarmModeState::new()));
         let bridge_registry = BridgeRuntimeRegistry::from_config(&config)?;
         let bridge_health = bridge_registry.shared_health();
-        let governance_policy = Arc::new(GovernancePolicy::default());
+        let governance_policy = Arc::new(GovernancePolicy::with_persistence(
+            GovernancePolicyConfig {
+                contingency_lease_ttl_ms: config.runtime.partition_contingency_lease_ttl_ms,
+                contingency_blast_radius_cap: config.runtime.partition_contingency_blast_radius_cap,
+            },
+            default_partition_governance_state_path(&cli.config),
+        )?);
+        let runtime_events = RuntimeEventBroadcaster::new(DEFAULT_RUNTIME_EVENT_CAPACITY);
+        let identity_store =
+            FileAgentKeyStore::open(resolve_agent_key_dir(&cli.config, &config.identity))
+                .map_err(std::io::Error::other)?;
+        let identity_registry = FileAgentIdentityRegistry::open(resolve_identity_registry_dir(
+            &cli.config,
+            &config.identity,
+        ))
+        .map_err(std::io::Error::other)?;
+        let now_ms = swarm_runtime::runtime_events::now_ms();
         let state = state
             .with_telemetry_channel(telemetry_tx.clone())
             .with_agent_health(Arc::clone(&agent_health))
+            .with_mode_state(Arc::clone(&mode_state))
             .with_bridge_health(bridge_health)
-            .with_shutdown_channel(shutdown_tx.clone());
+            .with_shutdown_channel(shutdown_tx.clone())
+            .with_runtime_events(runtime_events.clone())
+            .with_governance_policy(Arc::clone(&governance_policy))
+            .with_approval_harness(approval_harness);
         let dispatcher_shutdown = shutdown_rx.clone();
         let monitor_shutdown = shutdown_rx.clone();
         let mut dispatcher = AgentDispatcher::new(
@@ -528,56 +680,165 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(&agent_health),
         )
         .with_mode_state(Arc::clone(&mode_state))
-        .with_request_response_router(state.current_request_response_router());
+        .with_request_response_router(state.current_request_response_router())
+        .with_strategy_proposal_router(state.current_strategy_proposal_router())
+        .with_governance_policy(Arc::clone(&governance_policy))
+        .with_runtime_events(runtime_events.clone());
+        let mut admitted_identities = Vec::new();
         if let Some(metrics) = state.current_prometheus_metrics() {
             dispatcher = dispatcher.with_metrics(metrics);
         }
-        dispatcher
-            .register(Box::new(WhiskerAgent::new(
-                AgentId::new("whisker", "primary"),
-                telemetry_rx,
-                state.current_detector(),
-                state.current_substrate(),
-                state.current_pheromone_config(),
-            )))
-            .map_err(std::io::Error::other)?;
-        dispatcher
-            .register(Box::new(TomAgent::new(
-                AgentId::new("tom", "primary"),
-                config.runtime.governance_degraded_tick_threshold,
-                Arc::clone(&governance_policy),
-            )))
-            .map_err(std::io::Error::other)?;
-        dispatcher
-            .register(Box::new(
-                PounceAgent::new(
-                    AgentId::new("pounce", "primary"),
-                    state.current_pheromone_config().response_playbook.clone(),
-                )
-                .with_governance_policy(Arc::clone(&governance_policy)),
-            ))
-            .map_err(std::io::Error::other)?;
-        if config.investigation.enabled {
+        let whisker_identity =
+            load_persisted_agent_identity(&identity_store, AgentRole::Whisker, "primary")?;
+        if admit_runtime_identity(
+            &identity_registry,
+            AgentRole::Whisker,
+            "primary",
+            &whisker_identity,
+            now_ms,
+        )? {
+            admitted_identities.push(whisker_identity.id.clone());
             dispatcher
-                .register(Box::new(StalkerAgent::new(
-                    AgentId::new("stalker", "primary"),
-                    state.current_replay_store(),
-                    state.current_investigation(),
+                .register(Box::new(WhiskerAgent::new_with_signing_key(
+                    whisker_identity.id,
+                    whisker_identity.signing_key,
+                    telemetry_rx,
+                    state.current_detector(),
                     state.current_substrate(),
                     state.current_pheromone_config(),
                 )))
                 .map_err(std::io::Error::other)?;
         }
-        if config.correlation.enabled {
+        if let Some(calico_id) = register_optional_calico_agent(
+            &mut dispatcher,
+            &cli.config,
+            &config,
+            state.current_substrate(),
+            &identity_store,
+            &identity_registry,
+            now_ms,
+        )? {
+            admitted_identities.push(calico_id);
+        }
+        let tom_identity =
+            load_persisted_agent_identity(&identity_store, AgentRole::Tom, "primary")?;
+        if admit_runtime_identity(
+            &identity_registry,
+            AgentRole::Tom,
+            "primary",
+            &tom_identity,
+            now_ms,
+        )? {
+            admitted_identities.push(tom_identity.id.clone());
             dispatcher
-                .register(Box::new(WeaverAgent::new(
-                    AgentId::new("weaver", "primary"),
-                    state.current_correlation_engine(),
-                    state.current_investigation_store(),
-                    state.current_incident_store(),
+                .register(Box::new(TomAgent::new_with_signing_key(
+                    tom_identity.id,
+                    tom_identity.signing_key,
+                    config.runtime.governance_degraded_tick_threshold,
+                    Arc::clone(&governance_policy),
                 )))
                 .map_err(std::io::Error::other)?;
         }
+        let pounce_identity =
+            load_persisted_agent_identity(&identity_store, AgentRole::Pouncer, "primary")?;
+        if admit_runtime_identity(
+            &identity_registry,
+            AgentRole::Pouncer,
+            "primary",
+            &pounce_identity,
+            now_ms,
+        )? {
+            admitted_identities.push(pounce_identity.id.clone());
+            dispatcher
+                .register(Box::new(
+                    PounceAgent::new_with_signing_key(
+                        pounce_identity.id,
+                        pounce_identity.signing_key,
+                        state.current_pheromone_config().response_playbook.clone(),
+                    )
+                    .with_governance_policy(Arc::clone(&governance_policy)),
+                ))
+                .map_err(std::io::Error::other)?;
+        }
+        if config.evolution.enabled {
+            let kitten_identity =
+                load_persisted_agent_identity(&identity_store, AgentRole::Kitten, "primary")?;
+            if admit_runtime_identity(
+                &identity_registry,
+                AgentRole::Kitten,
+                "primary",
+                &kitten_identity,
+                now_ms,
+            )? {
+                admitted_identities.push(kitten_identity.id.clone());
+                dispatcher
+                    .register(Box::new(KittenAgent::new_with_signing_key(
+                        kitten_identity.id,
+                        kitten_identity.signing_key,
+                        cli.config.clone(),
+                        config.clone(),
+                        state.current_substrate(),
+                    )))
+                    .map_err(std::io::Error::other)?;
+            }
+        }
+        if let Some(sphinx_id) = register_optional_sphinx_agent(
+            &mut dispatcher,
+            &cli.config,
+            &config,
+            state.current_substrate(),
+            &identity_store,
+            &identity_registry,
+            now_ms,
+        )? {
+            admitted_identities.push(sphinx_id);
+        }
+        if config.investigation.enabled {
+            let stalker_identity =
+                load_persisted_agent_identity(&identity_store, AgentRole::Stalker, "primary")?;
+            if admit_runtime_identity(
+                &identity_registry,
+                AgentRole::Stalker,
+                "primary",
+                &stalker_identity,
+                now_ms,
+            )? {
+                admitted_identities.push(stalker_identity.id.clone());
+                dispatcher
+                    .register(Box::new(StalkerAgent::new_with_signing_key(
+                        stalker_identity.id,
+                        stalker_identity.signing_key,
+                        state.current_replay_store(),
+                        state.current_investigation(),
+                        state.current_substrate(),
+                        state.current_pheromone_config(),
+                    )))
+                    .map_err(std::io::Error::other)?;
+            }
+        }
+        if config.correlation.enabled {
+            let weaver_identity =
+                load_persisted_agent_identity(&identity_store, AgentRole::Weaver, "primary")?;
+            if admit_runtime_identity(
+                &identity_registry,
+                AgentRole::Weaver,
+                "primary",
+                &weaver_identity,
+                now_ms,
+            )? {
+                admitted_identities.push(weaver_identity.id.clone());
+                dispatcher
+                    .register(Box::new(WeaverAgent::new_with_signing_key(
+                        weaver_identity.id,
+                        weaver_identity.signing_key,
+                        state.current_correlation_engine(),
+                        state.current_investigation_store(),
+                        state.current_incident_store(),
+                    )))
+                    .map_err(std::io::Error::other)?;
+            }
+        }
+        dispatcher.set_admitted_identities(admitted_identities);
         let mut dispatcher_handle = Some(tokio::spawn(async move {
             dispatcher.run().await;
         }));
@@ -585,7 +846,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             state.current_pheromone_config(),
             Arc::new(state.current_substrate()),
         )
-        .with_shared_mode_state(Arc::clone(&mode_state));
+        .with_shared_mode_state(Arc::clone(&mode_state))
+        .with_runtime_events(runtime_events);
         let mut monitor_handle = Some(tokio::spawn(async move {
             concentration_monitor
                 .run_until_shutdown(CONCENTRATION_MONITOR_INTERVAL_MS, monitor_shutdown)
@@ -597,9 +859,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut reload_handles = Some(spawn_reload_tasks(state.clone(), shutdown_tx.clone()));
         let listener = tokio::net::TcpListener::bind(&cli.bind).await?;
         let serve_state = state.clone();
-        let server = axum::serve(listener, detect_http_router(serve_state))
-            .with_graceful_shutdown(wait_for_shutdown_request(shutdown_rx))
-            .into_future();
+        let server = serve_with_listener(
+            listener,
+            detect_http_router(serve_state),
+            config.tls.clone(),
+            wait_for_shutdown_request(shutdown_rx),
+        );
         tokio::pin!(server);
 
         tokio::select! {
@@ -806,8 +1071,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::watch_paths_differ;
+    use super::{
+        register_optional_calico_agent, register_optional_sphinx_agent, watch_paths_differ,
+    };
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use swarm_core::agent::{AgentRole, SwarmModeState};
+    use swarm_pheromone::ConfiguredPheromoneSubstrate;
+    use swarm_runtime::agent_identity::{
+        FileAgentIdentityRegistry, FileAgentKeyStore, resolve_agent_key_dir,
+        resolve_identity_registry_dir,
+    };
+    use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
+    use swarm_runtime::runtime_events::RuntimeEventBroadcaster;
 
     #[test]
     fn watch_paths_differ_detects_secret_dir_retargets() {
@@ -818,5 +1094,148 @@ mod tests {
         assert!(watch_paths_differ(left.as_ref(), None));
         assert!(!watch_paths_differ(left.as_ref(), left.as_ref()));
         assert!(!watch_paths_differ(None, None));
+    }
+
+    #[test]
+    fn serve_mode_registers_sphinx_when_memory_is_enabled() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-detect-sphinx-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temporary root should be created");
+
+        let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("rulesets/default.yaml");
+        let mut config =
+            swarm_runtime::config::load_config(&config_path).expect("default config should load");
+        config.memory.enabled = true;
+        config.identity.agent_key_dir = root.join("agent-keys").display().to_string();
+        config.identity.registry_dir = root.join("agent-identity").display().to_string();
+        config.memory.knowledge_graph_results_dir =
+            root.join("knowledge-graph").display().to_string();
+
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let health_state = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
+        let substrate = ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
+            .expect("substrate should build");
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate.clone(),
+            Arc::clone(&health_state),
+        )
+        .with_mode_state(Arc::new(arc_swap::ArcSwap::from_pointee(
+            SwarmModeState::new(),
+        )))
+        .with_runtime_events(RuntimeEventBroadcaster::new(16));
+
+        let identity_store =
+            FileAgentKeyStore::open(resolve_agent_key_dir(&config_path, &config.identity))
+                .expect("agent key store should open");
+        let identity_registry = FileAgentIdentityRegistry::open(resolve_identity_registry_dir(
+            &config_path,
+            &config.identity,
+        ))
+        .expect("identity registry should open");
+        let registered_id = register_optional_sphinx_agent(
+            &mut dispatcher,
+            &config_path,
+            &config,
+            substrate,
+            &identity_store,
+            &identity_registry,
+            swarm_runtime::runtime_events::now_ms(),
+        )
+        .expect("sphinx registration should succeed");
+        let registered_id = registered_id.expect("sphinx should be registered");
+
+        let summary = dispatcher.agent_health_summary();
+        let first_id = summary
+            .iter()
+            .find(|entry| entry.role == AgentRole::Sphinx)
+            .map(|entry| entry.id.clone())
+            .expect("sphinx entry should exist");
+        assert!(first_id.starts_with("swarm:ed25519:"));
+        assert_eq!(first_id, registered_id.0);
+
+        let reloaded_identity =
+            super::load_persisted_agent_identity(&identity_store, AgentRole::Sphinx, "primary")
+                .expect("persisted sphinx identity should reload");
+        assert_eq!(first_id, reloaded_identity.id.0);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn serve_mode_registers_calico_when_deception_is_enabled() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-detect-calico-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temporary root should be created");
+
+        let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("rulesets/default.yaml");
+        let mut config =
+            swarm_runtime::config::load_config(&config_path).expect("default config should load");
+        config.deception.enabled = true;
+        config.identity.agent_key_dir = root.join("agent-keys").display().to_string();
+        config.identity.registry_dir = root.join("agent-identity").display().to_string();
+
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let health_state = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
+        let substrate = ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
+            .expect("substrate should build");
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate.clone(),
+            Arc::clone(&health_state),
+        )
+        .with_mode_state(Arc::new(arc_swap::ArcSwap::from_pointee(
+            SwarmModeState::new(),
+        )))
+        .with_runtime_events(RuntimeEventBroadcaster::new(16));
+
+        let identity_store =
+            FileAgentKeyStore::open(resolve_agent_key_dir(&config_path, &config.identity))
+                .expect("agent key store should open");
+        let identity_registry = FileAgentIdentityRegistry::open(resolve_identity_registry_dir(
+            &config_path,
+            &config.identity,
+        ))
+        .expect("identity registry should open");
+        let registered_id = register_optional_calico_agent(
+            &mut dispatcher,
+            &config_path,
+            &config,
+            substrate,
+            &identity_store,
+            &identity_registry,
+            swarm_runtime::runtime_events::now_ms(),
+        )
+        .expect("calico registration should succeed");
+        let registered_id = registered_id.expect("calico should be registered");
+
+        let summary = dispatcher.agent_health_summary();
+        let first_id = summary
+            .iter()
+            .find(|entry| entry.role == AgentRole::Calico)
+            .map(|entry| entry.id.clone())
+            .expect("calico entry should exist");
+        assert!(first_id.starts_with("swarm:ed25519:"));
+        assert_eq!(first_id, registered_id.0);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -46,9 +46,26 @@ pub struct SupplyChainDetector {
 
 impl Default for SupplyChainDetector {
     fn default() -> Self {
-        match Self::from_profile(SupplyChainProfile::default()) {
-            Ok(detector) => detector,
-            Err(error) => panic!("default SupplyChainProfile is invalid: {error}"),
+        Self {
+            trusted_paths: default_trusted_paths()
+                .into_iter()
+                .map(|value| normalize_path(&value))
+                .collect(),
+            trusted_signers: default_trusted_signers()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            suspicious_loader_pairs: default_suspicious_loader_pairs()
+                .into_iter()
+                .map(|(loader, expected_dir)| {
+                    (
+                        normalize_process_name(&loader),
+                        normalize_path(&expected_dir),
+                    )
+                })
+                .collect(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
         }
     }
 }
@@ -254,6 +271,10 @@ impl SupplyChainProfile {
 }
 
 impl DetectionStrategy for SupplyChainDetector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "supply_chain"
     }
@@ -267,10 +288,14 @@ impl DetectionStrategy for SupplyChainDetector {
                 self.evaluate_file(event, file).into_iter().collect()
             }
             TelemetryPayload::NetworkConnect(_)
+            | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::DnsQuery(_)
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
-            | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
+            | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
         }
     }
 }

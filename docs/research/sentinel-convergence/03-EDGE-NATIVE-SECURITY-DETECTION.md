@@ -412,9 +412,12 @@ Telemetry Event  -->  Detector  -->  Finding  -->  Pheromone Deposit
 ```
 
 This pipeline is already microsecond-budget and allocation-conscious. The
-`DetectionStrategy` trait evaluates synchronously (no async, no allocation
-in the hot path), and findings are converted to pheromone deposits that are
-signed and stored in the in-memory substrate.
+`DetectionStrategy` trait evaluates synchronously (no async in the hot path),
+but the current implementation still materializes small `Vec` and JSON
+structures while producing findings and deposits. The benchmark therefore
+captures a typed, low-allocation path rather than a strictly allocation-free
+one; findings are then converted to pheromone deposits that are signed and
+stored in the in-memory substrate.
 
 ### 4.3 Components by Resource Cost
 

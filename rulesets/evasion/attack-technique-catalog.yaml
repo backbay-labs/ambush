@@ -1,0 +1,79 @@
+schema_version: 1
+suite: scenario-suites/evasion-breadth-v1.yaml
+detectors:
+  - detector: suspicious_process_tree
+    intentionally_uncovered:
+      - technique: T1204.001
+        threat_class: initial_access
+        rationale: The detector only sees normalized process starts after execution and cannot reason about phishing-link delivery or attachment-open provenance.
+      - technique: T1036.005
+        threat_class: defense_evasion
+        rationale: Legitimate-name or path-masquerading requires richer signer and file-origin telemetry than the current process-start payload carries.
+  - detector: fileless_execution
+    intentionally_uncovered:
+      - technique: T1055.004
+        threat_class: defense_evasion
+        rationale: APC injection timing and queue semantics are not exposed by the current ProcessMemoryAccess normalization.
+      - technique: T1106
+        threat_class: defense_evasion
+        rationale: Indirect-system-call provenance is only partially captured through call_stack_hint, so heavily obfuscated syscall trampolines remain a deliberate gap.
+      - technique: T1620
+        threat_class: defense_evasion
+        rationale: Reflective code loading detection relies on allocation-type and protection-flag heuristics that cannot distinguish intentional reflective loads from benign runtime loaders.
+  - detector: behavioral_anomaly
+    intentionally_uncovered:
+      - technique: T1070
+        threat_class: defense_evasion
+        rationale: The baseline lane models novelty and drift, not explicit cleanup or artifact-removal semantics.
+      - technique: T1036
+        threat_class: defense_evasion
+        rationale: Parent-child and role-tool frequency alone are not sufficient to prove masquerading without file-metadata lineage.
+  - detector: dns_exfiltration
+    intentionally_uncovered:
+      - technique: T1071.001
+        threat_class: command_and_control
+        rationale: DNS-over-HTTPS and other application-layer tunneling over web protocols bypass the DNS-query-specific normalization.
+  - detector: lateral_movement
+    intentionally_uncovered:
+      - technique: T1021.002
+        threat_class: lateral_movement
+        rationale: SMB admin-share execution needs file-share or service-control telemetry that is not currently part of the process and auth payload set.
+      - technique: T1550.002
+        threat_class: lateral_movement
+        rationale: Pass-the-hash behavior is not directly encoded in the current AuthenticationEvent normalization.
+  - detector: credential_access
+    intentionally_uncovered:
+      - technique: T1555.005
+        threat_class: credential_access
+        rationale: Cloud-credential scraping from browser stores requires browser-profile or filesystem telemetry beyond registry and auth events.
+  - detector: suspicious_scripting
+    intentionally_uncovered:
+      - technique: T1216
+        threat_class: defense_evasion
+        rationale: Signed-script proxy execution via uncommon LOLBins needs broader binary- and module-load coverage than the current script-focused heuristics.
+  - detector: persistence
+    intentionally_uncovered:
+      - technique: T1546.003
+        threat_class: persistence
+        rationale: WMI event subscriptions are intentionally excluded until normalized WMI repository or subscription telemetry exists.
+      - technique: T1546.008
+        threat_class: persistence
+        rationale: Accessibility-feature abuse is not represented in the current registry and file persistence payloads.
+  - detector: supply_chain
+    intentionally_uncovered:
+      - technique: T1195.001
+        threat_class: supply_chain
+        rationale: The adversarial robustness suite is host-execution focused and does not yet include package provenance or build-pipeline artifacts.
+      - technique: T1195.002
+        threat_class: supply_chain
+        rationale: Compromised dependency publication requires registry, CI, or artifact-signing telemetry that is outside the current evasion corpus.
+  - detector: network_connect
+    intentionally_uncovered:
+      - technique: T1071.001
+        threat_class: command_and_control
+        rationale: Low-and-slow HTTPS C2 over expected ports remains a deliberate gap without content or certificate-intel enrichment.
+  - detector: infrastructure_anomaly
+    intentionally_uncovered:
+      - technique: T1496
+        threat_class: impact
+        rationale: The evasion corpus exercises host and process telemetry, not node-level thermal or resource signals, so infrastructure-only abuse is intentionally cataloged rather than scored here.

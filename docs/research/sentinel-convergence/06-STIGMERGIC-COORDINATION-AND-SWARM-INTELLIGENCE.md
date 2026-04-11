@@ -377,10 +377,12 @@ Ed25519 `signature: Vec<u8>` with `agent_key: Vec<u8>`. Key design choices:
 
 ### 3.3 ThreatClass Taxonomy and Per-Class Tuning
 
-The `ThreatClass` enum's 12 MITRE-aligned variants double as NATS subject
-hierarchy keys (`swarm.pheromone.{threat_class}.{severity}`), meaning
-concentration is computed per-threat-class by design. Cross-class correlation
-is the Weaver agent's responsibility.
+The `ThreatClass` enum's 12 MITRE-aligned variants double as the substrate's
+threat-class routing/indexing dimension. The crate-level design notes describe
+a conceptual hierarchy (`swarm.pheromone.{threat_class}.{severity}`), but the
+current JetStream KV implementation keys deposits by threat class without a
+severity segment. Concentration is still computed per-threat-class by design;
+cross-class correlation is the Weaver agent's responsibility.
 
 Per-class `ThreatClassConfig` overrides allow operators to tune half-life,
 evaporation threshold, and escalation thresholds independently. Credential

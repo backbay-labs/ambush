@@ -109,11 +109,12 @@ async fn composite_detector_deposits_from_both_strategies() -> Result<(), Box<dy
     let detector = composite_detector();
     let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
 
+    let agent_id = AgentId::from_verifying_key(&test_signing_key().verifying_key());
     let process_outcome = detect_and_deposit(
         &detector,
         &substrate,
         &process_event(),
-        &AgentId("whisker-composite-process".to_string()),
+        &agent_id,
         &config.pheromone,
         &test_signing_key(),
     )
@@ -124,7 +125,7 @@ async fn composite_detector_deposits_from_both_strategies() -> Result<(), Box<dy
         &detector,
         &substrate,
         &dns_event(),
-        &AgentId("whisker-composite-dns".to_string()),
+        &agent_id,
         &config.pheromone,
         &test_signing_key(),
     )

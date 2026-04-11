@@ -40,7 +40,27 @@ impl StalkerAgent {
         substrate: ConfiguredPheromoneSubstrate,
         pheromone_config: PheromoneConfig,
     ) -> Self {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        Self::new_with_signing_key(
+            id,
+            SigningKey::generate(&mut OsRng),
+            replay_store,
+            investigation,
+            substrate,
+            pheromone_config,
+        )
+    }
+
+    pub fn new_with_signing_key(
+        id: AgentId,
+        signing_key: SigningKey,
+        replay_store: ConfiguredReplayBundleStore,
+        investigation: InvestigationCoordinator<
+            SummaryInvestigator,
+            ConfiguredInvestigationBundleStore,
+        >,
+        substrate: ConfiguredPheromoneSubstrate,
+        pheromone_config: PheromoneConfig,
+    ) -> Self {
         let verifying_key = signing_key.verifying_key();
         Self {
             id,
@@ -121,12 +141,23 @@ impl SwarmAgent for StalkerAgent {
                 continue;
             }
 
-            let confidence = 0.9_f64;
+            let confidence = if investigation.bundle.decision.final_confidence_basis_points == 0 {
+                0.9_f64
+            } else {
+                (f64::from(investigation.bundle.decision.final_confidence_basis_points) / 10_000.0)
+                    .clamp(0.55, 0.99)
+            };
             let indicator = serde_json::json!({
                 "hunt_id": hunt_id,
                 "investigation_id": investigation.bundle.investigation_id,
+                "host_id": investigation.bundle.host_id,
                 "correlation_keys": investigation.bundle.correlation_keys,
                 "summary": investigation.bundle.summary,
+                "priority_class": investigation.bundle.priority.class,
+                "priority_score_basis_points": investigation.bundle.priority.total_basis_points,
+                "selected_interpretation_id": investigation.bundle.decision.selected_interpretation_id,
+                "final_confidence_basis_points": investigation.bundle.decision.final_confidence_basis_points,
+                "ambiguous": investigation.bundle.decision.ambiguous,
             });
             let threat_class_config = self
                 .substrate
@@ -136,6 +167,7 @@ impl SwarmAgent for StalkerAgent {
             let policy = self
                 .pheromone_config
                 .resolve_threat_class_policy(threat_class_config.as_ref());
+            let derived_identity = AgentId::from_verifying_key(&self.verifying_key);
             let mut deposit = PheromoneDeposit {
                 indicator: indicator.clone(),
                 threat_class: investigation.bundle.threat_class.clone(),
@@ -143,7 +175,9 @@ impl SwarmAgent for StalkerAgent {
                 confidence,
                 timestamp: env.now,
                 decay_half_life: policy.half_life_secs,
-                agent_id: self.id.clone(),
+                agent_id: AgentId(format!("{}:{}", derived_identity.0, self.id.0)),
+                agent_identity: derived_identity.0,
+                agent_role: Some(AgentRole::Stalker),
                 signature: Vec::new(),
                 agent_key: Vec::new(),
             };
@@ -155,6 +189,8 @@ impl SwarmAgent for StalkerAgent {
                 timestamp: deposit.timestamp,
                 decay_half_life: deposit.decay_half_life,
                 agent_id: &deposit.agent_id,
+                agent_identity: &deposit.agent_identity,
+                agent_role: deposit.agent_role,
             };
             let payload_bytes = serde_json::to_vec(&signing_payload).map_err(internal_error)?;
             let sig = self.signing_key.sign(&payload_bytes);
@@ -190,7 +226,9 @@ impl SwarmAgent for StalkerAgent {
 fn detection_hunts(pheromones: &[PheromoneDeposit]) -> Vec<String> {
     let mut hunts = Vec::new();
     for deposit in pheromones {
-        if !deposit.agent_id.0.starts_with("whisker-") {
+        let from_whisker = matches!(deposit.agent_role, Some(AgentRole::Whisker))
+            || deposit.agent_id.0.starts_with("whisker-");
+        if !from_whisker {
             continue;
         }
         let Some(hunt_id) = deposit
@@ -286,6 +324,7 @@ mod tests {
                 max_pending_jobs: 8,
                 time_budget_ms: 250,
                 bundle_store: BundleStoreConfig::Memory,
+                ..InvestigationConfig::default()
             },
             SummaryInvestigator,
             ConfiguredInvestigationBundleStore::from_config(&BundleStoreConfig::Memory).unwrap(),
@@ -379,6 +418,8 @@ mod tests {
                 timestamp: 1_700_000_000,
                 decay_half_life: 3600.0,
                 agent_id: AgentId::new("whisker", "primary"),
+                agent_identity: String::new(),
+                agent_role: None,
                 signature: Vec::new(),
                 agent_key: Vec::new(),
             }],
@@ -461,7 +502,11 @@ mod tests {
                 .await
                 .unwrap()
                 .iter()
-                .any(|deposit| deposit.agent_id.0 == "stalker-primary")
+                .any(|deposit| {
+                    deposit.agent_id.0.ends_with(":stalker-primary")
+                        && deposit.agent_role == Some(AgentRole::Stalker)
+                        && deposit.agent_identity.starts_with("swarm:ed25519:")
+                })
         );
     }
 }

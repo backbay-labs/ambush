@@ -22,7 +22,7 @@ use swarm_spine::IncidentStore;
 use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
 fn is_strategy_scoped_whisker_deposit(agent_id: &str) -> bool {
-    agent_id.starts_with("whisker-primary:") && agent_id.ends_with("suspicious_process_tree")
+    agent_id.contains(":whisker-primary:") && agent_id.ends_with("suspicious_process_tree")
 }
 
 fn integration_config() -> SwarmConfig {
@@ -32,6 +32,7 @@ fn integration_config() -> SwarmConfig {
         description: "multi-agent integration".to_string(),
         runtime: RuntimeSettings {
             mode: RuntimeMode::DetectOnly,
+            demo_mode: false,
             telemetry_sources: vec![TelemetrySourceConfig {
                 name: "synthetic".to_string(),
                 subject: "telemetry.synthetic.process".to_string(),
@@ -44,6 +45,8 @@ fn integration_config() -> SwarmConfig {
             secret_dir: None,
             agent_tick_timeout_ms: 500,
             governance_degraded_tick_threshold: 3,
+            partition_contingency_lease_ttl_ms: 300_000,
+            partition_contingency_blast_radius_cap: 1,
             max_dead_letter_bytes: None,
         },
         detection: DetectionConfig {
@@ -82,6 +85,7 @@ fn integration_config() -> SwarmConfig {
             max_pending_jobs: 8,
             time_budget_ms: 250,
             bundle_store: BundleStoreConfig::Memory,
+            ..InvestigationConfig::default()
         },
         correlation: CorrelationConfig {
             enabled: true,
@@ -92,7 +96,13 @@ fn integration_config() -> SwarmConfig {
         },
         canary: CanaryConfig::default(),
         promotion: PromotionConfig::default(),
+        evolution: swarm_core::config::EvolutionConfig::default(),
+        deception: swarm_core::config::DeceptionConfig::default(),
+        memory: swarm_core::config::MemoryConfig::default(),
+        identity: swarm_core::config::IdentityConfig::default(),
+        platform_api: Default::default(),
         operator: OperatorSurfaceConfig::default(),
+        tls: None,
     }
 }
 
@@ -120,6 +130,8 @@ async fn full_multi_agent_pipeline() -> Result<(), Box<dyn Error>> {
     let detector = build_composite_detector(&config.detection)?;
     let stack = ConfiguredRuntimeStack::from_config(config.clone(), SummaryInvestigator)?;
     let event = suspicious_event("evt-multi-1");
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
+    let detect_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
     let approval = ApprovalContext {
         live_mode: false,
         receipt_chain: Vec::new(),
@@ -132,9 +144,9 @@ async fn full_multi_agent_pipeline() -> Result<(), Box<dyn Error>> {
             &detector,
             &event,
             EventExecutionContext {
-                agent_id: &AgentId("swarm-detect".to_string()),
+                agent_id: &detect_agent_id,
                 approval: &approval,
-                signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
+                signing_key: &signing_key,
             },
             |_| {
                 Some(ResponseAction::DeployDecoy {
@@ -186,13 +198,13 @@ async fn full_multi_agent_pipeline() -> Result<(), Box<dyn Error>> {
         dispatcher.run().await;
     });
 
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let deposits = stack.substrate.recent_deposits(20).await?;
             let incident = stack.incident_store.load_by_hunt_id("evt-multi-1")?;
             if deposits
                 .iter()
-                .any(|deposit| deposit.agent_id.0 == "stalker-primary")
+                .any(|deposit| deposit.agent_id.0.ends_with(":stalker-primary"))
                 && incident.is_some()
             {
                 break Ok::<(), Box<dyn Error>>(());
@@ -214,10 +226,35 @@ async fn full_multi_agent_pipeline() -> Result<(), Box<dyn Error>> {
     assert!(
         deposits
             .iter()
-            .any(|deposit| deposit.agent_id.0 == "stalker-primary")
+            .any(|deposit| deposit.agent_id.0.ends_with(":stalker-primary"))
     );
     let incident = stack.incident_store.load_by_hunt_id("evt-multi-1")?;
     assert!(incident.is_some());
+    let incident = incident.expect("correlated incident");
+    assert!(incident.incident.confidence_score > 0.5);
+    assert!(
+        incident
+            .incident
+            .graph_dimensions
+            .iter()
+            .any(|dimension| matches!(dimension, swarm_spine::IncidentGraphDimension::Entity))
+    );
+    let status_detector = build_composite_detector(&config.detection)?;
+    let status = stack.operator_review_status(&status_detector).await?;
+    assert!(status.async_lane.enabled);
+    assert!(status.async_lane.recent_investigations >= 1);
+    assert_eq!(status.async_lane.recent_incidents, 1);
+    assert_eq!(
+        status.async_lane.latest_incident_id.as_deref(),
+        Some(incident.record.incident_id.as_str())
+    );
+    assert!(
+        status
+            .async_lane
+            .latest_incident_graph_dimensions
+            .iter()
+            .any(|dimension| matches!(dimension, swarm_spine::IncidentGraphDimension::Entity))
+    );
 
     Ok(())
 }

@@ -10,12 +10,13 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use swarm_core::agent::AgentRole;
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
 use swarm_core::pheromone::{
-    EscalationRecord, PheromoneConcentration, PheromoneDeposit, ThreatClass, ThreatClassConfig,
-    ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
+    BehavioralBaselineSnapshot, EscalationRecord, PheromoneConcentration, PheromoneDeposit,
+    ThreatClass, ThreatClassConfig, ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
-use swarm_core::types::{AgentId, Severity};
+use swarm_core::types::{AgentId, SWARM_PROVIDENCE_FEEDBACK_SCHEMA, Severity};
 
 /// Errors raised by the pheromone substrate.
 #[derive(Debug, thiserror::Error)]
@@ -89,6 +90,8 @@ pub struct DepositSigningPayload<'a> {
     pub timestamp: i64,
     pub decay_half_life: f64,
     pub agent_id: &'a AgentId,
+    pub agent_identity: &'a str,
+    pub agent_role: Option<AgentRole>,
 }
 
 /// Validate that a [`PheromoneDeposit`] carries a valid Ed25519 signature
@@ -143,6 +146,8 @@ pub fn validate_deposit_signature(deposit: &PheromoneDeposit) -> Result<(), Subs
         timestamp: deposit.timestamp,
         decay_half_life: deposit.decay_half_life,
         agent_id: &deposit.agent_id,
+        agent_identity: &deposit.agent_identity,
+        agent_role: deposit.agent_role,
     };
     let payload_bytes = serde_json::to_vec(&payload).map_err(|err| SubstrateError::Encode {
         context: "deposit signing payload".into(),
@@ -155,7 +160,68 @@ pub fn validate_deposit_signature(deposit: &PheromoneDeposit) -> Result<(), Subs
             reason: format!("signature verification failed: {err}"),
         })?;
 
+    let derived_agent_id = AgentId::from_verifying_key(&verifying_key);
+    let agent_id_matches = derived_agent_id == deposit.agent_id
+        || deposit
+            .agent_id
+            .0
+            .strip_prefix(&derived_agent_id.0)
+            .is_some_and(|suffix| suffix.starts_with(':') && suffix.len() > 1);
+    if !agent_id_matches {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: format!(
+                "agent_id `{}` does not match signing key identity `{}`",
+                deposit.agent_id, derived_agent_id
+            ),
+        });
+    }
+    if deposit.agent_identity != derived_agent_id.to_string() {
+        return Err(SubstrateError::InvalidDeposit {
+            reason: format!(
+                "agent_identity `{}` does not match signing key identity `{}`",
+                deposit.agent_identity, derived_agent_id
+            ),
+        });
+    }
+
     Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AdmissionControl {
+    admitted_identities: Arc<RwLock<Option<HashSet<AgentId>>>>,
+}
+
+impl AdmissionControl {
+    pub(crate) fn set_admitted_identities(
+        &self,
+        identities: impl IntoIterator<Item = AgentId>,
+    ) -> Result<(), SubstrateError> {
+        let mut guard = self
+            .admitted_identities
+            .write()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        *guard = Some(identities.into_iter().collect());
+        Ok(())
+    }
+
+    pub(crate) fn validate_deposit_admission(
+        &self,
+        deposit: &PheromoneDeposit,
+    ) -> Result<(), SubstrateError> {
+        let guard = self
+            .admitted_identities
+            .read()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        if let Some(admitted_identities) = guard.as_ref()
+            && !admitted_identities.contains(&deposit.agent_id)
+        {
+            return Err(SubstrateError::InvalidDeposit {
+                reason: format!("agent `{}` is not admitted", deposit.agent_id),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Query filters for reading persisted deposits.
@@ -163,6 +229,7 @@ pub fn validate_deposit_signature(deposit: &PheromoneDeposit) -> Result<(), Subs
 pub struct DepositQuery {
     pub threat_class: Option<ThreatClass>,
     pub since_timestamp: Option<i64>,
+    pub host_id: Option<String>,
     pub limit: usize,
 }
 
@@ -171,6 +238,7 @@ impl DepositQuery {
         Self {
             threat_class: None,
             since_timestamp: None,
+            host_id: None,
             limit,
         }
     }
@@ -188,6 +256,18 @@ pub struct SubstrateHealth {
 
 type ThreatIntelKey = (ThreatIntelIndicatorType, String);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct FeedbackSuppressionKey {
+    threat_class: ThreatClass,
+    event_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeedbackSuppressionState {
+    Confirm,
+    Dismiss,
+}
+
 /// Async contract for pheromone substrates.
 #[async_trait]
 pub trait PheromoneSubstrate: Send + Sync {
@@ -202,6 +282,11 @@ pub trait PheromoneSubstrate: Send + Sync {
 
     async fn store_threat_intel_entry(&self, entry: ThreatIntelEntry)
     -> Result<(), SubstrateError>;
+
+    async fn store_behavioral_baseline_snapshot(
+        &self,
+        snapshot: BehavioralBaselineSnapshot,
+    ) -> Result<(), SubstrateError>;
 
     async fn query_concentration(
         &self,
@@ -232,6 +317,11 @@ pub trait PheromoneSubstrate: Send + Sync {
         value: &str,
         now: i64,
     ) -> Result<Option<ThreatIntelEntry>, SubstrateError>;
+
+    async fn query_behavioral_baseline_snapshot(
+        &self,
+        strategy_id: &str,
+    ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError>;
 
     async fn recent_deposits(&self, limit: usize) -> Result<Vec<PheromoneDeposit>, SubstrateError> {
         self.query_deposits(DepositQuery::recent(limit)).await
@@ -264,6 +354,18 @@ impl ConfiguredPheromoneSubstrate {
             PheromoneBackendConfig::JetStream { url, .. } => Ok(Self::JetStream(
                 JetStreamPheromoneSubstrate::new(config.clone(), url.clone()),
             )),
+        }
+    }
+
+    pub fn set_admitted_identities(
+        &self,
+        identities: impl IntoIterator<Item = AgentId>,
+    ) -> Result<(), SubstrateError> {
+        let identities = identities.into_iter().collect::<Vec<_>>();
+        match self {
+            Self::InMemory(substrate) => substrate.set_admitted_identities(identities),
+            Self::LocalJournal(substrate) => substrate.set_admitted_identities(identities),
+            Self::JetStream(substrate) => substrate.set_admitted_identities(identities),
         }
     }
 }
@@ -306,6 +408,23 @@ impl PheromoneSubstrate for ConfiguredPheromoneSubstrate {
             Self::InMemory(substrate) => substrate.store_threat_intel_entry(entry).await,
             Self::LocalJournal(substrate) => substrate.store_threat_intel_entry(entry).await,
             Self::JetStream(substrate) => substrate.store_threat_intel_entry(entry).await,
+        }
+    }
+
+    async fn store_behavioral_baseline_snapshot(
+        &self,
+        snapshot: BehavioralBaselineSnapshot,
+    ) -> Result<(), SubstrateError> {
+        match self {
+            Self::InMemory(substrate) => {
+                substrate.store_behavioral_baseline_snapshot(snapshot).await
+            }
+            Self::LocalJournal(substrate) => {
+                substrate.store_behavioral_baseline_snapshot(snapshot).await
+            }
+            Self::JetStream(substrate) => {
+                substrate.store_behavioral_baseline_snapshot(snapshot).await
+            }
         }
     }
 
@@ -389,6 +508,29 @@ impl PheromoneSubstrate for ConfiguredPheromoneSubstrate {
         }
     }
 
+    async fn query_behavioral_baseline_snapshot(
+        &self,
+        strategy_id: &str,
+    ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
+        match self {
+            Self::InMemory(substrate) => {
+                substrate
+                    .query_behavioral_baseline_snapshot(strategy_id)
+                    .await
+            }
+            Self::LocalJournal(substrate) => {
+                substrate
+                    .query_behavioral_baseline_snapshot(strategy_id)
+                    .await
+            }
+            Self::JetStream(substrate) => {
+                substrate
+                    .query_behavioral_baseline_snapshot(strategy_id)
+                    .await
+            }
+        }
+    }
+
     async fn gc_evaporated(&self, now: i64) -> Result<usize, SubstrateError> {
         match self {
             Self::InMemory(substrate) => substrate.gc_evaporated(now).await,
@@ -418,21 +560,32 @@ impl PheromoneSubstrate for ConfiguredPheromoneSubstrate {
 #[derive(Debug, Clone)]
 pub struct InMemoryPheromoneSubstrate {
     config: PheromoneConfig,
+    admission_control: AdmissionControl,
     deposits: Arc<RwLock<Vec<PheromoneDeposit>>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
     threat_class_configs: Arc<RwLock<BTreeMap<ThreatClass, ThreatClassConfig>>>,
     threat_intel_entries: Arc<RwLock<BTreeMap<ThreatIntelKey, ThreatIntelEntry>>>,
+    behavioral_baseline_snapshots: Arc<RwLock<BTreeMap<String, BehavioralBaselineSnapshot>>>,
 }
 
 impl InMemoryPheromoneSubstrate {
     pub fn new(config: PheromoneConfig) -> Self {
         Self {
             config,
+            admission_control: AdmissionControl::default(),
             deposits: Arc::new(RwLock::new(Vec::new())),
             escalations: Arc::new(RwLock::new(Vec::new())),
             threat_class_configs: Arc::new(RwLock::new(BTreeMap::new())),
             threat_intel_entries: Arc::new(RwLock::new(BTreeMap::new())),
+            behavioral_baseline_snapshots: Arc::new(RwLock::new(BTreeMap::new())),
         }
+    }
+
+    pub fn set_admitted_identities(
+        &self,
+        identities: impl IntoIterator<Item = AgentId>,
+    ) -> Result<(), SubstrateError> {
+        self.admission_control.set_admitted_identities(identities)
     }
 }
 
@@ -440,6 +593,8 @@ impl InMemoryPheromoneSubstrate {
 impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
         validate_deposit_signature(&deposit)?;
+        self.admission_control
+            .validate_deposit_admission(&deposit)?;
         let mut guard = self
             .deposits
             .write()
@@ -480,6 +635,18 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
         guard.insert(key, entry);
+        Ok(())
+    }
+
+    async fn store_behavioral_baseline_snapshot(
+        &self,
+        snapshot: BehavioralBaselineSnapshot,
+    ) -> Result<(), SubstrateError> {
+        let mut guard = self
+            .behavioral_baseline_snapshots
+            .write()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        guard.insert(snapshot.strategy_id.clone(), snapshot);
         Ok(())
     }
 
@@ -556,6 +723,17 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
             .get(&key)
             .filter(|entry| entry.expires_at > now)
             .cloned())
+    }
+
+    async fn query_behavioral_baseline_snapshot(
+        &self,
+        strategy_id: &str,
+    ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
+        let guard = self
+            .behavioral_baseline_snapshots
+            .read()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        Ok(guard.get(strategy_id).cloned())
     }
 
     async fn gc_evaporated(&self, now: i64) -> Result<usize, SubstrateError> {
@@ -610,14 +788,17 @@ impl PheromoneSubstrate for InMemoryPheromoneSubstrate {
 #[derive(Debug, Clone)]
 pub struct LocalJournalPheromoneSubstrate {
     config: PheromoneConfig,
+    admission_control: AdmissionControl,
     journal_path: PathBuf,
     escalation_journal_path: PathBuf,
     threat_class_config_journal_path: PathBuf,
     threat_intel_journal_path: PathBuf,
+    behavioral_baseline_journal_path: PathBuf,
     deposits: Arc<RwLock<Vec<PheromoneDeposit>>>,
     escalations: Arc<RwLock<Vec<EscalationRecord>>>,
     threat_class_configs: Arc<RwLock<BTreeMap<ThreatClass, ThreatClassConfig>>>,
     threat_intel_entries: Arc<RwLock<BTreeMap<ThreatIntelKey, ThreatIntelEntry>>>,
+    behavioral_baseline_snapshots: Arc<RwLock<BTreeMap<String, BehavioralBaselineSnapshot>>>,
 }
 
 impl LocalJournalPheromoneSubstrate {
@@ -626,23 +807,36 @@ impl LocalJournalPheromoneSubstrate {
         let escalation_journal_path = escalation_journal_path(&journal_path);
         let threat_class_config_journal_path = threat_class_config_journal_path(&journal_path);
         let threat_intel_journal_path = threat_intel_journal_path(&journal_path);
+        let behavioral_baseline_journal_path = behavioral_baseline_journal_path(&journal_path);
         ensure_parent_dir(&journal_path)?;
         let deposits = load_jsonl(&journal_path)?;
         let escalations = load_jsonl(&escalation_journal_path)?;
         let threat_class_configs = load_threat_class_configs(&threat_class_config_journal_path)?;
         let threat_intel_entries = load_threat_intel_entries(&threat_intel_journal_path)?;
+        let behavioral_baseline_snapshots =
+            load_behavioral_baseline_snapshots(&behavioral_baseline_journal_path)?;
 
         Ok(Self {
             config,
+            admission_control: AdmissionControl::default(),
             journal_path,
             escalation_journal_path,
             threat_class_config_journal_path,
             threat_intel_journal_path,
+            behavioral_baseline_journal_path,
             deposits: Arc::new(RwLock::new(deposits)),
             escalations: Arc::new(RwLock::new(escalations)),
             threat_class_configs: Arc::new(RwLock::new(threat_class_configs)),
             threat_intel_entries: Arc::new(RwLock::new(threat_intel_entries)),
+            behavioral_baseline_snapshots: Arc::new(RwLock::new(behavioral_baseline_snapshots)),
         })
+    }
+
+    pub fn set_admitted_identities(
+        &self,
+        identities: impl IntoIterator<Item = AgentId>,
+    ) -> Result<(), SubstrateError> {
+        self.admission_control.set_admitted_identities(identities)
     }
 }
 
@@ -650,6 +844,8 @@ impl LocalJournalPheromoneSubstrate {
 impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
         validate_deposit_signature(&deposit)?;
+        self.admission_control
+            .validate_deposit_admission(&deposit)?;
         append_jsonl_line(&self.journal_path, &deposit)?;
         let mut guard = self
             .deposits
@@ -694,6 +890,22 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
         guard.insert(key, entry);
+        Ok(())
+    }
+
+    async fn store_behavioral_baseline_snapshot(
+        &self,
+        snapshot: BehavioralBaselineSnapshot,
+    ) -> Result<(), SubstrateError> {
+        let mut guard = self
+            .behavioral_baseline_snapshots
+            .write()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        guard.insert(snapshot.strategy_id.clone(), snapshot);
+        rewrite_jsonl(
+            &self.behavioral_baseline_journal_path,
+            &guard.values().collect::<Vec<_>>(),
+        )?;
         Ok(())
     }
 
@@ -770,6 +982,17 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             .get(&key)
             .filter(|entry| entry.expires_at > now)
             .cloned())
+    }
+
+    async fn query_behavioral_baseline_snapshot(
+        &self,
+        strategy_id: &str,
+    ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
+        let guard = self
+            .behavioral_baseline_snapshots
+            .read()
+            .map_err(|_| SubstrateError::PoisonedLock)?;
+        Ok(guard.get(strategy_id).cloned())
     }
 
     async fn gc_evaporated(&self, now: i64) -> Result<usize, SubstrateError> {
@@ -835,18 +1058,28 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
             .append(true)
             .open(&self.threat_intel_journal_path)
             .is_ok();
-        let ready = deposits_ready && escalations_ready && configs_ready && threat_intel_ready;
+        let behavioral_baseline_ready = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.behavioral_baseline_journal_path)
+            .is_ok();
+        let ready = deposits_ready
+            && escalations_ready
+            && configs_ready
+            && threat_intel_ready
+            && behavioral_baseline_ready;
 
         Ok(SubstrateHealth {
             backend: "local_journal".to_string(),
             durable: true,
             ready,
             details: format!(
-                "journal files at {}, {}, {}, and {}",
+                "journal files at {}, {}, {}, {}, and {}",
                 self.journal_path.display(),
                 self.escalation_journal_path.display(),
                 self.threat_class_config_journal_path.display(),
-                self.threat_intel_journal_path.display()
+                self.threat_intel_journal_path.display(),
+                self.behavioral_baseline_journal_path.display()
             ),
             deposit_count: guard.len(),
         })
@@ -859,6 +1092,7 @@ pub(crate) fn concentration_for(
     now: i64,
     policy: &ThreatClassPolicy,
 ) -> PheromoneConcentration {
+    let suppression = latest_feedback_suppression_states(deposits);
     let mut sources = HashSet::new();
     let mut total_strength = 0.0;
     let mut peak_confidence: f64 = 0.0;
@@ -870,7 +1104,14 @@ pub(crate) fn concentration_for(
         if deposit.is_evaporated(now, policy.evaporation_threshold) {
             continue;
         }
-        total_strength += deposit.strength_at(now);
+        if is_suppressed_by_feedback(deposit, &suppression) {
+            continue;
+        }
+        let strength = deposit.strength_at(now);
+        if strength <= 0.0 {
+            continue;
+        }
+        total_strength += strength;
         peak_confidence = peak_confidence.max(deposit.confidence);
         sources.insert(deposit.agent_id.0.clone());
     }
@@ -887,6 +1128,7 @@ pub(crate) fn filter_deposits(
     deposits: &[PheromoneDeposit],
     query: DepositQuery,
 ) -> Vec<PheromoneDeposit> {
+    let suppression = latest_feedback_suppression_states(deposits);
     let mut filtered = deposits
         .iter()
         .filter(|deposit| {
@@ -897,6 +1139,11 @@ pub(crate) fn filter_deposits(
                 && query
                     .since_timestamp
                     .is_none_or(|since_timestamp| deposit.timestamp >= since_timestamp)
+                && query
+                    .host_id
+                    .as_deref()
+                    .is_none_or(|host_id| deposit_host_id(deposit) == Some(host_id))
+                && !is_suppressed_by_feedback(deposit, &suppression)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -905,6 +1152,101 @@ pub(crate) fn filter_deposits(
         filtered.truncate(query.limit);
     }
     filtered
+}
+
+fn deposit_host_id(deposit: &PheromoneDeposit) -> Option<&str> {
+    deposit
+        .indicator
+        .get("host_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            deposit
+                .indicator
+                .pointer("/evidence/host_metadata/host_id")
+                .and_then(serde_json::Value::as_str)
+        })
+}
+
+fn latest_feedback_suppression_states(
+    deposits: &[PheromoneDeposit],
+) -> BTreeMap<FeedbackSuppressionKey, (FeedbackSuppressionState, i64)> {
+    let mut states = BTreeMap::new();
+    for deposit in deposits {
+        let Some((key, state)) = feedback_suppression_marker(deposit) else {
+            continue;
+        };
+        let replace = states
+            .get(&key)
+            .is_none_or(|(_, timestamp)| *timestamp <= deposit.timestamp);
+        if replace {
+            states.insert(key, (state, deposit.timestamp));
+        }
+    }
+    states
+}
+
+fn is_suppressed_by_feedback(
+    deposit: &PheromoneDeposit,
+    suppression: &BTreeMap<FeedbackSuppressionKey, (FeedbackSuppressionState, i64)>,
+) -> bool {
+    if is_providence_feedback_deposit(deposit) {
+        return false;
+    }
+    let Some(key) = deposit_suppression_key(deposit) else {
+        return false;
+    };
+    suppression.get(&key).is_some_and(|(state, timestamp)| {
+        *state == FeedbackSuppressionState::Dismiss && *timestamp >= deposit.timestamp
+    })
+}
+
+fn feedback_suppression_marker(
+    deposit: &PheromoneDeposit,
+) -> Option<(FeedbackSuppressionKey, FeedbackSuppressionState)> {
+    let indicator = deposit.indicator.as_object()?;
+    if indicator.get("schema").and_then(serde_json::Value::as_str)
+        != Some(SWARM_PROVIDENCE_FEEDBACK_SCHEMA)
+    {
+        return None;
+    }
+    let event_id = indicator
+        .get("event_id")
+        .and_then(serde_json::Value::as_str)?;
+    let state = match indicator
+        .get("action")
+        .and_then(serde_json::Value::as_str)?
+        .trim()
+    {
+        "confirm" => FeedbackSuppressionState::Confirm,
+        "dismiss" => FeedbackSuppressionState::Dismiss,
+        _ => return None,
+    };
+    Some((
+        FeedbackSuppressionKey {
+            threat_class: deposit.threat_class.clone(),
+            event_id: event_id.to_string(),
+        },
+        state,
+    ))
+}
+
+fn deposit_suppression_key(deposit: &PheromoneDeposit) -> Option<FeedbackSuppressionKey> {
+    Some(FeedbackSuppressionKey {
+        threat_class: deposit.threat_class.clone(),
+        event_id: deposit
+            .indicator
+            .get("event_id")
+            .and_then(serde_json::Value::as_str)?
+            .to_string(),
+    })
+}
+
+fn is_providence_feedback_deposit(deposit: &PheromoneDeposit) -> bool {
+    deposit
+        .indicator
+        .get("schema")
+        .and_then(serde_json::Value::as_str)
+        == Some(SWARM_PROVIDENCE_FEEDBACK_SCHEMA)
 }
 
 pub(crate) fn filter_escalations(
@@ -1037,6 +1379,17 @@ fn load_threat_intel_entries(
     Ok(threat_intel_entries)
 }
 
+fn load_behavioral_baseline_snapshots(
+    path: &Path,
+) -> Result<BTreeMap<String, BehavioralBaselineSnapshot>, SubstrateError> {
+    let entries = load_jsonl::<BehavioralBaselineSnapshot>(path)?;
+    let mut snapshots = BTreeMap::new();
+    for entry in entries {
+        snapshots.insert(entry.strategy_id.clone(), entry);
+    }
+    Ok(snapshots)
+}
+
 fn escalation_journal_path(journal_path: &Path) -> PathBuf {
     journal_path.with_extension("escalations.jsonl")
 }
@@ -1047,6 +1400,10 @@ fn threat_class_config_journal_path(journal_path: &Path) -> PathBuf {
 
 fn threat_intel_journal_path(journal_path: &Path) -> PathBuf {
     journal_path.with_extension("threat-intel.jsonl")
+}
+
+fn behavioral_baseline_journal_path(journal_path: &Path) -> PathBuf {
+    journal_path.with_extension("behavioral-baselines.jsonl")
 }
 
 fn resolved_policy(
@@ -1096,11 +1453,12 @@ mod tests {
         InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate, PheromoneSubstrate,
     };
     use ed25519_dalek::{Signer, SigningKey};
+    use sha2::{Digest, Sha256};
     use swarm_core::agent::SwarmMode;
-    use swarm_core::config::{
-        PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig,
-    };
+    use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
     use swarm_core::pheromone::{
+        BehavioralBaselineSnapshot, BehavioralFrequencyEntry, BehavioralHostBaseline,
+        BehavioralIdentityBaseline, BehavioralPeerGroupBaseline, BehavioralRoleToolFrequencyEntry,
         EscalationRecord, PheromoneDeposit, ThreatClass, ThreatClassConfig, ThreatIntelEntry,
         ThreatIntelIndicatorType,
     };
@@ -1108,6 +1466,13 @@ mod tests {
 
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[42u8; 32])
+    }
+
+    fn signing_key_for_label(label: &str) -> SigningKey {
+        let digest = Sha256::digest(label.as_bytes());
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&digest);
+        SigningKey::from_bytes(&seed)
     }
 
     fn sign_deposit(deposit: &mut PheromoneDeposit, key: &SigningKey) {
@@ -1119,6 +1484,8 @@ mod tests {
             timestamp: deposit.timestamp,
             decay_half_life: deposit.decay_half_life,
             agent_id: &deposit.agent_id,
+            agent_identity: &deposit.agent_identity,
+            agent_role: deposit.agent_role,
         };
         let payload_bytes = serde_json::to_vec(&payload).unwrap();
         let sig = key.sign(&payload_bytes);
@@ -1127,15 +1494,30 @@ mod tests {
     }
 
     fn sample_deposit(agent_id: &str, timestamp: i64, confidence: f64) -> PheromoneDeposit {
-        let key = test_signing_key();
+        sample_deposit_with_host(agent_id, timestamp, confidence, "host-1")
+    }
+
+    fn sample_deposit_with_host(
+        agent_id: &str,
+        timestamp: i64,
+        confidence: f64,
+        host_id: &str,
+    ) -> PheromoneDeposit {
+        let key = signing_key_for_label(agent_id);
+        let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
         let mut deposit = PheromoneDeposit {
-            indicator: serde_json::json!({"signal": "process-tree"}),
+            indicator: serde_json::json!({
+                "signal": "process-tree",
+                "host_id": host_id,
+            }),
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
             confidence,
             timestamp,
             decay_half_life: 3600.0,
-            agent_id: AgentId(agent_id.to_string()),
+            agent_id: derived_agent_id.clone(),
+            agent_identity: derived_agent_id.0,
+            agent_role: None,
             signature: Vec::new(),
             agent_key: Vec::new(),
         };
@@ -1152,6 +1534,8 @@ mod tests {
             timestamp: 100,
             decay_half_life: 3600.0,
             agent_id: AgentId("test-agent".to_string()),
+            agent_identity: String::new(),
+            agent_role: None,
             signature: Vec::new(),
             agent_key: Vec::new(),
         }
@@ -1194,6 +1578,73 @@ mod tests {
             value: value.to_string(),
             confidence,
             expires_at,
+        }
+    }
+
+    fn sample_behavioral_baseline_snapshot(strategy_id: &str) -> BehavioralBaselineSnapshot {
+        BehavioralBaselineSnapshot {
+            strategy_id: strategy_id.to_string(),
+            captured_at: 1_700_000_500,
+            hosts: vec![BehavioralHostBaseline {
+                host_id: "host-1".to_string(),
+                observation_count: 3,
+                parent_child_pairs: vec![BehavioralFrequencyEntry {
+                    key: "explorer.exe->notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+                binaries: vec![BehavioralFrequencyEntry {
+                    key: "c:\\windows\\system32\\notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+                role_tools: vec![BehavioralRoleToolFrequencyEntry {
+                    user_role: "user".to_string(),
+                    tool: "notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+            }],
+            identities: vec![BehavioralIdentityBaseline {
+                identity_id: "alice".to_string(),
+                observation_count: 3,
+                parent_child_pairs: vec![BehavioralFrequencyEntry {
+                    key: "explorer.exe->notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+                binaries: vec![BehavioralFrequencyEntry {
+                    key: "c:\\windows\\system32\\notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+                role_tools: vec![BehavioralRoleToolFrequencyEntry {
+                    user_role: "interactive".to_string(),
+                    tool: "notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+            }],
+            peer_groups: vec![BehavioralPeerGroupBaseline {
+                peer_group_id: "role:interactive".to_string(),
+                observation_count: 4,
+                parent_child_pairs: vec![BehavioralFrequencyEntry {
+                    key: "explorer.exe->notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+                binaries: vec![BehavioralFrequencyEntry {
+                    key: "c:\\windows\\system32\\notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+                role_tools: vec![BehavioralRoleToolFrequencyEntry {
+                    user_role: "interactive".to_string(),
+                    tool: "notepad.exe".to_string(),
+                    weight: 2.0,
+                    last_seen_at: 1_700_000_400,
+                }],
+            }],
         }
     }
 
@@ -1320,16 +1771,16 @@ mod tests {
             .deposit(sample_deposit("whisker-a", 100, 1.0))
             .await
             .unwrap();
-        let key = test_signing_key();
         let mut second = sample_deposit("whisker-b", 200, 0.9);
         second.threat_class = ThreatClass::DefenseEvasion;
-        sign_deposit(&mut second, &key);
+        sign_deposit(&mut second, &signing_key_for_label("whisker-b"));
         substrate.deposit(second).await.unwrap();
 
         let deposits = substrate
             .query_deposits(DepositQuery {
                 threat_class: Some(ThreatClass::Execution),
                 since_timestamp: Some(50),
+                host_id: None,
                 limit: 10,
             })
             .await
@@ -1349,6 +1800,33 @@ mod tests {
 
         let removed = substrate.gc_evaporated(100_000).await.unwrap();
         assert_eq!(removed, 1);
+    }
+
+    #[tokio::test]
+    async fn query_deposits_filters_by_host_id() {
+        let substrate = in_memory();
+        substrate
+            .deposit(sample_deposit_with_host("whisker-a", 100, 1.0, "host-a"))
+            .await
+            .unwrap();
+        substrate
+            .deposit(sample_deposit_with_host("whisker-b", 200, 0.9, "host-b"))
+            .await
+            .unwrap();
+
+        let deposits = substrate
+            .query_deposits(DepositQuery {
+                threat_class: None,
+                since_timestamp: None,
+                host_id: Some("host-b".to_string()),
+                limit: 10,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0].timestamp, 200);
+        assert_eq!(deposits[0].indicator["host_id"], "host-b");
     }
 
     #[tokio::test]
@@ -1635,6 +2113,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_journal_recovers_behavioral_baseline_snapshots_after_reopen() {
+        let path = std::env::temp_dir().join("swarm-pheromone-behavioral-baseline.jsonl");
+        let escalation_path = super::escalation_journal_path(&path);
+        let config_path = super::threat_class_config_journal_path(&path);
+        let threat_intel_path = super::threat_intel_journal_path(&path);
+        let behavioral_baseline_path = super::behavioral_baseline_journal_path(&path);
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+        let snapshot = sample_behavioral_baseline_snapshot("behavioral_anomaly");
+
+        {
+            let substrate = LocalJournalPheromoneSubstrate::open(config.clone(), &path).unwrap();
+            substrate
+                .store_behavioral_baseline_snapshot(snapshot.clone())
+                .await
+                .unwrap();
+        }
+
+        let reopened = LocalJournalPheromoneSubstrate::open(config, &path).unwrap();
+        let stored = reopened
+            .query_behavioral_baseline_snapshot("behavioral_anomaly")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, snapshot);
+
+        let health = reopened.health().await.unwrap();
+        assert!(
+            health
+                .details
+                .contains(&behavioral_baseline_path.display().to_string())
+        );
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(escalation_path);
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_file(threat_intel_path);
+        let _ = std::fs::remove_file(behavioral_baseline_path);
+    }
+
+    #[tokio::test]
     async fn configured_substrate_uses_backend_selection() {
         let in_memory = ConfiguredPheromoneSubstrate::from_config(&substrate_config()).unwrap();
         let health = in_memory.health().await.unwrap();
@@ -1708,19 +2231,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deposit_accepts_strategy_scoped_agent_id_when_base_identity_matches_signing_key() {
+        let substrate = in_memory();
+        let key = signing_key_for_label("whisker-test");
+        let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
+        let mut deposit = sample_deposit("whisker-test", 100, 0.9);
+        deposit.agent_id = AgentId(format!("{}:behavioral_anomaly", derived_agent_id.0));
+        sign_deposit(&mut deposit, &key);
+
+        substrate.deposit(deposit).await.unwrap();
+
+        let deposits = substrate.recent_deposits(10).await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(
+            deposits[0].agent_id.0,
+            format!("{}:behavioral_anomaly", derived_agent_id.0)
+        );
+    }
+
+    #[tokio::test]
     async fn deposit_rejects_invalid_signature_bytes() {
         let substrate = in_memory();
-        let key = test_signing_key();
         let mut deposit = sample_deposit("whisker-test", 100, 0.9);
-        // Corrupt the signature
-        deposit.signature = key.sign(b"wrong content entirely").to_bytes().to_vec();
-        deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+        deposit.signature[0] ^= 0xFF;
 
         let err = substrate.deposit(deposit).await.unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("signature verification failed"),
             "expected verification failure, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn deposit_rejects_agent_id_that_does_not_match_signing_key() {
+        let substrate = in_memory();
+        let mut deposit = sample_deposit("whisker-test", 100, 0.9);
+        deposit.agent_id = AgentId::new("whisker", "spoofed");
+        sign_deposit(&mut deposit, &signing_key_for_label("whisker-test"));
+
+        let err = substrate.deposit(deposit).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("does not match signing key identity"),
+            "expected identity binding failure, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn deposit_rejects_unadmitted_identity_when_allowlist_is_configured() {
+        let substrate = in_memory();
+        substrate
+            .set_admitted_identities([AgentId::new("whisker", "admitted")])
+            .unwrap();
+
+        let err = substrate
+            .deposit(sample_deposit("whisker-test", 100, 0.9))
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("is not admitted"),
+            "expected admission failure, got: {msg}"
         );
     }
 
@@ -1870,6 +2442,7 @@ mod tests {
     async fn deposit_round_trip_preserves_all_fields() {
         let substrate = in_memory();
         let key = test_signing_key();
+        let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
         let mut deposit = PheromoneDeposit {
             indicator: serde_json::json!({"cmd": "whoami"}),
             threat_class: ThreatClass::Execution,
@@ -1877,7 +2450,9 @@ mod tests {
             confidence: 0.95,
             timestamp: 500,
             decay_half_life: 3600.0,
-            agent_id: AgentId("rt-agent".to_string()),
+            agent_id: derived_agent_id.clone(),
+            agent_identity: derived_agent_id.0,
+            agent_role: None,
             signature: Vec::new(),
             agent_key: Vec::new(),
         };
@@ -1902,8 +2477,7 @@ mod tests {
         let substrate = in_memory();
         let mut deposit = sample_deposit("decay-agent", 0, 1.0);
         deposit.decay_half_life = 3600.0;
-        let key = test_signing_key();
-        sign_deposit(&mut deposit, &key);
+        sign_deposit(&mut deposit, &signing_key_for_label("decay-agent"));
         substrate.deposit(deposit).await.unwrap();
 
         let c0 = substrate
@@ -1973,6 +2547,7 @@ mod tests {
             .query_deposits(DepositQuery {
                 threat_class: None,
                 since_timestamp: None,
+                host_id: None,
                 limit: 0,
             })
             .await

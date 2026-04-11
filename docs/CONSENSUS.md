@@ -1,449 +1,235 @@
-# BFT Consensus and Governance
+# Governance And Consensus Contract
 
-> Historical note: this document describes a deferred governance track. Consensus is no longer on the first critical path for STS.
+This document is part of the active contract set defined in
+`docs/REFERENCE-STATUS.md`.
 
-Technical reference for the Byzantine fault-tolerant consensus protocol and autonomy governance model in Swarm Team Six.
+It describes the bounded governance model that ships today: local policy,
+receipt-backed destructive response, registry-backed identity admission, and
+fail-closed partition handling.
 
----
+## Executive Summary
 
-## Table of Contents
+Swarm Team Six now ships a real governance lane, but it is deliberately narrow.
 
-1. [When Consensus Is Required](#when-consensus-is-required)
-2. [Tendermint-Style Protocol](#tendermint-style-protocol)
-3. [Tom Committee and VRF Rotation](#tom-committee-and-vrf-rotation)
-4. [Autonomy Tiers](#autonomy-tiers)
-5. [Consensus and the Guard Pipeline](#consensus-and-the-guard-pipeline)
-6. [Byzantine Fault Tolerance Guarantees](#byzantine-fault-tolerance-guarantees)
-7. [Configuration Reference](#configuration-reference)
+The runtime does not require consensus for every action. Most roles observe,
+investigate, correlate, remember, or evolve without entering the governance
+path. Governance applies when the runtime crosses a trust boundary:
 
----
+- a destructive response action is about to execute
+- a runtime identity must be trusted to participate
+- partition-era emergency authority must be staged or redeemed
 
-## When Consensus Is Required
+Everything else should remain outside the governance path unless a later
+milestone explicitly promotes it.
 
-Not all swarm actions require consensus. The system distinguishes between autonomous actions (detection, investigation, correlation) and consequential actions that require collective agreement. The design principle is: **the swarm observes freely but acts only with consensus**.
+## Governance Modes
 
-Three categories of decisions require BFT consensus among the Tom committee:
+The active runtime uses four governance modes.
 
-### 1. Response Actions
+| Mode | What it covers | What is required |
+| --- | --- | --- |
+| Observation | Detection, investigation, correlation, memory, deception, status publication | No governance receipt; standard signed deposits and audit only |
+| Guarded response | Non-destructive response actions such as escalation or decoy deployment | Policy validation and ordinary audit trail |
+| Receipt-backed response | Destructive response actions such as `BlockEgress`, `IsolateHost`, and `RevokeCredential` | Signed governance receipt, policy validation, and optional human approval |
+| Partition contingency | Destructive response while quorum is partitioned | Valid staged contingency lease plus partition authorization and later reconciliation |
+| Maintenance-only | Local operator review, export, replay, and bounded maintenance actions | Authenticated operator access and maintenance audit, but no widened destructive authority |
 
-Any action that modifies the environment outside the swarm's own state. These are the `ResponseAction` variants defined in `crates/swarm-core/src/types.rs`:
+This is the shipped contract. It is not a general-purpose distributed control
+plane.
 
-| Response Action | Effect | Risk |
-|---|---|---|
-| `BlockEgress { target }` | Blocks network traffic to a destination | Disrupts legitimate traffic if target is misidentified |
-| `IsolateHost { host_id }` | Removes a host from the network | Takes a production system offline |
-| `RevokeCredential { credential_id }` | Invalidates a credential or capability | Locks out legitimate users or services |
-| `DeployDecoy { decoy_type, target_zone }` | Deploys a honeypot or canary token | Low risk, but consumes infrastructure resources |
-| `Escalate { summary, urgency }` | Alerts a human operator | Low risk, but alert fatigue if overused |
+## What Requires A Governance Receipt
 
-Response actions are proposed by Pouncer agents via the `RequestResponse` swarm action and cannot execute without 2f+1 approval from the Tom committee. This is a hard gate -- no code path bypasses it.
+The dispatcher currently requires a valid signed governance receipt for these
+destructive actions:
 
-### 2. Evolution Commits
+- `BlockEgress`
+- `IsolateHost`
+- `RevokeCredential`
 
-When a Kitten agent evolves a new detection strategy and it passes Z3 verification, deploying it to the production detection pipeline requires consensus. A compromised Kitten could propose a strategy that deliberately misses certain attack patterns (a "blind spot" strategy). Consensus ensures multiple Toms evaluate the strategy's fitness metrics and Z3 verification proof before it enters the live pipeline.
+For those actions:
 
-Evolution commits cover:
-- New detection strategies promoted to production
-- Modified correlation rules in the Weaver pipeline
-- Updated investigation playbooks for Stalkers
-- Threshold adjustments to the pheromone configuration
+1. `Pouncer` asks `Tom` policy whether the action can proceed.
+2. `Tom` either returns an approval receipt, returns a veto, or attaches a
+   contingency lease if the request is occurring during partition.
+3. The dispatcher re-validates the receipt before the request reaches the
+   runtime response router.
+4. The response adapter still runs under the existing policy and lease checks.
 
-### 3. Trust Decisions
+Non-destructive actions remain guarded and audited, but they do not require a
+governance receipt in the current runtime.
 
-Changes to the swarm's membership and trust boundaries:
-- **Agent admission**: A new agent joining the swarm. Its Ed25519 public key must be registered by consensus.
-- **Agent revocation**: Removing an agent suspected of compromise. Its key is revoked and all its active pheromone deposits are flagged as untrusted.
-- **Tier promotion/demotion**: Changing an agent's autonomy tier (e.g., promoting a Stalker from Tier 2 to Tier 1 after it has demonstrated reliability).
+## Approval And Receipt Lineage
 
----
+The active receipt chain is:
 
-## Tendermint-Style Protocol
+1. An admitted runtime agent proposes or routes a response.
+2. Policy validation evaluates the request and severity.
+3. `Tom` governance either approves, vetoes, or stages partition-time fallback
+   evidence.
+4. The dispatcher verifies destructive-governance evidence before runtime
+   routing.
+5. Human approval applies when severity crosses `policy.human_gate_severity`.
+6. Final execution and audit artifacts persist the request, decision, and
+   outcome lineage.
 
-The consensus protocol follows Tendermint's three-phase commit pattern, adapted for the swarm's NATS-based transport. The protocol is implemented in `crates/swarm-consensus/src/`.
+This contract keeps one vocabulary across demo approval, live response, and
+operator review: request, receipt, approval, audit, and evidence.
 
-### Three Phases
+## Human Approval Boundary
 
-```
-Propose --> Prevote --> Precommit --> Commit
-```
+Human approval is a separate boundary layered on top of receipt-backed
+governance.
 
-**Phase 1: Propose**
+`policy.human_gate_severity` defines the severity at or above which destructive
+actions are held for human confirmation even when the runtime has otherwise
+authorized the request.
 
-A designated proposer (selected by the VRF rotation schedule) broadcasts a proposal to the Tom committee. The proposal contains:
+Current implications:
 
-- The action to be authorized (response action, evolution commit, or trust decision)
-- The supporting evidence chain (signed receipts from Whiskers, Stalkers, Weavers, and/or Kittens)
-- The proposer's assessment and recommended outcome
-- The round number and block height (monotonically increasing)
+- a destructive request can be policy-authorized and still stop at the human
+  gate
+- human approval does not replace the governance receipt
+- demo approval and live operator approval reuse the same bounded approval
+  vocabulary rather than defining a second governance model
 
-Only the current round's proposer may issue a valid proposal. Proposals from non-proposers are ignored.
+## Identity Admission Contract
 
-**Phase 2: Prevote**
+Every runtime-owned agent identity follows the same admission path:
 
-Each Tom committee member evaluates the proposal independently:
+- keys persist under `identity.agent_key_dir`
+- stable identities are derived from the Ed25519 public key
+- registry snapshots and continuity proofs persist under
+  `identity.registry_dir`
+- unadmitted identities do not join the dispatcher or deposit trusted
+  pheromones
 
-1. Verify the proposer is the legitimate proposer for this round (VRF check).
-2. Verify all evidence signatures in the chain.
-3. Evaluate the proposed action against the current swarm policy (guard pipeline).
-4. Check that the proposed action is appropriate for the current autonomy tier.
+Rotation is continuity-preserving rather than anonymous replacement. The active
+contract is:
 
-If the proposal passes all checks, the Tom casts a signed `PREVOTE_YES`. If any check fails, it casts a signed `PREVOTE_NIL` (abstain, but not an explicit rejection). Prevotes are broadcast to all committee members.
+- identities are durable
+- admission is explicit
+- rotation preserves trust lineage
+- retired keys remain available for historical verification
 
-A Tom does **not** prevote `YES` if:
-- Evidence signatures are invalid
-- The proposed action violates current policy
-- The action exceeds the relevant autonomy tier
-- The proposal is for an already-decided round
+This is stronger than an in-memory allowlist and narrower than a full external
+PKI or multi-tenant operator system.
 
-**Phase 3: Precommit**
+## Identity Rotation And Verification
 
-Once a Tom observes 2f+1 `PREVOTE_YES` messages for the same proposal, it casts a signed `PRECOMMIT_YES`. If it does not observe 2f+1 prevotes within the round timeout, it casts `PRECOMMIT_NIL`.
+Rotation is part of the active contract, not a manual side note.
 
-Precommits are broadcast to all committee members.
+- `swarmctl identity rotate` preserves continuity from the retired key to the
+  new key
+- registry state retains enough historical material to verify older receipts and
+  deposits
+- governance and deposit validation fail closed for identities that are not
+  admitted through the current registry state
+- runtime registration and substrate admission both consume the same admitted
+  identity set
 
-**Commit**
+## Governance Health States
 
-Once 2f+1 `PRECOMMIT_YES` messages are observed for the same proposal, the action is committed. The commit is recorded as a signed `ConsensusResult`:
+The governance policy persists and reports four runtime states:
 
-```rust
-pub struct ConsensusResult {
-    pub hunt_id: HuntId,
-    pub reached: bool,
-    pub approve_count: u32,
-    pub deny_count: u32,
-    pub total_voters: u32,
-    pub threshold: u32,
-}
-```
+| State | Meaning |
+| --- | --- |
+| `healthy` | Quorum is available and partition-era activity is not active |
+| `degraded` | Enough governors remain for quorum, but one or more are unhealthy |
+| `partitioned` | Quorum is unavailable; destructive actions fail closed unless a valid contingency lease exists |
+| `healing` | Quorum has returned and the runtime is reconciling partition-era activity |
 
-The `is_bft_consensus()` method verifies that `reached == true` and `approve_count >= threshold`.
+These states are not abstract theory. They are persisted, emitted as runtime
+events, and surfaced through `/healthz` and `/readyz`.
 
-### Timeout and Round Advancement
+## Partition And Recovery Rules
 
-If a round does not complete within `round_timeout_ms` (default: 5000ms), the round fails and advances to the next round with a new proposer. This handles:
+The active partition contract is:
 
-- A crashed or partitioned proposer (no proposal arrives)
-- Insufficient prevotes (not enough Toms online)
-- Network delays causing timeout
+| State | Destructive response | Observability | Recovery expectation |
+| --- | --- | --- | --- |
+| `healthy` | Allowed through normal receipt-backed governance | Full health and runtime visibility | Stage bounded contingency leases for later emergency use |
+| `degraded` | Still allowed if quorum remains available | Full visibility, degraded state reported | Repair unhealthy governors before the system trends into partition |
+| `partitioned` | Denied unless a valid staged contingency lease authorizes the exact action | Full visibility remains available | Persist every authorized and unauthorized partition-era attempt |
+| `healing` | Normal quorum is back, but partition-era activity is being reconciled | Full visibility plus reconciliation markers | Review reconciliation output before treating the incident as closed |
 
-The timeout is intentionally short. Security decisions should not block for extended periods. If the committee cannot reach consensus within 5 seconds, the situation is either not urgent enough (and can wait for the next round) or the committee is degraded (and cannot safely act).
+This rule is intentional:
 
-### Locked Values
+- destructive authority fails closed when quorum disappears
+- health, metrics, and operator visibility remain available
+- contingency leases are narrow emergency exceptions
+- healing is a first-class state, not an implicit return to healthy
 
-Tendermint's locking mechanism prevents equivocation across rounds. Once a Tom has precommitted to a value in round R, it is "locked" on that value and must prevote for it in subsequent rounds (or prevote NIL if a different value is proposed). This prevents the split-brain scenario where different Toms commit different values in different rounds.
+## Contingency Lease Contract
 
----
+Contingency leases are staged while the system is healthy and redeemed only
+under partition.
 
-## Tom Committee and VRF Rotation
+The active contract is intentionally narrow:
 
-The Tom committee is the set of agents authorized to participate in consensus. Committee membership rotates on a configurable interval to prevent long-term collusion and ensure no fixed subset of agents controls all governance decisions.
+- leases authorize only a specific destructive action kind
+- leases may be scoped to one host or other action scope
+- leases carry a blast-radius cap
+- leases expire after a bounded TTL
+- redemption is persisted for later reconciliation
 
-### Committee Size
+Contingency leases are an emergency exception inside the existing governance
+model. They are not an alternate control plane.
 
-The committee must have at least `3f + 1` members to tolerate `f` Byzantine faults. With the default `max_byzantine_faults = 1`:
+## Reconciliation Markers
 
-```
-Committee size = 3(1) + 1 = 4
-Required for consensus = 2(1) + 1 = 3
-```
+When the runtime transitions from `partitioned` back toward quorum, it persists
+and emits reconciliation artifacts that distinguish:
 
-The default mission configuration spawns 3 Tom agents with a maximum of 5. In practice, the committee should have at least 4 members for single-fault tolerance.
+- partition-authorized actions
+- unauthorized partition-era attempts
+- the last reconciliation report identifier
+- the latest partition-state transition time
 
-### VRF-Based Rotation
+Operators should treat these markers as part of the auditable response chain,
+not as optional debug output.
 
-Committee membership rotates using a Verifiable Random Function (VRF). The VRF takes as input:
+## Observability And Operator Surfaces
 
-- The current epoch number (incremented every `committee_rotation_interval_secs`, default: 3600 seconds)
-- The previous epoch's randomness seed (chain of VRF outputs)
-- Each candidate Tom's public key
+Operators should expect governance state in these surfaces:
 
-The VRF output determines:
+- `/healthz` and `/readyz` governance component details
+- runtime events for partition transitions and reconciliation
+- audit evidence attached to response execution
+- persisted governance state on disk for restart-safe recovery
+- reconciliation report identifiers and active contingency-lease counts in the
+  serve-mode governance component
 
-1. **Committee membership**: Which Tom agents are in the active committee for this epoch. All healthy Toms are candidates; the VRF selects `3f + 1` from the pool.
-2. **Proposer schedule**: Within an epoch, the proposer for each round is deterministically derived from the VRF output and the round number.
+The platform and operator surfaces consume this governance data, but they do not
+change the underlying authorization semantics.
 
-### Why VRF Over Static Assignment
+## Config Keys That Define The Contract
 
-| Property | Static Committee | VRF Rotation |
-|---|---|---|
-| Predictability | Attacker knows exactly who to target | Committee composition is unpredictable until epoch begins |
-| Collusion window | Permanent (same members can coordinate indefinitely) | Bounded by epoch length (default: 1 hour) |
-| Adaptability | Manual reconfiguration required | Automatically incorporates new Toms, excludes failed ones |
-| Verifiability | Trivial | VRF proofs are publicly verifiable -- any agent can confirm committee legitimacy |
+The active governance contract is anchored by these repo-owned settings:
 
-### Epoch Transitions
+- `policy.human_gate_severity`
+- `policy.lease_ttl_ms`
+- `runtime.governance_degraded_tick_threshold`
+- `runtime.partition_contingency_lease_ttl_ms`
+- `runtime.partition_contingency_blast_radius_cap`
+- `identity.agent_key_dir`
+- `identity.registry_dir`
+- `tls.*` and `platform_api.keys[*]` for the authenticated serve surfaces that
+  expose governance state
+- `operator_surface.*` for the bounded local operator and maintenance surface
+  that inspects, but does not replace, governance evidence
 
-At each epoch boundary:
+Use `docs/CONFIGURATION.md` for field-level examples and endpoint notes.
 
-1. The current committee computes the next epoch's VRF seed from the current seed and epoch number.
-2. The VRF output selects the next committee.
-3. Any pending consensus rounds from the previous epoch are finalized or timed out.
-4. The new committee begins accepting proposals.
+## Explicit Boundaries
 
-There is a brief overlap window (one round timeout) where both the old and new committees are considered valid. This prevents proposals from being dropped during the transition.
+The active governance contract explicitly does not include:
 
----
+- automatic governance over every swarm action
+- internet-exposed or multi-tenant operator governance
+- independent external consensus clusters beyond the bounded shipped runtime
+- unrestricted partition-time destructive authority
+- a second trust vocabulary separate from persisted identities, receipts, and
+  approval artifacts
 
-## Autonomy Tiers
-
-The swarm operates under a tiered autonomy model that determines which actions agents can take independently versus which require consensus or human approval. Tiers are defined in `crates/swarm-core/src/verdict.rs`:
-
-```rust
-pub enum AutonomyTier {
-    Tier1,  // Fully autonomous
-    Tier2,  // Autonomous with reporting
-    Tier3,  // Human-approved
-}
-```
-
-### Tier Definitions
-
-**Tier 1: Fully Autonomous**
-
-Actions the swarm can take without any consensus or human involvement. These are low-risk, high-confidence, well-understood operations.
-
-Examples:
-- Pheromone deposits (all agents deposit freely)
-- Detection strategy evaluation (Whiskers run detection on every event)
-- IOC matching against known-bad indicators
-- Honeypot interaction monitoring (Calico observes, does not respond)
-- Memory consolidation (Sphinx updates knowledge graph)
-- Health reporting and self-monitoring
-
-Default population at Tier 1: Whisker, Sphinx, Calico
-
-Confidence gate: actions are autonomous when the swarm's confidence in the threat assessment exceeds `tier1_confidence` (default: 0.9).
-
-**Tier 2: Autonomous with Reporting**
-
-Actions the swarm executes autonomously but must report for post-hoc human validation. These are moderate-risk operations where the swarm's judgment is good enough to act but human oversight prevents drift.
-
-Examples:
-- Opening a new investigation (Stalker claims an investigation lead)
-- Hypothesis generation for threat analysis
-- Cross-hunt correlation and attack narrative construction (Weaver)
-- Proposing evolved detection strategies (Kitten proposes, but deployment requires consensus)
-- Deploying deception assets to low-value zones (Calico)
-
-Default population at Tier 2: Stalker, Weaver, Kitten
-
-Confidence gate: actions are autonomous-with-reporting when confidence exceeds `tier2_confidence` (default: 0.7) but is below `tier1_confidence`.
-
-**Tier 3: Human-Approved**
-
-Actions that require explicit consensus from the Tom committee and, in the
-current repo defaults, human operator approval for High and Critical severity
-threats. These are high-risk, irreversible, or environment-modifying
-operations.
-
-Examples:
-- Blocking network egress (`BlockEgress`)
-- Isolating a production host (`IsolateHost`)
-- Revoking credentials (`RevokeCredential`)
-- Deploying evolved detection strategies to production (evolution commit)
-- Admitting or revoking swarm agents (trust decisions)
-- Any response action when severity is High or Critical (governed by `require_human_above_severity`)
-
-Default population at Tier 3: Pouncer, Tom
-
-The `require_human_above_severity` parameter (current repo default: `high`, as
-reflected in `rulesets/default.yaml` and `StaticApprovalGate`) adds a
-human-in-the-loop gate on top of BFT consensus. Even if the Tom committee
-unanimously approves a response action for a High- or Critical-severity threat,
-the action is held pending human confirmation. This is the ultimate safety
-valve.
-
-### Tier Assignment
-
-Each agent archetype has a default tier assigned in the population configuration:
-
-```yaml
-population:
-  whisker:
-    tier: tier1      # Fully autonomous detection
-  stalker:
-    tier: tier2      # Autonomous investigation, reported
-  weaver:
-    tier: tier2      # Autonomous correlation, reported
-  pouncer:
-    tier: tier3      # Response requires consensus
-  tom:
-    tier: tier3      # Governance requires consensus
-  kitten:
-    tier: tier2      # Strategy proposal is autonomous; deployment is tier3
-  sphinx:
-    tier: tier1      # Memory management is autonomous
-  calico:
-    tier: tier1      # Observation is autonomous; active deception may be tier2
-```
-
-Tiers can be adjusted per-mission based on the operational context. A red team exercise might lower Pouncer to Tier 2 for faster iteration. A production environment might raise Stalker to Tier 3 for stricter oversight.
-
-### Tier Interaction with Severity
-
-The tier system interacts with threat severity to create a decision matrix:
-
-| Severity | Tier 1 | Tier 2 | Tier 3 |
-|---|---|---|---|
-| Low | Autonomous | Autonomous + report | BFT consensus |
-| Medium | Autonomous | Autonomous + report | BFT consensus |
-| High | Autonomous | Autonomous + report | BFT consensus + **human approval** |
-| Critical | Autonomous | Autonomous + report | BFT consensus + **human approval** |
-
-The `require_human_above_severity: high` parameter governs the last two rows in
-the current repo defaults. Raising it to `critical` would require human
-approval only for Critical severity Tier 3 actions.
-
----
-
-## Consensus and the Guard Pipeline
-
-The BFT consensus protocol does not operate in isolation. It is one layer in the middleware pipeline that every swarm action traverses. From the brainstorm design:
-
-```
-1. IdentityVerification    (Ed25519 delegation token)
-2. TierAuthorization       (autonomy level enforcement)
-3. PheromoneInjection      (load relevant NATS trails)
-4. ContextCompression      (token-aware summarization)
-5. GuardPipeline           (ClawdStrike guard evaluation)
-6. ToolBoundary            (action-specific access control)
-7. ConsensusGate           (BFT for response actions)
-8. EvidenceCollection      (receipt signing, audit trail)
-9. EvolutionTracking       (strategy mutation logging)
-```
-
-### Pipeline Integration
-
-When a Pouncer proposes a response action via `RequestResponse`, the action traverses the full middleware stack:
-
-1. **IdentityVerification**: Verify the Pouncer's Ed25519 delegation token is valid and non-revoked.
-2. **TierAuthorization**: Confirm the action is permitted at the Pouncer's assigned tier (Tier 3 requires consensus -- proceed to later gate).
-3. **PheromoneInjection**: Attach current pheromone concentration data to the request context so the consensus committee can evaluate the threat landscape.
-4. **ContextCompression**: Summarize the evidence chain to fit within token budgets for any LLM-backed evaluation steps.
-5. **GuardPipeline**: Run the ClawdStrike guard pipeline against the proposed action. Guards check: Is this path/target allowed by policy? Does this action violate any forbidden-path rules? Is the egress target in the allowlist?
-6. **ToolBoundary**: Verify the Pouncer has the specific capability to execute this type of response (e.g., a Pouncer authorized for `BlockEgress` may not have capability for `IsolateHost`).
-7. **ConsensusGate**: The action enters the BFT consensus protocol. Proposal is broadcast to the Tom committee. The pipeline blocks until consensus is reached or timeout occurs.
-8. **EvidenceCollection**: On consensus approval, a signed receipt is generated. The receipt contains the proposal, all votes, the final verdict, and the Merkle proof anchoring it to the audit trail.
-9. **EvolutionTracking**: If this response action results in learning (e.g., the response was effective and the detection strategy should be reinforced), the outcome is logged for Kitten agents.
-
-### Guard Denial vs. Consensus Denial
-
-These are distinct failure modes:
-
-- **Guard denial** (step 5): The action violates static policy. It is rejected before the consensus protocol ever sees it. No votes are cast. The Pouncer receives a `GuardDenied` error.
-- **Consensus denial** (step 7): The action is policy-compliant but the Tom committee votes against it. The action was valid but the committee judged it unwise given the current context. The Pouncer receives a `ConsensusFailed` error.
-
-Both are fail-closed. A denied action does not execute.
-
-### Receipt Signing
-
-Every consensus outcome -- whether approved or denied -- produces an Ed25519-signed receipt. This receipt is:
-
-1. Published to the spine audit trail (NATS JetStream + Merkle tree)
-2. Available for post-hoc review by human operators
-3. Usable as evidence in subsequent consensus rounds (e.g., "the committee denied this action 30 minutes ago; new evidence has emerged")
-
----
-
-## Byzantine Fault Tolerance Guarantees
-
-The consensus protocol provides standard BFT guarantees based on the Tendermint model.
-
-### Core Invariants
-
-Given a committee of `n = 3f + 1` members where `f` is the maximum number of Byzantine (compromised, crashed, or malicious) agents:
-
-**Safety**: No two honest Tom agents commit different values for the same round. Even if `f` agents send conflicting messages, the locking mechanism ensures that once a value is precommitted by any honest agent, no other value can gather 2f+1 prevotes.
-
-**Liveness**: If fewer than `f + 1` agents are faulty and the network is eventually synchronous, the protocol will eventually commit a value. The round timeout and proposer rotation ensure progress even when individual proposers crash.
-
-**Agreement threshold**: `2f + 1` votes are required out of `3f + 1` total. This means:
-
-| f (max faults) | Committee size (3f+1) | Required votes (2f+1) | Fault tolerance |
-|---|---|---|---|
-| 1 | 4 | 3 | Tolerates 1 compromised Tom |
-| 2 | 7 | 5 | Tolerates 2 compromised Toms |
-| 3 | 10 | 7 | Tolerates 3 compromised Toms |
-
-### Failure Scenarios
-
-**Scenario: Proposer crash**
-
-The proposer for round R crashes before broadcasting the proposal. No prevotes are cast. After `round_timeout_ms` (5 seconds), the round times out and advances to round R+1 with the next proposer in the VRF schedule. Liveness is preserved.
-
-**Scenario: One Byzantine Tom**
-
-With `f = 1` (committee of 4), one Tom sends conflicting prevotes to different committee members (equivocation). Honest Toms detect equivocation by comparing received prevotes. The Byzantine Tom's votes are discarded. The remaining 3 honest Toms can still reach 2f+1 = 3 agreement.
-
-**Scenario: Compromised Tom proposes malicious action**
-
-A compromised Tom is selected as proposer and proposes blocking a legitimate production host. Each honest Tom independently evaluates the proposal through the guard pipeline and evidence chain. If the evidence does not support the action, honest Toms prevote NIL. With 3 honest Toms and only 1 Byzantine, the malicious proposal cannot reach 2f+1 = 3 prevotes (only the compromised Tom votes YES). The proposal is rejected.
-
-**Scenario: Network partition**
-
-The committee is split into two groups by a network partition. Neither group can have more than `2f` members (since the total is `3f + 1`). Neither group can reach `2f + 1` votes. No commits occur during the partition. When the partition heals, the locked-value mechanism ensures all honest agents converge on the same decision. Safety is preserved; liveness resumes after partition heals.
-
-### Relationship to Swarm Health
-
-The BFT guarantee bounds the swarm's safety even when agents are compromised. Combined with:
-
-- **Pheromone source diversity**: A single compromised Whisker cannot trigger mode transitions
-- **Guard pipeline**: A compromised Pouncer cannot bypass static policy
-- **Consensus**: A compromised Tom cannot unilaterally approve response actions
-- **VRF rotation**: A compromised committee is automatically refreshed at the next epoch
-
-The swarm degrades gracefully under attack. An adversary must compromise more than `f` Toms in the same epoch AND bypass source diversity AND bypass the guard pipeline to execute an unauthorized response action. Each layer is independent.
-
----
-
-## Configuration Reference
-
-Consensus parameters are configured via the `consensus` block in the mission YAML. The complete default configuration from `rulesets/default.yaml`:
-
-```yaml
-consensus:
-  max_byzantine_faults: 1
-  round_timeout_ms: 5000
-  committee_rotation_interval_secs: 3600
-```
-
-Autonomy parameters are in the `autonomy` block:
-
-```yaml
-autonomy:
-  tier1_confidence: 0.9
-  tier2_confidence: 0.7
-  require_human_above_severity: high
-```
-
-### Consensus Parameters
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `max_byzantine_faults` | `u32` | `1` | Maximum number of Byzantine faults the protocol tolerates (`f`). Committee size must be at least `3f + 1`. |
-| `round_timeout_ms` | `u64` | `5000` | Timeout for a single consensus round in milliseconds. If the round does not complete within this window, it fails and advances to the next round with a new proposer. |
-| `committee_rotation_interval_secs` | `u64` | `3600` | How often to rotate committee membership via VRF. Default is 1 hour. Shorter intervals increase security against collusion but increase coordination overhead. |
-
-### Autonomy Parameters
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `tier1_confidence` | `f64` | `0.9` | Minimum confidence threshold for fully autonomous action. Actions above this confidence operate without consensus or reporting. |
-| `tier2_confidence` | `f64` | `0.7` | Minimum confidence threshold for autonomous-with-reporting action. Actions above this confidence but below `tier1_confidence` execute autonomously but are reported for human review. |
-| `require_human_above_severity` | `String` | `"high"` | Severity level at or above which Tier 3 actions require human approval in addition to BFT consensus. Valid values: `low`, `medium`, `high`, `critical`. |
-
-### Rust Types
-
-```rust
-pub struct ConsensusConfig {
-    pub max_byzantine_faults: u32,
-    pub round_timeout_ms: u64,
-    pub committee_rotation_interval_secs: u64,
-}
-
-pub struct AutonomyConfig {
-    pub tier1_confidence: f64,
-    pub tier2_confidence: f64,
-    pub require_human_above_severity: String,
-}
-```
+Use `docs/ARCHITECTURE.md` for the lane map and `docs/AGENTS.md` for current
+Tom and Pouncer role boundaries.

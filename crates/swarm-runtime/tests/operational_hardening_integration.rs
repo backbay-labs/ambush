@@ -36,6 +36,7 @@ fn base_config() -> SwarmConfig {
         description: "operational hardening integration test".to_string(),
         runtime: RuntimeSettings {
             mode: RuntimeMode::DetectOnly,
+            demo_mode: false,
             telemetry_sources: vec![TelemetrySourceConfig {
                 name: "synthetic".to_string(),
                 subject: "telemetry.synthetic.process".to_string(),
@@ -48,6 +49,8 @@ fn base_config() -> SwarmConfig {
             secret_dir: None,
             agent_tick_timeout_ms: 500,
             governance_degraded_tick_threshold: 3,
+            partition_contingency_lease_ttl_ms: 300_000,
+            partition_contingency_blast_radius_cap: 1,
             max_dead_letter_bytes: None,
         },
         detection: DetectionConfig {
@@ -84,7 +87,13 @@ fn base_config() -> SwarmConfig {
         correlation: CorrelationConfig::default(),
         canary: CanaryConfig::default(),
         promotion: PromotionConfig::default(),
+        evolution: swarm_core::config::EvolutionConfig::default(),
+        deception: swarm_core::config::DeceptionConfig::default(),
+        memory: swarm_core::config::MemoryConfig::default(),
+        identity: swarm_core::config::IdentityConfig::default(),
+        platform_api: Default::default(),
         operator: OperatorSurfaceConfig::default(),
+        tls: None,
     }
 }
 

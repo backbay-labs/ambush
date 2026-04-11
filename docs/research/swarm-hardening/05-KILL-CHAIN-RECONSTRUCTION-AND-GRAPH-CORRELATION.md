@@ -1,7 +1,7 @@
 ---
 title: "05 -- Kill Chain Reconstruction and Graph-Based Correlation"
 series: Swarm Hardening (5 of 8)
-version: "0.2"
+version: "0.3"
 date: 2026-04-08
 status: Draft
 authors: Swarm Team Six Research
@@ -34,6 +34,7 @@ authors: Swarm Team Six Research
 10. [Integration Design](#10-integration-design)
 11. [Proposed Architecture](#11-proposed-architecture)
 12. [Open Questions and Future Work](#12-open-questions-and-future-work)
+13. [Real-World Validation Plan](#13-real-world-validation-plan)
 - [Cross-References](#cross-references)
 - [References](#references)
 
@@ -590,6 +591,111 @@ provides a direct `parent_process` causal link. `AuthenticationEvent` is the
 most important for lateral movement detection because it reveals credential
 usage across hosts.
 
+### 6.5 Entity Resolution Across Telemetry Sources
+
+Sections 6.1-6.4 assume `host_id` and `user` are globally unique identifiers.
+In practice, telemetry sources use inconsistent naming: CloudTrail reports
+account-scoped instance IDs, Tetragon reports Kubernetes pod names, and
+generic JSON sources report OS hostnames. The same physical host may appear
+under different identifiers across sources, fracturing kill chains that span
+identity changes.
+
+#### 6.5.1 Entity Resolution Challenges
+
+**Hostname instability.** In DHCP environments, a host's `host_id` may change
+on lease renewal. In cloud environments, ephemeral instances generate new host
+IDs on every deployment. The graph treats these as distinct `AssetNode`
+instances, splitting what should be a single attack path across two unrelated
+nodes.
+
+**NAT and proxy collapse.** Multiple internal hosts behind a NAT gateway share
+a single external IP. The graph produces a single `NetworkNode` for the NAT
+address, incorrectly merging distinct lateral movement paths. Conversely, a
+multi-homed host appears as multiple network nodes.
+
+**User identity federation.** `user:alice` on host-1 (local account) and
+`user:alice@CORP.LOCAL` on host-2 (domain account) may be the same person.
+The flat correlation key namespace treats them as distinct `IdentityNode`
+entries. Domain accounts, local accounts, and service principals need
+normalization to a canonical form.
+
+**Process identity ambiguity.** `process_name: powershell` is not globally
+unique. Multiple unrelated PowerShell instances on the same host produce
+identical `ProcessNode` attributes. The current `ProcessStartEvent` struct
+lacks per-execution identifiers (`pid`, `start_time`), so the graph cannot
+distinguish concurrent instances. The `executable_path` and `signer` fields
+are optional and often null.
+
+#### 6.5.2 Proposed EntityResolver Trait
+
+```rust
+/// Resolves raw telemetry identifiers to canonical entity keys.
+///
+/// Implementations may use lookup tables, naming conventions, or
+/// external inventory APIs. The default implementation passes
+/// identifiers through unchanged.
+pub trait EntityResolver: Send + Sync {
+    /// Map a raw host identifier to a canonical asset key.
+    fn resolve_host(&self, raw_host_id: &str, source: &str) -> String;
+
+    /// Map a raw username to a canonical identity key.
+    fn resolve_user(&self, raw_user: &str, source: &str) -> String;
+
+    /// Map a network address to a canonical network key,
+    /// disambiguating NAT where possible.
+    fn resolve_network(
+        &self,
+        address: &str,
+        port: Option<u16>,
+        originating_host: Option<&str>,
+    ) -> String;
+}
+```
+
+The `GraphCorrelator` receives an `Arc<dyn EntityResolver>` at construction.
+Entity extraction (Section 6.1) calls the resolver before creating or
+looking up graph nodes. The default `PassthroughResolver` preserves current
+behavior (raw identifiers used as-is).
+
+#### 6.5.3 Host Identity Table
+
+A `HostIdentityTable` maps observed `host_id` values to canonical asset
+identifiers. Canonical IDs should be the most stable available identifier:
+machine SID on Windows, `/etc/machine-id` on Linux, or cloud instance ID
+for managed infrastructure. When telemetry from multiple sources arrives for
+the same canonical host, the table merges their raw IDs:
+
+```
+raw "ip-10-0-1-42" (CloudTrail)  -> canonical "i-0abc123def"
+raw "web-pod-7fdb8" (Tetragon)   -> canonical "i-0abc123def"
+raw "web-server-1" (syslog)      -> canonical "i-0abc123def"
+```
+
+The table is populated by: (a) explicit configuration (asset inventory), (b)
+correlation heuristics (two raw IDs appearing in the same authentication
+event within a short window), and (c) telemetry fields that carry stable
+identifiers alongside ephemeral ones (e.g., a Tetragon event that includes
+both pod name and node name).
+
+#### 6.5.4 User Principal Name Normalization
+
+Apply UPN normalization before identity node lookup:
+
+1. Strip domain suffixes for known local account patterns.
+2. Normalize domain accounts to `user@DOMAIN` form (uppercase domain).
+3. Map well-known service account names to canonical forms
+   (`SYSTEM`, `LOCAL SERVICE`, `NETWORK SERVICE` on Windows;
+   `root`, `nobody`, `www-data` on Linux).
+
+#### 6.5.5 Process Instance Keying
+
+Until `ProcessStartEvent` gains `pid` and `start_time` fields (proposed in
+Doc 06 Section 16.3), process nodes use a composite key of
+`(host_id, process_name, parent_process, timestamp_bucket)` where
+`timestamp_bucket` is `timestamp / bucket_width_ms`. This is imprecise but
+avoids merging temporally distant process instances. When `pid` and
+`start_time` are available, the key becomes `(host_id, pid, start_time)`.
+
 ---
 
 ## 7. Graph Storage Approaches
@@ -954,6 +1060,118 @@ graph context, or probe a hypothesized connection between two technique nodes)
 that `StalkerAgent` instances consume, creating a feedback loop where graph
 analysis drives further investigation which improves the graph.
 
+### 10.5 Baseline-to-Graph Integration
+
+Doc 06 proposes behavioral baseline detectors that produce `DetectionFinding`
+records with evidence schemas distinct from rule-based detectors. This
+section specifies how those findings become graph nodes, addressing Gap
+Report finding #7.
+
+#### 10.5.1 Node Type Decision: AnomalyAnnotation
+
+Baseline anomaly findings ("unusual login time for alice") are fundamentally
+different from technique detections ("mimikatz credential dumping"). Making
+every baseline finding a `TechniqueNode` would dilute the graph's
+signal-to-noise ratio -- a graph flooded with low-confidence "something
+unusual happened" nodes obscures the high-confidence kill chain structure.
+
+We introduce a new node type:
+
+```rust
+/// Annotation attached to an existing entity node, representing a
+/// behavioral anomaly rather than a matched attack technique.
+pub struct AnomalyAnnotationNode {
+    pub annotation_id: String,
+    pub finding_id: String,
+    pub anomaly_type: AnomalyType,
+    pub z_score: f64,
+    pub confidence: f64,
+    pub timestamp: i64,
+    pub strategy_id: String,
+}
+
+pub enum AnomalyType {
+    ProcessDeviation,    // z_arg_count, z_entropy, etc.
+    NetworkCardinality,  // destination cardinality spike
+    PortRarity,          // unusual port for process
+    AuthTimeAnomaly,     // unusual login time
+    AuthSourceAnomaly,   // unusual source host
+    ServiceRarity,       // unusual target service
+    FailureRateAnomaly,  // elevated auth failure rate
+    NovelParentChild,    // rare parent-child process pair
+}
+```
+
+`AnomalyAnnotationNode` instances are attached to entity nodes
+(`AssetNode`, `IdentityNode`, `ProcessNode`) via `AssociationEdge`, not
+`CausalEdge`. They do not participate in kill chain depth scoring
+(Section 8.1.1) but do contribute to a new **anomaly density** signal:
+when multiple annotations cluster on the same entity within a short
+window, the entity's suspicion level rises even without a matched
+technique. If anomaly density exceeds a configurable threshold, the graph
+promotes the cluster to a synthetic `TechniqueNode` with
+`ThreatClass::Custom("behavioral_anomaly_cluster")`, enabling kill chain
+participation.
+
+#### 10.5.2 Evidence Schema Contract
+
+Graph entity extraction (Section 6.1) must handle both rule-sourced and
+baseline-sourced evidence. The `SummaryInvestigator` extracts correlation
+keys from the evidence JSON. Baseline evidence uses field names
+(`z_arg_count`, `pair_rarity`, `mode`) that differ from rule evidence
+(`command_line`, `parent_process`, `user`).
+
+To ensure consistent entity extraction, all baseline detectors must include
+standard entity fields alongside their statistical metrics:
+
+```json
+{
+    "mode": "process_baseline_deviation",
+    "host_id": "host-1",
+    "user": "alice",
+    "process_name": "powershell",
+    "parent_process": "winword",
+    "z_arg_count": 4.2,
+    "z_entropy": 3.1,
+    "observation_count": 847,
+    "cold_start_factor": 1.0
+}
+```
+
+The fields `host_id`, `user`, `process_name`, and `parent_process` are the
+shared entity contract. The `SummaryInvestigator` extracts these for
+correlation keys regardless of the `mode` field. The z-score and rarity
+fields are strategy-specific metadata consumed only by the graph's anomaly
+annotation logic.
+
+#### 10.5.3 Temporal Skew
+
+Baseline detectors operate per-event at the Whisker layer (microsecond
+latency). Graph ingestion operates per-investigation at the Weaver layer
+(millisecond latency, after async Stalker investigation). A baseline
+anomaly detected at T=0 may not appear in the graph until
+T=0+investigation_latency (typically 10-100ms).
+
+The graph must use the **original event timestamp** from the
+`TelemetryEvent`, not the ingestion timestamp, for all temporal consistency
+invariants (Section 4.5). The `InvestigationBundle` already carries
+`first_event_timestamp_ms` and `last_event_timestamp_ms` fields from
+which the original event time can be recovered.
+
+#### 10.5.4 Investigation Amplification
+
+Baseline detectors may produce 5-10x more `DetectionFinding` records than
+rule detectors, since their lower thresholds fire more frequently. Each
+finding becomes a pheromone deposit that the Stalker attempts to
+investigate, potentially overwhelming `InvestigationCoordinator`'s
+`max_pending_jobs` (currently 8).
+
+Mitigation: baseline-sourced investigations should use a separate,
+lower-priority investigation queue with its own `max_pending_jobs` limit
+(default: 4). The `StalkerAgent` processes rule-sourced hunts first and
+only dequeues baseline-sourced hunts when the primary queue has capacity.
+The hunt ID prefix (`baseline_*`) distinguishes queue membership.
+
 ---
 
 ## 11. Proposed Architecture
@@ -1118,6 +1336,112 @@ pub enum GraphCorrelationError {
 }
 ```
 
+### 11.8 Graph Scalability Under Burst Conditions
+
+Section 7.2 estimates ~120K nodes and ~360K edges at steady state
+(1,000 investigations/hour, 24-hour retention, ~60 MB). This section
+models behavior under burst conditions and defines failure-mode
+semantics, addressing Gap Report finding #1.
+
+#### 11.8.1 Burst Scaling Model
+
+During an active incident, investigation rates may spike 10-100x above
+steady state. The following table projects graph dimensions under
+sustained burst:
+
+| Burst Factor | Inv/Hour | Nodes (24h) | Edges (24h) | Memory Est. |
+|---|---|---|---|---|
+| 1x (steady)  | 1,000    | 120K        | 360K        | ~60 MB      |
+| 10x          | 10,000   | 1.2M        | 3.6M        | ~600 MB     |
+| 50x          | 50,000   | 6M          | 18M         | ~3 GB       |
+| 100x         | 100,000  | 12M         | 36M         | ~6 GB       |
+
+At 10x burst, memory remains manageable for server-class deployments.
+At 50x+, the graph risks exhausting process heap on edge nodes. The
+`max_node_count` configuration (Section 11.3) prevents unbounded growth,
+but the behavior when this limit is reached must be well-defined.
+
+#### 11.8.2 Backpressure Semantics
+
+When `graph.node_count() >= max_node_count`, new ingestion requests must
+be handled without silent data loss. Three strategies, selectable via
+`GraphBackpressureMode`:
+
+```rust
+pub enum GraphBackpressureMode {
+    /// Reject new ingestions; log a warning. Weaver continues with
+    /// time-window correlation only. Simplest; no data corruption risk.
+    Reject,
+    /// Force an emergency compaction before ingesting. Blocks the
+    /// Weaver tick until compaction completes. Preserves data at the
+    /// cost of latency spikes.
+    CompactAndRetry,
+    /// Accept the ingestion but mark it as degraded: create the
+    /// TechniqueNode and entity associations but skip edge evaluation
+    /// (the O(degree) cost from Section 6.3). Preserves node data for
+    /// later batch edge evaluation during compaction.
+    DegradedIngest,
+}
+```
+
+Default: `CompactAndRetry`. The emergency compaction uses aggressive
+age pruning (`retention_ms / 2`) to reclaim capacity quickly.
+
+#### 11.8.3 Compaction Lock Contention
+
+`retain_nodes` on `StableDiGraph` is O(|V|+|E|). During a burst with
+1.2M nodes and 3.6M edges, compaction may take 50-200ms while holding
+the write lock, blocking all graph reads.
+
+Mitigation: **shadow-graph compaction**. The compaction thread clones the
+current `GraphState` into a shadow copy, compacts the shadow (no lock
+held), then swaps the shadow into the live slot under a brief write lock.
+The swap is O(1). The clone cost is O(|V|+|E|) but occurs outside the
+write lock, so readers are unblocked. Memory peaks at 2x graph size
+during compaction, which is acceptable since compaction fires precisely
+when the graph is oversized and needs to shrink.
+
+```rust
+fn compact_with_shadow(state: &Arc<RwLock<GraphState>>, config: &GraphCorrelationConfig) {
+    // Clone outside write lock
+    let mut shadow = { state.read().unwrap().clone() };
+    compact_graph(&mut shadow, config);
+    // Swap under brief write lock
+    let mut live = state.write().unwrap();
+    *live = shadow;
+}
+```
+
+#### 11.8.4 Archival Strategy
+
+Compaction permanently deletes pruned nodes. For post-incident forensic
+review, completed incident subgraphs should be archived before pruning.
+
+Before age-based pruning, identify connected components whose newest
+`TechniqueNode` timestamp is older than `retention_ms / 2`. These are
+"cold" subgraphs -- likely completed incidents. Serialize each cold
+subgraph to a standalone JSON file in `{persistence_path}/archive/`,
+named by incident ID and timestamp. The archive files are write-once
+and can be loaded on demand by the review workbench for historical
+analysis.
+
+Archive files follow the same JSON node-list + edge-list format proposed
+in Q6 (Section 12.1), decoupled from petgraph's internal representation.
+
+#### 11.8.5 Incident-Partitioned Subgraphs
+
+An alternative to a monolithic graph is maintaining separate subgraphs per
+incident (identified by connected components). This isolates unrelated
+incidents, reducing edge evaluation scope and eliminating wasted
+cross-incident comparisons.
+
+Tradeoff: partitioned subgraphs cannot detect cross-incident campaigns
+(Section 8.2) or lateral movement that links two initially separate
+incidents. We recommend the monolithic graph as default, with
+incident-partitioned mode as an optional configuration for high-throughput
+deployments where campaign detection is handled by a separate upstream
+system.
+
 ---
 
 ## 12. Open Questions and Future Work
@@ -1187,6 +1511,93 @@ edges and add context notes that survive graph compaction.
 
 ---
 
+## 13. Real-World Validation Plan
+
+The graph correlator must be validated against realistic attack data, not
+only synthetic corpora. This section addresses Gap Report finding #6.
+
+### 13.1 Public Dataset Evaluation
+
+#### 13.1.1 DARPA Transparent Computing (TC) Datasets
+
+The DARPA TC program produced five labeled provenance graph datasets:
+CADETS (FreeBSD), THEIA (Linux), TRACE (Linux), ClearScope (Android), and
+FiveDirections (Windows). Each contains system call-level audit logs with
+ground-truth attack labels spanning multi-stage APT campaigns.
+
+**Evaluation plan**: Ingest CADETS and THEIA datasets through a telemetry
+adapter that maps their provenance records to STS `TelemetryPayload`
+variants. Run the graph correlator and measure:
+
+- **Kill chain reconstruction precision**: What fraction of edges in the
+  reconstructed graph correspond to true attack edges in the ground truth?
+- **Kill chain reconstruction recall**: What fraction of ground-truth
+  attack edges appear in the reconstructed graph?
+- **Lateral movement edge accuracy**: Among edges typed as `LateralEdge`,
+  what fraction correspond to actual lateral movement in the ground truth?
+
+The CADETS dataset is prioritized because its FreeBSD audit logs most
+closely resemble the Linux telemetry STS targets. THEIA provides
+complementary coverage with its information-flow tracking.
+
+#### 13.1.2 LANL Unified Host and Network Dataset
+
+The LANL dataset provides 58 days of authentication logs and network flows
+from a real enterprise network (anonymized). It contains labeled red team
+events across multiple hosts. This dataset validates cross-host correlation
+and campaign detection.
+
+**Evaluation plan**: Map LANL authentication records to
+`AuthenticationEvent` payloads and network flows to `NetworkConnectEvent`
+payloads. Measure campaign detection F1-score against the labeled red team
+events.
+
+### 13.2 Graph Evaluation Metrics
+
+The following metrics evaluate graph correlation quality, complementing
+the scoring algorithms defined in Section 8:
+
+| Metric | Definition | Target |
+|---|---|---|
+| Kill chain reconstruction precision | True attack edges / all reconstructed edges | >= 0.70 |
+| Kill chain reconstruction recall | Reconstructed attack edges / all true attack edges | >= 0.60 |
+| Lateral movement edge F1 | Harmonic mean of lateral edge precision and recall | >= 0.50 |
+| Campaign detection F1 | Against labeled multi-host campaigns | >= 0.55 |
+| Mean reciprocal rank (alert triage) | 1/rank of first true-positive incident in priority queue | >= 0.60 |
+| Precision@5 (alert triage) | Fraction of top-5 priority incidents that are true positives | >= 0.50 |
+
+### 13.3 Comparison Against Published Baselines
+
+HOLMES [8], UNICORN [9], SLEUTH [14], and ATLAS [13] have published
+evaluation results on the DARPA TC datasets. The STS graph correlator
+should report results on the same datasets using the same metrics
+(precision, recall, F1 at the edge level) to establish whether the
+approach is competitive.
+
+Note that direct comparison is imperfect -- HOLMES and SLEUTH operate on
+raw audit logs, while STS operates on pre-filtered detection findings.
+STS trades recall at the audit-log level for lower computational cost
+and tighter integration with the pheromone substrate. The comparison
+establishes relative positioning, not strict superiority.
+
+### 13.4 Purple Team Exercise Plan
+
+After initial implementation and dataset evaluation:
+
+1. **Red team scope**: Adversary attempts to (a) evade baseline detectors
+   through slow poisoning and noise injection, (b) fragment kill chains
+   across time windows and host boundaries to evade graph correlation,
+   (c) exploit entity resolution gaps (DHCP churn, NAT collapse) to
+   prevent cross-host linking.
+2. **Blue team scope**: Operators use the combined baseline + graph
+   system through the review workbench, with access to priority queue,
+   graph visualization, and anomaly annotations.
+3. **Metrics collected**: Time-to-detect, time-to-triage, false positive
+   rate during exercise, number of kill chain fragments that were
+   successfully linked vs. missed.
+
+---
+
 ## Cross-References
 
 - **01-Evasion Resistance and Adversarial Robustness**: Section 12.2/F5
@@ -1213,6 +1624,8 @@ edges and add context notes that survive graph compaction.
 
 - **06-Behavioral Baseline and Anomaly Detection**: Section 8.1.3 introduces
   asset criticality scoring that should be informed by behavioral baselines.
+  Section 10.5 defines how baseline anomaly findings integrate as
+  `AnomalyAnnotationNode` instances with a shared evidence schema contract.
   Section 12.2/F2 proposes graph-based anomaly detection using baseline
   attack graph patterns.
 
@@ -1258,3 +1671,9 @@ edges and add context notes that survive graph compaction.
 [16] Navarro, J., Deruyver, A., & Parrend, P. (2018). A Systematic Survey on Multi-Step Attack Detection. *Computers & Security,* 76, 214--249.
 
 [17] Ning, P., Cui, Y., & Reeves, D. S. (2002). Constructing Attack Scenarios through Correlation of Intrusion Alerts. *ACM CCS,* 245--254.
+
+[18] DARPA Transparent Computing Program. (2018-2020). Engagement datasets: CADETS, THEIA, TRACE, ClearScope, FiveDirections. https://github.com/darpa-i2o/Transparent-Computing
+
+[19] Kent, A. D. (2015). Comprehensive, Multi-Source Cyber-Security Events. *Los Alamos National Laboratory.* https://csr.lanl.gov/data/cyber1/
+
+[20] Zhu, T., & Dumitras, T. (2023). ProvDetector: A Graph Neural Network Based Approach to APT Detection Using Provenance Graphs. *ACM CCS Workshop on AI and Security.*

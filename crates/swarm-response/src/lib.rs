@@ -83,6 +83,8 @@ pub struct ResponsePolicyAudit {
 pub struct ResponseGovernanceAudit {
     pub governing_agent_id: AgentId,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<serde_json::Value>,
 }
 
 /// Normalized response status.
@@ -181,10 +183,12 @@ impl ResponseReceipt {
         mut self,
         governing_agent_id: AgentId,
         reason: impl Into<String>,
+        receipt: Option<serde_json::Value>,
     ) -> Self {
         self.audit.governance = Some(ResponseGovernanceAudit {
             governing_agent_id,
             reason: reason.into(),
+            receipt,
         });
         self
     }

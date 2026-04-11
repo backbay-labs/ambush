@@ -1,6 +1,7 @@
 use crate::substrate::{
-    DepositQuery, PheromoneSubstrate, SubstrateError, SubstrateHealth, concentration_for,
-    filter_deposits, filter_escalations, normalize_threat_intel_value,
+    AdmissionControl, DepositQuery, PheromoneSubstrate, SubstrateError, SubstrateHealth,
+    concentration_for, filter_deposits, filter_escalations, normalize_threat_intel_value,
+    validate_deposit_signature,
 };
 use async_trait::async_trait;
 #[cfg(feature = "nats")]
@@ -12,9 +13,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
 use swarm_core::pheromone::{
-    EscalationRecord, PheromoneConcentration, PheromoneDeposit, ThreatClass, ThreatClassConfig,
-    ThreatIntelEntry, ThreatIntelIndicatorType,
+    BehavioralBaselineSnapshot, EscalationRecord, PheromoneConcentration, PheromoneDeposit,
+    ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
+use swarm_core::types::AgentId;
 #[cfg(feature = "nats")]
 use tokio::sync::OnceCell;
 #[cfg(feature = "nats")]
@@ -36,12 +38,15 @@ const THREAT_CLASS_CONFIG_KEY_PREFIX: &str = "cfg";
 #[cfg(feature = "nats")]
 const THREAT_INTEL_KEY_PREFIX: &str = "intel";
 #[cfg(feature = "nats")]
+const BEHAVIORAL_BASELINE_KEY_PREFIX: &str = "baseline";
+#[cfg(feature = "nats")]
 const GC_PAGE_SPAN_SECS: i64 = 300;
 
 /// JetStream-backed durable pheromone substrate.
 #[derive(Clone)]
 pub struct JetStreamPheromoneSubstrate {
     config: PheromoneConfig,
+    admission_control: AdmissionControl,
     url: String,
     bucket: String,
     #[cfg(feature = "nats")]
@@ -96,6 +101,7 @@ impl JetStreamPheromoneSubstrate {
 
         Self {
             config,
+            admission_control: AdmissionControl::default(),
             url: url.into(),
             bucket: bucket.into(),
             #[cfg(feature = "nats")]
@@ -132,6 +138,13 @@ impl JetStreamPheromoneSubstrate {
 
     pub fn bucket(&self) -> &str {
         &self.bucket
+    }
+
+    pub fn set_admitted_identities(
+        &self,
+        identities: impl IntoIterator<Item = AgentId>,
+    ) -> Result<(), SubstrateError> {
+        self.admission_control.set_admitted_identities(identities)
     }
 
     #[cfg(feature = "nats")]
@@ -182,7 +195,11 @@ impl JetStreamPheromoneSubstrate {
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
-            if is_escalation_key(&key) || is_policy_key(&key) || is_threat_intel_key(&key) {
+            if is_escalation_key(&key)
+                || is_policy_key(&key)
+                || is_threat_intel_key(&key)
+                || is_behavioral_baseline_key(&key)
+            {
                 continue;
             }
             if let Some(threat_class) = threat_class
@@ -232,7 +249,11 @@ impl JetStreamPheromoneSubstrate {
         let mut count = 0usize;
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
-            if is_escalation_key(&key) || is_policy_key(&key) || is_threat_intel_key(&key) {
+            if is_escalation_key(&key)
+                || is_policy_key(&key)
+                || is_threat_intel_key(&key)
+                || is_behavioral_baseline_key(&key)
+            {
                 continue;
             }
             count = count.saturating_add(1);
@@ -325,6 +346,28 @@ impl JetStreamPheromoneSubstrate {
     }
 
     #[cfg(feature = "nats")]
+    async fn load_behavioral_baseline_snapshot(
+        &self,
+        strategy_id: &str,
+    ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
+        let connection = self.ensure_connected().await?;
+        let key = behavioral_baseline_key(strategy_id);
+        let Some(payload) = connection
+            .store
+            .get(&key)
+            .await
+            .map_err(|error| nats_error("get value", error))?
+        else {
+            return Ok(None);
+        };
+
+        let location = format!("jetstream://{}/{}", self.bucket, key);
+        let snapshot = serde_json::from_slice::<BehavioralBaselineSnapshot>(&payload)
+            .map_err(|source| SubstrateError::Decode { location, source })?;
+        Ok(Some(snapshot))
+    }
+
+    #[cfg(feature = "nats")]
     async fn load_escalations(
         &self,
         since_timestamp: i64,
@@ -396,7 +439,11 @@ impl JetStreamPheromoneSubstrate {
 
         while let Some(entry) = keys.next().await {
             let key = entry.map_err(|error| nats_error("stream keys", error))?;
-            if is_escalation_key(&key) || is_policy_key(&key) || is_threat_intel_key(&key) {
+            if is_escalation_key(&key)
+                || is_policy_key(&key)
+                || is_threat_intel_key(&key)
+                || is_behavioral_baseline_key(&key)
+            {
                 continue;
             }
             if key_gc_page(&key).is_some() {
@@ -575,6 +622,9 @@ impl JetStreamPheromoneSubstrate {
 #[async_trait]
 impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
+        validate_deposit_signature(&deposit)?;
+        self.admission_control
+            .validate_deposit_admission(&deposit)?;
         let connection = self.ensure_connected().await?;
         let payload = serde_json::to_vec(&deposit).map_err(|source| SubstrateError::Encode {
             context: "jetstream pheromone deposit".to_string(),
@@ -647,6 +697,24 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
         Ok(())
     }
 
+    async fn store_behavioral_baseline_snapshot(
+        &self,
+        snapshot: BehavioralBaselineSnapshot,
+    ) -> Result<(), SubstrateError> {
+        let connection = self.ensure_connected().await?;
+        let payload = serde_json::to_vec(&snapshot).map_err(|source| SubstrateError::Encode {
+            context: "jetstream behavioral baseline snapshot".to_string(),
+            source,
+        })?;
+        let key = behavioral_baseline_key(&snapshot.strategy_id);
+        connection
+            .store
+            .put(key, payload.into())
+            .await
+            .map_err(|error| nats_error("put value", error))?;
+        Ok(())
+    }
+
     async fn query_concentration(
         &self,
         threat_class: &ThreatClass,
@@ -696,6 +764,13 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     ) -> Result<Option<ThreatIntelEntry>, SubstrateError> {
         self.load_threat_intel_entry(indicator_type, value, now)
             .await
+    }
+
+    async fn query_behavioral_baseline_snapshot(
+        &self,
+        strategy_id: &str,
+    ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
+        self.load_behavioral_baseline_snapshot(strategy_id).await
     }
 
     async fn gc_evaporated(&self, now: i64) -> Result<usize, SubstrateError> {
@@ -816,6 +891,13 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
         Err(unsupported_backend())
     }
 
+    async fn store_behavioral_baseline_snapshot(
+        &self,
+        _snapshot: BehavioralBaselineSnapshot,
+    ) -> Result<(), SubstrateError> {
+        Err(unsupported_backend())
+    }
+
     async fn query_concentration(
         &self,
         _threat_class: &ThreatClass,
@@ -855,6 +937,13 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
         _value: &str,
         _now: i64,
     ) -> Result<Option<ThreatIntelEntry>, SubstrateError> {
+        Err(unsupported_backend())
+    }
+
+    async fn query_behavioral_baseline_snapshot(
+        &self,
+        _strategy_id: &str,
+    ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
         Err(unsupported_backend())
     }
 
@@ -1012,6 +1101,11 @@ fn is_threat_intel_key(key: &str) -> bool {
 }
 
 #[cfg(feature = "nats")]
+fn is_behavioral_baseline_key(key: &str) -> bool {
+    key.starts_with(&format!("{BEHAVIORAL_BASELINE_KEY_PREFIX}."))
+}
+
+#[cfg(feature = "nats")]
 fn threat_class_config_key(threat_class: &ThreatClass) -> String {
     format!(
         "{THREAT_CLASS_CONFIG_KEY_PREFIX}.{}",
@@ -1026,6 +1120,14 @@ fn threat_intel_key(indicator_type: &ThreatIntelIndicatorType, value: &str) -> S
         "{THREAT_INTEL_KEY_PREFIX}.{}.{}",
         threat_intel_indicator_segment(indicator_type),
         hash_prefix(normalized.as_bytes(), 64)
+    )
+}
+
+#[cfg(feature = "nats")]
+fn behavioral_baseline_key(strategy_id: &str) -> String {
+    format!(
+        "{BEHAVIORAL_BASELINE_KEY_PREFIX}.{}",
+        sanitize_segment(strategy_id)
     )
 }
 
@@ -1110,9 +1212,7 @@ mod tests {
     use crate::PheromoneSubstrate;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::agent::SwarmMode;
-    use swarm_core::config::{
-        PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig,
-    };
+    use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
     use swarm_core::pheromone::{
         EscalationRecord, PheromoneDeposit, ThreatClass, ThreatClassConfig, ThreatIntelEntry,
         ThreatIntelIndicatorType,
@@ -1145,6 +1245,8 @@ mod tests {
             timestamp,
             decay_half_life: 3600.0,
             agent_id: AgentId(agent_id.to_string()),
+            agent_identity: String::new(),
+            agent_role: None,
             signature: Vec::new(),
             agent_key: Vec::new(),
         }

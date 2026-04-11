@@ -77,9 +77,16 @@ struct BeaconStats {
 
 impl Default for NetworkConnectDetector {
     fn default() -> Self {
-        match Self::from_profile(NetworkConnectProfile::default()) {
-            Ok(detector) => detector,
-            Err(error) => panic!("default NetworkConnectProfile is invalid: {error}"),
+        Self {
+            suspicious_ports: normalize_ports(default_suspicious_ports()),
+            process_port_allowlist: normalize_allowlist(HashMap::new()),
+            beacon_min_sample_count: default_beacon_min_sample_count(),
+            beacon_window_ms: default_beacon_window_ms(),
+            beacon_min_interval_ms: default_beacon_min_interval_ms(),
+            beacon_max_jitter_ratio: default_beacon_max_jitter_ratio(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
+            beacon_tracker: Arc::default(),
         }
     }
 }
@@ -331,6 +338,10 @@ impl NetworkConnectProfile {
 }
 
 impl DetectionStrategy for NetworkConnectDetector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "network_connect"
     }
@@ -341,11 +352,15 @@ impl DetectionStrategy for NetworkConnectDetector {
                 self.evaluate_connect(event, connect).into_iter().collect()
             }
             TelemetryPayload::ProcessStart(_)
+            | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::DnsQuery(_)
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
-            | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
+            | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
         }
     }
 }

@@ -1,4 +1,5 @@
 use crate::{DetectionFinding, DetectionStrategy, TelemetryEvent};
+use std::any::Any;
 
 /// Detector that evaluates all configured strategies for a single event.
 pub struct CompositeDetector {
@@ -9,14 +10,33 @@ impl CompositeDetector {
     pub fn new(strategies: Vec<Box<dyn DetectionStrategy>>) -> Self {
         Self { strategies }
     }
+
+    pub fn strategies(&self) -> impl Iterator<Item = &dyn DetectionStrategy> {
+        self.strategies.iter().map(|strategy| strategy.as_ref())
+    }
 }
 
 impl DetectionStrategy for CompositeDetector {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "composite"
     }
 
     fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
+        let trace_id =
+            swarm_core::observability::current_trace_id().unwrap_or_else(|| "unknown".to_string());
+        let span = tracing::debug_span!(
+            "whisker.composite.evaluate",
+            trace_id = %trace_id,
+            event_id = %event.event_id,
+            host_id = ?event.host_id,
+            strategy_count = self.strategies.len()
+        );
+        let _guard = span.enter();
+
         self.strategies
             .iter()
             .flat_map(|strategy| strategy.evaluate(event))
@@ -39,6 +59,10 @@ mod tests {
     }
 
     impl DetectionStrategy for MockStrategy {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
         fn id(&self) -> &str {
             "mock"
         }

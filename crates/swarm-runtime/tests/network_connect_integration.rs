@@ -60,7 +60,7 @@ async fn network_connect_strategy_detects_suspicious_port_and_deposits_command_a
         &detector,
         &substrate,
         &network_event("network-port-evt", 1_700_000_000_000, "198.51.100.25", 4444),
-        &AgentId("whisker-network".to_string()),
+        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
         &config.pheromone,
         &test_signing_key(),
     )
@@ -116,7 +116,7 @@ async fn network_connect_strategy_detects_low_jitter_beacon_sequence()
                 "198.51.100.77",
                 443,
             ),
-            &AgentId("whisker-network".to_string()),
+            &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
             &config.pheromone,
             &test_signing_key(),
         )

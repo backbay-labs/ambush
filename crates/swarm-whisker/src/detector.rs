@@ -3,18 +3,26 @@
 use crate::{ProfileValidationError, validate_confidence_thresholds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::any::Any;
 use swarm_core::pheromone::ThreatClass;
 pub use swarm_core::telemetry::{
-    AuthenticationEventData, DnsQueryEvent, FilePersistenceEvent, NetworkConnectEvent,
-    ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent, TelemetryEvent,
-    TelemetryPayload,
+    AuthenticationEventData, DnsQueryEvent, ExhaustedResource, FilePersistenceEvent,
+    InfrastructureHealthEvent, NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent,
+    RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent, TelemetryEvent,
+    TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity,
 };
 use swarm_core::types::Severity;
 
 /// Trait for pluggable detection strategies.
 ///
-/// Strategies must be fast, deterministic, and side-effect free.
-pub trait DetectionStrategy: Send + Sync {
+/// Strategies must be fast and safe to run on the hot path.
+///
+/// Stateless detectors are preferred, but windowed/stateful detectors are allowed
+/// when they keep internal learning state behind synchronization primitives.
+pub trait DetectionStrategy: Send + Sync + 'static {
+    /// Downcast hook for runtime-specific persistence helpers.
+    fn as_any(&self) -> &dyn Any;
+
     /// Strategy identifier.
     fn id(&self) -> &str;
 
@@ -70,9 +78,17 @@ pub struct SuspiciousProcessTreeDetector {
 
 impl Default for SuspiciousProcessTreeDetector {
     fn default() -> Self {
-        match Self::from_profile(SuspiciousProcessTreeProfile::default()) {
-            Ok(detector) => detector,
-            Err(error) => panic!("default SuspiciousProcessTreeProfile is invalid: {error}"),
+        Self {
+            suspicious_parents: default_suspicious_parents()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            suspicious_children: default_suspicious_children()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
         }
     }
 }
@@ -184,6 +200,10 @@ impl SuspiciousProcessTreeProfile {
 }
 
 impl DetectionStrategy for SuspiciousProcessTreeDetector {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "suspicious_process_tree"
     }
@@ -194,11 +214,15 @@ impl DetectionStrategy for SuspiciousProcessTreeDetector {
                 self.process_match(event, process).into_iter().collect()
             }
             TelemetryPayload::NetworkConnect(_)
+            | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::DnsQuery(_)
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
-            | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
+            | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
         }
     }
 }

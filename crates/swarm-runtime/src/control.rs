@@ -2,6 +2,7 @@ use crate::config::{
     DetectorProfileError, RuntimeConfigError, load_config, validate_all_detector_profiles,
 };
 use crate::detector_factory::{DetectorFactoryError, build_detector_from_strategy};
+use crate::evolution_status::{DefaultEvolutionStatusHarness, EvolutionStatusError};
 use crate::investigation::SummaryInvestigator;
 use crate::service::{ConfiguredRuntimeStack, OperatorStatusReport, ServiceError};
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,9 @@ pub enum ControlError {
 
     #[error(transparent)]
     Notification(#[from] NotificationError),
+
+    #[error(transparent)]
+    EvolutionStatus(#[from] EvolutionStatusError),
 
     #[error("unsupported detector strategy `{strategy}`")]
     UnsupportedDetector { strategy: String },
@@ -156,7 +160,15 @@ impl DefaultControlPlane {
 
     /// Read the current operator review surface from the configured runtime stack.
     pub async fn status(&self) -> Result<ControlEnvelope<OperatorStatusReport>, ControlError> {
-        let report = self.stack.operator_review_status(&self.detector).await?;
+        let mut report = self.stack.operator_review_status(&self.detector).await?;
+        if self.stack.service.config.evolution.enabled {
+            let evolution = DefaultEvolutionStatusHarness::from_config(
+                &self.config_path,
+                self.stack.service.config.clone(),
+            )?
+            .status()?;
+            report = report.with_evolution(evolution);
+        }
         Ok(ControlEnvelope {
             origin: ControlDataOrigin::LiveRuntimeStatus,
             generated_at_ms: now_ms(),
@@ -436,7 +448,20 @@ fn render_status(envelope: &ControlEnvelope<OperatorStatusReport>) -> String {
             "Latest hot-path decision: {}",
             format_timestamp(report.freshness.latest_hot_path_decision_at_ms)
         ),
+        format!(
+            "Async lane: status={} queued={} running={} remaining={} investigations={} incidents={}",
+            report.async_lane.status.as_str(),
+            report.async_lane.queued_jobs,
+            report.async_lane.running_jobs,
+            report.async_lane.queue_budget_remaining,
+            report.async_lane.recent_investigations,
+            report.async_lane.recent_incidents
+        ),
     ];
+
+    if let Some(reason) = &report.async_lane.last_failure_reason {
+        lines.push(format!("Async lane last failure: {reason}"));
+    }
 
     if let Some(review) = &report.investigation_review {
         lines.push(format!(
@@ -460,6 +485,41 @@ fn render_status(envelope: &ControlEnvelope<OperatorStatusReport>) -> String {
         lines.push(format!(
             "Bridges: configured={} ok={} degraded={} idle={}",
             bridges.configured, bridges.ok, bridges.degraded, bridges.idle
+        ));
+    }
+
+    if let Some(providence) = &report.providence {
+        lines.push(format!(
+            "Providence: status={} reachable={} authenticated={} accepting_writes={}",
+            providence.status,
+            providence.reachable,
+            providence.authenticated,
+            providence.accepting_writes
+        ));
+    }
+
+    if let Some(evolution) = &report.evolution {
+        lines.push(format!(
+            "Evolution: generation={} population={}/{} drift={} best={} mean={} verify_pass={:.3} admit_rate={:.3}",
+            evolution.generation_count,
+            evolution.population.current_population_size,
+            evolution.population.configured_population_size,
+            evolution
+                .kitten_state
+                .map(|state| state.as_str())
+                .unwrap_or("unknown"),
+            evolution
+                .population
+                .best_fitness
+                .map(|value| format!("{value:.3}"))
+                .unwrap_or_else(|| "n/a".to_string()),
+            evolution
+                .population
+                .mean_fitness
+                .map(|value| format!("{value:.3}"))
+                .unwrap_or_else(|| "n/a".to_string()),
+            evolution.verification.pass_rate,
+            evolution.admission.canary_admission_rate
         ));
     }
 
@@ -596,6 +656,7 @@ mod tests {
             description: "control surface test config".to_string(),
             runtime: RuntimeSettings {
                 mode: RuntimeMode::LiveResponse,
+                demo_mode: false,
                 telemetry_sources: vec![TelemetrySourceConfig {
                     name: "synthetic".to_string(),
                     subject: "telemetry.synthetic.process".to_string(),
@@ -608,6 +669,8 @@ mod tests {
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
                 governance_degraded_tick_threshold: 3,
+                partition_contingency_lease_ttl_ms: 300_000,
+                partition_contingency_blast_radius_cap: 1,
                 max_dead_letter_bytes: None,
             },
             detection: swarm_core::config::DetectionConfig {
@@ -647,6 +710,7 @@ mod tests {
                 max_pending_jobs: 4,
                 time_budget_ms: 250,
                 bundle_store: BundleStoreConfig::Memory,
+                ..InvestigationConfig::default()
             },
             correlation: CorrelationConfig {
                 enabled: true,
@@ -657,7 +721,13 @@ mod tests {
             },
             canary: CanaryConfig::default(),
             promotion: PromotionConfig::default(),
+            evolution: swarm_core::config::EvolutionConfig::default(),
+            deception: swarm_core::config::DeceptionConfig::default(),
+            memory: swarm_core::config::MemoryConfig::default(),
+            identity: swarm_core::config::IdentityConfig::default(),
+            platform_api: Default::default(),
             operator: swarm_core::config::OperatorSurfaceConfig::default(),
+            tls: None,
         }
     }
 
@@ -688,10 +758,30 @@ mod tests {
         }
     }
 
+    fn test_signing_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[42u8; 32])
+    }
+
+    fn test_agent_id() -> AgentId {
+        AgentId::from_verifying_key(&test_signing_key().verifying_key())
+    }
+
+    fn signing_material_for(label: &str) -> (ed25519_dalek::SigningKey, AgentId) {
+        let mut seed = [0u8; 32];
+        seed[0] = label
+            .as_bytes()
+            .iter()
+            .fold(0u8, |acc, byte| acc.wrapping_add(*byte));
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+        (signing_key, agent_id)
+    }
+
     #[tokio::test]
     async fn status_output_uses_live_runtime_origin() {
         let plane = DefaultControlPlane::from_config("inline", control_config()).unwrap();
-        let agent_id = AgentId("whisker-a".to_string());
+        let signing_key = test_signing_key();
+        let agent_id = test_agent_id();
 
         let _ = plane
             .stack
@@ -701,7 +791,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context(1_700_000_000_001),
-                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
+                    signing_key: &signing_key,
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -725,6 +815,7 @@ mod tests {
 
         let rendered = render_output(&OperatorControlOutput::Status(Box::new(status.clone())));
         assert!(rendered.contains("Origin: live_runtime_status"));
+        assert!(rendered.contains("Async lane: status="));
 
         let json = serde_json::to_string(&OperatorControlOutput::Status(Box::new(status))).unwrap();
         assert!(json.contains("\"origin\":\"live_runtime_status\""));
@@ -733,7 +824,8 @@ mod tests {
     #[tokio::test]
     async fn lookup_outputs_resolve_stable_ids_and_persisted_origin() {
         let plane = DefaultControlPlane::from_config("inline", control_config()).unwrap();
-        let agent_id = AgentId("whisker-a".to_string());
+        let signing_key = test_signing_key();
+        let agent_id = test_agent_id();
 
         let processed = plane
             .stack
@@ -743,7 +835,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &context(1_700_000_000_002),
-                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
+                    signing_key: &signing_key,
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -811,8 +903,8 @@ mod tests {
             .unwrap();
 
         let substrate = Arc::new(plane.stack.substrate.clone());
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
         for agent in ["agent-a", "agent-b"] {
+            let (signing_key, agent_id) = signing_material_for(agent);
             let mut deposit = swarm_core::pheromone::PheromoneDeposit {
                 indicator: serde_json::json!({"signal": "execution"}),
                 threat_class: ThreatClass::Execution,
@@ -820,7 +912,9 @@ mod tests {
                 confidence: 0.8,
                 timestamp: 1_700_000_000,
                 decay_half_life: 3600.0,
-                agent_id: AgentId(agent.to_string()),
+                agent_id: agent_id.clone(),
+                agent_identity: agent_id.0.clone(),
+                agent_role: None,
                 signature: Vec::new(),
                 agent_key: Vec::new(),
             };
@@ -832,6 +926,8 @@ mod tests {
                 timestamp: deposit.timestamp,
                 decay_half_life: deposit.decay_half_life,
                 agent_id: &deposit.agent_id,
+                agent_identity: &deposit.agent_identity,
+                agent_role: deposit.agent_role,
             };
             let payload_bytes = serde_json::to_vec(&payload).unwrap();
             let sig = ed25519_dalek::Signer::sign(&signing_key, &payload_bytes);

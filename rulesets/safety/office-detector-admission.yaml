@@ -1,0 +1,32 @@
+schema_version: 1
+name: office_detector_admission_v1
+description: Deterministic repo-owned admission rules for evolved office detector candidates.
+invariants:
+  - name: known_bad_coverage_floor
+    type: coverage_floor
+    corpus_path: ../../verifications/office-detector-safety-v1.yaml
+    source: known_bad_coverage
+    min_ratio: 1.0
+  - name: threat_class_template_floor
+    type: coverage_floor
+    corpus_path: ../../verifications/office-detector-safety-v1.yaml
+    source: threat_class_templates
+    min_ratio: 1.0
+  - name: false_positive_ceiling
+    type: fp_ceiling
+    corpus_path: ../../verifications/office-detector-safety-v1.yaml
+    max_rate: 0.05
+  - name: detect_latency_budget
+    type: latency_budget
+    corpus_path: ../../verifications/office-detector-safety-v1.yaml
+    max_detect_latency_us: 10000
+  - name: medium_confidence_bounds
+    type: parameter_bounds
+    json_pointer: /candidate/profile/medium_confidence_threshold
+    min: 0.40
+    max: 0.95
+  - name: high_confidence_bounds
+    type: parameter_bounds
+    json_pointer: /candidate/profile/high_confidence_threshold
+    min: 0.60
+    max: 0.99

@@ -108,6 +108,46 @@ pub fn sha256_hex(data: &[u8]) -> String {
     sha256(data).to_hex_prefixed()
 }
 
+/// Compute an RFC 2104 HMAC-SHA256 over the provided bytes.
+pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Hash {
+    const BLOCK_SIZE: usize = 64;
+
+    let normalized_key = if key.len() > BLOCK_SIZE {
+        sha256(key).as_bytes().to_vec()
+    } else {
+        key.to_vec()
+    };
+
+    let mut padded_key = [0_u8; BLOCK_SIZE];
+    padded_key[..normalized_key.len()].copy_from_slice(&normalized_key);
+
+    let mut inner_pad = [0_u8; BLOCK_SIZE];
+    let mut outer_pad = [0_u8; BLOCK_SIZE];
+    for (index, byte) in padded_key.iter().enumerate() {
+        inner_pad[index] = byte ^ 0x36;
+        outer_pad[index] = byte ^ 0x5c;
+    }
+
+    let mut inner_hasher = Sha256::new();
+    inner_hasher.update(inner_pad);
+    inner_hasher.update(data);
+    let inner_digest = inner_hasher.finalize();
+
+    let mut outer_hasher = Sha256::new();
+    outer_hasher.update(outer_pad);
+    outer_hasher.update(inner_digest);
+    let outer_digest = outer_hasher.finalize();
+
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(&outer_digest);
+    Hash::from_bytes(bytes)
+}
+
+/// Compute HMAC-SHA256 and return it as lowercase hex without a prefix.
+pub fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
+    hmac_sha256(key, data).to_hex()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -165,5 +205,14 @@ mod tests {
 
         assert_eq!(combined, combined_again);
         assert_ne!(combined, concat_hashes(&right, &left));
+    }
+
+    #[test]
+    fn test_hmac_sha256_matches_known_vector() {
+        let digest = hmac_sha256_hex(b"key", b"The quick brown fox jumps over the lazy dog");
+        assert_eq!(
+            digest,
+            "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+        );
     }
 }

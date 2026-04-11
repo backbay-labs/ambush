@@ -4,8 +4,11 @@
 //! detection stays in Rust, policy stays deterministic, and live response
 //! execution is capability-scoped.
 
+pub mod agent_identity;
 pub mod approval;
 pub mod bridge_runtime;
+pub mod calico_agent;
+#[path = "../../swarm-evolution/src/canary.rs"]
 pub mod canary;
 pub mod cli;
 pub mod config;
@@ -14,25 +17,42 @@ pub mod correlation;
 pub mod detection;
 pub mod detector_factory;
 pub mod dispatcher;
+#[path = "../../swarm-evolution/src/drafting.rs"]
 pub mod drafting;
 pub mod escalation;
+pub mod evasion_coverage;
+#[path = "../../swarm-evolution/src/evidence.rs"]
 pub mod evidence;
+#[path = "../../swarm-evolution/src/evolution.rs"]
 pub mod evolution;
+pub mod evolution_status;
+#[path = "../../swarm-evolution/src/governance_prep.rs"]
 pub mod governance_prep;
 pub mod http;
 pub mod ingest;
 pub mod investigation;
+pub mod kitten_agent;
+#[path = "../../swarm-evolution/src/mutation.rs"]
 pub mod mutation;
 pub mod operator_http;
 pub mod operator_maintenance;
+#[path = "../../swarm-evolution/src/portfolio.rs"]
 pub mod portfolio;
 pub mod pounce_agent;
+#[path = "../../swarm-evolution/src/promotion.rs"]
 pub mod promotion;
+pub mod providence;
+pub mod red_swarm;
 pub mod replay;
 pub mod review_workbench;
+pub mod runtime_events;
+#[path = "../../swarm-evolution/src/selection.rs"]
 pub mod selection;
+pub mod serve;
 pub mod service;
+pub mod sphinx_agent;
 pub mod stalker_agent;
+#[path = "../../swarm-evolution/src/strategy.rs"]
 pub mod strategy;
 pub mod tom_agent;
 pub mod weaver_agent;
@@ -40,6 +60,7 @@ pub mod whisker_agent;
 pub mod workbench;
 
 use std::time::Instant;
+use swarm_consensus::ConsensusGovernanceReceipt;
 pub use swarm_core::config::RuntimeMode;
 use swarm_core::types::AgentId;
 use swarm_guard::{GuardAction, GuardContext, GuardPipeline};
@@ -136,7 +157,11 @@ impl<P, E> SwarmRuntime<P, E> {
             "governance.veto",
             reason.clone(),
         )
-        .with_governance_audit(governing_agent_id.clone(), reason.clone());
+        .with_governance_audit(
+            governing_agent_id.clone(),
+            reason.clone(),
+            Self::verified_governance_receipt(request).map(|(_, receipt_value)| receipt_value),
+        );
 
         AuditTrail {
             trail_id: format!("trail:{}:{}", request.hunt_id.0, context.now_ms),
@@ -180,6 +205,53 @@ impl<P, E> SwarmRuntime<P, E> {
             RuntimeMode::DetectOnly => ExecutionMode::DryRun,
             RuntimeMode::LiveResponse => ExecutionMode::Enforced,
         }
+    }
+
+    fn verified_governance_receipt(
+        request: &ActionRequest,
+    ) -> Option<(ConsensusGovernanceReceipt, serde_json::Value)> {
+        let receipt_value = request.evidence.get("governance_receipt")?.clone();
+        let receipt: ConsensusGovernanceReceipt =
+            match serde_json::from_value(receipt_value.clone()) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    tracing::warn!(
+                        hunt_id = %request.hunt_id.0,
+                        requested_by = %request.requested_by,
+                        reason = %error,
+                        module = module_path!(),
+                        "ignoring malformed governance receipt embedded in request evidence"
+                    );
+                    return None;
+                }
+            };
+        if let Err(error) = receipt.verify() {
+            tracing::warn!(
+                hunt_id = %request.hunt_id.0,
+                requested_by = %request.requested_by,
+                reason = %error,
+                module = module_path!(),
+                "ignoring unverifiable governance receipt embedded in request evidence"
+            );
+            return None;
+        }
+        Some((receipt, receipt_value))
+    }
+
+    fn decorate_receipt_with_governance(
+        receipt: ResponseReceipt,
+        request: &ActionRequest,
+        reason: impl Into<String>,
+    ) -> ResponseReceipt {
+        let Some((governance_receipt, receipt_value)) = Self::verified_governance_receipt(request)
+        else {
+            return receipt;
+        };
+        receipt.with_governance_audit(
+            governance_receipt.payload.issued_by,
+            reason.into(),
+            Some(receipt_value),
+        )
     }
 }
 
@@ -240,6 +312,11 @@ where
                 decision.rule_name.clone(),
                 decision.reason.clone(),
             );
+        let receipt = Self::decorate_receipt_with_governance(
+            receipt,
+            request,
+            "consensus approved response action",
+        );
         if !receipt.status.indicates_success() {
             return Err(RuntimeError::Response(ResponseError {
                 failure: receipt.into_failure(),
@@ -279,6 +356,28 @@ where
         request: &ActionRequest,
         context: &ApprovalContext,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
+        self.audit_authorize_and_execute_instrumented_internal(detection, request, context, false)
+            .await
+    }
+
+    /// Execute a previously human-approved request through the normal runtime lane.
+    pub async fn audit_authorize_and_execute_human_approved_instrumented(
+        &self,
+        detection: &DetectionFinding,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+    ) -> Result<RuntimeExecutionReport, RuntimeError> {
+        self.audit_authorize_and_execute_instrumented_internal(detection, request, context, true)
+            .await
+    }
+
+    async fn audit_authorize_and_execute_instrumented_internal(
+        &self,
+        detection: &DetectionFinding,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+        allow_human_approved_execution: bool,
+    ) -> Result<RuntimeExecutionReport, RuntimeError> {
         let policy_started = Instant::now();
         let decision = self.policy.evaluate(request, context)?;
         let policy_elapsed_us = policy_started.elapsed().as_micros() as u64;
@@ -306,7 +405,8 @@ where
                     false,
                 ),
                 swarm_policy::PolicyVerdict::RequireHuman
-                    if self.mode == RuntimeMode::LiveResponse =>
+                    if self.mode == RuntimeMode::LiveResponse
+                        && !allow_human_approved_execution =>
                 {
                     (
                         None,
@@ -346,20 +446,29 @@ where
                                     .await
                                 {
                                     Ok(receipt) if receipt.status.indicates_success() => {
-                                        AuditResponseRecord::Success(receipt.with_policy_audit(
-                                            decision.verdict,
-                                            decision.rule_name.clone(),
-                                            decision.reason.clone(),
-                                        ))
+                                        AuditResponseRecord::Success(
+                                            Self::decorate_receipt_with_governance(
+                                                receipt.with_policy_audit(
+                                                    decision.verdict,
+                                                    decision.rule_name.clone(),
+                                                    decision.reason.clone(),
+                                                ),
+                                                request,
+                                                "consensus approved response action",
+                                            ),
+                                        )
                                     }
                                     Ok(receipt) => AuditResponseRecord::Failure(
-                                        receipt
-                                            .with_policy_audit(
+                                        Self::decorate_receipt_with_governance(
+                                            receipt.with_policy_audit(
                                                 decision.verdict,
                                                 decision.rule_name.clone(),
                                                 decision.reason.clone(),
-                                            )
-                                            .into_failure(),
+                                            ),
+                                            request,
+                                            "consensus approved response action",
+                                        )
+                                        .into_failure(),
                                     ),
                                     Err(error) => AuditResponseRecord::Failure(error.failure),
                                 };
@@ -405,6 +514,11 @@ where
                                     decision.verdict,
                                     decision.rule_name.clone(),
                                     decision.reason.clone(),
+                                );
+                                let receipt = Self::decorate_receipt_with_governance(
+                                    receipt,
+                                    request,
+                                    "consensus approved response action",
                                 );
                                 (
                                     Some(lease),
@@ -607,6 +721,54 @@ mod tests {
                 .to_string()
                 .contains("authorized but held for human approval")
         );
+    }
+
+    #[tokio::test]
+    async fn human_approved_live_runtime_executes_human_gated_action() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            RecordingExecutor {
+                calls: Arc::clone(&calls),
+            },
+        );
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-approved".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::IsolateHost {
+                host_id: "host-1".to_string(),
+            },
+            severity: Severity::Critical,
+            evidence: serde_json::json!({"signal": "active-exploit"}),
+        };
+        let detection = swarm_whisker::DetectionFinding {
+            finding_id: "finding-approved".to_string(),
+            event_id: "evt-approved".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::Critical,
+            confidence: 0.99,
+            evidence: request.evidence.clone(),
+            strategy_id: "test".to_string(),
+        };
+
+        let report = runtime
+            .audit_authorize_and_execute_human_approved_instrumented(
+                &detection,
+                &request,
+                &sample_context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        match report.audit.response {
+            AuditResponseRecord::Success(receipt) => {
+                assert_eq!(receipt.status, ResponseStatus::Executed);
+                assert_eq!(receipt.mode, ExecutionMode::Enforced);
+            }
+            other => panic!("expected success response, got {other:?}"),
+        }
     }
 
     #[tokio::test]

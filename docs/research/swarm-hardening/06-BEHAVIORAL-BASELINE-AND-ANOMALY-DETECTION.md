@@ -1,7 +1,7 @@
 ---
 title: "06 -- Behavioral Baseline and Anomaly Detection Approaches"
 series: Swarm Hardening (6 of 8)
-version: "0.1"
+version: "0.3"
 date: 2026-04-08
 status: Draft
 authors: Swarm Team Six Research
@@ -42,9 +42,11 @@ authors: Swarm Team Six Research
 11. [Anomaly Scoring](#11-anomaly-scoring)
 12. [Proposed Detector Designs](#12-proposed-detector-designs)
 13. [Evaluation Methodology](#13-evaluation-methodology)
-14. [Open Questions and Future Work](#14-open-questions-and-future-work)
-15. [Cross-References](#15-cross-references)
-16. [References](#16-references)
+14. [Baseline Persistence and Durability](#14-baseline-persistence-and-durability)
+15. [Adversarial Resistance](#15-adversarial-resistance)
+16. [Open Questions and Future Work](#16-open-questions-and-future-work)
+17. [Cross-References](#17-cross-references)
+18. [References](#18-references)
 
 ---
 
@@ -879,6 +881,72 @@ growth and to implement recency semantics:
    reset current. Anomaly detection compares the current window's cardinality
    against the previous window's.
 
+### 9.5 Count-Min Sketch Decay Edge Effects
+
+The halving decay in Section 9.4.2 introduces edge effects at window
+boundaries that affect detection accuracy.
+
+#### 9.5.1 Post-Decay False Positive Analysis
+
+After halving, items with count=1 become count=0, making them appear
+completely novel on the next observation. Items with low counts (1-3) lose
+precision because integer division by 2 rounds toward zero, creating a
+systematic bias toward novelty immediately after decay.
+
+The `rarity()` function computes `1 - (count / max_count)`. While the
+ratio is preserved for items with proportional counts (count=80 out of
+max=100 stays at rarity 0.20 after decay), items near the integer floor
+are disproportionately affected. In a sketch with 1000 distinct items,
+approximately 10-20% of low-frequency items may generate spurious rarity
+spikes at each window boundary.
+
+#### 9.5.2 Per-Observation Exponential Decay Alternative
+
+Instead of periodic halving, multiply each counter by a continuous decay
+factor on every query, keyed to elapsed time since last access:
+
+```
+effective_count(item) = stored_count(item) * decay_rate ^ (now - last_update)
+```
+
+where `decay_rate` is a per-second multiplier (e.g., `0.9999` for a
+half-life of approximately 2 hours). This eliminates the step-function
+artifact at window boundaries and provides smooth frequency aging.
+
+**Tradeoff**: Per-observation decay requires storing a `last_update`
+timestamp per sketch row (not per cell, since all cells in a row decay
+together), adding `d * 8` bytes per sketch. The multiplication on every
+query adds ~2ns per hash row, or ~8ns total for `d=4` -- negligible
+relative to the hash computation.
+
+#### 9.5.3 Post-Decay Dampening Period
+
+If periodic halving is retained (simpler implementation), apply a
+dampening window after each decay event:
+
+1. For `dampening_ms` after decay (default: 60000, one minute), multiply
+   the rarity threshold by a relaxation factor (default: 1.5). This
+   raises the bar for a rarity-triggered finding during the period when
+   all counters are artificially low.
+2. After the dampening period, restore the normal threshold.
+3. Log a metric (`cms_decay_dampening_active`) so operators can correlate
+   any residual false positive bursts with decay timing.
+
+#### 9.5.4 Cross-Detector Decay Synchronization
+
+If `ProcessBaselineDetector` and `NetworkBaselineDetector` use CMS
+instances with different window sizes, their decay schedules are
+unsynchronized. A finding from one detector may have high rarity (just
+after its decay) while the other has low rarity (just before its decay).
+When both findings feed into pheromone concentration, the inconsistent
+timing can produce spurious compound escalations.
+
+Mitigation: align all CMS decay schedules to a shared clock. Define a
+global `decay_epoch_ms` in `BaselineConfig`. Each sketch decays at
+`decay_epoch_ms + N * window_size_ms` for integer N. This ensures all
+sketches with the same window size decay simultaneously, and sketches
+with different window sizes decay at predictable, non-overlapping times.
+
 ---
 
 ## 10. Integration with Current Architecture
@@ -1003,6 +1071,32 @@ requirement and can trigger escalation.
 This illustrates the key value: rule-based detectors provide the initial
 signal, baseline detectors amplify it, and the pheromone concentration
 model gates escalation on sustained, multi-source evidence.
+
+### 10.5 Baseline-to-Kill-Chain-Graph Bridge
+
+Baseline findings that trigger pheromone escalation eventually reach the
+Weaver's graph correlator (Doc 05). For this bridge to work, baseline
+evidence must carry the same entity fields that the `SummaryInvestigator`
+extracts for correlation keys and that the `GraphCorrelator` uses for
+entity extraction. The required shared fields:
+
+| Evidence Field | Source (Rule Detectors) | Source (Baseline Detectors) | Graph Usage |
+|---|---|---|---|
+| `host_id` | `event.host_id` | `event.host_id` | `AssetNode` lookup |
+| `user` | `evidence.user` | `evidence.user` | `IdentityNode` lookup |
+| `process_name` | `evidence.process_name` | `evidence.process_name` | `ProcessNode` lookup |
+| `parent_process` | `evidence.parent_process` | `evidence.parent_process` | `CausalEdge` evaluation |
+| `destination_ip` | `evidence.remote_address` | `evidence.destination_ip` | `NetworkNode` lookup |
+
+Baseline detectors must populate these fields in their evidence JSON (see
+Doc 05 Section 10.5.2 for the full contract). The baseline-specific fields
+(`z_arg_count`, `pair_rarity`, `mode`, etc.) are carried alongside but
+do not participate in entity extraction.
+
+In the graph, baseline findings become `AnomalyAnnotationNode` instances
+(not `TechniqueNode`) as specified in Doc 05 Section 10.5.1. This avoids
+diluting the kill chain signal while preserving the anomaly information as
+context on entity nodes.
 
 ---
 
@@ -1686,48 +1780,343 @@ The p99 latency target of 50 microseconds allows for occasional lock
 contention and sketch decay operations. The steady-state memory target of
 1 MiB per host is validated by the analysis in Section 9.2.
 
+### 13.4 Combined Pipeline Overhead Budget
+
+Doc 04 (Performance Characterization) defines a per-event latency SLO of
+10ms end-to-end. This section models the combined cost when baseline
+evaluation (this document) and graph ingestion (Doc 05) operate alongside
+the existing rule-based pipeline on the same event.
+
+#### 13.4.1 Per-Event Latency Breakdown
+
+| Component | Layer | p50 (est.) | p99 (est.) | Notes |
+|---|---|---|---|---|
+| Rule-based detectors (8 strategies) | Whisker | 10 us | 50 us | Doc 04 estimated 10-50us for 8 detectors |
+| Baseline detectors (3 strategies) | Whisker | 5 us | 50 us | Section 13.3 targets |
+| Threat intel enrichment | Whisker | 2 us | 10 us | Doc 04 estimated |
+| Pheromone deposit (finding conversion) | Whisker | 1 us | 5 us | Signing cost |
+| **Whisker layer total** | | **18 us** | **115 us** | Additive (strategies run sequentially in CompositeDetector) |
+| Stalker investigation (async) | Stalker | -- | -- | Async, not on event hot path |
+| Graph entity extraction | Weaver | 5 us | 25 us | JSON parsing per InvestigationBundle |
+| Graph edge evaluation | Weaver | 10 us | 100 us | O(degree) per entity; amortized per-investigation, not per-event |
+| Graph severity scoring | Weaver | 2 us | 10 us | Per-investigation |
+| **Weaver layer total (amortized per event)** | | **~1 us** | **~7 us** | ~1/20 events produce investigations |
+| **Combined per-event total** | | **~19 us** | **~122 us** | Well within 10ms SLO |
+
+The combined p99 of ~122us is dominated by baseline detector lock
+contention during sketch decay operations and rule-based detector
+evaluation. Under sustained 100K events/second, the pipeline requires
+approximately 2 core-seconds per wall-clock second of per-event
+evaluation -- requiring dedicated cores on server-class deployments and
+likely unsustainable on edge nodes. Edge deployments should disable the most expensive baseline
+detector (NetworkBaselineDetector with its HLL per-process allocations)
+via configuration.
+
+#### 13.4.2 Combined Memory Ceiling
+
+| Component | Steady State | Notes |
+|---|---|---|
+| Baseline state | ~456 KiB per host (Section 9.2) | Bounded by sketch dimensions |
+| Graph state | ~60 MB total (Doc 05 Section 7.2) | Bounded by `max_node_count` |
+| Pheromone substrate | ~2 MB total | Bounded by evaporation |
+| Investigation queue + stores | ~10 MB total | Bounded by `max_pending_jobs` + retention |
+| **Combined** | **~75 MB + 456 KiB/host** | For 100 monitored hosts: ~120 MB |
+
+Propose a unified memory watermark metric:
+`sts_combined_memory_bytes = baseline_state + graph_state + substrate_state`.
+Alert when this metric exceeds 80% of the configured `memory_ceiling`
+(default: 256 MB for server, 64 MB for edge). The metric should be
+exported via the existing runtime health endpoint.
+
+#### 13.4.3 End-to-End Load Test Requirement
+
+Neither this document nor Doc 05 can validate combined overhead from
+analysis alone. An end-to-end load test is required:
+
+- **Setup**: Full pipeline with all 8 rule detectors + 3 baseline
+  detectors + graph correlator active.
+- **Load**: Sustained 10K, 50K, and 100K events/second for 30 minutes.
+- **Metrics**: p50/p99 per-event latency, memory high-water mark,
+  lock contention histograms, graph compaction frequency and duration.
+- **Acceptance**: p99 latency <= 500us, memory <= `memory_ceiling`,
+  no deadlocks, no unbounded growth in any component.
+
 ---
 
-## 14. Open Questions and Future Work
+## 14. Baseline Persistence and Durability
 
-### 14.1 Baseline Persistence Across Restarts
+Section 13.4 establishes the combined overhead budget. This section
+specifies how baseline state survives agent restarts, expanding on the
+recommendation from the former Section 14.1 with concrete durability
+contracts.
 
-The current design stores baseline state in memory. Agent restarts lose all
-learned baselines, triggering a full cold-start period. Two mitigation paths:
+### 14.1 Snapshot Format Specification
 
-1. **Periodic snapshots**: Serialize baseline state to the local journal
-   backend at configurable intervals (e.g., every 5 minutes). On restart,
-   load the most recent snapshot. This requires `Serialize`/`Deserialize`
-   implementations for all baseline data structures.
-2. **Substrate-backed baselines**: Store baseline state as special pheromone
-   deposits in the substrate. This leverages existing durability
-   infrastructure but conflates two different data models (threat signals
-   vs. statistical state).
+Baseline snapshots use a versioned binary envelope:
 
-Recommendation: periodic snapshots to a sidecar file, separate from the
-pheromone substrate. Baseline state is not a threat signal and should not
-participate in concentration dynamics.
+```
+[magic: 4 bytes = "STBS"]     // Swarm Team Six Baseline Snapshot
+[version: u16 LE]              // Schema version (currently 1)
+[flags: u16 LE]                // Reserved for future use
+[checksum: 32 bytes]           // BLAKE3 hash of the payload
+[payload_len: u64 LE]          // Length of the serialized payload
+[payload: payload_len bytes]   // bincode-serialized BaselineSnapshot
+```
 
-### 14.2 Adversarial Baseline Manipulation
+The payload contains all baseline state:
 
-An adversary who is aware of the baseline detection system can attempt to:
+```rust
+#[derive(Serialize, Deserialize)]
+pub struct BaselineSnapshot {
+    pub schema_version: u16,
+    pub created_at_ms: i64,
+    pub process_baselines: HashMap<ProcessKey, ProcessBaseline>,
+    pub parent_child_sketch: CountMinSketchSnapshot,
+    pub network_cardinality: HashMap<NetworkKey, CardinalityTrackerSnapshot>,
+    pub port_sketch: CountMinSketchSnapshot,
+    pub rate_baselines: HashMap<NetworkKey, DualEwmaSnapshot>,
+    pub user_baselines: HashMap<String, AuthBaselineSnapshot>,
+    pub service_sketch: CountMinSketchSnapshot,
+    pub decay_schedule: DecayScheduleState,
+}
+```
 
-1. **Slow poisoning**: Gradually introduce malicious behavior over weeks to
-   shift the baseline before executing the attack. The dual-baseline
-   architecture (Section 8.2) partially mitigates this, but a sufficiently
-   patient adversary can shift even the long-term baseline.
-2. **Noise injection**: Generate high volumes of benign-looking anomalies
-   to inflate the false positive rate, desensitizing operators. The
-   graduated confidence model and pheromone concentration requirements
-   provide some resistance.
-3. **Baseline reset attacks**: Crash the agent to force a cold-start period
-   during which detection confidence is reduced.
+Schema version enables forward-compatible migration: when a future
+release adds a field, the deserializer can detect the older version and
+apply defaults for missing fields rather than rejecting the snapshot.
 
-See Swarm Hardening Doc 01 (Evasion Techniques) for a fuller treatment of
-adversarial resistance. Formal analysis of baseline robustness under
-adversarial manipulation is deferred to future work.
+### 14.2 Atomic Write Semantics
 
-### 14.3 Multi-Host Correlation
+Following the `FileIncidentStore` pattern in swarm-spine:
+
+1. Write to a temporary file: `{snapshot_path}.tmp`.
+2. `fsync` the temporary file.
+3. Atomic rename `{snapshot_path}.tmp` -> `{snapshot_path}`.
+
+This ensures the snapshot file is always either the previous valid
+snapshot or the new valid snapshot -- never a truncated write. On
+filesystems that do not support atomic rename (rare), fall back to
+write-to-temp, rename old to `.bak`, rename temp to final.
+
+### 14.3 Corruption Recovery
+
+On startup, the snapshot loader:
+
+1. Reads the magic bytes; rejects if not `"STBS"`.
+2. Reads the version; rejects if > current supported version.
+3. Reads the checksum and payload length.
+4. Reads the payload; computes BLAKE3 hash; rejects if mismatch.
+5. Deserializes with bincode; rejects on decode error.
+
+If any step fails, log a warning and fall back to cold-start with
+population baselines (Section 7.3.1). Do not attempt to repair a
+corrupted snapshot -- the risk of loading poisoned state outweighs the
+cold-start penalty.
+
+### 14.4 Snapshot Staleness and Window Alignment
+
+**Staleness policy.** If the snapshot's `created_at_ms` is more than
+`max_snapshot_age_ms` (default: 3600000, 1 hour) before the current
+wall clock, treat it as partially stale:
+
+1. Load the snapshot state.
+2. Set `observation_count` to `snapshot_count / 2` (effectively widening
+   confidence intervals via the cold-start scaling from Section 7.3.3).
+3. Log the staleness gap for operator visibility.
+
+This avoids the binary choice between "full cold start" and "trust old
+state completely." A 30-minute-old snapshot gets nearly full confidence;
+a 3-hour-old snapshot gets reduced confidence proportional to staleness.
+
+**CMS window alignment.** After restoring from snapshot, the CMS decay
+schedule must re-anchor to the wall clock. Compute the elapsed time
+since the snapshot's last decay event:
+
+```
+elapsed = now_ms - snapshot.decay_schedule.last_decay_ms
+full_windows = elapsed / window_size_ms
+partial_ms = elapsed % window_size_ms
+```
+
+Apply `full_windows` decay operations immediately (each multiplies all
+counters by 0.5). Schedule the next decay at
+`now_ms + (window_size_ms - partial_ms)`. This ensures the first
+post-restore decay aligns with the original schedule rather than
+resetting the window clock.
+
+### 14.5 Adaptive Snapshot Intervals
+
+The default 5-minute snapshot interval is appropriate for moderate event
+rates. Under burst conditions (thousands of events/minute), 5 minutes of
+baseline learning represents significant state. Under idle conditions,
+frequent snapshots waste I/O.
+
+Adaptive interval: `snapshot_interval_ms = max(min_interval, base_interval / log2(1 + events_since_last_snapshot / 1000))`.
+
+With `base_interval = 300000` (5 min) and `min_interval = 30000` (30 sec):
+- 100 events since last snapshot: interval ~5 minutes (no change).
+- 10,000 events: interval ~75 seconds.
+- 100,000 events: interval ~30 seconds (floor).
+
+### 14.6 HyperLogLog Serialization
+
+HLL registers use 6-bit packed representation in memory (Section 9.3.3).
+For snapshot persistence, serialize to an **unpacked** `Vec<u8>` format
+(one byte per register, values 0-63). This adds ~60% size overhead
+compared to packed representation but guarantees cross-version
+compatibility even if the packing algorithm changes.
+
+The serialized HLL format:
+
+```
+[precision: u8]                    // p parameter
+[register_count: u32 LE]          // 2^p
+[registers: register_count bytes]  // one byte per register
+```
+
+---
+
+## 15. Adversarial Resistance
+
+This section expands the adversarial analysis previously sketched in
+Section 14.2 of v0.1, providing quantified resistance bounds and
+concrete mitigations.
+
+### 15.1 Quantified Baseline Poisoning Window
+
+With EWMA alpha=0.02 (long-term baseline), the effective memory is
+approximately `1/alpha = 50` observations. Each new observation
+contributes 2% to the moving average. To shift the long-term mean by
+one standard deviation (sigma), the attacker must sustain observations
+at `mean + sigma` for approximately N observations where:
+
+```
+shift = alpha * N * sigma  (first-order approximation for small alpha)
+Solving for shift = sigma:  N = 1/alpha = 50 observations
+```
+
+More precisely, after N observations each at value `mean + delta`:
+
+```
+new_mean = mean + delta * (1 - (1 - alpha)^N)
+```
+
+For `delta = sigma` and `alpha = 0.02`:
+- N=25: mean shifts by 0.40 * sigma
+- N=50: mean shifts by 0.64 * sigma
+- N=75: mean shifts by 0.78 * sigma
+- N=100: mean shifts by 0.87 * sigma
+- N=150: mean shifts by 0.95 * sigma
+
+At one process execution per hour, shifting the mean by 1 sigma requires
+~50-75 hours (2-3 days) of sustained poisoning. At one execution per
+minute, it requires ~1 hour. The attack is easier against high-frequency
+features and harder against low-frequency features.
+
+For the short-term baseline (alpha=0.10, effective memory ~10), the same
+shift requires only ~10-15 observations -- potentially minutes. This is
+why the dual-baseline comparison is critical: the short-term baseline may
+be poisoned, but the long-term baseline serves as a reference.
+
+### 15.2 Minimum Learning Period Lockout
+
+During the cold-start phase (observation_count < `stable_observation_count`),
+baselines are most vulnerable to poisoning because the attacker's
+observations dominate the average. Mitigation:
+
+**Learning period lockout**: For the first `lockout_observation_count`
+(default: 20) observations, the baseline updates its statistics but does
+not emit findings. This prevents an attacker who triggers a restart from
+immediately injecting anomalous behavior that gets absorbed into the
+nascent baseline as "normal."
+
+The lockout complements the graduated confidence scaling (Section 7.3.3):
+even after lockout ends, findings carry reduced confidence until
+`stable_observation_count` is reached.
+
+### 15.3 Anomaly-During-Learning Detection
+
+If the baseline detects a statistical outlier during the learning period
+(z-score > 4.0 relative to the in-progress model, even with fewer than
+`stable_observation_count` observations), this suggests the learning
+period itself is contaminated. Two responses:
+
+1. **Exclude the outlier from the baseline model.** Do not update EWMA
+   with the anomalous observation. This prevents single extreme events
+   from corrupting the nascent baseline.
+2. **Emit a low-confidence `learning_period_anomaly` finding.** This
+   finding does not participate in normal pheromone escalation but is
+   logged for post-incident review. If many such findings accumulate
+   during learning, the operator is warned that the baseline may be
+   contaminated.
+
+### 15.4 Dual-Speed Baseline Comparison
+
+The dual-baseline architecture (Section 8.2) detects poisoning through
+divergence between the short-term and long-term baselines:
+
+```
+divergence = |short_term.mean - long_term.mean| / long_term.stddev
+```
+
+When `divergence > divergence_threshold` (default: 2.0), the short-term
+baseline has drifted significantly from the long-term reference. This
+triggers a `baseline_divergence` alert with metadata identifying the
+affected entity and feature. The alert is distinct from normal anomaly
+findings -- it signals that the baseline itself may be under attack.
+
+When divergence is detected:
+
+1. Freeze the short-term baseline (stop updating it with new observations)
+   until the divergence resolves.
+2. Use only the long-term baseline for anomaly scoring during the freeze.
+3. If divergence persists for `max_freeze_duration_ms` (default: 3600000,
+   1 hour), reset the short-term baseline to the long-term baseline's
+   current state.
+
+### 15.5 Baseline Snapshot Integrity
+
+If an attacker gains write access to the baseline snapshot file, they can
+directly poison the baseline without gradual shifting. Mitigation: sign
+snapshots using the agent's Ed25519 signing key (already present in
+`StalkerAgent` and `WeaverAgent` for pheromone deposit signing).
+
+The snapshot envelope gains an `[ed25519_signature: 64 bytes]` field
+after the checksum. On load, verify the signature against the agent's
+verifying key. If verification fails, reject the snapshot and cold-start.
+This reuses the existing Ed25519 infrastructure in `swarm-spine` with no
+new cryptographic dependencies.
+
+### 15.6 Noise Injection Defense
+
+A sophisticated attacker generates noise that mimics real anomaly
+patterns, saturating operator attention with high-fidelity false
+positives. Defenses:
+
+1. **Per-entity anomaly budget**: Track the number of baseline findings
+   per entity per hour. If entity E exceeds `max_findings_per_hour`
+   (default: 10), suppress further baseline findings for E and emit a
+   single `anomaly_budget_exhausted` meta-finding. This limits the
+   operator's exposure to noise from any single entity.
+
+2. **Anomaly pattern deduplication**: If the same `(entity, anomaly_type,
+   severity)` tuple fires more than `dedup_threshold` times within
+   `dedup_window_ms`, collapse subsequent findings into a count
+   annotation on the first finding rather than generating independent
+   pheromone deposits.
+
+3. **Correlation with rule detectors**: Baseline findings that co-occur
+   with rule-based findings on the same entity within a time window
+   receive a credibility boost (Section 11.3). Baseline findings without
+   any corroborating rule-based activity within `solo_timeout_ms` are
+   deprioritized (their pheromone half-life is reduced to
+   `0.5 * default_half_life_secs`).
+
+---
+
+## 16. Open Questions and Future Work
+
+### 16.1 Multi-Host Correlation
 
 The proposed detectors operate per-host. Fleet-wide attacks that produce
 small per-host anomalies may only be detectable through cross-host
@@ -1737,7 +2126,7 @@ a partial solution (multiple hosts depositing weak pheromones for the same
 baseline detectors -- "is this pattern unusual for the fleet, not just this
 host?" -- are a natural extension.
 
-### 14.4 Feedback Loop from Investigations
+### 16.2 Feedback Loop from Investigations
 
 When a Stalker agent (async investigation) confirms or rejects a baseline
 anomaly, that feedback could be used to adjust the baseline parameters:
@@ -1746,7 +2135,15 @@ confirmed false positives widen them. This creates a closed-loop learning
 system that improves over time. The mechanism is not yet designed and
 requires careful thought about adversary-induced feedback corruption.
 
-### 14.5 Telemetry Schema Extensions
+**Important**: Feedback loops should be deferred until both baseline
+detectors and graph correlation are independently validated. Feedback
+introduces coupling between the two systems that makes each harder to
+debug. If graph analysis changes baseline thresholds, which changes which
+findings reach the graph, which changes graph analysis, the resulting
+interaction may be unpredictable. Independent validation first, feedback
+integration second.
+
+### 16.3 Telemetry Schema Extensions
 
 The effectiveness of network baselines is limited by the current
 `NetworkConnectEvent` schema, which lacks:
@@ -1756,22 +2153,86 @@ The effectiveness of network baselines is limited by the current
   time detection.
 - **Direction**: Inbound vs. outbound distinction enables server-profile
   baselines.
+- **PID and start_time for ProcessStartEvent**: Required by Doc 05 Section
+  6.5.5 for per-execution process identity in graph nodes.
 
 A telemetry schema revision adding these fields would significantly increase
-the value of the `NetworkBaselineDetector`.
+the value of both `NetworkBaselineDetector` and the graph correlator's
+entity resolution.
+
+### 16.4 LANL Dataset Validation
+
+The LANL Unified Host and Network Dataset [13] provides 58 days of
+authentication logs and network flows with labeled red team events. This
+dataset is directly relevant to `AuthBaselineDetector` (authentication
+pattern anomalies) and `NetworkBaselineDetector` (connection pattern
+deviations).
+
+**Evaluation plan**: Map LANL authentication records to
+`AuthenticationEvent` payloads and network flows to `NetworkConnectEvent`
+payloads. Run all three baseline detectors and measure AUC-ROC against the
+labeled red team events. Compare individual detector AUC-ROC against the
+compound detection AUC-ROC (baseline + rule detectors through pheromone
+concentration) to quantify the amplification value.
+
+### 16.5 Correlation-Baseline Data Flow
+
+Baseline anomaly findings must flow into the kill chain graph (Doc 05) with
+consistent field mapping. The concrete data flow:
+
+```
+TelemetryEvent
+  |
+  v
+CompositeDetector
+  |-- RuleDetectors -> DetectionFinding (evidence: {command_line, parent_process, user, host_id})
+  |-- BaselineDetectors -> DetectionFinding (evidence: {mode, host_id, user, process_name, z_*, rarity_*})
+  |
+  v
+findings_to_deposits (swarm-whisker/stream.rs)
+  |
+  v
+PheromoneDeposit (per finding, baseline deposits use extended half-life)
+  |
+  v
+StalkerAgent (investigation)
+  |-- rule-sourced hunts: primary queue (max_pending_jobs=8)
+  |-- baseline-sourced hunts: secondary queue (max_pending_jobs=4)
+  |
+  v
+SummaryInvestigator -> InvestigationBundle
+  |-- Extracts correlation_keys from evidence JSON:
+  |     host:<host_id>, user:<user>, threat:<threat_class>, strategy:<strategy_id>
+  |-- For baseline evidence: also extracts process_name, parent_process
+  |     from the shared entity fields (Doc 05 Section 10.5.2)
+  |
+  v
+WeaverAgent
+  |-- CorrelationEngine (time-window) -> CorrelatedIncident
+  |-- GraphCorrelator
+        |-- Entity extraction using shared evidence fields
+        |-- Rule findings -> TechniqueNode
+        |-- Baseline findings -> AnomalyAnnotationNode (Doc 05 Section 10.5.1)
+        |-- Both types contribute to severity scoring
+```
+
+The shared entity fields (`host_id`, `user`, `process_name`,
+`parent_process`) in the evidence JSON are the bridge between the two
+systems. Both rule and baseline detectors must populate these fields for
+the `SummaryInvestigator` to extract consistent correlation keys.
 
 ---
 
-## 15. Cross-References
+## 17. Cross-References
 
 This document is part 6 of 8 in the **Swarm Hardening** research series.
 
 | Doc | Title | Relevance to This Document |
 |-----|-------|---------------------------|
-| 01 | Evasion Techniques and Countermeasures | Adversarial baseline manipulation (Section 14.2); evasion cost asymmetry motivating baselines (Section 2.2) |
+| 01 | Evasion Techniques and Countermeasures | Adversarial baseline manipulation (Section 15); evasion cost asymmetry motivating baselines (Section 2.2) |
 | 02 | ATT&CK Coverage Analysis | Coverage gaps addressable by baseline detectors (Section 13.2.2); technique-to-signal mapping |
-| 04 | Performance Budget and Hot-Path Constraints | Computation overhead targets for baseline evaluation (Section 13.3); memory budget constraints (Section 9.1) |
-| 05 | Kill Chain Reconstruction and Graph-Based Correlation | Compound detection via graph overlay complements pheromone-based correlation (Section 10.4) |
+| 04 | Performance Budget and Hot-Path Constraints | Computation overhead targets (Section 13.3); combined pipeline budget (Section 13.4); memory budget constraints (Section 9.1) |
+| 05 | Kill Chain Reconstruction and Graph-Based Correlation | Baseline-to-graph integration (Doc 05 Section 10.5); AnomalyAnnotationNode type; evidence schema contract; investigation amplification mitigation |
 
 **Sentinel Convergence Series Cross-References**:
 
@@ -1779,15 +2240,15 @@ This document is part 6 of 8 in the **Swarm Hardening** research series.
 |-----|-------|-----------|
 | [SC-02](../sentinel-convergence/02-PREDICTIVE-FAILURE-AS-THREAT-SIGNAL.md) | Predictive Infrastructure Failure as Threat Signal | Welford's algorithm analysis (Section 3.1); infrastructure baseline foundation |
 | [SC-03](../sentinel-convergence/03-EDGE-NATIVE-SECURITY-DETECTION.md) | Edge-Native Security Detection | Memory-constrained deployment targets informing the 1 MiB budget (Section 9.1) |
-| [SC-05](../sentinel-convergence/05-TELEMETRY-BRIDGE-ARCHITECTURE.md) | Telemetry Bridge Architecture | Schema constraints for new telemetry fields proposed in Section 14.5 |
+| [SC-05](../sentinel-convergence/05-TELEMETRY-BRIDGE-ARCHITECTURE.md) | Telemetry Bridge Architecture | Schema constraints for new telemetry fields proposed in Section 16.3 |
 | [SC-06](../sentinel-convergence/06-STIGMERGIC-COORDINATION-AND-SWARM-INTELLIGENCE.md) | Stigmergic Coordination and Swarm Intelligence | Pheromone concentration dynamics used for compound detection (Section 10.4) |
-| [SC-10](../sentinel-convergence/10-ADR-TELEMETRY-SCHEMA-ROLLOUT.md) | ADR: Telemetry Schema Rollout | Schema extension process for byte count/duration fields (Section 14.5) |
+| [SC-10](../sentinel-convergence/10-ADR-TELEMETRY-SCHEMA-ROLLOUT.md) | ADR: Telemetry Schema Rollout | Schema extension process for byte count/duration fields (Section 16.3) |
 
 ---
 
-## 16. References
+## 18. References
 
-### 16.1 swarm-team-six Source References
+### 18.1 swarm-team-six Source References
 
 - `crates/swarm-core/src/telemetry.rs` -- TelemetryEvent, TelemetryPayload, ProcessStartEvent, NetworkConnectEvent, DnsQueryEvent, AuthenticationEventData
 - `crates/swarm-core/src/pheromone.rs` -- ThreatClass, PheromoneDeposit, PheromoneConcentration, decay model
@@ -1805,7 +2266,7 @@ This document is part 6 of 8 in the **Swarm Hardening** research series.
 - `crates/swarm-whisker/src/suspicious_scripting.rs` -- SuspiciousScriptingDetector (encoded commands, LOLBins)
 - `crates/swarm-pheromone/src/substrate.rs` -- PheromoneSubstrate trait, InMemoryPheromoneSubstrate, concentration_for
 
-### 16.2 Academic and Industry References
+### 18.2 Academic and Industry References
 
 1. Welford, B.P. (1962). "Note on a method for calculating corrected sums of squares and products." *Technometrics* 4(3).
 2. Roberts, S.W. (1959). "Control chart tests based on geometric moving averages." *Technometrics* 1(3). [EWMA]
@@ -1819,3 +2280,4 @@ This document is part 6 of 8 in the **Swarm Hardening** research series.
 10. Axelsson, S. (2000). "The base-rate fallacy and the difficulty of intrusion detection." *ACM Transactions on Information and System Security* 3(3).
 11. Dorigo, M. and Stutzle, T. (2004). *Ant Colony Optimization*. MIT Press. [Stigmergic coordination foundations]
 12. Adams, R.P. and MacKay, D.J. (2007). "Bayesian online changepoint detection." *arXiv:0710.3742*.
+13. Kent, A. D. (2015). "Comprehensive, Multi-Source Cyber-Security Events." *Los Alamos National Laboratory.* https://csr.lanl.gov/data/cyber1/

@@ -6,19 +6,22 @@ use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use swarm_whisker::{
-    CredentialAccessProfile, DnsExfiltrationProfile, LateralMovementProfile, NetworkConnectProfile,
-    PersistenceProfile, ProfileValidationError, SupplyChainProfile, SuspiciousProcessTreeProfile,
-    SuspiciousScriptingProfile,
+    BehavioralAnomalyProfile, CredentialAccessProfile, DnsExfiltrationProfile,
+    FilelessExecutionProfile, InfrastructureAnomalyProfile, LateralMovementProfile,
+    NetworkConnectProfile, PersistenceProfile, ProfileValidationError, SupplyChainProfile,
+    SuspiciousProcessTreeProfile, SuspiciousScriptingProfile,
 };
 
 pub use swarm_core::config::{
     CanaryConfig, CircuitBreakerConfig, CloudTrailBridgeConfig, ConfigValidationError,
-    CorrelationConfig, DetectionConfig, DetectorProfilesConfig, FieldMappingConfig,
-    GenericJsonBridgeConfig, GenericJsonPayloadMappingConfig, HttpEdrConfig, InvestigationConfig,
-    JsonFileSourceConfig, NotificationChannelConfig, NotificationRateLimitConfig,
-    NotificationRoutingConfig, OperatorAuthConfig, OperatorSurfaceConfig, PheromoneConfig,
-    PolicyConfig, PromotionConfig, ResponseAdapterConfig, RetryConfig, RoutingRule, RuntimeMode,
-    RuntimeSettings, SiemForwardConfig, SwarmConfig, TelemetryBridgeConfig, TelemetrySourceConfig,
+    CorrelationConfig, DetectionConfig, DetectorProfilesConfig, EvolutionConfig,
+    EvolutionFitnessWeightsConfig, EvolutionPathsConfig, EvolutionSafetyGateConfig,
+    FieldMappingConfig, GenericJsonBridgeConfig, GenericJsonPayloadMappingConfig, HttpEdrConfig,
+    IdentityConfig, InvestigationConfig, JsonFileSourceConfig, NotificationChannelConfig,
+    NotificationRateLimitConfig, NotificationRoutingConfig, OperatorAuthConfig,
+    OperatorSurfaceConfig, PheromoneConfig, PolicyConfig, PromotionConfig, ResponseAdapterConfig,
+    RetryConfig, RoutingRule, RuntimeMode, RuntimeSettings, SentinelBridgeConfig,
+    SiemForwardConfig, SwarmConfig, TelemetryBridgeConfig, TelemetrySourceConfig,
     TetragonBridgeConfig, WebhookConfig,
 };
 
@@ -480,6 +483,16 @@ pub fn resolve_outbound_secrets(
                 }
             })?);
         }
+        if let Some(signature) = &mut channel.request_signature
+            && is_secret_reference(&signature.secret)
+        {
+            signature.secret = provider.resolve(&signature.secret).map_err(|error| {
+                ConfigValidationError::InvalidField {
+                    field: "notification_channels.request_signature.secret",
+                    reason: error.to_string(),
+                }
+            })?;
+        }
     }
     Ok(config)
 }
@@ -518,6 +531,36 @@ pub(crate) fn suspicious_process_tree_profile(
         },
         config.profiles.suspicious_process_tree.as_ref(),
         SuspiciousProcessTreeProfile::validate,
+    )
+}
+
+pub(crate) fn fileless_execution_profile(
+    config: &DetectionConfig,
+) -> Result<FilelessExecutionProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "fileless_execution",
+        FilelessExecutionProfile {
+            high_confidence_threshold: config.high_confidence_threshold,
+            medium_confidence_threshold: config.medium_confidence_threshold,
+            ..FilelessExecutionProfile::default()
+        },
+        config.profiles.fileless_execution.as_ref(),
+        FilelessExecutionProfile::validate,
+    )
+}
+
+pub(crate) fn behavioral_anomaly_profile(
+    config: &DetectionConfig,
+) -> Result<BehavioralAnomalyProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "behavioral_anomaly",
+        BehavioralAnomalyProfile {
+            high_confidence_threshold: config.high_confidence_threshold,
+            medium_confidence_threshold: config.medium_confidence_threshold,
+            ..BehavioralAnomalyProfile::default()
+        },
+        config.profiles.behavioral_anomaly.as_ref(),
+        BehavioralAnomalyProfile::validate,
     )
 }
 
@@ -626,11 +669,32 @@ pub(crate) fn network_connect_profile(
     )
 }
 
+pub(crate) fn infrastructure_anomaly_profile(
+    config: &DetectionConfig,
+) -> Result<InfrastructureAnomalyProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "infrastructure_anomaly",
+        InfrastructureAnomalyProfile {
+            high_confidence_threshold: config.high_confidence_threshold,
+            medium_confidence_threshold: config.medium_confidence_threshold,
+            ..InfrastructureAnomalyProfile::default()
+        },
+        config.profiles.infrastructure_anomaly.as_ref(),
+        InfrastructureAnomalyProfile::validate,
+    )
+}
+
 pub(crate) fn validate_detector_profiles(
     config: &DetectionConfig,
 ) -> Result<(), DetectorProfileError> {
     if config.profiles.suspicious_process_tree.is_some() {
         suspicious_process_tree_profile(config)?;
+    }
+    if config.profiles.fileless_execution.is_some() {
+        fileless_execution_profile(config)?;
+    }
+    if config.profiles.behavioral_anomaly.is_some() {
+        behavioral_anomaly_profile(config)?;
     }
     if config.profiles.dns_exfiltration.is_some() {
         dns_exfiltration_profile(config)?;
@@ -653,6 +717,9 @@ pub(crate) fn validate_detector_profiles(
     if config.profiles.network_connect.is_some() {
         network_connect_profile(config)?;
     }
+    if config.profiles.infrastructure_anomaly.is_some() {
+        infrastructure_anomaly_profile(config)?;
+    }
     Ok(())
 }
 
@@ -663,6 +730,12 @@ pub(crate) fn validate_all_detector_profiles(
         match strategy.as_str() {
             "suspicious_process_tree" => {
                 suspicious_process_tree_profile(config)?;
+            }
+            "fileless_execution" => {
+                fileless_execution_profile(config)?;
+            }
+            "behavioral_anomaly" => {
+                behavioral_anomaly_profile(config)?;
             }
             "dns_exfiltration" => {
                 dns_exfiltration_profile(config)?;
@@ -684,6 +757,9 @@ pub(crate) fn validate_all_detector_profiles(
             }
             "network_connect" => {
                 network_connect_profile(config)?;
+            }
+            "infrastructure_anomaly" => {
+                infrastructure_anomaly_profile(config)?;
             }
             _ => {}
         }
@@ -732,7 +808,8 @@ fn merge_json_value(target: &mut Value, overlay: Value) {
 mod tests {
     use super::{
         CURRENT_SCHEMA_VERSION, GenericJsonPayloadMappingConfig, RuntimeConfigError, RuntimeMode,
-        TelemetryBridgeConfig, load_config, network_connect_profile, parse_config,
+        TelemetryBridgeConfig, behavioral_anomaly_profile, fileless_execution_profile,
+        infrastructure_anomaly_profile, load_config, network_connect_profile, parse_config,
         suspicious_process_tree_profile,
     };
     use std::fs;
@@ -1189,6 +1266,105 @@ policy:
     }
 
     #[test]
+    fn fileless_execution_profile_merges_overrides() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: fileless_execution
+  high_confidence_threshold: 0.94
+  medium_confidence_threshold: 0.76
+  profiles:
+    fileless_execution:
+      min_region_size_bytes: 8192
+      privileged_target_processes: ["lsass", "winlogon", "spoolsv"]
+      executable_protection_flags: ["page_execute_readwrite", "rwx"]
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#;
+
+        let config = parse_config(yaml, "inline").unwrap();
+        let profile = fileless_execution_profile(&config.detection).unwrap();
+        assert_eq!(profile.min_region_size_bytes, 8192);
+        assert_eq!(
+            profile.privileged_target_processes,
+            vec![
+                "lsass".to_string(),
+                "winlogon".to_string(),
+                "spoolsv".to_string()
+            ]
+        );
+        assert_eq!(
+            profile.executable_protection_flags,
+            vec!["page_execute_readwrite".to_string(), "rwx".to_string()]
+        );
+        assert_eq!(profile.high_confidence_threshold, 0.94);
+        assert_eq!(profile.medium_confidence_threshold, 0.76);
+    }
+
+    #[test]
+    fn behavioral_anomaly_profile_merges_overrides() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: behavioral_anomaly
+  high_confidence_threshold: 0.93
+  medium_confidence_threshold: 0.74
+  profiles:
+    behavioral_anomaly:
+      min_host_observations: 6
+      min_identity_observations: 4
+      min_peer_group_observations: 5
+      min_feature_weight: 0.4
+      baseline_half_life_secs: 7200
+      rare_role_tools: ["powershell.exe", "wmic.exe"]
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#;
+
+        let config = parse_config(yaml, "inline").unwrap();
+        let profile = behavioral_anomaly_profile(&config.detection).unwrap();
+        assert_eq!(profile.min_host_observations, 6);
+        assert_eq!(profile.min_identity_observations, 4);
+        assert_eq!(profile.min_peer_group_observations, 5);
+        assert!((profile.min_feature_weight - 0.4).abs() < f64::EPSILON);
+        assert!((profile.baseline_half_life_secs - 7200.0).abs() < f64::EPSILON);
+        assert_eq!(
+            profile.rare_role_tools,
+            vec!["powershell.exe".to_string(), "wmic.exe".to_string()]
+        );
+        assert_eq!(profile.high_confidence_threshold, 0.93);
+        assert_eq!(profile.medium_confidence_threshold, 0.74);
+    }
+
+    #[test]
     fn network_connect_profile_merges_overrides() {
         let yaml = r#"
 name: test
@@ -1245,6 +1421,48 @@ policy:
         );
         assert_eq!(process_tree_profile.high_confidence_threshold, 0.92);
         assert_eq!(process_tree_profile.medium_confidence_threshold, 0.81);
+    }
+
+    #[test]
+    fn infrastructure_anomaly_profile_merges_overrides() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: infrastructure_anomaly
+  high_confidence_threshold: 0.93
+  medium_confidence_threshold: 0.74
+  profiles:
+    infrastructure_anomaly:
+      correlation_window_secs: 300
+      min_sustained_high_cpu_samples: 3
+      cpu_sustained_percent: 93.0
+      quiet_network_tx_bytes: 4096
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#;
+
+        let config = parse_config(yaml, "inline").unwrap();
+        let profile = infrastructure_anomaly_profile(&config.detection).unwrap();
+        assert_eq!(profile.correlation_window_secs, 300);
+        assert_eq!(profile.min_sustained_high_cpu_samples, 3);
+        assert_eq!(profile.cpu_sustained_percent, 93.0);
+        assert_eq!(profile.quiet_network_tx_bytes, 4096);
+        assert_eq!(profile.high_confidence_threshold, 0.93);
+        assert_eq!(profile.medium_confidence_threshold, 0.74);
     }
 
     #[test]
@@ -1414,6 +1632,56 @@ policy:
             }
             other => panic!("expected generic json bridge config, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sentinel_bridge_source_deserializes_without_subject() {
+        let yaml = r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: sentinel-primary
+      bridge:
+        kind: sentinel
+        endpoint: http://127.0.0.1:9100/metrics
+        scrape_interval_ms: 500
+        scrape_timeout_ms: 250
+        thermal_anomaly_threshold_celsius: 65.0
+        memory_exhaustion_threshold_percent: 80.0
+        disk_exhaustion_threshold_percent: 88.0
+        max_consecutive_failures: 3
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#;
+
+        let config = parse_config(yaml, "inline").unwrap();
+        match config.runtime.telemetry_sources[0].bridge.as_ref() {
+            Some(TelemetryBridgeConfig::Sentinel { config }) => {
+                assert_eq!(config.endpoint, "http://127.0.0.1:9100/metrics");
+                assert_eq!(config.scrape_interval_ms, 500);
+                assert_eq!(config.scrape_timeout_ms, 250);
+                assert_eq!(config.thermal_anomaly_threshold_celsius, 65.0);
+                assert_eq!(config.memory_exhaustion_threshold_percent, 80.0);
+                assert_eq!(config.disk_exhaustion_threshold_percent, 88.0);
+                assert_eq!(config.max_consecutive_failures, 3);
+            }
+            other => panic!("expected sentinel bridge config, got {other:?}"),
+        }
+        assert!(config.runtime.telemetry_sources[0].subject.is_empty());
     }
 
     #[test]
@@ -1826,6 +2094,90 @@ response_adapter:
 
         unsafe {
             std::env::remove_var(env_var);
+        }
+    }
+
+    #[test]
+    fn notification_request_signature_secret_reference_is_resolved() {
+        let auth_env = format!(
+            "SWARM_RUNTIME_PROVIDENCE_AUTH_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let hmac_env = format!(
+            "SWARM_RUNTIME_PROVIDENCE_HMAC_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let yaml = format!(
+            r#"
+schema_version: 1
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+operator_surface:
+  runtime_base_url: http://127.0.0.1:9090
+  public_base_url: http://127.0.0.1:7766
+notification_channels:
+  providence_webhook:
+    target_url: https://providence.example/incidents
+    auth_token: "@secret:env:{auth_env}"
+    request_signature:
+      header: X-Swarm-Signature
+      secret: "@secret:env:{hmac_env}"
+    timeout_ms: 5000
+    dead_letter_path: ./notification-providence.jsonl
+"#
+        );
+        unsafe {
+            std::env::set_var(&auth_env, "resolved-providence-bearer");
+            std::env::set_var(&hmac_env, "resolved-providence-hmac");
+        }
+
+        let config = parse_config(&yaml, "inline").unwrap();
+        let channel = config
+            .notification_channels
+            .get("providence_webhook")
+            .unwrap();
+        assert_eq!(
+            channel.auth_token.as_deref(),
+            Some("resolved-providence-bearer")
+        );
+        assert_eq!(
+            channel
+                .request_signature
+                .as_ref()
+                .map(|signature| signature.secret.as_str()),
+            Some("resolved-providence-hmac")
+        );
+
+        unsafe {
+            std::env::remove_var(auth_env);
+            std::env::remove_var(hmac_env);
         }
     }
 }

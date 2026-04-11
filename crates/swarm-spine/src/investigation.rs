@@ -19,6 +19,60 @@ pub enum InvestigationStatus {
     TimedOut,
 }
 
+/// Priority class assigned to an async investigation job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestigationPriorityClass {
+    Critical,
+    High,
+    Normal,
+    #[default]
+    Deferred,
+}
+
+/// Explainable priority breakdown for one queued investigation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InvestigationPriority {
+    pub class: InvestigationPriorityClass,
+    pub severity_basis_points: u16,
+    pub freshness_basis_points: u16,
+    pub learned_value_basis_points: u16,
+    pub starvation_boost_basis_points: u16,
+    pub total_basis_points: u16,
+}
+
+/// One candidate interpretation for an ambiguous investigation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InvestigationInterpretation {
+    pub interpretation_id: String,
+    pub label: String,
+    pub rationale: String,
+    #[serde(default)]
+    pub supporting_evidence: Vec<String>,
+}
+
+/// One durable vote supporting a candidate interpretation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InvestigationVote {
+    pub voter: String,
+    pub interpretation_id: String,
+    pub confidence_basis_points: u16,
+    pub rationale: String,
+}
+
+/// Final interpretation decision for one investigation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InvestigationDecision {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_interpretation_id: Option<String>,
+    #[serde(default)]
+    pub final_confidence_basis_points: u16,
+    #[serde(default)]
+    pub ambiguous: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+}
+
 /// Durable enrichment artifact derived from a replay bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvestigationBundle {
@@ -40,9 +94,17 @@ pub struct InvestigationBundle {
     pub started_at_ms: Option<i64>,
     pub completed_at_ms: Option<i64>,
     pub status: InvestigationStatus,
+    #[serde(default)]
+    pub priority: InvestigationPriority,
     pub summary: Option<String>,
     pub evidence_points: Vec<String>,
     pub correlation_keys: Vec<String>,
+    #[serde(default)]
+    pub candidate_interpretations: Vec<InvestigationInterpretation>,
+    #[serde(default)]
+    pub vote_lineage: Vec<InvestigationVote>,
+    #[serde(default)]
+    pub decision: InvestigationDecision,
     pub failure_reason: Option<String>,
 }
 
@@ -51,6 +113,7 @@ impl InvestigationBundle {
         replay: &ReplayBundle,
         investigation_id: String,
         queued_at_ms: i64,
+        priority: InvestigationPriority,
     ) -> Self {
         let host_id = replay.event.host_id.clone();
         let process_name = extract_process_name(replay);
@@ -74,9 +137,13 @@ impl InvestigationBundle {
             started_at_ms: None,
             completed_at_ms: None,
             status: InvestigationStatus::Queued,
+            priority,
             summary: None,
             evidence_points: Vec::new(),
             correlation_keys: Vec::new(),
+            candidate_interpretations: Vec::new(),
+            vote_lineage: Vec::new(),
+            decision: InvestigationDecision::default(),
             failure_reason: None,
         }
     }
@@ -93,11 +160,15 @@ impl InvestigationBundle {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_summary(
         mut self,
         summary: String,
         evidence_points: Vec<String>,
         correlation_keys: Vec<String>,
+        candidate_interpretations: Vec<InvestigationInterpretation>,
+        vote_lineage: Vec<InvestigationVote>,
+        decision: InvestigationDecision,
         completed_at_ms: i64,
     ) -> Self {
         self.status = InvestigationStatus::Completed;
@@ -105,6 +176,9 @@ impl InvestigationBundle {
         self.summary = Some(summary);
         self.evidence_points = evidence_points;
         self.correlation_keys = correlation_keys;
+        self.candidate_interpretations = candidate_interpretations;
+        self.vote_lineage = vote_lineage;
+        self.decision = decision;
         self.failure_reason = None;
         self
     }
@@ -145,6 +219,12 @@ pub struct InvestigationBundleRecord {
     pub status: InvestigationStatus,
     pub queued_at_ms: i64,
     pub last_updated_ms: i64,
+    pub priority_class: InvestigationPriorityClass,
+    pub priority_score_basis_points: u16,
+    pub candidate_interpretation_count: usize,
+    pub selected_interpretation_id: Option<String>,
+    pub final_confidence_basis_points: u16,
+    pub ambiguous: bool,
     pub summary_preview: Option<String>,
     pub failure_reason: Option<String>,
     pub correlation_keys: Vec<String>,
@@ -168,6 +248,12 @@ impl InvestigationBundleRecord {
             status: bundle.status,
             queued_at_ms: bundle.queued_at_ms,
             last_updated_ms: bundle.last_updated_ms(),
+            priority_class: bundle.priority.class,
+            priority_score_basis_points: bundle.priority.total_basis_points,
+            candidate_interpretation_count: bundle.candidate_interpretations.len(),
+            selected_interpretation_id: bundle.decision.selected_interpretation_id.clone(),
+            final_confidence_basis_points: bundle.decision.final_confidence_basis_points,
+            ambiguous: bundle.decision.ambiguous,
             summary_preview: bundle
                 .summary
                 .as_ref()
@@ -656,18 +742,29 @@ fn truncate(value: &str, max_len: usize) -> String {
 fn extract_process_name(replay: &ReplayBundle) -> Option<String> {
     match &replay.event.payload {
         TelemetryPayload::ProcessStart(process) => Some(process.process_name.clone()),
+        TelemetryPayload::ProcessMemoryAccess(access) => Some(access.source_process.clone()),
         TelemetryPayload::NetworkConnect(connect) => Some(connect.process_name.clone()),
         TelemetryPayload::DnsQuery(dns) => dns.process_name.clone(),
         TelemetryPayload::RegistryAccess(registry) => Some(registry.process_name.clone()),
         TelemetryPayload::RegistryPersistence(registry) => Some(registry.process_name.clone()),
         TelemetryPayload::FilePersistence(file) => Some(file.process_name.clone()),
         TelemetryPayload::AuthenticationEvent(auth) => auth.process_name.clone(),
+        TelemetryPayload::InfrastructureHealth(_) => None,
+        TelemetryPayload::ThermalAnomaly(_) => None,
+        TelemetryPayload::ResourceExhaustion(_) => None,
     }
 }
 
 fn extract_user(replay: &ReplayBundle) -> Option<String> {
     match &replay.event.payload {
         TelemetryPayload::ProcessStart(process) => process.user.clone(),
+        TelemetryPayload::ProcessMemoryAccess(_) => replay
+            .audit
+            .detection
+            .evidence
+            .get("user")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string),
         TelemetryPayload::NetworkConnect(_) => replay
             .audit
             .detection
@@ -690,6 +787,9 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
             .and_then(|value| value.as_str())
             .map(ToString::to_string),
         TelemetryPayload::AuthenticationEvent(auth) => auth.user.clone(),
+        TelemetryPayload::InfrastructureHealth(_)
+        | TelemetryPayload::ThermalAnomaly(_)
+        | TelemetryPayload::ResourceExhaustion(_) => None,
     }
 }
 
@@ -698,7 +798,9 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
 mod tests {
     use super::{
         ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
-        InvestigationBundleStore, InvestigationStatus, InvestigationStoreHealth,
+        InvestigationBundleStore, InvestigationDecision, InvestigationInterpretation,
+        InvestigationPriority, InvestigationPriorityClass, InvestigationStatus,
+        InvestigationStoreHealth, InvestigationVote,
     };
     use crate::{AuditResponseRecord, AuditTrail, PolicyRecord, ReplayBundle};
     use swarm_core::config::BundleStoreConfig;
@@ -797,6 +899,14 @@ mod tests {
             &sample_replay_bundle(),
             "investigation:hunt-1:1".to_string(),
             1_700_000_000_200,
+            InvestigationPriority {
+                class: InvestigationPriorityClass::High,
+                severity_basis_points: 3_800,
+                freshness_basis_points: 1_600,
+                learned_value_basis_points: 1_200,
+                starvation_boost_basis_points: 0,
+                total_basis_points: 6_600,
+            },
         )
         .with_status(InvestigationStatus::Running, Some(1_700_000_000_210), None)
         .with_summary(
@@ -810,6 +920,25 @@ mod tests {
                 "user:alice".to_string(),
                 "threat:execution".to_string(),
             ],
+            vec![InvestigationInterpretation {
+                interpretation_id: "malicious_execution".to_string(),
+                label: "Likely malicious activity".to_string(),
+                rationale: "Encoded PowerShell launched from Office.".to_string(),
+                supporting_evidence: vec!["parent_process=winword".to_string()],
+            }],
+            vec![InvestigationVote {
+                voter: "threat_class".to_string(),
+                interpretation_id: "malicious_execution".to_string(),
+                confidence_basis_points: 6_200,
+                rationale: "Execution threat class and Office lineage are both suspicious."
+                    .to_string(),
+            }],
+            InvestigationDecision {
+                selected_interpretation_id: Some("malicious_execution".to_string()),
+                final_confidence_basis_points: 10_000,
+                ambiguous: false,
+                rationale: Some("single interpretation preserved in fixture".to_string()),
+            },
             1_700_000_000_300,
         )
     }
@@ -820,6 +949,7 @@ mod tests {
             &sample_replay_bundle(),
             "investigation:hunt-1:queued".to_string(),
             1_700_000_000_200,
+            InvestigationPriority::default(),
         );
 
         assert_eq!(bundle.hunt_id, "hunt-1");

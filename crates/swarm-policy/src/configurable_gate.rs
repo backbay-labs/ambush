@@ -49,14 +49,15 @@ impl ConfigurableApprovalGate {
         rule.threat_class == *threat_class
             && request.severity >= rule.min_severity
             && request.severity <= rule.max_severity
-            && (rule.actions.is_empty() || rule.actions.iter().any(|action| action.matches(&request.action)))
+            && (rule.actions.is_empty()
+                || rule
+                    .actions
+                    .iter()
+                    .any(|action| action.matches(&request.action)))
     }
 
     fn current_hour_utc(now_ms: i64) -> u8 {
-        now_ms
-            .div_euclid(1_000)
-            .div_euclid(3_600)
-            .rem_euclid(24) as u8
+        now_ms.div_euclid(1_000).div_euclid(3_600).rem_euclid(24) as u8
     }
 
     fn agent_window_key(rule: &PolicyRuleConfig, request: &ActionRequest) -> String {
@@ -115,6 +116,21 @@ impl ApprovalGate for ConfigurableApprovalGate {
         request: &ActionRequest,
         context: &ApprovalContext,
     ) -> Result<PolicyDecision, ApprovalError> {
+        let trace_id = context
+            .correlation_id
+            .clone()
+            .or_else(swarm_core::observability::current_trace_id)
+            .unwrap_or_else(|| "unknown".to_string());
+        let span = tracing::info_span!(
+            "policy.configurable.evaluate",
+            trace_id = %trace_id,
+            hunt_id = %request.hunt_id.0,
+            requested_by = %request.requested_by.0,
+            action = %request.action.kind(),
+            severity = ?request.severity
+        );
+        let _guard = span.enter();
+
         self.static_gate.validate_request(request)?;
 
         if self.rules.is_empty() {
@@ -243,7 +259,9 @@ mod tests {
             ThreatClass::Execution,
         );
 
-        let decision = gate.evaluate(&request, &sample_context(1_700_000_000_000)).unwrap();
+        let decision = gate
+            .evaluate(&request, &sample_context(1_700_000_000_000))
+            .unwrap();
         assert_eq!(decision.verdict, PolicyVerdict::Deny);
         assert_eq!(decision.rule_name, "configurable.fail_closed.empty_ruleset");
     }
@@ -262,7 +280,9 @@ mod tests {
             ThreatClass::Execution,
         );
 
-        let decision = gate.evaluate(&request, &sample_context(1_700_000_000_000)).unwrap();
+        let decision = gate
+            .evaluate(&request, &sample_context(1_700_000_000_000))
+            .unwrap();
         assert_eq!(decision.verdict, PolicyVerdict::Allow);
         assert_eq!(decision.rule_name, "execution-allow");
     }
@@ -344,7 +364,9 @@ mod tests {
             ThreatClass::Execution,
         );
 
-        let decision = gate.evaluate(&request, &sample_context(1_700_000_000_000)).unwrap();
+        let decision = gate
+            .evaluate(&request, &sample_context(1_700_000_000_000))
+            .unwrap();
         assert_eq!(decision.verdict, PolicyVerdict::Allow);
         assert_eq!(decision.rule_name, "static.default_allow");
     }

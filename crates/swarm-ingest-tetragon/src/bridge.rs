@@ -263,6 +263,10 @@ impl TelemetryBridge for TetragonBridge {
                     && !file.process_name.trim().is_empty()
             }
             TelemetryPayload::AuthenticationEvent(auth) => !auth.auth_type.trim().is_empty(),
+            TelemetryPayload::ProcessMemoryAccess(_) => false,
+            TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => false,
         }
     }
 

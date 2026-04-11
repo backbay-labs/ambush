@@ -287,7 +287,7 @@ pub enum TelemetryPayload {
 }
 ```
 
-The `TelemetryPayload` enum uses serde's internally tagged representation (`#[serde(tag = "kind")]`), so serialized events include a `"kind": "process_start"` discriminator. This matters for forward compatibility: consumers that encounter an unknown `kind` tag can skip the event rather than failing on deserialization.
+The `TelemetryPayload` enum uses serde's internally tagged representation (`#[serde(tag = "kind")]`), so serialized events include a `"kind": "process_start"` discriminator. This matters for forward compatibility, but the current enum does **not** yet have an `Unknown` fallback: today an unrecognized `kind` fails deserialization. [Doc 10](./10-ADR-TELEMETRY-SCHEMA-ROLLOUT.md) proposes adding a serde-backed `Unknown` variant so older consumers can log-and-skip new payload kinds instead of erroring.
 
 **Critical observation**: All seven current payload variants are security-event oriented (process execution, network connections, authentication, registry access). There are no variants for infrastructure health, thermal anomalies, or resource exhaustion. The Sentinel bridge requires new variants -- see [Section 4.2](#42-new-telemetrypayload-variants).
 

@@ -1,0 +1,13 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "swarm-team-six.fullname" . }}
+  labels:
+    {{- include "swarm-team-six.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "swarm-team-six.selectorLabels" . | nindent 6 }}
+{{- end }}

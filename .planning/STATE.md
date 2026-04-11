@@ -1,43 +1,47 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.46
-milestone_name: Distributed Governance
-current_phase: 153
-current_phase_name: Consensus Protocol Core
-status: phase_defined
-last_updated: "2026-04-09T19:00:00Z"
-last_activity: 2026-04-09 — v1.46 activated after v1.45 completion
+milestone: v1.51
+milestone_name: Assurance-Gated Evolution And Counterexample Loop
+current_phase: null
+current_phase_name: null
+status: completed
+last_updated: "2026-04-11T16:30:00Z"
+last_activity: 2026-04-11 — Completed Phase 175 waiver lineage closeout and closed v1.51
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 4
+  total_plans: 4
+  completed_plans: 4
+  percent: 100
 ---
 
 # State
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-04-09)
+See: `.planning/PROJECT.md` (updated 2026-04-11)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** v1.46 Distributed Governance — phases 153-156 defined, ready for planning
+**Current focus:** `v1.51 Assurance-Gated Evolution And Counterexample Loop` is complete; `v1.52 Providence Reconciliation And Response Rehearsal` is queued for explicit activation
 
 ## Current Position
 
-Phase: 153 Consensus Protocol Core
-Current Phase: 153
-Current Phase Name: Consensus Protocol Core
-Status: Phases 153-156 defined for v1.46; planning not yet started
-Last activity: 2026-04-09 — v1.46 activated after v1.45 shipped
+Phase: None
+Current Phase: None
+Current Phase Name: None
+Status: v1.51 is complete and no phase is active
+Last activity: 2026-04-11 — Completed Phase 175 waiver lineage closeout and closed v1.51
 Total Phases: 4
 Total Plans in Phase: 0
 
-Progress: [..........] 0%
+Progress: [##########] 100%
 
 ## Memory
 
+- Phase 164 is complete: the canonical doc set now distinguishes active runtime contract material from historical reference material, and the architecture, agent, governance, evolution, and config references now describe the shipped Rust runtime instead of the removed Python-heavy plan.
+- Phase 165 is complete: the canonical docs now define one bounded governance contract spanning observation, guarded response, receipt-backed destructive response, maintenance-only operation, identity admission, approval lineage, and continuity-preserving rotation.
+- Phase 166 is complete: degraded, partitioned, and healing governance states now have one fail-closed contract across the architecture doc, governance doc, config reference, and disaster-recovery runbook.
+- Phase 167 is complete: queue, proof, canary, promotion, review, and export now read as one bounded operator contract across the architecture doc, evolution doc, config reference, and project summary.
 - v1.38 shipped CompositeDetector, NetworkConnectDetector with C2 beaconing and threat-intel enrichment, cross-strategy distinct-source escalation, and multi-strategy integration proof.
 - `AgentDispatcher::apply_actions()` now routes `RequestResponse` through a type-erased runtime seam, and request-response peer findings publish `scope=...` metadata for live dedupe visibility.
 - Research confirmed TomAgent veto must be synchronous inside PounceAgent's tick (before `execute()`), not a post-hoc deposit; the `Arc<GovernancePolicy>` shared ref is the design anchor.
@@ -85,11 +89,31 @@ Progress: [..........] 0%
 - Phase 151 is complete: signed Providence analyst feedback now lands on `POST /v1/providence/feedback`, persists durable incident-linked audit evidence, and forwards false-positive dismissals into Kitten or pending durable storage.
 - Phase 152 is complete: Providence can now embed `/v1/demo/widget`, consume scoped runtime SSE, and open read-only findings/incidents drilldowns through short-lived signed context tokens.
 - The v1.45 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots live in `.planning/milestones/`, and phase directories `149` through `152` now live in `.planning/milestones/v1.45-phases/`.
+- Phase 153 is complete: `swarm-consensus` now owns deterministic committee rotation, JetStream subject layout, timeout-driven propose/prevote/precommit round progress, and an in-process three-node proof covering ten sequential commits.
+- Phase 154 is complete: governance and exclusion receipts are now signed and verified, destructive Pounce actions carry consensus receipts through the routed runtime lane, and the pheromone substrate now rejects spoofed or unadmitted identities when admission state is configured.
+- Phase 155 is complete: Tom now tracks explicit quorum-loss partition state with durable persistence, pre-stages signed contingency leases during healthy periods, enforces lease-only destructive response during partition, emits runtime partition/reconciliation events, and exposes governance status on `/healthz`.
+- Phase 156 is complete: the consensus harness now proves invalid signatures and equivocation never produce unauthorized commits, partition routing now proves expired leases fail closed, and resilience integration now persists reconciliation across partition recovery and restart.
+- Phase 157 is complete: the repo now owns a typed `deception` config surface, `CalicoAgent` can bootstrap baseline `DeployDecoy` requests from that playbook, and monitored decoy interactions now emit signed high-confidence `initial_access` or `lateral_movement` pheromone deposits.
+- Phase 158 is complete: Calico now persists decoy lifecycle state across restart, Sphinx registers durable deception assets for correlation, and Kitten folds deception interactions into durable proposal and episode fitness artifacts.
+- Phase 159 is complete: shared telemetry now includes `ProcessMemoryAccess`, `FilelessExecutionDetector` is wired through repo-owned runtime config, and fileless execution findings reach the standard strategy-scoped pheromone lane with correct `DefenseEvasion` or `PrivilegeEscalation` mapping.
+- Phase 160 is complete: `BehavioralAnomalyDetector` now maintains per-host decaying baselines backed by durable substrate snapshots, the runtime hydrates or persists that state around live evaluation, and durable signature validation now accepts strategy-scoped detector IDs when their base signer identity matches the Ed25519 key.
+- The v1.47 lifecycle is complete: milestone audit passed, phase summaries and verification artifacts are on disk for phases 157-160, and the workspace now waits for `$gsd-new-milestone`.
+- v1.48 is now activated with phases 161-163 mapped in the roadmap and requirements: 161 builds the evasion corpus and coverage metrics, 162 feeds those measured gaps into Kitten mutation and canary flow, and 163 adds the optional `z3` formal verification tier.
+- Phase 161 is complete: the repo now owns an evasion corpus and ATT&CK technique catalog, the runtime exposes `/api/v1/evasion/coverage` and `/v2/api/evasion/coverage`, and Prometheus publishes per-detector evasion catch-rate gauges from the same coverage snapshot.
+- Phase 162 is complete: Kitten now derives bounded evasion pressure from the shared coverage snapshot, durable population and episode artifacts retain replay-vs-evasion fitness plus gap-closure metadata, replay scenarios execute under a signer-derived Ed25519 identity, and `critical_path_integration` now proves evasion-gap-to-canary admission.
+- Phase 163 is complete: `custom_z3` invariants now compile through an optional Z3-backed solver lane, proof and counterexample artifacts persist through the shared evolution proof store, timeout stays configurable through `SWARM_EVOLUTION_Z3_TIMEOUT_MS` with a 30s default, and the shared evolution-status surface now shows the latest solver-backed proof outcome.
+- The v1.50 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots live in `.planning/milestones/`, and phase directories `168` through `171` are archived under `.planning/milestones/v1.50-phases/`.
+- Milestone `v1.51 Assurance-Gated Evolution And Counterexample Loop` executed across phases 172 through 175 with complete context, plan, summary, and verification artifacts on disk.
+- Phase 172 is complete: the repo now owns an `evolution.assurance` policy, queue proposals persist one shared assurance decision from evasion coverage plus solver proof outcomes, and the shared evolution-status surface exposes the latest assurance block state from durable artifacts.
+- Phase 173 is complete: blocked queue proposals now harvest durable replay-ready assurance cases from coverage-floor failures and solver counterexamples, and mutation ranking now carries harvested case counts and lineage into candidate summaries and review packets.
+- Phase 174 is complete: queue review, handoff creation, canary admission, promotion start, and shared runtime status now all fail closed on missing or blocked assurance lineage instead of treating robustness artifacts as advisory only.
+- Phase 175 is complete: signed bounded assurance waivers now attach directly to blocked assurance lineage, queue review can proceed only when the active waiver clears the remaining assurance blocker, and waiver details surface through handoff, canary, promotion, and shared evolution status artifacts.
+- The v1.51 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots live in `.planning/milestones/`, and phase directories `172` through `175` are archived under `.planning/milestones/v1.51-phases/`.
 
 ## Issues
 
-- None active. v1.46 phases defined; ready for planning.
+- No active implementation blockers are recorded. `v1.52 Providence Reconciliation And Response Rehearsal` is queued for explicit activation.
 
 ## Next Command
 
-`/gsd:plan-phase 153`
+Activate `v1.52 Providence Reconciliation And Response Rehearsal`, then continue with `$gsd-autonomous`

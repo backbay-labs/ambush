@@ -1,4 +1,4 @@
-use crate::detection::pipeline::detect_and_deposit;
+use crate::detection::pipeline::detect_and_deposit_with_role;
 use async_trait::async_trait;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
@@ -34,9 +34,25 @@ impl WhiskerAgent {
         substrate: ConfiguredPheromoneSubstrate,
         pheromone_config: PheromoneConfig,
     ) -> Self {
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let verifying_key = signing_key.verifying_key();
+        Self::new_with_signing_key(
+            id,
+            SigningKey::generate(&mut OsRng),
+            event_rx,
+            detector,
+            substrate,
+            pheromone_config,
+        )
+    }
 
+    pub fn new_with_signing_key(
+        id: AgentId,
+        signing_key: SigningKey,
+        event_rx: mpsc::Receiver<TelemetryEvent>,
+        detector: Arc<CompositeDetector>,
+        substrate: ConfiguredPheromoneSubstrate,
+        pheromone_config: PheromoneConfig,
+    ) -> Self {
+        let verifying_key = signing_key.verifying_key();
         Self {
             id,
             signing_key,
@@ -88,11 +104,14 @@ impl SwarmAgent for WhiskerAgent {
 
         let mut actions = Vec::new();
         for event in events {
-            match detect_and_deposit(
+            let derived_identity = AgentId::from_verifying_key(&self.signing_key.verifying_key());
+            let scoped_agent_id = AgentId(format!("{}:{}", derived_identity.0, self.id.0));
+            match detect_and_deposit_with_role(
                 self.detector.as_ref(),
                 &self.substrate,
                 &event,
-                &self.id,
+                &scoped_agent_id,
+                Some(AgentRole::Whisker),
                 &self.pheromone_config,
                 &self.signing_key,
             )
@@ -294,6 +313,9 @@ mod tests {
         let actions = agent.tick(&env()).await.unwrap();
         assert!(!actions.is_empty());
         assert!(matches!(actions[0], SwarmAction::DepositPheromone { .. }));
-        assert_eq!(substrate.recent_deposits(10).await.unwrap().len(), 1);
+        let deposits = substrate.recent_deposits(10).await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0].agent_role, Some(AgentRole::Whisker));
+        assert!(deposits[0].agent_identity.starts_with("swarm:ed25519:"));
     }
 }

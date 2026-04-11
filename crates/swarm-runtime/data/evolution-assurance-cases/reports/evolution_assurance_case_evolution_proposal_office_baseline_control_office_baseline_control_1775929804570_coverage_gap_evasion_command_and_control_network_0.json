@@ -1,0 +1,28 @@
+{
+  "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1775929804570:coverage_gap:evasion_command_and_control_network:0",
+  "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1775929804570",
+  "created_at_ms": 1775929804570,
+  "strategy_id": "office_baseline_control",
+  "detector": "suspicious_process_tree",
+  "kind": "coverage_gap",
+  "scenario_name": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1775929804570:coverage_gap:evasion_command_and_control_network:0-harvest",
+  "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1775929804570_coverage_gap_evasion_command_and_control_network_0.yaml",
+  "suite_name": "evasion_breadth_v1",
+  "corpus_version": "2026-04-10",
+  "verification_id": "verification:office_baseline_control:office_baseline_control:office_detector_safety_v1",
+  "proof_id": "evolution_proof:office_baseline_control:office_baseline_control:1775929804567",
+  "reason_name": "coverage_gap",
+  "reason_details": "scenario `evasion_command_and_control_network` covers detector `suspicious_process_tree` gap for CommandAndControl",
+  "threat_class": "command_and_control",
+  "techniques": [
+    "T1071.001",
+    "T1071.004",
+    "T1105"
+  ],
+  "source_references": [
+    "/Users/connor/Medica/backbay/standalone/swarm-team-six/scenarios/evasion-command-and-control-network.yaml",
+    "evolution_proposal:office_baseline_control:office_baseline_control:1775929804570",
+    "verification:office_baseline_control:office_baseline_control:office_detector_safety_v1",
+    "evolution_proof:office_baseline_control:office_baseline_control:1775929804567"
+  ]
+}

@@ -5,6 +5,7 @@ use std::time::Duration;
 use swarm_core::config::{SwarmConfig, TelemetryBridgeConfig, TetragonBridgeConfig};
 use swarm_core::{BridgeHealth, TelemetryBridge, TelemetryEvent};
 use swarm_ingest_json::{CloudTrailBridge, GenericJsonBridge, JsonBridgeConfigError};
+use swarm_ingest_sentinel::SentinelBridge;
 use swarm_ingest_tetragon::{BridgeConfig as TetragonRuntimeConfig, TetragonBridge};
 use tokio::sync::{mpsc, watch};
 
@@ -306,6 +307,9 @@ fn build_bridge(
             })?;
             Ok(Box::new(bridge))
         }
+        TelemetryBridgeConfig::Sentinel { config } => {
+            Ok(Box::new(SentinelBridge::new((**config).clone())))
+        }
     }
 }
 
@@ -324,10 +328,12 @@ mod tests {
     use super::{BridgeRuntimeRegistry, bridge_health_report};
     use crate::config::load_config;
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
+    use axum::{Router, routing::get};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::TelemetryPayload;
+    use tokio::net::TcpListener;
     use tokio::sync::{mpsc, watch};
 
     fn default_config_path() -> PathBuf {
@@ -343,6 +349,67 @@ mod tests {
             "swarm-runtime-bridge-{label}-{}-{nanos}.jsonl",
             std::process::id()
         ))
+    }
+
+    fn sentinel_metrics_body() -> String {
+        r#"
+sentinel_cpu_usage_percent{node="node-a"} 96
+sentinel_cpu_temperature_celsius{node="node-a"} 82
+sentinel_cpu_throttled{node="node-a"} 1
+sentinel_cpu_frequency_mhz{node="node-a"} 3200
+sentinel_cpu_load_average{node="node-a",period="1m"} 12
+sentinel_cpu_load_average{node="node-a",period="5m"} 8
+sentinel_cpu_load_average{node="node-a",period="15m"} 4
+sentinel_memory_total_bytes{node="node-a"} 1000
+sentinel_memory_available_bytes{node="node-a"} 100
+sentinel_memory_usage_percent{node="node-a"} 91
+sentinel_memory_oom_kill_total{node="node-a"} 3
+sentinel_memory_swap_used_bytes{node="node-a"} 128
+sentinel_disk_total_bytes{node="node-a"} 2000
+sentinel_disk_used_bytes{node="node-a"} 1900
+sentinel_disk_usage_percent{node="node-a"} 95
+sentinel_disk_io_latency_ms{node="node-a"} 7
+sentinel_network_rx_bytes_total{node="node-a"} 1000
+sentinel_network_tx_bytes_total{node="node-a"} 2000
+sentinel_network_rx_errors_total{node="node-a"} 2
+sentinel_network_tx_errors_total{node="node-a"} 1
+sentinel_prediction_failure_probability{node="node-a"} 0.8
+sentinel_prediction_confidence{node="node-a"} 0.9
+sentinel_prediction_time_to_failure_seconds{node="node-a"} 45
+sentinel_collection_duration_ms{node="node-a"} 11
+"#
+        .to_string()
+    }
+
+    async fn spawn_metrics_server(
+        body: String,
+    ) -> (
+        String,
+        watch::Sender<bool>,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let app = Router::new().route(
+            "/metrics",
+            get({
+                let body = body.clone();
+                move || {
+                    let body = body.clone();
+                    async move { body }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.changed().await;
+                })
+                .await
+                .map_err(std::io::Error::other)
+        });
+        (format!("http://{addr}/metrics"), shutdown_tx, handle)
     }
 
     #[test]
@@ -446,5 +513,83 @@ mod tests {
         );
 
         let _ = fs::remove_file(fixture_path);
+    }
+
+    #[tokio::test]
+    async fn registry_polls_sentinel_bridge_and_updates_metrics() {
+        let (endpoint, server_shutdown, server_handle) =
+            spawn_metrics_server(sentinel_metrics_body()).await;
+        let mut config = load_config(default_config_path()).unwrap();
+        config.runtime.telemetry_sources = vec![swarm_core::config::TelemetrySourceConfig {
+            name: "sentinel-infra".to_string(),
+            subject: String::new(),
+            bridge: Some(swarm_core::config::TelemetryBridgeConfig::Sentinel {
+                config: Box::new(swarm_core::config::SentinelBridgeConfig {
+                    endpoint,
+                    scrape_interval_ms: 1,
+                    scrape_timeout_ms: 1_000,
+                    thermal_anomaly_threshold_celsius: 60.0,
+                    memory_exhaustion_threshold_percent: 85.0,
+                    disk_exhaustion_threshold_percent: 90.0,
+                    max_consecutive_failures: 3,
+                }),
+            }),
+        }];
+
+        let registry = BridgeRuntimeRegistry::from_config(&config).unwrap();
+        let health = registry.shared_health();
+        let metrics = CriticalPathMetrics::new();
+        let (tx, mut rx) = mpsc::channel(8);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handles = registry.spawn(tx, shutdown_rx, Some(metrics.clone()));
+
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("bridge should deliver an event")
+            .expect("event should be present");
+        match event.payload {
+            TelemetryPayload::InfrastructureHealth(health) => {
+                assert_eq!(health.node_name, "node-a");
+                assert_eq!(health.memory_usage_percent, 91.0);
+            }
+            other => panic!("expected infrastructure_health payload, got {other:?}"),
+        }
+
+        shutdown_tx.send(true).unwrap();
+        for handle in handles {
+            tokio::time::timeout(Duration::from_secs(2), handle)
+                .await
+                .expect("bridge worker should stop cleanly")
+                .unwrap();
+        }
+
+        let report = bridge_health_report(&health);
+        assert_eq!(report.status(), "ok");
+        assert_eq!(report.configured, 1);
+        assert_eq!(report.entries[0].events_processed, 4);
+        assert_eq!(report.entries[0].source_id, "sentinel");
+
+        let encoded = encode_metrics(&metrics);
+        assert!(
+            encoded.contains(
+                "swarm_bridge_events_processed{bridge=\"sentinel-infra\",source_id=\"sentinel\"} 4"
+            ) || encoded.contains(
+                "swarm_bridge_events_processed{source_id=\"sentinel\",bridge=\"sentinel-infra\"} 4"
+            )
+        );
+        assert!(
+            encoded
+                .contains("swarm_bridge_ready{bridge=\"sentinel-infra\",source_id=\"sentinel\"} 1")
+                || encoded.contains(
+                    "swarm_bridge_ready{source_id=\"sentinel\",bridge=\"sentinel-infra\"} 1"
+                )
+        );
+
+        server_shutdown.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server_handle)
+            .await
+            .expect("metrics server should stop cleanly")
+            .unwrap()
+            .unwrap();
     }
 }

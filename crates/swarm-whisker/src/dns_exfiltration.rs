@@ -64,9 +64,23 @@ pub struct DnsExfiltrationDetector {
 
 impl Default for DnsExfiltrationDetector {
     fn default() -> Self {
-        match Self::from_profile(DnsExfiltrationProfile::default()) {
-            Ok(detector) => detector,
-            Err(error) => panic!("default DnsExfiltrationProfile is invalid: {error}"),
+        Self {
+            entropy_threshold: default_entropy_threshold(),
+            min_subdomain_length: default_min_subdomain_length(),
+            allowlisted_domains: Vec::new(),
+            suspicious_query_types: default_suspicious_query_types()
+                .into_iter()
+                .map(|value| value.to_ascii_uppercase())
+                .collect(),
+            known_tunneling_patterns: default_known_tunneling_patterns()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            query_burst_threshold: default_query_burst_threshold(),
+            burst_window_ms: default_burst_window_ms(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
+            query_tracker: Arc::default(),
         }
     }
 }
@@ -262,6 +276,10 @@ impl DnsExfiltrationProfile {
 }
 
 impl DetectionStrategy for DnsExfiltrationDetector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "dns_exfiltration"
     }
@@ -270,11 +288,15 @@ impl DetectionStrategy for DnsExfiltrationDetector {
         match &event.payload {
             TelemetryPayload::DnsQuery(dns) => self.evaluate_dns(event, dns).into_iter().collect(),
             TelemetryPayload::ProcessStart(_)
+            | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::NetworkConnect(_)
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
-            | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
+            | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
         }
     }
 }

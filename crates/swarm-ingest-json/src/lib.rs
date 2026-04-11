@@ -33,6 +33,13 @@ fn validate_event_schema(event: &TelemetryEvent, source_id: &str) -> bool {
                 && !process.process_name.trim().is_empty()
                 && !process.command_line.trim().is_empty()
         }
+        TelemetryPayload::ProcessMemoryAccess(access) => {
+            !access.source_process.trim().is_empty()
+                && !access.target_process.trim().is_empty()
+                && !access.allocation_type.trim().is_empty()
+                && !access.protection_flags.is_empty()
+                && access.region_size > 0
+        }
         TelemetryPayload::NetworkConnect(connect) => {
             !connect.process_name.trim().is_empty()
                 && !connect.destination_ip.trim().is_empty()
@@ -57,6 +64,9 @@ fn validate_event_schema(event: &TelemetryEvent, source_id: &str) -> bool {
                 && !file.process_name.trim().is_empty()
         }
         TelemetryPayload::AuthenticationEvent(auth) => !auth.auth_type.trim().is_empty(),
+        TelemetryPayload::InfrastructureHealth(_)
+        | TelemetryPayload::ThermalAnomaly(_)
+        | TelemetryPayload::ResourceExhaustion(_) => false,
     }
 }
 

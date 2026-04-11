@@ -46,7 +46,14 @@ struct PlaybookMatch {
 
 impl PounceAgent {
     pub fn new(id: AgentId, playbook: ResponsePlaybookConfig) -> Self {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        Self::new_with_signing_key(id, SigningKey::generate(&mut OsRng), playbook)
+    }
+
+    pub fn new_with_signing_key(
+        id: AgentId,
+        signing_key: SigningKey,
+        playbook: ResponsePlaybookConfig,
+    ) -> Self {
         let verifying_key = signing_key.verifying_key();
 
         Self {
@@ -182,22 +189,46 @@ impl SwarmAgent for PounceAgent {
                 continue;
             }
 
+            let mut evidence = playbook_match.evidence.clone();
             match self.governance_policy.can_act(&action) {
-                GovernanceDecision::Allow => actions.push(SwarmAction::RequestResponse {
-                    hunt_id: playbook_match.hunt_id.clone(),
-                    action,
-                    evidence: playbook_match.evidence.clone(),
-                }),
+                GovernanceDecision::Allow {
+                    receipt,
+                    contingency_lease,
+                } => {
+                    if let Some(receipt) = receipt
+                        && let Ok(receipt_value) = serde_json::to_value(receipt)
+                    {
+                        evidence["governance_receipt"] = receipt_value;
+                    }
+                    if let Some(contingency_lease) = contingency_lease
+                        && let Ok(lease_value) = serde_json::to_value(contingency_lease)
+                    {
+                        evidence["contingency_lease"] = lease_value;
+                    }
+                    actions.push(SwarmAction::RequestResponse {
+                        hunt_id: playbook_match.hunt_id.clone(),
+                        action,
+                        evidence,
+                    })
+                }
                 GovernanceDecision::Veto {
                     governing_agent_id,
                     reason,
-                } => actions.push(SwarmAction::GovernanceVeto {
-                    hunt_id: playbook_match.hunt_id.clone(),
-                    action,
-                    evidence: playbook_match.evidence.clone(),
-                    governing_agent_id,
-                    reason,
-                }),
+                    receipt,
+                } => {
+                    if let Some(receipt) = receipt
+                        && let Ok(receipt_value) = serde_json::to_value(receipt)
+                    {
+                        evidence["governance_receipt"] = receipt_value;
+                    }
+                    actions.push(SwarmAction::GovernanceVeto {
+                        hunt_id: playbook_match.hunt_id.clone(),
+                        action,
+                        evidence,
+                        governing_agent_id,
+                        reason,
+                    })
+                }
             }
         }
 

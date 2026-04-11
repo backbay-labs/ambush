@@ -1,12 +1,14 @@
+use crate::detector_factory::RuntimeDetector;
 use ed25519_dalek::{Signer, SigningKey};
 use std::collections::BTreeSet;
+use swarm_core::agent::AgentRole;
 use swarm_core::config::PheromoneConfig;
 use swarm_core::pheromone::{PheromoneDeposit, ThreatIntelEntry, ThreatIntelIndicatorType};
 use swarm_core::telemetry::TelemetryPayload;
 use swarm_core::types::AgentId;
 use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate, SubstrateError};
 use swarm_whisker::stream::{evaluate_event, strategy_scoped_agent_id};
-use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
+use swarm_whisker::{CompositeDetector, DetectionFinding, DetectionStrategy, TelemetryEvent};
 
 /// Output of the fast detection lane for a single event.
 #[derive(Debug, Clone)]
@@ -38,13 +40,41 @@ where
     D: DetectionStrategy,
     S: PheromoneSubstrate,
 {
+    detect_and_deposit_with_role(
+        detector,
+        substrate,
+        event,
+        agent_id,
+        infer_agent_role(agent_id),
+        pheromone,
+        signing_key,
+    )
+    .await
+}
+
+pub async fn detect_and_deposit_with_role<D, S>(
+    detector: &D,
+    substrate: &S,
+    event: &TelemetryEvent,
+    agent_id: &AgentId,
+    agent_role: Option<AgentRole>,
+    pheromone: &PheromoneConfig,
+    signing_key: &SigningKey,
+) -> Result<DetectionPipelineOutcome, PipelineError>
+where
+    D: DetectionStrategy,
+    S: PheromoneSubstrate,
+{
+    hydrate_stateful_detectors(detector, substrate).await?;
     let findings =
         enrich_findings_with_threat_intel(substrate, event, evaluate_event(detector, event))
             .await?;
-    let mut deposits = resolve_deposits(substrate, &findings, event, agent_id, pheromone).await?;
+    persist_stateful_detectors(detector, substrate).await?;
+    let mut deposits =
+        resolve_deposits(substrate, &findings, event, agent_id, agent_role, pheromone).await?;
 
     for deposit in &mut deposits {
-        sign_deposit(deposit, signing_key)?;
+        sign_deposit(deposit, signing_key, agent_role)?;
         substrate.deposit(deposit.clone()).await?;
     }
 
@@ -55,11 +85,85 @@ where
     })
 }
 
+async fn hydrate_stateful_detectors<D, S>(detector: &D, substrate: &S) -> Result<(), PipelineError>
+where
+    D: DetectionStrategy,
+    S: PheromoneSubstrate,
+{
+    if let Some(composite) = detector.as_any().downcast_ref::<CompositeDetector>() {
+        for strategy in composite.strategies() {
+            hydrate_runtime_detector(strategy, substrate).await?;
+        }
+    } else {
+        hydrate_runtime_detector(detector, substrate).await?;
+    }
+    Ok(())
+}
+
+async fn hydrate_runtime_detector<D, S>(detector: &D, substrate: &S) -> Result<(), PipelineError>
+where
+    D: DetectionStrategy + ?Sized,
+    S: PheromoneSubstrate,
+{
+    let Some(runtime_detector) = detector.as_any().downcast_ref::<RuntimeDetector>() else {
+        return Ok(());
+    };
+    let Some((strategy_id, detector)) = runtime_detector.behavioral_anomaly_detector() else {
+        return Ok(());
+    };
+    if detector.needs_hydration() {
+        let snapshot = substrate
+            .query_behavioral_baseline_snapshot(strategy_id)
+            .await?;
+        detector.hydrate_from_snapshot(snapshot);
+    }
+    Ok(())
+}
+
+async fn persist_stateful_detectors<D, S>(detector: &D, substrate: &S) -> Result<(), PipelineError>
+where
+    D: DetectionStrategy,
+    S: PheromoneSubstrate,
+{
+    if let Some(composite) = detector.as_any().downcast_ref::<CompositeDetector>() {
+        for strategy in composite.strategies() {
+            persist_runtime_detector(strategy, substrate).await?;
+        }
+    } else {
+        persist_runtime_detector(detector, substrate).await?;
+    }
+    Ok(())
+}
+
+async fn persist_runtime_detector<D, S>(detector: &D, substrate: &S) -> Result<(), PipelineError>
+where
+    D: DetectionStrategy + ?Sized,
+    S: PheromoneSubstrate,
+{
+    let Some(runtime_detector) = detector.as_any().downcast_ref::<RuntimeDetector>() else {
+        return Ok(());
+    };
+    let Some((strategy_id, detector)) = runtime_detector.behavioral_anomaly_detector() else {
+        return Ok(());
+    };
+    let Some(snapshot) = detector.snapshot_if_dirty(strategy_id) else {
+        return Ok(());
+    };
+    substrate
+        .store_behavioral_baseline_snapshot(snapshot)
+        .await?;
+    detector.mark_persisted();
+    Ok(())
+}
+
 /// Sign a [`PheromoneDeposit`] in place using an Ed25519 signing key.
 fn sign_deposit(
     deposit: &mut PheromoneDeposit,
     signing_key: &SigningKey,
+    agent_role: Option<AgentRole>,
 ) -> Result<(), PipelineError> {
+    deposit.agent_identity = AgentId::from_verifying_key(&signing_key.verifying_key()).0;
+    deposit.agent_role = agent_role;
     let payload = DepositSigningPayload {
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
@@ -68,6 +172,8 @@ fn sign_deposit(
         timestamp: deposit.timestamp,
         decay_half_life: deposit.decay_half_life,
         agent_id: &deposit.agent_id,
+        agent_identity: &deposit.agent_identity,
+        agent_role: deposit.agent_role,
     };
     let payload_bytes = serde_json::to_vec(&payload).map_err(|source| {
         PipelineError::Substrate(SubstrateError::Encode {
@@ -159,10 +265,14 @@ fn candidate_threat_intel_queries(
             }
         }
         TelemetryPayload::ProcessStart(_)
+        | TelemetryPayload::ProcessMemoryAccess(_)
         | TelemetryPayload::RegistryAccess(_)
         | TelemetryPayload::RegistryPersistence(_)
         | TelemetryPayload::FilePersistence(_)
-        | TelemetryPayload::AuthenticationEvent(_) => {}
+        | TelemetryPayload::AuthenticationEvent(_)
+        | TelemetryPayload::InfrastructureHealth(_)
+        | TelemetryPayload::ThermalAnomaly(_)
+        | TelemetryPayload::ResourceExhaustion(_) => {}
     }
 
     candidates
@@ -239,6 +349,7 @@ async fn resolve_deposits<S>(
     findings: &[DetectionFinding],
     event: &TelemetryEvent,
     agent_id: &AgentId,
+    agent_role: Option<AgentRole>,
     pheromone: &PheromoneConfig,
 ) -> Result<Vec<PheromoneDeposit>, SubstrateError>
 where
@@ -253,6 +364,7 @@ where
         deposits.push(PheromoneDeposit {
             indicator: serde_json::json!({
                 "event_id": finding.event_id,
+                "host_id": event.host_id,
                 "source": event.source,
                 "evidence": finding.evidence.clone(),
             }),
@@ -262,6 +374,8 @@ where
             timestamp: event.timestamp,
             decay_half_life: policy.half_life_secs,
             agent_id: strategy_scoped_agent_id(agent_id, &finding.strategy_id),
+            agent_identity: String::new(),
+            agent_role,
             signature: Vec::new(),
             agent_key: Vec::new(),
         });
@@ -269,10 +383,35 @@ where
     Ok(deposits)
 }
 
+fn infer_agent_role(agent_id: &AgentId) -> Option<AgentRole> {
+    let value = agent_id.0.as_str();
+    if value.starts_with("whisker-") {
+        Some(AgentRole::Whisker)
+    } else if value.starts_with("stalker-") {
+        Some(AgentRole::Stalker)
+    } else if value.starts_with("weaver-") {
+        Some(AgentRole::Weaver)
+    } else if value.starts_with("pounce-") || value.starts_with("pouncer-") {
+        Some(AgentRole::Pouncer)
+    } else if value.starts_with("tom-") {
+        Some(AgentRole::Tom)
+    } else if value.starts_with("kitten-") {
+        Some(AgentRole::Kitten)
+    } else if value.starts_with("sphinx-") {
+        Some(AgentRole::Sphinx)
+    } else if value.starts_with("calico-") {
+        Some(AgentRole::Calico)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::detect_and_deposit;
+    use crate::config::parse_config;
+    use crate::detector_factory::build_detector_from_strategy;
     use ed25519_dalek::SigningKey;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::pheromone::{
@@ -280,10 +419,13 @@ mod tests {
     };
     use swarm_core::types::{AgentId, Severity};
     use swarm_pheromone::substrate::validate_deposit_signature;
-    use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
+    use swarm_pheromone::{
+        InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate, PheromoneSubstrate,
+    };
     use swarm_whisker::{
         DetectionFinding, DetectionStrategy, DnsExfiltrationDetector, DnsQueryEvent,
-        NetworkConnectDetector, NetworkConnectEvent, NetworkConnectProfile, ProcessStartEvent,
+        FilelessExecutionDetector, NetworkConnectDetector, NetworkConnectEvent,
+        NetworkConnectProfile, ProcessMemoryAccessEvent, ProcessStartEvent,
         SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
     };
 
@@ -293,6 +435,10 @@ mod tests {
     }
 
     impl DetectionStrategy for StaticDetector {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
         fn id(&self) -> &str {
             "static"
         }
@@ -350,6 +496,47 @@ mod tests {
         }
     }
 
+    fn memory_access_event(event_id: &str, target_process: &str) -> TelemetryEvent {
+        TelemetryEvent {
+            source: "memory".to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessMemoryAccess(ProcessMemoryAccessEvent {
+                source_process: "powershell.exe".to_string(),
+                target_process: target_process.to_string(),
+                allocation_type: "private".to_string(),
+                protection_flags: vec!["PAGE_EXECUTE_READWRITE".to_string()],
+                region_size: 16384,
+                call_stack_hint: Some("ReflectiveLoader -> HellsGate".to_string()),
+            }),
+        }
+    }
+
+    fn process_start_event(
+        event_id: &str,
+        timestamp: i64,
+        parent_process: &str,
+        process_name: &str,
+        executable_path: Option<&str>,
+    ) -> TelemetryEvent {
+        TelemetryEvent {
+            source: "process".to_string(),
+            event_id: event_id.to_string(),
+            timestamp,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: parent_process.to_string(),
+                process_name: process_name.to_string(),
+                command_line: format!("{process_name} --synthetic"),
+                user: Some("alice".to_string()),
+                executable_path: executable_path.map(|path| path.to_string()),
+                signer: None,
+                signature_valid: None,
+            }),
+        }
+    }
+
     #[tokio::test]
     async fn detector_findings_are_deposited_into_substrate() {
         let detector = SuspiciousProcessTreeDetector::default();
@@ -374,7 +561,7 @@ mod tests {
             &detector,
             &substrate,
             &event,
-            &AgentId("whisker-a".to_string()),
+            &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
             &pheromone_config(),
             &test_signing_key(),
         )
@@ -420,7 +607,7 @@ mod tests {
             &detector,
             &substrate,
             &event,
-            &AgentId("whisker-a".to_string()),
+            &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
             &pheromone_config(),
             &test_signing_key(),
         )
@@ -462,7 +649,7 @@ mod tests {
             &detector,
             &substrate,
             &event,
-            &AgentId("whisker-dns".to_string()),
+            &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
             &pheromone_config(),
             &test_signing_key(),
         )
@@ -505,7 +692,7 @@ mod tests {
             &detector,
             &substrate,
             &event,
-            &AgentId("whisker-network".to_string()),
+            &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
             &pheromone_config(),
             &test_signing_key(),
         )
@@ -550,11 +737,12 @@ mod tests {
             }),
         };
 
+        let base_agent_id = AgentId::from_verifying_key(&test_signing_key().verifying_key());
         let outcome = detect_and_deposit(
             &detector,
             &substrate,
             &event,
-            &AgentId("whisker-primary".to_string()),
+            &base_agent_id,
             &pheromone_config(),
             &test_signing_key(),
         )
@@ -568,14 +756,259 @@ mod tests {
         assert_ne!(outcome.deposits[0].agent_id, outcome.deposits[1].agent_id);
         assert_eq!(
             outcome.deposits[0].agent_id.0,
-            "whisker-primary:suspicious_process_tree"
+            format!("{}:suspicious_process_tree", base_agent_id)
         );
         assert_eq!(
             outcome.deposits[1].agent_id.0,
-            "whisker-primary:dns_exfiltration"
+            format!("{}:dns_exfiltration", base_agent_id)
         );
         for deposit in &outcome.deposits {
             validate_deposit_signature(deposit).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn fileless_memory_access_event_deposits_defense_evasion_pheromone() {
+        let detector = FilelessExecutionDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let event = memory_access_event("evt-fileless-defense", "explorer.exe");
+        let findings = detector.evaluate(&event);
+        let mut deposits = super::resolve_deposits(
+            &substrate,
+            &findings,
+            &event,
+            &AgentId("whisker-fileless".to_string()),
+            Some(swarm_core::agent::AgentRole::Whisker),
+            &pheromone_config(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].threat_class, ThreatClass::DefenseEvasion);
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0].threat_class, ThreatClass::DefenseEvasion);
+
+        super::sign_deposit(
+            &mut deposits[0],
+            &test_signing_key(),
+            Some(swarm_core::agent::AgentRole::Whisker),
+        )
+        .unwrap();
+
+        assert_eq!(
+            deposits[0].agent_id.0,
+            "whisker-fileless:fileless_execution"
+        );
+        assert!(!deposits[0].signature.is_empty());
+        assert_eq!(
+            deposits[0].agent_identity,
+            AgentId::from_verifying_key(&test_signing_key().verifying_key()).0
+        );
+    }
+
+    #[tokio::test]
+    async fn fileless_privileged_target_event_deposits_privilege_escalation_pheromone() {
+        let detector = FilelessExecutionDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        let event = memory_access_event("evt-fileless-priv", "lsass.exe");
+        let findings = detector.evaluate(&event);
+        let mut deposits = super::resolve_deposits(
+            &substrate,
+            &findings,
+            &event,
+            &AgentId("whisker-fileless".to_string()),
+            Some(swarm_core::agent::AgentRole::Whisker),
+            &pheromone_config(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].threat_class, ThreatClass::PrivilegeEscalation);
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0].threat_class, ThreatClass::PrivilegeEscalation);
+
+        super::sign_deposit(
+            &mut deposits[0],
+            &test_signing_key(),
+            Some(swarm_core::agent::AgentRole::Whisker),
+        )
+        .unwrap();
+
+        assert_eq!(
+            deposits[0].agent_id.0,
+            "whisker-fileless:fileless_execution"
+        );
+        assert!(!deposits[0].signature.is_empty());
+        assert_eq!(
+            deposits[0].agent_identity,
+            AgentId::from_verifying_key(&test_signing_key().verifying_key()).0
+        );
+    }
+
+    #[tokio::test]
+    async fn behavioral_anomaly_detector_hydrates_persisted_baseline_after_restart() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let journal_path =
+            std::env::temp_dir().join(format!("swarm-behavioral-baseline-pipeline-{unique}.jsonl"));
+        let escalation_path = journal_path.with_extension("escalations.jsonl");
+        let config_path = journal_path.with_extension("threat-class-configs.jsonl");
+        let threat_intel_path = journal_path.with_extension("threat-intel.jsonl");
+        let behavioral_baseline_path = journal_path.with_extension("behavioral-baselines.jsonl");
+        let yaml = format!(
+            r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: behavioral_anomaly
+  high_confidence_threshold: 0.93
+  medium_confidence_threshold: 0.74
+  profiles:
+    behavioral_anomaly:
+      min_host_observations: 2
+      min_identity_observations: 2
+      min_peer_group_observations: 2
+      min_feature_weight: 0.5
+      baseline_half_life_secs: 7200
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+  backend:
+    kind: local_journal
+    path: {}
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#,
+            journal_path.display()
+        );
+        let config = parse_config(&yaml, "inline").unwrap();
+        let runtime_agent_id = AgentId::from_verifying_key(&test_signing_key().verifying_key());
+
+        {
+            let substrate =
+                LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), &journal_path)
+                    .unwrap();
+            let detector =
+                build_detector_from_strategy("behavioral_anomaly", &config.detection).unwrap();
+
+            let warm_events = [
+                process_start_event(
+                    "evt-warm-1",
+                    1_700_000_100,
+                    "explorer.exe",
+                    "notepad.exe",
+                    Some("C:\\Windows\\System32\\notepad.exe"),
+                ),
+                process_start_event(
+                    "evt-warm-2",
+                    1_700_000_200,
+                    "explorer.exe",
+                    "notepad.exe",
+                    Some("C:\\Windows\\System32\\notepad.exe"),
+                ),
+            ];
+
+            for event in warm_events {
+                let outcome = detect_and_deposit(
+                    &detector,
+                    &substrate,
+                    &event,
+                    &runtime_agent_id,
+                    &config.pheromone,
+                    &test_signing_key(),
+                )
+                .await
+                .unwrap();
+                assert!(outcome.findings.is_empty());
+            }
+
+            let snapshot = substrate
+                .query_behavioral_baseline_snapshot("behavioral_anomaly")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.hosts.len(), 1);
+            assert_eq!(snapshot.hosts[0].observation_count, 2);
+            assert_eq!(snapshot.identities.len(), 1);
+            assert_eq!(snapshot.identities[0].identity_id, "alice");
+            assert_eq!(snapshot.identities[0].observation_count, 2);
+            assert_eq!(snapshot.peer_groups.len(), 1);
+            assert_eq!(snapshot.peer_groups[0].peer_group_id, "role:interactive");
+            assert_eq!(snapshot.peer_groups[0].observation_count, 2);
+        }
+
+        let substrate =
+            LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), &journal_path).unwrap();
+        let detector =
+            build_detector_from_strategy("behavioral_anomaly", &config.detection).unwrap();
+        let anomaly_event = process_start_event(
+            "evt-anomaly",
+            1_700_000_300,
+            "winword.exe",
+            "powershell.exe",
+            Some("C:\\Users\\alice\\AppData\\Local\\Temp\\powershell.exe"),
+        );
+
+        let outcome = detect_and_deposit(
+            &detector,
+            &substrate,
+            &anomaly_event,
+            &runtime_agent_id,
+            &config.pheromone,
+            &test_signing_key(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(
+            outcome.findings[0].threat_class,
+            ThreatClass::DefenseEvasion
+        );
+        assert_eq!(
+            outcome.findings[0].strategy_id,
+            "behavioral_anomaly".to_string()
+        );
+        assert_eq!(
+            outcome.findings[0].evidence["baseline_scope_hits"],
+            serde_json::json!(["host", "identity", "peer_group"])
+        );
+        assert_eq!(outcome.deposits.len(), 1);
+        assert_eq!(
+            outcome.deposits[0].agent_id.0,
+            format!("{}:behavioral_anomaly", runtime_agent_id.0)
+        );
+
+        let snapshot = substrate
+            .query_behavioral_baseline_snapshot("behavioral_anomaly")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.hosts.len(), 1);
+        assert_eq!(snapshot.hosts[0].observation_count, 3);
+        assert_eq!(snapshot.identities.len(), 1);
+        assert_eq!(snapshot.identities[0].observation_count, 3);
+        assert_eq!(snapshot.peer_groups.len(), 1);
+        assert_eq!(snapshot.peer_groups[0].observation_count, 3);
+
+        let _ = std::fs::remove_file(journal_path);
+        let _ = std::fs::remove_file(escalation_path);
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_file(threat_intel_path);
+        let _ = std::fs::remove_file(behavioral_baseline_path);
     }
 }

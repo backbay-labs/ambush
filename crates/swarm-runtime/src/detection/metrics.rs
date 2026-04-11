@@ -41,6 +41,13 @@ struct BridgeLabels {
     source_id: String,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct EvasionCoverageLabels {
+    detector: String,
+    threat_class: String,
+    suite: String,
+}
+
 #[derive(Clone)]
 pub struct CriticalPathMetrics {
     registry: Arc<Mutex<Registry>>,
@@ -60,6 +67,9 @@ pub struct CriticalPathMetrics {
     bridge_error_count: Family<BridgeLabels, Gauge<u64, AtomicU64>>,
     bridge_lag_seconds: Family<BridgeLabels, Gauge<f64, AtomicU64>>,
     bridge_ready: Family<BridgeLabels, Gauge>,
+    evasion_catch_rate: Family<EvasionCoverageLabels, Gauge<f64, AtomicU64>>,
+    evasion_total_payloads: Family<EvasionCoverageLabels, Gauge<u64, AtomicU64>>,
+    evasion_detected_payloads: Family<EvasionCoverageLabels, Gauge<u64, AtomicU64>>,
 }
 
 impl CriticalPathMetrics {
@@ -80,6 +90,11 @@ impl CriticalPathMetrics {
         let bridge_error_count = Family::<BridgeLabels, Gauge<u64, AtomicU64>>::default();
         let bridge_lag_seconds = Family::<BridgeLabels, Gauge<f64, AtomicU64>>::default();
         let bridge_ready = Family::<BridgeLabels, Gauge>::default();
+        let evasion_catch_rate = Family::<EvasionCoverageLabels, Gauge<f64, AtomicU64>>::default();
+        let evasion_total_payloads =
+            Family::<EvasionCoverageLabels, Gauge<u64, AtomicU64>>::default();
+        let evasion_detected_payloads =
+            Family::<EvasionCoverageLabels, Gauge<u64, AtomicU64>>::default();
         let mut registry = Registry::with_prefix("swarm");
         registry.register(
             "detect_latency_microseconds",
@@ -161,6 +176,21 @@ impl CriticalPathMetrics {
             "Whether each configured telemetry bridge is currently healthy",
             bridge_ready.clone(),
         );
+        registry.register(
+            "evasion_catch_rate",
+            "Measured detector catch rate over the repo-owned evasion corpus",
+            evasion_catch_rate.clone(),
+        );
+        registry.register(
+            "evasion_total_payloads",
+            "Total adversarial payloads measured for one detector and threat class in the evasion corpus",
+            evasion_total_payloads.clone(),
+        );
+        registry.register(
+            "evasion_detected_payloads",
+            "Detected adversarial payloads for one detector and threat class in the evasion corpus",
+            evasion_detected_payloads.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             detect_latency_us,
@@ -179,6 +209,9 @@ impl CriticalPathMetrics {
             bridge_error_count,
             bridge_lag_seconds,
             bridge_ready,
+            evasion_catch_rate,
+            evasion_total_payloads,
+            evasion_detected_payloads,
         }
     }
 
@@ -281,6 +314,31 @@ impl CriticalPathMetrics {
         self.bridge_ready
             .get_or_create(&labels)
             .set(if ready { 1 } else { 0 });
+    }
+
+    pub fn observe_evasion_coverage(
+        &self,
+        detector: &str,
+        threat_class: &str,
+        suite: &str,
+        total_payloads: u64,
+        detected_payloads: u64,
+        catch_rate: f64,
+    ) {
+        let labels = EvasionCoverageLabels {
+            detector: detector.to_string(),
+            threat_class: threat_class.to_string(),
+            suite: suite.to_string(),
+        };
+        self.evasion_catch_rate
+            .get_or_create(&labels)
+            .set(catch_rate.clamp(0.0, 1.0));
+        self.evasion_total_payloads
+            .get_or_create(&labels)
+            .set(total_payloads);
+        self.evasion_detected_payloads
+            .get_or_create(&labels)
+            .set(detected_payloads);
     }
 }
 
@@ -413,6 +471,48 @@ mod tests {
         assert!(
             encoded.contains("swarm_bridge_lag_seconds{bridge=\"cloudtrail-primary\",source_id=\"cloudtrail\"} 12.5")
                 || encoded.contains("swarm_bridge_lag_seconds{source_id=\"cloudtrail\",bridge=\"cloudtrail-primary\"} 12.5")
+        );
+    }
+
+    #[test]
+    fn encode_metrics_renders_evasion_coverage_gauges() {
+        let metrics = CriticalPathMetrics::new();
+        metrics.observe_evasion_coverage(
+            "suspicious_process_tree",
+            "execution",
+            "evasion_breadth_v1",
+            10,
+            8,
+            0.8,
+        );
+
+        let encoded = encode_metrics(&metrics);
+        assert!(
+            encoded.contains(
+                "swarm_evasion_catch_rate{detector=\"suspicious_process_tree\",threat_class=\"execution\",suite=\"evasion_breadth_v1\"} 0.8"
+            ) || encoded.contains(
+                "swarm_evasion_catch_rate{detector=\"suspicious_process_tree\",suite=\"evasion_breadth_v1\",threat_class=\"execution\"} 0.8"
+            ) || encoded.contains(
+                "swarm_evasion_catch_rate{suite=\"evasion_breadth_v1\",detector=\"suspicious_process_tree\",threat_class=\"execution\"} 0.8"
+            )
+        );
+        assert!(
+            encoded.contains(
+                "swarm_evasion_total_payloads{detector=\"suspicious_process_tree\",threat_class=\"execution\",suite=\"evasion_breadth_v1\"} 10"
+            ) || encoded.contains(
+                "swarm_evasion_total_payloads{detector=\"suspicious_process_tree\",suite=\"evasion_breadth_v1\",threat_class=\"execution\"} 10"
+            ) || encoded.contains(
+                "swarm_evasion_total_payloads{suite=\"evasion_breadth_v1\",detector=\"suspicious_process_tree\",threat_class=\"execution\"} 10"
+            )
+        );
+        assert!(
+            encoded.contains(
+                "swarm_evasion_detected_payloads{detector=\"suspicious_process_tree\",threat_class=\"execution\",suite=\"evasion_breadth_v1\"} 8"
+            ) || encoded.contains(
+                "swarm_evasion_detected_payloads{detector=\"suspicious_process_tree\",suite=\"evasion_breadth_v1\",threat_class=\"execution\"} 8"
+            ) || encoded.contains(
+                "swarm_evasion_detected_payloads{suite=\"evasion_breadth_v1\",detector=\"suspicious_process_tree\",threat_class=\"execution\"} 8"
+            )
         );
     }
 }

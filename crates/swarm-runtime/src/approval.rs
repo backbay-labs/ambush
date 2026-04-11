@@ -1085,6 +1085,41 @@ impl DefaultApprovalHarness {
         Ok(quorum_state)
     }
 
+    pub fn append_signed_vote(
+        &self,
+        ledger_id: &str,
+        voter_id: &str,
+        signature: &DetachedSignature,
+    ) -> Result<ApprovalLedgerQuorumState, ApprovalError> {
+        let mut ledger =
+            self.load_ledger(ledger_id)?
+                .ok_or_else(|| ApprovalError::ApprovalLedgerNotFound {
+                    ledger_id: ledger_id.to_string(),
+                })?;
+        let set = self
+            .load_approval_set(&ledger.report.approval_set_id)?
+            .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
+                set_id: ledger.report.approval_set_id.clone(),
+            })?;
+        let timestamp_ms = now_ms();
+        let entry_id =
+            next_approval_ledger_entry_id(&ledger.report.ledger_id, ledger.report.entries.len());
+        let envelope_hash =
+            build_vote_envelope_hash(&ledger.report, &entry_id, voter_id, signature, timestamp_ms)?;
+        validate_and_append_vote(
+            &mut ledger.report,
+            &set.report,
+            voter_id,
+            signature,
+            timestamp_ms,
+            &envelope_hash,
+        )?;
+        let quorum_state =
+            ApprovalLedgerQuorumState::from_ledger_and_set(&ledger.report, &set.report);
+        self.ledger_store.persist(&ledger.report)?;
+        Ok(quorum_state)
+    }
+
     pub fn load_approval_set(
         &self,
         set_id: &str,
@@ -2029,6 +2064,44 @@ mod tests {
             ledger.entries[0].entry_id,
             "approval-ledger-entry:approval-ledger_test:1"
         );
+    }
+
+    #[test]
+    fn append_signed_vote_accepts_valid_signature() {
+        let dir = TestDir::new("signed-vote");
+        let harness = DefaultApprovalHarness::from_paths(
+            dir.child("approval-sets"),
+            dir.child("approval-ledgers"),
+        )
+        .unwrap();
+        let (voter_id, signer) = voter("alpha");
+        let set_record = harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                "promotion://packet/001",
+            )
+            .expect("approval set");
+        let ledger = harness
+            .load_stored_ledger_for_set(&set_record.set_id)
+            .expect("load ledger");
+        let signature = signer.sign(
+            &vote_payload_bytes(&set_record.set_id, &ledger.report.ledger_id, &voter_id)
+                .expect("payload bytes"),
+        );
+
+        let quorum_state = harness
+            .append_signed_vote(&ledger.report.ledger_id, &voter_id, &signature)
+            .expect("signed vote should append");
+
+        assert!(quorum_state.quorum_met);
+        let updated = harness
+            .load_ledger(&ledger.report.ledger_id)
+            .expect("load updated ledger")
+            .expect("updated ledger");
+        assert_eq!(updated.report.entries.len(), 1);
+        assert_eq!(updated.report.entries[0].voter_id, voter_id);
+        assert_eq!(updated.report.entries[0].signature, signature);
     }
 
     #[test]

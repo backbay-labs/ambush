@@ -53,9 +53,17 @@ pub struct LateralMovementDetector {
 
 impl Default for LateralMovementDetector {
     fn default() -> Self {
-        match Self::from_profile(LateralMovementProfile::default()) {
-            Ok(detector) => detector,
-            Err(error) => panic!("default LateralMovementProfile is invalid: {error}"),
+        Self {
+            remote_exec_indicators: default_remote_exec_indicators()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            allowed_ssh_sources: Vec::new(),
+            rdp_failure_threshold: default_rdp_failure_threshold(),
+            auth_window_ms: default_auth_window_ms(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
+            failed_rdp_tracker: Arc::default(),
         }
     }
 }
@@ -256,6 +264,10 @@ impl LateralMovementProfile {
 }
 
 impl DetectionStrategy for LateralMovementDetector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "lateral_movement"
     }
@@ -269,10 +281,14 @@ impl DetectionStrategy for LateralMovementDetector {
                 self.evaluate_auth(event, auth).into_iter().collect()
             }
             TelemetryPayload::NetworkConnect(_)
+            | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::DnsQuery(_)
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
-            | TelemetryPayload::FilePersistence(_) => Vec::new(),
+            | TelemetryPayload::FilePersistence(_)
+            | TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
         }
     }
 }

@@ -1,15 +1,19 @@
 use crate::RuntimeError;
 use crate::detection::metrics::CriticalPathMetrics;
+use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster, now_ms};
+use crate::tom_agent::{GovernancePolicy, GovernanceRuntimeEvent};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use std::collections::{BTreeMap, HashMap};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use swarm_consensus::ConsensusGovernanceReceipt;
 use swarm_core::agent::{
     AgentFinding, AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment,
     SwarmEvent, SwarmModeState,
 };
-use swarm_core::types::{AgentId, Severity, SwarmAction};
+use swarm_core::types::{AgentId, ResponseAction, Severity, SwarmAction};
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
 use swarm_policy::static_gate::scope_for_response_action;
 use swarm_policy::{ActionRequest, ApprovalContext};
@@ -107,6 +111,31 @@ pub struct GovernanceVetoRoute {
     pub reason: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct StrategyProposalRoute {
+    pub proposed_by: AgentId,
+    pub strategy_id: String,
+    pub strategy: Value,
+    pub fitness: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrategyProposalOutcome {
+    Accepted,
+    Blocked,
+    Rejected,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrategyProposalRouteReport {
+    pub strategy_id: String,
+    pub outcome: StrategyProposalOutcome,
+    pub selection_id: Option<String>,
+    pub bridge_id: Option<String>,
+    pub handoff_id: Option<String>,
+    pub canary_run_id: Option<String>,
+}
+
 #[async_trait]
 pub trait RequestResponseRouter: Send + Sync {
     async fn route_request(&self, request: ActionRequest) -> Result<AuditTrail, RuntimeError>;
@@ -117,9 +146,18 @@ pub trait RequestResponseRouter: Send + Sync {
     ) -> Result<AuditTrail, RuntimeError>;
 }
 
+#[async_trait]
+pub trait StrategyProposalRouter: Send + Sync {
+    async fn route_proposal(
+        &self,
+        proposal: StrategyProposalRoute,
+    ) -> Result<StrategyProposalRouteReport, String>;
+}
+
 pub struct AgentDispatcher {
     registry: AgentRegistry,
     health_overrides: HashMap<AgentId, AgentHealth>,
+    admitted_identities: Option<HashSet<AgentId>>,
     config: AgentDispatcherConfig,
     shutdown: watch::Receiver<bool>,
     substrate: ConfiguredPheromoneSubstrate,
@@ -128,6 +166,9 @@ pub struct AgentDispatcher {
     recent_findings: HashMap<AgentId, AgentFinding>,
     metrics: Option<CriticalPathMetrics>,
     request_response_router: Option<Arc<dyn RequestResponseRouter>>,
+    strategy_proposal_router: Option<Arc<dyn StrategyProposalRouter>>,
+    runtime_events: Option<RuntimeEventBroadcaster>,
+    governance_policy: Option<Arc<GovernancePolicy>>,
 }
 
 impl AgentDispatcher {
@@ -140,6 +181,7 @@ impl AgentDispatcher {
         Self {
             registry: AgentRegistry::new(),
             health_overrides: HashMap::new(),
+            admitted_identities: None,
             config,
             shutdown,
             substrate,
@@ -148,6 +190,9 @@ impl AgentDispatcher {
             recent_findings: HashMap::new(),
             metrics: None,
             request_response_router: None,
+            strategy_proposal_router: None,
+            runtime_events: None,
+            governance_policy: None,
         }
     }
 
@@ -163,6 +208,40 @@ impl AgentDispatcher {
 
     pub fn with_request_response_router(mut self, router: Arc<dyn RequestResponseRouter>) -> Self {
         self.request_response_router = Some(router);
+        self
+    }
+
+    pub fn with_strategy_proposal_router(
+        mut self,
+        router: Arc<dyn StrategyProposalRouter>,
+    ) -> Self {
+        self.strategy_proposal_router = Some(router);
+        self
+    }
+
+    pub fn with_runtime_events(mut self, runtime_events: RuntimeEventBroadcaster) -> Self {
+        self.runtime_events = Some(runtime_events);
+        self
+    }
+
+    pub fn with_governance_policy(mut self, governance_policy: Arc<GovernancePolicy>) -> Self {
+        self.governance_policy = Some(governance_policy);
+        self
+    }
+
+    pub fn set_admitted_identities(
+        &mut self,
+        identities: impl IntoIterator<Item = AgentId>,
+    ) -> &mut Self {
+        let identities = identities.into_iter().collect::<Vec<_>>();
+        self.admitted_identities = Some(identities.iter().cloned().collect());
+        if let Err(error) = self.substrate.set_admitted_identities(identities) {
+            tracing::warn!(
+                reason = %error,
+                module = module_path!(),
+                "failed to propagate admitted identities to pheromone substrate"
+            );
+        }
         self
     }
 
@@ -318,6 +397,7 @@ impl AgentDispatcher {
         }
 
         self.apply_actions(completed_ticks, now).await;
+        self.publish_governance_events();
         self.log_health_transitions(before_health);
         self.refresh_health_snapshot();
     }
@@ -328,11 +408,26 @@ impl AgentDispatcher {
         for completed in completed_ticks {
             let mut latest_finding = None;
             for action in completed.actions {
+                if governance_action_requires_admission(&action)
+                    && !self.is_governance_identity_admitted(&completed.agent_id)
+                {
+                    tracing::warn!(
+                        agent_id = %completed.agent_id,
+                        role = agent_role_label(completed.role),
+                        action = swarm_action_kind(&action),
+                        module = module_path!(),
+                        "blocked governance action from unadmitted identity"
+                    );
+                    continue;
+                }
+
                 if let Some(finding) =
                     agent_finding_from_action(&completed.agent_id, completed.role, &action)
                 {
                     latest_finding = Some(finding);
                 }
+
+                self.publish_agent_action(&completed.agent_id, completed.role, &action);
 
                 match action {
                     SwarmAction::RoleShift {
@@ -408,9 +503,44 @@ impl AgentDispatcher {
                             );
                             continue;
                         };
+                        let partition_authorized = match self.authorize_partition_request(&request)
+                        {
+                            Ok(authorized) => authorized,
+                            Err(reason) => {
+                                tracing::warn!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %request.hunt_id.0,
+                                    action = %action_kind,
+                                    reason = %reason,
+                                    module = module_path!(),
+                                    "request_response action rejected during partition authorization"
+                                );
+                                continue;
+                            }
+                        };
+                        if !partition_authorized
+                            && let Some(reason) = missing_governance_receipt_reason(&request)
+                        {
+                            tracing::warn!(
+                                agent_id = %completed.agent_id,
+                                hunt_id = %request.hunt_id.0,
+                                action = %action_kind,
+                                reason = %reason,
+                                module = module_path!(),
+                                "request_response action rejected before runtime routing"
+                            );
+                            continue;
+                        }
 
                         match router.route_request(request).await {
                             Ok(audit) => {
+                                self.publish_routed_response(
+                                    &completed.agent_id,
+                                    &audit,
+                                    &action_kind,
+                                    None,
+                                    None,
+                                );
                                 tracing::info!(
                                     agent_id = %completed.agent_id,
                                     hunt_id = %audit.hunt_id,
@@ -420,6 +550,13 @@ impl AgentDispatcher {
                                 );
                             }
                             Err(error) => {
+                                self.publish_routed_response_error(
+                                    &completed.agent_id,
+                                    &hunt_id_value,
+                                    &action_kind,
+                                    None,
+                                    error.to_string(),
+                                );
                                 tracing::warn!(
                                     agent_id = %completed.agent_id,
                                     hunt_id = %hunt_id_value,
@@ -465,6 +602,30 @@ impl AgentDispatcher {
                             );
                             continue;
                         };
+                        if self
+                            .governance_policy
+                            .as_ref()
+                            .is_some_and(|policy| policy.is_partitioned())
+                        {
+                            if let Some(policy) = &self.governance_policy {
+                                policy.note_partition_veto(
+                                    &request,
+                                    &reason,
+                                    unix_timestamp_millis(),
+                                );
+                            }
+                        } else if let Some(reason) = missing_governance_receipt_reason(&request) {
+                            tracing::warn!(
+                                agent_id = %completed.agent_id,
+                                hunt_id = %request.hunt_id.0,
+                                action = %action_kind,
+                                governing_agent_id = %governing_agent_id,
+                                reason = %reason,
+                                module = module_path!(),
+                                "governance veto rejected before runtime routing"
+                            );
+                            continue;
+                        }
 
                         match router
                             .route_governance_veto(GovernanceVetoRoute {
@@ -475,6 +636,13 @@ impl AgentDispatcher {
                             .await
                         {
                             Ok(audit) => {
+                                self.publish_routed_response(
+                                    &completed.agent_id,
+                                    &audit,
+                                    &action_kind,
+                                    Some(governing_agent_id.to_string()),
+                                    None,
+                                );
                                 tracing::info!(
                                     agent_id = %completed.agent_id,
                                     hunt_id = %audit.hunt_id,
@@ -485,6 +653,13 @@ impl AgentDispatcher {
                                 );
                             }
                             Err(error) => {
+                                self.publish_routed_response_error(
+                                    &completed.agent_id,
+                                    &hunt_id_value,
+                                    &action_kind,
+                                    Some(governing_agent_id.to_string()),
+                                    error.to_string(),
+                                );
                                 tracing::warn!(
                                     agent_id = %completed.agent_id,
                                     hunt_id = %hunt_id_value,
@@ -522,21 +697,69 @@ impl AgentDispatcher {
                             "agent-direct action: publish_findings (not dispatcher-routed)"
                         );
                     }
-                    // ProposeStrategy has no handler yet — log a structured warning
-                    // so the unhandled variant is visible in operational logs.
+                    SwarmAction::FeedbackSignal { signal } => {
+                        tracing::debug!(
+                            agent_id = %completed.agent_id,
+                            incident_id = %signal.incident_id,
+                            finding_id = ?signal.finding_id,
+                            strategy_id = ?signal.strategy_id,
+                            module = module_path!(),
+                            "agent-direct action: feedback_signal (not dispatcher-routed)"
+                        );
+                    }
                     SwarmAction::ProposeStrategy {
                         strategy_id,
                         fitness,
-                        ..
+                        strategy,
                     } => {
-                        tracing::warn!(
-                            agent_id = %completed.agent_id,
-                            action = "propose_strategy",
-                            strategy_id = %strategy_id,
-                            fitness = %fitness,
-                            module = module_path!(),
-                            "unhandled swarm action variant in dispatcher"
-                        );
+                        let Some(router) = self.strategy_proposal_router.as_ref() else {
+                            tracing::warn!(
+                                agent_id = %completed.agent_id,
+                                action = "propose_strategy",
+                                strategy_id = %strategy_id,
+                                fitness = %fitness,
+                                module = module_path!(),
+                                "strategy proposal dropped because no router is configured"
+                            );
+                            continue;
+                        };
+                        let router = Arc::clone(router);
+                        let proposed_by = completed.agent_id.clone();
+                        tokio::spawn(async move {
+                            match router
+                                .route_proposal(StrategyProposalRoute {
+                                    proposed_by: proposed_by.clone(),
+                                    strategy_id: strategy_id.clone(),
+                                    strategy,
+                                    fitness,
+                                })
+                                .await
+                            {
+                                Ok(report) => {
+                                    tracing::info!(
+                                        agent_id = %proposed_by,
+                                        strategy_id = %report.strategy_id,
+                                        outcome = ?report.outcome,
+                                        selection_id = report.selection_id.as_deref().unwrap_or("none"),
+                                        bridge_id = report.bridge_id.as_deref().unwrap_or("none"),
+                                        handoff_id = report.handoff_id.as_deref().unwrap_or("none"),
+                                        canary_run_id = report.canary_run_id.as_deref().unwrap_or("none"),
+                                        module = module_path!(),
+                                        "strategy proposal routed through the formal safety and canary lane"
+                                    );
+                                }
+                                Err(error) => {
+                                    tracing::warn!(
+                                        agent_id = %proposed_by,
+                                        strategy_id = %strategy_id,
+                                        fitness = %fitness,
+                                        reason = %error,
+                                        module = module_path!(),
+                                        "strategy proposal failed during runtime routing"
+                                    );
+                                }
+                            }
+                        });
                     }
                 }
             }
@@ -550,6 +773,12 @@ impl AgentDispatcher {
         for role_shift in pending_role_shifts {
             self.broadcast_role_shift(role_shift, now);
         }
+    }
+
+    fn is_governance_identity_admitted(&self, agent_id: &AgentId) -> bool {
+        self.admitted_identities
+            .as_ref()
+            .is_none_or(|identities| identities.contains(agent_id))
     }
 
     fn broadcast_role_shift(&mut self, role_shift: PendingRoleShift, now: i64) {
@@ -592,6 +821,15 @@ impl AgentDispatcher {
             }
 
             if let Some(role) = self.registry.get(&agent_id).map(SwarmAgent::role) {
+                if let Some(runtime_events) = &self.runtime_events {
+                    runtime_events.publish(RuntimeEvent::AgentHealth {
+                        emitted_at_ms: now_ms(),
+                        agent_id: agent_id.to_string(),
+                        role,
+                        from: previous_health,
+                        to: current_health,
+                    });
+                }
                 tracing::info!(
                     agent_id = %agent_id,
                     role = agent_role_label(role),
@@ -642,6 +880,126 @@ impl AgentDispatcher {
     fn refresh_health_snapshot(&self) {
         self.health_state
             .store(Arc::new(self.agent_health_summary()));
+    }
+
+    fn publish_agent_action(&self, agent_id: &AgentId, role: AgentRole, action: &SwarmAction) {
+        let Some(runtime_events) = &self.runtime_events else {
+            return;
+        };
+
+        runtime_events.publish(RuntimeEvent::AgentAction {
+            emitted_at_ms: now_ms(),
+            agent_id: agent_id.to_string(),
+            role,
+            action_kind: swarm_action_kind(action).to_string(),
+            hunt_id: swarm_action_hunt_id(action).map(ToString::to_string),
+            details: serde_json::to_value(action).unwrap_or_else(|error| {
+                json!({
+                    "type": "serialization_error",
+                    "reason": error.to_string(),
+                })
+            }),
+        });
+    }
+
+    fn publish_routed_response(
+        &self,
+        agent_id: &AgentId,
+        audit: &AuditTrail,
+        action_kind: &str,
+        governing_agent_id: Option<String>,
+        error: Option<String>,
+    ) {
+        let Some(runtime_events) = &self.runtime_events else {
+            return;
+        };
+
+        runtime_events.publish(RuntimeEvent::ResponseExecution {
+            emitted_at_ms: now_ms(),
+            agent_id: agent_id.to_string(),
+            hunt_id: audit.hunt_id.clone(),
+            action_kind: action_kind.to_string(),
+            response_kind: audit.response_kind().to_string(),
+            policy_verdict: audit.policy.verdict,
+            rule_name: audit.policy.rule_name.clone(),
+            reason: audit.policy.reason.clone(),
+            receipt_id: audit.response_receipt_id().map(ToString::to_string),
+            governing_agent_id,
+            error,
+        });
+    }
+
+    fn publish_routed_response_error(
+        &self,
+        agent_id: &AgentId,
+        hunt_id: &str,
+        action_kind: &str,
+        governing_agent_id: Option<String>,
+        error: String,
+    ) {
+        let Some(runtime_events) = &self.runtime_events else {
+            return;
+        };
+
+        runtime_events.publish(RuntimeEvent::ResponseExecution {
+            emitted_at_ms: now_ms(),
+            agent_id: agent_id.to_string(),
+            hunt_id: hunt_id.to_string(),
+            action_kind: action_kind.to_string(),
+            response_kind: "routing_error".to_string(),
+            policy_verdict: swarm_policy::PolicyVerdict::Deny,
+            rule_name: "runtime.routing".to_string(),
+            reason: error.clone(),
+            receipt_id: None,
+            governing_agent_id,
+            error: Some(error),
+        });
+    }
+
+    fn authorize_partition_request(&self, request: &ActionRequest) -> Result<bool, String> {
+        let Some(governance_policy) = &self.governance_policy else {
+            return Ok(false);
+        };
+        governance_policy
+            .authorize_partition_request(request, unix_timestamp_millis())
+            .map(|lease| lease.is_some())
+    }
+
+    fn publish_governance_events(&self) {
+        let Some(governance_policy) = &self.governance_policy else {
+            return;
+        };
+        let events = governance_policy.drain_runtime_events();
+        if events.is_empty() {
+            return;
+        }
+        let Some(runtime_events) = &self.runtime_events else {
+            return;
+        };
+
+        for event in events {
+            let (agent_id, action_kind) = match &event {
+                GovernanceRuntimeEvent::PartitionStateTransition {
+                    governing_agent_id, ..
+                } => (governing_agent_id.to_string(), "partition_state_transition"),
+                GovernanceRuntimeEvent::PartitionReconciliation {
+                    governing_agent_id, ..
+                } => (governing_agent_id.to_string(), "partition_reconciliation"),
+            };
+            runtime_events.publish(RuntimeEvent::AgentAction {
+                emitted_at_ms: now_ms(),
+                agent_id,
+                role: AgentRole::Tom,
+                action_kind: action_kind.to_string(),
+                hunt_id: None,
+                details: serde_json::to_value(&event).unwrap_or_else(|error| {
+                    json!({
+                        "type": "serialization_error",
+                        "reason": error.to_string(),
+                    })
+                }),
+            });
+        }
     }
 }
 
@@ -714,7 +1072,95 @@ fn agent_finding_from_action(
                 governing_agent_id
             ),
         }),
+        SwarmAction::ProposeStrategy {
+            strategy_id,
+            fitness,
+            ..
+        } => Some(AgentFinding {
+            agent_id: agent_id.clone(),
+            role,
+            kind: "propose_strategy".to_string(),
+            summary: format!("strategy_id={strategy_id} fitness={fitness:.3}"),
+        }),
+        SwarmAction::FeedbackSignal { signal } => Some(AgentFinding {
+            agent_id: agent_id.clone(),
+            role,
+            kind: "feedback_signal".to_string(),
+            summary: format!(
+                "action={:?} incident_id={} finding_id={} strategy_id={}",
+                signal.action,
+                signal.incident_id,
+                signal.finding_id.as_deref().unwrap_or("n/a"),
+                signal.strategy_id.as_deref().unwrap_or("n/a")
+            ),
+        }),
         _ => None,
+    }
+}
+
+fn swarm_action_kind(action: &SwarmAction) -> &'static str {
+    match action {
+        SwarmAction::DepositPheromone { .. } => "deposit_pheromone",
+        SwarmAction::ClaimInvestigation { .. } => "claim_investigation",
+        SwarmAction::PublishFindings { .. } => "publish_findings",
+        SwarmAction::RequestResponse { .. } => "request_response",
+        SwarmAction::ProposeStrategy { .. } => "propose_strategy",
+        SwarmAction::FeedbackSignal { .. } => "feedback_signal",
+        SwarmAction::RoleShift { .. } => "role_shift",
+        SwarmAction::HealthReport { .. } => "health_report",
+        SwarmAction::GovernanceVeto { .. } => "governance_veto",
+    }
+}
+
+fn governance_action_requires_admission(action: &SwarmAction) -> bool {
+    matches!(
+        action,
+        SwarmAction::RoleShift { .. }
+            | SwarmAction::HealthReport { .. }
+            | SwarmAction::RequestResponse { .. }
+            | SwarmAction::GovernanceVeto { .. }
+            | SwarmAction::ProposeStrategy { .. }
+    )
+}
+
+fn response_action_requires_governance_receipt(action: &ResponseAction) -> bool {
+    matches!(
+        action,
+        ResponseAction::BlockEgress { .. }
+            | ResponseAction::IsolateHost { .. }
+            | ResponseAction::RevokeCredential { .. }
+    )
+}
+
+fn missing_governance_receipt_reason(request: &ActionRequest) -> Option<String> {
+    if !response_action_requires_governance_receipt(&request.action) {
+        return None;
+    }
+    let Some(receipt_value) = request.evidence.get("governance_receipt").cloned() else {
+        return Some("missing governance receipt".to_string());
+    };
+    let receipt: ConsensusGovernanceReceipt = match serde_json::from_value(receipt_value) {
+        Ok(receipt) => receipt,
+        Err(error) => return Some(format!("invalid governance receipt: {error}")),
+    };
+    receipt
+        .verify()
+        .map(|_| ())
+        .map_err(|error| format!("invalid governance receipt signature: {error}"))
+        .err()
+}
+
+fn swarm_action_hunt_id(action: &SwarmAction) -> Option<&swarm_core::types::HuntId> {
+    match action {
+        SwarmAction::ClaimInvestigation { hunt_id, .. }
+        | SwarmAction::PublishFindings { hunt_id, .. }
+        | SwarmAction::RequestResponse { hunt_id, .. }
+        | SwarmAction::GovernanceVeto { hunt_id, .. } => Some(hunt_id),
+        SwarmAction::DepositPheromone { .. }
+        | SwarmAction::ProposeStrategy { .. }
+        | SwarmAction::FeedbackSignal { .. }
+        | SwarmAction::RoleShift { .. }
+        | SwarmAction::HealthReport { .. } => None,
     }
 }
 
@@ -794,8 +1240,13 @@ fn unix_timestamp_millis() -> i64 {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{AgentDispatcher, AgentDispatcherConfig, agent_role_label};
+    use super::{
+        AgentDispatcher, AgentDispatcherConfig, StrategyProposalOutcome, StrategyProposalRoute,
+        StrategyProposalRouteReport, StrategyProposalRouter, agent_role_label,
+    };
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
+    use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
+    use crate::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
     use arc_swap::ArcSwap;
     use async_trait::async_trait;
     use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -810,7 +1261,7 @@ mod tests {
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::types::{AgentId, HuntId, SwarmAction};
     use swarm_pheromone::{ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate};
-    use tokio::sync::watch;
+    use tokio::sync::{mpsc, watch};
 
     struct MockAgent {
         id: AgentId,
@@ -908,6 +1359,22 @@ mod tests {
         }
     }
 
+    struct MockStrategyProposalRouter {
+        tx: mpsc::UnboundedSender<StrategyProposalRoute>,
+        result: Result<StrategyProposalRouteReport, String>,
+    }
+
+    #[async_trait]
+    impl StrategyProposalRouter for MockStrategyProposalRouter {
+        async fn route_proposal(
+            &self,
+            proposal: StrategyProposalRoute,
+        ) -> Result<StrategyProposalRouteReport, String> {
+            let _ = self.tx.send(proposal);
+            self.result.clone()
+        }
+    }
+
     fn pheromone_config() -> PheromoneConfig {
         PheromoneConfig {
             default_half_life_secs: 3600.0,
@@ -954,6 +1421,56 @@ mod tests {
             .unwrap();
 
         assert!(health_state.load_full().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dispatcher_publishes_partition_state_transitions_to_runtime_events() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
+            contingency_lease_ttl_ms: 60_000,
+            contingency_blast_radius_cap: 1,
+        }));
+        governance_policy.register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[31; 32]),
+        );
+        governance_policy.observe_health(
+            &AgentId::new("tom", "primary"),
+            &[AgentHealthEntry {
+                id: "tom-primary".to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            1_700_000_000_000,
+        );
+
+        let broadcaster = RuntimeEventBroadcaster::new(8);
+        let mut receiver = broadcaster.subscribe();
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate(),
+            health_state,
+        )
+        .with_governance_policy(governance_policy)
+        .with_runtime_events(broadcaster);
+
+        dispatcher.tick_once().await;
+
+        let event = receiver.recv().await.unwrap();
+        match event {
+            RuntimeEvent::AgentAction {
+                action_kind,
+                details,
+                ..
+            } => {
+                assert_eq!(action_kind, "partition_state_transition");
+                assert_eq!(details["kind"], "partition_state_transition");
+                assert_eq!(details["to"], "partitioned");
+            }
+            other => panic!("expected agent_action runtime event, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1141,6 +1658,52 @@ mod tests {
                 ..
             } if agent_id.0 == "whisker-primary"
         )));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_rejects_governance_actions_from_unadmitted_identities() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let observer_events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate(),
+            empty_health_state(),
+        );
+        dispatcher.set_admitted_identities([AgentId::new("whisker", "primary")]);
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "tom-primary",
+                    AgentRole::Tom,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_actions(vec![vec![SwarmAction::RoleShift {
+                    target_agent_id: AgentId::new("whisker", "primary"),
+                    new_role: AgentRole::Tom,
+                }]]),
+            ))
+            .unwrap();
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "whisker-primary",
+                    AgentRole::Whisker,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_event_log(Arc::clone(&observer_events)),
+            ))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+
+        let summary = dispatcher.agent_health_summary();
+        assert_eq!(summary[1].role, AgentRole::Whisker);
+        assert!(observer_events.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1468,6 +2031,115 @@ mod tests {
         let snapshot = health_state.load_full();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].health, AgentHealth::Healthy);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_routes_kitten_strategy_proposals_through_configured_router() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig {
+                tick_interval_ms: 5,
+                ..AgentDispatcherConfig::default()
+            },
+            shutdown_rx,
+            substrate(),
+            empty_health_state(),
+        )
+        .with_strategy_proposal_router(Arc::new(MockStrategyProposalRouter {
+            tx,
+            result: Ok(StrategyProposalRouteReport {
+                strategy_id: "strategy-1".to_string(),
+                outcome: StrategyProposalOutcome::Accepted,
+                selection_id: Some("selection-1".to_string()),
+                bridge_id: Some("bridge-1".to_string()),
+                handoff_id: Some("handoff-1".to_string()),
+                canary_run_id: Some("canary-1".to_string()),
+            }),
+        }));
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "kitten-evolver",
+                    AgentRole::Kitten,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_actions(vec![vec![SwarmAction::ProposeStrategy {
+                    strategy_id: "strategy-1".to_string(),
+                    strategy: serde_json::json!({
+                        "source": "kitten_population_candidate",
+                        "ranking_id": "ranking-1",
+                        "validation_bundle_id": "validation-1",
+                        "materialization_id": "materialization-1",
+                        "experiment_path": "experiments/strategy-1.yaml"
+                    }),
+                    fitness: 0.87,
+                }]]),
+            ))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+
+        let routed = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(routed.strategy_id, "strategy-1");
+        assert_eq!(routed.proposed_by.0, "kitten-evolver");
+        assert_eq!(
+            routed
+                .strategy
+                .get("source")
+                .and_then(serde_json::Value::as_str),
+            Some("kitten_population_candidate")
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatcher_records_kitten_strategy_proposals_for_peer_visibility() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let peer_findings_seen = Arc::new(AtomicUsize::new(0));
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate(),
+            empty_health_state(),
+        );
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "kitten-evolver",
+                    AgentRole::Kitten,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_actions(vec![vec![SwarmAction::ProposeStrategy {
+                    strategy_id: "strategy-1".to_string(),
+                    strategy: serde_json::json!({"kind": "evolved"}),
+                    fitness: 0.87,
+                }]]),
+            ))
+            .unwrap();
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "observer-whisker",
+                    AgentRole::Whisker,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_peer_finding_counter(Arc::clone(&peer_findings_seen)),
+            ))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+        dispatcher.tick_agents().await;
+
+        assert_eq!(peer_findings_seen.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

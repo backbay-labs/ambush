@@ -20,6 +20,10 @@ struct StaticDetector {
 }
 
 impl DetectionStrategy for StaticDetector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "static"
     }
@@ -46,13 +50,21 @@ fn test_config() -> PheromoneConfig {
     }
 }
 
+fn signing_key_a() -> SigningKey {
+    SigningKey::from_bytes(&[42u8; 32])
+}
+
+fn signing_key_b() -> SigningKey {
+    SigningKey::from_bytes(&[43u8; 32])
+}
+
 fn make_deposit(
-    agent_id: &str,
+    key: &SigningKey,
     threat_class: ThreatClass,
     confidence: f64,
     timestamp: i64,
 ) -> PheromoneDeposit {
-    let key = test_signing_key();
+    let agent_id = AgentId::from_verifying_key(&key.verifying_key());
     let mut deposit = PheromoneDeposit {
         indicator: serde_json::json!({"signal": "execution"}),
         threat_class,
@@ -60,7 +72,9 @@ fn make_deposit(
         confidence,
         timestamp,
         decay_half_life: 3600.0,
-        agent_id: AgentId(agent_id.to_string()),
+        agent_id: agent_id.clone(),
+        agent_identity: agent_id.0,
+        agent_role: None,
         signature: Vec::new(),
         agent_key: Vec::new(),
     };
@@ -72,9 +86,11 @@ fn make_deposit(
         timestamp: deposit.timestamp,
         decay_half_life: deposit.decay_half_life,
         agent_id: &deposit.agent_id,
+        agent_identity: &deposit.agent_identity,
+        agent_role: deposit.agent_role,
     };
     let payload_bytes = serde_json::to_vec(&payload).unwrap();
-    let sig = ed25519_dalek::Signer::sign(&key, &payload_bytes);
+    let sig = ed25519_dalek::Signer::sign(key, &payload_bytes);
     deposit.signature = sig.to_bytes().to_vec();
     deposit.agent_key = key.verifying_key().to_bytes().to_vec();
     deposit
@@ -126,7 +142,7 @@ async fn below_threshold_no_escalation() {
     let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
     substrate
         .deposit(make_deposit(
-            "agent-a",
+            &signing_key_a(),
             ThreatClass::Execution,
             0.3,
             1_700_000_000,
@@ -135,7 +151,7 @@ async fn below_threshold_no_escalation() {
         .unwrap();
     substrate
         .deposit(make_deposit(
-            "agent-b",
+            &signing_key_b(),
             ThreatClass::Execution,
             0.3,
             1_700_000_000,
@@ -153,10 +169,11 @@ async fn below_threshold_no_escalation() {
 #[tokio::test]
 async fn single_source_above_threshold_no_escalation() {
     let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let key = signing_key_a();
     for _ in 0..3 {
         substrate
             .deposit(make_deposit(
-                "agent-a",
+                &key,
                 ThreatClass::Execution,
                 0.9,
                 1_700_000_000,
@@ -174,10 +191,10 @@ async fn single_source_above_threshold_no_escalation() {
 #[tokio::test]
 async fn dual_source_above_alert_threshold() {
     let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
-    for agent in ["agent-a", "agent-b"] {
+    for key in [&signing_key_a(), &signing_key_b()] {
         substrate
             .deposit(make_deposit(
-                agent,
+                key,
                 ThreatClass::Execution,
                 0.9,
                 1_700_000_000,
@@ -186,7 +203,7 @@ async fn dual_source_above_alert_threshold() {
             .unwrap();
         substrate
             .deposit(make_deposit(
-                agent,
+                key,
                 ThreatClass::Execution,
                 0.9,
                 1_700_000_000,
@@ -217,11 +234,11 @@ async fn dual_source_above_alert_threshold() {
 #[tokio::test]
 async fn dual_source_above_incident_threshold() {
     let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
-    for agent in ["agent-a", "agent-b"] {
+    for key in [&signing_key_a(), &signing_key_b()] {
         for _ in 0..3 {
             substrate
                 .deposit(make_deposit(
-                    agent,
+                    key,
                     ThreatClass::Execution,
                     0.9,
                     1_700_000_000,
@@ -258,10 +275,10 @@ async fn threat_class_alert_override_applies_without_restart() {
         })
         .await
         .unwrap();
-    for agent in ["agent-a", "agent-b"] {
+    for key in [&signing_key_a(), &signing_key_b()] {
         substrate
             .deposit(make_deposit(
-                agent,
+                key,
                 ThreatClass::Execution,
                 0.8,
                 1_700_000_000,
@@ -287,10 +304,10 @@ async fn mode_progression_normal_to_alert_to_incident() {
     let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
     let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
 
-    for agent in ["agent-a", "agent-b"] {
+    for key in [&signing_key_a(), &signing_key_b()] {
         substrate
             .deposit(make_deposit(
-                agent,
+                key,
                 ThreatClass::Execution,
                 1.1,
                 1_700_000_000,
@@ -301,11 +318,11 @@ async fn mode_progression_normal_to_alert_to_incident() {
     let alert = monitor.evaluate_all(1_700_000_000).await.unwrap();
     assert_eq!(alert.current_mode, SwarmMode::Alert);
 
-    for agent in ["agent-a", "agent-b"] {
+    for key in [&signing_key_a(), &signing_key_b()] {
         for _ in 0..3 {
             substrate
                 .deposit(make_deposit(
-                    agent,
+                    key,
                     ThreatClass::Execution,
                     0.9,
                     1_700_000_010,
@@ -341,9 +358,9 @@ async fn concentration_monitor_deescalates_after_cooldown() {
     let mut monitor = ConcentrationMonitor::new(config.clone(), Arc::clone(&substrate));
     let start = 1_700_000_000;
 
-    for agent in ["agent-a", "agent-b"] {
+    for key in [&signing_key_a(), &signing_key_b()] {
         substrate
-            .deposit(make_deposit(agent, ThreatClass::Execution, 1.1, start))
+            .deposit(make_deposit(key, ThreatClass::Execution, 1.1, start))
             .await
             .unwrap();
     }
@@ -419,7 +436,7 @@ async fn threat_intel_enriched_dns_detection_triggers_alert_escalation() {
         &detector,
         substrate.as_ref(),
         &event,
-        &AgentId("whisker-dns".to_string()),
+        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
         &config,
         &test_signing_key(),
     )
@@ -465,7 +482,7 @@ async fn cross_strategy_findings_from_one_agent_trigger_alert_escalation() {
         &detector,
         substrate.as_ref(),
         &event,
-        &AgentId("whisker-primary".to_string()),
+        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
         &config,
         &test_signing_key(),
     )
@@ -508,7 +525,7 @@ async fn repeated_same_strategy_findings_from_one_agent_do_not_trigger_cross_str
         &detector,
         substrate.as_ref(),
         &event,
-        &AgentId("whisker-primary".to_string()),
+        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
         &config,
         &test_signing_key(),
     )

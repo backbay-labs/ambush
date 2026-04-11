@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::SwarmMode;
+use crate::agent::{AgentRole, SwarmMode};
 use crate::config::PheromoneConfig;
 use crate::types::{AgentId, Severity};
 
@@ -67,6 +67,71 @@ pub struct ThreatIntelEntry {
     pub expires_at: i64,
 }
 
+/// Durable restart-safe behavioral baseline snapshot stored in the substrate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BehavioralBaselineSnapshot {
+    /// Strategy family that owns the snapshot.
+    pub strategy_id: String,
+    /// When the snapshot was captured (unix timestamp seconds).
+    pub captured_at: i64,
+    /// Host-scoped baseline states tracked by the detector.
+    #[serde(default)]
+    pub hosts: Vec<BehavioralHostBaseline>,
+    /// Identity-scoped baseline states tracked by the detector.
+    #[serde(default)]
+    pub identities: Vec<BehavioralIdentityBaseline>,
+    /// Peer-group-scoped baseline states tracked by the detector.
+    #[serde(default)]
+    pub peer_groups: Vec<BehavioralPeerGroupBaseline>,
+}
+
+/// Behavioral baseline state for one host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BehavioralHostBaseline {
+    pub host_id: String,
+    pub observation_count: u64,
+    pub parent_child_pairs: Vec<BehavioralFrequencyEntry>,
+    pub binaries: Vec<BehavioralFrequencyEntry>,
+    pub role_tools: Vec<BehavioralRoleToolFrequencyEntry>,
+}
+
+/// Behavioral baseline state for one identity principal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BehavioralIdentityBaseline {
+    pub identity_id: String,
+    pub observation_count: u64,
+    pub parent_child_pairs: Vec<BehavioralFrequencyEntry>,
+    pub binaries: Vec<BehavioralFrequencyEntry>,
+    pub role_tools: Vec<BehavioralRoleToolFrequencyEntry>,
+}
+
+/// Behavioral baseline state for one peer-group scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BehavioralPeerGroupBaseline {
+    pub peer_group_id: String,
+    pub observation_count: u64,
+    pub parent_child_pairs: Vec<BehavioralFrequencyEntry>,
+    pub binaries: Vec<BehavioralFrequencyEntry>,
+    pub role_tools: Vec<BehavioralRoleToolFrequencyEntry>,
+}
+
+/// One decayed-frequency baseline observation keyed by a string value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BehavioralFrequencyEntry {
+    pub key: String,
+    pub weight: f64,
+    pub last_seen_at: i64,
+}
+
+/// One decayed-frequency baseline observation keyed by user role plus tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BehavioralRoleToolFrequencyEntry {
+    pub user_role: String,
+    pub tool: String,
+    pub weight: f64,
+    pub last_seen_at: i64,
+}
+
 /// Effective pheromone policy after base config plus threat-class override resolution.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreatClassPolicy {
@@ -94,6 +159,12 @@ pub struct PheromoneDeposit {
     pub decay_half_life: f64,
     /// Who deposited it.
     pub agent_id: AgentId,
+    /// Stable cryptographic identity derived from the depositing public key.
+    #[serde(default)]
+    pub agent_identity: String,
+    /// Depositing agent role at the time the pheromone was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<AgentRole>,
     /// Ed25519 signature over the canonical deposit content.
     pub signature: Vec<u8>,
     /// Public key of the depositing agent.

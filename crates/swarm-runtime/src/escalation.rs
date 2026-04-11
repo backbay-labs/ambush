@@ -1,3 +1,6 @@
+use crate::runtime_events::{
+    EscalationLevel, RuntimeEvent, RuntimeEventBroadcaster, RuntimeThreatConcentration, now_ms,
+};
 use arc_swap::ArcSwap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -22,6 +25,7 @@ pub struct ConcentrationMonitor<S: PheromoneSubstrate> {
     mode_state: SwarmModeState,
     below_threshold_since: Option<i64>,
     shared_mode_state: Option<Arc<ArcSwap<SwarmModeState>>>,
+    runtime_events: Option<RuntimeEventBroadcaster>,
 }
 
 impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
@@ -32,6 +36,7 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
             mode_state: SwarmModeState::new(),
             below_threshold_since: None,
             shared_mode_state: None,
+            runtime_events: None,
         }
     }
 
@@ -41,6 +46,11 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
     ) -> Self {
         shared_mode_state.store(Arc::new(self.mode_state.clone()));
         self.shared_mode_state = Some(shared_mode_state);
+        self
+    }
+
+    pub fn with_runtime_events(mut self, runtime_events: RuntimeEventBroadcaster) -> Self {
+        self.runtime_events = Some(runtime_events);
         self
     }
 
@@ -95,11 +105,13 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
     pub async fn evaluate_all(&mut self, now: i64) -> Result<EscalationOutcome, SubstrateError> {
         let mut events = Vec::new();
         let mut mode_changed = false;
+        let starting_mode = self.mode_state.current;
 
         for threat_class in standard_threat_classes() {
             if let Some(event) = self.evaluate_threat_class(&threat_class, now).await? {
                 let target_mode = event_mode(&event);
                 let event_threat_class = event_threat_class(&event).clone();
+                let mut event_mode_changed = false;
                 tracing::warn!(
                     module = module_path!(),
                     threat_class = %threat_class_name(&event_threat_class),
@@ -113,9 +125,17 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
                 if target_mode > self.mode_state.current {
                     let record = escalation_record(&event);
                     self.substrate.record_escalation(record).await?;
+                    let previous_mode = self.mode_state.current;
                     self.mode_state
                         .transition_to(target_mode, event_threat_class.clone(), now);
                     mode_changed = true;
+                    event_mode_changed = true;
+                    self.publish_mode_transition(
+                        previous_mode,
+                        target_mode,
+                        Some(event_threat_class.clone()),
+                        "threshold_crossed",
+                    );
                     tracing::info!(
                         module = module_path!(),
                         to_mode = ?target_mode,
@@ -125,6 +145,7 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
                     );
                 }
 
+                self.publish_escalation(&event, event_mode_changed);
                 events.push(event);
             }
         }
@@ -136,6 +157,12 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
                     && self.mode_state.transition_down(SwarmMode::Normal, now)
                 {
                     mode_changed = true;
+                    self.publish_mode_transition(
+                        starting_mode,
+                        SwarmMode::Normal,
+                        None,
+                        "deescalation_cooldown_elapsed",
+                    );
                     self.below_threshold_since = None;
                     tracing::info!(
                         module = module_path!(),
@@ -151,6 +178,8 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
             self.below_threshold_since = None;
         }
 
+        let concentrations = self.snapshot_concentrations(now).await?;
+        self.publish_concentration_snapshot(concentrations);
         self.sync_shared_mode_state();
 
         Ok(EscalationOutcome {
@@ -197,9 +226,76 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
             shared_mode_state.store(Arc::new(self.mode_state.clone()));
         }
     }
+
+    fn publish_escalation(&self, event: &EscalationEvent, mode_changed: bool) {
+        let Some(runtime_events) = &self.runtime_events else {
+            return;
+        };
+
+        runtime_events.publish(RuntimeEvent::Escalation {
+            emitted_at_ms: now_ms(),
+            threat_class: event_threat_class(event).clone(),
+            level: match event {
+                EscalationEvent::Alert { .. } => EscalationLevel::Alert,
+                EscalationEvent::Incident { .. } => EscalationLevel::Incident,
+            },
+            total_strength: event_total_strength(event),
+            distinct_sources: event_distinct_sources(event),
+            peak_confidence: event_peak_confidence(event),
+            mode_changed,
+            current_mode: self.mode_state.current,
+        });
+    }
+
+    async fn snapshot_concentrations(
+        &self,
+        now: i64,
+    ) -> Result<Vec<RuntimeThreatConcentration>, SubstrateError> {
+        let mut concentrations = Vec::with_capacity(standard_threat_classes().len());
+        for threat_class in standard_threat_classes() {
+            let concentration = self
+                .substrate
+                .query_concentration(&threat_class, now)
+                .await?;
+            concentrations.push(RuntimeThreatConcentration::from(&concentration));
+        }
+        Ok(concentrations)
+    }
+
+    fn publish_concentration_snapshot(&self, concentrations: Vec<RuntimeThreatConcentration>) {
+        let Some(runtime_events) = &self.runtime_events else {
+            return;
+        };
+
+        runtime_events.publish(RuntimeEvent::ConcentrationSnapshot {
+            emitted_at_ms: now_ms(),
+            current_mode: self.mode_state.current,
+            concentrations,
+        });
+    }
+
+    fn publish_mode_transition(
+        &self,
+        from: SwarmMode,
+        to: SwarmMode,
+        triggering_threat_class: Option<ThreatClass>,
+        reason: &str,
+    ) {
+        let Some(runtime_events) = &self.runtime_events else {
+            return;
+        };
+
+        runtime_events.publish(RuntimeEvent::ModeTransition {
+            emitted_at_ms: now_ms(),
+            from,
+            to,
+            triggering_threat_class,
+            reason: reason.to_string(),
+        });
+    }
 }
 
-fn standard_threat_classes() -> Vec<ThreatClass> {
+pub(crate) fn standard_threat_classes() -> Vec<ThreatClass> {
     vec![
         ThreatClass::LateralMovement,
         ThreatClass::DataExfiltration,
@@ -323,12 +419,16 @@ mod tests {
         }
     }
 
-    fn test_signing_key() -> SigningKey {
+    fn signing_key_a() -> SigningKey {
         SigningKey::from_bytes(&[42u8; 32])
     }
 
-    fn make_deposit(agent_id: &str, confidence: f64, timestamp: i64) -> PheromoneDeposit {
-        let key = test_signing_key();
+    fn signing_key_b() -> SigningKey {
+        SigningKey::from_bytes(&[43u8; 32])
+    }
+
+    fn make_deposit(key: &SigningKey, confidence: f64, timestamp: i64) -> PheromoneDeposit {
+        let agent_id = AgentId::from_verifying_key(&key.verifying_key());
         let mut deposit = PheromoneDeposit {
             indicator: serde_json::json!({"signal": "process-tree"}),
             threat_class: ThreatClass::Execution,
@@ -336,7 +436,9 @@ mod tests {
             confidence,
             timestamp,
             decay_half_life: 3600.0,
-            agent_id: AgentId(agent_id.to_string()),
+            agent_id: agent_id.clone(),
+            agent_identity: agent_id.0,
+            agent_role: None,
             signature: Vec::new(),
             agent_key: Vec::new(),
         };
@@ -348,6 +450,8 @@ mod tests {
             timestamp: deposit.timestamp,
             decay_half_life: deposit.decay_half_life,
             agent_id: &deposit.agent_id,
+            agent_identity: &deposit.agent_identity,
+            agent_role: deposit.agent_role,
         };
         let payload_bytes = serde_json::to_vec(&payload).unwrap();
         let sig = key.sign(&payload_bytes);
@@ -360,11 +464,11 @@ mod tests {
     async fn below_threshold_returns_no_events() {
         let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
         substrate
-            .deposit(make_deposit("agent-a", 0.3, 1_700_000_000))
+            .deposit(make_deposit(&signing_key_a(), 0.3, 1_700_000_000))
             .await
             .unwrap();
         substrate
-            .deposit(make_deposit("agent-b", 0.3, 1_700_000_000))
+            .deposit(make_deposit(&signing_key_b(), 0.3, 1_700_000_000))
             .await
             .unwrap();
         let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
@@ -377,17 +481,18 @@ mod tests {
 
     #[tokio::test]
     async fn single_source_above_threshold_returns_no_event() {
+        let key = signing_key_a();
         let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
         substrate
-            .deposit(make_deposit("agent-a", 0.9, 1_700_000_000))
+            .deposit(make_deposit(&key, 0.9, 1_700_000_000))
             .await
             .unwrap();
         substrate
-            .deposit(make_deposit("agent-a", 0.9, 1_700_000_000))
+            .deposit(make_deposit(&key, 0.9, 1_700_000_000))
             .await
             .unwrap();
         substrate
-            .deposit(make_deposit("agent-a", 0.9, 1_700_000_000))
+            .deposit(make_deposit(&key, 0.9, 1_700_000_000))
             .await
             .unwrap();
         let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
@@ -400,13 +505,13 @@ mod tests {
     #[tokio::test]
     async fn dual_source_alert_threshold_emits_alert_event() {
         let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
-        for agent in ["agent-a", "agent-b"] {
+        for key in [&signing_key_a(), &signing_key_b()] {
             substrate
-                .deposit(make_deposit(agent, 0.9, 1_700_000_000))
+                .deposit(make_deposit(key, 0.9, 1_700_000_000))
                 .await
                 .unwrap();
             substrate
-                .deposit(make_deposit(agent, 0.9, 1_700_000_000))
+                .deposit(make_deposit(key, 0.9, 1_700_000_000))
                 .await
                 .unwrap();
         }
@@ -422,10 +527,10 @@ mod tests {
     #[tokio::test]
     async fn dual_source_incident_threshold_emits_incident_event() {
         let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
-        for agent in ["agent-a", "agent-b"] {
+        for key in [&signing_key_a(), &signing_key_b()] {
             for _ in 0..3 {
                 substrate
-                    .deposit(make_deposit(agent, 0.9, 1_700_000_000))
+                    .deposit(make_deposit(key, 0.9, 1_700_000_000))
                     .await
                     .unwrap();
             }
@@ -447,19 +552,19 @@ mod tests {
         let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
         let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
 
-        for agent in ["agent-a", "agent-b"] {
+        for key in [&signing_key_a(), &signing_key_b()] {
             substrate
-                .deposit(make_deposit(agent, 1.1, 1_700_000_000))
+                .deposit(make_deposit(key, 1.1, 1_700_000_000))
                 .await
                 .unwrap();
         }
         let alert = monitor.evaluate_all(1_700_000_000).await.unwrap();
         assert_eq!(alert.current_mode, SwarmMode::Alert);
 
-        for agent in ["agent-a", "agent-b"] {
+        for key in [&signing_key_a(), &signing_key_b()] {
             for _ in 0..3 {
                 substrate
-                    .deposit(make_deposit(agent, 0.9, 1_700_000_010))
+                    .deposit(make_deposit(key, 0.9, 1_700_000_010))
                     .await
                     .unwrap();
             }
@@ -479,9 +584,9 @@ mod tests {
             1_700_000_000,
         );
 
-        for agent in ["agent-a", "agent-b"] {
+        for key in [&signing_key_a(), &signing_key_b()] {
             substrate
-                .deposit(make_deposit(agent, 1.1, 1_700_000_100))
+                .deposit(make_deposit(key, 1.1, 1_700_000_100))
                 .await
                 .unwrap();
         }

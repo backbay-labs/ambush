@@ -2,17 +2,22 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use axum::{Json, Router, routing::post};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use serde_json::json;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use swarm_consensus::{
+    ConsensusCommit, ConsensusCommittee, ConsensusGovernanceReceipt, ConsensusProposal,
+    GovernanceReceiptDecision,
+};
 use swarm_core::ThreatClass;
 use swarm_core::agent::{
-    AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
-    SwarmMode, SwarmModeState,
+    AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmMode,
+    SwarmModeState,
 };
 use swarm_core::config::{
     CircuitBreakerConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
@@ -21,10 +26,13 @@ use swarm_core::config::{
 };
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
+use swarm_crypto::{canonical_json_bytes, sha256_hex};
 use swarm_guard::{
     Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
 };
-use swarm_pheromone::{ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, PheromoneSubstrate};
+use swarm_pheromone::{
+    ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, PheromoneSubstrate,
+};
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
 use swarm_policy::static_gate::{StaticApprovalGate, scope_for_response_action};
 use swarm_policy::{
@@ -43,6 +51,7 @@ use swarm_runtime::{
     },
     escalation::ConcentrationMonitor,
     pounce_agent::PounceAgent,
+    tom_agent::{ContingencyLease, GovernanceDecision, GovernancePolicy, GovernancePolicyConfig},
 };
 use swarm_spine::{AuditResponseRecord, AuditTrail};
 use swarm_whisker::DetectionFinding;
@@ -418,7 +427,7 @@ fn test_mode_state() -> Arc<ArcSwap<SwarmModeState>> {
 }
 
 fn make_signed_deposit(
-    agent_id: &str,
+    _agent_label: &str,
     seed: u8,
     event_id: &str,
     threat_class: ThreatClass,
@@ -427,6 +436,7 @@ fn make_signed_deposit(
     timestamp: i64,
 ) -> PheromoneDeposit {
     let key = SigningKey::from_bytes(&[seed; 32]);
+    let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
     let mut deposit = PheromoneDeposit {
         indicator: serde_json::json!({
             "event_id": event_id,
@@ -443,7 +453,9 @@ fn make_signed_deposit(
         confidence,
         timestamp,
         decay_half_life: 3600.0,
-        agent_id: AgentId(agent_id.to_string()),
+        agent_id: derived_agent_id.clone(),
+        agent_identity: derived_agent_id.0,
+        agent_role: None,
         signature: Vec::new(),
         agent_key: Vec::new(),
     };
@@ -455,6 +467,8 @@ fn make_signed_deposit(
         timestamp: deposit.timestamp,
         decay_half_life: deposit.decay_half_life,
         agent_id: &deposit.agent_id,
+        agent_identity: &deposit.agent_identity,
+        agent_role: deposit.agent_role,
     };
     let payload_bytes = serde_json::to_vec(&payload).unwrap();
     let sig = key.sign(&payload_bytes);
@@ -499,34 +513,40 @@ fn sample_request_response_action(
     action: ResponseAction,
     severity: Severity,
 ) -> SwarmAction {
+    let mut evidence = json!({
+        "lineage": {
+            "hunt_id": hunt_id,
+            "event_id": event_id,
+            "indicator": {
+                "event_id": event_id,
+                "hunt_id": hunt_id,
+                "sensor": "dispatch_integration"
+            }
+        },
+        "escalation": {
+            "mode": "alert",
+            "mode_transition_at": 1_700_000_000,
+            "timestamp": 1_700_000_010,
+            "threat_class": ThreatClass::Execution,
+            "severity": severity,
+            "confidence": 0.97
+        },
+        "playbook_match": {
+            "threat_class": ThreatClass::Execution,
+            "severity": severity,
+            "min_confidence": 0.90,
+            "max_confidence": 1.0
+        }
+    });
+    if is_destructive_action(&action) {
+        evidence["governance_receipt"] =
+            sample_governance_receipt(&action, GovernanceReceiptDecision::Approve);
+    }
+
     SwarmAction::RequestResponse {
         hunt_id: HuntId(hunt_id.to_string()),
         action,
-        evidence: serde_json::json!({
-            "lineage": {
-                "hunt_id": hunt_id,
-                "event_id": event_id,
-                "indicator": {
-                    "event_id": event_id,
-                    "hunt_id": hunt_id,
-                    "sensor": "dispatch_integration"
-                }
-            },
-            "escalation": {
-                "mode": "alert",
-                "mode_transition_at": 1_700_000_000,
-                "timestamp": 1_700_000_010,
-                "threat_class": ThreatClass::Execution,
-                "severity": severity,
-                "confidence": 0.97
-            },
-            "playbook_match": {
-                "threat_class": ThreatClass::Execution,
-                "severity": severity,
-                "min_confidence": 0.90,
-                "max_confidence": 1.0
-            }
-        }),
+        evidence,
     }
 }
 
@@ -538,36 +558,171 @@ fn sample_governance_veto_action(
     governing_agent_id: AgentId,
     reason: &str,
 ) -> SwarmAction {
+    let mut evidence = json!({
+        "lineage": {
+            "hunt_id": hunt_id,
+            "event_id": event_id,
+            "indicator": {
+                "event_id": event_id,
+                "hunt_id": hunt_id,
+                "sensor": "dispatch_integration"
+            }
+        },
+        "escalation": {
+            "mode": "incident",
+            "mode_transition_at": 1_700_000_000,
+            "timestamp": 1_700_000_010,
+            "threat_class": ThreatClass::CommandAndControl,
+            "severity": severity,
+            "confidence": 0.99
+        },
+        "playbook_match": {
+            "threat_class": ThreatClass::CommandAndControl,
+            "severity": severity,
+            "min_confidence": 0.95,
+            "max_confidence": 1.0
+        }
+    });
+    evidence["governance_receipt"] =
+        sample_governance_receipt(&action, GovernanceReceiptDecision::Veto);
+
     SwarmAction::GovernanceVeto {
         hunt_id: HuntId(hunt_id.to_string()),
         action,
-        evidence: serde_json::json!({
-            "lineage": {
-                "hunt_id": hunt_id,
-                "event_id": event_id,
-                "indicator": {
-                    "event_id": event_id,
-                    "hunt_id": hunt_id,
-                    "sensor": "dispatch_integration"
-                }
-            },
-            "escalation": {
-                "mode": "incident",
-                "mode_transition_at": 1_700_000_000,
-                "timestamp": 1_700_000_010,
-                "threat_class": ThreatClass::CommandAndControl,
-                "severity": severity,
-                "confidence": 0.99
-            },
-            "playbook_match": {
-                "threat_class": ThreatClass::CommandAndControl,
-                "severity": severity,
-                "min_confidence": 0.95,
-                "max_confidence": 1.0
-            }
-        }),
+        evidence,
         governing_agent_id,
         reason: reason.to_string(),
+    }
+}
+
+fn is_destructive_action(action: &ResponseAction) -> bool {
+    matches!(
+        action,
+        ResponseAction::BlockEgress { .. }
+            | ResponseAction::IsolateHost { .. }
+            | ResponseAction::RevokeCredential { .. }
+    )
+}
+
+fn sample_governance_receipt(
+    action: &ResponseAction,
+    decision: GovernanceReceiptDecision,
+) -> serde_json::Value {
+    let signing_key = SigningKey::from_bytes(&[17; 32]);
+    let issued_by = AgentId::from_verifying_key(&signing_key.verifying_key());
+    let committee = ConsensusCommittee::new(vec![issued_by.clone()], 0).unwrap();
+    let proposal_payload = json!({
+        "action": action,
+        "decision": decision,
+    });
+    let commit = ConsensusCommit {
+        height: 1,
+        round: 0,
+        committee_id: committee.committee_id().to_string(),
+        proposal: ConsensusProposal {
+            proposal_id: sha256_hex(&canonical_json_bytes(&proposal_payload).unwrap()),
+            payload: proposal_payload,
+        },
+        prevote_tally: 1,
+        precommit_tally: 1,
+        commit_hash: sha256_hex(
+            &canonical_json_bytes(&json!({
+                "action": action,
+                "decision": decision,
+                "committee_id": committee.committee_id(),
+            }))
+            .unwrap(),
+        ),
+    };
+    serde_json::to_value(
+        ConsensusGovernanceReceipt::issue(
+            &commit,
+            "dispatch-integration-bootstrap",
+            &committee,
+            decision,
+            issued_by,
+            &signing_key,
+            1_700_000_000_010,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn sample_partition_governance_policy_with_ttl(ttl_ms: i64) -> Arc<GovernancePolicy> {
+    let base_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("current time should be after unix epoch")
+        .as_millis() as i64;
+    let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
+        contingency_lease_ttl_ms: ttl_ms,
+        contingency_blast_radius_cap: 1,
+    }));
+    policy.register_governor(
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&[23; 32]),
+    );
+    policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
+    policy.observe_health(
+        &AgentId::new("tom", "primary"),
+        &[AgentHealthEntry {
+            id: "tom-primary".to_string(),
+            role: AgentRole::Tom,
+            health: AgentHealth::Failed,
+        }],
+        base_ms + 10_000,
+    );
+    policy
+}
+
+fn sample_partition_governance_policy() -> Arc<GovernancePolicy> {
+    sample_partition_governance_policy_with_ttl(60_000)
+}
+
+fn sample_partition_request_response_action(
+    hunt_id: &str,
+    event_id: &str,
+    action: ResponseAction,
+    severity: Severity,
+    lease: &ContingencyLease,
+) -> SwarmAction {
+    let mut evidence = json!({
+        "lineage": {
+            "hunt_id": hunt_id,
+            "event_id": event_id,
+            "indicator": {
+                "event_id": event_id,
+                "hunt_id": hunt_id,
+                "sensor": "dispatch_integration"
+            }
+        },
+        "escalation": {
+            "mode": "incident",
+            "mode_transition_at": 1_700_000_000,
+            "timestamp": 1_700_000_010,
+            "threat_class": ThreatClass::CommandAndControl,
+            "severity": severity,
+            "confidence": 0.99
+        },
+        "playbook_match": {
+            "threat_class": ThreatClass::CommandAndControl,
+            "severity": severity,
+            "min_confidence": 0.95,
+            "max_confidence": 1.0
+        },
+        "contingency_lease": lease,
+        "governance_receipt": lease.governance_receipt.clone(),
+    });
+    if !is_destructive_action(&action) {
+        evidence
+            .as_object_mut()
+            .expect("evidence must be object")
+            .remove("contingency_lease");
+    }
+    SwarmAction::RequestResponse {
+        hunt_id: HuntId(hunt_id.to_string()),
+        action,
+        evidence,
     }
 }
 
@@ -827,6 +982,270 @@ async fn request_response_routes_through_authorize_and_execute() -> Result<(), B
 }
 
 #[tokio::test]
+async fn destructive_request_response_persists_governance_receipt() -> Result<(), Box<dyn Error>> {
+    let (gate, _evaluate_calls, _issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        Arc::clone(&runtime),
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router);
+    dispatcher.register(Box::new(OneShotRequestAgent::new(
+        AgentId::new("pounce", "primary"),
+        vec![sample_request_response_action(
+            "hunt-governance-1",
+            "evt-governance-1",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.10".to_string(),
+            },
+            Severity::Critical,
+        )],
+    )))?;
+
+    dispatcher.tick_once().await;
+
+    let audits = audits.lock().unwrap();
+    let AuditResponseRecord::Success(receipt) = &audits[0].response else {
+        panic!("expected success receipt, got {:?}", audits[0].response);
+    };
+    let governance = receipt
+        .audit
+        .governance
+        .as_ref()
+        .expect("governance audit missing");
+    assert_eq!(
+        governance.reason,
+        "consensus approved response action".to_string()
+    );
+    assert!(
+        governance
+            .receipt
+            .as_ref()
+            .is_some_and(serde_json::Value::is_object)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn partitioned_request_response_fails_closed_without_contingency_lease()
+-> Result<(), Box<dyn Error>> {
+    let governance_policy = sample_partition_governance_policy();
+    let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        Arc::clone(&runtime),
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(Arc::clone(&governance_policy));
+    dispatcher.register(Box::new(OneShotRequestAgent::new(
+        AgentId::new("pounce", "primary"),
+        vec![sample_request_response_action(
+            "hunt-partition-blocked-1",
+            "evt-partition-blocked-1",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.200".to_string(),
+            },
+            Severity::Critical,
+        )],
+    )))?;
+
+    dispatcher.tick_once().await;
+
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert!(audits.lock().unwrap().is_empty());
+    assert_eq!(
+        governance_policy
+            .status_report()
+            .unauthorized_partition_actions,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn partitioned_request_response_redeems_contingency_lease() -> Result<(), Box<dyn Error>> {
+    let governance_policy = sample_partition_governance_policy();
+    let action = ResponseAction::BlockEgress {
+        target: "203.0.113.210".to_string(),
+    };
+    let lease = match governance_policy.can_act(&action) {
+        GovernanceDecision::Allow {
+            contingency_lease: Some(lease),
+            ..
+        } => lease,
+        other => panic!("expected contingency lease, got {other:?}"),
+    };
+
+    let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        Arc::clone(&runtime),
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(Arc::clone(&governance_policy));
+    dispatcher.register(Box::new(OneShotRequestAgent::new(
+        AgentId::new("pounce", "primary"),
+        vec![sample_partition_request_response_action(
+            "hunt-partition-lease-1",
+            "evt-partition-lease-1",
+            action,
+            Severity::Critical,
+            &lease,
+        )],
+    )))?;
+
+    dispatcher.tick_once().await;
+
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    let audits = audits.lock().unwrap();
+    assert_eq!(audits.len(), 1);
+    let AuditResponseRecord::Success(receipt) = &audits[0].response else {
+        panic!("expected success receipt, got {:?}", audits[0].response);
+    };
+    assert_eq!(receipt.action, "block_egress");
+    assert_eq!(
+        governance_policy
+            .status_report()
+            .unauthorized_partition_actions,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn partitioned_request_response_rejects_expired_contingency_lease()
+-> Result<(), Box<dyn Error>> {
+    let base_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("current time should be after unix epoch")
+        .as_millis() as i64;
+    let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
+        contingency_lease_ttl_ms: 200,
+        contingency_blast_radius_cap: 1,
+    }));
+    governance_policy.register_governor(
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&[29; 32]),
+    );
+    governance_policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
+    governance_policy.observe_health(
+        &AgentId::new("tom", "primary"),
+        &[AgentHealthEntry {
+            id: "tom-primary".to_string(),
+            role: AgentRole::Tom,
+            health: AgentHealth::Failed,
+        }],
+        base_ms + 10,
+    );
+    let action = ResponseAction::BlockEgress {
+        target: "203.0.113.211".to_string(),
+    };
+    let lease = match governance_policy.can_act(&action) {
+        GovernanceDecision::Allow {
+            contingency_lease: Some(lease),
+            ..
+        } => lease,
+        other => panic!("expected contingency lease, got {other:?}"),
+    };
+    std::thread::sleep(Duration::from_millis(250));
+
+    let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        Arc::clone(&runtime),
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(Arc::clone(&governance_policy));
+    dispatcher.register(Box::new(OneShotRequestAgent::new(
+        AgentId::new("pounce", "primary"),
+        vec![sample_partition_request_response_action(
+            "hunt-partition-expired-1",
+            "evt-partition-expired-1",
+            action,
+            Severity::Critical,
+            &lease,
+        )],
+    )))?;
+
+    dispatcher.tick_once().await;
+
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert!(audits.lock().unwrap().is_empty());
+    assert_eq!(
+        governance_policy
+            .status_report()
+            .unauthorized_partition_actions,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn pounceagent_dry_run_routes_through_runtime_path() -> Result<(), Box<dyn Error>> {
     let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
     let executor = RecordingExecutor::default();
@@ -931,7 +1350,11 @@ async fn pounceagent_routes_same_escalation_only_once_per_session() -> Result<()
 
     let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
     let executor = RecordingExecutor::default();
-    let runtime = Arc::new(SwarmRuntime::new(RuntimeMode::DetectOnly, gate, executor.clone()));
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::DetectOnly,
+        gate,
+        executor.clone(),
+    ));
     let audits = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(RuntimeBackedRouter::new(
         Arc::clone(&runtime),
@@ -969,8 +1392,8 @@ async fn pounceagent_routes_same_escalation_only_once_per_session() -> Result<()
 }
 
 #[tokio::test]
-async fn empty_ruleset_policy_fails_closed_for_routed_pounce_request(
-) -> Result<(), Box<dyn Error>> {
+async fn empty_ruleset_policy_fails_closed_for_routed_pounce_request() -> Result<(), Box<dyn Error>>
+{
     let config = phase127_pheromone_config();
     let (substrate, dispatcher_substrate) = shared_test_substrate(config.clone());
     let mode_state = test_mode_state();
@@ -1018,15 +1441,18 @@ async fn empty_ruleset_policy_fails_closed_for_routed_pounce_request(
         "configurable.fail_closed.empty_ruleset"
     );
     let AuditResponseRecord::Skipped { reason } = &audits[0].response else {
-        panic!("expected skipped audit record, got {:?}", audits[0].response);
+        panic!(
+            "expected skipped audit record, got {:?}",
+            audits[0].response
+        );
     };
     assert!(reason.contains("no configurable policy rules loaded"));
     Ok(())
 }
 
 #[tokio::test]
-async fn expired_lease_routing_records_failure_audit_without_execution(
-) -> Result<(), Box<dyn Error>> {
+async fn expired_lease_routing_records_failure_audit_without_execution()
+-> Result<(), Box<dyn Error>> {
     let context = sample_context();
     let config = phase127_pheromone_config();
     let (substrate, dispatcher_substrate) = shared_test_substrate(config.clone());
@@ -1077,7 +1503,11 @@ async fn expired_lease_routing_records_failure_audit_without_execution(
     assert_eq!(audits.len(), 1);
     assert_eq!(audits[0].policy.rule_name, "test.allow");
     assert_eq!(
-        audits[0].policy.lease.as_ref().map(|lease| lease.expires_at_ms),
+        audits[0]
+            .policy
+            .lease
+            .as_ref()
+            .map(|lease| lease.expires_at_ms),
         Some(sample_context().now_ms)
     );
     let AuditResponseRecord::Failure(failure) = &audits[0].response else {
@@ -1101,8 +1531,8 @@ async fn expired_lease_routing_records_failure_audit_without_execution(
 }
 
 #[tokio::test]
-async fn burst_decay_burst_does_not_retrigger_pounceagent_before_cooldown_reset(
-) -> Result<(), Box<dyn Error>> {
+async fn burst_decay_burst_does_not_retrigger_pounceagent_before_cooldown_reset()
+-> Result<(), Box<dyn Error>> {
     let config = phase127_pheromone_config();
     let (substrate, dispatcher_substrate) = shared_test_substrate(config.clone());
     let mode_state = test_mode_state();
@@ -1111,7 +1541,11 @@ async fn burst_decay_burst_does_not_retrigger_pounceagent_before_cooldown_reset(
 
     let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
     let executor = RecordingExecutor::default();
-    let runtime = Arc::new(SwarmRuntime::new(RuntimeMode::DetectOnly, gate, executor.clone()));
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::DetectOnly,
+        gate,
+        executor.clone(),
+    ));
     let audits = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(RuntimeBackedRouter::new(
         Arc::clone(&runtime),
@@ -1355,6 +1789,7 @@ async fn governance_veto_records_failure_receipt_without_execution() -> Result<(
             "blocked destructive action while swarm unhealthy: whisker-primary:Degraded"
         )
     );
+    assert!(failure.details["audit"]["governance"]["receipt"].is_object());
     assert!(
         audits[0]
             .all_receipt_ids()

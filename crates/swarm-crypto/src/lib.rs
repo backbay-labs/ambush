@@ -8,7 +8,7 @@ pub mod signing;
 
 pub use canonical::canonicalize as canonicalize_json;
 pub use error::{Error, Result};
-pub use hashing::{Hash, sha256};
+pub use hashing::{Hash, hmac_sha256, hmac_sha256_hex, sha256};
 pub use merkle::{MerkleProof, MerkleTree, leaf_hash, node_hash};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

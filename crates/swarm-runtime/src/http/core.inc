@@ -1,6 +1,6 @@
 use crate::approval::{
     ApprovalError, ApprovalLedgerList, ApprovalLedgerLookup, ApprovalSetList, ApprovalSetReport,
-    DefaultApprovalHarness, ThresholdRule,
+    ApprovalVerdictStatus, DefaultApprovalHarness, ThresholdRule,
 };
 use crate::config::{RuntimeConfigError, load_config};
 use crate::control::{
@@ -35,6 +35,7 @@ use crate::review_workbench::{
     ReviewSessionPromotionReadiness, ReviewSessionPromotionReadinessList, ReviewSessionResolved,
     ReviewSessionReverifyRequest, ReviewWorkbenchError,
 };
+use crate::serve::serve_with_listener;
 use crate::service::OperatorStatusReport;
 use axum::extract::{Form, Path as RoutePath, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -43,12 +44,13 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swarm_core::config::SwarmConfig;
 use swarm_core::pheromone::{ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType};
-use swarm_crypto::Ed25519Signer;
+use swarm_crypto::DetachedSignature;
 
 /// Result directories required to expose authenticated operator artifacts through HTTP.
 #[derive(Debug, Clone)]
@@ -75,6 +77,8 @@ pub struct OperatorSurfacePaths {
     pub review_delegation_results_dir: PathBuf,
     pub approval_set_results_dir: PathBuf,
     pub approval_ledger_results_dir: PathBuf,
+    pub approval_verdict_results_dir: PathBuf,
+    pub approval_receipt_pack_results_dir: PathBuf,
 }
 
 /// Errors raised while building or serving the authenticated operator surface.
@@ -139,7 +143,10 @@ struct OperatorHttpState {
     workbench: Option<Arc<DefaultReviewWorkbenchHarness>>,
     approval: Option<Arc<DefaultApprovalHarness>>,
     prometheus: Option<CriticalPathMetrics>,
+    runtime_base_url: String,
     max_list_results: usize,
+    approval_receipt_signer_id: String,
+    approval_receipt_signing_key_env: String,
 }
 
 #[derive(Debug, Clone)]
@@ -280,7 +287,7 @@ struct ApprovalSetCreateRequest {
 #[derive(Debug, Deserialize)]
 struct ApprovalVoteAppendRequest {
     voter_id: String,
-    voter_signing_key: String,
+    signature: DetachedSignature,
 }
 
 struct OperatorApiError {
@@ -308,6 +315,14 @@ impl OperatorApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             error: "bad_request",
+            message: message.into(),
+        }
+    }
+
+    fn bad_gateway(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            error: "bad_gateway",
             message: message.into(),
         }
     }
@@ -446,6 +461,14 @@ impl LocalOperatorSurface {
         let config_path = config_path.into();
         let control = DefaultControlPlane::from_config(config_path.clone(), config.clone())?;
         let prometheus = control.stack.service.prometheus_metrics().cloned();
+        let approval_receipt_signer_id = paths
+            .as_ref()
+            .map(|value| value.evidence_signer_id.clone())
+            .unwrap_or_else(|| "local-approval-signer".to_string());
+        let approval_receipt_signing_key_env = paths
+            .as_ref()
+            .map(|value| value.evidence_signing_key_env.clone())
+            .unwrap_or_else(|| "SWARM_EVIDENCE_SIGNING_KEY".to_string());
         let (portfolio, governance_prep, maintenance, evidence, workbench, approval) =
             if let Some(paths) = paths {
                 let portfolio = DefaultEvolutionPortfolioHarness::from_path(
@@ -473,7 +496,10 @@ impl LocalOperatorSurface {
                     config.operator.auth.operator_id.clone(),
                     &paths,
                 )?;
-                let approval = DefaultApprovalHarness::from_paths(
+                let approval = DefaultApprovalHarness::from_path(
+                    &config_path,
+                    &paths.approval_verdict_results_dir,
+                    &paths.approval_receipt_pack_results_dir,
                     &paths.approval_set_results_dir,
                     &paths.approval_ledger_results_dir,
                 )?;
@@ -500,7 +526,10 @@ impl LocalOperatorSurface {
                 workbench,
                 approval,
                 prometheus,
+                runtime_base_url: config.operator.runtime_base_url.clone(),
                 max_list_results: config.operator.max_list_results,
+                approval_receipt_signer_id,
+                approval_receipt_signing_key_env,
             },
         })
     }
@@ -738,9 +767,14 @@ impl LocalOperatorSurface {
                 bind_addr: self.bind_addr,
                 source,
             })?;
-        axum::serve(listener, self.router(token))
-            .await
-            .map_err(OperatorHttpError::Serve)
+        serve_with_listener(
+            listener,
+            self.router(token),
+            self.state.control.stack.service.config.tls.clone(),
+            std::future::pending(),
+        )
+        .await
+        .map_err(OperatorHttpError::Serve)
     }
 }
 
@@ -952,6 +986,7 @@ async fn review_home_handler(
         state.max_list_results,
     );
     Ok(Html(render_review_home_page(
+        &state.runtime_base_url,
         &bundles,
         &packets,
         &sessions,
@@ -1538,21 +1573,14 @@ async fn approval_vote_append_handler(
     Json(request): Json<ApprovalVoteAppendRequest>,
 ) -> Result<Json<ApprovalLedgerLookup>, OperatorApiError> {
     let harness = approval_harness(&state)?;
-    let lookup = harness
+    harness
         .load_ledger(&ledger_id)
         .map_err(map_approval_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!("approval ledger `{ledger_id}` was not found"))
         })?;
-    let voter_signing_key = request.voter_signing_key.trim();
-    if voter_signing_key.is_empty() {
-        return Err(OperatorApiError::bad_request(
-            "voter_signing_key must not be empty",
-        ));
-    }
-    let signer = Ed25519Signer::from_secret_material(voter_signing_key);
     harness
-        .append_vote(&lookup.report.approval_set_id, &request.voter_id, &signer)
+        .append_signed_vote(&ledger_id, &request.voter_id, &request.signature)
         .map_err(map_approval_error)?;
     let updated = harness
         .load_ledger(&ledger_id)
@@ -1560,7 +1588,59 @@ async fn approval_vote_append_handler(
         .ok_or_else(|| {
             OperatorApiError::internal("approval ledger was updated but could not be reloaded")
         })?;
+    if updated.quorum_state.quorum_met {
+        let verdict = harness
+            .create_verdict(&updated.report.approval_set_id, &updated.report.ledger_id)
+            .map_err(map_approval_error)?;
+        if matches!(verdict.report.status, ApprovalVerdictStatus::Approved) {
+            let receipt_pack = harness
+                .export_receipt_pack(
+                    &verdict.report.verdict_id,
+                    &state.approval_receipt_signer_id,
+                    &state.approval_receipt_signing_key_env,
+                )
+                .map_err(map_approval_error)?;
+            resume_demo_approval(
+                &state.runtime_base_url,
+                &updated.report.approval_set_id,
+                &receipt_pack.report,
+            )
+            .await?;
+        }
+    }
     Ok(Json(updated))
+}
+
+async fn resume_demo_approval(
+    runtime_base_url: &str,
+    approval_set_id: &str,
+    receipt_pack: &crate::approval::ApprovalReceiptPackReport,
+) -> Result<(), OperatorApiError> {
+    let url = format!(
+        "{}/v1/demo/approvals/{}/resume",
+        runtime_base_url.trim_end_matches('/'),
+        approval_set_id
+    );
+    let response = reqwest::Client::new()
+        .post(url)
+        .json(&json!({ "receipt_pack": receipt_pack }))
+        .send()
+        .await
+        .map_err(|error| {
+            OperatorApiError::bad_gateway(format!(
+                "failed to resume demo approval `{approval_set_id}`: {error}"
+            ))
+        })?;
+    if response.status().is_success() {
+        return Ok(());
+    }
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Err(OperatorApiError::bad_gateway(format!(
+        "runtime resume endpoint returned {} for approval `{approval_set_id}`: {}",
+        status.as_u16(),
+        body
+    )))
 }
 
 async fn portfolio_handler(
@@ -2349,6 +2429,32 @@ fn render_review_layout(title: &str, subtitle: &str, body: &str) -> String {
             ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;}",
             ".card{background:#fff;border:1px solid #d7deeb;border-radius:18px;padding:18px;box-shadow:0 10px 25px rgba(29,36,51,.06);}",
             ".card h2,.card h3{margin-top:0;}",
+            ".dashboard-shell{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(320px,.85fr);gap:18px;margin-bottom:18px;}",
+            ".dashboard-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:16px;}",
+            ".metric-card{padding:16px;border-radius:16px;background:linear-gradient(160deg,#fff9ef,#eef5ff);border:1px solid #d7deeb;}",
+            ".metric-card h3{margin:0 0 8px;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:#6a7282;}",
+            ".kpi{font-size:28px;line-height:1.05;font-weight:800;letter-spacing:-.02em;}",
+            ".status-row{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;}",
+            ".status-banner{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;font-weight:700;font-size:12px;letter-spacing:.04em;text-transform:uppercase;}",
+            ".status-banner.ok{background:#ddf8e8;color:#15643a;}",
+            ".status-banner.warn{background:#fff1dc;color:#9a580a;}",
+            ".status-banner.err{background:#fde1e1;color:#9c2331;}",
+            ".status-dot{width:10px;height:10px;border-radius:999px;background:currentColor;}",
+            ".health-list,.timeline-list{list-style:none;padding:0;margin:0;}",
+            ".health-list{display:flex;flex-direction:column;gap:10px;}",
+            ".health-item{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 14px;border-radius:14px;border:1px solid #e0e6f0;background:#f8fafc;}",
+            ".timeline-list{display:flex;flex-direction:column;gap:10px;max-height:420px;overflow:auto;padding-right:4px;}",
+            ".timeline-item{padding:12px 14px;border-radius:14px;border:1px solid #dfe7f2;background:#f8fafc;border-left:4px solid #9fb2c8;}",
+            ".timeline-item.escalation{background:#fff1ea;border-left-color:#c2410c;}",
+            ".timeline-item.mode_transition{background:#edf4ff;border-left-color:#0f4f8a;}",
+            ".timeline-item.agent_health{background:#eef4ff;border-left-color:#2563eb;}",
+            ".timeline-item.response_execution{background:#f4f0ff;border-left-color:#7c3aed;}",
+            ".timeline-item.ingest{background:#eefbf5;border-left-color:#15803d;}",
+            ".timeline-title{display:flex;justify-content:space-between;gap:10px;align-items:baseline;margin-bottom:6px;}",
+            ".timeline-title strong{font-size:14px;}",
+            ".timeline-time{font-size:12px;color:#667085;white-space:nowrap;}",
+            ".dashboard-empty{padding:14px;border:1px dashed #cbd5e1;border-radius:14px;background:#fbfdff;color:#667085;}",
+            ".compact-table td,.compact-table th{padding:8px 6px;}",
             ".meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:16px 0;}",
             ".meta div{padding:12px 14px;border-radius:14px;background:#f7f9fc;border:1px solid #e0e6f0;}",
             ".meta dt{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#6a7282;font-weight:700;}",
@@ -2369,8 +2475,306 @@ fn render_review_layout(title: &str, subtitle: &str, body: &str) -> String {
             "details{margin-top:14px;}",
             "ul{padding-left:20px;}",
             ".muted{color:#667085;}",
+            "@media (max-width:980px){.dashboard-shell{grid-template-columns:1fr;}}",
             "@media (max-width:760px){.hero{flex-direction:column;}.nav{justify-content:flex-start;}}"
         )
+    )
+}
+
+fn render_demo_dashboard_panel(runtime_base_url: &str) -> String {
+    let runtime_base_url_json =
+        serde_json::to_string(runtime_base_url).unwrap_or_else(|_| "\"\"".to_string());
+    let script = r#"<script>
+(function () {
+  const runtimeBaseUrl = __RUNTIME_BASE_URL__;
+  const snapshotUrl = runtimeBaseUrl.replace(/\/$/, "") + "/v1/demo/dashboard";
+  const streamUrl = runtimeBaseUrl.replace(/\/$/, "") + "/v1/events/stream?types=" + encodeURIComponent([
+    "agent_health",
+    "concentration_snapshot",
+    "escalation",
+    "mode_transition",
+    "agent_action",
+    "response_execution",
+    "replay",
+    "ingest"
+  ].join(","));
+
+  const connection = document.getElementById("dashboard-connection");
+  const modeValue = document.getElementById("dashboard-mode");
+  const modeDetail = document.getElementById("dashboard-mode-detail");
+  const runtimeSource = document.getElementById("dashboard-runtime-source");
+  const escalationsValue = document.getElementById("dashboard-escalation-count");
+  const healthValue = document.getElementById("dashboard-health-count");
+  const healthList = document.getElementById("dashboard-agent-health");
+  const concentrationBody = document.getElementById("dashboard-concentrations");
+  const timeline = document.getElementById("dashboard-timeline");
+
+  let eventSource = null;
+  let latestHealth = new Map();
+
+  function setConnection(kind, label) {
+    connection.className = "status-banner " + kind;
+    connection.innerHTML = '<span class="status-dot"></span>' + label;
+  }
+
+  function titleCase(value) {
+    return String(value || "")
+      .split("_")
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+
+  function formatTime(epochMs) {
+    if (!epochMs) {
+      return "pending";
+    }
+    return new Date(epochMs).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  }
+
+  function renderMode(modeState) {
+    const mode = modeState && modeState.current ? modeState.current : "normal";
+    modeValue.textContent = titleCase(mode);
+    if (modeState && modeState.last_transition_at) {
+      const transitionMs = modeState.last_transition_at * 1000;
+      const threatClass = modeState.triggering_threat_class
+        ? titleCase(modeState.triggering_threat_class)
+        : "cooldown reset";
+      modeDetail.textContent = "Last transition " + formatTime(transitionMs) + " via " + threatClass;
+    } else {
+      modeDetail.textContent = "No escalation recorded in this runtime session.";
+    }
+  }
+
+  function renderHealth(entries) {
+    latestHealth = new Map((entries || []).map((entry) => [entry.id, entry]));
+    healthValue.textContent = String(entries.length);
+    if (!entries.length) {
+      healthList.innerHTML = '<li class="dashboard-empty">No registered agent health has been published yet.</li>';
+      return;
+    }
+    healthList.innerHTML = entries.map((entry) => {
+      const pillClass = entry.health === "healthy" ? "ready" : entry.health;
+      return '<li class="health-item"><div><strong>' + entry.id + '</strong><div class="muted">' +
+        titleCase(entry.role) + '</div></div><span class="pill ' + pillClass + '">' +
+        titleCase(entry.health) + '</span></li>';
+    }).join("");
+  }
+
+  function renderConcentrations(entries) {
+    const rows = (entries || []).map((entry) => {
+      return '<tr><td><strong>' + titleCase(entry.threat_class) + '</strong></td><td>' +
+        Number(entry.total_strength || 0).toFixed(2) + '</td><td>' +
+        String(entry.distinct_sources || 0) + '</td><td>' +
+        Number(entry.peak_confidence || 0).toFixed(2) + '</td></tr>';
+    }).join("");
+    concentrationBody.innerHTML = rows || '<tr><td colspan="4" class="dashboard-empty">No concentration data available yet.</td></tr>';
+  }
+
+  function timelineItem(kind, title, detail, epochMs) {
+    return '<li class="timeline-item ' + kind + '"><div class="timeline-title"><strong>' +
+      title + '</strong><span class="timeline-time">' + formatTime(epochMs) +
+      '</span></div><div class="muted">' + detail + '</div></li>';
+  }
+
+  function pushTimeline(kind, title, detail, epochMs) {
+    const markup = timelineItem(kind, title, detail, epochMs);
+    if (timeline.querySelector(".dashboard-empty")) {
+      timeline.innerHTML = markup;
+    } else {
+      timeline.insertAdjacentHTML("afterbegin", markup);
+    }
+    while (timeline.children.length > 30) {
+      timeline.removeChild(timeline.lastElementChild);
+    }
+  }
+
+  function renderEscalationSeed(records) {
+    if (!(records || []).length) {
+      timeline.innerHTML = '<li class="dashboard-empty">Waiting for live runtime events.</li>';
+      escalationsValue.textContent = "0";
+      return;
+    }
+    escalationsValue.textContent = String(records.length);
+    timeline.innerHTML = records.map((record) => {
+      const detail = titleCase(record.threat_class) + " strength " +
+        Number(record.total_strength || 0).toFixed(2) + " from " +
+        String(record.distinct_sources || 0) + " sources";
+      return timelineItem(
+        "escalation",
+        titleCase(record.mode) + " escalation",
+        detail,
+        (record.timestamp || 0) * 1000
+      );
+    }).join("");
+  }
+
+  function handleRuntimeEvent(event) {
+    switch (event.event_type) {
+      case "concentration_snapshot":
+        renderConcentrations(event.concentrations || []);
+        renderMode({ current: event.current_mode });
+        break;
+      case "agent_health": {
+        const next = Array.from(latestHealth.values());
+        const index = next.findIndex((entry) => entry.id === event.agent_id);
+        const entry = { id: event.agent_id, role: event.role, health: event.to };
+        if (index >= 0) {
+          next[index] = entry;
+        } else {
+          next.push(entry);
+        }
+        renderHealth(next.sort((left, right) => left.id.localeCompare(right.id)));
+        pushTimeline(
+          "agent_health",
+          event.agent_id + " health changed",
+          titleCase(event.role) + " is now " + titleCase(event.to),
+          event.emitted_at_ms
+        );
+        break;
+      }
+      case "escalation":
+        pushTimeline(
+          "escalation",
+          titleCase(event.level) + " escalation",
+          titleCase(event.threat_class) + " strength " + Number(event.total_strength || 0).toFixed(2) +
+            " from " + String(event.distinct_sources || 0) + " sources",
+          event.emitted_at_ms
+        );
+        break;
+      case "mode_transition":
+        renderMode({
+          current: event.to
+        });
+        pushTimeline(
+          "mode_transition",
+          titleCase(event.from) + " → " + titleCase(event.to),
+          event.reason || "mode transition",
+          event.emitted_at_ms
+        );
+        break;
+      case "response_execution":
+        pushTimeline(
+          "response_execution",
+          titleCase(event.response_kind) + " response",
+          event.agent_id + " · " + event.action_kind + " · " + titleCase(event.policy_verdict),
+          event.emitted_at_ms
+        );
+        break;
+      case "agent_action":
+        pushTimeline(
+          "agent_action",
+          event.agent_id + " action",
+          titleCase(event.action_kind),
+          event.emitted_at_ms
+        );
+        break;
+      case "ingest":
+        pushTimeline(
+          "ingest",
+          event.accepted ? "Telemetry accepted" : "Telemetry rejected",
+          event.event_id + " · " + event.source,
+          event.emitted_at_ms
+        );
+        break;
+      case "replay":
+        if (event.phase === "step") {
+          return;
+        }
+        pushTimeline(
+          "replay",
+          "Replay " + titleCase(event.phase),
+          event.scenario_name + " · " + String(event.total_steps || 0) + " steps",
+          event.emitted_at_ms
+        );
+        break;
+      default:
+        break;
+    }
+  }
+
+  async function bootstrap() {
+    runtimeSource.textContent = runtimeBaseUrl;
+    setConnection("warn", "Connecting");
+    try {
+      const response = await fetch(snapshotUrl, { credentials: "omit" });
+      if (!response.ok) {
+        throw new Error("snapshot returned " + response.status);
+      }
+      const snapshot = await response.json();
+      renderMode(snapshot.mode_state || { current: "normal" });
+      renderHealth(snapshot.agent_health || []);
+      renderConcentrations(snapshot.concentrations || []);
+      renderEscalationSeed(snapshot.recent_escalations || []);
+      setConnection("ok", "Live");
+    } catch (error) {
+      setConnection("err", "Snapshot Error");
+      timeline.innerHTML = '<li class="dashboard-empty">Unable to load runtime snapshot: ' +
+        String(error.message || error) + '</li>';
+    }
+
+    eventSource = new EventSource(streamUrl, { withCredentials: false });
+    eventSource.onopen = function () {
+      setConnection("ok", "Streaming");
+    };
+    eventSource.onerror = function () {
+      setConnection("warn", "Reconnecting");
+    };
+    [
+      "agent_health",
+      "concentration_snapshot",
+      "escalation",
+      "mode_transition",
+      "agent_action",
+      "response_execution",
+      "replay",
+      "ingest"
+    ].forEach((type) => {
+      eventSource.addEventListener(type, function (message) {
+        try {
+          handleRuntimeEvent(JSON.parse(message.data));
+        } catch (error) {
+          setConnection("warn", "Stream Decode Error");
+        }
+      });
+    });
+  }
+
+  bootstrap();
+})();
+</script>"#
+        .replace("__RUNTIME_BASE_URL__", &runtime_base_url_json);
+
+    format!(
+        "<section class=\"dashboard-shell\">\
+            <article class=\"card\">\
+                <div class=\"status-row\">\
+                    <div><h2>Live Demo Dashboard</h2><p class=\"muted\">Bootstrapped from the runtime snapshot endpoint and kept live from the typed runtime event stream.</p></div>\
+                    <div id=\"dashboard-connection\" class=\"status-banner warn\"><span class=\"status-dot\"></span>Connecting</div>\
+                </div>\
+                <div class=\"dashboard-grid\">\
+                    <div class=\"metric-card\"><h3>Swarm Mode</h3><div id=\"dashboard-mode\" class=\"kpi\">Loading</div><div id=\"dashboard-mode-detail\" class=\"muted\">Waiting for runtime snapshot.</div></div>\
+                    <div class=\"metric-card\"><h3>Agents Visible</h3><div id=\"dashboard-health-count\" class=\"kpi\">0</div><div class=\"muted\">Per-agent health over the live runtime stream.</div></div>\
+                    <div class=\"metric-card\"><h3>Escalations Seeded</h3><div id=\"dashboard-escalation-count\" class=\"kpi\">0</div><div class=\"muted\">Recent escalation records used to seed the timeline.</div></div>\
+                    <div class=\"metric-card\"><h3>Runtime Source</h3><div id=\"dashboard-runtime-source\" class=\"kpi\" style=\"font-size:18px;word-break:break-word;\">{runtime_base_url}</div><div class=\"muted\">Repo-owned base URL for snapshot and SSE reads.</div></div>\
+                </div>\
+            </article>\
+            <article class=\"card\">\
+                <h2>Runtime Timeline</h2>\
+                <p class=\"muted\">Escalations, mode shifts, and agent actions arrive here from the shared event backbone.</p>\
+                <ol id=\"dashboard-timeline\" class=\"timeline-list\"><li class=\"dashboard-empty\">Waiting for live runtime events.</li></ol>\
+            </article>\
+        </section>\
+        <section class=\"grid\" style=\"margin-bottom:18px;\">\
+            <article class=\"card\"><h2>Agent Health</h2><ul id=\"dashboard-agent-health\" class=\"health-list\"><li class=\"dashboard-empty\">Waiting for agent health.</li></ul></article>\
+            <article class=\"card\"><h2>Threat Concentrations</h2><table class=\"compact-table\"><thead><tr><th>Threat Class</th><th>Strength</th><th>Sources</th><th>Peak Confidence</th></tr></thead><tbody id=\"dashboard-concentrations\"><tr><td colspan=\"4\" class=\"dashboard-empty\">Waiting for concentration snapshots.</td></tr></tbody></table></article>\
+        </section>{script}",
+        runtime_base_url = escape_html(runtime_base_url),
+        script = script
     )
 }
 
@@ -3314,6 +3718,7 @@ fn render_maintenance_status_pill(status: OperatorMaintenanceStatus) -> String {
 }
 
 fn render_review_home_page(
+    runtime_base_url: &str,
     bundles: &EvidenceBundleList,
     packets: &PromotionEvidencePacketList,
     sessions: &ReviewSessionList,
@@ -3434,11 +3839,14 @@ fn render_review_home_page(
         );
     }
 
+    let demo_dashboard = render_demo_dashboard_panel(runtime_base_url);
+
     render_review_layout(
         "Local Evidence Review",
         "Authenticated local evidence workbench layered on the operator API. Portable signed review capsules and imported continuity are available, but rollout and governance remain out of scope.",
         &format!(
-            "<section class=\"grid\">\
+            "{demo_dashboard}\
+            <section class=\"grid\">\
                 <article class=\"card\"><h2>Review Scope</h2><p>Use this surface to inspect signed evidence bundles, verification reports, and promotion evidence packets without reading store files directly.</p><p class=\"muted\">Authentication stays on the existing bearer-token boundary, and follow-on write actions remain on the existing maintenance or rollout paths.</p></article>\
                 <article class=\"card\"><h2>Import Foreign Capsule</h2>\
                     <form class=\"toolbar\" method=\"post\" action=\"/v1/operator/review/capsule-imports\">\
@@ -3474,6 +3882,7 @@ fn render_review_home_page(
                 "/v1/operator/evidence/bundles",
                 "Open raw evidence JSON API"
             ),
+            demo_dashboard = demo_dashboard,
             bundle_rows = bundle_rows,
             packet_rows = packet_rows,
             session_rows = session_rows,
@@ -3865,11 +4274,17 @@ fn related_ref_path(kind: &str, id: &str) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{LocalOperatorSurface, OperatorSurfacePaths};
+    use crate::approval::DefaultApprovalHarness;
     use crate::evidence::{
         EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
         EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
         FileEvidenceBundleStore, FileEvidenceVerificationStore, FilePromotionEvidencePacketStore,
         PromotionEvidenceAttachment, PromotionEvidencePacket, PromotionEvidenceRecommendation,
+    };
+    use crate::ingest::{DemoProofPackage, IngestState, detect_http_router};
+    use crate::replay::{
+        ExperimentLineage, ReplayScenarioInput, ReplayScenarioManifest, ReplayScenarioMetadata,
+        ReplayScenarioStep,
     };
     use crate::service::EventExecutionContext;
     use axum::Json;
@@ -3894,7 +4309,8 @@ mod tests {
     use swarm_core::pheromone::{
         ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
     };
-    use swarm_core::types::{AgentId, Severity};
+    use swarm_core::types::{AgentId, ResponseAction, Severity};
+    use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
     use swarm_policy::ApprovalContext;
     use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
     use tokio::sync::{Mutex as AsyncMutex, oneshot};
@@ -3918,7 +4334,6 @@ mod tests {
         EvolutionPortfolioReport, FileEvolutionGovernanceReviewPacketStore,
         FileEvolutionPortfolioStore,
     };
-    use crate::replay::ExperimentLineage;
     use crate::review_workbench::DefaultReviewWorkbenchHarness;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3944,6 +4359,7 @@ mod tests {
             description: "operator surface config".to_string(),
             runtime: RuntimeSettings {
                 mode: crate::RuntimeMode::DetectOnly,
+                demo_mode: false,
                 telemetry_sources: vec![TelemetrySourceConfig {
                     name: "synthetic".to_string(),
                     subject: "telemetry.synthetic".to_string(),
@@ -3956,6 +4372,8 @@ mod tests {
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
                 governance_degraded_tick_threshold: 3,
+                partition_contingency_lease_ttl_ms: 300_000,
+                partition_contingency_blast_radius_cap: 1,
                 max_dead_letter_bytes: None,
             },
             detection: DetectionConfig {
@@ -3995,6 +4413,7 @@ mod tests {
                 max_pending_jobs: 4,
                 time_budget_ms: 250,
                 bundle_store: BundleStoreConfig::Memory,
+                ..InvestigationConfig::default()
             },
             correlation: CorrelationConfig {
                 enabled: true,
@@ -4005,15 +4424,25 @@ mod tests {
             },
             canary: CanaryConfig::default(),
             promotion: PromotionConfig::default(),
+            evolution: swarm_core::config::EvolutionConfig::default(),
+            deception: swarm_core::config::DeceptionConfig::default(),
+            memory: swarm_core::config::MemoryConfig::default(),
+            identity: swarm_core::config::IdentityConfig::default(),
+            platform_api: Default::default(),
             operator: OperatorSurfaceConfig {
                 enabled: true,
                 bind_addr: "127.0.0.1:7766".to_string(),
+                runtime_base_url: "http://127.0.0.1:9090".to_string(),
+                public_base_url: "http://127.0.0.1:7766".to_string(),
+                allowed_embed_origins: Vec::new(),
                 max_list_results: 2,
+                widget_token_ttl_secs: 900,
                 auth: OperatorAuthConfig {
                     operator_id: "local-operator".to_string(),
                     token_env: "SWARM_OPERATOR_TEST_TOKEN".to_string(),
                 },
             },
+            tls: None,
         }
     }
 
@@ -4126,6 +4555,7 @@ mod tests {
             NotificationChannelConfig {
                 target_url,
                 auth_token: Some("notify-secret".to_string()),
+                request_signature: None,
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig {
                     max_notifications: 5,
@@ -4562,6 +4992,8 @@ mod tests {
             review_delegation_results_dir: root.join("review-delegations"),
             approval_set_results_dir: root.join("approval-sets"),
             approval_ledger_results_dir: root.join("approval-ledgers"),
+            approval_verdict_results_dir: root.join("approval-verdicts"),
+            approval_receipt_pack_results_dir: root.join("approval-receipt-packs"),
         }
     }
 
@@ -4812,7 +5244,8 @@ mod tests {
         )
         .unwrap();
 
-        let agent_id = AgentId("whisker-a".to_string());
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
+        let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
         let _ = surface
             .state
             .control
@@ -4823,7 +5256,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &approval_context(1_700_000_000_010),
-                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
+                    signing_key: &signing_key,
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -4951,7 +5384,8 @@ mod tests {
             LocalOperatorSurface::from_config_and_paths("inline", operator_config(), paths)
                 .unwrap();
 
-        let agent_id = AgentId("whisker-a".to_string());
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
+        let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
         let processed = surface
             .state
             .control
@@ -4962,7 +5396,7 @@ mod tests {
                 EventExecutionContext {
                     agent_id: &agent_id,
                     approval: &approval_context(1_700_000_000_001),
-                    signing_key: &ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]),
+                    signing_key: &signing_key,
                 },
                 |_finding| {
                     Some(swarm_core::types::ResponseAction::DeployDecoy {
@@ -5179,6 +5613,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+            std::env::set_var("SWARM_EVIDENCE_SIGNING_KEY", "operator-demo-proof-key");
+        }
+
+        let root = unique_temp_dir("approval-resume");
+        let operator_vote_signer = Ed25519Signer::from_secret_material("local-operator-vote-key");
+        let operator_voter_id = format!("swarm:ed25519:{}", operator_vote_signer.public_key_hex());
+        let runtime_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let runtime_addr = runtime_listener.local_addr().unwrap();
+        let runtime_base_url = format!("http://{}", runtime_addr);
+
+        let runtime_config_path = root.join("runtime-config.yaml");
+        let mut runtime_config = operator_config();
+        runtime_config.runtime.mode = crate::RuntimeMode::LiveResponse;
+        runtime_config.runtime.demo_mode = true;
+        runtime_config.policy.human_gate_severity = swarm_core::types::Severity::Low;
+        runtime_config.operator.runtime_base_url = runtime_base_url.clone();
+        runtime_config.operator.auth.operator_id = operator_voter_id.clone();
+        let runtime_harness = DefaultApprovalHarness::from_path(
+            &runtime_config_path,
+            root.join("approval-verdicts"),
+            root.join("approval-receipt-packs"),
+            root.join("approval-sets"),
+            root.join("approval-ledgers"),
+        )
+        .unwrap();
+        let runtime_state = IngestState::from_config(runtime_config_path, runtime_config)
+            .unwrap()
+            .with_approval_harness(runtime_harness.clone());
+        let runtime_server = tokio::spawn(async move {
+            axum::serve(runtime_listener, detect_http_router(runtime_state))
+                .await
+                .unwrap();
+        });
+
+        let scenario_path = root.join("human-gate-demo.yaml");
+        let manifest = ReplayScenarioManifest {
+            name: "operator approval replay".to_string(),
+            description: "operator approval replay scenario".to_string(),
+            seed_time_ms: 1_700_000_200_000,
+            requested_by: "demo-operator".to_string(),
+            receipt_chain: Vec::new(),
+            metadata: ReplayScenarioMetadata::default(),
+            input: ReplayScenarioInput::Events {
+                events: vec![ReplayScenarioStep {
+                    action: ResponseAction::IsolateHost {
+                        host_id: "host-1".to_string(),
+                    },
+                    event: event("evt-approval-1", "powershell.exe -enc AAA="),
+                }],
+            },
+            expectations: Default::default(),
+        };
+        fs::write(&scenario_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+
+        let replay_response = reqwest::Client::new()
+            .post(format!("{runtime_base_url}/v1/demo/replay"))
+            .json(&json!({
+                "scenario_path": scenario_path.display().to_string(),
+                "pace_ms": 0,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(replay_response.status(), reqwest::StatusCode::OK);
+        let replay_json: Value = replay_response.json().await.unwrap();
+        let run_id = replay_json["run_id"].as_str().unwrap().to_string();
+
+        let approval_sets = runtime_harness.list_approval_sets().unwrap();
+        assert_eq!(approval_sets.total_count, 1);
+        let approval_set_id = approval_sets.sets[0].set_id.clone();
+        let approval_ledgers = runtime_harness
+            .list_ledgers(Some(&approval_set_id))
+            .unwrap();
+        assert_eq!(approval_ledgers.total_count, 1);
+        let approval_ledger_id = approval_ledgers.ledgers[0].ledger_id.clone();
+
+        let mut operator_demo_config = operator_config();
+        operator_demo_config.operator.runtime_base_url = runtime_base_url.clone();
+        let surface = LocalOperatorSurface::from_config_and_paths(
+            "inline",
+            operator_demo_config,
+            surface_paths(&root),
+        )
+        .unwrap();
+        let app = surface.router("secret-token".to_string());
+        let vote_payload = canonical_json_bytes(&json!({
+            "approval_set_id": approval_set_id.clone(),
+            "ledger_id": approval_ledger_id.clone(),
+            "voter_id": operator_voter_id.clone(),
+        }))
+        .unwrap();
+        let signature = operator_vote_signer.sign(&vote_payload);
+
+        let vote_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/operator/approval-ledgers/{approval_ledger_id}/vote"
+                    ))
+                    .header("authorization", "Bearer secret-token")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "voter_id": operator_voter_id,
+                            "signature": signature,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(vote_response.status(), StatusCode::OK);
+        let vote_body = to_bytes(vote_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let vote_json: Value = serde_json::from_slice(&vote_body).unwrap();
+        assert_eq!(vote_json["quorum_state"]["quorum_met"], true);
+
+        let proof_response = reqwest::Client::new()
+            .get(format!("{runtime_base_url}/v1/demo/proof"))
+            .query(&[("run_id", run_id.clone())])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(proof_response.status(), reqwest::StatusCode::OK);
+        let proof: DemoProofPackage = proof_response.json().await.unwrap();
+        assert_eq!(proof.run_id, run_id);
+        assert_eq!(proof.signed_receipts.len(), 1);
+        assert!(
+            proof
+                .decision_timeline
+                .iter()
+                .any(|entry| entry.stage == "approval_resumed")
+        );
+        assert!(!proof.final_incident.incident_id.is_empty());
+
+        runtime_server.abort();
+    }
+
+    #[tokio::test]
     async fn review_surface_renders_html_shell_and_evidence_pages() {
         unsafe {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
@@ -5220,6 +5799,9 @@ mod tests {
             .unwrap();
         let home_html = String::from_utf8(home_body.to_vec()).unwrap();
         assert!(home_html.contains("Local Evidence Review"));
+        assert!(home_html.contains("Live Demo Dashboard"));
+        assert!(home_html.contains("/v1/demo/dashboard"));
+        assert!(home_html.contains("/v1/events/stream"));
         assert!(home_html.contains("/v1/operator/review/evidence"));
         assert!(home_html.contains("promotion_evidence:promotion:red"));
 

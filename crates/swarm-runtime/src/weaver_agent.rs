@@ -29,7 +29,22 @@ impl WeaverAgent {
         investigation_store: ConfiguredInvestigationBundleStore,
         incident_store: ConfiguredIncidentStore,
     ) -> Self {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        Self::new_with_signing_key(
+            id,
+            SigningKey::generate(&mut OsRng),
+            correlation,
+            investigation_store,
+            incident_store,
+        )
+    }
+
+    pub fn new_with_signing_key(
+        id: AgentId,
+        signing_key: SigningKey,
+        correlation: CorrelationEngine,
+        investigation_store: ConfiguredInvestigationBundleStore,
+        incident_store: ConfiguredIncidentStore,
+    ) -> Self {
         let verifying_key = signing_key.verifying_key();
         Self {
             id,
@@ -93,6 +108,9 @@ impl SwarmAgent for WeaverAgent {
                     "incident_id": outcome.incident.incident_id,
                     "summary": outcome.incident.summary,
                     "included_hunts": outcome.incident.included_hunt_ids(),
+                    "correlation_confidence": outcome.incident.confidence_score,
+                    "graph_dimensions": outcome.incident.graph_dimensions,
+                    "included_members": outcome.incident.included_members,
                 }),
                 confidence: 1.0,
             });
@@ -109,7 +127,9 @@ impl SwarmAgent for WeaverAgent {
 fn investigation_hunts(pheromones: &[swarm_core::pheromone::PheromoneDeposit]) -> Vec<String> {
     let mut hunts = Vec::new();
     for deposit in pheromones {
-        if !deposit.agent_id.0.starts_with("stalker-") {
+        let from_stalker = matches!(deposit.agent_role, Some(AgentRole::Stalker))
+            || deposit.agent_id.0.starts_with("stalker-");
+        if !from_stalker {
             continue;
         }
         let Some(hunt_id) = deposit
@@ -183,9 +203,13 @@ mod tests {
             started_at_ms: Some(1_700_000_000_010),
             completed_at_ms: Some(1_700_000_000_020),
             status: InvestigationStatus::Completed,
+            priority: swarm_spine::InvestigationPriority::default(),
             summary: Some("completed investigation".to_string()),
             evidence_points: vec!["host_id=host-1".to_string()],
             correlation_keys: vec!["host:host-1".to_string()],
+            candidate_interpretations: Vec::new(),
+            vote_lineage: Vec::new(),
+            decision: swarm_spine::InvestigationDecision::default(),
             failure_reason: None,
         }
     }
@@ -200,6 +224,8 @@ mod tests {
                 timestamp: 1_700_000_000,
                 decay_half_life: 3600.0,
                 agent_id: AgentId::new("stalker", "primary"),
+                agent_identity: String::new(),
+                agent_role: None,
                 signature: Vec::new(),
                 agent_key: Vec::new(),
             }],
@@ -237,10 +263,14 @@ mod tests {
         );
 
         let actions = agent.tick(&env("hunt-1")).await.unwrap();
-        assert!(
-            actions
-                .iter()
-                .any(|action| matches!(action, SwarmAction::PublishFindings { .. }))
-        );
+        let findings = actions
+            .iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => Some(findings),
+                _ => None,
+            })
+            .expect("publish findings action");
+        assert!(findings.get("correlation_confidence").is_some());
+        assert!(findings.get("graph_dimensions").is_some());
     }
 }

@@ -38,6 +38,8 @@ immediate implementation.
 | `10` | ADR for telemetry-schema rollout in the monorepo | Proposed migration decision | Use before landing schema changes |
 | `11` | Candidate partition authority defaults | Proposed future policy | Use only if contingency leases are adopted |
 | `12` | Failure-injection experiment plan for resilience gaps | Proposed experimental supplement | Use to drive targeted hardening work |
+| `13` | ADR for minimal partition-authority type changes | Proposed follow-on ADR | Use before implementing `11`-driven type changes |
+| `14` | Detailed partition reconciliation and rollback study | Proposed follow-on protocol | Use with `07` and `11` when designing post-heal recovery |
 
 ## Canonical Decisions In This Revision
 

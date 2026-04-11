@@ -52,9 +52,27 @@ pub struct SwarmConfig {
     /// Controlled production-promotion settings for canary-approved detectors.
     #[serde(default)]
     pub promotion: PromotionConfig,
+    /// Repo-owned evolution settings for Kitten orchestration and drift detection.
+    #[serde(default)]
+    pub evolution: EvolutionConfig,
+    /// Repo-owned deception settings for the runtime Calico lane.
+    #[serde(default)]
+    pub deception: DeceptionConfig,
+    /// Repo-owned durable memory settings for the Sphinx knowledge graph.
+    #[serde(default)]
+    pub memory: MemoryConfig,
+    /// Repo-owned durable identity settings for runtime agents.
+    #[serde(default)]
+    pub identity: IdentityConfig,
+    /// Versioned platform read API settings.
+    #[serde(default)]
+    pub platform_api: PlatformApiConfig,
     /// Local authenticated operator-surface settings.
     #[serde(default, rename = "operator_surface")]
     pub operator: OperatorSurfaceConfig,
+    /// Optional shared TLS settings for both HTTP serve surfaces.
+    #[serde(default)]
+    pub tls: Option<TlsConfig>,
 }
 
 /// Whether the runtime simulates or executes live response actions.
@@ -71,6 +89,9 @@ pub enum RuntimeMode {
 pub struct RuntimeSettings {
     /// Whether responses execute or remain dry-run.
     pub mode: RuntimeMode,
+    /// Enable operator-facing demo endpoints such as replay injection and live event streaming.
+    #[serde(default)]
+    pub demo_mode: bool,
     /// Telemetry streams or subjects to subscribe to.
     pub telemetry_sources: Vec<TelemetrySourceConfig>,
     /// Maximum concurrent response executions.
@@ -95,6 +116,14 @@ pub struct RuntimeSettings {
     /// escalating an agent to Failed.
     #[serde(default = "default_governance_degraded_tick_threshold")]
     pub governance_degraded_tick_threshold: usize,
+    /// Maximum lifetime for pre-staged contingency leases that can be redeemed
+    /// during quorum loss.
+    #[serde(default = "default_partition_contingency_lease_ttl_ms")]
+    pub partition_contingency_lease_ttl_ms: i64,
+    /// Maximum number of distinct scoped destructive actions one contingency
+    /// lease may authorize during a partition window.
+    #[serde(default = "default_partition_contingency_blast_radius_cap")]
+    pub partition_contingency_blast_radius_cap: usize,
     /// Maximum size in bytes for dead-letter journal files before rotation.
     /// When set, journals exceeding this size are renamed with a timestamp
     /// suffix and a fresh file is started. When `None` (default), no rotation.
@@ -128,6 +157,10 @@ pub enum TelemetryBridgeConfig {
     GenericJson {
         #[serde(flatten)]
         config: Box<GenericJsonBridgeConfig>,
+    },
+    Sentinel {
+        #[serde(flatten)]
+        config: Box<SentinelBridgeConfig>,
     },
 }
 
@@ -166,6 +199,25 @@ pub struct GenericJsonBridgeConfig {
     #[serde(flatten)]
     pub source: JsonFileSourceConfig,
     pub mapping: FieldMappingConfig,
+}
+
+/// Sentinel Prometheus scrape bridge configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SentinelBridgeConfig {
+    pub endpoint: String,
+    #[serde(default = "default_sentinel_scrape_interval_ms")]
+    pub scrape_interval_ms: u64,
+    #[serde(default = "default_sentinel_scrape_timeout_ms")]
+    pub scrape_timeout_ms: u64,
+    #[serde(default = "default_thermal_anomaly_threshold_celsius")]
+    pub thermal_anomaly_threshold_celsius: f64,
+    #[serde(default = "default_memory_exhaustion_threshold_percent")]
+    pub memory_exhaustion_threshold_percent: f64,
+    #[serde(default = "default_disk_exhaustion_threshold_percent")]
+    pub disk_exhaustion_threshold_percent: f64,
+    #[serde(default = "default_max_consecutive_sentinel_failures")]
+    pub max_consecutive_failures: u32,
 }
 
 /// Config-driven field mapping for generic JSON bridge normalization.
@@ -342,6 +394,8 @@ impl DetectionConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct DetectorProfilesConfig {
     pub suspicious_process_tree: Option<serde_json::Value>,
+    pub fileless_execution: Option<serde_json::Value>,
+    pub behavioral_anomaly: Option<serde_json::Value>,
     pub dns_exfiltration: Option<serde_json::Value>,
     pub lateral_movement: Option<serde_json::Value>,
     pub credential_access: Option<serde_json::Value>,
@@ -349,6 +403,7 @@ pub struct DetectorProfilesConfig {
     pub persistence: Option<serde_json::Value>,
     pub supply_chain: Option<serde_json::Value>,
     pub network_connect: Option<serde_json::Value>,
+    pub infrastructure_anomaly: Option<serde_json::Value>,
 }
 
 /// Pheromone substrate tuning.
@@ -501,7 +556,10 @@ impl PolicyActionSelector {
             (self, action),
             (Self::BlockEgress, ResponseAction::BlockEgress { .. })
                 | (Self::IsolateHost, ResponseAction::IsolateHost { .. })
-                | (Self::RevokeCredential, ResponseAction::RevokeCredential { .. })
+                | (
+                    Self::RevokeCredential,
+                    ResponseAction::RevokeCredential { .. }
+                )
                 | (Self::DeployDecoy, ResponseAction::DeployDecoy { .. })
                 | (Self::Escalate, ResponseAction::Escalate { .. })
         )
@@ -668,6 +726,8 @@ pub struct NotificationChannelConfig {
     pub target_url: String,
     #[serde(default)]
     pub auth_token: Option<String>,
+    #[serde(default)]
+    pub request_signature: Option<RequestSignatureConfig>,
     #[serde(default = "default_response_adapter_timeout_ms")]
     pub timeout_ms: u64,
     #[serde(default)]
@@ -676,6 +736,17 @@ pub struct NotificationChannelConfig {
     pub quiet_hours: Option<QuietHoursConfig>,
     #[serde(default = "default_notification_dead_letter_path")]
     pub dead_letter_path: String,
+}
+
+/// Optional HMAC request signing for outbound notification channels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestSignatureConfig {
+    /// HTTP header receiving the detached signature value.
+    #[serde(default = "default_request_signature_header")]
+    pub header: String,
+    /// Shared secret used to compute an HMAC-SHA256 over the canonical JSON body.
+    pub secret: String,
 }
 
 /// In-memory rate limiting for one notification channel.
@@ -749,6 +820,15 @@ pub struct InvestigationConfig {
     /// Maximum time budget for one investigation run.
     #[serde(default = "default_investigation_time_budget_ms")]
     pub time_budget_ms: u64,
+    /// Priority boost accrued per second while a job waits in the async queue.
+    #[serde(default = "default_investigation_starvation_boost_per_second_basis_points")]
+    pub starvation_boost_per_second_basis_points: u16,
+    /// Upper bound on starvation boost so queue aging remains bounded.
+    #[serde(default = "default_investigation_max_starvation_boost_basis_points")]
+    pub max_starvation_boost_basis_points: u16,
+    /// Vote delta at or below which the final interpretation remains marked ambiguous.
+    #[serde(default = "default_investigation_ambiguity_margin_basis_points")]
+    pub ambiguity_margin_basis_points: u16,
     /// Store used for investigation bundles and lookup by stable identifiers.
     #[serde(default)]
     pub bundle_store: BundleStoreConfig,
@@ -835,6 +915,311 @@ pub struct PromotionConfig {
     pub max_total_detections: usize,
 }
 
+/// Repo-owned evolution settings for runtime Kitten orchestration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvolutionConfig {
+    /// Whether the runtime-owned evolution lane is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Sliding observation window used when evaluating recent drift evidence.
+    #[serde(default = "default_evolution_observation_window_secs")]
+    pub observation_window_secs: u64,
+    /// Fraction of degraded observations required to trigger drift.
+    #[serde(default = "default_evolution_drift_threshold_pct")]
+    pub drift_threshold_pct: f64,
+    /// Minimum number of recent observations required before drift can trigger.
+    #[serde(default = "default_evolution_minimum_observations")]
+    pub minimum_observations: usize,
+    /// Cooldown window after one proposal cycle completes.
+    #[serde(default = "default_evolution_cooldown_secs")]
+    pub cooldown_secs: u64,
+    /// Maximum number of candidate variants materialized during one cycle.
+    #[serde(default = "default_evolution_max_variants_per_cycle")]
+    pub max_variants_per_cycle: usize,
+    /// Number of ranked candidates preserved for proposal review.
+    #[serde(default = "default_evolution_shortlist_count")]
+    pub shortlist_count: usize,
+    /// Maximum number of persisted candidates retained across generations.
+    #[serde(default = "default_evolution_population_size")]
+    pub population_size: usize,
+    /// Tournament width used when selecting Pareto survivors from the population.
+    #[serde(default = "default_evolution_pareto_tournament_size")]
+    pub pareto_tournament_size: usize,
+    /// Maximum number of candidate proposals emitted during a rolling one-hour window.
+    #[serde(default = "default_evolution_max_proposals_per_hour")]
+    pub max_proposals_per_hour: usize,
+    /// Multi-objective weights used when scoring validated candidates.
+    #[serde(default)]
+    pub fitness_weights: EvolutionFitnessWeightsConfig,
+    /// Repo-owned formal safety gate settings for canary admission.
+    #[serde(default)]
+    pub safety_gate: EvolutionSafetyGateConfig,
+    /// Repo-owned assurance policy that turns robustness artifacts into gate inputs.
+    #[serde(default)]
+    pub assurance: EvolutionAssuranceConfig,
+    /// Durable artifact directories shared with the extracted evolution workflows.
+    #[serde(default)]
+    pub paths: EvolutionPathsConfig,
+}
+
+/// Weighting used by the runtime evolution lane when combining replay-derived objectives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvolutionFitnessWeightsConfig {
+    #[serde(default = "default_evolution_fitness_detection_rate_weight")]
+    pub detection_rate: f64,
+    #[serde(default = "default_evolution_fitness_false_positive_cost_weight")]
+    pub false_positive_cost: f64,
+    #[serde(default = "default_evolution_fitness_speed_weight")]
+    pub speed: f64,
+    #[serde(default = "default_evolution_fitness_threat_class_coverage_weight")]
+    pub threat_class_coverage: f64,
+}
+
+/// Repo-owned formal safety gate settings used before canary admission.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvolutionSafetyGateConfig {
+    /// Bundle files defining deterministic safety invariants for evolved candidates.
+    #[serde(default = "default_evolution_safety_invariant_bundle_paths")]
+    pub invariant_bundle_paths: Vec<String>,
+    /// Optional Z3-backed proof mode toggle for future strict verification.
+    #[serde(default)]
+    pub enable_z3: bool,
+}
+
+/// Repo-owned assurance policy used when deciding whether a candidate can stay queue-eligible.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvolutionAssuranceConfig {
+    /// Whether a solver summary must be present on proposal proofs.
+    #[serde(default)]
+    pub require_solver_summary: bool,
+    /// Global minimum detector catch rate required across the repo-owned evasion suite.
+    #[serde(default = "default_evolution_assurance_min_detector_catch_rate")]
+    pub min_detector_catch_rate: f64,
+    /// Solver outcomes that remain eligible under the assurance policy.
+    #[serde(default = "default_evolution_assurance_allowed_solver_statuses")]
+    pub allowed_solver_statuses: Vec<EvolutionAssuranceSolverStatusConfig>,
+    /// Per-detector catch-rate overrides for stricter or looser assurance floors.
+    #[serde(default)]
+    pub coverage_overrides: Vec<EvolutionAssuranceCoverageOverrideConfig>,
+    /// Bounded durable regeneration settings for harvested assurance cases.
+    #[serde(default)]
+    pub harvest: EvolutionAssuranceHarvestConfig,
+    /// Bounded signed waiver limits for one blocked assurance decision.
+    #[serde(default)]
+    pub waiver: EvolutionAssuranceWaiverConfig,
+}
+
+/// Repo-owned solver-proof outcomes allowed by the assurance policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvolutionAssuranceSolverStatusConfig {
+    Proved,
+    Counterexample,
+    Timeout,
+    Disabled,
+    Error,
+}
+
+/// Per-detector assurance floor override.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvolutionAssuranceCoverageOverrideConfig {
+    pub detector: String,
+    pub min_catch_rate: f64,
+}
+
+/// Repo-owned harvest settings for replayable assurance cases.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvolutionAssuranceHarvestConfig {
+    #[serde(default = "default_evolution_assurance_harvest_results_dir")]
+    pub results_dir: String,
+    #[serde(default = "default_evolution_assurance_harvest_max_cases_per_proposal")]
+    pub max_cases_per_proposal: usize,
+    #[serde(default = "default_evolution_assurance_harvest_max_events_per_case")]
+    pub max_events_per_case: usize,
+}
+
+/// Repo-owned limits that bound one signed assurance waiver.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvolutionAssuranceWaiverConfig {
+    #[serde(default)]
+    pub allowed_operator_ids: Vec<String>,
+    #[serde(default = "default_evolution_assurance_waiver_max_ttl_secs")]
+    pub max_ttl_secs: u64,
+    #[serde(default = "default_evolution_assurance_waiver_max_actionable_gap_count")]
+    pub max_actionable_gap_count: usize,
+}
+
+/// Durable artifact paths used by the runtime evolution lane.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvolutionPathsConfig {
+    #[serde(default = "default_replay_results_dir")]
+    pub replay_results_dir: String,
+    #[serde(default = "default_experiment_results_dir")]
+    pub experiment_results_dir: String,
+    #[serde(default = "default_verification_results_dir")]
+    pub verification_results_dir: String,
+    #[serde(default = "default_shadow_results_dir")]
+    pub shadow_results_dir: String,
+    #[serde(default = "default_strategy_memory_results_dir")]
+    pub strategy_memory_results_dir: String,
+    #[serde(default = "default_strategy_scorecard_results_dir")]
+    pub strategy_scorecard_results_dir: String,
+    #[serde(default = "default_evolution_proof_results_dir")]
+    pub evolution_proof_results_dir: String,
+    #[serde(default = "default_evolution_queue_results_dir")]
+    pub evolution_queue_results_dir: String,
+    #[serde(default = "default_evolution_selection_results_dir")]
+    pub evolution_selection_results_dir: String,
+    #[serde(default = "default_evolution_bridge_results_dir")]
+    pub evolution_bridge_results_dir: String,
+    #[serde(default = "default_evolution_handoff_results_dir")]
+    pub evolution_handoff_results_dir: String,
+    #[serde(default = "default_evolution_pressure_results_dir")]
+    pub evolution_pressure_results_dir: String,
+    #[serde(default = "default_evolution_draft_results_dir")]
+    pub evolution_draft_results_dir: String,
+    #[serde(default = "default_evolution_draft_promotion_results_dir")]
+    pub evolution_draft_promotion_results_dir: String,
+    #[serde(default = "default_evolution_materialization_results_dir")]
+    pub evolution_materialization_results_dir: String,
+    #[serde(default = "default_evolution_validation_results_dir")]
+    pub evolution_validation_results_dir: String,
+    #[serde(default = "default_evolution_reconciliation_results_dir")]
+    pub evolution_reconciliation_results_dir: String,
+    #[serde(default = "default_evolution_mutation_results_dir")]
+    pub evolution_mutation_results_dir: String,
+    #[serde(default = "default_evolution_mutation_materialization_batch_results_dir")]
+    pub evolution_mutation_materialization_batch_results_dir: String,
+    #[serde(default = "default_evolution_mutation_validation_batch_results_dir")]
+    pub evolution_mutation_validation_batch_results_dir: String,
+    #[serde(default = "default_evolution_ranking_results_dir")]
+    pub evolution_ranking_results_dir: String,
+    #[serde(default = "default_evolution_population_results_dir")]
+    pub evolution_population_results_dir: String,
+    #[serde(default = "default_canary_results_dir")]
+    pub canary_results_dir: String,
+}
+
+/// Repo-owned deception settings for the runtime Calico lane.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeceptionConfig {
+    /// Whether the runtime should register Calico and manage baseline deception assets.
+    pub enabled: bool,
+    /// Root directory where durable Calico lifecycle snapshots are persisted.
+    #[serde(default = "default_deception_lifecycle_results_dir")]
+    pub lifecycle_results_dir: String,
+    /// Maximum lifetime for one active decoy generation before Calico rotates it.
+    #[serde(default = "default_deception_rotation_interval_secs")]
+    pub rotation_interval_secs: u64,
+    /// Grace window a rotated decoy remains in the registry before cleanup.
+    #[serde(default = "default_deception_cleanup_grace_secs")]
+    pub cleanup_grace_secs: u64,
+    /// Blend weight used when deception interactions boost Kitten proposal fitness.
+    #[serde(default = "default_deception_interaction_fitness_weight")]
+    pub interaction_fitness_weight: f64,
+    /// Typed repo-owned playbook describing decoys, placement, and monitoring rules.
+    pub playbook: DeceptionPlaybookConfig,
+}
+
+/// Ordered deception entries the runtime Calico lane deploys and monitors.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeceptionPlaybookConfig {
+    /// Named deception entries evaluated in order.
+    pub entries: Vec<DeceptionPlaybookEntry>,
+}
+
+/// One deception asset definition in the repo-owned playbook.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeceptionPlaybookEntry {
+    /// Stable entry identifier used in audit and runtime evidence.
+    pub name: String,
+    /// Decoy asset type routed through `ResponseAction::DeployDecoy`.
+    pub decoy_type: String,
+    /// Zone or segment where the decoy should be placed.
+    pub target_zone: String,
+    /// Human-readable legitimate-host profile the decoy emulates.
+    pub host_profile: String,
+    /// Placement strategy for the asset.
+    #[serde(default)]
+    pub placement_strategy: DeceptionPlacementStrategy,
+    /// Monitoring rules used to treat interaction as high-confidence detection.
+    #[serde(default)]
+    pub monitoring: DeceptionMonitoringConfig,
+}
+
+/// Placement strategy for one deception asset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeceptionPlacementStrategy {
+    #[default]
+    Baseline,
+    HighValuePath,
+    NetworkSegment,
+    InvestigationZone,
+}
+
+/// Monitoring rules associated with one deception asset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeceptionMonitoringConfig {
+    /// File-system tripwires that should never be touched by legitimate activity.
+    pub file_paths: Vec<String>,
+    /// Honeypot ports that indicate suspicious network access when contacted.
+    pub honeypot_ports: Vec<u16>,
+    /// Canary credentials whose use indicates suspicious activity.
+    pub canary_credentials: Vec<String>,
+    /// Threat class used when this monitoring rule fires.
+    #[serde(default = "default_deception_monitoring_threat_class")]
+    pub threat_class: ThreatClass,
+    /// Severity attached to emitted Calico findings.
+    #[serde(default = "default_deception_monitoring_severity")]
+    pub severity: Severity,
+    /// Confidence attached to emitted Calico findings. Must stay high-fidelity.
+    #[serde(default = "default_deception_monitoring_confidence")]
+    pub confidence: f64,
+}
+
+/// Repo-owned Sphinx memory settings for the durable knowledge graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryConfig {
+    /// Whether the runtime should register Sphinx and persist graph state.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Root directory for the typed knowledge-graph store.
+    #[serde(default = "default_memory_knowledge_graph_results_dir")]
+    pub knowledge_graph_results_dir: String,
+    /// Correlation window for temporal graph edges between related engagements.
+    #[serde(default = "default_memory_temporal_window_secs")]
+    pub temporal_window_secs: u64,
+    /// Retention window in days before stale graph records are garbage-collected.
+    #[serde(default = "default_memory_knowledge_retention_days")]
+    pub knowledge_retention_days: u64,
+}
+
+/// Repo-owned durable identity settings for runtime agents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// Directory where runtime agent Ed25519 seeds are persisted.
+    #[serde(default = "default_agent_key_dir")]
+    pub agent_key_dir: String,
+    /// Directory where identity registry snapshots and continuity proofs are persisted.
+    #[serde(default = "default_identity_registry_dir")]
+    pub registry_dir: String,
+}
+
 /// Local authenticated operator-surface settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -845,12 +1230,65 @@ pub struct OperatorSurfaceConfig {
     /// Local socket address the surface listens on.
     #[serde(default = "default_operator_bind_addr")]
     pub bind_addr: String,
+    /// Runtime HTTP base URL the live demo dashboard reads from.
+    #[serde(default = "default_operator_runtime_base_url")]
+    pub runtime_base_url: String,
+    /// Public HTTP base URL external systems use for operator drilldown links.
+    #[serde(default = "default_operator_public_base_url")]
+    pub public_base_url: String,
+    /// Additional origins allowed to embed the minimal Providence widget.
+    #[serde(default)]
+    pub allowed_embed_origins: Vec<String>,
     /// Maximum records returned from list endpoints.
     #[serde(default = "default_operator_max_list_results")]
     pub max_list_results: usize,
+    /// Lifetime for Providence widget context tokens.
+    #[serde(default = "default_operator_widget_token_ttl_secs")]
+    pub widget_token_ttl_secs: u64,
     /// Bearer-token auth configuration for the local surface.
     #[serde(default)]
     pub auth: OperatorAuthConfig,
+}
+
+/// Versioned detect-server platform API settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformApiConfig {
+    /// Configured API keys allowed to read `/v2/api/*`.
+    #[serde(default)]
+    pub keys: Vec<PlatformApiKeyConfig>,
+}
+
+/// Shared TLS settings for the detect and operator HTTP servers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsConfig {
+    /// PEM-encoded server certificate chain.
+    pub cert_path: String,
+    /// PEM-encoded private key matching `cert_path`.
+    pub key_path: String,
+    /// Optional PEM-encoded client CA bundle enabling mTLS.
+    #[serde(default)]
+    pub client_ca_cert: Option<String>,
+}
+
+/// One scoped platform API key entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformApiKeyConfig {
+    /// Human-readable name attached to authenticated requests.
+    pub name: String,
+    /// Lowercase or uppercase SHA-256 hex digest of the raw key material.
+    pub key_hash: String,
+    /// Scopes granted to this key.
+    pub scopes: Vec<PlatformApiScope>,
+}
+
+/// Platform API scopes supported by the current detect-server read surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformApiScope {
+    Read,
 }
 
 /// Authentication settings for the local operator surface.
@@ -889,6 +1327,7 @@ impl TelemetryBridgeConfig {
             Self::Tetragon { config } => config.validate(),
             Self::CloudTrail { config } => config.validate(),
             Self::GenericJson { config } => config.validate(),
+            Self::Sentinel { config } => config.validate(),
         }
     }
 }
@@ -935,6 +1374,527 @@ impl TetragonBridgeConfig {
     }
 }
 
+impl PlatformApiConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        let mut names = BTreeSet::new();
+        let mut hashes = BTreeSet::new();
+
+        for (index, key) in self.keys.iter().enumerate() {
+            let name = key.name.trim();
+            if name.is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "platform_api.keys",
+                    reason: format!("key {index} name must not be empty"),
+                });
+            }
+            if !names.insert(name.to_string()) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "platform_api.keys",
+                    reason: format!("duplicate key name `{name}`"),
+                });
+            }
+
+            let key_hash = key.key_hash.trim();
+            if key_hash.len() != 64 || !key_hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "platform_api.keys.key_hash",
+                    reason: format!(
+                        "key {index} key_hash must be a 64-character SHA-256 hex digest"
+                    ),
+                });
+            }
+            if !hashes.insert(key_hash.to_ascii_lowercase()) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "platform_api.keys.key_hash",
+                    reason: format!("duplicate key hash for key `{name}`"),
+                });
+            }
+
+            if key.scopes.is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "platform_api.keys.scopes",
+                    reason: format!("key {index} must grant at least one scope"),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl TlsConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.cert_path.trim().is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "tls.cert_path",
+                reason: "must not be empty when TLS is configured".to_string(),
+            });
+        }
+        if self.key_path.trim().is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "tls.key_path",
+                reason: "must not be empty when TLS is configured".to_string(),
+            });
+        }
+        if self
+            .client_ca_cert
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "tls.client_ca_cert",
+                reason: "must not be empty when configured".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl EvolutionConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.observation_window_secs == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.observation_window_secs",
+                reason: "must be greater than zero when evolution is enabled".to_string(),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.drift_threshold_pct) || self.drift_threshold_pct == 0.0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.drift_threshold_pct",
+                reason: "must be greater than 0.0 and less than or equal to 1.0".to_string(),
+            });
+        }
+        if self.minimum_observations == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.minimum_observations",
+                reason: "must be greater than zero when evolution is enabled".to_string(),
+            });
+        }
+        if self.cooldown_secs == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.cooldown_secs",
+                reason: "must be greater than zero when evolution is enabled".to_string(),
+            });
+        }
+        if self.max_variants_per_cycle == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.max_variants_per_cycle",
+                reason: "must be greater than zero when evolution is enabled".to_string(),
+            });
+        }
+        if self.shortlist_count == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.shortlist_count",
+                reason: "must be greater than zero when evolution is enabled".to_string(),
+            });
+        }
+        if self.population_size == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.population_size",
+                reason: "must be greater than zero when evolution is enabled".to_string(),
+            });
+        }
+        if self.pareto_tournament_size == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.pareto_tournament_size",
+                reason: "must be greater than zero when evolution is enabled".to_string(),
+            });
+        }
+        if self.max_proposals_per_hour == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.max_proposals_per_hour",
+                reason: "must be greater than zero when evolution is enabled".to_string(),
+            });
+        }
+        self.fitness_weights.validate()?;
+        self.safety_gate.validate()?;
+        self.assurance.validate()?;
+        self.paths.validate()
+    }
+}
+
+impl EvolutionFitnessWeightsConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        let components = [
+            (
+                "evolution.fitness_weights.detection_rate",
+                self.detection_rate,
+            ),
+            (
+                "evolution.fitness_weights.false_positive_cost",
+                self.false_positive_cost,
+            ),
+            ("evolution.fitness_weights.speed", self.speed),
+            (
+                "evolution.fitness_weights.threat_class_coverage",
+                self.threat_class_coverage,
+            ),
+        ];
+        for (field, value) in components {
+            if !value.is_finite() || value < 0.0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field,
+                    reason: "must be finite and greater than or equal to zero".to_string(),
+                });
+            }
+        }
+        let total = self.detection_rate
+            + self.false_positive_cost
+            + self.speed
+            + self.threat_class_coverage;
+        if total <= 0.0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.fitness_weights",
+                reason: "at least one weight must be greater than zero".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl EvolutionSafetyGateConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.invariant_bundle_paths.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.safety_gate.invariant_bundle_paths",
+                reason: "must include at least one repo-owned invariant bundle when evolution is enabled"
+                    .to_string(),
+            });
+        }
+        for (index, path) in self.invariant_bundle_paths.iter().enumerate() {
+            if path.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "evolution.safety_gate.invariant_bundle_paths",
+                    reason: format!("entry {index} must not be empty"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl EvolutionAssuranceConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        if !self.min_detector_catch_rate.is_finite()
+            || !(0.0..=1.0).contains(&self.min_detector_catch_rate)
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.assurance.min_detector_catch_rate",
+                reason: "must be between 0.0 and 1.0".to_string(),
+            });
+        }
+        if self.allowed_solver_statuses.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.assurance.allowed_solver_statuses",
+                reason: "must include at least one allowed solver outcome".to_string(),
+            });
+        }
+        for (index, override_config) in self.coverage_overrides.iter().enumerate() {
+            if override_config.detector.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "evolution.assurance.coverage_overrides.detector",
+                    reason: format!("entry {index} must not be empty"),
+                });
+            }
+            if !override_config.min_catch_rate.is_finite()
+                || !(0.0..=1.0).contains(&override_config.min_catch_rate)
+            {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "evolution.assurance.coverage_overrides.min_catch_rate",
+                    reason: "must be between 0.0 and 1.0".to_string(),
+                });
+            }
+        }
+        self.harvest.validate()?;
+        self.waiver.validate()?;
+        Ok(())
+    }
+}
+
+impl EvolutionAssuranceHarvestConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        validate_non_empty("evolution.assurance.harvest.results_dir", &self.results_dir)?;
+        if self.max_cases_per_proposal == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.assurance.harvest.max_cases_per_proposal",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.max_events_per_case == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.assurance.harvest.max_events_per_case",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl EvolutionAssuranceWaiverConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.max_ttl_secs == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.assurance.waiver.max_ttl_secs",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.max_actionable_gap_count == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "evolution.assurance.waiver.max_actionable_gap_count",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        for (index, operator_id) in self.allowed_operator_ids.iter().enumerate() {
+            if operator_id.trim().is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "evolution.assurance.waiver.allowed_operator_ids",
+                    reason: format!("entry {index} must not be empty"),
+                });
+            }
+            if !operator_id.starts_with("swarm:ed25519:") {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "evolution.assurance.waiver.allowed_operator_ids",
+                    reason: format!("entry {index} must start with swarm:ed25519:"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl EvolutionPathsConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        validate_non_empty(
+            "evolution.paths.replay_results_dir",
+            &self.replay_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.experiment_results_dir",
+            &self.experiment_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.verification_results_dir",
+            &self.verification_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.shadow_results_dir",
+            &self.shadow_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.strategy_memory_results_dir",
+            &self.strategy_memory_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.strategy_scorecard_results_dir",
+            &self.strategy_scorecard_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_proof_results_dir",
+            &self.evolution_proof_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_queue_results_dir",
+            &self.evolution_queue_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_selection_results_dir",
+            &self.evolution_selection_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_bridge_results_dir",
+            &self.evolution_bridge_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_handoff_results_dir",
+            &self.evolution_handoff_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_pressure_results_dir",
+            &self.evolution_pressure_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_draft_results_dir",
+            &self.evolution_draft_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_draft_promotion_results_dir",
+            &self.evolution_draft_promotion_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_materialization_results_dir",
+            &self.evolution_materialization_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_validation_results_dir",
+            &self.evolution_validation_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_reconciliation_results_dir",
+            &self.evolution_reconciliation_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_mutation_results_dir",
+            &self.evolution_mutation_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_mutation_materialization_batch_results_dir",
+            &self.evolution_mutation_materialization_batch_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_mutation_validation_batch_results_dir",
+            &self.evolution_mutation_validation_batch_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_ranking_results_dir",
+            &self.evolution_ranking_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.evolution_population_results_dir",
+            &self.evolution_population_results_dir,
+        )?;
+        validate_non_empty(
+            "evolution.paths.canary_results_dir",
+            &self.canary_results_dir,
+        )?;
+        Ok(())
+    }
+}
+
+impl MemoryConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        validate_non_empty(
+            "memory.knowledge_graph_results_dir",
+            &self.knowledge_graph_results_dir,
+        )?;
+        if self.temporal_window_secs == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "memory.temporal_window_secs",
+                reason: "must be greater than zero when memory is enabled".to_string(),
+            });
+        }
+        if self.knowledge_retention_days == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "memory.knowledge_retention_days",
+                reason: "must be greater than zero when memory is enabled".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl DeceptionConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.enabled {
+            validate_non_empty(
+                "deception.lifecycle_results_dir",
+                &self.lifecycle_results_dir,
+            )?;
+            if self.rotation_interval_secs == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "deception.rotation_interval_secs",
+                    reason: "must be greater than zero when deception is enabled".to_string(),
+                });
+            }
+            if self.cleanup_grace_secs == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "deception.cleanup_grace_secs",
+                    reason: "must be greater than zero when deception is enabled".to_string(),
+                });
+            }
+            if !(0.0 < self.interaction_fitness_weight && self.interaction_fitness_weight <= 1.0) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "deception.interaction_fitness_weight",
+                    reason: "must be greater than zero and at most 1.0 when deception is enabled"
+                        .to_string(),
+                });
+            }
+        }
+        self.playbook.validate(self.enabled)
+    }
+}
+
+impl DeceptionPlaybookConfig {
+    fn validate(&self, enabled: bool) -> Result<(), ConfigValidationError> {
+        if enabled && self.entries.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "deception.playbook.entries",
+                reason: "must contain at least one entry when deception is enabled".to_string(),
+            });
+        }
+
+        let mut names = BTreeSet::new();
+        for (index, entry) in self.entries.iter().enumerate() {
+            entry.validate(index)?;
+            if !names.insert(entry.name.clone()) {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "deception.playbook.entries.name",
+                    reason: format!("duplicate playbook entry `{}`", entry.name),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl DeceptionPlaybookEntry {
+    fn validate(&self, index: usize) -> Result<(), ConfigValidationError> {
+        validate_non_empty("deception.playbook.entries.name", &self.name)?;
+        validate_non_empty("deception.playbook.entries.decoy_type", &self.decoy_type)?;
+        validate_non_empty("deception.playbook.entries.target_zone", &self.target_zone)?;
+        validate_non_empty(
+            "deception.playbook.entries.host_profile",
+            &self.host_profile,
+        )?;
+        self.monitoring.validate(index)
+    }
+}
+
+impl DeceptionMonitoringConfig {
+    fn validate(&self, index: usize) -> Result<(), ConfigValidationError> {
+        if self.file_paths.is_empty()
+            && self.honeypot_ports.is_empty()
+            && self.canary_credentials.is_empty()
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "deception.playbook.entries.monitoring",
+                reason: format!(
+                    "entry {index} must define at least one monitored file path, honeypot port, or canary credential"
+                ),
+            });
+        }
+        for path in &self.file_paths {
+            validate_non_empty("deception.playbook.entries.monitoring.file_paths", path)?;
+        }
+        for credential in &self.canary_credentials {
+            validate_non_empty(
+                "deception.playbook.entries.monitoring.canary_credentials",
+                credential,
+            )?;
+        }
+        if self.honeypot_ports.contains(&0) {
+            return Err(ConfigValidationError::InvalidField {
+                field: "deception.playbook.entries.monitoring.honeypot_ports",
+                reason: "must contain only positive port values".to_string(),
+            });
+        }
+        if !(0.95..=1.0).contains(&self.confidence) {
+            return Err(ConfigValidationError::InvalidField {
+                field: "deception.playbook.entries.monitoring.confidence",
+                reason: "must be between 0.95 and 1.0".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl IdentityConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        validate_non_empty("identity.agent_key_dir", &self.agent_key_dir)?;
+        validate_non_empty("identity.registry_dir", &self.registry_dir)
+    }
+}
+
 impl CloudTrailBridgeConfig {
     fn validate(&self) -> Result<(), ConfigValidationError> {
         self.source
@@ -947,6 +1907,56 @@ impl GenericJsonBridgeConfig {
         self.source
             .validate("runtime.telemetry_sources.bridge.path")?;
         self.mapping.validate()
+    }
+}
+
+impl SentinelBridgeConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.endpoint.trim().is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.telemetry_sources.bridge.endpoint",
+                reason: "must not be empty".to_string(),
+            });
+        }
+        if !self.endpoint.starts_with("http://") && !self.endpoint.starts_with("https://") {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.telemetry_sources.bridge.endpoint",
+                reason: "must start with http:// or https://".to_string(),
+            });
+        }
+        if self.scrape_interval_ms == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.telemetry_sources.bridge.scrape_interval_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.scrape_timeout_ms == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.telemetry_sources.bridge.scrape_timeout_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        validate_percentage_threshold(
+            "runtime.telemetry_sources.bridge.memory_exhaustion_threshold_percent",
+            self.memory_exhaustion_threshold_percent,
+        )?;
+        validate_percentage_threshold(
+            "runtime.telemetry_sources.bridge.disk_exhaustion_threshold_percent",
+            self.disk_exhaustion_threshold_percent,
+        )?;
+        if self.thermal_anomaly_threshold_celsius <= 0.0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.telemetry_sources.bridge.thermal_anomaly_threshold_celsius",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.max_consecutive_failures == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.telemetry_sources.bridge.max_consecutive_failures",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -1228,6 +2238,19 @@ fn validate_json_pointer(field: &'static str, pointer: &str) -> Result<(), Confi
     Ok(())
 }
 
+fn validate_percentage_threshold(
+    field: &'static str,
+    value: f64,
+) -> Result<(), ConfigValidationError> {
+    if !(0.0..=100.0).contains(&value) || value == 0.0 {
+        return Err(ConfigValidationError::InvalidField {
+            field,
+            reason: "must be greater than 0.0 and less than or equal to 100.0".to_string(),
+        });
+    }
+    Ok(())
+}
+
 impl SwarmConfig {
     /// Validate cross-field and semantic constraints after deserialization.
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
@@ -1243,6 +2266,9 @@ impl SwarmConfig {
                 field: "schema_version",
                 reason: "must be greater than zero".to_string(),
             });
+        }
+        if let Some(tls) = self.tls.as_ref() {
+            tls.validate()?;
         }
 
         if self.runtime.telemetry_sources.is_empty() {
@@ -1460,6 +2486,18 @@ impl SwarmConfig {
                 reason: "must be greater than zero".to_string(),
             });
         }
+        if self.runtime.partition_contingency_lease_ttl_ms <= 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.partition_contingency_lease_ttl_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.runtime.partition_contingency_blast_radius_cap == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.partition_contingency_blast_radius_cap",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
 
         self.response_adapter.validate()?;
         if let Some(config) = &self.siem_forward {
@@ -1512,6 +2550,26 @@ impl SwarmConfig {
                 return Err(ConfigValidationError::InvalidField {
                     field: "investigation.time_budget_ms",
                     reason: "must be greater than zero when investigation is enabled".to_string(),
+                });
+            }
+            if self.investigation.starvation_boost_per_second_basis_points == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "investigation.starvation_boost_per_second_basis_points",
+                    reason: "must be greater than zero when investigation is enabled".to_string(),
+                });
+            }
+            if self.investigation.max_starvation_boost_basis_points == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "investigation.max_starvation_boost_basis_points",
+                    reason: "must be greater than zero when investigation is enabled".to_string(),
+                });
+            }
+            if self.investigation.ambiguity_margin_basis_points == 0
+                || self.investigation.ambiguity_margin_basis_points > 10_000
+            {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "investigation.ambiguity_margin_basis_points",
+                    reason: "must be between 1 and 10000 when investigation is enabled".to_string(),
                 });
             }
         }
@@ -1646,10 +2704,72 @@ impl SwarmConfig {
             }
         }
 
+        if self.evolution.enabled {
+            self.evolution.validate()?;
+        }
+        if self.deception.enabled || !self.deception.playbook.entries.is_empty() {
+            self.deception.validate()?;
+        }
+        if self.memory.enabled {
+            self.memory.validate()?;
+        }
+        self.identity.validate()?;
+
+        self.platform_api.validate()?;
+
+        let needs_operator_urls = self.operator.enabled
+            || self
+                .notification_channels
+                .contains_key("providence_webhook");
+
+        if needs_operator_urls {
+            let runtime_base_url = self.operator.runtime_base_url.trim();
+            if runtime_base_url.is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.runtime_base_url",
+                    reason:
+                        "must not be empty when operator surface or Providence delivery is enabled"
+                            .to_string(),
+                });
+            }
+            if !(runtime_base_url.starts_with("http://")
+                || runtime_base_url.starts_with("https://"))
+            {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.runtime_base_url",
+                    reason: "must start with http:// or https://".to_string(),
+                });
+            }
+
+            let public_base_url = self.operator.public_base_url.trim();
+            if public_base_url.is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.public_base_url",
+                    reason:
+                        "must not be empty when operator surface or Providence delivery is enabled"
+                            .to_string(),
+                });
+            }
+            if !(public_base_url.starts_with("http://") || public_base_url.starts_with("https://"))
+            {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.public_base_url",
+                    reason: "must start with http:// or https://".to_string(),
+                });
+            }
+        }
+
         if self.operator.enabled {
             if self.operator.max_list_results == 0 {
                 return Err(ConfigValidationError::InvalidField {
                     field: "operator_surface.max_list_results",
+                    reason: "must be greater than zero when operator surface is enabled"
+                        .to_string(),
+                });
+            }
+            if self.operator.widget_token_ttl_secs == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.widget_token_ttl_secs",
                     reason: "must be greater than zero when operator surface is enabled"
                         .to_string(),
                 });
@@ -1679,6 +2799,27 @@ impl SwarmConfig {
                 return Err(ConfigValidationError::InvalidField {
                     field: "operator_surface.bind_addr",
                     reason: "must bind to a loopback address".to_string(),
+                });
+            }
+        }
+
+        for (index, origin) in self.operator.allowed_embed_origins.iter().enumerate() {
+            let trimmed = origin.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.allowed_embed_origins",
+                    reason: format!("origin {index} must not be empty"),
+                });
+            }
+            if !(trimmed == "'self'"
+                || trimmed.starts_with("http://")
+                || trimmed.starts_with("https://"))
+            {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.allowed_embed_origins",
+                    reason: format!(
+                        "origin {index} must be 'self' or start with http:// or https://"
+                    ),
                 });
             }
         }
@@ -1880,6 +3021,9 @@ impl NotificationChannelConfig {
         if let Some(auth_token) = &self.auth_token {
             validate_non_empty("notification_channels.auth_token", auth_token)?;
         }
+        if let Some(signature) = &self.request_signature {
+            signature.validate()?;
+        }
         validate_timeout("notification_channels.timeout_ms", self.timeout_ms)?;
         self.rate_limit.validate()?;
         if let Some(quiet_hours) = &self.quiet_hours {
@@ -1888,6 +3032,19 @@ impl NotificationChannelConfig {
         validate_non_empty(
             "notification_channels.dead_letter_path",
             &self.dead_letter_path,
+        )
+    }
+}
+
+impl RequestSignatureConfig {
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        validate_non_empty(
+            "notification_channels.request_signature.header",
+            &self.header,
+        )?;
+        validate_non_empty(
+            "notification_channels.request_signature.secret",
+            &self.secret,
         )
     }
 }
@@ -2044,6 +3201,11 @@ impl Default for InvestigationConfig {
             worker_count: default_investigation_worker_count(),
             max_pending_jobs: default_investigation_max_pending_jobs(),
             time_budget_ms: default_investigation_time_budget_ms(),
+            starvation_boost_per_second_basis_points:
+                default_investigation_starvation_boost_per_second_basis_points(),
+            max_starvation_boost_basis_points:
+                default_investigation_max_starvation_boost_basis_points(),
+            ambiguity_margin_basis_points: default_investigation_ambiguity_margin_basis_points(),
             bundle_store: BundleStoreConfig::default(),
         }
     }
@@ -2091,12 +3253,169 @@ impl Default for PromotionConfig {
     }
 }
 
+impl Default for EvolutionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            observation_window_secs: default_evolution_observation_window_secs(),
+            drift_threshold_pct: default_evolution_drift_threshold_pct(),
+            minimum_observations: default_evolution_minimum_observations(),
+            cooldown_secs: default_evolution_cooldown_secs(),
+            max_variants_per_cycle: default_evolution_max_variants_per_cycle(),
+            shortlist_count: default_evolution_shortlist_count(),
+            population_size: default_evolution_population_size(),
+            pareto_tournament_size: default_evolution_pareto_tournament_size(),
+            max_proposals_per_hour: default_evolution_max_proposals_per_hour(),
+            fitness_weights: EvolutionFitnessWeightsConfig::default(),
+            safety_gate: EvolutionSafetyGateConfig::default(),
+            assurance: EvolutionAssuranceConfig::default(),
+            paths: EvolutionPathsConfig::default(),
+        }
+    }
+}
+
+impl Default for EvolutionAssuranceConfig {
+    fn default() -> Self {
+        Self {
+            require_solver_summary: false,
+            min_detector_catch_rate: default_evolution_assurance_min_detector_catch_rate(),
+            allowed_solver_statuses: default_evolution_assurance_allowed_solver_statuses(),
+            coverage_overrides: Vec::new(),
+            harvest: EvolutionAssuranceHarvestConfig::default(),
+            waiver: EvolutionAssuranceWaiverConfig::default(),
+        }
+    }
+}
+
+impl Default for EvolutionAssuranceHarvestConfig {
+    fn default() -> Self {
+        Self {
+            results_dir: default_evolution_assurance_harvest_results_dir(),
+            max_cases_per_proposal: default_evolution_assurance_harvest_max_cases_per_proposal(),
+            max_events_per_case: default_evolution_assurance_harvest_max_events_per_case(),
+        }
+    }
+}
+
+impl Default for EvolutionAssuranceWaiverConfig {
+    fn default() -> Self {
+        Self {
+            allowed_operator_ids: Vec::new(),
+            max_ttl_secs: default_evolution_assurance_waiver_max_ttl_secs(),
+            max_actionable_gap_count: default_evolution_assurance_waiver_max_actionable_gap_count(),
+        }
+    }
+}
+
+impl Default for DeceptionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            lifecycle_results_dir: default_deception_lifecycle_results_dir(),
+            rotation_interval_secs: default_deception_rotation_interval_secs(),
+            cleanup_grace_secs: default_deception_cleanup_grace_secs(),
+            interaction_fitness_weight: default_deception_interaction_fitness_weight(),
+            playbook: DeceptionPlaybookConfig::default(),
+        }
+    }
+}
+
+impl Default for DeceptionMonitoringConfig {
+    fn default() -> Self {
+        Self {
+            file_paths: Vec::new(),
+            honeypot_ports: Vec::new(),
+            canary_credentials: Vec::new(),
+            threat_class: default_deception_monitoring_threat_class(),
+            severity: default_deception_monitoring_severity(),
+            confidence: default_deception_monitoring_confidence(),
+        }
+    }
+}
+
+impl Default for EvolutionFitnessWeightsConfig {
+    fn default() -> Self {
+        Self {
+            detection_rate: default_evolution_fitness_detection_rate_weight(),
+            false_positive_cost: default_evolution_fitness_false_positive_cost_weight(),
+            speed: default_evolution_fitness_speed_weight(),
+            threat_class_coverage: default_evolution_fitness_threat_class_coverage_weight(),
+        }
+    }
+}
+
+impl Default for EvolutionSafetyGateConfig {
+    fn default() -> Self {
+        Self {
+            invariant_bundle_paths: default_evolution_safety_invariant_bundle_paths(),
+            enable_z3: false,
+        }
+    }
+}
+
+impl Default for EvolutionPathsConfig {
+    fn default() -> Self {
+        Self {
+            replay_results_dir: default_replay_results_dir(),
+            experiment_results_dir: default_experiment_results_dir(),
+            verification_results_dir: default_verification_results_dir(),
+            shadow_results_dir: default_shadow_results_dir(),
+            strategy_memory_results_dir: default_strategy_memory_results_dir(),
+            strategy_scorecard_results_dir: default_strategy_scorecard_results_dir(),
+            evolution_proof_results_dir: default_evolution_proof_results_dir(),
+            evolution_queue_results_dir: default_evolution_queue_results_dir(),
+            evolution_selection_results_dir: default_evolution_selection_results_dir(),
+            evolution_bridge_results_dir: default_evolution_bridge_results_dir(),
+            evolution_handoff_results_dir: default_evolution_handoff_results_dir(),
+            evolution_pressure_results_dir: default_evolution_pressure_results_dir(),
+            evolution_draft_results_dir: default_evolution_draft_results_dir(),
+            evolution_draft_promotion_results_dir: default_evolution_draft_promotion_results_dir(),
+            evolution_materialization_results_dir: default_evolution_materialization_results_dir(),
+            evolution_validation_results_dir: default_evolution_validation_results_dir(),
+            evolution_reconciliation_results_dir: default_evolution_reconciliation_results_dir(),
+            evolution_mutation_results_dir: default_evolution_mutation_results_dir(),
+            evolution_mutation_materialization_batch_results_dir:
+                default_evolution_mutation_materialization_batch_results_dir(),
+            evolution_mutation_validation_batch_results_dir:
+                default_evolution_mutation_validation_batch_results_dir(),
+            evolution_ranking_results_dir: default_evolution_ranking_results_dir(),
+            evolution_population_results_dir: default_evolution_population_results_dir(),
+            canary_results_dir: default_canary_results_dir(),
+        }
+    }
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            knowledge_graph_results_dir: default_memory_knowledge_graph_results_dir(),
+            temporal_window_secs: default_memory_temporal_window_secs(),
+            knowledge_retention_days: default_memory_knowledge_retention_days(),
+        }
+    }
+}
+
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self {
+            agent_key_dir: default_agent_key_dir(),
+            registry_dir: default_identity_registry_dir(),
+        }
+    }
+}
+
+
 impl Default for OperatorSurfaceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             bind_addr: default_operator_bind_addr(),
+            runtime_base_url: default_operator_runtime_base_url(),
+            public_base_url: default_operator_public_base_url(),
+            allowed_embed_origins: Vec::new(),
             max_list_results: default_operator_max_list_results(),
+            widget_token_ttl_secs: default_operator_widget_token_ttl_secs(),
             auth: OperatorAuthConfig::default(),
         }
     }
@@ -2141,12 +3460,40 @@ const fn default_governance_degraded_tick_threshold() -> usize {
     3
 }
 
+const fn default_partition_contingency_lease_ttl_ms() -> i64 {
+    300_000
+}
+
+const fn default_partition_contingency_blast_radius_cap() -> usize {
+    1
+}
+
 const fn default_drain_timeout_ms() -> u64 {
     30_000
 }
 
 const fn default_max_heap_pressure() -> f64 {
     0.90
+}
+
+const fn default_deception_monitoring_threat_class() -> ThreatClass {
+    ThreatClass::InitialAccess
+}
+
+const fn default_deception_monitoring_severity() -> Severity {
+    Severity::High
+}
+
+const fn default_deception_monitoring_confidence() -> f64 {
+    0.99
+}
+
+fn default_agent_key_dir() -> String {
+    "data/agent-keys".to_string()
+}
+
+fn default_identity_registry_dir() -> String {
+    "data/agent-identity".to_string()
 }
 
 const fn default_investigation_worker_count() -> usize {
@@ -2189,6 +3536,10 @@ fn default_notification_dead_letter_path() -> String {
     "./notification-dead-letter.jsonl".to_string()
 }
 
+fn default_request_signature_header() -> String {
+    "X-Swarm-Signature".to_string()
+}
+
 fn default_elk_index() -> String {
     "swarm-findings".to_string()
 }
@@ -2221,6 +3572,30 @@ const fn default_tetragon_event_timeout_secs() -> u64 {
     30
 }
 
+const fn default_sentinel_scrape_interval_ms() -> u64 {
+    5_000
+}
+
+const fn default_sentinel_scrape_timeout_ms() -> u64 {
+    3_000
+}
+
+const fn default_thermal_anomaly_threshold_celsius() -> f64 {
+    60.0
+}
+
+const fn default_memory_exhaustion_threshold_percent() -> f64 {
+    85.0
+}
+
+const fn default_disk_exhaustion_threshold_percent() -> f64 {
+    90.0
+}
+
+const fn default_max_consecutive_sentinel_failures() -> u32 {
+    5
+}
+
 const fn default_deescalation_cooldown_secs() -> i64 {
     300
 }
@@ -2233,8 +3608,20 @@ fn default_operator_bind_addr() -> String {
     "127.0.0.1:7766".to_string()
 }
 
+fn default_operator_runtime_base_url() -> String {
+    "http://127.0.0.1:9090".to_string()
+}
+
+fn default_operator_public_base_url() -> String {
+    "http://127.0.0.1:7766".to_string()
+}
+
 const fn default_operator_max_list_results() -> usize {
     50
+}
+
+const fn default_operator_widget_token_ttl_secs() -> u64 {
+    15 * 60
 }
 
 fn default_operator_id() -> String {
@@ -2247,6 +3634,18 @@ fn default_operator_token_env() -> String {
 
 const fn default_investigation_max_pending_jobs() -> usize {
     16
+}
+
+const fn default_investigation_starvation_boost_per_second_basis_points() -> u16 {
+    15
+}
+
+const fn default_investigation_max_starvation_boost_basis_points() -> u16 {
+    2_500
+}
+
+const fn default_investigation_ambiguity_margin_basis_points() -> u16 {
+    900
 }
 
 fn validate_non_empty(field: &'static str, value: &str) -> Result<(), ConfigValidationError> {
@@ -2371,6 +3770,214 @@ const fn default_promotion_max_total_detections() -> usize {
     12
 }
 
+const fn default_evolution_observation_window_secs() -> u64 {
+    3_600
+}
+
+const fn default_evolution_drift_threshold_pct() -> f64 {
+    0.40
+}
+
+const fn default_evolution_minimum_observations() -> usize {
+    3
+}
+
+const fn default_evolution_cooldown_secs() -> u64 {
+    900
+}
+
+const fn default_evolution_max_variants_per_cycle() -> usize {
+    2
+}
+
+const fn default_evolution_shortlist_count() -> usize {
+    1
+}
+
+const fn default_evolution_population_size() -> usize {
+    16
+}
+
+const fn default_evolution_pareto_tournament_size() -> usize {
+    4
+}
+
+const fn default_evolution_max_proposals_per_hour() -> usize {
+    4
+}
+
+const fn default_evolution_assurance_min_detector_catch_rate() -> f64 {
+    0.25
+}
+
+fn default_evolution_assurance_allowed_solver_statuses() -> Vec<EvolutionAssuranceSolverStatusConfig>
+{
+    vec![
+        EvolutionAssuranceSolverStatusConfig::Proved,
+        EvolutionAssuranceSolverStatusConfig::Disabled,
+    ]
+}
+
+fn default_evolution_assurance_harvest_results_dir() -> String {
+    "data/evolution-assurance-cases".to_string()
+}
+
+const fn default_evolution_assurance_harvest_max_cases_per_proposal() -> usize {
+    8
+}
+
+const fn default_evolution_assurance_harvest_max_events_per_case() -> usize {
+    16
+}
+
+const fn default_evolution_assurance_waiver_max_ttl_secs() -> u64 {
+    3600
+}
+
+const fn default_evolution_assurance_waiver_max_actionable_gap_count() -> usize {
+    4
+}
+
+fn default_evolution_safety_invariant_bundle_paths() -> Vec<String> {
+    vec!["safety/office-detector-admission.yaml".to_string()]
+}
+
+const fn default_evolution_fitness_detection_rate_weight() -> f64 {
+    0.40
+}
+
+const fn default_evolution_fitness_false_positive_cost_weight() -> f64 {
+    0.30
+}
+
+const fn default_evolution_fitness_speed_weight() -> f64 {
+    0.15
+}
+
+const fn default_evolution_fitness_threat_class_coverage_weight() -> f64 {
+    0.15
+}
+
+fn default_replay_results_dir() -> String {
+    "data/replay-runs".to_string()
+}
+
+fn default_experiment_results_dir() -> String {
+    "data/experiments".to_string()
+}
+
+fn default_verification_results_dir() -> String {
+    "data/verifications".to_string()
+}
+
+fn default_shadow_results_dir() -> String {
+    "data/shadows".to_string()
+}
+
+fn default_strategy_memory_results_dir() -> String {
+    "data/strategy-memory".to_string()
+}
+
+fn default_memory_knowledge_graph_results_dir() -> String {
+    "data/knowledge-graph".to_string()
+}
+
+fn default_deception_lifecycle_results_dir() -> String {
+    "data/deception-lifecycle".to_string()
+}
+
+const fn default_deception_rotation_interval_secs() -> u64 {
+    86_400
+}
+
+const fn default_deception_cleanup_grace_secs() -> u64 {
+    3_600
+}
+
+const fn default_deception_interaction_fitness_weight() -> f64 {
+    0.15
+}
+
+const fn default_memory_temporal_window_secs() -> u64 {
+    3_600
+}
+
+const fn default_memory_knowledge_retention_days() -> u64 {
+    90
+}
+
+fn default_strategy_scorecard_results_dir() -> String {
+    "data/strategy-scorecards".to_string()
+}
+
+fn default_evolution_proof_results_dir() -> String {
+    "data/evolution-proofs".to_string()
+}
+
+fn default_evolution_queue_results_dir() -> String {
+    "data/evolution-queue".to_string()
+}
+
+fn default_evolution_selection_results_dir() -> String {
+    "data/evolution-selections".to_string()
+}
+
+fn default_evolution_bridge_results_dir() -> String {
+    "data/evolution-selection-bridges".to_string()
+}
+
+fn default_evolution_handoff_results_dir() -> String {
+    "data/evolution-handoffs".to_string()
+}
+
+fn default_evolution_pressure_results_dir() -> String {
+    "data/evolution-pressures".to_string()
+}
+
+fn default_evolution_draft_results_dir() -> String {
+    "data/evolution-drafts".to_string()
+}
+
+fn default_evolution_draft_promotion_results_dir() -> String {
+    "data/evolution-draft-promotions".to_string()
+}
+
+fn default_evolution_materialization_results_dir() -> String {
+    "data/evolution-materializations".to_string()
+}
+
+fn default_evolution_validation_results_dir() -> String {
+    "data/evolution-validation-bundles".to_string()
+}
+
+fn default_evolution_reconciliation_results_dir() -> String {
+    "data/evolution-reconciliations".to_string()
+}
+
+fn default_evolution_mutation_results_dir() -> String {
+    "data/evolution-mutations".to_string()
+}
+
+fn default_evolution_mutation_materialization_batch_results_dir() -> String {
+    "data/evolution-mutation-materialization-batches".to_string()
+}
+
+fn default_evolution_mutation_validation_batch_results_dir() -> String {
+    "data/evolution-mutation-validation-batches".to_string()
+}
+
+fn default_evolution_ranking_results_dir() -> String {
+    "data/evolution-rankings".to_string()
+}
+
+fn default_evolution_population_results_dir() -> String {
+    "data/evolution-population".to_string()
+}
+
+fn default_canary_results_dir() -> String {
+    "data/canaries".to_string()
+}
+
 const fn default_max_actions_per_scope_per_minute() -> usize {
     5
 }
@@ -2425,9 +4032,7 @@ impl PolicyRuleConfig {
             if window.start_hour_utc == window.end_hour_utc {
                 return Err(ConfigValidationError::InvalidField {
                     field: "policy.rules",
-                    reason: format!(
-                        "rule {index} time_window_utc must span at least one UTC hour"
-                    ),
+                    reason: format!("rule {index} time_window_utc must span at least one UTC hour"),
                 });
             }
         }
@@ -2439,11 +4044,15 @@ impl PolicyRuleConfig {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, InvestigationConfig,
-        OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PolicyActionSelector,
-        PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PolicyTimeWindowConfig,
-        PromotionConfig, ResponsePlaybookConfig, ResponsePlaybookRule, RuntimeMode,
-        RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DeceptionConfig,
+        DeceptionMonitoringConfig, DeceptionPlacementStrategy, DeceptionPlaybookConfig,
+        DeceptionPlaybookEntry, EvolutionAssuranceCoverageOverrideConfig, EvolutionConfig,
+        InvestigationConfig, NotificationChannelConfig, OperatorSurfaceConfig,
+        PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig,
+        PlatformApiScope, PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
+        PolicyTimeWindowConfig, PromotionConfig, RequestSignatureConfig, ResponsePlaybookConfig,
+        ResponsePlaybookRule, RuntimeMode, RuntimeSettings, SentinelBridgeConfig, SwarmConfig,
+        TelemetryBridgeConfig, TelemetrySourceConfig,
     };
     use crate::ThreatClass;
     use crate::types::{ResponseAction, Severity};
@@ -2455,6 +4064,7 @@ mod tests {
             description: "test config".to_string(),
             runtime: RuntimeSettings {
                 mode: RuntimeMode::LiveResponse,
+                demo_mode: false,
                 telemetry_sources: vec![TelemetrySourceConfig {
                     name: "synthetic".to_string(),
                     subject: "telemetry.synthetic.process".to_string(),
@@ -2467,6 +4077,8 @@ mod tests {
                 secret_dir: None,
                 agent_tick_timeout_ms: 500,
                 governance_degraded_tick_threshold: 3,
+                partition_contingency_lease_ttl_ms: 300_000,
+                partition_contingency_blast_radius_cap: 1,
                 max_dead_letter_bytes: None,
             },
             detection: super::DetectionConfig {
@@ -2499,7 +4111,13 @@ mod tests {
             correlation: CorrelationConfig::default(),
             canary: CanaryConfig::default(),
             promotion: PromotionConfig::default(),
+            evolution: EvolutionConfig::default(),
+            deception: DeceptionConfig::default(),
+            memory: super::MemoryConfig::default(),
+            identity: super::IdentityConfig::default(),
+            platform_api: PlatformApiConfig::default(),
             operator: OperatorSurfaceConfig::default(),
+            tls: None,
         }
     }
 
@@ -2542,6 +4160,487 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "invalid field `pheromone.backend.connect_timeout_ms`: must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn operator_surface_requires_http_runtime_base_url_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.runtime_base_url = "ws://127.0.0.1:9090".to_string();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.runtime_base_url`: must start with http:// or https://"
+        );
+    }
+
+    #[test]
+    fn deception_enabled_requires_non_empty_playbook() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.deception.enabled = true;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `deception.playbook.entries`: must contain at least one entry when deception is enabled"
+        );
+    }
+
+    #[test]
+    fn deception_monitoring_confidence_must_be_high_fidelity() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.deception.enabled = true;
+        config.deception.playbook = DeceptionPlaybookConfig {
+            entries: vec![DeceptionPlaybookEntry {
+                name: "finance-canary".to_string(),
+                decoy_type: "canary_token".to_string(),
+                target_zone: "finance".to_string(),
+                host_profile: "linux-app".to_string(),
+                placement_strategy: DeceptionPlacementStrategy::HighValuePath,
+                monitoring: DeceptionMonitoringConfig {
+                    file_paths: vec!["/srv/finance/payroll.xlsx".to_string()],
+                    honeypot_ports: Vec::new(),
+                    canary_credentials: Vec::new(),
+                    threat_class: crate::pheromone::ThreatClass::InitialAccess,
+                    severity: Severity::High,
+                    confidence: 0.80,
+                },
+            }],
+        };
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `deception.playbook.entries.monitoring.confidence`: must be between 0.95 and 1.0"
+        );
+    }
+
+    #[test]
+    fn deception_requires_non_empty_lifecycle_results_dir_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.deception.enabled = true;
+        config.deception.lifecycle_results_dir = " ".to_string();
+        config.deception.playbook = DeceptionPlaybookConfig {
+            entries: vec![DeceptionPlaybookEntry {
+                name: "finance-canary".to_string(),
+                decoy_type: "canary_token".to_string(),
+                target_zone: "finance".to_string(),
+                host_profile: "linux-app".to_string(),
+                placement_strategy: DeceptionPlacementStrategy::HighValuePath,
+                monitoring: DeceptionMonitoringConfig {
+                    file_paths: vec!["/srv/finance/payroll.xlsx".to_string()],
+                    honeypot_ports: Vec::new(),
+                    canary_credentials: Vec::new(),
+                    threat_class: crate::pheromone::ThreatClass::InitialAccess,
+                    severity: Severity::High,
+                    confidence: 0.99,
+                },
+            }],
+        };
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `deception.lifecycle_results_dir`: must not be empty"
+        );
+    }
+
+    #[test]
+    fn deception_requires_positive_rotation_interval_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.deception.enabled = true;
+        config.deception.rotation_interval_secs = 0;
+        config.deception.playbook = DeceptionPlaybookConfig {
+            entries: vec![DeceptionPlaybookEntry {
+                name: "finance-canary".to_string(),
+                decoy_type: "canary_token".to_string(),
+                target_zone: "finance".to_string(),
+                host_profile: "linux-app".to_string(),
+                placement_strategy: DeceptionPlacementStrategy::HighValuePath,
+                monitoring: DeceptionMonitoringConfig {
+                    file_paths: vec!["/srv/finance/payroll.xlsx".to_string()],
+                    honeypot_ports: Vec::new(),
+                    canary_credentials: Vec::new(),
+                    threat_class: crate::pheromone::ThreatClass::InitialAccess,
+                    severity: Severity::High,
+                    confidence: 0.99,
+                },
+            }],
+        };
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `deception.rotation_interval_secs`: must be greater than zero when deception is enabled"
+        );
+    }
+
+    #[test]
+    fn operator_surface_requires_http_public_base_url_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.public_base_url = "ws://127.0.0.1:7766".to_string();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.public_base_url`: must start with http:// or https://"
+        );
+    }
+
+    #[test]
+    fn operator_surface_requires_positive_widget_token_ttl_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.widget_token_ttl_secs = 0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.widget_token_ttl_secs`: must be greater than zero when operator surface is enabled"
+        );
+    }
+
+    #[test]
+    fn operator_surface_rejects_invalid_embed_origin() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.allowed_embed_origins = vec!["ftp://providence.example".to_string()];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.allowed_embed_origins`: origin 0 must be 'self' or start with http:// or https://"
+        );
+    }
+
+    #[test]
+    fn platform_api_rejects_invalid_key_hash() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.platform_api.keys = vec![PlatformApiKeyConfig {
+            name: "reader".to_string(),
+            key_hash: "not-a-sha".to_string(),
+            scopes: vec![PlatformApiScope::Read],
+        }];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `platform_api.keys.key_hash`: key 0 key_hash must be a 64-character SHA-256 hex digest"
+        );
+    }
+
+    #[test]
+    fn notification_request_signature_requires_non_empty_secret() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.notification_channels.insert(
+            "providence_webhook".to_string(),
+            NotificationChannelConfig {
+                target_url: "https://providence.example/incidents".to_string(),
+                auth_token: Some("@secret:providence_api_token".to_string()),
+                request_signature: Some(RequestSignatureConfig {
+                    header: "X-Swarm-Signature".to_string(),
+                    secret: "   ".to_string(),
+                }),
+                timeout_ms: 5_000,
+                rate_limit: super::NotificationRateLimitConfig::default(),
+                quiet_hours: None,
+                dead_letter_path: "./notification-providence.jsonl".to_string(),
+            },
+        );
+        config.notification_routing.rules = vec![super::RoutingRule {
+            min_severity: Some(Severity::High),
+            threat_class: Some(ThreatClass::Execution),
+            utc_start_hour: None,
+            utc_end_hour: None,
+            channels: vec!["providence_webhook".to_string()],
+        }];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `notification_channels.request_signature.secret`: must not be empty"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_non_zero_drift_threshold_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.drift_threshold_pct = 0.0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.drift_threshold_pct`: must be greater than 0.0 and less than or equal to 1.0"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_non_empty_results_paths_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.paths.evolution_validation_results_dir = " ".to_string();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.paths.evolution_validation_results_dir`: must not be empty"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_positive_hourly_proposal_limit_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.max_proposals_per_hour = 0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.max_proposals_per_hour`: must be greater than zero when evolution is enabled"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_non_zero_fitness_weight_total_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.fitness_weights.detection_rate = 0.0;
+        config.evolution.fitness_weights.false_positive_cost = 0.0;
+        config.evolution.fitness_weights.speed = 0.0;
+        config.evolution.fitness_weights.threat_class_coverage = 0.0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.fitness_weights`: at least one weight must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_non_empty_safety_invariant_bundle_paths_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.safety_gate.invariant_bundle_paths.clear();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.safety_gate.invariant_bundle_paths`: must include at least one repo-owned invariant bundle when evolution is enabled"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_non_empty_canary_results_dir_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.paths.canary_results_dir = " ".to_string();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.paths.canary_results_dir`: must not be empty"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_probability_assurance_floor_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.assurance.min_detector_catch_rate = 1.5;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.assurance.min_detector_catch_rate`: must be between 0.0 and 1.0"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_non_empty_allowed_solver_statuses_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.assurance.allowed_solver_statuses.clear();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.assurance.allowed_solver_statuses`: must include at least one allowed solver outcome"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_non_empty_assurance_override_detector_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.assurance.coverage_overrides =
+            vec![EvolutionAssuranceCoverageOverrideConfig {
+                detector: " ".to_string(),
+                min_catch_rate: 0.5,
+            }];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.assurance.coverage_overrides.detector`: entry 0 must not be empty"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_non_empty_assurance_harvest_results_dir_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.assurance.harvest.results_dir = " ".to_string();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.assurance.harvest.results_dir`: must not be empty"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_positive_assurance_waiver_ttl_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.assurance.waiver.max_ttl_secs = 0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.assurance.waiver.max_ttl_secs`: must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn evolution_requires_ed25519_assurance_waiver_operator_ids_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.evolution.enabled = true;
+        config.evolution.assurance.waiver.allowed_operator_ids = vec!["local-operator".to_string()];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `evolution.assurance.waiver.allowed_operator_ids`: entry 0 must start with swarm:ed25519:"
+        );
+    }
+
+    #[test]
+    fn memory_requires_non_empty_results_dir_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.memory.enabled = true;
+        config.memory.knowledge_graph_results_dir = " ".to_string();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `memory.knowledge_graph_results_dir`: must not be empty"
+        );
+    }
+
+    #[test]
+    fn memory_requires_positive_temporal_window_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.memory.enabled = true;
+        config.memory.temporal_window_secs = 0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `memory.temporal_window_secs`: must be greater than zero when memory is enabled"
+        );
+    }
+
+    #[test]
+    fn memory_requires_positive_retention_days_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.memory.enabled = true;
+        config.memory.knowledge_retention_days = 0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `memory.knowledge_retention_days`: must be greater than zero when memory is enabled"
+        );
+    }
+
+    #[test]
+    fn identity_requires_non_empty_agent_key_dir() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.identity.agent_key_dir = "   ".to_string();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `identity.agent_key_dir`: must not be empty"
+        );
+    }
+
+    #[test]
+    fn identity_requires_non_empty_registry_dir() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.identity.registry_dir = "   ".to_string();
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `identity.registry_dir`: must not be empty"
+        );
+    }
+
+    #[test]
+    fn sentinel_bridge_requires_http_endpoint() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.runtime.telemetry_sources = vec![TelemetrySourceConfig {
+            name: "sentinel-primary".to_string(),
+            subject: String::new(),
+            bridge: Some(TelemetryBridgeConfig::Sentinel {
+                config: Box::new(SentinelBridgeConfig {
+                    endpoint: "127.0.0.1:9100/metrics".to_string(),
+                    scrape_interval_ms: 5_000,
+                    scrape_timeout_ms: 3_000,
+                    thermal_anomaly_threshold_celsius: 60.0,
+                    memory_exhaustion_threshold_percent: 85.0,
+                    disk_exhaustion_threshold_percent: 90.0,
+                    max_consecutive_failures: 5,
+                }),
+            }),
+        }];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `runtime.telemetry_sources.bridge.endpoint`: must start with http:// or https://"
         );
     }
 
@@ -2677,6 +4776,7 @@ mod tests {
             "description": "test config",
             "runtime": {
                 "mode": "live_response",
+                "demo_mode": false,
                 "telemetry_sources": [
                     {
                         "name": "synthetic",
@@ -2810,6 +4910,7 @@ mod tests {
             "description": "test config",
             "runtime": {
                 "mode": "live_response",
+                "demo_mode": false,
                 "telemetry_sources": [
                     {
                         "name": "synthetic",
@@ -2917,6 +5018,38 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "invalid field `policy.rules`: rule 0 max_actions_per_agent_per_minute must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn investigation_requires_positive_starvation_boost_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.investigation.enabled = true;
+        config
+            .investigation
+            .starvation_boost_per_second_basis_points = 0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `investigation.starvation_boost_per_second_basis_points`: must be greater than zero when investigation is enabled"
+        );
+    }
+
+    #[test]
+    fn investigation_requires_ambiguity_margin_within_basis_point_range() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.investigation.enabled = true;
+        config.investigation.ambiguity_margin_basis_points = 10_001;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `investigation.ambiguity_margin_basis_points`: must be between 1 and 10000 when investigation is enabled"
         );
     }
 }

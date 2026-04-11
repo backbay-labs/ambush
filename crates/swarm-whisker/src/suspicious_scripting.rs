@@ -45,9 +45,21 @@ pub struct SuspiciousScriptingDetector {
 
 impl Default for SuspiciousScriptingDetector {
     fn default() -> Self {
-        match Self::from_profile(SuspiciousScriptingProfile::default()) {
-            Ok(detector) => detector,
-            Err(error) => panic!("default SuspiciousScriptingProfile is invalid: {error}"),
+        Self {
+            encoded_indicators: default_encoded_indicators()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            download_execute_indicators: default_download_execute_indicators()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            lolbin_processes: default_lolbin_processes()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
         }
     }
 }
@@ -168,6 +180,10 @@ impl SuspiciousScriptingProfile {
 }
 
 impl DetectionStrategy for SuspiciousScriptingDetector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "suspicious_scripting"
     }
@@ -178,11 +194,15 @@ impl DetectionStrategy for SuspiciousScriptingDetector {
                 self.evaluate_process(event, process).into_iter().collect()
             }
             TelemetryPayload::NetworkConnect(_)
+            | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::DnsQuery(_)
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
-            | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
+            | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
         }
     }
 }

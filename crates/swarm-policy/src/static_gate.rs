@@ -214,9 +214,9 @@ impl ApprovalGate for StaticApprovalGate {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::StaticApprovalGate;
-    use swarm_core::config::PolicyConfig;
     use crate::{ActionRequest, ApprovalContext, ApprovalGate, PolicyVerdict};
     use serde_json::json;
+    use swarm_core::config::PolicyConfig;
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 
     fn sample_request(action: ResponseAction, severity: Severity) -> ActionRequest {

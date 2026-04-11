@@ -1,12 +1,13 @@
 # Swarm Team Six Disaster Recovery Runbook
 
 > Operational recovery procedures for the hardened serve-mode runtime.  
-> Last updated: 2026-04-07
+> Last updated: 2026-04-10
 
 ## Scope
 
 This runbook covers the required `v1.35` production failure modes:
 
+- degraded or partitioned governance state
 - NATS JetStream connection loss
 - dead-letter journal disk full
 - `CircuitBreakerState` stuck open
@@ -20,7 +21,48 @@ Use the same repo-owned runtime surfaces for detection and verification:
 - `GET /v1/operator/status`
 - `cargo run -p swarm-runtime --bin swarmctl -- status --config rulesets/default.yaml`
 
-## 1. JetStream Connection Loss
+## 1. Governance Degraded Or Partitioned
+
+### Detection Signals
+
+- `/healthz` and `/readyz` show a `governance` component with
+  `partition_state` set to `degraded`, `partitioned`, or `healing`.
+- The governance component reports reduced healthy-governor counts,
+  non-zero `active_contingency_leases`, or a populated reconciliation report
+  marker.
+- Runtime events include partition transition or reconciliation entries.
+- Destructive response attempts are vetoed or denied with governance or
+  partition-authorization reasons.
+
+### Operator Remediation
+
+1. Confirm whether the issue is ordinary agent health degradation or actual
+   quorum loss.
+2. If the state is `degraded`, restore the unhealthy governors before the
+   system crosses into `partitioned`.
+3. If the state is `partitioned`, do not expect destructive response to proceed
+   unless a staged contingency lease already authorizes the exact action.
+4. Restore the missing governors or network path, then wait for the runtime to
+   enter `healing` and emit a reconciliation report.
+5. Review authorized versus unauthorized partition-era actions before treating
+   the system as fully recovered.
+
+### Verification Commands
+
+```bash
+curl -sf http://127.0.0.1:9090/healthz | jq '.components.governance'
+curl -sf http://127.0.0.1:9090/readyz | jq '.components.governance'
+cargo run -p swarm-runtime --bin swarmctl -- status --config rulesets/default.yaml
+```
+
+### Recovery Notes
+
+- destructive action should fail closed during partition
+- observability should remain available
+- contingency leases are emergency exceptions, not routine recovery tooling
+- reconciliation reports are part of the audit trail and should be retained
+
+## 2. JetStream Connection Loss
 
 ### Detection Signals
 
@@ -43,7 +85,7 @@ curl -sf http://127.0.0.1:9090/readyz | jq .
 cargo run -p swarm-runtime --bin swarmctl -- status --config rulesets/default.yaml
 ```
 
-## 2. Dead-Letter Journal Disk Full
+## 3. Dead-Letter Journal Disk Full
 
 ### Detection Signals
 
@@ -66,7 +108,7 @@ ls -lh ./dead-letter.jsonl
 curl -sf http://127.0.0.1:9090/healthz | jq .
 ```
 
-## 3. Circuit Breaker Stuck Open
+## 4. Circuit Breaker Stuck Open
 
 ### Detection Signals
 
@@ -88,7 +130,7 @@ curl -sf http://127.0.0.1:9090/metrics | rg "adapter_outcomes|response_latency"
 curl -sf http://127.0.0.1:9090/healthz | jq .
 ```
 
-## 4. PolicyVerdict::Deny Blocking All Response Actions
+## 5. PolicyVerdict::Deny Blocking All Response Actions
 
 ### Detection Signals
 

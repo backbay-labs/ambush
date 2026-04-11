@@ -50,9 +50,22 @@ pub struct PersistenceDetector {
 
 impl Default for PersistenceDetector {
     fn default() -> Self {
-        match Self::from_profile(PersistenceProfile::default()) {
-            Ok(detector) => detector,
-            Err(error) => panic!("default PersistenceProfile is invalid: {error}"),
+        Self {
+            suspicious_registry_run_paths: default_suspicious_registry_run_paths()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            suspicious_cron_directories: default_suspicious_cron_directories()
+                .into_iter()
+                .map(|value| normalize_path(&value))
+                .collect(),
+            systemd_timer_directories: default_systemd_timer_directories()
+                .into_iter()
+                .map(|value| normalize_path(&value))
+                .collect(),
+            dormancy_window_secs: default_dormancy_window_secs(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
         }
     }
 }
@@ -284,6 +297,10 @@ impl PersistenceProfile {
 }
 
 impl DetectionStrategy for PersistenceDetector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "persistence"
     }
@@ -298,10 +315,14 @@ impl DetectionStrategy for PersistenceDetector {
                 self.evaluate_file(event, file).into_iter().collect()
             }
             TelemetryPayload::ProcessStart(_)
+            | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::NetworkConnect(_)
             | TelemetryPayload::DnsQuery(_)
             | TelemetryPayload::RegistryAccess(_)
-            | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
+            | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
         }
     }
 }

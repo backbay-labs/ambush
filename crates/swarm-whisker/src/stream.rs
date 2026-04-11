@@ -33,6 +33,7 @@ pub fn findings_to_deposits(
         .map(|finding| PheromoneDeposit {
             indicator: serde_json::json!({
                 "event_id": finding.event_id,
+                "host_id": event.host_id,
                 "source": event.source,
                 "evidence": finding.evidence.clone(),
             }),
@@ -42,6 +43,8 @@ pub fn findings_to_deposits(
             timestamp: event.timestamp,
             decay_half_life: pheromone.default_half_life_secs,
             agent_id: strategy_scoped_agent_id(agent_id, &finding.strategy_id),
+            agent_identity: String::new(),
+            agent_role: None,
             signature: Vec::new(),
             agent_key: Vec::new(),
         })
@@ -55,9 +58,7 @@ mod tests {
         DetectionFinding, ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent,
         TelemetryPayload,
     };
-    use swarm_core::config::{
-        PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig,
-    };
+    use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::{AgentId, Severity};
 
@@ -115,6 +116,10 @@ mod tests {
 
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].agent_id.0, "whisker-a:suspicious_process_tree");
+        assert_eq!(
+            deposits[0].indicator["host_id"],
+            serde_json::json!("host-1")
+        );
     }
 
     #[test]

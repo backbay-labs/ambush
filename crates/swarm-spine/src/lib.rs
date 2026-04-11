@@ -29,15 +29,17 @@ pub use envelope::{
     parse_issuer_pubkey_hex, sign_envelope, verify_envelope,
 };
 pub use incident::{
-    ConfiguredIncidentStore, CorrelatedIncident, FileIncidentStore, IncidentLookup,
+    AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
+    FileIncidentStore, IncidentEvidenceLink, IncidentGraphDimension, IncidentLookup,
     IncidentMemberDecision, IncidentRecord, IncidentStore, IncidentStoreError, IncidentStoreHealth,
     MemoryIncidentStore,
 };
 pub use investigation::{
     ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
     InvestigationBundleLookup, InvestigationBundleRecord, InvestigationBundleStore,
-    InvestigationStatus, InvestigationStoreError, InvestigationStoreHealth,
-    MemoryInvestigationBundleStore,
+    InvestigationDecision, InvestigationInterpretation, InvestigationPriority,
+    InvestigationPriorityClass, InvestigationStatus, InvestigationStoreError,
+    InvestigationStoreHealth, InvestigationVote, MemoryInvestigationBundleStore,
 };
 pub use spine_error::{SpineError, SpineResult};
 pub use store::{

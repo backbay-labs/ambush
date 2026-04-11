@@ -5,10 +5,13 @@ members = [
     "crates/swarm-whisker",
     "crates/swarm-ingest-tetragon",
     "crates/swarm-ingest-json",
+    "crates/swarm-ingest-sentinel",
     "crates/swarm-pheromone",
     "crates/swarm-policy",
     "crates/swarm-response",
     "crates/swarm-runtime",
+    "crates/swarm-evolution",
+    "crates/swarm-cli",
     "crates/swarm-consensus",
     "crates/swarm-spine",
     "crates/swarm-guard",
@@ -27,10 +30,13 @@ swarm-core = { path = "crates/swarm-core" }
 swarm-whisker = { path = "crates/swarm-whisker" }
 swarm-ingest-tetragon = { path = "crates/swarm-ingest-tetragon" }
 swarm-ingest-json = { path = "crates/swarm-ingest-json" }
+swarm-ingest-sentinel = { path = "crates/swarm-ingest-sentinel" }
 swarm-pheromone = { path = "crates/swarm-pheromone" }
 swarm-policy = { path = "crates/swarm-policy" }
 swarm-response = { path = "crates/swarm-response" }
 swarm-runtime = { path = "crates/swarm-runtime" }
+swarm-evolution = { path = "crates/swarm-evolution" }
+swarm-cli = { path = "crates/swarm-cli" }
 swarm-consensus = { path = "crates/swarm-consensus" }
 swarm-spine = { path = "crates/swarm-spine" }
 swarm-guard = { path = "crates/swarm-guard" }
@@ -69,6 +75,10 @@ uuid = { version = "1", features = ["v4"] }
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+opentelemetry = "0.31"
+opentelemetry_sdk = "0.31"
+opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-rustls"] }
+tracing-opentelemetry = "0.32.1"
 
 # Error handling
 thiserror = "2"

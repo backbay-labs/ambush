@@ -60,6 +60,8 @@ fn test_deposit(agent: &str, ts: i64, confidence: f64) -> PheromoneDeposit {
         timestamp: ts,
         decay_half_life: 3600.0,
         agent_id: AgentId(agent.to_string()),
+        agent_identity: String::new(),
+        agent_role: None,
         signature: Vec::new(),
         agent_key: Vec::new(),
     }

@@ -1,13 +1,13 @@
 ---
 title: "04 -- Performance Characterization Under Load"
 series: Swarm Hardening (4 of 8)
-version: "0.2"
+version: "0.3"
 date: 2026-04-08
 status: Draft
 authors: Swarm Team Six Research
 ---
 
-# Performance Characterization Under Load
+# 04 -- Performance Characterization Under Load
 
 ## Document Metadata
 
@@ -15,7 +15,7 @@ authors: Swarm Team Six Research
 |----------------|---------------------------------------------------------------------------|
 | Document       | `04-PERFORMANCE-CHARACTERIZATION-UNDER-LOAD.md`                          |
 | Series         | Swarm Hardening (4 of 8)                                                 |
-| Version        | 0.1                                                                       |
+| Version        | 0.3                                                                       |
 | Date           | 2026-04-08                                                                |
 | Status         | Draft (reviewed)                                                                     |
 | Authors        | Swarm Team Six Research                                                   |
@@ -36,9 +36,11 @@ authors: Swarm Team Six Research
 10. [Benchmarking Framework Design](#10-benchmarking-framework-design)
 11. [Target Performance Envelope](#11-target-performance-envelope)
 12. [Optimization Opportunities](#12-optimization-opportunities)
-13. [Open Questions and Future Work](#13-open-questions-and-future-work)
-14. [Cross-References](#14-cross-references)
-15. [References](#15-references)
+13. [Allocation Pattern Analysis](#13-allocation-pattern-analysis)
+14. [Deployment Scenario Profiles](#14-deployment-scenario-profiles)
+15. [Open Questions and Future Work](#15-open-questions-and-future-work)
+16. [Cross-References](#16-cross-references)
+17. [References](#17-references)
 
 ---
 
@@ -143,7 +145,7 @@ Performance-sensitive locks in the critical path:
 | Lock | Type | Scope | Hot Path? |
 |------|------|-------|-----------|
 | `InMemoryPheromoneSubstrate::deposits` | `std::sync::RwLock` | All deposit/query/GC operations | Yes |
-| `InMemoryPheromoneSubstrate::threat_intel_entries` | `std::sync::RwLock` | Threat intel enrichment queries | Yes |
+| `InMemoryPheromoneSubstrate::threat_intel_entries` | `std::sync::RwLock` | Threat intel enrichment queries, GC, feed ingestion | Yes |
 | `InMemoryPheromoneSubstrate::threat_class_configs` | `std::sync::RwLock` | Concentration queries, deposit resolution | Yes |
 | `RuntimeMetrics::inner` | `std::sync::Mutex` | Per-stage latency recording | Yes |
 | `ConfigurableApprovalGate::agent_windows` | `std::sync::Mutex` | Rate-limiting window tracking | Yes |
@@ -157,6 +159,45 @@ query). **Note:** `gc_evaporated()` is not currently invoked by any runtime code
 write contention is between concurrent `deposit()` calls. Once GC is wired up,
 the full `retain()` sweep will block all reads for O(n) time where n is the
 number of active deposits.
+
+**Lock ordering discipline.** The codebase currently acquires locks in the
+following order within `gc_evaporated()`: `deposits` (write) then
+`threat_class_configs` (read). If any future code path acquires these in
+reverse order, deadlock results. The current code does not exhibit the reverse
+ordering, but with 7+ locks in the critical path (see table above) and GC
+increasing the lock interaction surface, the risk of accidental inversion grows.
+
+The canonical lock acquisition order MUST be documented in the substrate module
+and enforced by convention:
+
+```
+// LOCK ORDER (acquire in this sequence, never reverse):
+//   1. deposits            (RwLock - write for deposit/GC, read for query)
+//   2. threat_class_configs (RwLock - read for policy resolution)
+//   3. threat_intel_entries (RwLock - read for enrichment, write for GC/store)
+//   4. escalations         (RwLock - write for record, read for query)
+//   5. RuntimeMetrics       (Mutex - per-stage recording)
+//   6. agent_windows        (Mutex - rate-limit window tracking)
+//   7. beacon_tracker       (Mutex - beacon state, independent of substrate)
+```
+
+A stronger enforcement mechanism: wrap each lock in a numbered-tier newtype
+that makes out-of-order acquisition a compile-time or `debug_assert!` error:
+
+```rust
+struct TieredLock<T, const TIER: u8> {
+    inner: RwLock<T>,
+}
+
+impl<T, const TIER: u8> TieredLock<T, TIER> {
+    fn read(&self, _proof: LockOrderProof<TIER>) -> RwLockReadGuard<T> {
+        self.inner.read().unwrap()
+    }
+}
+```
+
+At minimum, add a `// LOCK ORDER:` comment block to the top of `substrate.rs`
+documenting the required acquisition sequence.
 
 ### 2.4 Expected Bottlenecks
 
@@ -248,7 +289,7 @@ calls `validate_deposit_signature()` before dispatching to the inner backend.
 Each inner backend (`InMemoryPheromoneSubstrate`, `LocalJournalPheromoneSubstrate`)
 also calls `validate_deposit_signature()` in its own `deposit()` implementation.
 This means every deposit is verified twice. Removing the redundant verification
-at either layer would save ~50-80us per finding (see section 13.1, question 6).
+at either layer would save ~50-80us per finding (see section 15.1, question 6).
 
 Most events produce 0-1 findings. For a typical workload where ~30% of events
 produce a finding, the amortized deposit cost per event is ~42-72us.
@@ -505,7 +546,7 @@ deposit vector grows monotonically until process restart.
 
 This is a correctness gap, not just a performance concern: without GC, the
 memory growth model in section 5.2 describes the actual runtime behavior, not
-a theoretical worst case. The 71.7M steady-state deposit calculation represents
+a theoretical worst case. The 70.2M steady-state deposit calculation represents
 what will actually happen under sustained load.
 
 Adding a GC invocation path (e.g., within the `ConcentrationMonitor` tick loop
@@ -540,6 +581,45 @@ these locks were ever acquired in the reverse order elsewhere, deadlock would
 result. The current code does not exhibit this reverse ordering, but the pattern
 is fragile.
 
+### 5.3a Enrichment Read-Lock vs. GC Write-Lock Contention
+
+The threat-intel enrichment pipeline acquires the `threat_intel_entries`
+read-lock on every detection pipeline invocation (`pipeline.rs` line 92, via
+`threat_intel_matches_for_event`). Under sustained load at 10K events/sec,
+this read-lock is acquired approximately 10K times/second (potentially more
+with multiple queries per event -- see Doc 03 Section 6.5).
+
+When `gc_expired_threat_intel` is eventually wired up, it will need the
+write-lock on the same `threat_intel_entries` BTreeMap. The interaction:
+
+| Load Level | Read-lock rate | GC interval | Contention window |
+|------------|---------------|-------------|-------------------|
+| 1K events/sec | ~1K reads/sec | 10s | 10K reads between GC ticks |
+| 10K events/sec | ~10K reads/sec | 10s | 100K reads between GC ticks |
+| 10K events/sec | 1s | 1s | 10K reads between GC ticks |
+
+The write-lock for threat-intel GC blocks all enrichment reads for its
+duration. With the current O(n) `retain()` implementation, GC pause
+estimates by entry count:
+
+| Entries | Estimated GC pause | Blocked reads at 10K/sec |
+|---------|-------------------|-------------------------|
+| 10,000 | ~200us | ~2 reads |
+| 100,000 | ~2ms | ~20 reads |
+| 1,000,000 | ~20ms | ~200 reads |
+
+At 1M entries, a 20ms GC pause blocks 200 enrichment queries, pushing
+those events' p99 latency well above the 10ms SLO.
+
+**Mitigation:** The incremental GC design (Section 12.1) applies to threat-
+intel GC as well. Using a `BinaryHeap` ordered by `expires_at`, each GC
+tick pops only the expired entries, bounding write-lock hold time to O(k)
+where k is the expired-entry batch size. With k=100 and ~1us per removal,
+write-lock hold time is ~100us -- negligible relative to the 100ms tick
+interval. Threat-intel GC should run at a slower cadence than deposit GC
+(every 10 seconds vs. every 100ms) because IOC TTLs are measured in hours
+to days, not seconds.
+
 ### 5.4 Memory Pressure Monitoring
 
 The runtime includes heap pressure monitoring via `sysinfo::System`:
@@ -552,6 +632,24 @@ The runtime includes heap pressure monitoring via `sysinfo::System`:
 This is a coarse safety valve, not a fine-grained memory management strategy.
 It does not account for substrate-specific growth patterns.
 
+**Alerting thresholds.** The current binary reject-at-90% model provides no
+warning before the system starts dropping traffic. Operators should receive
+graduated alerts:
+
+| Threshold | Level | Action |
+|-----------|-------|--------|
+| Heap pressure > 70% | Warning | Operator alert; consider reducing feed polling frequency or lowering deposit retention |
+| Heap pressure > 85% | Critical | Operator page; trigger aggressive GC (increase `gc_max_evictions_per_tick` temporarily) |
+| Heap pressure > 90% | Emergency | Reject new ingest requests (current behavior) |
+| Deposit count > 80% of `max_active_deposits` | Warning | Indicates GC is not keeping up with deposit rate |
+| GC pause duration > 5ms | Warning | Incremental GC batch size may be too large |
+| GC pause duration > 50ms | Critical | GC is operating in full-sweep mode or the incremental design has regressed |
+
+These thresholds should be exposed as Prometheus metrics and configurable via
+the runtime configuration. The existing `CriticalPathMetrics` infrastructure
+can be extended with `gc_pause_duration_us` (histogram) and
+`deposit_count_ratio` (gauge) metrics.
+
 ### 5.5 LocalJournal Backend Memory
 
 The `LocalJournalPheromoneSubstrate` maintains the same in-memory
@@ -563,6 +661,179 @@ The journal files grow monotonically. There is no compaction or truncation
 mechanism -- `gc_evaporated()` removes entries from the in-memory vector but
 does not rewrite the journal. Over time, the journal file will contain a mix of
 live and evaporated deposits.
+
+**Journal compaction analysis.** At 3,000 deposits/second, the journal
+grows at approximately 2.25 MB/second (750 bytes/deposit as JSON line). After
+one hour: ~8.1 GB. After 24 hours: ~194 GB. Even with aggressive GC keeping
+the in-memory deposit count at 100K, the journal file contains the full history
+of all deposits ever written.
+
+Replay-on-startup re-reads all entries via `load_jsonl`, including long-
+evaporated deposits that will be discarded during the first GC pass. At 194 GB,
+startup takes minutes of blocking I/O.
+
+**Compaction options:**
+
+1. **Periodic journal rewrite** (simplest). After each GC pass, rewrite the
+   journal with only live entries. The existing `LocalJournalPheromoneSubstrate::
+   gc_evaporated()` already does this via `rewrite_jsonl()`. The issue is that
+   this is blocking I/O holding the write lock. Move to `spawn_blocking` and
+   write to a temporary file, then atomic rename.
+
+2. **Segmented journal.** Write to time-stamped segment files (one per hour).
+   Delete segments older than `2 * max_evaporation_time`. Startup only reads
+   segments within the evaporation window.
+
+3. **Embedded database.** Replace JSONL with `redb` or `sled`, which handle
+   compaction natively. This adds a dependency but eliminates the compaction
+   problem entirely.
+
+**Recommendation:** Option 1 is already partially implemented (the
+`rewrite_jsonl` calls in GC). The fix is to make it non-blocking and run it
+at a lower cadence than GC itself (e.g., every 5 minutes). Option 2 is
+preferred for long-running production deployments. Estimate: at 3K deposits/sec
+and 6.5-hour evaporation window, each segment contains ~70M entries and
+compaction should trigger when cumulative journal size exceeds 2x the live
+entry count.
+
+### 5.6 Beacon Tracker Unbounded Growth
+
+The `NetworkConnectDetector::beacon_tracker` (`crates/swarm-whisker/src/
+network_connect.rs`, line 58) is a `HashMap<BeaconKey, VecDeque<i64>>` behind
+an `Arc<Mutex<...>>` with **no eviction of stale keys**. Each `BeaconKey`
+is a 5-field struct:
+
+```rust
+struct BeaconKey {
+    host_id: String,        // ~16-32 bytes
+    process_name: String,   // ~8-32 bytes
+    destination_ip: String, // ~7-39 bytes
+    destination_port: u16,  // 2 bytes
+    protocol: String,       // ~3-8 bytes
+}
+```
+
+The `record_connection` method (line 211) evicts old timestamps from each
+key's `VecDeque` when they fall outside `beacon_window_ms`, but **never
+removes keys whose VecDeque is empty or whose last timestamp is outside the
+beacon window**. The code:
+
+```rust
+fn record_connection(&self, key: BeaconKey, timestamp_ms: i64) -> Vec<i64> {
+    let window_start = timestamp_ms.saturating_sub(self.beacon_window_ms);
+    let mut guard = self.beacon_tracker.lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let entries = guard.entry(key).or_default();
+    while entries.front().is_some_and(|recorded_at| *recorded_at < window_start) {
+        entries.pop_front();
+    }
+    entries.push_back(timestamp_ms);
+    entries.iter().copied().collect()
+}
+```
+
+Note that even when all timestamps are evicted from a `VecDeque`, the key
+remains in the `HashMap` with an empty deque. The key itself consumes ~100-200
+bytes (five heap-allocated `String` fields plus `HashMap` entry overhead).
+
+**Growth projection.** In a deployment seeing connections to many distinct
+(host, process, IP, port, protocol) tuples:
+
+| Events/sec | Unique tuple rate | Keys/hour | Memory/hour |
+|------------|------------------|-----------|-------------|
+| 1,000 | 5% (50 new keys/s) | 180,000 | ~27 MB |
+| 10,000 | 10% (1,000 new keys/s) | 3,600,000 | ~540 MB |
+| 10,000 | 1% (100 new keys/s) | 360,000 | ~54 MB |
+
+Even conservative estimates produce significant memory growth over hours of
+operation. After 24 hours at the moderate scenario (100 new keys/sec), the
+tracker holds ~8.6M keys consuming ~1.3GB.
+
+**Proposed eviction strategies:**
+
+1. **Eager empty-key removal.** After evicting stale timestamps, check if the
+   `VecDeque` is empty and remove the key. Zero implementation cost, addresses
+   the common case where connections are bursty:
+
+   ```rust
+   // After the while loop in record_connection:
+   if entries.is_empty() {
+       // Don't insert a new timestamp for a stale key we just found
+       // Actually, we always push_back, so check after the full method
+   }
+   ```
+
+   More precisely, add a periodic sweep that removes empty deques.
+
+2. **Periodic stale-key sweep.** Run a background task every 60 seconds that
+   iterates the `HashMap` and removes keys whose most recent timestamp is
+   older than `beacon_window_ms`:
+
+   ```rust
+   fn gc_stale_beacon_keys(&self, now_ms: i64) {
+       let window_start = now_ms.saturating_sub(self.beacon_window_ms);
+       let mut guard = self.beacon_tracker.lock()
+           .unwrap_or_else(|poison| poison.into_inner());
+       guard.retain(|_key, deque| {
+           deque.back().is_some_and(|ts| *ts >= window_start)
+       });
+   }
+   ```
+
+   Cost: O(n) per sweep, but the `retain` callback is cheap (one pointer
+   comparison per key). At 1M keys, this takes ~1-2ms.
+
+3. **LRU-bounded capacity.** Replace `HashMap` with an LRU cache capped at
+   a configurable maximum (e.g., 100K keys). When the cache is full, the
+   least-recently-accessed key is evicted. This provides a hard memory
+   ceiling at the cost of potentially evicting active beacon tracking for
+   low-frequency connections.
+
+**Recommendation:** Implement option 2 (periodic stale-key sweep) as the
+initial fix. It is simple, correct, and bounds memory growth to the number
+of *active* connection tuples within the beacon window. Add option 3 as a
+secondary safeguard for edge deployments with strict memory budgets.
+
+### 5.7 Threat Intel Entry Memory Pressure
+
+Doc 03 proposes scaling the threat-intel cache to 1M entries (Section 6.3, L2
+target). The `gc_expired_threat_intel()` function suffers the same "never
+called" bug as deposit GC (Section 5.3), and `store_threat_intel_entry`
+(`substrate.rs` line 472) simply inserts into the `BTreeMap` without checking
+any capacity limit. Feed ingestion thus grows the map without bound.
+
+**Per-entry memory estimate:**
+
+```rust
+pub struct ThreatIntelEntry {
+    pub indicator_type: ThreatIntelIndicatorType, // enum, 1-2 words
+    pub value: String,                            // 24 + content (~20-80 bytes)
+    pub confidence: f64,                          // 8 bytes
+    pub expires_at: i64,                          // 8 bytes
+}
+// Plus BTreeMap node overhead: ~48-64 bytes per node
+```
+
+| Entry Count | Estimated Heap | Notes |
+|-------------|---------------|-------|
+| 1,000 | ~200 KB | Minimal deployment |
+| 10,000 | ~2 MB | Edge profile (Doc 03 Section 15.1) |
+| 100,000 | ~20 MB | Standard deployment |
+| 1,000,000 | ~200 MB | Enterprise with expanded entry format |
+
+With Doc 03's proposed expanded `ThreatIntelEntry` (adding `sources:
+Vec<ThreatIntelSource>`, `ingested_at`, `decay_half_life_secs`, tags), per-
+entry size increases to ~300-600 bytes, pushing the 1M entry scenario to
+~300-600MB -- which exceeds the 256MB edge budget and consumes a significant
+fraction of the 512MB developer-laptop budget.
+
+**Mitigations:**
+
+- Wire up `gc_expired_threat_intel()` alongside deposit GC (same priority).
+- Add a hard cap: `threat_intel_max_entries` configuration parameter with LRU
+  eviction when the cap is reached. Evict the lowest-confidence expired entry
+  first, then the oldest entry.
+- Deployment profiles (Doc 03 Section 15) should set per-profile caps.
 
 ---
 
@@ -607,7 +878,33 @@ functions:
 5. **File I/O in `LocalJournalPheromoneSubstrate`** -- `append_jsonl_line()`
    performs synchronous `OpenOptions::append().open()` + `write_all()` +
    `flush()` inside an async context. This blocks the tokio worker thread on
-   filesystem I/O.
+   filesystem I/O. The scope of blocking I/O is broader than the deposit path
+   alone:
+
+   - `deposit()` (line 653): `append_jsonl_line(&self.journal_path, &deposit)`
+   - `record_escalation()` (line 663): `append_jsonl_line(&self.escalation_journal_path, &record)`
+   - `store_threat_class_config()` (line 676): `append_jsonl_line(&self.threat_class_config_journal_path, &config)`
+   - `store_threat_intel_entry()` (line 690): `append_jsonl_line(&self.threat_intel_journal_path, &entry)`
+   - `gc_evaporated()` (line 789): `rewrite_jsonl(&self.journal_path, &guard)` -- full file rewrite
+   - `gc_expired_threat_intel()` (line 800): `rewrite_jsonl(&self.threat_intel_journal_path, ...)` -- full file rewrite
+   - `open()` (line 624): `load_jsonl()` x4 for deposits, escalations, configs, threat intel -- blocking reads at startup
+
+   With Doc 03's automated feed ingestion producing bulk inserts via
+   `store_threat_intel_entry`, the threat-intel journal write path becomes a
+   sustained blocking I/O source. Ingesting a feed batch of 10,000 IOCs
+   produces 10,000 sequential `append_jsonl_line` calls, each performing an
+   `open()` + `write_all()` + `flush()` syscall sequence. At ~50us per
+   append on SSD, this is ~500ms of blocking I/O during a single feed poll.
+
+   The `rewrite_jsonl` calls during GC are even more expensive: they serialize
+   the entire live dataset and rewrite the file. At 100K deposits (~75MB of
+   JSON), this is a multi-second blocking operation.
+
+   **Recommendation:** Wrap all `LocalJournalPheromoneSubstrate` I/O operations
+   in `tokio::task::spawn_blocking()`. For bulk feed ingestion, batch journal
+   writes: accumulate N entries in memory and write them in a single
+   `write_all` call rather than one `append_jsonl_line` per entry. Target:
+   one fsync per batch (1,000 entries) rather than one fsync per entry.
 
 **Risk assessment:** Under high concurrency, the `std::sync::RwLock` on
 deposits is a contention source for concurrent deposit writes and concentration
@@ -934,6 +1231,17 @@ struct SyntheticLoadConfig {
 }
 ```
 
+**Load test prerequisite: concurrency limits.** The current Axum server has
+no concurrency limits (Section 7.1). A load test with 100 concurrent HTTP
+clients could overwhelm the tokio thread pool before the substrate or
+detection stages become the bottleneck, producing misleading results. Either
+add `tower::limit::ConcurrencyLimitLayer` to the Axum server before load
+testing, or design the load test to bypass HTTP and drive events directly
+through `RuntimeService::process_event()` for a focused critical-path
+measurement. The bypass approach is recommended for the initial benchmark
+suite (Section 10.5) because it isolates the detection pipeline from HTTP
+and network variability.
+
 **Metrics to collect during load tests:**
 
 | Category | Metrics |
@@ -975,6 +1283,68 @@ Benchmarks should run in CI with:
 - Fixed CPU affinity for reproducibility
 - Memory-limited cgroups to catch allocation regressions
 - Baseline comparisons using `criterion`'s statistical regression detection
+
+### 10.5 Benchmark Runability Status
+
+**Current state: zero Criterion benchmarks exist in the production crates.**
+The only `criterion` usage is in `vendor/reference/clawdstrike/`, which is
+reference-only material. No `[[bench]]` sections exist in any production
+`Cargo.toml`. The benchmarking framework designed above is aspirational --
+none of it is runnable today.
+
+**Bootstrap steps to create the first runnable benchmarks:**
+
+1. **Add `criterion` to dev-dependencies** of `swarm-pheromone` and
+   `swarm-runtime`:
+
+   ```toml
+   # crates/swarm-pheromone/Cargo.toml
+   [dev-dependencies]
+   criterion = { version = "0.5", features = ["async_tokio"] }
+
+   [[bench]]
+   name = "substrate_bench"
+   harness = false
+
+   # crates/swarm-runtime/Cargo.toml
+   [dev-dependencies]
+   criterion = { version = "0.5", features = ["async_tokio"] }
+
+   [[bench]]
+   name = "pipeline_bench"
+   harness = false
+   ```
+
+2. **Write the three highest-value benchmarks** that directly validate
+   the cost estimates in Sections 3-5:
+
+   a. **`substrate_bench::deposit_and_query`** -- construct an
+      `InMemoryPheromoneSubstrate` pre-populated with N deposits, then
+      benchmark `deposit()` and `query_concentration()` under varying N
+      (1K, 10K, 100K). This validates the write-lock contention estimates
+      and provides the first empirical GC pause measurements.
+
+   b. **`substrate_bench::gc_evaporated`** -- pre-fill the substrate with
+      N deposits where P% are past their evaporation threshold. Benchmark
+      `gc_evaporated()` at (10K, 10%), (100K, 50%), and (100K, 90%).
+      This provides the GC pause duration numbers needed to validate the
+      incremental GC design (Section 12.1).
+
+   c. **`pipeline_bench::detect_and_deposit`** -- construct a
+      `CompositeDetector` with all 8 strategies, an `InMemoryPheromoneSubstrate`
+      with 1K threat-intel entries, and benchmark `detect_and_deposit()` with
+      realistic `TelemetryEvent` payloads (DnsQuery, NetworkConnect,
+      ProcessStart). This validates the end-to-end latency budget (Section 4).
+
+3. **Run with**: `cargo bench --workspace` and verify results are
+   reproducible within 5% variance across runs.
+
+4. **CI integration** can follow once the benchmarks are stable. Start
+   with local-only execution and manual comparison; add CI gates later.
+
+**Estimated effort:** 2-4 hours for the three bootstrap benchmarks.
+These should be treated as a prerequisite task for any optimization work,
+not as future work.
 
 ---
 
@@ -1034,16 +1404,104 @@ memory footprint.
 
 ### 12.1 Low-Hanging Fruit
 
-**0a. Wire up GC invocation in the runtime**
+**0a. Wire up GC invocation in the runtime (with incremental design)**
 
 The `gc_evaporated()` and `gc_expired_threat_intel()` methods exist on the
 `PheromoneSubstrate` trait and are implemented by all backends, but **no runtime
-code calls them**. Without GC, deposits accumulate without bound. The simplest
-fix is to add GC calls to the `ConcentrationMonitor::evaluate_all()` method,
-which already runs on a 100ms tick and has access to the substrate.
+code calls them**. Without GC, deposits accumulate without bound.
 
 **Impact:** Without this change, the memory ceiling SLOs in section 11 are
 unachievable. This is a blocking prerequisite for production deployment.
+
+**Critical design constraint:** Wiring the existing O(n) `retain()` into the
+`ConcentrationMonitor` 100ms tick creates a new bottleneck. At 100K deposits,
+the `retain()` call iterates all deposits with a decay computation per entry,
+holding the write-lock for the entire sweep. At 10 ticks/second, this is ~1M
+decay computations/second of pure GC overhead, plus write-lock contention that
+blocks all concurrent deposit and query operations.
+
+**Recommendation: skip the full-sweep wire-up and go directly to incremental
+GC.** The existing `gc_evaporated()` implementation should be replaced, not
+merely called. Three viable incremental designs:
+
+**Option A: Time-bucketed eviction (recommended).** Maintain an auxiliary
+`BTreeMap<i64, Vec<usize>>` mapping estimated evaporation timestamps to deposit
+indices. On each GC tick, pop the front of the tree (entries with the earliest
+evaporation times) and verify they are actually evaporated (the estimate may be
+stale if confidence was boosted). Remove confirmed-evaporated deposits. Bound
+the number of removals per tick to `gc_max_evictions_per_tick` (default: 500).
+
+```rust
+struct IncrementalGcState {
+    /// Estimated evaporation time -> deposit indices.
+    eviction_schedule: BTreeMap<i64, Vec<usize>>,
+    /// Maximum deposits to evaluate per GC tick.
+    max_per_tick: usize,
+}
+
+impl IncrementalGcState {
+    fn gc_tick(
+        &mut self,
+        deposits: &mut Vec<PheromoneDeposit>,
+        configs: &BTreeMap<ThreatClass, ThreatClassConfig>,
+        pheromone_config: &PheromoneConfig,
+        now: i64,
+    ) -> usize {
+        let mut evicted = 0;
+        let mut checked = 0;
+        // Collect keys up to `now` to avoid borrowing conflicts.
+        let expired_keys: Vec<i64> = self.eviction_schedule
+            .range(..=now)
+            .map(|(k, _)| *k)
+            .collect();
+        for key in expired_keys {
+            if checked >= self.max_per_tick {
+                break;
+            }
+            if let Some(indices) = self.eviction_schedule.remove(&key) {
+                for idx in indices {
+                    if idx < deposits.len() {
+                        let deposit = &deposits[idx];
+                        let policy = resolved_policy(
+                            pheromone_config, configs, &deposit.threat_class,
+                        );
+                        if deposit.is_evaporated(now, policy.evaporation_threshold) {
+                            // Mark for removal (swap-remove or deferred compaction)
+                            evicted += 1;
+                        }
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        evicted
+    }
+}
+```
+
+Write-lock hold time is bounded to O(k) where k = `max_per_tick`, not O(n).
+At k=500 with ~1us per evaporation check, the hold time is ~500us -- well
+within the 5ms GC pause SLO.
+
+**Option B: Generational GC.** Partition deposits into "young" and "old"
+generations. New deposits enter the young generation. After surviving N GC
+cycles, they are promoted to old. The young generation (which changes rapidly)
+is swept every tick; the old generation is swept every 10th tick. This reduces
+per-tick work because most evaporations occur in the young generation (recently
+deposited, low-confidence findings evaporate fast).
+
+**Option C: Epoch-based reclamation.** Assign each deposit a monotonically
+increasing epoch number. Track the "safe epoch" below which all deposits are
+confirmed evaporated. GC only examines deposits between the safe epoch and the
+current epoch. This is similar to epoch-based memory reclamation in lock-free
+data structures.
+
+**For the threat-intel GC (`gc_expired_threat_intel`):** The same incremental
+approach applies. Since `ThreatIntelEntry` has an explicit `expires_at`
+timestamp, maintain a `BinaryHeap<(i64, ThreatIntelKey)>` ordered by
+expiration time. Each GC tick pops entries whose `expires_at <= now` and
+removes them from the `BTreeMap`. This is O(k log n) per tick where k is the
+number of expired entries.
 
 **0b. Remove redundant double signature verification**
 
@@ -1099,13 +1557,20 @@ Replace the full `retain()` sweep with an incremental eviction strategy:
 **Impact:** Eliminates GC pauses as a tail-latency contributor. Converts O(n)
 per-tick GC to O(k) where k is the eviction batch size.
 
-**4. Move LocalJournal file I/O to `spawn_blocking`**
+**4. Move all LocalJournal file I/O to `spawn_blocking`**
 
-The `append_jsonl_line()` function performs synchronous file I/O. Wrapping it
-in `tokio::task::spawn_blocking()` would prevent file system latency from
-blocking tokio worker threads.
+The `append_jsonl_line()` and `rewrite_jsonl()` functions perform synchronous
+file I/O in async context. The scope is broader than deposit appends alone --
+it includes threat-intel entry storage, escalation recording, threat-class
+config persistence, and GC compaction (see Section 6.2 for full inventory).
+Wrapping all `LocalJournalPheromoneSubstrate` I/O operations in
+`tokio::task::spawn_blocking()` would prevent filesystem latency from blocking
+tokio worker threads. For bulk feed ingestion, batch journal writes (N entries
+per fsync) rather than one `append_jsonl_line` per entry.
 
-**Impact:** Eliminates file I/O as a source of worker thread stalls.
+**Impact:** Eliminates file I/O as a source of worker thread stalls. Critical
+for feed ingestion paths where 10,000+ sequential appends would otherwise
+block a tokio worker for ~500ms.
 
 ### 12.2 Architectural Changes
 
@@ -1180,9 +1645,187 @@ evaporated deposits per tick.
 
 ---
 
-## 13. Open Questions and Future Work
+## 13. Allocation Pattern Analysis
 
-### 13.1 Open Questions
+The detection hot path performs significant heap allocation that does not
+appear in the lock-contention or cryptographic-cost analyses above. Under
+high throughput, allocator pressure (fragmentation, system call overhead for
+large allocations, contention on the global allocator) can become a
+meaningful latency contributor.
+
+### 13.1 Hot-Path Clone Inventory
+
+The following clones occur in the critical path for every event that produces
+at least one finding:
+
+| Clone Site | File:Line | Estimated Cost | Notes |
+|-----------|-----------|---------------|-------|
+| `event.clone()` | `pipeline.rs:52` | 200-500 bytes | Clones the entire `TelemetryEvent` including all payload strings (source, host_identifier, event_id, plus payload-specific strings). A `ProcessStart` event with a long `command_line` can exceed 1KB. |
+| `deposit.clone()` | `pipeline.rs:48` | 450-1100 bytes | Clones the full `PheromoneDeposit` before passing to `substrate.deposit()`. Includes the `indicator` JSON blob, signature `Vec<u8>`, and agent key `Vec<u8>`. |
+| `finding.evidence.clone()` | `pipeline.rs:257` | 200-800 bytes | Clones the JSON evidence blob into the deposit's `indicator` field. |
+| `entry.cloned()` | `substrate.rs:558` | 50-150 bytes | Clones a `ThreatIntelEntry` out of the read-locked `BTreeMap`. One clone per matching IOC. |
+
+**Per-event allocation estimate (1 finding, 1 threat-intel match):**
+
+- Minimum: ~900 bytes across 4 allocations
+- Typical: ~2,000 bytes across 4-6 allocations
+- Maximum (ProcessStart with long command line, multiple matches): ~5,000+ bytes
+
+At 10K events/sec with 30% finding rate, this is ~6M bytes/sec of hot-path
+allocations (3K finding-producing events x ~2KB each). The allocator must
+handle ~12K-18K allocations/second from the hot path alone, plus background
+allocations from logging, metrics, and channel operations.
+
+### 13.2 Allocation Reduction Strategies
+
+1. **`Arc<TelemetryEvent>` for zero-copy sharing.** The event is cloned into
+   `DetectionPipelineOutcome` for the caller's use. If the caller accepts an
+   `Arc<TelemetryEvent>` instead of an owned `TelemetryEvent`, the clone is
+   replaced with an `Arc::clone` (pointer increment, ~1ns). This saves
+   200-500 bytes of allocation per finding-producing event.
+
+2. **Return `&ThreatIntelEntry` from substrate queries.** Currently
+   `query_threat_intel_entry` returns `Option<ThreatIntelEntry>` (cloned from
+   the `BTreeMap`). Returning a reference would eliminate the clone, but
+   requires holding the read-lock for the duration of enrichment -- which
+   conflicts with the goal of minimizing lock hold time. A middle ground:
+   return `Arc<ThreatIntelEntry>` stored in the `BTreeMap`, paying the `Arc`
+   overhead at insert time but eliminating clone-on-read.
+
+3. **Pre-allocated finding buffer.** Instead of constructing a new
+   `Vec<DetectionFinding>` per event, maintain a thread-local buffer that is
+   cleared between events. This eliminates the `Vec` allocation overhead and
+   reduces allocator contention under concurrent access.
+
+4. **Evidence blob size cap.** The `annotate_threat_intel_evidence` function
+   (pipeline.rs line 192) appends the full `threat_intel_matches` array to
+   the evidence JSON. If an event matches 10+ IOCs (plausible with CIDR range
+   expansion), each serialized as a full `ThreatIntelEntry`, the evidence
+   blob can exceed 5KB. Cap the serialized matches at top-5 by confidence,
+   summarize the remainder as `"additional_matches": N`.
+
+### 13.3 Profiling Methodology
+
+Allocation patterns should be measured before optimizing:
+
+1. **`dhat` profiling:** Add `#[global_allocator] static ALLOC:
+   dhat::Alloc = dhat::Alloc;` behind a `profiling` feature flag. Run the
+   benchmark suite (Section 10.5) with `--features profiling` to collect
+   per-allocation-site counts, bytes, and lifetimes.
+
+2. **`jemalloc` statistics:** Switch to `tikv-jemallocator` and enable stats
+   collection. Compare fragmentation ratios between `jemalloc` and the system
+   allocator under the deposit growth/eviction pattern. `jemalloc` typically
+   provides better fragmentation characteristics for the allocate-then-free-
+   in-bulk pattern that GC produces.
+
+3. **`perf` flame graphs:** Profile allocator time contribution to p99
+   latency using `perf record` + `inferno`. Identify whether `malloc`/`free`
+   appear in the hot path's flame graph.
+
+---
+
+## 14. Deployment Scenario Profiles
+
+The performance characteristics and tuning parameters must adapt to
+fundamentally different deployment targets. This section defines concrete
+memory and CPU profiles for three scenarios.
+
+### 14.1 Cloud Deployment (Generous Resources)
+
+**Hardware:** 8-16 cores, 4-16GB RAM, SSD storage, low-latency network.
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Substrate backend | JetStream (NATS) | Durability and multi-node sharing. Accepts the 1-5ms per-operation latency (Section 8.2) in exchange for crash recovery. |
+| `max_active_deposits` | 1,000,000 | ~750MB deposit heap, well within 4GB+ budget |
+| `threat_intel_max_entries` | 1,000,000 | ~200MB with current entry format (Section 5.7) |
+| GC strategy | Incremental, 500 evictions/tick | GC CPU overhead is negligible relative to available cores |
+| `telemetry_channel_capacity` | 50,000 | Larger buffer to absorb CloudTrail batch spikes |
+| Worker threads | Pin to N-2 cores | Reserve 2 cores for GC, feed polling, and OS |
+| Feed polling | Full portfolio (Tier 1-3) | Bandwidth and API rate limits are not a concern |
+
+**Expected steady-state memory profile:**
+
+| Component | Estimated Memory |
+|-----------|-----------------|
+| Deposit heap (500K active) | ~375 MB |
+| Threat-intel cache (500K entries) | ~100 MB |
+| Tokio runtime + task state | ~50 MB |
+| Beacon tracker (100K keys) | ~20 MB |
+| Journal files (if LocalJournal) | N/A (JetStream) |
+| Channel buffers | ~50 MB |
+| **Total** | **~600 MB** |
+
+**Key concern:** JetStream KV latency (1-5ms per operation) means the
+enrichment latency budget is consumed entirely by substrate I/O if threat-
+intel queries go through JetStream. The L1 hot cache (Doc 03 Section 6.3)
+is essential in cloud deployments to keep enrichment fast despite the slower
+substrate backend.
+
+### 14.2 Edge Deployment (Constrained Resources)
+
+**Hardware:** Raspberry Pi 4, 4 ARM64 cores, 256MB available memory, SD card
+or eMMC storage, potentially intermittent network.
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Substrate backend | InMemory | No disk I/O overhead; crash recovery is acceptable to lose |
+| `max_active_deposits` | 10,000 | ~7.5MB deposit heap |
+| `threat_intel_max_entries` | 10,000 | ~2MB; IOC snapshots pushed from coordinator |
+| GC strategy | Incremental, 100 evictions/tick | Minimize CPU overhead on 4 ARM cores |
+| `telemetry_channel_capacity` | 1,000 | Smaller buffer to control memory |
+| Worker threads | 2 | Reserve 2 cores for kernel and other processes |
+| Feed polling | Disabled | IOCs pushed by central coordinator |
+| Beacon tracker cap | 10,000 keys (LRU) | Hard memory ceiling |
+| External enrichment | Disabled | No reliable network |
+
+**Expected steady-state memory profile:**
+
+| Component | Estimated Memory |
+|-----------|-----------------|
+| Deposit heap (5K active) | ~3.75 MB |
+| Threat-intel cache (10K entries) | ~2 MB |
+| Tokio runtime + task state | ~20 MB |
+| Beacon tracker (10K keys) | ~2 MB |
+| Channel buffers | ~5 MB |
+| Binary + static data | ~30 MB |
+| **Total** | **~65 MB** |
+
+This leaves ~190MB headroom for spikes, OS overhead, and other processes.
+The 256MB budget is achievable only with strict caps on all growable data
+structures.
+
+**Key concerns:**
+- ARM64 Ed25519 performance is ~2-3x slower than x86_64. The per-deposit
+  crypto cost rises from ~130-210us to ~260-630us. At 4K events/sec with
+  30% finding rate, crypto alone consumes ~0.3-0.75 CPU seconds per second
+  on one core. The double-verify fix (Section 12.1, item 0b) is critical
+  for edge viability.
+- SD card write latency (1-10ms per fsync) makes `LocalJournal` unsuitable.
+  Use `InMemory` backend and accept data loss on crash.
+
+### 14.3 Development Environment
+
+**Hardware:** Developer laptop, 4-8 cores, 8-16GB RAM, SSD.
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Substrate backend | LocalJournal | Persistence across restarts for iterative development |
+| `max_active_deposits` | 100,000 | Sufficient for realistic test scenarios |
+| `threat_intel_max_entries` | 100,000 | Supports local feed testing |
+| GC strategy | Incremental, 200 evictions/tick | Balance between responsiveness and background CPU |
+| Feed polling | Tier 1 only (open-source feeds) | Developer network, avoid commercial API keys |
+
+**Memory budget:** 512MB ceiling (Section 11.1). This is achievable with the
+100K deposit and 100K threat-intel caps. Developers should be alerted if the
+process exceeds 400MB, indicating a leak or misconfiguration.
+
+---
+
+## 15. Open Questions and Future Work
+
+### 15.1 Open Questions
 
 1. **What is the actual memory footprint of a `PheromoneDeposit` with realistic
    `indicator` JSON payloads?** The estimates in section 5 use conservative
@@ -1220,7 +1863,7 @@ evaporated deposits per tick.
    either the old or new configuration. The performance impact of cache
    invalidation across cores during reload is unknown.
 
-### 13.2 Future Work
+### 15.2 Future Work
 
 1. **Wire up GC invocation** -- add `gc_evaporated()` and
    `gc_expired_threat_intel()` calls to the runtime (see section 12.1, item 0a).
@@ -1254,12 +1897,12 @@ evaporated deposits per tick.
 
 ---
 
-## 14. Cross-References
+## 16. Cross-References
 
 | Document | Relevance |
 |----------|-----------|
-| [03 -- Threat Intel Integration](../swarm-hardening/03-THREAT-INTEL-INTEGRATION.md) | Threat intel enrichment adds per-event substrate queries; enrichment latency directly impacts the detection pipeline timing in section 4. Feed refresh frequency affects the threat intel entry count and memory pressure in section 5. |
-| [07 -- Behavioral Baselines](../swarm-hardening/07-BEHAVIORAL-BASELINES.md) | Baseline computation requires periodic full-substrate scans. The overhead of these scans is analogous to GC pauses analyzed in section 5.3. Baseline models add per-event comparison cost to the detection stage in section 3.1. |
+| [03 -- Threat Intelligence Lifecycle and Enrichment](../swarm-hardening/03-THREAT-INTELLIGENCE-LIFECYCLE-AND-ENRICHMENT.md) | Threat intel enrichment adds per-event substrate queries; enrichment latency directly impacts the detection pipeline timing in section 4. Feed refresh frequency affects the threat intel entry count and memory pressure in section 5. |
+| [06 -- Behavioral Baseline and Anomaly Detection](../swarm-hardening/06-BEHAVIORAL-BASELINE-AND-ANOMALY-DETECTION.md) | Baseline computation requires periodic full-substrate scans. The overhead of these scans is analogous to GC pauses analyzed in section 5.3. Baseline models add per-event comparison cost to the detection stage in section 3.1. |
 | [06 -- Stigmergic Coordination (Sentinel Convergence)](../sentinel-convergence/06-STIGMERGIC-COORDINATION-AND-SWARM-INTELLIGENCE.md) | The pheromone evaporation model analyzed in section 5.2 is formalized in this document. Decay rate and evaporation threshold parameters directly determine steady-state deposit counts. |
 | [03 -- Edge-Native Security Detection (Sentinel Convergence)](../sentinel-convergence/03-EDGE-NATIVE-SECURITY-DETECTION.md) | Edge deployment targets (section 11.2) inherit the resource constraints analyzed in this document: 256MB memory ceiling, 4-core ARM64 CPU. Performance characterization here informs the tiered architecture proposed there. |
 | [05 -- Telemetry Bridge Architecture (Sentinel Convergence)](../sentinel-convergence/05-TELEMETRY-BRIDGE-ARCHITECTURE.md) | Multi-bridge concurrent ingestion (section 9) directly extends the bridge architecture. Channel contention under multi-bridge load is a primary concern for bridge scaling. |
@@ -1267,7 +1910,7 @@ evaporated deposits per tick.
 
 ---
 
-## 15. References
+## 17. References
 
 1. Tokio project. "Tokio: An Asynchronous Rust Runtime." 2024.
    https://tokio.rs/

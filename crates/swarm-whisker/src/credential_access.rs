@@ -46,9 +46,21 @@ pub struct CredentialAccessDetector {
 
 impl Default for CredentialAccessDetector {
     fn default() -> Self {
-        match Self::from_profile(CredentialAccessProfile::default()) {
-            Ok(detector) => detector,
-            Err(error) => panic!("default CredentialAccessProfile is invalid: {error}"),
+        Self {
+            sensitive_registry_paths: default_sensitive_registry_paths()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            protected_processes: default_protected_processes()
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
+            suspicious_kerberoast_processes: default_suspicious_kerberoast_processes()
+                .into_iter()
+                .map(|value| normalize_process_name(&value))
+                .collect(),
+            high_confidence_threshold: default_high_confidence_threshold(),
+            medium_confidence_threshold: default_medium_confidence_threshold(),
         }
     }
 }
@@ -240,6 +252,10 @@ fn normalize_process_name(value: &str) -> String {
 }
 
 impl DetectionStrategy for CredentialAccessDetector {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn id(&self) -> &str {
         "credential_access"
     }
@@ -254,8 +270,12 @@ impl DetectionStrategy for CredentialAccessDetector {
                 self.evaluate_auth(event, auth).into_iter().collect()
             }
             TelemetryPayload::ProcessStart(_)
+            | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::NetworkConnect(_)
-            | TelemetryPayload::DnsQuery(_) => Vec::new(),
+            | TelemetryPayload::DnsQuery(_)
+            | TelemetryPayload::InfrastructureHealth(_)
+            | TelemetryPayload::ThermalAnomaly(_)
+            | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
             TelemetryPayload::RegistryPersistence(_) | TelemetryPayload::FilePersistence(_) => {
                 Vec::new()
             }

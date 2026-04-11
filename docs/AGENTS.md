@@ -1,470 +1,227 @@
-# Agent Reference
+# Agent Contract
 
-> Historical note: this document describes the earlier Python-heavy swarm shape. As of April 2, 2026 it is reference material, not the active implementation path.
+This document is part of the active contract set defined in
+`docs/REFERENCE-STATUS.md`.
 
-Detailed reference for each Swarm Team Six agent archetype.
+It describes the Rust runtime agents that ship today, how they are registered,
+what lanes they operate in, and what boundaries constrain them.
 
----
+## Executive Summary
 
-## Overview
+Swarm Team Six ships eight runtime agent roles:
 
-Eight agent archetypes form the blue swarm. Each maps to a biological swarm role and a real threat-hunting function. Roles are behavioral modes, not fixed assignments -- agents can shift based on swarm needs.
+- `Whisker` drives hot-path detection and pheromone deposit.
+- `Stalker` drives async investigation when investigation is enabled.
+- `Weaver` drives async incident correlation when correlation is enabled.
+- `Pouncer` translates approved response intent into routed response requests.
+- `Tom` owns governance health, receipts, and partition-era control.
+- `Kitten` owns bounded detector evolution and rollout preparation.
+- `Sphinx` owns durable memory and memory-query answers when memory is enabled.
+- `Calico` owns deception deployment and tripwire findings when deception is enabled.
 
-| Agent | Hunt Phase | Language | Autonomy |
-|-------|-----------|----------|----------|
-| [Whisker](#whisker) | Detect | Rust | Tier 1 |
-| [Stalker](#stalker) | Stalk | Python | Tier 2 |
-| [Weaver](#weaver) | Stalk | Python | Tier 2 |
-| [Pouncer](#pouncer) | Ambush | Python | Tier 3 |
-| [Tom](#tom) | Ambush | Python | Tier 3 |
-| [Kitten](#kitten) | Evolve | Python | Tier 2 |
-| [Sphinx](#sphinx) | All | Python | Tier 1 |
-| [Calico](#calico) | Detect | Python | Tier 1 |
+All active roles are implemented in the Rust runtime under `crates/`. The old
+Python-heavy archetype map is not the active contract.
 
----
+## Registration Model
 
-## Whisker
+Serve mode uses the same registration model for every runtime-owned agent:
 
-**Role:** Sensor/detection -- deposits pheromones on anomaly detection.
-**Biological analog:** Cat whiskers sensing air currents.
-**Language:** Rust (crate: `swarm-whisker`)
-**Autonomy tier:** Tier 1 (fully autonomous)
+1. Load or create one persisted Ed25519 seed per role and slot from
+   `identity.agent_key_dir`.
+2. Derive the stable runtime identity as `swarm:ed25519:<hex>`.
+3. Check the identity against the registry under `identity.registry_dir`.
+4. Register the admitted identity with the dispatcher and the pheromone
+   substrate.
 
-### What It Does
+An identity that is not admitted does not join the dispatcher, does not deposit
+trusted pheromones, and does not participate in governance.
 
-Whiskers are long-running, stateful stream processors operating on NATS telemetry subjects. They consume telemetry events (eBPF syscalls from Tetragon, network flows from Hubble, tool invocations from the guard pipeline) and apply fast Rust-native detection. No LLM per signal -- microsecond budget per event.
+## Capability Matrix
 
-Detection methods:
-- Embedding cosine similarity (Spider Sense fast path)
-- Rule matching (Sigma-style patterns)
-- Statistical anomaly detection (sliding window state)
+| Role | Enabled when | Lane | Primary inputs | Primary outputs | Bounded by |
+| --- | --- | --- | --- | --- | --- |
+| `Whisker` | Always when admitted | Critical | Live telemetry, detector config, threat intel, pheromone policy | Signed pheromone deposits, agent findings, runtime events | Detector selection, pheromone thresholds, substrate admission |
+| `Stalker` | `investigation.enabled` | Async | Pheromone leads, replay bundles, investigation queue | Persisted investigation bundles, published findings | Investigation queue limits and time budgets |
+| `Weaver` | `correlation.enabled` | Async | Investigation bundles, incident store state | Correlated incidents, published findings | Correlation window, shared-key threshold, candidate limit |
+| `Pouncer` | Always when admitted | Critical / governance edge | Escalated findings, response playbook matches, governance policy | `RequestResponse` or `GovernanceVeto` actions | Policy gate, governance receipt checks, partition authorization |
+| `Tom` | Always when admitted | Governance | Agent health, destructive response requests, persisted governance state | Governance receipts, vetoes, contingency leases, partition reports | Quorum health, registry admission, persisted partition state |
+| `Kitten` | `evolution.enabled` | Evolution | Drift signals, replay results, ranking state, memory answers, adversarial pressure | Strategy proposals, durable population state, evolution status | Replay validation, proof lane, canary and promotion gates |
+| `Sphinx` | `memory.enabled` | Async / memory | Findings, incidents, deception assets, signed memory queries | Knowledge-graph persistence, signed memory answers | Memory retention policy and typed graph schema |
+| `Calico` | `deception.enabled` | Async / deception | Repo-owned deception playbook, runtime mode, observed decoy interactions | Decoy lifecycle state, high-confidence tripwire findings | Playbook entries, lifecycle rotation, cleanup windows |
 
-On detection, a Whisker deposits a signed `PheromoneDeposit` into the substrate. Other agents sense the concentration and react.
+## Shared Runtime Contract
 
-### Key Types
+Every registered agent operates under the same dispatcher contract:
 
-```rust
-// crates/swarm-whisker/src/detector.rs
+- agents tick on the bounded dispatcher loop instead of owning an unbounded
+  private runtime
+- each tick receives the current swarm mode, the last upward mode transition,
+  recent peer findings, and visible agent health
+- every role reports `healthy`, `degraded`, or `failed`
+- role shifts are broadcast as `SwarmEvent::RoleShift`
+- peer-visible findings are surfaced back into the dispatcher for bounded
+  cross-agent coordination
 
-pub trait DetectionStrategy: Send + Sync {
-    fn id(&self) -> &str;
-    fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionMatch>;
-}
+This means the runtime contract is not "independent services per archetype." It
+is one Rust runtime with typed role implementations sharing one substrate,
+health model, and event surface.
 
-pub struct TelemetryEvent {
-    pub source: String,       // "tetragon", "hubble", "guard_pipeline"
-    pub event_type: String,
-    pub timestamp: i64,
-    pub payload: serde_json::Value,
-}
+## Governance And Approval Lineage
 
-pub struct DetectionMatch {
-    pub threat_class: ThreatClass,
-    pub severity: Severity,
-    pub confidence: f64,
-    pub indicator: serde_json::Value,
-    pub strategy_id: String,
-}
-```
+The current governance chain is intentionally simple:
 
-### Communication
+1. An admitted runtime identity emits a finding or response proposal.
+2. `Pouncer` asks `Tom` policy whether a response can proceed.
+3. `Tom` returns either:
+   - no extra governance artifact for non-destructive guarded response,
+   - a signed governance receipt for destructive response, or
+   - a veto or contingency lease path when partition handling applies.
+4. The dispatcher re-validates destructive-governance artifacts before routing.
+5. The response router and audit trail persist the final outcome.
 
-- **Subscribes to:** Telemetry NATS subjects (source-specific)
-- **Publishes to:** `swarm.pheromone.{threat_class}.{severity}`
-- **Emits:** `SwarmAction::DepositPheromone`
+This means:
 
-### Triggers
+- identity admission happens before agent participation
+- destructive authority is attached as explicit evidence
+- operator approval layers on top of governance, not beside it
+- review and maintenance surfaces inspect and replay this lineage but do not
+  invent a second approval path
 
-- Incoming telemetry events on subscribed NATS subjects (continuous)
-- Swarm mode escalation to Alert or Incident (increases sampling rate)
+## Role Definitions
 
-### Produces
+### Whisker
 
-- `PheromoneDeposit` signed with the agent's Ed25519 key
-- Aggregated `PheromoneConcentration` triggers mode transitions
+`Whisker` is the hot-path detector. It consumes normalized telemetry, evaluates
+the configured detector set, and writes signed pheromone deposits into the
+configured substrate. It is the only role that must remain on the critical
+latency path for every event.
 
-### Notes
+Current scope:
 
-Detection strategies are pluggable via the `DetectionStrategy` trait. Strategies are evolved by Kitten agents, verified by Z3, and hot-loaded into Whiskers at runtime. The streaming runtime (`swarm-whisker/src/stream.rs`) maintains sliding window state for temporal correlation across events.
+- typed detector execution
+- threat-intel enrichment
+- distinct-source escalation inputs
+- agent findings for peer visibility
 
----
+`Whisker` does not own async investigation, correlation, or response execution.
 
-## Stalker
+### Stalker
 
-**Role:** Investigation -- follows leads, reconstructs timelines, gathers evidence.
-**Biological analog:** Cat stalking prey.
-**Language:** Python (`kernel/archetypes/stalker/`)
-**Autonomy tier:** Tier 2 (autonomous with reporting)
+`Stalker` is the bounded async investigation worker. It consumes lead pressure
+from the substrate, claims investigation work, and persists investigation
+bundles for later review and correlation.
 
-### What It Does
+Current scope:
 
-Stalkers activate when pheromone concentration crosses the alert threshold. They claim a lead (preventing duplication via OR-Set CRDTs), spawn an isolated investigation context (Cyntra workcell), and use LLM-powered hypothesis-driven investigation to reconstruct attack timelines.
+- replay-backed investigation work
+- bounded queue submission and completion
+- persisted investigation artifacts
+- publication of completed investigation findings back into the substrate
 
-Each Stalker has full `HushEngine` capability -- it can evaluate the ClawdStrike guard pipeline, issue delegation tokens to sub-agents, and produce signed receipts attesting to its findings.
+`Stalker` is optional and does not block the critical lane.
 
-### Key Capabilities
+### Weaver
 
-- Timeline reconstruction via hunt-query patterns
-- Hypothesis generation using Claude
-- Evidence gathering from telemetry streams
-- Cross-reference against Sphinx knowledge graph
-- Signed receipt production on investigation completion
+`Weaver` is the bounded async correlation worker. It consumes investigation
+results and turns related evidence into durable incidents.
 
-### Communication
+Current scope:
 
-- **Subscribes to:** `swarm.pheromone.*.*` (filtered by current investigation focus)
-- **Publishes to:** `swarm.blackboard.L{0-4}.{topic}` (investigation findings)
-- **Emits:** `SwarmAction::ClaimInvestigation`, `SwarmAction::PublishFindings`, `SwarmAction::RequestResponse`, `SwarmAction::DepositPheromone`
+- time-windowed candidate search
+- shared-key and evidence-based incident assembly
+- durable incident persistence
+- publication of correlated findings for downstream review
 
-### Triggers
+`Weaver` enriches operator context. It does not directly authorize response.
 
-- Pheromone concentration crossing alert threshold from >= 2 distinct sources
-- Direct assignment by Tom governance agent
-- Automatic spawn by Cyntra dispatcher when investigation queue exceeds capacity
+### Pouncer
 
-### Produces
+`Pouncer` is the response-routing agent. It watches the current swarm mode,
+matches escalated findings against the configured response playbook, and emits
+typed response requests only after governance policy review.
 
-- Investigation findings (published to blackboard)
-- Reinforced pheromone deposits (confirmed threats get stronger signals)
-- Response recommendations (forwarded to Pouncer via `RequestResponse`)
-- Ed25519-signed receipts for every investigation conclusion
+Current scope:
 
-### Notes
+- guarded response request creation
+- receipt attachment for destructive requests
+- contingency-lease attachment during partition when allowed
+- veto emission when governance blocks execution
 
-Stalkers are the primary LLM consumer in the swarm. They use the `anthropic` SDK for hypothesis generation and evidence evaluation. Investigation contexts are isolated (Cyntra workcells) to prevent cross-contamination between concurrent investigations. The dispatcher monitors Stalker health and reassigns leads if an agent times out.
+`Pouncer` does not bypass the policy gate, dispatcher checks, or response
+adapter controls.
 
----
+### Tom
 
-## Weaver
+`Tom` is the governance role. It tracks governance health, issues signed
+receipts for destructive requests, stages contingency leases for partition
+survival, and persists partition-era activity for later reconciliation.
 
-**Role:** Correlation -- connects independent signals into coherent attack narratives.
-**Biological analog:** Cat weaving between objects.
-**Language:** Python (`kernel/archetypes/weaver/`)
-**Autonomy tier:** Tier 2 (autonomous with reporting)
+Current scope:
 
-### What It Does
+- governance health observation
+- receipt-backed approval and veto for destructive response actions
+- persisted partition state and reconciliation reporting
+- pre-staged contingency lease issuance while healthy
 
-Weavers maintain MAGMA-style multi-graph threat context across four orthogonal graphs:
+`Tom` is the bounded governance layer that ships today. It is not a general
+fleet-wide control plane.
 
-1. **Temporal graph** -- attack timeline ordering (what happened when)
-2. **Causal graph** -- kill chain / dependency relationships (what caused what)
-3. **Entity graph** -- adversary infrastructure (IPs, domains, tools, credentials)
-4. **Semantic graph** -- TTP pattern similarity (embedding-based, which attacks look alike)
+### Kitten
 
-When multiple Whisker and Stalker signals arrive, the Weaver attempts to correlate them into a unified attack narrative. A single IP flagged by one Whisker is noise. The same IP appearing in Whisker pheromones, correlated with lateral movement by a Stalker, and matching a known TTP in the semantic graph, is a hypothesis worth promoting.
+`Kitten` owns the bounded evolution lane. It reacts to drift, analyst feedback,
+deception pressure, and evasion gaps, then materializes, validates, ranks, and
+proposes candidate detector strategies.
 
-### Communication
+Current scope:
 
-- **Subscribes to:** `swarm.pheromone.*.*`, `swarm.blackboard.L{0-4}.*`
-- **Publishes to:** `swarm.blackboard.L{2-4}.{topic}` (correlated hypotheses)
-- **Emits:** `SwarmAction::PublishFindings`, `SwarmAction::RequestResponse`
+- drift-driven and adversarially informed mutation cycles
+- durable population and episode tracking
+- replay validation and ranking
+- proof-lane handoff and canary admission bridging
+- evolution status persistence for operator surfaces
 
-### Triggers
+`Kitten` does not mutate response behavior or bypass rollout gates.
 
-- New pheromone deposits (continuous background processing)
-- New Stalker findings on the blackboard
-- Swarm mode escalation (activates aggressive cross-correlation in Alert/Incident mode)
+### Sphinx
 
-### Produces
+`Sphinx` owns durable memory. It persists typed knowledge-graph nodes and edges,
+registers long-lived threat context, and answers signed memory queries from the
+rest of the runtime.
 
-- Correlated hypotheses with cross-graph evidence chains
-- MITRE ATT&CK technique mappings
-- Kill chain reconstructions
-- Escalation recommendations when correlation confidence exceeds threshold
+Current scope:
 
-### Notes
+- file-backed typed graph persistence
+- memory-query answer emission
+- deception-asset registration
+- retention and garbage collection
 
-The 4-graph architecture is based on MAGMA (arXiv 2601.03236), which demonstrated 45.5% higher reasoning accuracy versus single-graph approaches. Graphs are maintained using NetworkX in-process, with periodic snapshots to Sphinx for long-term memory. Cross-hunt correlation allows the Weaver to connect signals from separate investigations that share infrastructure or TTPs.
+`Sphinx` is an enrichment lane, not a gate on hot-path execution.
 
----
+### Calico
 
-## Pouncer
+`Calico` owns deception. It deploys repo-owned decoys, rotates them through the
+lifecycle window, and emits high-confidence findings when monitored tripwires
+are touched.
 
-**Role:** Response execution -- executes coordinated response actions after consensus.
-**Biological analog:** Explosive kill strike.
-**Language:** Python (`kernel/archetypes/pouncer/`)
-**Autonomy tier:** Tier 3 (human-approved)
+Current scope:
 
-### What It Does
+- decoy inventory and lifecycle persistence
+- monitored file, port, and credential tripwires
+- deception asset registration into Sphinx
+- live interaction pressure for Kitten fitness
 
-Pouncers never act alone. Every response action requires BFT consensus from the Tom committee (2f+1 agreement). Actions are executed through the ClawdStrike broker subsystem -- time-bounded, path-scoped, cryptographically audited.
+`Calico` broadens detection coverage without widening destructive autonomy.
 
-Available response actions:
+## Boundaries
 
-| Action | What It Does |
-|--------|-------------|
-| `BlockEgress` | Block network egress to a target IP/CIDR |
-| `IsolateHost` | Isolate a host from the network |
-| `RevokeCredential` | Revoke a credential or capability token |
-| `DeployDecoy` | Deploy a deception asset (coordinated with Calico) |
-| `Escalate` | Escalate to human operator with summary and urgency |
+The active contract intentionally excludes:
 
-### Communication
+- a revived Python runtime for agent execution
+- per-role autonomy tiers as the primary control vocabulary
+- uncontrolled multi-node swarms or gossip-based agent coordination
+- response execution that bypasses dispatcher routing, policy, or governance
+- agent identity without persisted keys and registry-backed admission
 
-- **Subscribes to:** `swarm.consensus.{committee_id}.{phase}` (consensus results)
-- **Publishes to:** Broker capability requests, `swarm.agent.{id}.heartbeat`
-- **Emits:** `SwarmAction::RequestResponse` (which triggers consensus pipeline)
-
-### Triggers
-
-- Authorized `RequestResponse` action from Stalker or Weaver, approved by Tom consensus
-- Direct human operator command (Tier 3 override)
-
-### Produces
-
-- Executed response actions
-- Ed25519-signed receipts with full evidence chain
-- Broker capability tokens (time-bounded, path-scoped, auditable)
-
-### Notes
-
-The Pouncer is the most constrained agent in the swarm. It cannot independently decide to act. The middleware pipeline enforces this: stage 7 (ConsensusGate) blocks until BFT consensus is reached, and stage 2 (TierAuthorization) rejects any Tier 3 action from an agent not operating at Tier 3 with proper authorization. This is a direct design response to the false-positive cascade risk identified in brainstorm analysis.
-
----
-
-## Tom
-
-**Role:** Governance -- enforces policy, manages lifecycle, runs consensus.
-**Biological analog:** Tomcat (dominant leader).
-**Language:** Python (`kernel/archetypes/tom/`)
-**Autonomy tier:** Tier 3 (human-approved)
-
-### What It Does
-
-Tom agents are the swarm's governance layer:
-
-- **Policy enforcement** -- evaluates all actions against the ClawdStrike policy engine
-- **Autonomy tier management** -- sets and enforces what each archetype can do autonomously
-- **BFT consensus committee** -- participates in Tendermint-style consensus for response actions and evolution commits
-- **Agent lifecycle** -- admits new agents, revokes compromised agents, manages population scaling
-- **Posture state machine** -- manages swarm-wide mode transitions (Normal -> Alert -> Incident)
-- **Veto authority** -- can veto false-positive-prone strategies before deployment
-- **Receipt validation** -- verifies evidence chains and signed receipts from other agents
-
-### Communication
-
-- **Subscribes to:** `swarm.consensus.{committee_id}.*`, `swarm.evolution.proposal`, `swarm.agent.*.role_change`
-- **Publishes to:** `swarm.consensus.{committee_id}.{phase}`, `swarm.agent.{id}.heartbeat`
-- **Emits:** Consensus votes, policy decisions, lifecycle commands
-
-### Triggers
-
-- Consensus round initiated (propose/prevote/precommit phases)
-- Evolution strategy proposal (Z3 verification + consensus vote)
-- Agent health degradation (triggers lifecycle management)
-- Trust decision requests (admit/revoke agents)
-
-### Produces
-
-- Consensus votes (signed)
-- Policy decisions (signed receipts)
-- Agent lifecycle commands (admit, revoke, scale)
-- Posture state transitions
-
-### Notes
-
-Tom committee membership rotates via VRF seeded from the latest Merkle checkpoint hash. Default rotation: every hour. Default population: 3 Toms (tolerating f=1 Byzantine fault). Committee size can scale to 5 for larger deployments (tolerating f=1 with wider consensus, or configurable to f=2 with 7 members). Tom agents themselves require Tier 3 authorization for destructive actions (revoking agents, changing policy).
-
----
-
-## Kitten
-
-**Role:** Evolution -- mutates detection strategies, drives the co-evolutionary arms race.
-**Biological analog:** Kittens learning to hunt.
-**Language:** Python (`kernel/archetypes/kitten/`)
-**Autonomy tier:** Tier 2 (autonomous with reporting)
-
-### What It Does
-
-Kittens evolve detection strategies through genetic/memetic algorithms, test them against Hellcat red swarm replays, and submit verified strategies for Tom consensus approval.
-
-Evolution pipeline:
-
-1. **Generate** -- create candidate strategy via mutation/crossover of existing strategies
-2. **Shadow test** -- run candidate against historical traffic replay (no live impact)
-3. **Z3 gate** -- verify that the strategy maintains all safety invariants (compiled to Z3 formula via `clawdstrike-logos`)
-4. **Canary deployment** -- small Whisker population tests the strategy in production
-5. **Tom consensus** -- BFT vote approves promotion to full deployment
-
-Strategy selection uses MemRL Q-value scoring -- past strategies are scored by actual hunting utility (not just semantic similarity), and the Kitten selects parents with high learned effectiveness.
-
-### Communication
-
-- **Subscribes to:** `swarm.evolution.validation`, `swarm.canary.{test|alert}`
-- **Publishes to:** `swarm.evolution.proposal`, `swarm.canary.test`
-- **Emits:** `SwarmAction::ProposeStrategy`
-
-### Triggers
-
-- Red swarm evasion event (a Hellcat operator successfully evaded blue detection)
-- Scheduled evolution cadence (configurable: continuous, batch, or event-triggered)
-- Fitness degradation detected (detection rate dropping)
-
-### Produces
-
-- Evolved detection strategies (submitted as proposals)
-- Fitness metrics (blue detection rate vs red evasion rate over time)
-- Strategy lineage tracking (mutation/crossover history)
-- Z3 verification results
-
-### Notes
-
-Kittens evolve detection heuristics only, never response actions. Response actions are governed by the static, verified ClawdStrike policy engine. This is a hard architectural constraint -- the co-evolutionary engine in `kernel/evolution/` enforces it. The Z3 gate is not optional; it is a required step in the middleware pipeline (stage 9, EvolutionTracking, validates that all proposals have Z3 certification).
-
----
-
-## Sphinx
-
-**Role:** Memory -- maintains the swarm's long-term threat knowledge.
-**Biological analog:** Keeper of knowledge.
-**Language:** Python (`kernel/archetypes/sphinx/`)
-**Autonomy tier:** Tier 1 (fully autonomous)
-
-### What It Does
-
-Sphinx maintains the swarm's collective memory across three scopes:
-
-| Scope | Contents | Retention |
-|-------|----------|-----------|
-| **Individual** | Per-agent recent observations, investigation notes | Short-term, high fidelity |
-| **Collective** | Aggregated swarm findings, confirmed threats, resolved incidents | Medium-term, consolidated |
-| **World** | Threat landscape context, MITRE ATT&CK mappings, external intel | Long-term, curated |
-
-The memory system is backed by a knowledge graph (pluggable backend: in-memory for dev, SQLite for single-node, Neo4j/KuzuDB for production). Knowledge is grounded in structured data -- Ed25519-signed receipts, STIX objects, MITRE technique IDs -- to prevent hallucinated threats.
-
-Memory types adapted from Cyntra:
-- **Pattern memory** -- recurring threat patterns and detection strategies
-- **Failure memory** -- past false positives and investigation dead ends
-- **Dynamic memory** -- active investigation state
-- **Context memory** -- environmental context (what's normal for this network)
-- **Playbook memory** -- investigation procedures and their outcomes
-- **Frontier memory** -- unresolved hypotheses and leads for future investigation
-
-### Communication
-
-- **Subscribes to:** `swarm.blackboard.L{0-4}.*` (all investigation findings)
-- **Publishes to:** Knowledge graph queries return directly to requesting agents
-- **Emits:** `SwarmAction::DepositPheromone` (when historical pattern matches current activity)
-
-### Triggers
-
-- New findings published to the blackboard (continuous ingestion)
-- Direct queries from Stalkers and Weavers needing historical context
-- Scheduled consolidation (short-term to long-term memory migration)
-
-### Produces
-
-- Knowledge graph entries (signed, timestamped)
-- Historical pattern matches (deposited as pheromones)
-- Investigation context for Stalker hypothesis generation
-- Cross-engagement correlation data for Weavers
-- Curated pattern DB updates for Whisker detection strategies
-
-### Notes
-
-Sphinx prevents the "hallucinated threat" problem identified in brainstorm analysis. Every knowledge graph entry must be grounded in a signed receipt or structured external intelligence (STIX/TAXII). LLM-generated summaries are stored as supplementary context, never as primary evidence. The MiroFish-inspired architecture ensures that all agent reasoning derives from the structured graph, not from LLM memory.
-
----
-
-## Calico
-
-**Role:** Deception -- deploys honeypots and canary tokens.
-**Biological analog:** Camouflage patterns.
-**Language:** Python (`kernel/archetypes/calico/`)
-**Autonomy tier:** Tier 1 (fully autonomous)
-
-### What It Does
-
-Calico deploys and manages deception infrastructure:
-
-- **Honeypots** -- service emulators that appear to be real targets
-- **Canary tokens** -- tripwire credentials and files that alert when accessed
-- **Decoy network segments** -- fake network infrastructure to attract reconnaissance
-
-Calico agents coordinate with Whiskers to monitor interactions with deception assets. Any interaction with a honeypot or canary token is inherently suspicious -- legitimate users and systems don't touch them. This gives Calico's detections unusually high confidence.
-
-### Communication
-
-- **Subscribes to:** Telemetry from deception infrastructure, `swarm.pheromone.initial_access.*`, `swarm.pheromone.discovery.*`
-- **Publishes to:** `swarm.pheromone.{threat_class}.{severity}`, deployment records to Sphinx
-- **Emits:** `SwarmAction::DepositPheromone`
-
-### Triggers
-
-- Swarm initialization (deploys baseline deception infrastructure)
-- Stalker investigation findings (deploys targeted decoys in active investigation zones)
-- Tom directive (deploys specific decoy types in specific zones)
-
-### Produces
-
-- Deployed deception assets (honeypots, canaries, decoys)
-- High-confidence pheromone deposits when deception assets are triggered
-- Deception asset inventory (maintained in Sphinx)
-
-### Notes
-
-Calico is Tier 1 (fully autonomous) because deploying bait is low-risk -- it does not block traffic, isolate hosts, or revoke credentials. The worst case for a false positive is a wasted honeypot. This makes Calico a safe first-mover in the hunt cycle, deploying deception infrastructure ahead of confirmed threats and providing high-signal-to-noise detection when assets are triggered.
-
----
-
-## Red Swarm Agents (Hellcat-based)
-
-The red swarm is not part of the STS blue swarm codebase. It is adapted from the Hellcat kernel and runs as the adversarial opponent in the co-evolutionary arms race. Included here for completeness.
-
-| Agent | Hellcat Source | Role |
-|-------|---------------|------|
-| **ReconOp** | 9-phase recon pipeline | Discovers attack surface, feeds TargetGraph |
-| **InjectionOp** | SQLi/cmd injection operator | Probes for injection vulnerabilities |
-| **AuthOp** | Auth bypass operator | Tests authentication weaknesses |
-| **EvasionOp** | Evasion classifier + strategy engine | Adapts to blue swarm detection patterns |
-| **ChainOp** | ChainAnalyzer | Finds multi-step exploit chains |
-| **OpsecOp** | NoiseMonitor + StealthBudget | Detects when blue swarm is watching |
-
-Red swarm fitness degrades when blue swarm detects its activity. Blue swarm fitness degrades when red swarm evades detection. Both sides co-evolve.
-
----
-
-## Log Format
-
-Agent radio chatter follows a consistent format. Every line is backed by a signed receipt anchored in the Merkle trail.
-
-```
-[Whisker-7a3f] anomaly: unusual egress to 185.220.101.x (sim=0.91)
-[Stalker-2e1b] investigating Whisker-7a3f lead, 6h timeline
-[Weaver-9c4d] correlated: H-0042 lateral movement via SSH
-[Tom-0001]    consensus: 3/5 approve, authorizing Pouncer
-[Pouncer-8f2a] response: block 185.220.101.0/24 (receipt 0xae3f)
-[Kitten-4d1c] evolved: strategy S-0087 promoted (Z3 verified, fitness +12%)
-[Sphinx-1b0e] indexed: H-0042 -> ATT&CK T1021.004, linked to campaign C-0019
-[Calico-3e7a] deployed: canary token in /srv/data/finance (tripwire active)
-```
-
-Format: `[{Role}-{short_id}] {action}: {detail}`
-
-The `AgentId` is constructed as `{role}-{short_id}` where `short_id` is the first 4 hex characters of the agent's Ed25519 public key hash:
-
-```rust
-pub struct AgentId(pub String);
-
-impl AgentId {
-    pub fn new(role: &str, short_id: &str) -> Self {
-        Self(format!("{role}-{short_id}"))
-    }
-}
-```
-
----
-
-## Autonomy Tier Reference
-
-| Tier | Can Do Autonomously | Requires |
-|------|-------------------|----------|
-| **Tier 1** | Deposit pheromones, run detection, deploy decoys, query memory, publish findings | Nothing -- fully autonomous |
-| **Tier 2** | All Tier 1 actions, plus: claim investigations, generate hypotheses, propose strategies, correlate signals | Must report findings for human validation before escalation |
-| **Tier 3** | All Tier 2 actions, plus: execute response actions, change policy, deploy evolved strategies, admit/revoke agents | BFT consensus (2f+1 Tom committee) AND human approval |
-
-Confidence thresholds (from `rulesets/default.yaml`):
-- Tier 1: confidence >= 0.9
-- Tier 2: confidence >= 0.7
-- Below 0.7: requires human guidance
-- Any action above `critical` severity: requires human approval regardless of confidence
+Use `docs/ARCHITECTURE.md` for lane boundaries,
+`docs/CONSENSUS.md` for governance semantics, and `docs/EVOLUTION.md` for the
+bounded rollout contract.
