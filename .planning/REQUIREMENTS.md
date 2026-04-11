@@ -434,6 +434,126 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - **ACCESS-02**: Operator actions and approvals are individually attributable and auditable end to end
 - **ACCESS-03**: A reference architecture and adoption pack document supported deployment, identity, secret, and integration patterns for operators
 
+### Panic Eradication And Error Contracts (v1.54)
+
+#### Error Propagation
+
+- **PANIC-01**: All `unwrap()` and `expect()` calls in non-test runtime code are replaced with explicit error propagation or documented `// SAFETY:` justifications
+- **PANIC-02**: Each crate boundary defines a typed error enum with `From` conversions; cross-crate error propagation never uses string-only errors for programmatic decisions
+- **PANIC-03**: The ingest, service, and agent tick paths propagate errors through `Result` returns instead of panicking on unexpected input shapes
+- **PANIC-04**: A CI lint or test enforces that new `unwrap()`/`expect()` calls in non-test code require explicit justification comments
+
+### JetStream Integration Tests And Load Baselines (v1.55)
+
+#### JetStream Testing
+
+- **JTEST-01**: A containerized NATS JetStream test harness runs the full pheromone substrate test suite against a real JetStream backend in CI
+- **JTEST-02**: Substrate tests covering deposit, query, escalation, threat-class config, threat-intel, and GC run against both in-memory and JetStream backends with identical assertions
+- **JTEST-03**: `criterion` benchmarks measure hot-path latency (ingest → detect → deposit → escalate) at p50, p95, and p99 under sustained synthetic load
+
+#### Load Testing
+
+- **JTEST-04**: A sustained-throughput load test establishes the maximum events-per-second the runtime can process before readiness shedding activates, with documented hardware profile
+
+### Binary Attestation And Configuration Integrity (v1.56)
+
+#### Startup Attestation
+
+- **ATTEST-01**: The runtime verifies its own binary hash and repo-owned ruleset signatures at startup; live-response mode is refused if attestation fails
+- **ATTEST-02**: Configuration files loaded at startup are verified against Ed25519 signatures from the config-signing key; unsigned or tampered configs fail closed with structured error
+
+#### Runtime Self-Monitoring
+
+- **ATTEST-03**: The runtime detects debugger attachment (TracerPid on Linux) and unexpected library loads at configurable intervals; detection emits structured alerts and optionally fails closed for live-response mode
+
+#### Supply Chain
+
+- **ATTEST-04**: `deny.toml` denies advisory violations and wildcard licenses; `cargo-audit` runs as a hard CI gate; SBOM artifacts are generated per release
+
+### Autonomous Parameter Evolution With Measured Fitness (v1.57)
+
+#### Algorithmic Mutation
+
+- **AUTOEVO-01**: KittenAgent generates parameter variant candidates algorithmically (bounded random perturbation, crossover of top-performing genomes) without requiring operator-authored experiment specs
+- **AUTOEVO-02**: Generated candidates are evaluated against the repo-owned evasion corpus with measured catch rate, false-positive rate, and latency as fitness dimensions
+
+#### Measured Evolution
+
+- **AUTOEVO-03**: The evolution loop runs for N configurable generations and reports generation-over-generation fitness improvement with statistical significance
+- **AUTOEVO-04**: At least one detector strategy shows measurable autonomous improvement (target: 5%+ evasion catch-rate gain over 10 generations) validated against the tracked evasion corpus
+
+### Multi-Event Sequence Detection (v1.58)
+
+#### Temporal Matching
+
+- **SEQDET-01**: A `SequenceDetector` matches ordered temporal sequences of events within a configurable sliding window, where each step is a predicate over `TelemetryEvent` fields
+- **SEQDET-02**: Sequence rules are defined in repo-owned YAML with ATT&CK technique chain metadata (e.g., T1003→T1021→T1053)
+
+#### Kill Chain Coverage
+
+- **SEQDET-03**: At least three ATT&CK technique chains are detected that no single-event detector can catch, validated by new scenario suite entries with chain-only ground truth
+- **SEQDET-04**: Sequence detection integrates with the existing pheromone deposit and escalation pipeline; partial chain matches deposit lower-confidence intermediate pheromones
+
+### Guided First-Run And Alert Quality Scoring (v1.59)
+
+#### Onboarding
+
+- **ONBOARD-01**: `swarmctl init` includes a readiness diagnostic that validates telemetry source connectivity, detector activation, and substrate health before declaring operational
+- **ONBOARD-02**: A guided first-run mode injects synthetic telemetry and walks the operator through seeing their first detection, approval, and proof export within 15 minutes of install
+
+#### Alert Quality
+
+- **ONBOARD-03**: Per-detector and per-host false-positive rates are tracked from analyst feedback and surfaced through `swarmctl` and the operator API
+- **ONBOARD-04**: The system generates concrete tuning recommendations (e.g., "add host X to exclusion list", "raise threshold for detector Y") based on measured FP patterns
+
+### Agent Lifecycle Isolation And Graceful Degradation (v1.60)
+
+#### Agent Isolation
+
+- **ISOLATE-01**: Each agent type runs within its own panic boundary (`catch_unwind` or equivalent) so that a panic in one agent does not crash the runtime process
+- **ISOLATE-02**: Agent health monitoring detects persistent failures and restarts individual agents without affecting the rest of the swarm
+
+#### Degradation Modes
+
+- **ISOLATE-03**: The runtime defines explicit degradation levels (full, detect-only, read-only, emergency-drain) with documented behavior per level and automated transitions based on health signals
+- **ISOLATE-04**: Degradation mode transitions are tested end-to-end: NATS unreachable → detect-only, disk full → read-only, heap pressure → emergency-drain
+
+### Response Action Library And Playbook Builder (v1.61)
+
+#### Action Expansion
+
+- **RESPONSE-01**: The response adapter library expands to at least 15 concrete action types including network isolation, DNS sinkhole, user session termination, EDR-initiated scan, and firewall rule injection
+- **RESPONSE-02**: Each response action defines a typed blast-radius model (affected hosts, services, users) and a rollback procedure
+
+#### Playbook Composition
+
+- **RESPONSE-03**: Operators define multi-step response playbooks in YAML with conditional branching (if severity >= high AND threat_class == LateralMovement, then: step1, step2...)
+- **RESPONSE-04**: Playbooks support dry-run preview that shows projected blast radius and approval requirements before any live execution
+
+### Statistical Anomaly Scoring And Behavioral Breadth (v1.62)
+
+#### Statistical Scoring
+
+- **ANOMALY-01**: `BehavioralAnomalyDetector` replaces its fixed confidence formula with learned per-entity distributions using online algorithms (Welford's or equivalent)
+- **ANOMALY-02**: Anomaly scores are derived from statistical deviation measures (z-score, percentile rank, or information-theoretic surprise) instead of fixed threshold arithmetic
+
+#### Behavioral Breadth
+
+- **ANOMALY-03**: Behavioral baselines extend to network, DNS, authentication, file access, and memory event types with per-type learned distributions
+- **ANOMALY-04**: False-positive rate on behavioral findings decreases by at least 30% while maintaining catch rate, measured by replaying labeled telemetry with ground-truth normal/anomalous labels
+
+### Evolution Crate Decomposition And Schema Migration (v1.63)
+
+#### Crate Decomposition
+
+- **DECOMP-01**: `evolution.rs` and `mutation.rs` are decomposed into focused sub-modules with explicit `pub(crate)` API boundaries and no file exceeding 2000 lines
+- **DECOMP-02**: Public API surface of `swarm-evolution` is documented with module-level doc comments describing each sub-module's responsibility
+
+#### Schema Migration
+
+- **DECOMP-03**: Pheromone deposit wire format includes an explicit schema version; the substrate accepts deposits from the current and previous version with automatic migration
+- **DECOMP-04**: API response envelopes include schema versions; breaking changes are gated behind version negotiation rather than silent field addition
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -653,6 +773,46 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | ACCESS-01 | Phase 183 | Pending |
 | ACCESS-02 | Phase 183 | Pending |
 | ACCESS-03 | Phase 183 | Pending |
+| PANIC-01 | Phase 184 | Pending |
+| PANIC-02 | Phase 185 | Pending |
+| PANIC-03 | Phase 186 | Pending |
+| PANIC-04 | Phase 187 | Pending |
+| JTEST-01 | Phase 188 | Pending |
+| JTEST-02 | Phase 189 | Pending |
+| JTEST-03 | Phase 190 | Pending |
+| JTEST-04 | Phase 191 | Pending |
+| ATTEST-01 | Phase 192 | Pending |
+| ATTEST-02 | Phase 193 | Pending |
+| ATTEST-03 | Phase 194 | Pending |
+| ATTEST-04 | Phase 195 | Pending |
+| AUTOEVO-01 | Phase 196 | Pending |
+| AUTOEVO-02 | Phase 197 | Pending |
+| AUTOEVO-03 | Phase 198 | Pending |
+| AUTOEVO-04 | Phase 199 | Pending |
+| SEQDET-01 | Phase 200 | Pending |
+| SEQDET-02 | Phase 201 | Pending |
+| SEQDET-03 | Phase 202 | Pending |
+| SEQDET-04 | Phase 203 | Pending |
+| ONBOARD-01 | Phase 204 | Pending |
+| ONBOARD-02 | Phase 205 | Pending |
+| ONBOARD-03 | Phase 206 | Pending |
+| ONBOARD-04 | Phase 207 | Pending |
+| ISOLATE-01 | Phase 208 | Pending |
+| ISOLATE-02 | Phase 209 | Pending |
+| ISOLATE-03 | Phase 210 | Pending |
+| ISOLATE-04 | Phase 211 | Pending |
+| RESPONSE-01 | Phase 212 | Pending |
+| RESPONSE-02 | Phase 213 | Pending |
+| RESPONSE-03 | Phase 214 | Pending |
+| RESPONSE-04 | Phase 215 | Pending |
+| ANOMALY-01 | Phase 216 | Pending |
+| ANOMALY-02 | Phase 217 | Pending |
+| ANOMALY-03 | Phase 218 | Pending |
+| ANOMALY-04 | Phase 219 | Pending |
+| DECOMP-01 | Phase 220 | Pending |
+| DECOMP-02 | Phase 221 | Pending |
+| DECOMP-03 | Phase 222 | Pending |
+| DECOMP-04 | Phase 223 | Pending |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
@@ -672,7 +832,17 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.51 complete: 7 requirements satisfied across phases 172-175
 - v1.52 planned: 7 requirements across phases 176-179
 - v1.53 planned: 7 requirements across phases 180-183
-- Total queued in v1.52-v1.53: 14
+- v1.54 planned: 4 requirements across phases 184-187
+- v1.55 planned: 4 requirements across phases 188-191
+- v1.56 planned: 4 requirements across phases 192-195
+- v1.57 planned: 4 requirements across phases 196-199
+- v1.58 planned: 4 requirements across phases 200-203
+- v1.59 planned: 4 requirements across phases 204-207
+- v1.60 planned: 4 requirements across phases 208-211
+- v1.61 planned: 4 requirements across phases 212-215
+- v1.62 planned: 4 requirements across phases 216-219
+- v1.63 planned: 4 requirements across phases 220-223
+- Total queued in v1.52-v1.63: 54
 
 ---
 *Requirements defined: 2026-04-05*

@@ -171,6 +171,106 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 - [ ] **Phase 182: SLO, Capacity Envelope, And Alert Baselines** - Publish end-to-end load, capacity, SLO, and alert guidance based on measured runtime behavior. (PROD-04) (queued)
 - [ ] **Phase 183: Operator Access Model And Multi-Operator Audit** - Add scoped multi-operator access, attributable approvals, and a supported reference architecture for adoption. (ACCESS-01, ACCESS-02, ACCESS-03) (queued)
 
+### v1.54 Panic Eradication And Error Contracts
+
+**Goal:** Eliminate unwrap/expect from non-test runtime code and establish typed error propagation contracts at every crate boundary.
+**Executable phases:** 184-187
+
+- [ ] **Phase 184: Runtime Unwrap Audit And Error Types** - Audit and catalog all unwrap/expect sites in swarm-runtime; define typed error enums per module boundary. (PANIC-01, PANIC-02) (queued)
+- [ ] **Phase 185: Ingest And Service Panic-Free Conversion** - Convert ingest handlers, service module, and HTTP surfaces to propagate errors instead of panicking. (PANIC-03) (queued)
+- [ ] **Phase 186: Agent Tick And Evolution Error Boundaries** - Convert agent tick paths, evolution harnesses, and cross-crate calls to typed error propagation. (PANIC-03) (queued)
+- [ ] **Phase 187: Error Contract CI Enforcement** - Add CI lint enforcing unwrap/expect justification and integration tests proving panic-free behavior under malformed input. (PANIC-04) (queued)
+
+### v1.55 JetStream Integration Tests And Load Baselines
+
+**Goal:** Establish real JetStream test coverage and measured performance baselines for the production substrate and hot path.
+**Executable phases:** 188-191
+
+- [ ] **Phase 188: Containerized NATS Test Harness** - Build a Docker-based NATS JetStream test fixture reusable across pheromone and runtime test suites. (JTEST-01) (queued)
+- [ ] **Phase 189: JetStream Substrate Test Migration** - Run the full pheromone substrate test suite against JetStream with identical assertions to the in-memory backend. (JTEST-02) (queued)
+- [ ] **Phase 190: Hot Path Criterion Benchmarks** - Establish criterion benchmarks for ingest→detect→deposit→escalate at p50/p95/p99. (JTEST-03) (queued)
+- [ ] **Phase 191: Sustained Throughput Load Test** - Measure maximum events/sec before readiness shedding with documented hardware profile. (JTEST-04) (queued)
+
+### v1.56 Binary Attestation And Configuration Integrity
+
+**Goal:** Verify binary and config integrity at startup and detect runtime tampering to close the self-protection gap.
+**Executable phases:** 192-195
+
+- [ ] **Phase 192: Startup Binary And Ruleset Attestation** - Verify binary hash and ruleset signatures at startup; refuse live-response mode on failure. (ATTEST-01) (queued)
+- [ ] **Phase 193: Configuration Signature Verification** - Ed25519-signed config files with fail-closed rejection on tamper. (ATTEST-02) (queued)
+- [ ] **Phase 194: Runtime Anti-Tamper Monitoring** - Detect debugger attachment and unexpected library loads on Linux with structured alerts. (ATTEST-03) (queued)
+- [ ] **Phase 195: Supply Chain Hardening And SBOM** - Harden deny.toml, add cargo-audit CI gate, generate SBOM per release. (ATTEST-04) (queued)
+
+### v1.57 Autonomous Parameter Evolution With Measured Fitness
+
+**Goal:** Prove the evolution engine can autonomously improve detector quality without operator-authored experiment specs.
+**Executable phases:** 196-199
+
+- [ ] **Phase 196: Algorithmic Parameter Variant Generation** - KittenAgent generates bounded random perturbation and crossover variants from top-performing genomes. (AUTOEVO-01) (queued)
+- [ ] **Phase 197: Autonomous Fitness Evaluation Loop** - Generated candidates are evaluated against evasion corpus with catch rate, FP rate, and latency fitness. (AUTOEVO-02) (queued)
+- [ ] **Phase 198: Measured Evolution Benchmark** - Run N-generation evolution loop and report generation-over-generation fitness with statistical significance. (AUTOEVO-03) (queued)
+- [ ] **Phase 199: Evolution Results And Reporting** - Publish measured improvement results; target 5%+ catch-rate gain over 10 generations on at least one detector. (AUTOEVO-04) (queued)
+
+### v1.58 Multi-Event Sequence Detection
+
+**Goal:** Detect temporal attack chains that span multiple events, closing the single-event detection gap.
+**Executable phases:** 200-203
+
+- [ ] **Phase 200: Temporal Event Window Infrastructure** - Sliding window event buffer with configurable retention and efficient predicate matching. (SEQDET-01) (queued)
+- [ ] **Phase 201: Kill Chain Sequence Detector** - Repo-owned YAML sequence rules with ATT&CK technique chain metadata. (SEQDET-02) (queued)
+- [ ] **Phase 202: ATT&CK Chain Scenario Suite** - At least three kill chain scenarios with chain-only ground truth proving multi-event detection. (SEQDET-03) (queued)
+- [ ] **Phase 203: Sequence Detection Integration** - Sequence findings integrate with pheromone deposit and escalation; partial chains emit intermediate signals. (SEQDET-04) (queued)
+
+### v1.59 Guided First-Run And Alert Quality Scoring
+
+**Goal:** Reduce time-to-first-detection to under 15 minutes and surface actionable alert tuning recommendations.
+**Executable phases:** 204-207
+
+- [ ] **Phase 204: Readiness Diagnostic And Guided Setup** - swarmctl init validates telemetry connectivity, detector activation, and substrate health. (ONBOARD-01) (queued)
+- [ ] **Phase 205: Time-To-First-Detection Wizard** - Guided first-run mode with synthetic telemetry injection and walkthrough of detection→approval→proof. (ONBOARD-02) (queued)
+- [ ] **Phase 206: Per-Detector False Positive Tracking** - Track and persist per-detector and per-host FP rates from analyst feedback. (ONBOARD-03) (queued)
+- [ ] **Phase 207: Alert Tuning Recommendations** - Generate concrete tuning recommendations from measured FP patterns. (ONBOARD-04) (queued)
+
+### v1.60 Agent Lifecycle Isolation And Graceful Degradation
+
+**Goal:** Contain agent failures to their own boundary and define explicit runtime degradation levels.
+**Executable phases:** 208-211
+
+- [ ] **Phase 208: Per-Agent Panic Boundaries** - Each agent type runs within catch_unwind; one agent crash does not crash the process. (ISOLATE-01) (queued)
+- [ ] **Phase 209: Agent Health-Driven Restart** - Persistent agent failures trigger individual restart without affecting the rest of the swarm. (ISOLATE-02) (queued)
+- [ ] **Phase 210: Degradation Mode State Machine** - Define full/detect-only/read-only/emergency-drain levels with automated health-driven transitions. (ISOLATE-03) (queued)
+- [ ] **Phase 211: Degradation Transition Tests** - End-to-end tests prove NATS-down→detect-only, disk-full→read-only, heap-pressure→drain transitions. (ISOLATE-04) (queued)
+
+### v1.61 Response Action Library And Playbook Builder
+
+**Goal:** Expand from 3 response adapters to 15+ concrete actions with operator-composable playbook sequences.
+**Executable phases:** 212-215
+
+- [ ] **Phase 212: Response Action Adapter Expansion** - Add network isolation, DNS sinkhole, session termination, EDR scan, firewall injection adapters. (RESPONSE-01) (queued)
+- [ ] **Phase 213: Blast-Radius Models And Rollback Procedures** - Each action defines typed blast-radius and rollback. (RESPONSE-02) (queued)
+- [ ] **Phase 214: Composable Playbook YAML Schema** - Multi-step conditional playbooks with branching and approval gates. (RESPONSE-03) (queued)
+- [ ] **Phase 215: Playbook Dry-Run And Preview** - Dry-run preview showing projected blast radius and approval requirements. (RESPONSE-04) (queued)
+
+### v1.62 Statistical Anomaly Scoring And Behavioral Breadth
+
+**Goal:** Replace fixed anomaly formulas with learned distributions and extend behavioral detection to all telemetry types.
+**Executable phases:** 216-219
+
+- [ ] **Phase 216: Online Distribution Learning** - Replace fixed confidence formula with Welford's algorithm or equivalent per-entity online distribution. (ANOMALY-01) (queued)
+- [ ] **Phase 217: Statistical Deviation Scoring** - Derive anomaly scores from z-score, percentile rank, or information-theoretic surprise. (ANOMALY-02) (queued)
+- [ ] **Phase 218: Multi-Telemetry Behavioral Extension** - Extend baselines to network, DNS, auth, file, and memory events. (ANOMALY-03) (queued)
+- [ ] **Phase 219: Anomaly Quality Benchmark** - Measure 30%+ FP reduction while maintaining catch rate against labeled telemetry. (ANOMALY-04) (queued)
+
+### v1.63 Evolution Crate Decomposition And Schema Migration
+
+**Goal:** Pay down velocity debt by decomposing the evolution crate and establishing versioned wire formats.
+**Executable phases:** 220-223
+
+- [ ] **Phase 220: Evolution Module Extraction** - Decompose evolution.rs into focused sub-modules with no file exceeding 2000 lines. (DECOMP-01) (queued)
+- [ ] **Phase 221: Mutation Module Extraction** - Decompose mutation.rs into focused sub-modules with documented API boundaries. (DECOMP-02) (queued)
+- [ ] **Phase 222: Pheromone Wire Format Versioning** - Add explicit schema version to deposits with current+previous version migration. (DECOMP-03) (queued)
+- [ ] **Phase 223: API Response Schema Migration** - Version API envelopes with version negotiation for breaking changes. (DECOMP-04) (queued)
+
 ## Progress
 
 **v1.38 execution order:** 120 -> 121 || 122 -> 123
@@ -204,6 +304,26 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 **v1.52 execution order:** 176 -> 177 -> 178 -> 179
 
 **v1.53 execution order:** 180 -> 181 -> 182 -> 183
+
+**v1.54 execution order:** 184 -> 185 -> 186 -> 187
+
+**v1.55 execution order:** 188 -> 189 -> 190 -> 191
+
+**v1.56 execution order:** 192 -> 193 -> 194 -> 195
+
+**v1.57 execution order:** 196 -> 197 -> 198 -> 199
+
+**v1.58 execution order:** 200 -> 201 -> 202 -> 203
+
+**v1.59 execution order:** 204 -> 205 -> 206 -> 207
+
+**v1.60 execution order:** 208 -> 209 -> 210 -> 211
+
+**v1.61 execution order:** 212 -> 213 -> 214 -> 215
+
+**v1.62 execution order:** 216 -> 217 -> 218 -> 219
+
+**v1.63 execution order:** 220 -> 221 -> 222 -> 223
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -279,8 +399,48 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 | 181. Recovery Drills And Durability Validation | v1.53 | 0/1 | Pending | - |
 | 182. SLO, Capacity Envelope, And Alert Baselines | v1.53 | 0/1 | Pending | - |
 | 183. Operator Access Model And Multi-Operator Audit | v1.53 | 0/1 | Pending | - |
+| 184. Runtime Unwrap Audit And Error Types | v1.54 | 0/1 | Pending | - |
+| 185. Ingest And Service Panic-Free Conversion | v1.54 | 0/1 | Pending | - |
+| 186. Agent Tick And Evolution Error Boundaries | v1.54 | 0/1 | Pending | - |
+| 187. Error Contract CI Enforcement | v1.54 | 0/1 | Pending | - |
+| 188. Containerized NATS Test Harness | v1.55 | 0/1 | Pending | - |
+| 189. JetStream Substrate Test Migration | v1.55 | 0/1 | Pending | - |
+| 190. Hot Path Criterion Benchmarks | v1.55 | 0/1 | Pending | - |
+| 191. Sustained Throughput Load Test | v1.55 | 0/1 | Pending | - |
+| 192. Startup Binary And Ruleset Attestation | v1.56 | 0/1 | Pending | - |
+| 193. Configuration Signature Verification | v1.56 | 0/1 | Pending | - |
+| 194. Runtime Anti-Tamper Monitoring | v1.56 | 0/1 | Pending | - |
+| 195. Supply Chain Hardening And SBOM | v1.56 | 0/1 | Pending | - |
+| 196. Algorithmic Parameter Variant Generation | v1.57 | 0/1 | Pending | - |
+| 197. Autonomous Fitness Evaluation Loop | v1.57 | 0/1 | Pending | - |
+| 198. Measured Evolution Benchmark | v1.57 | 0/1 | Pending | - |
+| 199. Evolution Results And Reporting | v1.57 | 0/1 | Pending | - |
+| 200. Temporal Event Window Infrastructure | v1.58 | 0/1 | Pending | - |
+| 201. Kill Chain Sequence Detector | v1.58 | 0/1 | Pending | - |
+| 202. ATT&CK Chain Scenario Suite | v1.58 | 0/1 | Pending | - |
+| 203. Sequence Detection Integration | v1.58 | 0/1 | Pending | - |
+| 204. Readiness Diagnostic And Guided Setup | v1.59 | 0/1 | Pending | - |
+| 205. Time-To-First-Detection Wizard | v1.59 | 0/1 | Pending | - |
+| 206. Per-Detector False Positive Tracking | v1.59 | 0/1 | Pending | - |
+| 207. Alert Tuning Recommendations | v1.59 | 0/1 | Pending | - |
+| 208. Per-Agent Panic Boundaries | v1.60 | 0/1 | Pending | - |
+| 209. Agent Health-Driven Restart | v1.60 | 0/1 | Pending | - |
+| 210. Degradation Mode State Machine | v1.60 | 0/1 | Pending | - |
+| 211. Degradation Transition Tests | v1.60 | 0/1 | Pending | - |
+| 212. Response Action Adapter Expansion | v1.61 | 0/1 | Pending | - |
+| 213. Blast-Radius Models And Rollback Procedures | v1.61 | 0/1 | Pending | - |
+| 214. Composable Playbook YAML Schema | v1.61 | 0/1 | Pending | - |
+| 215. Playbook Dry-Run And Preview | v1.61 | 0/1 | Pending | - |
+| 216. Online Distribution Learning | v1.62 | 0/1 | Pending | - |
+| 217. Statistical Deviation Scoring | v1.62 | 0/1 | Pending | - |
+| 218. Multi-Telemetry Behavioral Extension | v1.62 | 0/1 | Pending | - |
+| 219. Anomaly Quality Benchmark | v1.62 | 0/1 | Pending | - |
+| 220. Evolution Module Extraction | v1.63 | 0/1 | Pending | - |
+| 221. Mutation Module Extraction | v1.63 | 0/1 | Pending | - |
+| 222. Pheromone Wire Format Versioning | v1.63 | 0/1 | Pending | - |
+| 223. API Response Schema Migration | v1.63 | 0/1 | Pending | - |
 
 ---
 *Latest completed milestone: v1.51 Assurance-Gated Evolution And Counterexample Loop*
-*Next step: Activate `v1.52 Providence Reconciliation And Response Rehearsal` before resuming `$gsd-autonomous`*
+*Next step: Execute `$gsd-autonomous` to work through v1.52 through v1.63*
 *Last updated: 2026-04-11 — Completed Phase 175 and closed v1.51 Assurance-Gated Evolution And Counterexample Loop*

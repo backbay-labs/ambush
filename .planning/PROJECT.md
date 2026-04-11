@@ -26,13 +26,23 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.50` made the async lane first-class and operator-visible, so assurance decisions can now build on stronger correlation, scheduling, and evidence quality.
 - `v1.52` and `v1.53` both benefit from a fail-closed rollout and review contract before Providence reconciliation and production packaging add more operator surface area.
 
-**Queued after that:**
+**Queued milestones (v1.52-v1.63):**
 - `v1.52 Providence Reconciliation And Response Rehearsal`
 - `v1.53 Production Packaging, Recovery, And Operator Access`
+- `v1.54 Panic Eradication And Error Contracts`
+- `v1.55 JetStream Integration Tests And Load Baselines`
+- `v1.56 Binary Attestation And Configuration Integrity`
+- `v1.57 Autonomous Parameter Evolution With Measured Fitness`
+- `v1.58 Multi-Event Sequence Detection`
+- `v1.59 Guided First-Run And Alert Quality Scoring`
+- `v1.60 Agent Lifecycle Isolation And Graceful Degradation`
+- `v1.61 Response Action Library And Playbook Builder`
+- `v1.62 Statistical Anomaly Scoring And Behavioral Breadth`
+- `v1.63 Evolution Crate Decomposition And Schema Migration`
 
 ## Current State
 
-No milestone is active right now. `v1.51 Assurance-Gated Evolution And Counterexample Loop` is complete with phases `172` through `175` shipped, and `v1.52 Providence Reconciliation And Response Rehearsal` remains queued awaiting explicit activation.
+`v1.52 Providence Reconciliation And Response Rehearsal` is active. The full autonomous execution queue runs v1.52 through v1.63 (phases 176-223) covering Providence reconciliation, production packaging, operational hardening, self-protection, autonomous evolution, sequence detection, operator onboarding, agent isolation, response expansion, anomaly depth, and codebase decomposition.
 
 **What v1.37.1 hardened:**
 - Pheromone deposits are now Ed25519-signed by agents and validated by the substrate on all backends
