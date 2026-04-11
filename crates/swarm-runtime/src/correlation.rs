@@ -225,6 +225,8 @@ impl CorrelationEngine {
             threat_class: Some(seed.threat_class.clone()),
             severity: Some(seed.severity),
             external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
         }
     }

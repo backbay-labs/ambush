@@ -20,6 +20,27 @@ use tokio_rustls::rustls::{RootCertStore, ServerConfig};
 use tower::Service;
 use x509_parser::parse_x509_certificate;
 
+#[derive(Debug, thiserror::Error)]
+pub enum ServeError {
+    #[error("http server exited: {0}")]
+    Http(#[source] io::Error),
+
+    #[error("failed to load TLS server configuration: {0}")]
+    TlsConfig(#[source] io::Error),
+
+    #[error("failed to wait for shutdown signal: {0}")]
+    ShutdownSignal(#[source] io::Error),
+
+    #[error("failed to accept incoming connection: {0}")]
+    Accept(#[source] io::Error),
+
+    #[error("TLS connection task exited unexpectedly: {0}")]
+    TaskJoin(#[from] tokio::task::JoinError),
+
+    #[error("TLS connection failed: {0}")]
+    Connection(#[source] io::Error),
+}
+
 #[derive(Debug, Clone)]
 pub struct TlsClientIdentity(Arc<str>);
 
@@ -34,7 +55,7 @@ pub async fn serve_with_listener<F>(
     app: Router,
     tls: Option<TlsConfig>,
     shutdown: F,
-) -> io::Result<()>
+) -> Result<(), ServeError>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -44,6 +65,7 @@ where
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown)
             .await
+            .map_err(ServeError::Http)
     }
 }
 
@@ -52,11 +74,13 @@ async fn serve_tls_with_listener<F>(
     app: Router,
     tls: TlsConfig,
     shutdown: F,
-) -> io::Result<()>
+) -> Result<(), ServeError>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let acceptor = TlsAcceptor::from(Arc::new(load_server_config(&tls)?));
+    let acceptor = TlsAcceptor::from(Arc::new(
+        load_server_config(&tls).map_err(ServeError::TlsConfig)?,
+    ));
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut shutdown_task = Some(tokio::spawn(async move {
         shutdown.await;
@@ -71,7 +95,7 @@ where
                 break;
             }
             accepted = listener.accept() => {
-                let (stream, peer_addr) = accepted?;
+                let (stream, peer_addr) = accepted.map_err(ServeError::Accept)?;
                 let acceptor = acceptor.clone();
                 let app = app.clone();
                 let connection_shutdown = shutdown_rx.clone();
@@ -84,7 +108,7 @@ where
                                 error = %error,
                                 "rejected TLS connection"
                             );
-                            return Ok(()) as io::Result<()>;
+                            return Ok(()) as Result<(), ServeError>;
                         }
                     };
                     let client_identity = extract_client_identity(tls_stream.get_ref().1);
@@ -120,12 +144,17 @@ where
 
                     tokio::select! {
                         result = &mut connection => {
-                            result.map_err(io::Error::other)?;
+                            result
+                                .map_err(io::Error::other)
+                                .map_err(ServeError::Connection)?;
                         }
                         changed = wait_for_shutdown_signal(connection_shutdown) => {
                             changed?;
                             connection.as_mut().graceful_shutdown();
-                            connection.await.map_err(io::Error::other)?;
+                            connection
+                                .await
+                                .map_err(io::Error::other)
+                                .map_err(ServeError::Connection)?;
                         }
                     }
                     Ok(())
@@ -135,7 +164,7 @@ where
     }
 
     while let Some(result) = connection_tasks.join_next().await {
-        result.map_err(io::Error::other)??;
+        result.map_err(ServeError::TaskJoin)??;
     }
     if let Some(task) = shutdown_task.take() {
         task.abort();
@@ -150,9 +179,15 @@ fn ensure_crypto_provider_installed() {
     });
 }
 
-async fn wait_for_shutdown_signal(mut shutdown_rx: watch::Receiver<bool>) -> io::Result<()> {
+async fn wait_for_shutdown_signal(
+    mut shutdown_rx: watch::Receiver<bool>,
+) -> Result<(), ServeError> {
     loop {
-        shutdown_rx.changed().await.map_err(io::Error::other)?;
+        shutdown_rx
+            .changed()
+            .await
+            .map_err(io::Error::other)
+            .map_err(ServeError::ShutdownSignal)?;
         if *shutdown_rx.borrow() {
             return Ok(());
         }
@@ -222,7 +257,7 @@ fn client_identity_from_certificate(cert: &CertificateDer<'_>) -> Option<String>
 
 #[cfg(test)]
 mod tests {
-    use super::serve_with_listener;
+    use super::{ServeError, serve_with_listener};
     use axum::Router;
     use axum::routing::get;
     use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
@@ -302,6 +337,32 @@ mod tests {
 
         let _ = shutdown_tx.send(());
         handle.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn tls_server_reports_typed_config_error_for_missing_cert() {
+        let dir = unique_temp_dir();
+        let missing_cert = dir.join("missing-cert.pem");
+        let missing_key = dir.join("missing-key.pem");
+        let (listener, _) = bind_listener();
+        let app = Router::new().route("/readyz", get(|| async { "ok" }));
+
+        let error = serve_with_listener(
+            listener,
+            app,
+            Some(TlsConfig {
+                cert_path: missing_cert.display().to_string(),
+                key_path: missing_key.display().to_string(),
+                client_ca_cert: None,
+            }),
+            async {},
+        )
+        .await
+        .expect_err("missing TLS assets should fail before serving");
+
+        assert!(matches!(error, ServeError::TlsConfig(_)));
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn bind_listener() -> (TcpListener, std::net::SocketAddr) {

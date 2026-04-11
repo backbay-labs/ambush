@@ -8,10 +8,18 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 const LATENCY_BUCKETS_US: [f64; 6] = [100.0, 500.0, 1_000.0, 5_000.0, 10_000.0, 50_000.0];
+const INGEST_REQUEST_BUCKETS_US: [f64; 8] = [
+    1_000.0, 5_000.0, 10_000.0, 25_000.0, 50_000.0, 100_000.0, 250_000.0, 500_000.0,
+];
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 struct VerdictLabels {
     verdict: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct IngestOutcomeLabels {
+    status: String,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -51,6 +59,8 @@ struct EvasionCoverageLabels {
 #[derive(Clone)]
 pub struct CriticalPathMetrics {
     registry: Arc<Mutex<Registry>>,
+    ingest_request_latency_us: Histogram,
+    ingest_events_total: Family<IngestOutcomeLabels, Counter>,
     detect_latency_us: Histogram,
     policy_latency_us: Histogram,
     response_latency_us: Histogram,
@@ -74,6 +84,8 @@ pub struct CriticalPathMetrics {
 
 impl CriticalPathMetrics {
     pub fn new() -> Self {
+        let ingest_request_latency_us = Histogram::new(INGEST_REQUEST_BUCKETS_US);
+        let ingest_events_total = Family::<IngestOutcomeLabels, Counter>::default();
         let detect_latency_us = Histogram::new(LATENCY_BUCKETS_US);
         let policy_latency_us = Histogram::new(LATENCY_BUCKETS_US);
         let response_latency_us = Histogram::new(LATENCY_BUCKETS_US);
@@ -96,6 +108,16 @@ impl CriticalPathMetrics {
         let evasion_detected_payloads =
             Family::<EvasionCoverageLabels, Gauge<u64, AtomicU64>>::default();
         let mut registry = Registry::with_prefix("swarm");
+        registry.register(
+            "ingest_request_latency_microseconds",
+            "End-to-end HTTP ingest request latency in microseconds",
+            ingest_request_latency_us.clone(),
+        );
+        registry.register(
+            "ingest_events",
+            "Count of ingest events partitioned by request outcome",
+            ingest_events_total.clone(),
+        );
         registry.register(
             "detect_latency_microseconds",
             "Detection latency for the critical path in microseconds",
@@ -193,6 +215,8 @@ impl CriticalPathMetrics {
         );
         Self {
             registry: Arc::new(Mutex::new(registry)),
+            ingest_request_latency_us,
+            ingest_events_total,
             detect_latency_us,
             policy_latency_us,
             response_latency_us,
@@ -217,6 +241,18 @@ impl CriticalPathMetrics {
 
     pub fn observe_detect(&self, latency_us: f64) {
         self.detect_latency_us.observe(latency_us);
+    }
+
+    pub fn observe_ingest_request(&self, latency_us: f64) {
+        self.ingest_request_latency_us.observe(latency_us);
+    }
+
+    pub fn observe_ingest_events(&self, status: &str, count: u64) {
+        self.ingest_events_total
+            .get_or_create(&IngestOutcomeLabels {
+                status: status.to_string(),
+            })
+            .inc_by(count);
     }
 
     pub fn observe_policy(&self, latency_us: f64) {
@@ -366,12 +402,18 @@ mod tests {
     #[test]
     fn encode_metrics_renders_all_histograms() {
         let metrics = CriticalPathMetrics::new();
+        metrics.observe_ingest_request(7_500.0);
+        metrics.observe_ingest_events("accepted", 25);
         metrics.observe_detect(125.0);
         metrics.observe_policy(240.0);
         metrics.observe_response(800.0);
         metrics.observe_heap(4_096, 0.25);
 
         let encoded = encode_metrics(&metrics);
+        assert!(encoded.contains("# HELP swarm_ingest_request_latency_microseconds"));
+        assert!(encoded.contains("# TYPE swarm_ingest_request_latency_microseconds histogram"));
+        assert!(encoded.contains("swarm_ingest_request_latency_microseconds_bucket"));
+        assert!(encoded.contains("swarm_ingest_events_total{status=\"accepted\"} 25"));
         assert!(encoded.contains("# HELP swarm_detect_latency_microseconds"));
         assert!(encoded.contains("# TYPE swarm_detect_latency_microseconds histogram"));
         assert!(encoded.contains("swarm_detect_latency_microseconds_bucket"));

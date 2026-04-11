@@ -759,23 +759,23 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | COUNTER-02 | Phase 173 | Completed |
 | ASSURE-04 | Phase 175 | Completed |
 | ASSURE-05 | Phase 175 | Completed |
-| PROVREC-01 | Phase 176 | Pending |
-| PROVREC-02 | Phase 176 | Pending |
-| PROVREC-03 | Phase 177 | Pending |
-| REHEARSE-01 | Phase 178 | Pending |
-| REHEARSE-02 | Phase 178 | Pending |
-| REHEARSE-03 | Phase 179 | Pending |
-| REHEARSE-04 | Phase 179 | Pending |
-| PROD-01 | Phase 180 | Pending |
-| PROD-02 | Phase 181 | Pending |
-| PROD-03 | Phase 181 | Pending |
-| PROD-04 | Phase 182 | Pending |
-| ACCESS-01 | Phase 183 | Pending |
-| ACCESS-02 | Phase 183 | Pending |
-| ACCESS-03 | Phase 183 | Pending |
-| PANIC-01 | Phase 184 | Pending |
-| PANIC-02 | Phase 185 | Pending |
-| PANIC-03 | Phase 186 | Pending |
+| PROVREC-01 | Phase 176 | Completed |
+| PROVREC-02 | Phase 176 | Completed |
+| PROVREC-03 | Phase 177 | Completed |
+| REHEARSE-01 | Phase 178 | Completed |
+| REHEARSE-02 | Phase 178 | Completed |
+| REHEARSE-03 | Phase 179 | Completed |
+| REHEARSE-04 | Phase 179 | Completed |
+| PROD-01 | Phase 180 | Completed |
+| PROD-02 | Phase 181 | Completed |
+| PROD-03 | Phase 181 | Completed |
+| PROD-04 | Phase 182 | Completed |
+| ACCESS-01 | Phase 183 | Completed |
+| ACCESS-02 | Phase 183 | Completed |
+| ACCESS-03 | Phase 183 | Completed |
+| PANIC-01 | Phase 184 | Completed |
+| PANIC-02 | Phase 184 | Completed |
+| PANIC-03 | Phases 185-186 | Pending |
 | PANIC-04 | Phase 187 | Pending |
 | JTEST-01 | Phase 188 | Pending |
 | JTEST-02 | Phase 189 | Pending |
@@ -830,9 +830,9 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.49 complete: 7 satisfied across phases 164-167
 - v1.50 complete: 8 satisfied across phases 168-171
 - v1.51 complete: 7 requirements satisfied across phases 172-175
-- v1.52 planned: 7 requirements across phases 176-179
-- v1.53 planned: 7 requirements across phases 180-183
-- v1.54 planned: 4 requirements across phases 184-187
+- v1.52 complete: 7 requirements satisfied across phases 176-179
+- v1.53 complete: 7 requirements satisfied across phases 180-183
+- v1.54 in progress: 2 of 4 requirements completed across phases 184-187; Phase 185 completed the ingest/service/http tranche of PANIC-03 and Phase 186 now owns the remaining agent/evolution boundary pass
 - v1.55 planned: 4 requirements across phases 188-191
 - v1.56 planned: 4 requirements across phases 192-195
 - v1.57 planned: 4 requirements across phases 196-199
@@ -842,8 +842,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.61 planned: 4 requirements across phases 212-215
 - v1.62 planned: 4 requirements across phases 216-219
 - v1.63 planned: 4 requirements across phases 220-223
-- Total queued in v1.52-v1.63: 54
+- Total remaining in v1.54-v1.63: 42
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-11 — Completed Phase 175 waiver lineage closeout and closed v1.51 coverage*
+*Last updated: 2026-04-11 — Completed Phase 185 typed ingest, service, and HTTP error-boundary conversion and queued Phase 186*

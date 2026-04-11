@@ -22,12 +22,17 @@ use swarm_core::config::SwarmConfig;
 use swarm_core::observability::with_trace_id;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::telemetry::TelemetryPayload;
-use swarm_core::types::{AgentId, ResponseAction};
+use swarm_core::types::{
+    AgentId, ResponseAction, ResponseBlastRadiusImpact, ResponseBlastRadiusPreview,
+    ResponseRehearsalPreview, ResponseRehearsalScopeKind, ResponseRollbackPreview,
+    ResponseRollbackStep, ResponseRollbackStepKind,
+};
 use swarm_pheromone::{
     ConfiguredPheromoneSubstrate, PheromoneSubstrate, SubstrateError, SubstrateHealth,
 };
 use swarm_policy::ApprovalGate;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
+use swarm_policy::static_gate::scope_for_response_action;
 use swarm_policy::{ActionRequest, ApprovalContext, PolicyVerdict};
 use swarm_response::{
     DispatchingExecutor, NotificationRouter, ResponseExecutor, SiemFindingForwarder,
@@ -80,11 +85,33 @@ pub enum ServiceError {
     #[error("failed to serialize replay bundle: {0}")]
     Serialize(#[from] serde_json::Error),
 
-    #[error("runtime readiness check failed for {component}: {reason}")]
+    #[error("failed to build rehearsal preview: {0}")]
+    RehearsalPreview(#[from] RehearsalPreviewError),
+
+    #[error("runtime readiness check failed for {component}: {source}")]
     Readiness {
         component: &'static str,
-        reason: String,
+        #[source]
+        source: ReadinessError,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RehearsalPreviewError {
+    #[error("{label} must not be empty")]
+    EmptyValue { label: &'static str },
+
+    #[error("{action} did not produce a scoped lease target")]
+    MissingScopeTarget { action: &'static str },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReadinessError {
+    #[error("backend `{backend}` is not ready")]
+    SubstrateNotReady { backend: String },
+
+    #[error("backend `{backend}` is not durable but live response requires durability")]
+    SubstrateNotDurable { backend: String },
 }
 
 /// Inputs that stay constant while processing one event through the critical lane.
@@ -379,6 +406,219 @@ fn adapter_outcome_label(response: &AuditResponseRecord) -> Option<&'static str>
     }
 }
 
+fn merge_rehearsal_receipt_chain(
+    approval: &ApprovalContext,
+    source: &ReplayBundle,
+) -> ApprovalContext {
+    let mut receipt_chain = approval.receipt_chain.clone();
+    for receipt_id in source.audit.all_receipt_ids() {
+        if !receipt_chain.iter().any(|existing| existing == &receipt_id) {
+            receipt_chain.push(receipt_id);
+        }
+    }
+    ApprovalContext {
+        receipt_chain,
+        ..approval.clone()
+    }
+}
+
+fn build_rehearsal_preview(
+    request: &ActionRequest,
+    source_bundle_id: &str,
+    prepared_at_ms: i64,
+) -> Result<ResponseRehearsalPreview, ServiceError> {
+    fn require_value(label: &'static str, value: &str) -> Result<String, RehearsalPreviewError> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(RehearsalPreviewError::EmptyValue { label });
+        }
+        Ok(trimmed.to_string())
+    }
+
+    let preview = match &request.action {
+        ResponseAction::BlockEgress { .. } => {
+            let scope_value = scope_for_response_action(&request.action).ok_or(
+                RehearsalPreviewError::MissingScopeTarget {
+                    action: "block_egress",
+                },
+            )?;
+            let target = require_value("block target", &scope_value)?;
+            ResponseRehearsalPreview {
+                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
+                source_bundle_id: source_bundle_id.to_string(),
+                prepared_at_ms,
+                simulated_only: true,
+                blast_radius: ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::NetworkTarget,
+                    scope_value: target.clone(),
+                    impact: ResponseBlastRadiusImpact::NetworkEgressBlocked,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec!["egress_connectivity".to_string()],
+                    summary: format!(
+                        "Blocks outbound connectivity to the scoped network target `{target}`"
+                    ),
+                },
+                rollback: ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Remove the temporary egress deny rule for `{target}` to restore traffic"
+                    ),
+                    steps: vec![ResponseRollbackStep {
+                        kind: ResponseRollbackStepKind::RemoveNetworkBlock,
+                        summary: format!(
+                            "Remove the egress deny rule for `{target}` and confirm traffic flows normally"
+                        ),
+                    }],
+                },
+            }
+        }
+        ResponseAction::IsolateHost { .. } => {
+            let scope_value = scope_for_response_action(&request.action).ok_or(
+                RehearsalPreviewError::MissingScopeTarget {
+                    action: "isolate_host",
+                },
+            )?;
+            let host_id = require_value("host_id", &scope_value)?;
+            ResponseRehearsalPreview {
+                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
+                source_bundle_id: source_bundle_id.to_string(),
+                prepared_at_ms,
+                simulated_only: true,
+                blast_radius: ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::Host,
+                    scope_value: host_id.clone(),
+                    impact: ResponseBlastRadiusImpact::HostConnectivityIsolated,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "network_connectivity".to_string(),
+                        "remote_management".to_string(),
+                    ],
+                    summary: format!(
+                        "Cuts the scoped host `{host_id}` off from normal network communication"
+                    ),
+                },
+                rollback: ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Restore normal connectivity for the isolated host `{host_id}`"
+                    ),
+                    steps: vec![ResponseRollbackStep {
+                        kind: ResponseRollbackStepKind::RestoreHostConnectivity,
+                        summary: format!(
+                            "Remove the isolation policy for `{host_id}` and verify host reachability"
+                        ),
+                    }],
+                },
+            }
+        }
+        ResponseAction::RevokeCredential { .. } => {
+            let scope_value = scope_for_response_action(&request.action).ok_or(
+                RehearsalPreviewError::MissingScopeTarget {
+                    action: "revoke_credential",
+                },
+            )?;
+            let credential_id = require_value("credential_id", &scope_value)?;
+            ResponseRehearsalPreview {
+                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
+                source_bundle_id: source_bundle_id.to_string(),
+                prepared_at_ms,
+                simulated_only: true,
+                blast_radius: ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::Credential,
+                    scope_value: credential_id.clone(),
+                    impact: ResponseBlastRadiusImpact::CredentialAccessRevoked,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec!["credential_authentication".to_string()],
+                    summary: format!(
+                        "Removes the scoped credential `{credential_id}` from future authentication attempts"
+                    ),
+                },
+                rollback: ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Restore or rotate the revoked credential `{credential_id}` with bounded access"
+                    ),
+                    steps: vec![ResponseRollbackStep {
+                        kind: ResponseRollbackStepKind::RestoreCredential,
+                        summary: format!(
+                            "Reissue or restore `{credential_id}` after validation of the owning principal"
+                        ),
+                    }],
+                },
+            }
+        }
+        ResponseAction::DeployDecoy { decoy_type, .. } => {
+            let decoy_type = require_value("decoy_type", decoy_type)?;
+            let zone = scope_for_response_action(&request.action).ok_or(
+                RehearsalPreviewError::MissingScopeTarget {
+                    action: "deploy_decoy",
+                },
+            )?;
+            let zone = require_value("target_zone", &zone)?;
+            ResponseRehearsalPreview {
+                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
+                source_bundle_id: source_bundle_id.to_string(),
+                prepared_at_ms,
+                simulated_only: true,
+                blast_radius: ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::Zone,
+                    scope_value: zone.clone(),
+                    impact: ResponseBlastRadiusImpact::DeceptionCoverageChanged,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec!["deception_coverage".to_string()],
+                    summary: format!(
+                        "Adds a `{decoy_type}` deception asset inside the bounded zone `{zone}`"
+                    ),
+                },
+                rollback: ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Withdraw the rehearsal-scoped `{decoy_type}` decoy from zone `{zone}` if it is promoted"
+                    ),
+                    steps: vec![ResponseRollbackStep {
+                        kind: ResponseRollbackStepKind::WithdrawDecoy,
+                        summary: format!(
+                            "Remove the `{decoy_type}` decoy from `{zone}` and confirm sensors return to baseline"
+                        ),
+                    }],
+                },
+            }
+        }
+        ResponseAction::Escalate { summary, .. } => {
+            let summary = require_value("summary", summary)?;
+            ResponseRehearsalPreview {
+                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
+                source_bundle_id: source_bundle_id.to_string(),
+                prepared_at_ms,
+                simulated_only: true,
+                blast_radius: ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::OperatorQueue,
+                    scope_value: "human_review".to_string(),
+                    impact: ResponseBlastRadiusImpact::OperatorEscalationOnly,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec!["operator_review_queue".to_string()],
+                    summary: format!(
+                        "Queues one bounded operator review using the escalation summary `{summary}`"
+                    ),
+                },
+                rollback: ResponseRollbackPreview {
+                    required: false,
+                    summary:
+                        "No containment rollback is required; only the queued escalation note may need closure"
+                            .to_string(),
+                    steps: vec![ResponseRollbackStep {
+                        kind: ResponseRollbackStepKind::CloseEscalation,
+                        summary: "Close or supersede the rehearsal-only escalation note after review"
+                            .to_string(),
+                    }],
+                },
+            }
+        }
+    };
+
+    Ok(preview)
+}
+
 fn enrich_finding_evidence(
     event: &TelemetryEvent,
     evidence: serde_json::Value,
@@ -569,16 +809,17 @@ where
             if !health.ready {
                 return Err(ServiceError::Readiness {
                     component: "substrate",
-                    reason: format!("backend `{}` is not ready", health.backend),
+                    source: ReadinessError::SubstrateNotReady {
+                        backend: health.backend.clone(),
+                    },
                 });
             }
             if !health.durable {
                 return Err(ServiceError::Readiness {
                     component: "substrate",
-                    reason: format!(
-                        "backend `{}` is not durable but live response requires durability",
-                        health.backend
-                    ),
+                    source: ReadinessError::SubstrateNotDurable {
+                        backend: health.backend.clone(),
+                    },
                 });
             }
         }
@@ -820,6 +1061,7 @@ where
                     findings,
                     deposits,
                     action_request: request,
+                    rehearsal: None,
                     audit: execution_report.audit,
                 }))
             }
@@ -862,6 +1104,90 @@ where
             "persisted replay bundle"
         );
         Ok(record)
+    }
+
+    pub async fn rehearse_bundle_with_store<Store>(
+        &self,
+        store: &Store,
+        source: &ReplayBundle,
+        approval: &ApprovalContext,
+    ) -> Result<PersistedReplayBundle, ServiceError>
+    where
+        Store: ReplayBundleStore,
+    {
+        let preview =
+            build_rehearsal_preview(&source.action_request, &source.bundle_id, approval.now_ms)?;
+        let approval = merge_rehearsal_receipt_chain(approval, source);
+        let execution_started = Instant::now();
+        let execution_result = self
+            .runtime
+            .audit_rehearse_authorize_and_execute_instrumented(
+                &source.audit.detection,
+                &source.action_request,
+                &approval,
+            )
+            .await;
+        let execution_report = match execution_result {
+            Ok(report) => report,
+            Err(error) => {
+                let elapsed_us = execution_started.elapsed().as_micros() as u64;
+                self.metrics.record(RuntimeStage::Policy, elapsed_us, false);
+                if let Some(prometheus) = &self.prometheus {
+                    prometheus.observe_policy(elapsed_us as f64);
+                }
+                tracing::error!(
+                    correlation_id = %approval_correlation_id(&approval),
+                    hunt_id = %source.action_request.hunt_id.0,
+                    source_bundle_id = %source.bundle_id,
+                    reason = %error,
+                    module = module_path!(),
+                    "rehearsal authorization or response execution failed"
+                );
+                return Err(error.into());
+            }
+        };
+        self.metrics.record(
+            RuntimeStage::Policy,
+            execution_report.policy_elapsed_us,
+            true,
+        );
+        if let Some(prometheus) = &self.prometheus {
+            prometheus.observe_policy(execution_report.policy_elapsed_us as f64);
+            prometheus.observe_verdict(verdict_label(execution_report.audit.policy.verdict));
+            if let AuditResponseRecord::GuardRejected { guard_name, .. } =
+                &execution_report.audit.response
+            {
+                prometheus.observe_guard_rejection(guard_name);
+            }
+            if let Some(outcome) = adapter_outcome_label(&execution_report.audit.response) {
+                prometheus.observe_adapter_outcome(outcome);
+            }
+        }
+        if let Some(response_elapsed_us) = execution_report.response_elapsed_us {
+            self.metrics.record(
+                RuntimeStage::Response,
+                response_elapsed_us,
+                execution_report.response_succeeded,
+            );
+            if let Some(prometheus) = &self.prometheus {
+                prometheus.observe_response(response_elapsed_us as f64);
+            }
+        }
+
+        let bundle = ReplayBundle {
+            bundle_id: format!(
+                "bundle:rehearsal:{}:{}",
+                source.action_request.hunt_id.0, approval.now_ms
+            ),
+            event: source.event.clone(),
+            findings: source.findings.clone(),
+            deposits: source.deposits.clone(),
+            action_request: source.action_request.clone(),
+            rehearsal: Some(preview),
+            audit: execution_report.audit,
+        };
+        let record = self.persist_replay_bundle(store, &bundle)?;
+        Ok(PersistedReplayBundle { record, bundle })
     }
 
     pub async fn process_event_with_store<D, S, F, Store>(
@@ -1129,6 +1455,15 @@ where
 
     pub fn replay_preview(&self, bundle: &ReplayBundle) -> ReplayPreview {
         ReplayPreview::from_bundle(bundle)
+    }
+
+    pub fn rehearsal_preview(
+        &self,
+        request: &ActionRequest,
+        source_bundle_id: &str,
+        prepared_at_ms: i64,
+    ) -> Result<ResponseRehearsalPreview, ServiceError> {
+        build_rehearsal_preview(request, source_bundle_id, prepared_at_ms)
     }
 
     pub async fn operator_status<D, S, Store>(
@@ -1712,7 +2047,10 @@ fn extend_unique_warnings(target: &mut Vec<String>, new_warnings: Vec<String>) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{ConfiguredRuntimeStack, EventExecutionContext, RuntimeService};
+    use super::{
+        ConfiguredRuntimeStack, EventExecutionContext, ReadinessError, RehearsalPreviewError,
+        RuntimeService, ServiceError,
+    };
     use crate::bridge_runtime::{BridgeStatusReport, BridgeStatusSnapshot};
     use crate::correlation::CorrelationEngine;
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
@@ -1730,7 +2068,9 @@ mod tests {
         PromotionConfig, RetryConfig, RuntimeSettings, SiemForwardConfig, SwarmConfig,
         TelemetrySourceConfig,
     };
-    use swarm_core::types::{AgentId, ResponseAction, Severity};
+    use swarm_core::types::{
+        AgentId, ResponseAction, ResponseRehearsalScopeKind, ResponseRollbackStepKind, Severity,
+    };
     use swarm_guard::{
         Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
     };
@@ -1743,7 +2083,7 @@ mod tests {
     };
     use swarm_spine::{
         AuditResponseRecord, FileReplayBundleStore, InvestigationBundleStore, MemoryIncidentStore,
-        MemoryInvestigationBundleStore, ReplayBundle, ReplayBundleStore,
+        MemoryInvestigationBundleStore, MemoryReplayBundleStore, ReplayBundle, ReplayBundleStore,
     };
     use swarm_whisker::{
         ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
@@ -1977,6 +2317,61 @@ mod tests {
                 audit: Default::default(),
             })
         }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingModeExecutor {
+        modes: std::sync::Arc<AsyncMutex<Vec<ExecutionMode>>>,
+    }
+
+    #[async_trait]
+    impl ResponseExecutor for RecordingModeExecutor {
+        async fn execute(
+            &self,
+            request: &ActionRequest,
+            _lease: &CapabilityLease,
+            mode: ExecutionMode,
+        ) -> Result<ResponseReceipt, ResponseError> {
+            self.modes.lock().await.push(mode);
+            Ok(ResponseReceipt {
+                receipt_id: format!("recorded:{}", request.hunt_id.0),
+                action: request.action.kind().to_string(),
+                mode,
+                status: if mode == ExecutionMode::DryRun {
+                    ResponseStatus::Simulated
+                } else {
+                    ResponseStatus::Executed
+                },
+                summary: "recorded execution".to_string(),
+                details: serde_json::json!({
+                    "adapter": "recording_mode_executor",
+                }),
+                audit: Default::default(),
+            })
+        }
+    }
+
+    fn runtime_service_with_recording_modes() -> (
+        RuntimeService<StaticApprovalGate, RecordingModeExecutor>,
+        std::sync::Arc<AsyncMutex<Vec<ExecutionMode>>>,
+    ) {
+        let executor = RecordingModeExecutor::default();
+        let modes = executor.modes.clone();
+        (
+            RuntimeService::new(
+                service_config(
+                    RuntimeMode::LiveResponse,
+                    PheromoneBackendConfig::InMemory,
+                    false,
+                ),
+                SwarmRuntime::new(
+                    RuntimeMode::LiveResponse,
+                    StaticApprovalGate::default(),
+                    executor,
+                ),
+            ),
+            modes,
+        )
     }
 
     #[derive(Debug, Clone)]
@@ -2448,11 +2843,13 @@ mod tests {
             .ensure_substrate_ready(&substrate)
             .await
             .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("not durable but live response requires durability")
-        );
+        assert!(matches!(
+            error,
+            ServiceError::Readiness {
+                component: "substrate",
+                source: ReadinessError::SubstrateNotDurable { .. },
+            }
+        ));
     }
 
     #[tokio::test]
@@ -2555,6 +2952,137 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(store_root);
+    }
+
+    #[tokio::test]
+    async fn rehearse_bundle_persists_typed_preview_and_forces_dry_run() {
+        let (service, modes) = runtime_service_with_recording_modes();
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-rehearsal-1", "powershell.exe -enc AAA=");
+        let source_context = approval_context(1_700_000_000_100, "corr-rehearsal-source");
+        let agent_id = test_agent_id();
+
+        let source = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &source_context,
+                    signing_key: &test_signing_key(),
+                },
+                |_finding| {
+                    Some(ResponseAction::BlockEgress {
+                        target: "203.0.113.10".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            source.audit.response,
+            AuditResponseRecord::Skipped { .. }
+        ));
+        assert!(modes.lock().await.is_empty());
+
+        let store = MemoryReplayBundleStore::default();
+        let rehearsal_context = approval_context(1_700_000_000_200, "corr-rehearsal-run");
+        let persisted = service
+            .rehearse_bundle_with_store(&store, &source, &rehearsal_context)
+            .await
+            .unwrap();
+
+        assert_eq!(&*modes.lock().await, &[ExecutionMode::DryRun]);
+        assert!(persisted.record.is_rehearsal);
+        assert!(persisted.record.bundle_id.contains("rehearsal"));
+        let rehearsal = persisted
+            .bundle
+            .rehearsal
+            .as_ref()
+            .expect("rehearsal preview");
+        assert_eq!(rehearsal.source_bundle_id, source.bundle_id);
+        assert!(rehearsal.simulated_only);
+        assert_eq!(
+            rehearsal.blast_radius.scope_kind,
+            ResponseRehearsalScopeKind::NetworkTarget
+        );
+        assert_eq!(
+            rehearsal.rollback.steps[0].kind,
+            ResponseRollbackStepKind::RemoveNetworkBlock
+        );
+        let AuditResponseRecord::Success(receipt) = &persisted.bundle.audit.response else {
+            panic!(
+                "expected successful rehearsal response, got {:?}",
+                persisted.bundle.audit.response
+            );
+        };
+        assert_eq!(
+            persisted.bundle.audit.policy.verdict,
+            PolicyVerdict::RequireHuman
+        );
+        assert_eq!(receipt.mode, ExecutionMode::DryRun);
+        assert_eq!(receipt.status, ResponseStatus::Simulated);
+
+        let loaded = service
+            .load_persisted_bundle_by_bundle_id(&store, &persisted.record.bundle_id)
+            .unwrap()
+            .unwrap();
+        let preview = service.replay_preview(&loaded.bundle);
+        assert!(preview.rehearsal.is_some());
+        assert!(preview.note.contains("dry-run receipt"));
+    }
+
+    #[tokio::test]
+    async fn rehearse_bundle_fails_closed_before_executor_when_scope_metadata_is_missing() {
+        let (service, modes) = runtime_service_with_recording_modes();
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-rehearsal-invalid", "powershell.exe -enc AAA=");
+        let source_context = approval_context(1_700_000_000_300, "corr-rehearsal-invalid");
+        let agent_id = test_agent_id();
+
+        let mut source = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &source_context,
+                    signing_key: &test_signing_key(),
+                },
+                |_finding| {
+                    Some(ResponseAction::BlockEgress {
+                        target: "203.0.113.10".to_string(),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        source.action_request.action = ResponseAction::BlockEgress {
+            target: "   ".to_string(),
+        };
+
+        let store = MemoryReplayBundleStore::default();
+        let rehearsal_context = approval_context(1_700_000_000_301, "corr-rehearsal-preview");
+        let error = service
+            .rehearse_bundle_with_store(&store, &source, &rehearsal_context)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ServiceError::RehearsalPreview(RehearsalPreviewError::EmptyValue {
+                label: "block target"
+            })
+        ));
+        assert!(modes.lock().await.is_empty());
+        assert!(store.recent(10).unwrap().is_empty());
     }
 
     #[tokio::test]

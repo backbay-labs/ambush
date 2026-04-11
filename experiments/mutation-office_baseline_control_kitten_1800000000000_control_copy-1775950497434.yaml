@@ -1,0 +1,35 @@
+name: mutation_materialized_office_baseline_control_kitten_1800000000000_control_copy_1775950497434
+description: Materialized from mutation spec `evolution_mutation_spec:draft:office_baseline_control_kitten_1800000000000:1775950497104` variant `control-copy` using base experiment `office_baseline_control`
+corpus:
+  suite: ../scenario-suites/hellcat-office-v1.yaml
+verification:
+  corpus: ../verifications/office-detector-safety-v1.yaml
+candidate:
+  strategy: suspicious_process_tree
+  strategy_id: office_baseline_control_kitten_1800000000000_control_copy
+  description: Kitten control copy candidate
+  profile:
+    suspicious_parents:
+    - winword
+    - excel
+    - outlook
+    - acrord32
+    - teams
+    suspicious_children:
+    - powershell
+    - pwsh
+    - cmd
+    - sh
+    - bash
+    - curl
+    - wget
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+lineage:
+  parent_strategy_id: suspicious_process_tree
+  mutation: profile_copy
+  rationale: Runtime drift detector observed 2 degraded observations out of 2 (1.00 degraded ratio) | preserve a known-good control candidate in the same batch
+gates:
+  require_known_bad_coverage: true
+  max_false_positive_delta: 0
+  max_detect_latency_delta_us: 10000

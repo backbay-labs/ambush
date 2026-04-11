@@ -246,6 +246,8 @@ async fn ingest_router_coexists_with_metrics_endpoint() -> Result<(), Box<dyn st
     assert_eq!(metrics_response.status(), StatusCode::OK);
     let body = to_bytes(metrics_response.into_body(), usize::MAX).await?;
     let body = String::from_utf8(body.to_vec())?;
+    assert!(body.contains("swarm_ingest_events_total"));
+    assert!(body.contains("swarm_ingest_request_latency_microseconds"));
     assert!(body.contains("swarm_detect_latency_microseconds"));
     Ok(())
 }

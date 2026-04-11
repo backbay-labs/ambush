@@ -5,20 +5,18 @@ mod providence_handlers;
 
 // Re-export the public API that was previously accessible as `crate::ingest::*`
 pub use demo::{
-    DemoApprovalResumeRequest, DemoApprovalResumeResponse, DemoDashboardSnapshot,
-    DemoProofLeaf, DemoProofPackage, DemoProofQuery, DemoReplayRequest, DemoReplayResponse,
-    DemoTimelineEntry,
+    DemoApprovalResumeRequest, DemoApprovalResumeResponse, DemoDashboardSnapshot, DemoProofLeaf,
+    DemoProofPackage, DemoProofQuery, DemoReplayRequest, DemoReplayResponse, DemoTimelineEntry,
 };
 
 use crate::RuntimeError;
 use crate::approval::{
-    ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule,
+    ApprovalError, ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule,
 };
 use crate::bridge_runtime::{SharedBridgeHealth, bridge_health_report};
 use crate::canary::DefaultCanaryHarness;
 use crate::config::{
-    RuntimeConfigError, load_config_unresolved, resolve_outbound_secrets,
-    resolve_secret_dir_path,
+    RuntimeConfigError, load_config_unresolved, resolve_outbound_secrets, resolve_secret_dir_path,
 };
 use crate::control::{ControlError, build_composite_detector};
 use crate::correlation::CorrelationEngine;
@@ -42,13 +40,12 @@ use crate::evolution_status::DefaultEvolutionStatusHarness;
 use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use crate::mutation::DefaultEvolutionMutationHarness;
 use crate::providence::{
-    PROVIDENCE_CHANNEL, ProvidenceContextScope, ProvidenceHealthStatus,
-    ProvidenceIncidentAdapter, ProvidenceRuntimeContext,
-    verify_providence_context_token,
+    PROVIDENCE_CHANNEL, ProvidenceContextScope, ProvidenceHealthStatus, ProvidenceIncidentAdapter,
+    ProvidenceRuntimeContext, verify_providence_context_token,
 };
 use crate::runtime_events::{
-    AsyncLaneStatusSnapshot, RuntimeEvent, RuntimeEventBroadcaster,
-    RuntimeThreatConcentration, now_ms,
+    AsyncLaneStatusSnapshot, RuntimeEvent, RuntimeEventBroadcaster, RuntimeThreatConcentration,
+    now_ms,
 };
 use crate::selection::DefaultEvolutionSelectionHarness;
 use crate::service::{ConfiguredRuntimeStack, ServiceError};
@@ -66,21 +63,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use swarm_core::ThreatClass;
 use swarm_core::agent::{AgentHealthEntry, SwarmModeState};
-use swarm_core::config::{
-    OperatorSurfaceConfig, ResponseAdapterConfig, RuntimeMode,
-    SwarmConfig,
-};
+use swarm_core::config::{OperatorSurfaceConfig, ResponseAdapterConfig, RuntimeMode, SwarmConfig};
 use swarm_core::pheromone::EscalationRecord;
 use swarm_core::types::AgentId;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::DispatchingExecutor;
 use swarm_spine::{
-    AuditResponseRecord, AuditTrail, ConfiguredIncidentStore,
-    ConfiguredInvestigationBundleStore, ConfiguredReplayBundleStore, CorrelatedIncident,
+    AuditResponseRecord, AuditTrail, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
+    ConfiguredReplayBundleStore, CorrelatedIncident,
 };
 use swarm_whisker::{CompositeDetector, DetectionFinding, TelemetryEvent};
 use tracing::Instrument;
@@ -88,16 +82,13 @@ use uuid::Uuid;
 
 // Re-import from sub-modules for internal use
 use demo::{
-    DemoApprovalDecisionRecord, DemoRunRegistry, DemoRunState, DemoScopeQuery,
-    PendingDemoApproval,
+    DemoApprovalDecisionRecord, DemoRunRegistry, DemoRunState, DemoScopeQuery, PendingDemoApproval,
 };
 use health::{
     DetectorRuntimeStatus, HeapPressureSnapshot, IngestLifecycleState, IngestRequestGuard,
     sample_heap_pressure,
 };
-use providence_handlers::{
-    build_providence_notification_payload, publish_runtime_findings,
-};
+use providence_handlers::{build_providence_notification_payload, publish_runtime_findings};
 
 type IngestRuntimeStack =
     ConfiguredRuntimeStack<ConfigurableApprovalGate, DispatchingExecutor, SummaryInvestigator>;
@@ -439,26 +430,20 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             if proposal_report.assurance.is_none() {
                 proposal_report.assurance =
                     Some(crate::evolution::EvolutionProposalAssuranceSummary {
-                        decision:
-                            crate::evolution::EvolutionProposalAssuranceDecision::Passed,
-                        coverage:
-                            crate::evolution::EvolutionProposalAssuranceCoverageSummary {
-                                detector: proposal.strategy_id.clone(),
-                                suite_name: None,
-                                corpus_version: None,
-                                required_catch_rate: config
-                                    .evolution
-                                    .assurance
-                                    .min_detector_catch_rate,
-                                actual_catch_rate: None,
-                                actionable_gap_count: 0,
-                            },
-                        solver:
-                            crate::evolution::EvolutionProposalAssuranceSolverSummary {
-                                required: false,
-                                status: None,
-                                allowed_statuses: Vec::new(),
-                            },
+                        decision: crate::evolution::EvolutionProposalAssuranceDecision::Passed,
+                        coverage: crate::evolution::EvolutionProposalAssuranceCoverageSummary {
+                            detector: proposal.strategy_id.clone(),
+                            suite_name: None,
+                            corpus_version: None,
+                            required_catch_rate: config.evolution.assurance.min_detector_catch_rate,
+                            actual_catch_rate: None,
+                            actionable_gap_count: 0,
+                        },
+                        solver: crate::evolution::EvolutionProposalAssuranceSolverSummary {
+                            required: false,
+                            status: None,
+                            allowed_statuses: Vec::new(),
+                        },
                         harvested_case_ids: Vec::new(),
                         waiver: None,
                     });
@@ -557,31 +542,30 @@ fn sanitize_id(raw: &str) -> String {
         .collect()
 }
 
-fn operator_secret_material(operator: &OperatorSurfaceConfig) -> Result<String, String> {
-    std::env::var(&operator.auth.token_env)
+fn operator_secret_material(
+    operator: &OperatorSurfaceConfig,
+) -> Result<String, IngestRequestError> {
+    std::env::var(operator.auth.context_token_env())
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "operator surface token env `{}` is missing or empty",
-                operator.auth.token_env
-            )
+        .ok_or_else(|| IngestRequestError::MissingOperatorContextTokenEnv {
+            env_name: operator.auth.context_token_env().to_string(),
         })
 }
 
 fn merge_context_scope(
     token_scope: ProvidenceContextScope,
     requested_scope: ProvidenceContextScope,
-) -> Result<ProvidenceContextScope, String> {
+) -> Result<ProvidenceContextScope, IngestRequestError> {
     fn field_matches(
-        field: &str,
+        field: &'static str,
         token_value: Option<&str>,
         requested_value: Option<&str>,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, IngestRequestError> {
         match (token_value, requested_value) {
             (Some(token), Some(requested)) if token != requested => {
-                Err(format!("requested `{field}` does not match token scope"))
+                Err(IngestRequestError::ContextScopeMismatch { field })
             }
             (_, Some(requested)) => Ok(Some(requested.to_string())),
             (Some(token), None) => Ok(Some(token.to_string())),
@@ -594,7 +578,7 @@ fn merge_context_scope(
         requested_scope.threat_class.as_ref(),
     ) {
         (Some(token), Some(requested)) if token != requested => {
-            return Err("requested `threat_class` does not match token scope".to_string());
+            return Err(IngestRequestError::ThreatClassScopeMismatch);
         }
         (_, Some(requested)) => Some(requested.clone()),
         (Some(token), None) => Some(token.clone()),
@@ -629,7 +613,7 @@ fn merge_context_scope(
 fn resolve_demo_scope(
     operator: &OperatorSurfaceConfig,
     query: &DemoScopeQuery,
-) -> Result<ProvidenceContextScope, String> {
+) -> Result<ProvidenceContextScope, IngestRequestError> {
     let requested_scope = query.raw_scope();
     let Some(raw_token) = query
         .context_token
@@ -639,7 +623,8 @@ fn resolve_demo_scope(
         return Ok(requested_scope);
     };
     let secret_material = operator_secret_material(operator)?;
-    let claims = verify_providence_context_token(&secret_material, raw_token, now_ms())?;
+    let claims = verify_providence_context_token(&secret_material, raw_token, now_ms())
+        .map_err(|reason| IngestRequestError::ProvidenceContextToken { reason })?;
     merge_context_scope(claims.scope, requested_scope)
 }
 
@@ -782,7 +767,7 @@ fn filter_runtime_event_for_scope(
 
 fn widget_embed_headers(
     operator: &OperatorSurfaceConfig,
-) -> Result<(HeaderValue, HeaderValue), String> {
+) -> Result<(HeaderValue, HeaderValue), IngestRequestError> {
     let mut ancestors = vec!["'self'".to_string()];
     let mut external = Vec::new();
     for origin in &operator.allowed_embed_origins {
@@ -793,11 +778,9 @@ fn widget_embed_headers(
         ancestors.push(trimmed.to_string());
         external.push(trimmed.to_string());
     }
-    let csp = HeaderValue::from_str(&format!("frame-ancestors {}", ancestors.join(" ")))
-        .map_err(|error| error.to_string())?;
+    let csp = HeaderValue::from_str(&format!("frame-ancestors {}", ancestors.join(" ")))?;
     let x_frame_options = if let Some(first_origin) = external.first() {
-        HeaderValue::from_str(&format!("ALLOW-FROM {first_origin}"))
-            .map_err(|error| error.to_string())?
+        HeaderValue::from_str(&format!("ALLOW-FROM {first_origin}"))?
     } else {
         HeaderValue::from_static("SAMEORIGIN")
     };
@@ -836,25 +819,82 @@ fn resolve_strategy_proposal_paths(
 ) -> StrategyProposalPaths {
     let paths = &config.evolution.paths;
     StrategyProposalPaths {
-        verification_results_dir: resolve_repo_relative_path_local(config_path, &paths.verification_results_dir),
-        shadow_results_dir: resolve_repo_relative_path_local(config_path, &paths.shadow_results_dir),
-        evolution_proof_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_proof_results_dir),
-        evolution_queue_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_queue_results_dir),
-        evolution_selection_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_selection_results_dir),
-        evolution_bridge_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_bridge_results_dir),
-        evolution_handoff_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_handoff_results_dir),
-        evolution_pressure_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_pressure_results_dir),
-        evolution_draft_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_draft_results_dir),
-        evolution_draft_promotion_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_draft_promotion_results_dir),
-        evolution_materialization_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_materialization_results_dir),
-        evolution_validation_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_validation_results_dir),
-        evolution_reconciliation_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_reconciliation_results_dir),
-        evolution_mutation_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_mutation_results_dir),
-        evolution_mutation_materialization_batch_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_mutation_materialization_batch_results_dir),
-        evolution_mutation_validation_batch_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_mutation_validation_batch_results_dir),
-        evolution_ranking_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_ranking_results_dir),
-        evolution_population_results_dir: resolve_repo_relative_path_local(config_path, &paths.evolution_population_results_dir),
-        canary_results_dir: resolve_repo_relative_path_local(config_path, &paths.canary_results_dir),
+        verification_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.verification_results_dir,
+        ),
+        shadow_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.shadow_results_dir,
+        ),
+        evolution_proof_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_proof_results_dir,
+        ),
+        evolution_queue_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_queue_results_dir,
+        ),
+        evolution_selection_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_selection_results_dir,
+        ),
+        evolution_bridge_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_bridge_results_dir,
+        ),
+        evolution_handoff_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_handoff_results_dir,
+        ),
+        evolution_pressure_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_pressure_results_dir,
+        ),
+        evolution_draft_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_draft_results_dir,
+        ),
+        evolution_draft_promotion_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_draft_promotion_results_dir,
+        ),
+        evolution_materialization_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_materialization_results_dir,
+        ),
+        evolution_validation_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_validation_results_dir,
+        ),
+        evolution_reconciliation_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_reconciliation_results_dir,
+        ),
+        evolution_mutation_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_mutation_results_dir,
+        ),
+        evolution_mutation_materialization_batch_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_mutation_materialization_batch_results_dir,
+        ),
+        evolution_mutation_validation_batch_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_mutation_validation_batch_results_dir,
+        ),
+        evolution_ranking_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_ranking_results_dir,
+        ),
+        evolution_population_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.evolution_population_results_dir,
+        ),
+        canary_results_dir: resolve_repo_relative_path_local(
+            config_path,
+            &paths.canary_results_dir,
+        ),
     }
 }
 
@@ -983,7 +1023,7 @@ async fn process_runtime_event(
     requested_by: &AgentId,
     correlation_id: &str,
     event: TelemetryEvent,
-) -> Result<(), String> {
+) -> Result<(), IngestProcessingError> {
     let trace_id = correlation_id.to_string();
     let span = tracing::info_span!(
         "ingest.process_runtime_event",
@@ -1052,6 +1092,7 @@ async fn process_runtime_event(
                     Ok(())
                 }
                 Err(error) => {
+                    let reason = error.to_string();
                     state.publish_runtime_event(RuntimeEvent::Ingest {
                         emitted_at_ms: now_ms(),
                         correlation_id: correlation_id.to_string(),
@@ -1059,9 +1100,9 @@ async fn process_runtime_event(
                         source: event.source.clone(),
                         host_id: event.host_id.clone(),
                         accepted: false,
-                        reason: Some(error.to_string()),
+                        reason: Some(reason.clone()),
                     });
-                    Err(error.to_string())
+                    Err(error.into())
                 }
             }
         }
@@ -1089,7 +1130,7 @@ async fn process_demo_replay_step(
     requested_by: &AgentId,
     step_index: usize,
     step: crate::replay::ReplayScenarioStep,
-) -> Result<(), String> {
+) -> Result<(), IngestProcessingError> {
     let approval = ApprovalContext {
         live_mode: state.stack.load_full().service.runtime.mode() == RuntimeMode::LiveResponse,
         receipt_chain: Vec::new(),
@@ -1112,8 +1153,7 @@ async fn process_demo_replay_step(
             |_| Some(replay_action.clone()),
             |event, findings| publish_runtime_findings(state, event, findings),
         )
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
 
     state.publish_runtime_event(RuntimeEvent::Ingest {
         emitted_at_ms: now_ms(),
@@ -1173,10 +1213,7 @@ async fn process_demo_replay_step(
         audit.created_at_ms,
     );
 
-    if let Some(outcome) = stack
-        .correlate_hunt(&bundle.replay.bundle.action_request.hunt_id.0)
-        .map_err(|error| error.to_string())?
-    {
+    if let Some(outcome) = stack.correlate_hunt(&bundle.replay.bundle.action_request.hunt_id.0)? {
         state.update_demo_incident(run_id, outcome.incident.clone());
         state.append_demo_timeline(
             run_id,
@@ -1216,6 +1253,57 @@ pub enum IngestBuildError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum IngestRequestError {
+    #[error(transparent)]
+    InvalidPayload(#[from] serde_json::Error),
+
+    #[error("operator surface context token env `{env_name}` is missing or empty")]
+    MissingOperatorContextTokenEnv { env_name: String },
+
+    #[error("requested `{field}` does not match token scope")]
+    ContextScopeMismatch { field: &'static str },
+
+    #[error("requested `threat_class` does not match token scope")]
+    ThreatClassScopeMismatch,
+
+    #[error("{reason}")]
+    ProvidenceContextToken { reason: String },
+
+    #[error(transparent)]
+    InvalidHeaderValue(#[from] axum::http::header::InvalidHeaderValue),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum DemoApprovalError {
+    #[error(transparent)]
+    Approval(#[from] ApprovalError),
+
+    #[error("demo approval harness is not configured")]
+    HarnessNotConfigured,
+
+    #[error("approval set `{set_id}` was created without an associated ledger")]
+    MissingLedger { set_id: String },
+
+    #[error("demo run `{run_id}` was not found")]
+    RunNotFound { run_id: String },
+
+    #[error("demo run `{run_id}` does not contain approval `{approval_set_id}`")]
+    ApprovalNotFound {
+        run_id: String,
+        approval_set_id: String,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+enum IngestProcessingError {
+    #[error(transparent)]
+    Service(#[from] ServiceError),
+
+    #[error(transparent)]
+    DemoApproval(#[from] DemoApprovalError),
 }
 
 #[derive(Clone)]
@@ -1790,31 +1878,29 @@ impl IngestState {
         step_index: usize,
         request: &ActionRequest,
         audit: &AuditTrail,
-    ) -> Result<(), String> {
+    ) -> Result<(), DemoApprovalError> {
         let Some(harness) = &self.approval_harness else {
-            return Err("demo approval harness is not configured".to_string());
+            return Err(DemoApprovalError::HarnessNotConfigured);
         };
 
-        let set_record = harness
-            .create_approval_set(
-                vec![self.operator_id()],
-                ThresholdRule::AtLeast { required: 1 },
-                &format!(
-                    "demo_approval:{}:{}:{}",
-                    run_id, step_index, request.hunt_id.0
-                ),
-            )
-            .map_err(|error| error.to_string())?;
+        let set_record = harness.create_approval_set(
+            vec![self.operator_id()],
+            ThresholdRule::AtLeast { required: 1 },
+            &format!(
+                "demo_approval:{}:{}:{}",
+                run_id, step_index, request.hunt_id.0
+            ),
+        )?;
         let approval_set_id = set_record.set_id.clone();
-        let ledgers = harness
-            .list_ledgers(Some(&approval_set_id))
-            .map_err(|error| error.to_string())?;
-        let ledger = ledgers.ledgers.into_iter().next().ok_or_else(|| {
-            format!(
-                "approval set `{}` was created without an associated ledger",
-                approval_set_id
-            )
-        })?;
+        let ledgers = harness.list_ledgers(Some(&approval_set_id))?;
+        let ledger =
+            ledgers
+                .ledgers
+                .into_iter()
+                .next()
+                .ok_or_else(|| DemoApprovalError::MissingLedger {
+                    set_id: approval_set_id.clone(),
+                })?;
         let approval_ledger_id = ledger.ledger_id.clone();
 
         let action_kind = request.action.kind().to_string();
@@ -1826,7 +1912,9 @@ impl IngestState {
         let run = registry
             .runs
             .get_mut(run_id)
-            .ok_or_else(|| format!("demo run `{run_id}` was not found"))?;
+            .ok_or_else(|| DemoApprovalError::RunNotFound {
+                run_id: run_id.to_string(),
+            })?;
         run.approvals.push(DemoApprovalDecisionRecord {
             approval_set_id: approval_set_id.clone(),
             approval_ledger_id: approval_ledger_id.clone(),
@@ -1883,24 +1971,23 @@ impl IngestState {
         pending: &PendingDemoApproval,
         receipt_pack: ApprovalReceiptPackReport,
         resumed_audit: AuditTrail,
-    ) -> Result<(), String> {
+    ) -> Result<(), DemoApprovalError> {
         let mut registry = self
             .demo_runs
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let run = registry
-            .runs
-            .get_mut(&pending.run_id)
-            .ok_or_else(|| format!("demo run `{}` was not found", pending.run_id))?;
+        let run = registry.runs.get_mut(&pending.run_id).ok_or_else(|| {
+            DemoApprovalError::RunNotFound {
+                run_id: pending.run_id.clone(),
+            }
+        })?;
         let approval = run
             .approvals
             .iter_mut()
             .find(|record| record.approval_set_id.as_str() == pending.approval_set_id.as_str())
-            .ok_or_else(|| {
-                format!(
-                    "demo run `{}` does not contain approval `{}`",
-                    pending.run_id, pending.approval_set_id
-                )
+            .ok_or_else(|| DemoApprovalError::ApprovalNotFound {
+                run_id: pending.run_id.clone(),
+                approval_set_id: pending.approval_set_id.clone(),
             })?;
         approval.receipt_pack = Some(receipt_pack.clone());
         approval.resumed_audit = Some(resumed_audit.clone());
@@ -1958,8 +2045,8 @@ struct IngestErrorBody {
     correlation_id: String,
 }
 
-pub fn validate_and_parse(value: Value) -> Result<TelemetryEvent, String> {
-    serde_json::from_value::<TelemetryEvent>(value).map_err(|error| error.to_string())
+pub fn validate_and_parse(value: Value) -> Result<TelemetryEvent, IngestRequestError> {
+    serde_json::from_value::<TelemetryEvent>(value).map_err(IngestRequestError::from)
 }
 
 // --- Core ingest handler ---
@@ -2010,6 +2097,7 @@ pub async fn ingest_events_handler(
     let events = request.0;
     let event_count = events.len();
     let span_correlation_id = correlation_id.clone();
+    let request_started = Instant::now();
     async move {
         let _request_guard = request_guard;
         let mut accepted = Vec::new();
@@ -2066,10 +2154,16 @@ pub async fn ingest_events_handler(
                     rejected.push(IngestEventResult {
                         event_id,
                         status: IngestEventStatus::Rejected,
-                        reason: Some(error),
+                        reason: Some(error.to_string()),
                     });
                 }
             }
+        }
+        if let Some(prometheus) = state.stack.load_full().service.prometheus_metrics() {
+            prometheus
+                .observe_ingest_request(request_started.elapsed().as_secs_f64() * 1_000_000.0);
+            prometheus.observe_ingest_events("accepted", accepted.len() as u64);
+            prometheus.observe_ingest_events("rejected", rejected.len() as u64);
         }
 
         ResponseJson(IngestResponse {
@@ -2106,13 +2200,23 @@ pub fn detect_http_router(state: IngestState) -> Router {
         .route("/v1/ingest/events", post(ingest_events_handler))
         .route("/v1/demo/replay", post(demo::demo_replay_handler))
         .route("/v1/demo/widget", get(demo::demo_widget_handler))
-        .route("/v1/demo/dashboard", get(demo::demo_dashboard_snapshot_handler))
+        .route(
+            "/v1/demo/dashboard",
+            get(demo::demo_dashboard_snapshot_handler),
+        )
         .route(
             "/v1/demo/approvals/{approval_set_id}/resume",
             post(demo::demo_approval_resume_handler),
         )
         .route("/v1/demo/proof", get(demo::demo_proof_handler))
-        .route("/v1/providence/feedback", post(providence_handlers::providence_feedback_handler))
+        .route(
+            "/v1/providence/callback",
+            post(providence_handlers::providence_callback_handler),
+        )
+        .route(
+            "/v1/providence/feedback",
+            post(providence_handlers::providence_feedback_handler),
+        )
         .route("/v1/events/stream", get(demo::runtime_events_handler))
         .nest("/api/v1", platform_api::legacy_evasion_api_router(&state))
         .nest("/v2/api", platform_api::platform_api_router(&state))

@@ -10,10 +10,12 @@ use std::time::Duration;
 use swarm_core::agent::{AgentHealth, AgentHealthEntry, SwarmMode, SwarmModeState};
 use swarm_core::config::{NotificationChannelConfig, OperatorSurfaceConfig};
 use swarm_core::types::{
-    ProvidenceCreateIncidentBody, ProvidenceIncidentStatus, SWARM_PROVIDENCE_WEBHOOK_SCHEMA,
+    ProvidenceCallbackAuditEntry, ProvidenceCreateIncidentBody, ProvidenceIncidentReconciliation,
+    ProvidenceIncidentStatus, ProvidenceReconciliationOutcome, SWARM_PROVIDENCE_WEBHOOK_SCHEMA,
     SWARM_PROVIDENCE_WEBHOOK_SCHEMA_VERSION, Severity, SwarmProvidenceAggregateContext,
-    SwarmProvidenceFindingContext, SwarmProvidenceLinks, SwarmProvidenceRuntimeBridgeHealth,
-    SwarmProvidenceRuntimeContext, SwarmProvidenceWebhookContract,
+    SwarmProvidenceCallbackRequest, SwarmProvidenceFindingContext, SwarmProvidenceLinks,
+    SwarmProvidenceRuntimeBridgeHealth, SwarmProvidenceRuntimeContext,
+    SwarmProvidenceWebhookContract,
 };
 use swarm_crypto::{
     DetachedSignature, Ed25519Signer, canonical_json_bytes, hmac_sha256_hex,
@@ -21,8 +23,8 @@ use swarm_crypto::{
 };
 use swarm_response::{DeadLetterEntry, DeadLetterJournal, ExecutionMode};
 use swarm_spine::{
-    ConfiguredIncidentStore, ExternalReference, IncidentLookup, IncidentMemberDecision,
-    IncidentRecord, IncidentStore,
+    ConfiguredIncidentStore, CorrelatedIncident, ExternalReference, IncidentLookup,
+    IncidentMemberDecision, IncidentRecord, IncidentStore,
 };
 use uuid::Uuid;
 
@@ -113,14 +115,14 @@ pub fn mint_providence_context_token(
     if scope.is_empty() {
         return Err("Providence context token scope must not be empty".to_string());
     }
-    let secret_material = std::env::var(&operator.auth.token_env)
+    let secret_material = std::env::var(operator.auth.context_token_env())
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             format!(
-                "operator surface token env `{}` is missing or empty",
-                operator.auth.token_env
+                "operator surface context token env `{}` is missing or empty",
+                operator.auth.context_token_env()
             )
         })?;
     let signer = Ed25519Signer::from_secret_material(&secret_material);
@@ -248,11 +250,20 @@ pub fn build_scoped_providence_links(
             &[("hunt_id", scope.hunt_id.clone())],
         ),
         audit_trail: append_query_params(
-            join_base_url(&operator.public_base_url, "/v1/operator/replay"),
-            &[("hunt_id", scope.hunt_id.clone())],
+            join_base_url(&operator.public_base_url, "/v1/operator/review"),
+            &[
+                ("hunt_id", scope.hunt_id.clone()),
+                ("incident_id", scope.incident_id.clone()),
+            ],
         ),
         incident,
-        review_home: join_base_url(&operator.public_base_url, "/v1/operator/review"),
+        review_home: append_query_params(
+            join_base_url(&operator.public_base_url, "/v1/operator/review"),
+            &[
+                ("hunt_id", scope.hunt_id.clone()),
+                ("incident_id", scope.incident_id.clone()),
+            ],
+        ),
     }
 }
 
@@ -395,11 +406,18 @@ impl ProvidenceIncidentAdapter {
                     continue;
                 };
                 state.open_incidents.entry(incident_key).or_insert_with(|| {
+                    let reconciliation = record.providence_reconciliation.as_ref();
                     ProvidenceRemoteIncident {
                         remote_id: reference.id.clone(),
-                        remote_url: reference.url.clone(),
-                        severity: record.severity.unwrap_or(Severity::Medium),
-                        status: ProvidenceIncidentStatus::Open,
+                        remote_url: reconciliation
+                            .and_then(|entry| entry.remote_incident_url.clone())
+                            .or_else(|| reference.url.clone()),
+                        severity: reconciliation
+                            .map(|entry| entry.remote_severity)
+                            .unwrap_or_else(|| record.severity.unwrap_or(Severity::Medium)),
+                        status: reconciliation
+                            .map(|entry| entry.remote_status)
+                            .unwrap_or(ProvidenceIncidentStatus::Open),
                     }
                 });
             }
@@ -428,6 +446,21 @@ impl ProvidenceIncidentAdapter {
             let Some(incident_key) = providence_incident_key(&record) else {
                 continue;
             };
+            if record
+                .providence_reconciliation
+                .as_ref()
+                .is_some_and(|entry| entry.needs_review)
+            {
+                tracing::warn!(
+                    incident_id = %record.incident_id,
+                    outcome = ?record
+                        .providence_reconciliation
+                        .as_ref()
+                        .map(|entry| entry.outcome),
+                    "Providence reconciliation requires review; skipping automatic sync"
+                );
+                continue;
+            }
             let target_severity = mode_adjusted_severity(
                 record.severity.unwrap_or(Severity::Medium),
                 runtime.mode_state.current,
@@ -799,6 +832,179 @@ pub fn resolve_feedback_target(
     })
 }
 
+pub fn resolve_callback_incident(
+    incident_store: &ConfiguredIncidentStore,
+    request: &SwarmProvidenceCallbackRequest,
+) -> Result<IncidentLookup, String> {
+    if let Some(incident_id) = request.incident_id.as_deref()
+        && let Some(lookup) = incident_store
+            .load_by_incident_id(incident_id)
+            .map_err(|error| error.to_string())?
+    {
+        return Ok(lookup);
+    }
+
+    let recent = incident_store
+        .recent(usize::MAX)
+        .map_err(|error| error.to_string())?;
+
+    if let Some(record) = recent.iter().find(|record| {
+        record.external_references.iter().any(|reference| {
+            reference.system == PROVIDENCE_EXTERNAL_SYSTEM
+                && reference.id == request.remote_incident_id
+        })
+    }) {
+        return incident_store
+            .load_by_incident_id(&record.incident_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                format!(
+                    "incident `{}` disappeared during Providence callback reconciliation",
+                    record.incident_id
+                )
+            });
+    }
+
+    if let Some(record) = recent
+        .iter()
+        .find(|record| providence_incident_key(record).as_deref() == Some(&request.incident_key))
+    {
+        return incident_store
+            .load_by_incident_id(&record.incident_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                format!(
+                    "incident `{}` disappeared during Providence callback reconciliation",
+                    record.incident_id
+                )
+            });
+    }
+
+    Err(format!(
+        "no incident matched Providence callback remote_id=`{}` incident_key=`{}`",
+        request.remote_incident_id, request.incident_key
+    ))
+}
+
+pub fn build_providence_reconciliation(
+    record: &IncidentRecord,
+    mode_state: &SwarmModeState,
+    request: &SwarmProvidenceCallbackRequest,
+    reconciled_at_ms: i64,
+) -> ProvidenceIncidentReconciliation {
+    let swarm_status = mode_adjusted_status(mode_state.current);
+    let swarm_severity = mode_adjusted_severity(
+        record.severity.unwrap_or(Severity::Medium),
+        mode_state.current,
+    );
+    let expected_key = providence_incident_key(record);
+    let key_mismatch = expected_key
+        .as_deref()
+        .is_some_and(|expected| expected != request.incident_key);
+    let remote_rank = providence_status_rank(request.status);
+    let swarm_rank = providence_status_rank(swarm_status);
+    let (outcome, needs_review, summary) = if key_mismatch {
+        let expected = expected_key.unwrap_or_else(|| "unavailable".to_string());
+        (
+            ProvidenceReconciliationOutcome::Mismatch,
+            true,
+            format!(
+                "Providence callback incident_key `{}` did not match the Swarm incident key `{expected}`.",
+                request.incident_key
+            ),
+        )
+    } else if request.status == swarm_status && request.severity == swarm_severity {
+        (
+            ProvidenceReconciliationOutcome::InSync,
+            false,
+            format!(
+                "Providence and Swarm agree on status `{}` and severity `{}`.",
+                providence_status_label(request.status),
+                severity_label(request.severity)
+            ),
+        )
+    } else if remote_rank > swarm_rank {
+        (
+            ProvidenceReconciliationOutcome::ProvidenceAhead,
+            true,
+            format!(
+                "Providence is ahead: remote status `{}` exceeds Swarm status `{}`.",
+                providence_status_label(request.status),
+                providence_status_label(swarm_status)
+            ),
+        )
+    } else if remote_rank < swarm_rank {
+        (
+            ProvidenceReconciliationOutcome::SwarmAhead,
+            true,
+            format!(
+                "Swarm is ahead: local status `{}` exceeds Providence status `{}`.",
+                providence_status_label(swarm_status),
+                providence_status_label(request.status)
+            ),
+        )
+    } else {
+        (
+            ProvidenceReconciliationOutcome::Mismatch,
+            true,
+            format!(
+                "Providence and Swarm disagree on severity: remote `{}` vs local `{}`.",
+                severity_label(request.severity),
+                severity_label(swarm_severity)
+            ),
+        )
+    };
+
+    ProvidenceIncidentReconciliation {
+        incident_key: request.incident_key.clone(),
+        remote_incident_id: request.remote_incident_id.clone(),
+        remote_incident_url: request.remote_incident_url.clone(),
+        remote_status: request.status,
+        remote_severity: request.severity,
+        swarm_status,
+        swarm_severity,
+        remote_updated_at_ms: request.updated_at_ms,
+        reconciled_at_ms,
+        outcome,
+        needs_review,
+        summary,
+    }
+}
+
+pub fn apply_providence_callback_reconciliation(
+    incident: &mut CorrelatedIncident,
+    request: &SwarmProvidenceCallbackRequest,
+    request_signature: String,
+    payload: Value,
+    reconciliation: ProvidenceIncidentReconciliation,
+    received_at_ms: i64,
+) {
+    upsert_external_reference(
+        &mut incident.external_references,
+        ExternalReference {
+            system: PROVIDENCE_EXTERNAL_SYSTEM.to_string(),
+            id: request.remote_incident_id.clone(),
+            url: request.remote_incident_url.clone(),
+        },
+    );
+    incident.providence_reconciliation = Some(reconciliation.clone());
+    incident
+        .providence_callback_audit_entries
+        .push(ProvidenceCallbackAuditEntry {
+            callback_id: format!(
+                "providence-callback:{}:{received_at_ms}",
+                sanitize_callback_id(&incident.incident_id)
+            ),
+            received_at_ms,
+            event: request.event,
+            incident_key: request.incident_key.clone(),
+            remote_incident_id: request.remote_incident_id.clone(),
+            request_signature,
+            payload,
+            reconciliation,
+        });
+}
+
 fn select_feedback_member<'a>(
     members: &'a [IncidentMemberDecision],
     finding_id: Option<&str>,
@@ -810,6 +1016,52 @@ fn select_feedback_member<'a>(
                 .find(|member| member.finding_id == finding_id)
         })
         .or_else(|| members.first())
+}
+
+fn providence_status_rank(status: ProvidenceIncidentStatus) -> u8 {
+    match status {
+        ProvidenceIncidentStatus::Open => 0,
+        ProvidenceIncidentStatus::Investigating => 1,
+        ProvidenceIncidentStatus::Resolved => 2,
+    }
+}
+
+fn providence_status_label(status: ProvidenceIncidentStatus) -> &'static str {
+    match status {
+        ProvidenceIncidentStatus::Open => "open",
+        ProvidenceIncidentStatus::Investigating => "investigating",
+        ProvidenceIncidentStatus::Resolved => "resolved",
+    }
+}
+
+fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Low => "low",
+        Severity::Medium => "medium",
+        Severity::High => "high",
+        Severity::Critical => "critical",
+    }
+}
+
+fn upsert_external_reference(
+    references: &mut Vec<ExternalReference>,
+    external_reference: ExternalReference,
+) {
+    if let Some(existing) = references
+        .iter_mut()
+        .find(|existing| existing.system == external_reference.system)
+    {
+        *existing = external_reference;
+    } else {
+        references.push(external_reference);
+    }
+}
+
+fn sanitize_callback_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
 }
 
 fn build_providence_contract(
@@ -1066,9 +1318,12 @@ pub mod tests {
         OperatorSurfaceConfig,
     };
     use swarm_core::pheromone::ThreatClass;
-    use swarm_core::types::Severity;
+    use swarm_core::types::{
+        ProvidenceIncidentReconciliation, ProvidenceReconciliationOutcome, Severity,
+    };
     use swarm_spine::{
-        ConfiguredIncidentStore, CorrelatedIncident, IncidentMemberDecision, IncidentStore,
+        ConfiguredIncidentStore, CorrelatedIncident, ExternalReference, IncidentMemberDecision,
+        IncidentStore,
     };
     use tokio::sync::{Mutex, oneshot};
 
@@ -1202,6 +1457,8 @@ pub mod tests {
             threat_class: Some(ThreatClass::Execution),
             severity: Some(Severity::High),
             external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
         }
     }
@@ -1299,6 +1556,64 @@ pub mod tests {
             persisted.record.external_references[0].system,
             PROVIDENCE_EXTERNAL_SYSTEM
         );
+
+        let _ = shutdown_tx.send(());
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_skips_incidents_with_review_required_reconciliation() {
+        let (target_url, state, shutdown_tx, handle) = spawn_providence_server(0).await;
+        let store = incident_store();
+        let mut incident = sample_incident();
+        incident.external_references.push(ExternalReference {
+            system: PROVIDENCE_EXTERNAL_SYSTEM.to_string(),
+            id: "prov-incident-review".to_string(),
+            url: Some("http://127.0.0.1/incidents/prov-incident-review".to_string()),
+        });
+        incident.providence_reconciliation = Some(ProvidenceIncidentReconciliation {
+            incident_key: "suspicious_process_tree:execution:finding-1".to_string(),
+            remote_incident_id: "prov-incident-review".to_string(),
+            remote_incident_url: Some(
+                "http://127.0.0.1/incidents/prov-incident-review".to_string(),
+            ),
+            remote_status: super::ProvidenceIncidentStatus::Resolved,
+            remote_severity: Severity::High,
+            swarm_status: super::ProvidenceIncidentStatus::Open,
+            swarm_severity: Severity::High,
+            remote_updated_at_ms: 1_700_000_000_500,
+            reconciled_at_ms: 1_700_000_000_600,
+            outcome: ProvidenceReconciliationOutcome::ProvidenceAhead,
+            needs_review: true,
+            summary: "Providence resolved the incident before Swarm did.".to_string(),
+        });
+        store.persist(&incident).unwrap();
+
+        let adapter = ProvidenceIncidentAdapter::new(
+            NotificationChannelConfig {
+                target_url,
+                auth_token: Some("bearer".to_string()),
+                request_signature: None,
+                timeout_ms: 500,
+                rate_limit: NotificationRateLimitConfig::default(),
+                quiet_hours: None,
+                dead_letter_path: temp_path("review-blocked"),
+            },
+            None,
+        )
+        .unwrap();
+
+        adapter
+            .sync_incidents(
+                &store,
+                &runtime_context(swarm_core::agent::SwarmMode::Alert),
+                10,
+            )
+            .await
+            .unwrap();
+
+        let requests = state.requests.lock().await.clone();
+        assert!(requests.is_empty());
 
         let _ = shutdown_tx.send(());
         handle.await.unwrap();

@@ -18,6 +18,11 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -63,17 +68,31 @@ spec:
                   - /bin/sh
                   - -c
                   - wget -qO- http://127.0.0.1:{{ .Values.service.port }}/prestop >/dev/null || true
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: config
               mountPath: /etc/swarm/config.yaml
               subPath: config.yaml
+              readOnly: true
             - name: data
-              mountPath: {{ .Values.persistence.mountPath }}
+              mountPath: {{ include "swarm-team-six.stateRoot" . }}
+            {{- if .Values.scratchVolume.enabled }}
+            - name: scratch
+              mountPath: {{ .Values.scratchVolume.mountPath }}
+            {{- end }}
             {{- if or .Values.secrets.existingSecret (and .Values.secrets.enabled (gt (len .Values.secrets.files) 0)) }}
             - name: secrets
               mountPath: {{ .Values.secrets.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: {{ .Values.tls.mountPath }}
               readOnly: true
             {{- end }}
       volumes:
@@ -88,10 +107,19 @@ spec:
         - name: data
           emptyDir: {}
         {{- end }}
+        {{- if .Values.scratchVolume.enabled }}
+        - name: scratch
+          emptyDir: {}
+        {{- end }}
         {{- if or .Values.secrets.existingSecret (and .Values.secrets.enabled (gt (len .Values.secrets.files) 0)) }}
         - name: secrets
           secret:
             secretName: {{ include "swarm-team-six.secretName" . }}
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ include "swarm-team-six.tlsSecretName" . }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

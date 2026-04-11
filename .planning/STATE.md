@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.52
-milestone_name: Providence Reconciliation And Response Rehearsal
-current_phase: null
-current_phase_name: null
+milestone: v1.54
+milestone_name: Panic Eradication And Error Contracts
+current_phase: 186
+current_phase_name: Agent Tick And Evolution Error Boundaries
 status: active
-last_updated: "2026-04-11T18:00:00Z"
-last_activity: 2026-04-11 — Activated v1.52 and defined milestones v1.54-v1.63 for autonomous execution
+last_updated: "2026-04-11T23:37:53Z"
+last_activity: 2026-04-11 — Completed Phase 185 typed ingest, service, and HTTP error-boundary conversion, and queued Phase 186 agent and evolution boundary cleanup
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 2
+  total_plans: 4
+  completed_plans: 2
+  percent: 50
 ---
 
 # State
@@ -22,19 +22,19 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-11)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.52 Providence Reconciliation And Response Rehearsal` is active. Autonomous execution queue: v1.52 through v1.63 (phases 176-223).
+**Current focus:** `v1.54 Panic Eradication And Error Contracts` is active. Phases 184 and 185 are complete, Phase 186 is planned next, and the autonomous execution queue remains v1.54 through v1.63 (phases 186-223).
 
 ## Current Position
 
-Phase: None (v1.52 active, awaiting discuss/plan for Phase 176)
-Current Phase: None
-Current Phase Name: None
-Status: v1.52 is active, awaiting discuss/plan for Phase 176
-Last activity: 2026-04-11 — Activated v1.52 and defined milestones v1.54-v1.63 for autonomous execution
+Phase: 186 (planned)
+Current Phase: 186
+Current Phase Name: Agent Tick And Evolution Error Boundaries
+Status: v1.54 is active; Phases 184 and 185 are complete and Phase 186 is next
+Last activity: 2026-04-11 — Completed Phase 185 typed ingest, service, and HTTP error-boundary conversion, and queued Phase 186 agent and evolution boundary cleanup
 Total Phases: 4
-Total Plans in Phase: 0
+Total Plans in Phase: 1
 
-Progress: [..........] 0%
+Progress: [#####.....] 50%
 
 ## Memory
 
@@ -109,11 +109,22 @@ Progress: [..........] 0%
 - Phase 174 is complete: queue review, handoff creation, canary admission, promotion start, and shared runtime status now all fail closed on missing or blocked assurance lineage instead of treating robustness artifacts as advisory only.
 - Phase 175 is complete: signed bounded assurance waivers now attach directly to blocked assurance lineage, queue review can proceed only when the active waiver clears the remaining assurance blocker, and waiver details surface through handoff, canary, promotion, and shared evolution status artifacts.
 - The v1.51 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots live in `.planning/milestones/`, and phase directories `172` through `175` are archived under `.planning/milestones/v1.51-phases/`.
+- Phase 176 is complete: Providence now accepts authenticated lifecycle callbacks, persists explicit reconciliation state and callback audit on incidents, surfaces reconciliation on `/v2/api/incidents`, and blocks automatic outbound sync while review-required drift is unresolved.
+- Phase 177 is complete: Providence analyst feedback now preserves durable signed evidence on incident audit entries, dismiss feedback continues to drive bounded Kitten penalties, and Sphinx now annotates the matching engagement so analyst disposition and note change memory reward on later retrieval.
+- Phase 178 is complete: replay bundles now support bounded rehearsal proof with typed blast-radius and rollback previews, rehearsal reuses the live policy and executor lane in forced `DryRun`, and rehearsal starts from persisted replay artifacts so it does not create new detection-side effects.
+- Phase 179 is complete: the operator review surface now joins scoped replay, rehearsal proof, and Providence reconciliation on one bounded page, Providence handoff links land on that scoped review context, platform findings and incidents expose latest rehearsal metadata alongside reconciliation, and rehearsal replay bundles export as signed proof through the existing evidence contract.
+- Phase 180 is complete: the Helm chart now ships a supported secure production profile with explicit runtime and JetStream state roots, normalized rendered config paths under `/var/lib/swarm`, declared chart dependency wiring for bundled NATS, and hardened pod packaging for non-root read-only deployments.
+- Phase 181 is complete: the repo now defines a recovery evidence packet, runtime PVC and JetStream durability boundaries, repeatable backup or restore and upgrade or rollback drills, and a supported durability matrix for both bootstrap `local_journal` and production `jet_stream` topologies.
+- Phase 182 is complete: the runtime now exposes ingest request latency and accepted-event counters on `/metrics`, the repo ships a runnable end-to-end ingest benchmark, and the configuration plus architecture docs now anchor SLO and scaling guidance to measured runtime behavior instead of heuristic population tables.
+- Phase 183 is complete: operator auth now supports scoped multi-principal read, rehearse, approve, and maintenance access, approval and maintenance actions are attributable to the authenticated operator identity, and the platform API plus Providence context-token surfaces now align with that operator model.
+- The v1.53 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are archived in `.planning/milestones/`, and phase directories `180` through `183` now live under `.planning/milestones/v1.53-phases/`.
+- Phase 184 is complete: the runtime panic audit confirms zero live non-test `unwrap()` and `expect()` sites across `swarm-runtime` entrypoints, the serve and TLS seam now has an explicit `ServeError` boundary, and the deferred string-only propagation work for ingest, service, and HTTP is mapped for Phase 185.
+- Phase 185 is complete: request-facing ingest paths now use typed `IngestRequestError` and `IngestProcessingError`, service rehearsal and readiness seams now use typed sub-errors under `ServiceError`, and the operator HTTP surface maps typed runtime, evidence, portfolio, governance, and maintenance failures through explicit adapters instead of inline blanket string flattening.
 
 ## Issues
 
-- No active implementation blockers. v1.52 is active. The autonomous execution queue runs v1.52 through v1.63 (48 phases, 176-223).
+- No active implementation blockers. Phase 186 is queued on top of the shipped runtime request-boundary pass, and the autonomous execution queue runs v1.54 through v1.63 (38 phases, 186-223).
 
 ## Next Command
 
-`$gsd-autonomous` — execute v1.52 through v1.63 sequentially
+`$gsd-autonomous` — execute v1.54 through v1.63 sequentially

@@ -1148,7 +1148,7 @@ promotion:
     }
 
     #[test]
-    fn operator_surface_requires_loopback_bind_address() {
+    fn operator_surface_allows_non_loopback_bind_address() {
         let yaml = r#"
 name: test
 description: test
@@ -1180,11 +1180,8 @@ operator_surface:
     token_env: SWARM_OPERATOR_TOKEN
 "#;
 
-        let error = parse_config(yaml, "inline").unwrap_err();
-        match error {
-            RuntimeConfigError::Validation { source_name, .. } => assert_eq!(source_name, "inline"),
-            other => panic!("expected validation error, got {other:?}"),
-        }
+        let config = parse_config(yaml, "inline").unwrap();
+        assert_eq!(config.operator.bind_addr, "0.0.0.0:7766");
     }
 
     #[test]

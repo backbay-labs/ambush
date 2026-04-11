@@ -854,6 +854,7 @@ mod tests {
                 severity: Severity::Critical,
                 evidence: serde_json::json!({"signal": "encoded-command"}),
             },
+            rehearsal: None,
             audit: AuditTrail {
                 trail_id: "trail:hunt-1:1".to_string(),
                 hunt_id: "hunt-1".to_string(),

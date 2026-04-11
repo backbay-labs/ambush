@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
-use swarm_core::types::{ProvidenceFeedbackAction, Severity};
+use swarm_core::types::{
+    ProvidenceCallbackAuditEntry, ProvidenceFeedbackAction, ProvidenceFeedbackEvidence,
+    ProvidenceIncidentReconciliation, Severity,
+};
 
 /// Generic outbound-system reference linked to a correlated incident.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +32,8 @@ pub struct AnalystFeedbackAuditEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub request_signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<ProvidenceFeedbackEvidence>,
     pub payload: Value,
     pub outcome: Value,
 }
@@ -96,6 +101,10 @@ pub struct CorrelatedIncident {
     pub severity: Option<Severity>,
     #[serde(default)]
     pub external_references: Vec<ExternalReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub providence_reconciliation: Option<ProvidenceIncidentReconciliation>,
+    #[serde(default)]
+    pub providence_callback_audit_entries: Vec<ProvidenceCallbackAuditEntry>,
     #[serde(default)]
     pub feedback_audit_entries: Vec<AnalystFeedbackAuditEntry>,
 }
@@ -145,6 +154,10 @@ pub struct IncidentRecord {
     pub severity: Option<Severity>,
     #[serde(default)]
     pub external_references: Vec<ExternalReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub providence_reconciliation: Option<ProvidenceIncidentReconciliation>,
+    #[serde(default)]
+    pub providence_callback_audit_entries: Vec<ProvidenceCallbackAuditEntry>,
     #[serde(default)]
     pub feedback_audit_entries: Vec<AnalystFeedbackAuditEntry>,
 }
@@ -168,6 +181,8 @@ impl IncidentRecord {
             threat_class: incident.threat_class.clone(),
             severity: incident.severity,
             external_references: incident.external_references.clone(),
+            providence_reconciliation: incident.providence_reconciliation.clone(),
+            providence_callback_audit_entries: incident.providence_callback_audit_entries.clone(),
             feedback_audit_entries: incident.feedback_audit_entries.clone(),
         }
     }
@@ -771,6 +786,8 @@ mod tests {
             threat_class: Some(ThreatClass::Execution),
             severity: Some(Severity::Critical),
             external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
         }
     }
@@ -871,6 +888,7 @@ mod tests {
                     finding_id: Some("finding-1".to_string()),
                     reason: Some("false positive".to_string()),
                     request_signature: "sha256=test".to_string(),
+                    evidence: None,
                     payload: serde_json::json!({
                         "action": "dismiss",
                         "incident_id": record.incident_id,

@@ -14,6 +14,7 @@ pub mod store;
 
 use serde::{Deserialize, Serialize};
 use swarm_core::pheromone::PheromoneDeposit;
+use swarm_core::types::ResponseRehearsalPreview;
 use swarm_policy::{ActionRequest, CapabilityLease, PolicyVerdict};
 use swarm_response::{ResponseFailure, ResponseReceipt};
 use swarm_whisker::{DetectionFinding, TelemetryEvent};
@@ -87,6 +88,8 @@ pub struct ReplayBundle {
     pub findings: Vec<DetectionFinding>,
     pub deposits: Vec<PheromoneDeposit>,
     pub action_request: ActionRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rehearsal: Option<ResponseRehearsalPreview>,
     pub audit: AuditTrail,
 }
 
@@ -123,5 +126,15 @@ impl AuditTrail {
 impl ReplayBundle {
     pub fn action_kind(&self) -> &'static str {
         self.action_request.action.kind()
+    }
+
+    pub fn is_rehearsal(&self) -> bool {
+        self.rehearsal.is_some()
+    }
+
+    pub fn rehearsal_id(&self) -> Option<&str> {
+        self.rehearsal
+            .as_ref()
+            .map(|preview| preview.rehearsal_id.as_str())
     }
 }

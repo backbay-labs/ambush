@@ -149,37 +149,87 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 </details>
 
-## Queued Milestones
+<details>
+<summary>Shipped: v1.52 Providence Reconciliation And Response Rehearsal (Phases 176-179)</summary>
 
-### v1.52 Providence Reconciliation And Response Rehearsal
+- [x] **Phase 176: Providence Callback And Incident Reconciliation** - Accept authenticated Providence callbacks and reconcile incident lifecycle state with correlated incidents. (PROVREC-01, PROVREC-02) (completed 2026-04-11)
+- [x] **Phase 177: Analyst Disposition Sync And Memory Feedback** - Persist analyst dispositions and notes as signed audit evidence and feed them back into Sphinx and Kitten memory. (PROVREC-03) (completed 2026-04-11)
+- [x] **Phase 178: Response Rehearsal Harness And Blast-Radius Modeling** - Reuse the existing response and approval path in non-destructive rehearsal mode with bounded blast-radius and rollback evidence. (REHEARSE-01, REHEARSE-02) (completed 2026-04-11)
+- [x] **Phase 179: Rehearsal Review Surface And Providence Handoff** - Surface reconciliation and rehearsal context through the local review path and Providence-facing handoff surfaces. (REHEARSE-03, REHEARSE-04) (completed 2026-04-11)
 
-**Goal:** Close the Providence loop with inbound reconciliation and analyst disposition sync, and add bounded response rehearsal and blast-radius proof so live actions can be practiced before execution.
-**Executable phases:** 176-179
+</details>
 
-- [ ] **Phase 176: Providence Callback And Incident Reconciliation** - Accept authenticated Providence callbacks and reconcile incident lifecycle state with correlated incidents. (PROVREC-01, PROVREC-02) (queued)
-- [ ] **Phase 177: Analyst Disposition Sync And Memory Feedback** - Persist analyst dispositions and notes as signed audit evidence and feed them back into Sphinx and Kitten memory. (PROVREC-03) (queued)
-- [ ] **Phase 178: Response Rehearsal Harness And Blast-Radius Modeling** - Reuse the existing response and approval path in non-destructive rehearsal mode with bounded blast-radius and rollback evidence. (REHEARSE-01, REHEARSE-02) (queued)
-- [ ] **Phase 179: Rehearsal Review Surface And Providence Handoff** - Surface reconciliation and rehearsal context through the local review path and Providence-facing handoff surfaces. (REHEARSE-03, REHEARSE-04) (queued)
+<details>
+<summary>Shipped: v1.53 Production Packaging, Recovery, And Operator Access (Phases 180-183)</summary>
 
-### v1.53 Production Packaging, Recovery, And Operator Access
+- [x] **Phase 180: Secure Production Packaging Profile** - Ship secure-by-default packaging for runtime, state, and dependency surfaces with an explicit supported deployment profile. (PROD-01) (completed 2026-04-11)
+- [x] **Phase 181: Recovery Drills And Durability Validation** - Prove backup, restore, upgrade, rollback, and durability behavior across the supported state roots. (PROD-02, PROD-03) (completed 2026-04-11)
+- [x] **Phase 182: SLO, Capacity Envelope, And Alert Baselines** - Publish end-to-end load, capacity, SLO, and alert guidance based on measured runtime behavior. (PROD-04) (completed 2026-04-11)
+- [x] **Phase 183: Operator Access Model And Multi-Operator Audit** - Add scoped multi-operator access, attributable approvals, and a supported reference architecture for adoption. (ACCESS-01, ACCESS-02, ACCESS-03) (completed 2026-04-11)
 
-**Goal:** Make the system credibly deployable with secure packaging, HA and durability drills, SLO and capacity bounds, and a real operator access model instead of loopback-only shared-secret usage.
-**Executable phases:** 180-183
+</details>
 
-- [ ] **Phase 180: Secure Production Packaging Profile** - Ship secure-by-default packaging for runtime, state, and dependency surfaces with an explicit supported deployment profile. (PROD-01) (queued)
-- [ ] **Phase 181: Recovery Drills And Durability Validation** - Prove backup, restore, upgrade, rollback, and durability behavior across the supported state roots. (PROD-02, PROD-03) (queued)
-- [ ] **Phase 182: SLO, Capacity Envelope, And Alert Baselines** - Publish end-to-end load, capacity, SLO, and alert guidance based on measured runtime behavior. (PROD-04) (queued)
-- [ ] **Phase 183: Operator Access Model And Multi-Operator Audit** - Add scoped multi-operator access, attributable approvals, and a supported reference architecture for adoption. (ACCESS-01, ACCESS-02, ACCESS-03) (queued)
+## Active Milestone
 
 ### v1.54 Panic Eradication And Error Contracts
 
 **Goal:** Eliminate unwrap/expect from non-test runtime code and establish typed error propagation contracts at every crate boundary.
 **Executable phases:** 184-187
 
-- [ ] **Phase 184: Runtime Unwrap Audit And Error Types** - Audit and catalog all unwrap/expect sites in swarm-runtime; define typed error enums per module boundary. (PANIC-01, PANIC-02) (queued)
-- [ ] **Phase 185: Ingest And Service Panic-Free Conversion** - Convert ingest handlers, service module, and HTTP surfaces to propagate errors instead of panicking. (PANIC-03) (queued)
+- [x] **Phase 184: Runtime Unwrap Audit And Error Types** - Audit and catalog all unwrap/expect sites in swarm-runtime; define typed error enums per module boundary. (PANIC-01, PANIC-02) (completed 2026-04-11)
+- [x] **Phase 185: Ingest And Service Panic-Free Conversion** - Convert ingest handlers, service module, and HTTP surfaces to propagate errors instead of panicking. (PANIC-03) (completed 2026-04-11)
 - [ ] **Phase 186: Agent Tick And Evolution Error Boundaries** - Convert agent tick paths, evolution harnesses, and cross-crate calls to typed error propagation. (PANIC-03) (queued)
 - [ ] **Phase 187: Error Contract CI Enforcement** - Add CI lint enforcing unwrap/expect justification and integration tests proving panic-free behavior under malformed input. (PANIC-04) (queued)
+
+### Phase 184: Runtime Unwrap Audit And Error Types
+
+**Goal:** Audit and catalog all unwrap/expect sites in `swarm-runtime` and define typed error enums per module boundary.
+**Requirements:** PANIC-01, PANIC-02
+**Depends on:** Phase 183
+**Status:** Complete
+**Plans:** 1
+**Success Criteria**:
+1. Non-test `unwrap()` and `expect()` use in `swarm-runtime` is inventoried by module and runtime path instead of remaining ad hoc debt.
+2. Typed error boundaries are explicit for the first tranche of runtime modules that still lean on panic-driven or string-only failure handling.
+3. Follow-on conversion work has a repo-owned map of what remains and where those errors should propagate.
+
+### Phase 185: Ingest And Service Panic-Free Conversion
+
+**Goal:** Convert ingest handlers, service module, and HTTP surfaces to propagate errors instead of panicking.
+**Requirements:** PANIC-03
+**Depends on:** Phase 184
+**Status:** Complete
+**Plans:** 1
+**Success Criteria**:
+1. Ingest, service, and HTTP request paths fail closed with typed `Result` propagation instead of panic on malformed input or store errors.
+2. Runtime-facing entrypoints map module-local failures into stable error enums rather than ad hoc strings.
+3. Regression coverage proves malformed requests and config-adjacent failures return structured errors instead of crashing the process.
+
+### Phase 186: Agent Tick And Evolution Error Boundaries
+
+**Goal:** Convert agent tick paths, evolution harnesses, and cross-crate calls to typed error propagation.
+**Requirements:** PANIC-03
+**Depends on:** Phase 185
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. Agent and evolution paths no longer rely on panic-driven unwrap/expect behavior in non-test runtime code.
+2. Cross-crate calls between runtime, evolution, and support crates preserve typed failure context.
+3. Runtime degradation or failure reporting can distinguish agent/evolution faults without crashing the surrounding process.
+
+### Phase 187: Error Contract CI Enforcement
+
+**Goal:** Add CI enforcement for the panic-free contract and prove malformed input stays non-panicking.
+**Requirements:** PANIC-04
+**Depends on:** Phase 186
+**Status:** Queued
+**Plans:** 0
+**Success Criteria**:
+1. CI or repo-owned tests flag new unjustified `unwrap()` and `expect()` use in non-test runtime code.
+2. Integration coverage proves representative malformed input paths return errors instead of panic.
+3. The repo documents the allowed exception pattern for any intentionally infallible runtime sites that remain.
+
+## Queued Milestones
 
 ### v1.55 JetStream Integration Tests And Load Baselines
 
@@ -391,16 +441,16 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 | 173. Counterexample Harvest And Replay Regeneration | v1.51 | 1/1 | Complete | 2026-04-11 |
 | 174. Assurance-Gated Queue, Canary, And Promotion | v1.51 | 1/1 | Complete | 2026-04-11 |
 | 175. Waivers, Review Surface, And Assurance Lineage | v1.51 | 1/1 | Complete | 2026-04-11 |
-| 176. Providence Callback And Incident Reconciliation | v1.52 | 0/1 | Pending | - |
-| 177. Analyst Disposition Sync And Memory Feedback | v1.52 | 0/1 | Pending | - |
-| 178. Response Rehearsal Harness And Blast-Radius Modeling | v1.52 | 0/1 | Pending | - |
-| 179. Rehearsal Review Surface And Providence Handoff | v1.52 | 0/1 | Pending | - |
-| 180. Secure Production Packaging Profile | v1.53 | 0/1 | Pending | - |
-| 181. Recovery Drills And Durability Validation | v1.53 | 0/1 | Pending | - |
-| 182. SLO, Capacity Envelope, And Alert Baselines | v1.53 | 0/1 | Pending | - |
-| 183. Operator Access Model And Multi-Operator Audit | v1.53 | 0/1 | Pending | - |
-| 184. Runtime Unwrap Audit And Error Types | v1.54 | 0/1 | Pending | - |
-| 185. Ingest And Service Panic-Free Conversion | v1.54 | 0/1 | Pending | - |
+| 176. Providence Callback And Incident Reconciliation | v1.52 | 1/1 | Complete | 2026-04-11 |
+| 177. Analyst Disposition Sync And Memory Feedback | v1.52 | 1/1 | Complete | 2026-04-11 |
+| 178. Response Rehearsal Harness And Blast-Radius Modeling | v1.52 | 1/1 | Complete | 2026-04-11 |
+| 179. Rehearsal Review Surface And Providence Handoff | v1.52 | 1/1 | Complete | 2026-04-11 |
+| 180. Secure Production Packaging Profile | v1.53 | 1/1 | Complete | 2026-04-11 |
+| 181. Recovery Drills And Durability Validation | v1.53 | 1/1 | Complete | 2026-04-11 |
+| 182. SLO, Capacity Envelope, And Alert Baselines | v1.53 | 1/1 | Complete | 2026-04-11 |
+| 183. Operator Access Model And Multi-Operator Audit | v1.53 | 1/1 | Complete | 2026-04-11 |
+| 184. Runtime Unwrap Audit And Error Types | v1.54 | 1/1 | Complete | 2026-04-11 |
+| 185. Ingest And Service Panic-Free Conversion | v1.54 | 1/1 | Complete | 2026-04-11 |
 | 186. Agent Tick And Evolution Error Boundaries | v1.54 | 0/1 | Pending | - |
 | 187. Error Contract CI Enforcement | v1.54 | 0/1 | Pending | - |
 | 188. Containerized NATS Test Harness | v1.55 | 0/1 | Pending | - |
@@ -441,6 +491,6 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 | 223. API Response Schema Migration | v1.63 | 0/1 | Pending | - |
 
 ---
-*Latest completed milestone: v1.51 Assurance-Gated Evolution And Counterexample Loop*
-*Next step: Execute `$gsd-autonomous` to work through v1.52 through v1.63*
-*Last updated: 2026-04-11 — Completed Phase 175 and closed v1.51 Assurance-Gated Evolution And Counterexample Loop*
+*Active milestone: v1.54 Panic Eradication And Error Contracts*
+*Next step: Execute `$gsd-autonomous` to begin Phase 186 Agent Tick And Evolution Error Boundaries*
+*Last updated: 2026-04-11 — Completed Phase 185 typed ingest, service, and HTTP error-boundary conversion and advanced v1.54 to Phase 186*

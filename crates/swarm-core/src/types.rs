@@ -79,6 +79,10 @@ pub struct SphinxMemoryContribution {
     pub outcome_reward: f64,
     pub recency_decay: f64,
     pub q_value: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyst_disposition: Option<ProvidenceFeedbackAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyst_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -111,6 +115,23 @@ pub enum ProvidenceFeedbackAction {
     Investigate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvidenceCallbackEvent {
+    Created,
+    Updated,
+    Resolved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvidenceReconciliationOutcome {
+    InSync,
+    SwarmAhead,
+    ProvidenceAhead,
+    Mismatch,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SwarmProvidenceFeedbackRequest {
     pub action: ProvidenceFeedbackAction,
@@ -120,6 +141,32 @@ pub struct SwarmProvidenceFeedbackRequest {
     pub analyst_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProvidenceFeedbackEvidence {
+    pub schema: String,
+    pub schema_version: u32,
+    pub threat_class: ThreatClass,
+    pub agent_id: String,
+    pub signed_at_ms: i64,
+    pub signature_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmProvidenceCallbackRequest {
+    pub event: ProvidenceCallbackEvent,
+    pub incident_key: String,
+    pub remote_incident_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_incident_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incident_id: Option<String>,
+    pub status: ProvidenceIncidentStatus,
+    pub severity: Severity,
+    pub updated_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -195,6 +242,35 @@ pub struct SwarmProvidenceLinks {
     pub audit_trail: String,
     pub incident: String,
     pub review_home: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProvidenceIncidentReconciliation {
+    pub incident_key: String,
+    pub remote_incident_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_incident_url: Option<String>,
+    pub remote_status: ProvidenceIncidentStatus,
+    pub remote_severity: Severity,
+    pub swarm_status: ProvidenceIncidentStatus,
+    pub swarm_severity: Severity,
+    pub remote_updated_at_ms: i64,
+    pub reconciled_at_ms: i64,
+    pub outcome: ProvidenceReconciliationOutcome,
+    pub needs_review: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProvidenceCallbackAuditEntry {
+    pub callback_id: String,
+    pub received_at_ms: i64,
+    pub event: ProvidenceCallbackEvent,
+    pub incident_key: String,
+    pub remote_incident_id: String,
+    pub request_signature: String,
+    pub payload: serde_json::Value,
+    pub reconciliation: ProvidenceIncidentReconciliation,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -317,6 +393,69 @@ pub enum ResponseAction {
     },
     /// Escalate to human operator.
     Escalate { summary: String, urgency: Severity },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseRehearsalScopeKind {
+    NetworkTarget,
+    Host,
+    Credential,
+    Zone,
+    OperatorQueue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseBlastRadiusImpact {
+    NetworkEgressBlocked,
+    HostConnectivityIsolated,
+    CredentialAccessRevoked,
+    DeceptionCoverageChanged,
+    OperatorEscalationOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseBlastRadiusPreview {
+    pub scope_kind: ResponseRehearsalScopeKind,
+    pub scope_value: String,
+    pub impact: ResponseBlastRadiusImpact,
+    pub max_affected_scopes: usize,
+    pub affected_capabilities: Vec<String>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseRollbackStepKind {
+    RemoveNetworkBlock,
+    RestoreHostConnectivity,
+    RestoreCredential,
+    WithdrawDecoy,
+    CloseEscalation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseRollbackStep {
+    pub kind: ResponseRollbackStepKind,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseRollbackPreview {
+    pub required: bool,
+    pub summary: String,
+    pub steps: Vec<ResponseRollbackStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseRehearsalPreview {
+    pub rehearsal_id: String,
+    pub source_bundle_id: String,
+    pub prepared_at_ms: i64,
+    pub simulated_only: bool,
+    pub blast_radius: ResponseBlastRadiusPreview,
+    pub rollback: ResponseRollbackPreview,
 }
 
 impl ResponseAction {

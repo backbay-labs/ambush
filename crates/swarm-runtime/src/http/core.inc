@@ -10,13 +10,14 @@ use crate::control::{
 };
 use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use crate::evidence::{
-    EvidenceBundle, EvidenceBundleList, EvidenceSubjectKind, EvidenceVerificationReport,
+    DefaultEvidenceHarness, EvidenceBundle, EvidenceBundleList, EvidenceError,
+    EvidenceExportRequest, EvidenceHarnessPaths, EvidenceSubjectKind, EvidenceVerificationReport,
     EvidenceVerificationStatus, OperatorEvidenceReadService, PromotionEvidencePacket,
     PromotionEvidencePacketList, PromotionEvidenceRecommendation,
 };
 use crate::governance_prep::{
     DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePacketSetList,
-    EvolutionPortfolioHistoryList,
+    EvolutionGovernancePrepError, EvolutionPortfolioHistoryList,
 };
 use crate::operator_maintenance::{
     OperatorMaintenanceError, OperatorMaintenanceExecution, OperatorMaintenanceList,
@@ -24,7 +25,8 @@ use crate::operator_maintenance::{
     OperatorMaintenanceStatus,
 };
 use crate::portfolio::{
-    DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioList,
+    DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioError,
+    EvolutionPortfolioList,
 };
 use crate::review_workbench::{
     DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind, ReviewCapsule,
@@ -35,9 +37,9 @@ use crate::review_workbench::{
     ReviewSessionPromotionReadiness, ReviewSessionPromotionReadinessList, ReviewSessionResolved,
     ReviewSessionReverifyRequest, ReviewWorkbenchError,
 };
-use crate::serve::serve_with_listener;
-use crate::service::OperatorStatusReport;
-use axum::extract::{Form, Path as RoutePath, Query, State};
+use crate::serve::{ServeError, serve_with_listener};
+use crate::service::{OperatorStatusReport, ReadinessError, ServiceError};
+use axum::extract::{Extension, Form, Path as RoutePath, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -48,8 +50,11 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swarm_core::config::SwarmConfig;
+use swarm_core::config::{OperatorScope, SwarmConfig};
 use swarm_core::pheromone::{ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType};
+use swarm_core::types::{
+    ProvidenceIncidentStatus, ProvidenceReconciliationOutcome, ResponseRehearsalPreview,
+};
 use swarm_crypto::DetachedSignature;
 
 /// Result directories required to expose authenticated operator artifacts through HTTP.
@@ -57,6 +62,11 @@ use swarm_crypto::DetachedSignature;
 pub struct OperatorSurfacePaths {
     pub evidence_signer_id: String,
     pub evidence_signing_key_env: String,
+    pub verification_results_dir: PathBuf,
+    pub shadow_results_dir: PathBuf,
+    pub promotion_review_results_dir: PathBuf,
+    pub canary_results_dir: PathBuf,
+    pub promotion_results_dir: PathBuf,
     pub evolution_ranking_results_dir: PathBuf,
     pub evolution_selection_results_dir: PathBuf,
     pub evolution_portfolio_results_dir: PathBuf,
@@ -124,7 +134,7 @@ pub enum OperatorHttpError {
     },
 
     #[error("operator surface server exited: {0}")]
-    Serve(#[from] std::io::Error),
+    Serve(#[from] ServeError),
 }
 
 #[derive(Clone)]
@@ -135,11 +145,13 @@ pub struct LocalOperatorSurface {
 
 #[derive(Clone)]
 struct OperatorHttpState {
+    auth: OperatorAuthState,
     control: Arc<DefaultControlPlane>,
     portfolio: Option<Arc<DefaultEvolutionPortfolioHarness>>,
     governance_prep: Option<Arc<DefaultEvolutionGovernancePrepHarness>>,
     maintenance: Option<Arc<OperatorMaintenanceService>>,
     evidence: Option<Arc<OperatorEvidenceReadService>>,
+    evidence_harness: Option<Arc<DefaultEvidenceHarness>>,
     workbench: Option<Arc<DefaultReviewWorkbenchHarness>>,
     approval: Option<Arc<DefaultApprovalHarness>>,
     prometheus: Option<CriticalPathMetrics>,
@@ -150,8 +162,69 @@ struct OperatorHttpState {
 }
 
 #[derive(Debug, Clone)]
-struct OperatorAuthState {
+struct AuthenticatedOperatorPrincipal {
+    operator_id: Arc<str>,
+    scopes: Vec<OperatorScope>,
+}
+
+impl AuthenticatedOperatorPrincipal {
+    fn has_scope(&self, scope: OperatorScope) -> bool {
+        self.scopes.contains(&scope)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedOperatorPrincipal {
+    principal: AuthenticatedOperatorPrincipal,
     expected_token: Arc<str>,
+}
+
+#[derive(Debug, Clone)]
+struct OperatorAuthState {
+    principals: Arc<Vec<ResolvedOperatorPrincipal>>,
+}
+
+impl OperatorAuthState {
+    fn from_config(config: &SwarmConfig) -> Result<Self, OperatorHttpError> {
+        let principals = config
+            .operator
+            .auth
+            .effective_principals()
+            .into_iter()
+            .map(|principal| {
+                let expected_token = std::env::var(&principal.token_env)
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| OperatorHttpError::MissingTokenEnv {
+                        env_name: principal.token_env.clone(),
+                    })?;
+                Ok(ResolvedOperatorPrincipal {
+                    principal: AuthenticatedOperatorPrincipal {
+                        operator_id: Arc::from(principal.operator_id),
+                        scopes: principal.scopes,
+                    },
+                    expected_token: Arc::from(expected_token),
+                })
+            })
+            .collect::<Result<Vec<_>, OperatorHttpError>>()?;
+        Ok(Self {
+            principals: Arc::new(principals),
+        })
+    }
+
+    fn authenticate(&self, token: &str) -> Option<AuthenticatedOperatorPrincipal> {
+        self.principals.iter().find_map(|principal| {
+            (principal.expected_token.as_ref() == token).then(|| principal.principal.clone())
+        })
+    }
+
+    fn operator_has_scope(&self, operator_id: &str, scope: OperatorScope) -> bool {
+        self.principals.iter().any(|principal| {
+            principal.principal.operator_id.as_ref() == operator_id
+                && principal.principal.has_scope(scope)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,6 +314,13 @@ struct ReviewEvidenceListQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct ReviewHomeQuery {
+    hunt_id: Option<String>,
+    incident_id: Option<String>,
+    bundle_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ReviewPromotionPacketListQuery {
     recommendation: Option<String>,
     limit: Option<usize>,
@@ -302,6 +382,14 @@ struct OperatorReviewError {
     message: String,
 }
 
+#[derive(Debug, Clone)]
+struct ReviewHomeContext {
+    selected_bundle: Option<ReplayArtifactView>,
+    latest_rehearsal_bundle: Option<ReplayArtifactView>,
+    incident: Option<IncidentArtifactView>,
+    signed_rehearsal_bundle_id: Option<String>,
+}
+
 impl OperatorApiError {
     fn unauthorized(message: impl Into<String>) -> Self {
         Self {
@@ -323,6 +411,14 @@ impl OperatorApiError {
         Self {
             status: StatusCode::BAD_GATEWAY,
             error: "bad_gateway",
+            message: message.into(),
+        }
+    }
+
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            error: "forbidden",
             message: message.into(),
         }
     }
@@ -374,6 +470,14 @@ impl OperatorReviewError {
         }
     }
 
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            title: "Forbidden",
+            message: message.into(),
+        }
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -397,6 +501,20 @@ impl IntoResponse for OperatorReviewError {
             )),
         )
             .into_response()
+    }
+}
+
+fn evidence_harness_paths(paths: &OperatorSurfacePaths) -> EvidenceHarnessPaths {
+    EvidenceHarnessPaths {
+        verification_results_dir: paths.verification_results_dir.clone(),
+        shadow_results_dir: paths.shadow_results_dir.clone(),
+        promotion_review_results_dir: paths.promotion_review_results_dir.clone(),
+        canary_results_dir: paths.canary_results_dir.clone(),
+        promotion_results_dir: paths.promotion_results_dir.clone(),
+        operator_maintenance_results_dir: paths.operator_maintenance_results_dir.clone(),
+        evidence_results_dir: paths.evidence_results_dir.clone(),
+        evidence_verification_results_dir: paths.evidence_verification_results_dir.clone(),
+        promotion_evidence_results_dir: paths.promotion_evidence_results_dir.clone(),
     }
 }
 
@@ -434,14 +552,6 @@ impl LocalOperatorSurface {
             return Err(OperatorHttpError::Disabled);
         }
 
-        std::env::var(&config.operator.auth.token_env)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| OperatorHttpError::MissingTokenEnv {
-                env_name: config.operator.auth.token_env.clone(),
-            })?;
-
         let bind_addr =
             config
                 .operator
@@ -457,9 +567,13 @@ impl LocalOperatorSurface {
                         reason: "must be a valid socket address".to_string(),
                     },
                 })?;
+        let auth = OperatorAuthState::from_config(&config)?;
 
         let config_path = config_path.into();
-        let control = DefaultControlPlane::from_config(config_path.clone(), config.clone())?;
+        let control = Arc::new(DefaultControlPlane::from_config(
+            config_path.clone(),
+            config.clone(),
+        )?);
         let prometheus = control.stack.service.prometheus_metrics().cloned();
         let approval_receipt_signer_id = paths
             .as_ref()
@@ -469,60 +583,68 @@ impl LocalOperatorSurface {
             .as_ref()
             .map(|value| value.evidence_signing_key_env.clone())
             .unwrap_or_else(|| "SWARM_EVIDENCE_SIGNING_KEY".to_string());
-        let (portfolio, governance_prep, maintenance, evidence, workbench, approval) =
-            if let Some(paths) = paths {
-                let portfolio = DefaultEvolutionPortfolioHarness::from_path(
-                    &paths.evolution_ranking_results_dir,
-                    &paths.evolution_selection_results_dir,
-                    &paths.evolution_portfolio_results_dir,
-                    &paths.evolution_governance_review_packet_results_dir,
-                )?;
-                let governance_prep = DefaultEvolutionGovernancePrepHarness::from_path(
-                    &paths.evolution_governance_review_packet_results_dir,
-                    &paths.evolution_packet_set_results_dir,
-                    &paths.strategy_memory_results_dir,
-                    &paths.evolution_portfolio_history_results_dir,
-                )?;
-                let maintenance = OperatorMaintenanceService::from_paths(
-                    config.operator.auth.operator_id.clone(),
-                    &paths,
-                )?;
-                let evidence = OperatorEvidenceReadService::from_store_paths(
-                    &paths.evidence_results_dir,
-                    &paths.evidence_verification_results_dir,
-                    &paths.promotion_evidence_results_dir,
-                )?;
-                let workbench = DefaultReviewWorkbenchHarness::from_paths(
-                    config.operator.auth.operator_id.clone(),
-                    &paths,
-                )?;
-                let approval = DefaultApprovalHarness::from_path(
-                    &config_path,
-                    &paths.approval_verdict_results_dir,
-                    &paths.approval_receipt_pack_results_dir,
-                    &paths.approval_set_results_dir,
-                    &paths.approval_ledger_results_dir,
-                )?;
-                (
-                    Some(Arc::new(portfolio)),
-                    Some(Arc::new(governance_prep)),
-                    Some(Arc::new(maintenance)),
-                    Some(Arc::new(evidence)),
-                    Some(Arc::new(workbench)),
-                    Some(Arc::new(approval)),
-                )
-            } else {
-                (None, None, None, None, None, None)
-            };
+        let (
+            portfolio,
+            governance_prep,
+            maintenance,
+            evidence,
+            evidence_harness,
+            workbench,
+            approval,
+        ) = if let Some(paths) = paths {
+            let portfolio = DefaultEvolutionPortfolioHarness::from_path(
+                &paths.evolution_ranking_results_dir,
+                &paths.evolution_selection_results_dir,
+                &paths.evolution_portfolio_results_dir,
+                &paths.evolution_governance_review_packet_results_dir,
+            )?;
+            let governance_prep = DefaultEvolutionGovernancePrepHarness::from_path(
+                &paths.evolution_governance_review_packet_results_dir,
+                &paths.evolution_packet_set_results_dir,
+                &paths.strategy_memory_results_dir,
+                &paths.evolution_portfolio_history_results_dir,
+            )?;
+            let maintenance = OperatorMaintenanceService::from_paths(&paths)?;
+            let evidence = OperatorEvidenceReadService::from_store_paths(
+                &paths.evidence_results_dir,
+                &paths.evidence_verification_results_dir,
+                &paths.promotion_evidence_results_dir,
+            )?;
+            let evidence_harness = DefaultEvidenceHarness::from_control(
+                control.clone(),
+                evidence_harness_paths(&paths),
+            )?;
+            let workbench = DefaultReviewWorkbenchHarness::from_paths(&paths)?;
+            let approval = DefaultApprovalHarness::from_path(
+                &config_path,
+                &paths.approval_verdict_results_dir,
+                &paths.approval_receipt_pack_results_dir,
+                &paths.approval_set_results_dir,
+                &paths.approval_ledger_results_dir,
+            )?;
+            (
+                Some(Arc::new(portfolio)),
+                Some(Arc::new(governance_prep)),
+                Some(Arc::new(maintenance)),
+                Some(Arc::new(evidence)),
+                Some(Arc::new(evidence_harness)),
+                Some(Arc::new(workbench)),
+                Some(Arc::new(approval)),
+            )
+        } else {
+            (None, None, None, None, None, None, None)
+        };
 
         Ok(Self {
             bind_addr,
             state: OperatorHttpState {
-                control: Arc::new(control),
+                auth,
+                control,
                 portfolio,
                 governance_prep,
                 maintenance,
                 evidence,
+                evidence_harness,
                 workbench,
                 approval,
                 prometheus,
@@ -550,11 +672,7 @@ impl LocalOperatorSurface {
     }
 
     /// Build the authenticated router.
-    pub fn router(&self, token: String) -> Router {
-        let auth_state = OperatorAuthState {
-            expected_token: Arc::from(token),
-        };
-
+    pub fn router(&self) -> Router {
         let protected = Router::new()
             .route("/v1/operator/status", get(status_handler))
             .route(
@@ -574,6 +692,10 @@ impl LocalOperatorSurface {
             .route("/v1/operator/investigation", get(investigation_handler))
             .route("/v1/operator/incident", get(incident_handler))
             .route("/v1/operator/review", get(review_home_handler))
+            .route(
+                "/v1/operator/review/rehearsals/{bundle_id}/export",
+                post(review_rehearsal_export_handler),
+            )
             .route(
                 "/v1/operator/review/sessions",
                 get(review_session_list_handler).post(review_session_create_handler),
@@ -732,7 +854,7 @@ impl LocalOperatorSurface {
             )
             .with_state(self.state.clone())
             .layer(middleware::from_fn_with_state(
-                auth_state,
+                self.state.auth.clone(),
                 require_bearer_auth,
             ));
 
@@ -744,23 +866,6 @@ impl LocalOperatorSurface {
 
     /// Serve the authenticated operator surface until the process exits.
     pub async fn serve(self) -> Result<(), OperatorHttpError> {
-        let token_env = self
-            .state
-            .control
-            .stack
-            .service
-            .config
-            .operator
-            .auth
-            .token_env
-            .clone();
-        let token = std::env::var(&token_env)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .ok_or(OperatorHttpError::MissingTokenEnv {
-                env_name: token_env,
-            })?;
         let listener = tokio::net::TcpListener::bind(self.bind_addr)
             .await
             .map_err(|source| OperatorHttpError::Bind {
@@ -769,7 +874,7 @@ impl LocalOperatorSurface {
             })?;
         serve_with_listener(
             listener,
-            self.router(token),
+            self.router(),
             self.state.control.stack.service.config.tls.clone(),
             std::future::pending(),
         )
@@ -781,11 +886,7 @@ impl LocalOperatorSurface {
 async fn status_handler(
     State(state): State<OperatorHttpState>,
 ) -> Result<Json<ControlEnvelope<OperatorStatusReport>>, OperatorApiError> {
-    let status = state
-        .control
-        .status()
-        .await
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+    let status = state.control.status().await.map_err(map_control_error)?;
     Ok(Json(status))
 }
 
@@ -796,19 +897,21 @@ async fn threat_class_config_list_handler(
         .control
         .threat_class_configs()
         .await
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_control_error)?;
     Ok(Json(configs))
 }
 
 async fn threat_class_config_upsert_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     Json(config): Json<ThreatClassConfig>,
 ) -> Result<Json<ControlEnvelope<ThreatClassConfig>>, OperatorApiError> {
+    require_operator_api_scope(&principal, OperatorScope::Maintenance, "maintenance")?;
     let stored = state
         .control
         .store_threat_class_config(config)
         .await
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_control_error)?;
     Ok(Json(stored))
 }
 
@@ -829,14 +932,16 @@ async fn threat_intel_entry_lookup_handler(
             query.now.unwrap_or_else(now_ms),
         )
         .await
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_control_error)?;
     Ok(Json(entry))
 }
 
 async fn threat_intel_entry_upsert_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     Json(entry): Json<ThreatIntelEntry>,
 ) -> Result<Json<ControlEnvelope<ThreatIntelEntry>>, OperatorApiError> {
+    require_operator_api_scope(&principal, OperatorScope::Maintenance, "maintenance")?;
     if entry.value.trim().is_empty() {
         return Err(OperatorApiError::bad_request(
             "threat-intel entry requires a non-empty `value` field",
@@ -846,7 +951,7 @@ async fn threat_intel_entry_upsert_handler(
         .control
         .store_threat_intel_entry(entry)
         .await
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_control_error)?;
     Ok(Json(stored))
 }
 
@@ -862,21 +967,23 @@ async fn notification_dead_letter_list_handler(
             Some(effective_limit(query.limit, state.max_list_results)),
         )
         .await
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_control_error)?;
     Ok(Json(entries))
 }
 
 async fn notification_dead_letter_replay_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     RoutePath(channel): RoutePath<String>,
     Json(request): Json<NotificationDeadLetterReplayRequest>,
 ) -> Result<Json<ControlEnvelope<Vec<swarm_response::NotificationReplayResult>>>, OperatorApiError>
 {
+    require_operator_api_scope(&principal, OperatorScope::Maintenance, "maintenance")?;
     let result = state
         .control
         .replay_notification_dead_letters(&channel, request.receipt_ids)
         .await
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_control_error)?;
     Ok(Json(result))
 }
 
@@ -900,6 +1007,34 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+fn require_operator_api_scope(
+    principal: &AuthenticatedOperatorPrincipal,
+    scope: OperatorScope,
+    action: &str,
+) -> Result<(), OperatorApiError> {
+    if principal.has_scope(scope) {
+        return Ok(());
+    }
+    Err(OperatorApiError::forbidden(format!(
+        "operator `{}` does not grant `{}` access",
+        principal.operator_id, action
+    )))
+}
+
+fn require_operator_review_scope(
+    principal: &AuthenticatedOperatorPrincipal,
+    scope: OperatorScope,
+    action: &str,
+) -> Result<(), OperatorReviewError> {
+    if principal.has_scope(scope) {
+        return Ok(());
+    }
+    Err(OperatorReviewError::forbidden(format!(
+        "operator `{}` does not grant `{}` access",
+        principal.operator_id, action
+    )))
 }
 
 async fn replay_handler(
@@ -940,20 +1075,22 @@ async fn incident_handler(
 
 async fn review_home_handler(
     State(state): State<OperatorHttpState>,
+    Query(query): Query<ReviewHomeQuery>,
 ) -> Result<Html<String>, OperatorReviewError> {
     let service = review_evidence_service(&state)?;
     let workbench = review_workbench_service(&state)?;
+    let context = resolve_review_home_context(&state, &query)?;
     let bundles = limit_evidence_bundle_list(
         service
             .list_bundles(None)
-            .map_err(|error| OperatorReviewError::internal(error.to_string()))?,
+            .map_err(map_review_evidence_error)?,
         Some(state.max_list_results),
         state.max_list_results,
     );
     let packets = limit_promotion_packet_list(
         service
             .list_promotion_evidence_packets()
-            .map_err(|error| OperatorReviewError::internal(error.to_string()))?,
+            .map_err(map_review_evidence_error)?,
         Some(state.max_list_results),
         state.max_list_results,
     );
@@ -987,12 +1124,44 @@ async fn review_home_handler(
     );
     Ok(Html(render_review_home_page(
         &state.runtime_base_url,
+        context.as_ref(),
         &bundles,
         &packets,
         &sessions,
         &capsules,
         &imports,
         &delegations,
+    )))
+}
+
+async fn review_rehearsal_export_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
+    State(state): State<OperatorHttpState>,
+    RoutePath(bundle_id): RoutePath<String>,
+) -> Result<Redirect, OperatorReviewError> {
+    require_operator_review_scope(&principal, OperatorScope::Rehearse, "rehearsal")?;
+    let replay = state
+        .control
+        .replay_lookup(ReplayLookupSelector::BundleId(&bundle_id))
+        .map_err(map_control_review_error)?;
+    if replay.data.bundle.rehearsal.is_none() {
+        return Err(OperatorReviewError::bad_request(format!(
+            "replay bundle `{bundle_id}` does not contain rehearsal proof"
+        )));
+    }
+    let harness = review_evidence_harness(&state)?;
+    let secret_material = review_evidence_secret_material(&state)?;
+    let lookup = harness
+        .export_bundle(EvidenceExportRequest {
+            subject_kind: EvidenceSubjectKind::ReplayBundle,
+            stable_id: bundle_id,
+            signer_id: state.approval_receipt_signer_id.clone(),
+            secret_material,
+        })
+        .map_err(map_review_evidence_error)?;
+    Ok(Redirect::to(&format!(
+        "/v1/operator/review/evidence/{}",
+        lookup.record.bundle_id
     )))
 }
 
@@ -1218,10 +1387,12 @@ async fn review_session_readiness_capsule_handler(
 }
 
 async fn review_session_handoff_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     RoutePath(session_id): RoutePath<String>,
     Form(form): Form<ReviewSessionHandoffForm>,
 ) -> Result<Redirect, OperatorReviewError> {
+    require_operator_review_scope(&principal, OperatorScope::Maintenance, "maintenance")?;
     let service = review_workbench_service(&state)?;
     let selected_artifact_refs = form
         .selected_artifact_refs
@@ -1230,12 +1401,15 @@ async fn review_session_handoff_handler(
         .transpose()?
         .unwrap_or_default();
     let lookup = service
-        .create_reverify_handoff(ReviewSessionReverifyRequest {
-            session_id,
-            selected_artifact_refs,
-            expected_key_id: normalize_form_optional_text(form.expected_key_id),
-            reason: form.reason,
-        })
+        .create_reverify_handoff(
+            principal.operator_id.as_ref(),
+            ReviewSessionReverifyRequest {
+                session_id,
+                selected_artifact_refs,
+                expected_key_id: normalize_form_optional_text(form.expected_key_id),
+                reason: form.reason,
+            },
+        )
         .map_err(map_review_workbench_error)?;
     Ok(Redirect::to(&format!(
         "/v1/operator/review/handoffs/{}",
@@ -1332,7 +1506,7 @@ async fn review_evidence_list_handler(
         .transpose()?;
     let list = service
         .list_bundles(subject_kind)
-        .map_err(|error| OperatorReviewError::internal(error.to_string()))?;
+        .map_err(map_review_evidence_error)?;
     let list = filter_review_evidence_list(list, verification_status);
     let list = limit_evidence_bundle_list(list, query.limit, state.max_list_results);
     Ok(Html(render_review_evidence_list_page(
@@ -1348,7 +1522,7 @@ async fn review_evidence_bundle_handler(
     let service = review_evidence_service(&state)?;
     let lookup = service
         .load_bundle(&bundle_id)
-        .map_err(|error| OperatorReviewError::internal(error.to_string()))?
+        .map_err(map_review_evidence_error)?
         .ok_or_else(|| {
             OperatorReviewError::not_found(format!("evidence bundle `{bundle_id}` was not found"))
         })?;
@@ -1356,7 +1530,7 @@ async fn review_evidence_bundle_handler(
         if let Some(verification_id) = lookup.record.latest_verification_id.as_deref() {
             service
                 .load_verification(verification_id)
-                .map_err(|error| OperatorReviewError::internal(error.to_string()))?
+                .map_err(map_review_evidence_error)?
         } else {
             None
         };
@@ -1374,7 +1548,7 @@ async fn review_evidence_verification_handler(
     let service = review_evidence_service(&state)?;
     let lookup = service
         .load_verification(&verification_id)
-        .map_err(|error| OperatorReviewError::internal(error.to_string()))?
+        .map_err(map_review_evidence_error)?
         .ok_or_else(|| {
             OperatorReviewError::not_found(format!(
                 "evidence verification `{verification_id}` was not found"
@@ -1397,7 +1571,7 @@ async fn review_promotion_packet_list_handler(
         .transpose()?;
     let list = service
         .list_promotion_evidence_packets()
-        .map_err(|error| OperatorReviewError::internal(error.to_string()))?;
+        .map_err(map_review_evidence_error)?;
     let list = filter_review_promotion_packet_list(list, recommendation);
     let list = limit_promotion_packet_list(list, query.limit, state.max_list_results);
     Ok(Html(render_review_promotion_packet_list_page(
@@ -1413,7 +1587,7 @@ async fn review_promotion_packet_handler(
     let service = review_evidence_service(&state)?;
     let lookup = service
         .load_promotion_evidence_packet(&packet_id)
-        .map_err(|error| OperatorReviewError::internal(error.to_string()))?
+        .map_err(map_review_evidence_error)?
         .ok_or_else(|| {
             OperatorReviewError::not_found(format!(
                 "promotion evidence packet `{packet_id}` was not found"
@@ -1429,7 +1603,7 @@ async fn evidence_bundle_handler(
     let service = evidence_service(&state)?;
     let lookup = service
         .load_bundle(&bundle_id)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .map_err(map_evidence_api_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!("evidence bundle `{bundle_id}` was not found"))
         })?;
@@ -1448,7 +1622,7 @@ async fn evidence_bundle_list_handler(
         .transpose()?;
     let list = service
         .list_bundles(subject_kind)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_evidence_api_error)?;
     Ok(Json(limit_evidence_bundle_list(
         list,
         query.limit,
@@ -1463,7 +1637,7 @@ async fn evidence_verification_handler(
     let service = evidence_service(&state)?;
     let lookup = service
         .load_verification(&verification_id)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .map_err(map_evidence_api_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!(
                 "evidence verification `{verification_id}` was not found"
@@ -1479,7 +1653,7 @@ async fn promotion_evidence_packet_handler(
     let service = evidence_service(&state)?;
     let lookup = service
         .load_promotion_evidence_packet(&packet_id)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .map_err(map_evidence_api_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!(
                 "promotion evidence packet `{packet_id}` was not found"
@@ -1516,9 +1690,20 @@ async fn approval_set_list_handler(
 }
 
 async fn approval_set_create_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     Json(request): Json<ApprovalSetCreateRequest>,
 ) -> Result<(StatusCode, Json<ApprovalSetReport>), OperatorApiError> {
+    require_operator_api_scope(&principal, OperatorScope::Approve, "approval")?;
+    if let Some(ineligible_voter) = request.eligible_voters.iter().find(|voter_id| {
+        !state
+            .auth
+            .operator_has_scope(voter_id, OperatorScope::Approve)
+    }) {
+        return Err(OperatorApiError::bad_request(format!(
+            "eligible voter `{ineligible_voter}` is not configured with `approve` scope"
+        )));
+    }
     let harness = approval_harness(&state)?;
     let record = harness
         .create_approval_set(
@@ -1568,10 +1753,18 @@ async fn approval_ledger_list_handler(
 }
 
 async fn approval_vote_append_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     RoutePath(ledger_id): RoutePath<String>,
     Json(request): Json<ApprovalVoteAppendRequest>,
 ) -> Result<Json<ApprovalLedgerLookup>, OperatorApiError> {
+    require_operator_api_scope(&principal, OperatorScope::Approve, "approval")?;
+    if request.voter_id != principal.operator_id.as_ref() {
+        return Err(OperatorApiError::forbidden(format!(
+            "authenticated operator `{}` cannot submit votes for `{}`",
+            principal.operator_id, request.voter_id
+        )));
+    }
     let harness = approval_harness(&state)?;
     harness
         .load_ledger(&ledger_id)
@@ -1650,7 +1843,7 @@ async fn portfolio_handler(
     let harness = portfolio_harness(&state)?;
     let lookup = harness
         .load_portfolio(&portfolio_id)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .map_err(map_portfolio_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!("portfolio `{portfolio_id}` was not found"))
         })?;
@@ -1669,7 +1862,7 @@ async fn portfolio_list_handler(
         .transpose()?;
     let list = harness
         .list_portfolios(query.cohort.as_deref(), review_state)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_portfolio_error)?;
     Ok(Json(limit_portfolio_list(
         list,
         query.limit,
@@ -1684,7 +1877,7 @@ async fn governance_packet_handler(
     let harness = portfolio_harness(&state)?;
     let lookup = harness
         .load_governance_review_packet(&packet_id)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .map_err(map_portfolio_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!("governance packet `{packet_id}` was not found"))
         })?;
@@ -1698,7 +1891,7 @@ async fn packet_set_handler(
     let harness = governance_harness(&state)?;
     let lookup = harness
         .load_packet_set(&packet_set_id)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .map_err(map_governance_prep_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!("packet set `{packet_set_id}` was not found"))
         })?;
@@ -1712,7 +1905,7 @@ async fn packet_set_list_handler(
     let harness = governance_harness(&state)?;
     let list = harness
         .list_packet_sets(query.cohort.as_deref())
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_governance_prep_error)?;
     Ok(Json(limit_packet_set_list(
         list,
         query.limit,
@@ -1727,7 +1920,7 @@ async fn portfolio_history_handler(
     let harness = governance_harness(&state)?;
     let lookup = harness
         .load_portfolio_history(&history_id)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .map_err(map_governance_prep_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!("portfolio history `{history_id}` was not found"))
         })?;
@@ -1741,7 +1934,7 @@ async fn portfolio_history_list_handler(
     let harness = governance_harness(&state)?;
     let list = harness
         .list_portfolio_history(query.cohort.as_deref())
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+        .map_err(map_governance_prep_error)?;
     Ok(Json(limit_portfolio_history_list(
         list,
         query.limit,
@@ -1750,14 +1943,20 @@ async fn portfolio_history_list_handler(
 }
 
 async fn maintenance_action_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     Json(request): Json<OperatorMaintenanceRequest>,
 ) -> Response {
+    if let Err(error) =
+        require_operator_api_scope(&principal, OperatorScope::Maintenance, "maintenance")
+    {
+        return error.into_response();
+    }
     let service = match maintenance_service(&state) {
         Ok(service) => service,
         Err(error) => return error.into_response(),
     };
-    match service.execute(request) {
+    match service.execute(principal.operator_id.as_ref(), request) {
         Ok(execution) => {
             let (status, record) = match execution {
                 OperatorMaintenanceExecution::Applied(lookup) => (StatusCode::OK, lookup.record),
@@ -1770,7 +1969,7 @@ async fn maintenance_action_handler(
             };
             (status, Json(record)).into_response()
         }
-        Err(error) => OperatorApiError::internal(error.to_string()).into_response(),
+        Err(error) => map_maintenance_error(error).into_response(),
     }
 }
 
@@ -1781,7 +1980,7 @@ async fn maintenance_action_lookup_handler(
     let service = maintenance_service(&state)?;
     let lookup = service
         .load(&action_id)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?
+        .map_err(map_maintenance_error)?
         .ok_or_else(|| {
             OperatorApiError::not_found(format!("maintenance action `{action_id}` was not found"))
         })?;
@@ -1798,9 +1997,7 @@ async fn maintenance_action_list_handler(
         .as_deref()
         .map(parse_maintenance_status)
         .transpose()?;
-    let list = service
-        .list(status)
-        .map_err(|error| OperatorApiError::internal(error.to_string()))?;
+    let list = service.list(status).map_err(map_maintenance_error)?;
     Ok(Json(limit_maintenance_list(
         list,
         query.limit,
@@ -1811,7 +2008,7 @@ async fn maintenance_action_list_handler(
 async fn require_bearer_auth(
     State(auth): State<OperatorAuthState>,
     headers: HeaderMap,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, OperatorApiError> {
     let value = headers
@@ -1821,9 +2018,10 @@ async fn require_bearer_auth(
     let token = value
         .strip_prefix("Bearer ")
         .ok_or_else(|| OperatorApiError::unauthorized("expected Authorization: Bearer <token>"))?;
-    if token != auth.expected_token.as_ref() {
-        return Err(OperatorApiError::unauthorized("invalid bearer token"));
-    }
+    let principal = auth
+        .authenticate(token)
+        .ok_or_else(|| OperatorApiError::unauthorized("invalid bearer token"))?;
+    request.extensions_mut().insert(principal);
 
     Ok(next.run(request).await)
 }
@@ -1934,10 +2132,111 @@ fn parse_evidence_subject_kind(value: &str) -> Result<EvidenceSubjectKind, Opera
     })
 }
 
+fn map_service_api_error(error: ServiceError) -> OperatorApiError {
+    match error {
+        ServiceError::Readiness {
+            component,
+            source: ReadinessError::SubstrateNotReady { backend },
+        } => OperatorApiError::internal(format!(
+            "runtime readiness check failed for {component}: backend `{backend}` is not ready"
+        )),
+        ServiceError::Readiness {
+            component,
+            source: ReadinessError::SubstrateNotDurable { backend },
+        } => OperatorApiError::internal(format!(
+            "runtime readiness check failed for {component}: backend `{backend}` is not durable but live response requires durability"
+        )),
+        other => OperatorApiError::internal(other.to_string()),
+    }
+}
+
+fn map_service_review_error(error: ServiceError) -> OperatorReviewError {
+    match error {
+        ServiceError::Readiness {
+            component,
+            source: ReadinessError::SubstrateNotReady { backend },
+        } => OperatorReviewError::internal(format!(
+            "runtime readiness check failed for {component}: backend `{backend}` is not ready"
+        )),
+        ServiceError::Readiness {
+            component,
+            source: ReadinessError::SubstrateNotDurable { backend },
+        } => OperatorReviewError::internal(format!(
+            "runtime readiness check failed for {component}: backend `{backend}` is not durable but live response requires durability"
+        )),
+        other => OperatorReviewError::internal(other.to_string()),
+    }
+}
+
 fn map_control_error(error: ControlError) -> OperatorApiError {
     match error {
         ControlError::NotFound { entity, lookup } => {
             OperatorApiError::not_found(format!("{entity} `{lookup}` was not found"))
+        }
+        ControlError::Service(error) => map_service_api_error(error),
+        other => OperatorApiError::internal(other.to_string()),
+    }
+}
+
+fn map_evidence_api_error(error: EvidenceError) -> OperatorApiError {
+    match error {
+        EvidenceError::ArtifactNotFound { kind, id } => {
+            OperatorApiError::not_found(format!("artifact `{kind}` with id `{id}` was not found"))
+        }
+        EvidenceError::Control(error) => map_control_error(error),
+        other => OperatorApiError::internal(other.to_string()),
+    }
+}
+
+fn map_portfolio_error(error: EvolutionPortfolioError) -> OperatorApiError {
+    match error {
+        EvolutionPortfolioError::SelectionNotFound { selection_id } => OperatorApiError::not_found(
+            format!("ranked-candidate selection `{selection_id}` was not found"),
+        ),
+        EvolutionPortfolioError::RankingNotFound { ranking_id } => {
+            OperatorApiError::not_found(format!("candidate ranking `{ranking_id}` was not found"))
+        }
+        EvolutionPortfolioError::PortfolioNotFound { portfolio_id } => {
+            OperatorApiError::not_found(format!("portfolio `{portfolio_id}` was not found"))
+        }
+        EvolutionPortfolioError::PortfolioEntryNotFound {
+            portfolio_id,
+            entry_id,
+        } => OperatorApiError::not_found(format!(
+            "portfolio entry `{entry_id}` was not found in portfolio `{portfolio_id}`"
+        )),
+        EvolutionPortfolioError::GovernancePacketNotFound { packet_id } => {
+            OperatorApiError::not_found(format!(
+                "governance review packet `{packet_id}` was not found"
+            ))
+        }
+        EvolutionPortfolioError::InvalidPortfolioRequest { .. }
+        | EvolutionPortfolioError::InvalidDecision { .. } => {
+            OperatorApiError::bad_request(error.to_string())
+        }
+        other => OperatorApiError::internal(other.to_string()),
+    }
+}
+
+fn map_governance_prep_error(error: EvolutionGovernancePrepError) -> OperatorApiError {
+    match error {
+        EvolutionGovernancePrepError::GovernancePacketNotFound { packet_id } => {
+            OperatorApiError::not_found(format!(
+                "governance review packet `{packet_id}` was not found"
+            ))
+        }
+        EvolutionGovernancePrepError::PacketSetNotFound { packet_set_id } => {
+            OperatorApiError::not_found(format!(
+                "governance packet set `{packet_set_id}` was not found"
+            ))
+        }
+        EvolutionGovernancePrepError::PortfolioHistoryNotFound { history_id } => {
+            OperatorApiError::not_found(format!("portfolio history `{history_id}` was not found"))
+        }
+        EvolutionGovernancePrepError::InvalidPacketSetRequest { .. }
+        | EvolutionGovernancePrepError::PacketNotInSet { .. }
+        | EvolutionGovernancePrepError::InconsistentPacketEvidence { .. } => {
+            OperatorApiError::bad_request(error.to_string())
         }
         other => OperatorApiError::internal(other.to_string()),
     }
@@ -1988,6 +2287,15 @@ fn evidence_service(
         .ok_or_else(|| OperatorApiError::internal("evidence stores are not configured"))
 }
 
+fn review_evidence_harness(
+    state: &OperatorHttpState,
+) -> Result<&DefaultEvidenceHarness, OperatorReviewError> {
+    state
+        .evidence_harness
+        .as_deref()
+        .ok_or_else(|| OperatorReviewError::internal("evidence export stores are not configured"))
+}
+
 fn review_workbench_service(
     state: &OperatorHttpState,
 ) -> Result<&DefaultReviewWorkbenchHarness, OperatorReviewError> {
@@ -1995,6 +2303,21 @@ fn review_workbench_service(
         .workbench
         .as_deref()
         .ok_or_else(|| OperatorReviewError::internal("review workbench stores are not configured"))
+}
+
+fn review_evidence_secret_material(
+    state: &OperatorHttpState,
+) -> Result<String, OperatorReviewError> {
+    std::env::var(&state.approval_receipt_signing_key_env)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            OperatorReviewError::internal(format!(
+                "evidence signing key env `{}` is missing or empty",
+                state.approval_receipt_signing_key_env
+            ))
+        })
 }
 
 fn map_review_workbench_error(error: ReviewWorkbenchError) -> OperatorReviewError {
@@ -2027,6 +2350,132 @@ fn map_review_workbench_error(error: ReviewWorkbenchError) -> OperatorReviewErro
         ),
         other => OperatorReviewError::internal(other.to_string()),
     }
+}
+
+fn map_control_review_error(error: ControlError) -> OperatorReviewError {
+    match error {
+        ControlError::NotFound { entity, lookup } => {
+            OperatorReviewError::not_found(format!("{entity} `{lookup}` was not found"))
+        }
+        ControlError::Service(error) => map_service_review_error(error),
+        other => OperatorReviewError::internal(other.to_string()),
+    }
+}
+
+fn map_review_evidence_error(error: EvidenceError) -> OperatorReviewError {
+    match error {
+        EvidenceError::ArtifactNotFound { kind, id } => OperatorReviewError::not_found(format!(
+            "artifact `{kind}` with id `{id}` was not found"
+        )),
+        EvidenceError::Control(error) => map_control_review_error(error),
+        other => OperatorReviewError::internal(other.to_string()),
+    }
+}
+
+fn resolve_review_home_context(
+    state: &OperatorHttpState,
+    query: &ReviewHomeQuery,
+) -> Result<Option<ReviewHomeContext>, OperatorReviewError> {
+    if query.hunt_id.is_none() && query.incident_id.is_none() && query.bundle_id.is_none() {
+        return Ok(None);
+    }
+
+    let selected_bundle = match query.bundle_id.as_deref() {
+        Some(bundle_id) => Some(
+            state
+                .control
+                .replay_lookup(ReplayLookupSelector::BundleId(bundle_id))
+                .map_err(map_control_review_error)?
+                .data,
+        ),
+        None => query
+            .hunt_id
+            .as_deref()
+            .map(|hunt_id| {
+                match state
+                    .control
+                    .replay_lookup(ReplayLookupSelector::HuntId(hunt_id))
+                {
+                    Ok(lookup) => Ok(Some(lookup.data)),
+                    Err(ControlError::NotFound { .. }) => Ok(None),
+                    Err(other) => Err(map_control_review_error(other)),
+                }
+            })
+            .transpose()?
+            .flatten(),
+    };
+
+    let incident = match query.incident_id.as_deref() {
+        Some(incident_id) => Some(
+            state
+                .control
+                .incident_lookup(IncidentLookupSelector::IncidentId(incident_id))
+                .map_err(map_control_review_error)?
+                .data,
+        ),
+        None => query
+            .hunt_id
+            .as_deref()
+            .map(|hunt_id| {
+                match state
+                    .control
+                    .incident_lookup(IncidentLookupSelector::HuntId(hunt_id))
+                {
+                    Ok(lookup) => Ok(Some(lookup.data)),
+                    Err(ControlError::NotFound { .. }) => Ok(None),
+                    Err(other) => Err(map_control_review_error(other)),
+                }
+            })
+            .transpose()?
+            .flatten(),
+    };
+
+    let rehearsal_hunt_id = query
+        .hunt_id
+        .as_deref()
+        .map(ToString::to_string)
+        .or_else(|| {
+            selected_bundle
+                .as_ref()
+                .map(|bundle| bundle.record.hunt_id.clone())
+        })
+        .or_else(|| {
+            incident
+                .as_ref()
+                .and_then(|incident| incident.record.included_hunt_ids.first().cloned())
+        });
+    let latest_rehearsal_bundle = rehearsal_hunt_id
+        .as_deref()
+        .map(|hunt_id| {
+            match state
+                .control
+                .replay_lookup(ReplayLookupSelector::HuntId(hunt_id))
+            {
+                Ok(lookup) => Ok(Some(lookup.data)),
+                Err(ControlError::NotFound { .. }) => Ok(None),
+                Err(other) => Err(map_control_review_error(other)),
+            }
+        })
+        .transpose()?
+        .flatten()
+        .filter(|lookup| lookup.bundle.rehearsal.is_some());
+    let signed_rehearsal_bundle_id = latest_rehearsal_bundle
+        .as_ref()
+        .map(|lookup| {
+            review_evidence_service(state)?
+                .find_bundle_by_subject(EvidenceSubjectKind::ReplayBundle, &lookup.bundle.bundle_id)
+                .map_err(map_review_evidence_error)
+                .map(|lookup| lookup.map(|bundle| bundle.record.bundle_id))
+        })
+        .transpose()?
+        .flatten();
+
+    Ok(Some(ReviewHomeContext {
+        selected_bundle,
+        latest_rehearsal_bundle,
+        incident,
+        signed_rehearsal_bundle_id,
+    }))
 }
 
 fn map_approval_error(error: ApprovalError) -> OperatorApiError {
@@ -2065,6 +2514,15 @@ fn map_approval_error(error: ApprovalError) -> OperatorApiError {
         | ApprovalError::ReceiptPackStore(_)
         | ApprovalError::Crypto(_)
         | ApprovalError::Spine(_) => OperatorApiError::internal(error.to_string()),
+    }
+}
+
+fn map_maintenance_error(error: OperatorMaintenanceError) -> OperatorApiError {
+    match error {
+        OperatorMaintenanceError::Store(_) => OperatorApiError::internal(error.to_string()),
+        OperatorMaintenanceError::Portfolio(error) => map_portfolio_error(error),
+        OperatorMaintenanceError::GovernancePrep(error) => map_governance_prep_error(error),
+        OperatorMaintenanceError::Evidence(error) => map_evidence_api_error(error),
     }
 }
 
@@ -3717,8 +4175,212 @@ fn render_maintenance_status_pill(status: OperatorMaintenanceStatus) -> String {
     render_status_pill(label, class_name)
 }
 
+fn render_providence_incident_status(status: ProvidenceIncidentStatus) -> &'static str {
+    match status {
+        ProvidenceIncidentStatus::Open => "open",
+        ProvidenceIncidentStatus::Investigating => "investigating",
+        ProvidenceIncidentStatus::Resolved => "resolved",
+    }
+}
+
+fn render_providence_reconciliation_outcome(
+    outcome: ProvidenceReconciliationOutcome,
+) -> (&'static str, &'static str) {
+    match outcome {
+        ProvidenceReconciliationOutcome::InSync => ("in_sync", "passed"),
+        ProvidenceReconciliationOutcome::SwarmAhead => ("swarm_ahead", "ready"),
+        ProvidenceReconciliationOutcome::ProvidenceAhead => ("providence_ahead", "blocked"),
+        ProvidenceReconciliationOutcome::Mismatch => ("mismatch", "failed"),
+    }
+}
+
+fn render_rehearsal_preview_details(preview: &ResponseRehearsalPreview) -> String {
+    let affected_capabilities = if preview.blast_radius.affected_capabilities.is_empty() {
+        "<li class=\"muted\">No affected capabilities recorded.</li>".to_string()
+    } else {
+        preview
+            .blast_radius
+            .affected_capabilities
+            .iter()
+            .map(|value| format!("<li><code>{}</code></li>", escape_html(value)))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let rollback_steps = if preview.rollback.steps.is_empty() {
+        "<li class=\"muted\">No explicit rollback steps recorded.</li>".to_string()
+    } else {
+        preview
+            .rollback
+            .steps
+            .iter()
+            .map(|step| format!("<li>{}</li>", escape_html(&step.summary)))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    format!(
+        "<div class=\"meta\">\
+            <div><dt>Rehearsal ID</dt><dd><code>{rehearsal_id}</code></dd></div>\
+            <div><dt>Source Bundle</dt><dd><code>{source_bundle_id}</code></dd></div>\
+            <div><dt>Dry Run Only</dt><dd>{dry_run}</dd></div>\
+            <div><dt>Blast Radius</dt><dd>{blast_summary}</dd></div>\
+            <div><dt>Rollback</dt><dd>{rollback_summary}</dd></div>\
+        </div>\
+        <p class=\"muted\">{impact_summary}</p>\
+        <h3>Affected Capabilities</h3><ul>{affected_capabilities}</ul>\
+        <h3>Rollback Steps</h3><ul>{rollback_steps}</ul>",
+        rehearsal_id = escape_html(&preview.rehearsal_id),
+        source_bundle_id = escape_html(&preview.source_bundle_id),
+        dry_run = if preview.simulated_only { "yes" } else { "no" },
+        blast_summary = escape_html(&preview.blast_radius.summary),
+        rollback_summary = escape_html(&preview.rollback.summary),
+        impact_summary = escape_html(&format!(
+            "{} scope `{}` with up to {} affected scope(s)",
+            format!("{:?}", preview.blast_radius.impact).to_lowercase(),
+            preview.blast_radius.scope_value,
+            preview.blast_radius.max_affected_scopes,
+        )),
+        affected_capabilities = affected_capabilities,
+        rollback_steps = rollback_steps,
+    )
+}
+
+fn render_review_home_context_card(context: &ReviewHomeContext) -> String {
+    let selected_bundle_card = context
+        .selected_bundle
+        .as_ref()
+        .map(|bundle| {
+            format!(
+                "<article class=\"card\">\
+                    <h2>Scoped Replay</h2>\
+                    <div class=\"meta\">\
+                        <div><dt>Bundle</dt><dd><code>{bundle_id}</code></dd></div>\
+                        <div><dt>Hunt</dt><dd><code>{hunt_id}</code></dd></div>\
+                        <div><dt>Response</dt><dd><code>{response_kind}</code></dd></div>\
+                    </div>\
+                    <p class=\"muted\">{note}</p>\
+                    <p>{replay_link}</p>\
+                </article>",
+                bundle_id = escape_html(&bundle.record.bundle_id),
+                hunt_id = escape_html(&bundle.record.hunt_id),
+                response_kind = escape_html(&bundle.preview.response_kind),
+                note = escape_html(&bundle.preview.note),
+                replay_link = review_link(
+                    &format!("/v1/operator/replay?bundle_id={}", bundle.record.bundle_id),
+                    "Open raw replay JSON"
+                ),
+            )
+        })
+        .unwrap_or_else(|| {
+            "<article class=\"card\"><h2>Scoped Replay</h2><p class=\"muted\">No replay bundle matched the supplied scope.</p></article>"
+                .to_string()
+        });
+
+    let rehearsal_card = context
+        .latest_rehearsal_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.bundle.rehearsal.as_ref().map(|preview| (bundle, preview)))
+        .map(|(bundle, preview)| {
+            let signed_proof = context
+                .signed_rehearsal_bundle_id
+                .as_deref()
+                .map(|bundle_id| {
+                    review_link(
+                        &format!("/v1/operator/review/evidence/{bundle_id}"),
+                        "Open signed rehearsal proof",
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "<form method=\"post\" action=\"/v1/operator/review/rehearsals/{bundle_id}/export\">\
+                            <button type=\"submit\">Export Signed Rehearsal Proof</button>\
+                        </form>",
+                        bundle_id = escape_html(&bundle.record.bundle_id),
+                    )
+                });
+            format!(
+                "<article class=\"card\">\
+                    <h2>Latest Rehearsal Proof</h2>\
+                    <p>{signed_proof}</p>\
+                    {details}\
+                </article>",
+                signed_proof = signed_proof,
+                details = render_rehearsal_preview_details(preview),
+            )
+        })
+        .unwrap_or_else(|| {
+            "<article class=\"card\"><h2>Latest Rehearsal Proof</h2><p class=\"muted\">No persisted dry-run rehearsal is available for this scope yet.</p></article>"
+                .to_string()
+        });
+
+    let incident_card = context
+        .incident
+        .as_ref()
+        .map(|incident| {
+            let reconciliation = incident
+                .incident
+                .providence_reconciliation
+                .as_ref()
+                .map(|reconciliation| {
+                    let (outcome_label, outcome_class) =
+                        render_providence_reconciliation_outcome(reconciliation.outcome);
+                    format!(
+                        "<div class=\"meta\">\
+                            <div><dt>Remote Incident</dt><dd><code>{remote_id}</code></dd></div>\
+                            <div><dt>Outcome</dt><dd>{outcome}</dd></div>\
+                            <div><dt>Remote Status</dt><dd><code>{remote_status}</code></dd></div>\
+                            <div><dt>Needs Review</dt><dd>{needs_review}</dd></div>\
+                        </div>\
+                        <p class=\"muted\">{summary}</p>",
+                        remote_id = escape_html(&reconciliation.remote_incident_id),
+                        outcome = render_status_pill(outcome_label, outcome_class),
+                        remote_status = escape_html(render_providence_incident_status(
+                            reconciliation.remote_status
+                        )),
+                        needs_review = if reconciliation.needs_review { "yes" } else { "no" },
+                        summary = escape_html(&reconciliation.summary),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    "<p class=\"muted\">No Providence reconciliation has been recorded for this incident yet.</p>"
+                        .to_string()
+                });
+            format!(
+                "<article class=\"card\">\
+                    <h2>Providence Reconciliation</h2>\
+                    <div class=\"meta\">\
+                        <div><dt>Incident</dt><dd><code>{incident_id}</code></dd></div>\
+                        <div><dt>Summary</dt><dd>{summary}</dd></div>\
+                    </div>\
+                    {reconciliation}\
+                    <p>{incident_link}</p>\
+                </article>",
+                incident_id = escape_html(&incident.record.incident_id),
+                summary = escape_html(&incident.record.summary),
+                reconciliation = reconciliation,
+                incident_link = review_link(
+                    &format!("/v1/operator/incident?incident_id={}", incident.record.incident_id),
+                    "Open raw incident JSON"
+                ),
+            )
+        })
+        .unwrap_or_else(|| {
+            "<article class=\"card\"><h2>Providence Reconciliation</h2><p class=\"muted\">No correlated incident matched the supplied scope.</p></article>"
+                .to_string()
+        });
+
+    format!(
+        "<section class=\"grid\" style=\"margin-bottom:18px;\">{selected_bundle_card}{rehearsal_card}{incident_card}</section>",
+        selected_bundle_card = selected_bundle_card,
+        rehearsal_card = rehearsal_card,
+        incident_card = incident_card,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_review_home_page(
     runtime_base_url: &str,
+    context: Option<&ReviewHomeContext>,
     bundles: &EvidenceBundleList,
     packets: &PromotionEvidencePacketList,
     sessions: &ReviewSessionList,
@@ -3841,11 +4503,16 @@ fn render_review_home_page(
 
     let demo_dashboard = render_demo_dashboard_panel(runtime_base_url);
 
+    let scoped_context = context
+        .map(render_review_home_context_card)
+        .unwrap_or_default();
+
     render_review_layout(
         "Local Evidence Review",
         "Authenticated local evidence workbench layered on the operator API. Portable signed review capsules and imported continuity are available, but rollout and governance remain out of scope.",
         &format!(
             "{demo_dashboard}\
+            {scoped_context}\
             <section class=\"grid\">\
                 <article class=\"card\"><h2>Review Scope</h2><p>Use this surface to inspect signed evidence bundles, verification reports, and promotion evidence packets without reading store files directly.</p><p class=\"muted\">Authentication stays on the existing bearer-token boundary, and follow-on write actions remain on the existing maintenance or rollout paths.</p></article>\
                 <article class=\"card\"><h2>Import Foreign Capsule</h2>\
@@ -3883,6 +4550,7 @@ fn render_review_home_page(
                 "Open raw evidence JSON API"
             ),
             demo_dashboard = demo_dashboard,
+            scoped_context = scoped_context,
             bundle_rows = bundle_rows,
             packet_rows = packet_rows,
             session_rows = session_rows,
@@ -4302,17 +4970,27 @@ mod tests {
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
         DetectorProfilesConfig, InvestigationConfig, NotificationChannelConfig,
         NotificationRateLimitConfig, NotificationRoutingConfig, OperatorAuthConfig,
-        OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PolicyRuleConfig, PolicyRuleDecision, PromotionConfig, QuietHoursConfig, RoutingRule,
-        RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+        OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, PheromoneBackendConfig,
+        PheromoneConfig, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PromotionConfig,
+        QuietHoursConfig, RoutingRule, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
     };
     use swarm_core::pheromone::{
         ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
     };
-    use swarm_core::types::{AgentId, ResponseAction, Severity};
+    use swarm_core::types::{
+        AgentId, HuntId, ProvidenceIncidentReconciliation, ProvidenceIncidentStatus,
+        ProvidenceReconciliationOutcome, ResponseAction, ResponseBlastRadiusImpact,
+        ResponseBlastRadiusPreview, ResponseRehearsalPreview, ResponseRehearsalScopeKind,
+        ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity,
+    };
     use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
     use swarm_policy::ApprovalContext;
-    use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
+    use swarm_response::SwarmFindingEnvelope;
+    use swarm_spine::{
+        AuditResponseRecord, AuditTrail, CorrelatedIncident, IncidentMemberDecision, IncidentStore,
+        PolicyRecord, ReplayBundle, ReplayBundleStore,
+    };
+    use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
     use tokio::sync::{Mutex as AsyncMutex, oneshot};
     use tower::ServiceExt;
 
@@ -4438,12 +5116,24 @@ mod tests {
                 max_list_results: 2,
                 widget_token_ttl_secs: 900,
                 auth: OperatorAuthConfig {
+                    context_token_env: "SWARM_OPERATOR_TEST_TOKEN".to_string(),
+                    principals: Vec::new(),
                     operator_id: "local-operator".to_string(),
                     token_env: "SWARM_OPERATOR_TEST_TOKEN".to_string(),
                 },
             },
             tls: None,
         }
+    }
+
+    fn scoped_operator_config(
+        context_token_env: &str,
+        principals: Vec<OperatorPrincipalConfig>,
+    ) -> SwarmConfig {
+        let mut config = operator_config();
+        config.operator.auth.context_token_env = context_token_env.to_string();
+        config.operator.auth.principals = principals;
+        config
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
@@ -4487,6 +5177,49 @@ mod tests {
             correlation_id: None,
             now_ms,
         }
+    }
+
+    #[test]
+    fn control_service_readiness_error_maps_to_internal_api_error() {
+        let error = super::map_control_error(crate::control::ControlError::Service(
+            crate::service::ServiceError::Readiness {
+                component: "substrate",
+                source: crate::service::ReadinessError::SubstrateNotDurable {
+                    backend: "in_memory".to_string(),
+                },
+            },
+        ));
+
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.error, "internal_error");
+        assert!(error.message.contains("substrate"));
+        assert!(error.message.contains("not durable"));
+    }
+
+    #[test]
+    fn portfolio_invalid_request_maps_to_bad_request() {
+        let error = super::map_portfolio_error(
+            crate::portfolio::EvolutionPortfolioError::InvalidPortfolioRequest {
+                reason: "missing cohort".to_string(),
+            },
+        );
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.error, "bad_request");
+        assert!(error.message.contains("missing cohort"));
+    }
+
+    #[test]
+    fn review_evidence_artifact_not_found_maps_to_not_found() {
+        let error =
+            super::map_review_evidence_error(crate::evidence::EvidenceError::ArtifactNotFound {
+                kind: "replay_bundle",
+                id: "bundle:missing".to_string(),
+            });
+
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
+        assert_eq!(error.title, "Not Found");
+        assert!(error.message.contains("bundle:missing"));
     }
 
     #[derive(Clone, Default)]
@@ -4972,6 +5705,11 @@ mod tests {
         OperatorSurfacePaths {
             evidence_signer_id: "local-evidence-signer".to_string(),
             evidence_signing_key_env: "SWARM_EVIDENCE_SIGNING_KEY".to_string(),
+            verification_results_dir: root.join("detector-verifications"),
+            shadow_results_dir: root.join("strategy-shadows"),
+            promotion_review_results_dir: root.join("promotion-reviews"),
+            canary_results_dir: root.join("canary-runs"),
+            promotion_results_dir: root.join("promotions"),
             evolution_ranking_results_dir: root.join("rankings"),
             evolution_selection_results_dir: root.join("selections"),
             evolution_portfolio_results_dir: root.join("portfolios"),
@@ -5054,13 +5792,131 @@ mod tests {
             .unwrap();
     }
 
+    fn sample_review_scope_rehearsal_bundle() -> ReplayBundle {
+        let finding = DetectionFinding {
+            finding_id: "finding-hunt-review".to_string(),
+            event_id: "hunt-review".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.99,
+            evidence: json!({
+                "host_id": "host-1",
+                "event_id": "hunt-review",
+            }),
+            strategy_id: "suspicious_process_tree".to_string(),
+        };
+        ReplayBundle {
+            bundle_id: "bundle:rehearsal:hunt-review:1700000000002".to_string(),
+            event: event("hunt-review", "powershell -enc review"),
+            findings: vec![finding.clone()],
+            deposits: Vec::new(),
+            action_request: swarm_policy::ActionRequest {
+                hunt_id: HuntId("hunt-review".to_string()),
+                requested_by: AgentId::new("whisker", "primary"),
+                action: ResponseAction::Escalate {
+                    summary: "escalate hunt-review".to_string(),
+                    urgency: Severity::High,
+                },
+                severity: Severity::High,
+                evidence: json!(SwarmFindingEnvelope::from(&finding)),
+            },
+            rehearsal: Some(ResponseRehearsalPreview {
+                rehearsal_id: "rehearsal:hunt-review".to_string(),
+                source_bundle_id: "bundle:source:hunt-review".to_string(),
+                prepared_at_ms: 1_700_000_000_002,
+                simulated_only: true,
+                blast_radius: ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::Host,
+                    scope_value: "host-1".to_string(),
+                    impact: ResponseBlastRadiusImpact::OperatorEscalationOnly,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec!["notify_operator".to_string()],
+                    summary: "Escalation stays on the operator lane.".to_string(),
+                },
+                rollback: ResponseRollbackPreview {
+                    required: true,
+                    summary: "Close the rehearsal escalation if operators accept it.".to_string(),
+                    steps: vec![ResponseRollbackStep {
+                        kind: ResponseRollbackStepKind::CloseEscalation,
+                        summary: "Close the dry-run escalation receipt.".to_string(),
+                    }],
+                },
+            }),
+            audit: AuditTrail {
+                trail_id: "trail-hunt-review".to_string(),
+                hunt_id: "hunt-review".to_string(),
+                related_receipt_ids: vec!["receipt-hunt-review".to_string()],
+                detection: finding,
+                policy: PolicyRecord {
+                    verdict: swarm_policy::PolicyVerdict::Allow,
+                    rule_name: "review-surface.allow".to_string(),
+                    reason: "review surface rehearsal test".to_string(),
+                    lease: None,
+                },
+                response: AuditResponseRecord::Skipped {
+                    reason: "review surface fixture records persisted dry-run proof only"
+                        .to_string(),
+                },
+                created_at_ms: 1_700_000_000_002,
+            },
+        }
+    }
+
+    fn sample_review_scope_incident() -> CorrelatedIncident {
+        CorrelatedIncident {
+            incident_id: "incident-review".to_string(),
+            summary: "Review scope incident".to_string(),
+            created_at_ms: 1_700_000_000_003,
+            window_start_ms: 1_700_000_000_000,
+            window_end_ms: 1_700_000_000_003,
+            correlation_keys: vec!["host:host-1".to_string()],
+            related_receipt_ids: vec!["receipt-hunt-review".to_string()],
+            included_members: vec![IncidentMemberDecision {
+                investigation_id: "investigation-review".to_string(),
+                hunt_id: "hunt-review".to_string(),
+                finding_id: "finding-hunt-review".to_string(),
+                reason: "same review hunt".to_string(),
+                shared_keys: vec!["host:host-1".to_string()],
+                evidence_links: Vec::new(),
+                confidence_score: 1.0,
+            }],
+            rejected_members: Vec::new(),
+            graph_dimensions: Vec::new(),
+            confidence_score: 1.0,
+            trigger_event_id: Some("hunt-review".to_string()),
+            trigger_finding_id: Some("finding-hunt-review".to_string()),
+            trigger_strategy_id: Some("summary_investigator".to_string()),
+            threat_class: Some(ThreatClass::Execution),
+            severity: Some(Severity::High),
+            external_references: Vec::new(),
+            providence_reconciliation: Some(ProvidenceIncidentReconciliation {
+                incident_key: "suspicious_process_tree:execution:finding-hunt-review".to_string(),
+                remote_incident_id: "prov-review-1".to_string(),
+                remote_incident_url: Some(
+                    "https://providence.local/incidents/prov-review-1".to_string(),
+                ),
+                remote_status: ProvidenceIncidentStatus::Investigating,
+                remote_severity: Severity::High,
+                swarm_status: ProvidenceIncidentStatus::Open,
+                swarm_severity: Severity::High,
+                remote_updated_at_ms: 1_700_000_000_004,
+                reconciled_at_ms: 1_700_000_000_005,
+                outcome: ProvidenceReconciliationOutcome::ProvidenceAhead,
+                needs_review: true,
+                summary: "Providence status advanced while Swarm stayed open.".to_string(),
+            }),
+            providence_callback_audit_entries: Vec::new(),
+            feedback_audit_entries: Vec::new(),
+        }
+    }
+
     #[tokio::test]
     async fn status_route_requires_bearer_token() {
         unsafe {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
         }
         let surface = LocalOperatorSurface::from_config("inline", operator_config()).unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
 
         let response = app
             .oneshot(
@@ -5081,7 +5937,7 @@ mod tests {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
         }
         let surface = LocalOperatorSurface::from_config("inline", operator_config()).unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
 
         let response = app
             .oneshot(
@@ -5107,7 +5963,7 @@ mod tests {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
         }
         let surface = LocalOperatorSurface::from_config("inline", operator_config()).unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
 
         let request = serde_json::to_vec(&ThreatClassConfig {
             threat_class: ThreatClass::Execution,
@@ -5163,7 +6019,7 @@ mod tests {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
         }
         let surface = LocalOperatorSurface::from_config("inline", operator_config()).unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
 
         let request = serde_json::to_vec(&ThreatIntelEntry {
             indicator_type: ThreatIntelIndicatorType::Domain,
@@ -5272,7 +6128,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         assert!(capture.payloads.lock().await.is_empty());
 
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
         let list_response = app
             .clone()
             .oneshot(
@@ -5344,7 +6200,7 @@ mod tests {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
         }
         let surface = LocalOperatorSurface::from_config("inline", operator_config()).unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
 
         let response = app
             .oneshot(
@@ -5416,7 +6272,7 @@ mod tests {
             .correlate_hunt("evt-http-1")
             .unwrap();
 
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
         let auth = ("authorization", "Bearer secret-token");
 
         let replay_response = app
@@ -5529,7 +6385,7 @@ mod tests {
         let surface =
             LocalOperatorSurface::from_config_and_paths("inline", operator_config(), paths)
                 .unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
         let auth = ("authorization", "Bearer secret-token");
 
         let list_response = app
@@ -5694,13 +6550,14 @@ mod tests {
 
         let mut operator_demo_config = operator_config();
         operator_demo_config.operator.runtime_base_url = runtime_base_url.clone();
+        operator_demo_config.operator.auth.operator_id = operator_voter_id.clone();
         let surface = LocalOperatorSurface::from_config_and_paths(
             "inline",
             operator_demo_config,
             surface_paths(&root),
         )
         .unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
         let vote_payload = canonical_json_bytes(&json!({
             "approval_set_id": approval_set_id.clone(),
             "ledger_id": approval_ledger_id.clone(),
@@ -5772,7 +6629,7 @@ mod tests {
             surface_paths(&root),
         )
         .unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
         let auth = ("authorization", "Bearer secret-token");
 
         let home_response = app
@@ -5868,6 +6725,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn review_surface_scoped_context_renders_rehearsal_and_exports_signed_proof() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+            std::env::set_var(
+                "SWARM_EVIDENCE_SIGNING_KEY",
+                "review-evidence-export-secret-material",
+            );
+        }
+
+        let root = unique_temp_dir("review-scoped-rehearsal");
+        seed_evolution_artifacts(&root);
+        seed_evidence_artifacts(&root);
+        let surface = LocalOperatorSurface::from_config_and_paths(
+            "inline",
+            operator_config(),
+            surface_paths(&root),
+        )
+        .unwrap();
+        surface
+            .state
+            .control
+            .stack
+            .replay_store
+            .persist(&sample_review_scope_rehearsal_bundle())
+            .unwrap();
+        surface
+            .state
+            .control
+            .stack
+            .incident_store
+            .persist(&sample_review_scope_incident())
+            .unwrap();
+        let app = surface.router();
+        let auth = ("authorization", "Bearer secret-token");
+
+        let home_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/review?hunt_id=hunt-review&incident_id=incident-review")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(home_response.status(), StatusCode::OK);
+        let home_body = to_bytes(home_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let home_html = String::from_utf8(home_body.to_vec()).unwrap();
+        assert!(home_html.contains("Latest Rehearsal Proof"));
+        assert!(home_html.contains("Providence Reconciliation"));
+        assert!(home_html.contains("Providence status advanced while Swarm stayed open."));
+        assert!(home_html.contains("bundle:rehearsal:hunt-review:1700000000002"));
+        assert!(home_html.contains(
+            "/v1/operator/review/rehearsals/bundle:rehearsal:hunt-review:1700000000002/export"
+        ));
+
+        let export_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/review/rehearsals/bundle:rehearsal:hunt-review:1700000000002/export")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(export_response.status(), StatusCode::SEE_OTHER);
+        let location = export_response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            location,
+            "/v1/operator/review/evidence/evidence:replay_bundle:bundle:rehearsal:hunt-review:1700000000002:local-evidence-signer"
+        );
+
+        let exported = surface
+            .state
+            .evidence
+            .as_ref()
+            .unwrap()
+            .find_bundle_by_subject(
+                EvidenceSubjectKind::ReplayBundle,
+                "bundle:rehearsal:hunt-review:1700000000002",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            exported.bundle.subject.stable_id,
+            "bundle:rehearsal:hunt-review:1700000000002"
+        );
+        assert_eq!(exported.bundle.signature.signer_id, "local-evidence-signer");
+
+        let refreshed_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/review?hunt_id=hunt-review&incident_id=incident-review")
+                    .header(auth.0, auth.1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refreshed_response.status(), StatusCode::OK);
+        let refreshed_body = to_bytes(refreshed_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let refreshed_html = String::from_utf8(refreshed_body.to_vec()).unwrap();
+        assert!(refreshed_html.contains("Open signed rehearsal proof"));
+        assert!(refreshed_html.contains(&location));
+    }
+
+    #[tokio::test]
     async fn review_surface_renders_promotion_packet_pages() {
         unsafe {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
@@ -5882,7 +6860,7 @@ mod tests {
             surface_paths(&root),
         )
         .unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
         let auth = ("authorization", "Bearer secret-token");
 
         let list_response = app
@@ -5938,7 +6916,7 @@ mod tests {
         let surface =
             LocalOperatorSurface::from_config_and_paths("inline", operator_config(), paths)
                 .unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
         let auth = ("authorization", "Bearer secret-token");
 
         let applied_response = app
@@ -6079,6 +7057,287 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
+        const READ_ENV: &str = "SWARM_OPERATOR_SCOPE_READ_TOKEN";
+        const REHEARSE_ENV: &str = "SWARM_OPERATOR_SCOPE_REHEARSE_TOKEN";
+        const APPROVE_ENV: &str = "SWARM_OPERATOR_SCOPE_APPROVE_TOKEN";
+        const APPROVE2_ENV: &str = "SWARM_OPERATOR_SCOPE_APPROVE2_TOKEN";
+        const MAINT_ENV: &str = "SWARM_OPERATOR_SCOPE_MAINT_TOKEN";
+        const READ_TOKEN: &str = "scope-read-secret";
+        const REHEARSE_TOKEN: &str = "scope-rehearse-secret";
+        const APPROVE_TOKEN: &str = "scope-approve-secret";
+        const APPROVE2_TOKEN: &str = "scope-approve-secret-2";
+        const MAINT_TOKEN: &str = "scope-maint-secret";
+
+        unsafe {
+            std::env::set_var(READ_ENV, READ_TOKEN);
+            std::env::set_var(REHEARSE_ENV, REHEARSE_TOKEN);
+            std::env::set_var(APPROVE_ENV, APPROVE_TOKEN);
+            std::env::set_var(APPROVE2_ENV, APPROVE2_TOKEN);
+            std::env::set_var(MAINT_ENV, MAINT_TOKEN);
+            std::env::set_var("SWARM_EVIDENCE_SIGNING_KEY", "scope-evidence-signing-key");
+        }
+
+        let approve_signer = Ed25519Signer::from_secret_material("scope-approve-voter-key");
+        let approver_id = format!("swarm:ed25519:{}", approve_signer.public_key_hex());
+        let second_approver_id = "approver-2".to_string();
+        let maintainer_id = "maintainer-1".to_string();
+        let config = scoped_operator_config(
+            READ_ENV,
+            vec![
+                OperatorPrincipalConfig {
+                    operator_id: "reader-1".to_string(),
+                    token_env: READ_ENV.to_string(),
+                    scopes: vec![OperatorScope::Read],
+                },
+                OperatorPrincipalConfig {
+                    operator_id: "rehearser-1".to_string(),
+                    token_env: REHEARSE_ENV.to_string(),
+                    scopes: vec![OperatorScope::Rehearse],
+                },
+                OperatorPrincipalConfig {
+                    operator_id: approver_id.clone(),
+                    token_env: APPROVE_ENV.to_string(),
+                    scopes: vec![OperatorScope::Approve],
+                },
+                OperatorPrincipalConfig {
+                    operator_id: second_approver_id.clone(),
+                    token_env: APPROVE2_ENV.to_string(),
+                    scopes: vec![OperatorScope::Approve],
+                },
+                OperatorPrincipalConfig {
+                    operator_id: maintainer_id.clone(),
+                    token_env: MAINT_ENV.to_string(),
+                    scopes: vec![OperatorScope::Maintenance],
+                },
+            ],
+        );
+
+        let root = unique_temp_dir("scoped-operator-principals");
+        seed_evolution_artifacts(&root);
+        let surface =
+            LocalOperatorSurface::from_config_and_paths("inline", config, surface_paths(&root))
+                .unwrap();
+        surface
+            .state
+            .control
+            .stack
+            .replay_store
+            .persist(&sample_review_scope_rehearsal_bundle())
+            .unwrap();
+        let app = surface.router();
+
+        let read_status = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header("authorization", format!("Bearer {READ_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read_status.status(), StatusCode::OK);
+
+        let read_maintenance = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/maintenance/actions")
+                    .header("authorization", format!("Bearer {READ_TOKEN}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "action": "refresh_portfolio_history",
+                            "packet_set_id": "packet_set:red:1",
+                            "reason": "reader should not be allowed"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read_maintenance.status(), StatusCode::FORBIDDEN);
+
+        let read_rehearsal_export = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/review/rehearsals/bundle:rehearsal:hunt-review:1700000000002/export")
+                    .header("authorization", format!("Bearer {READ_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read_rehearsal_export.status(), StatusCode::FORBIDDEN);
+
+        let rehearse_export = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/review/rehearsals/bundle:rehearsal:hunt-review:1700000000002/export")
+                    .header("authorization", format!("Bearer {REHEARSE_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rehearse_export.status(), StatusCode::SEE_OTHER);
+
+        let invalid_set_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/approval-sets")
+                    .header("authorization", format!("Bearer {APPROVE_TOKEN}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "eligible_voters": ["reader-1"],
+                            "threshold_required": 1,
+                            "promotion_evidence_ref": "promotion_evidence:promotion:red"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(invalid_set_response.status(), StatusCode::BAD_REQUEST);
+
+        let create_set_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/approval-sets")
+                    .header("authorization", format!("Bearer {APPROVE_TOKEN}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "eligible_voters": [approver_id.clone(), second_approver_id.clone()],
+                            "threshold_required": 2,
+                            "promotion_evidence_ref": "promotion_evidence:promotion:red"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_set_response.status(), StatusCode::CREATED);
+        let create_set_body = to_bytes(create_set_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let create_set_json: Value = serde_json::from_slice(&create_set_body).unwrap();
+        let approval_set_id = create_set_json["set_id"].as_str().unwrap().to_string();
+
+        let ledgers = surface
+            .state
+            .approval
+            .as_ref()
+            .unwrap()
+            .list_ledgers(Some(&approval_set_id))
+            .unwrap();
+        let approval_ledger_id = ledgers.ledgers[0].ledger_id.clone();
+        let vote_signature = approve_signer.sign(
+            &canonical_json_bytes(&json!({
+                "approval_set_id": approval_set_id,
+                "ledger_id": approval_ledger_id,
+                "voter_id": approver_id,
+            }))
+            .unwrap(),
+        );
+
+        let maintenance_vote = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/operator/approval-ledgers/{approval_ledger_id}/vote"
+                    ))
+                    .header("authorization", format!("Bearer {MAINT_TOKEN}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "voter_id": approver_id,
+                            "signature": vote_signature.clone(),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(maintenance_vote.status(), StatusCode::FORBIDDEN);
+
+        let approval_vote = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/operator/approval-ledgers/{approval_ledger_id}/vote"
+                    ))
+                    .header("authorization", format!("Bearer {APPROVE_TOKEN}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "voter_id": approver_id,
+                            "signature": vote_signature,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approval_vote.status(), StatusCode::OK);
+        let approval_vote_body = to_bytes(approval_vote.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let approval_vote_json: Value = serde_json::from_slice(&approval_vote_body).unwrap();
+        assert_eq!(
+            approval_vote_json["report"]["entries"][0]["voter_id"],
+            approver_id.as_str()
+        );
+
+        let maintenance_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/maintenance/actions")
+                    .header("authorization", format!("Bearer {MAINT_TOKEN}"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "action": "refresh_portfolio_history",
+                            "packet_set_id": "packet_set:red:1",
+                            "reason": "maintainer refresh"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(maintenance_response.status(), StatusCode::OK);
+        let maintenance_body = to_bytes(maintenance_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let maintenance_json: Value = serde_json::from_slice(&maintenance_body).unwrap();
+        assert_eq!(maintenance_json["actor"], maintainer_id);
+    }
+
+    #[tokio::test]
     async fn review_workbench_routes_create_export_and_handoff_sessions() {
         unsafe {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
@@ -6094,7 +7353,7 @@ mod tests {
             surface_paths(&root),
         )
         .unwrap();
-        let app = surface.router("secret-token".to_string());
+        let app = surface.router();
         let auth = ("authorization", "Bearer secret-token");
         let create_body =
             "title=red+lane+review&notes=compare+promotion+lanes&artifact_refs=promotion_review%3Areview%3Ared%0Acanary_run%3Acanary%3Ared%0Aproduction_promotion%3Apromotion%3Ared"
@@ -6301,11 +7560,7 @@ mod tests {
             .unwrap();
         assert_eq!(readiness_capsule_response.status(), StatusCode::SEE_OTHER);
 
-        let workbench = DefaultReviewWorkbenchHarness::from_paths(
-            "operator-http:test".to_string(),
-            &surface_paths(&root),
-        )
-        .unwrap();
+        let workbench = DefaultReviewWorkbenchHarness::from_paths(&surface_paths(&root)).unwrap();
         let capsule_lookup = workbench.load_capsule(&capsule_id).unwrap().unwrap();
         let import_body = format!("source_path={}", capsule_lookup.record.bundle_path);
         let import_response = app

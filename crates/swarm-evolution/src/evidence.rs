@@ -20,7 +20,9 @@ use crate::replay::{
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use swarm_core::config::SwarmConfig;
 use swarm_crypto::{
     CryptoError, DetachedSignature, Ed25519Signer, canonical_json_bytes, normalize_canonical_json,
     sha256_hex, verify_detached_signature,
@@ -1039,7 +1041,7 @@ pub enum EvidenceError {
 
 /// Repo-owned harness for signed evidence export and verification.
 pub struct DefaultEvidenceHarness {
-    control: DefaultControlPlane,
+    control: Arc<DefaultControlPlane>,
     verification_results_dir: PathBuf,
     shadow_results_dir: PathBuf,
     promotion_review_results_dir: PathBuf,
@@ -1052,14 +1054,12 @@ pub struct DefaultEvidenceHarness {
 }
 
 impl DefaultEvidenceHarness {
-    pub fn from_path(
-        config_path: impl AsRef<Path>,
+    pub fn from_control(
+        control: Arc<DefaultControlPlane>,
         paths: EvidenceHarnessPaths,
     ) -> Result<Self, EvidenceError> {
-        let config_path = config_path.as_ref();
-        let _config = load_config(config_path)?;
         Ok(Self {
-            control: DefaultControlPlane::from_path(config_path)?,
+            control,
             verification_results_dir: paths.verification_results_dir,
             shadow_results_dir: paths.shadow_results_dir,
             promotion_review_results_dir: paths.promotion_review_results_dir,
@@ -1076,6 +1076,26 @@ impl DefaultEvidenceHarness {
                 paths.promotion_evidence_results_dir,
             )?,
         })
+    }
+
+    pub fn from_config(
+        config_path: impl Into<PathBuf>,
+        config: SwarmConfig,
+        paths: EvidenceHarnessPaths,
+    ) -> Result<Self, EvidenceError> {
+        Self::from_control(
+            Arc::new(DefaultControlPlane::from_config(config_path, config)?),
+            paths,
+        )
+    }
+
+    pub fn from_path(
+        config_path: impl AsRef<Path>,
+        paths: EvidenceHarnessPaths,
+    ) -> Result<Self, EvidenceError> {
+        let config_path = config_path.as_ref();
+        let config = load_config(config_path)?;
+        Self::from_config(config_path.to_path_buf(), config, paths)
     }
 
     pub fn export_bundle(

@@ -252,7 +252,10 @@ async fn network_connect_end_to_end_produces_signed_command_and_control_deposit(
     let persisted = substrate.recent_deposits(10).await?;
     assert_eq!(persisted.len(), 1);
     assert_eq!(persisted[0].threat_class, ThreatClass::CommandAndControl);
-    assert_eq!(persisted[0].agent_id.0, format!("{}:network_connect", test_agent_id()));
+    assert_eq!(
+        persisted[0].agent_id.0,
+        format!("{}:network_connect", test_agent_id())
+    );
     validate_deposit_signature(&persisted[0])?;
 
     Ok(())

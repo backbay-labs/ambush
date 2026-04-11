@@ -17,9 +17,9 @@ use swarm_core::agent::{
 use swarm_core::config::{MemoryConfig, SwarmConfig};
 use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
 use swarm_core::types::{
-    AgentId, SPHINX_MEMORY_PHEROMONE_SCHEMA_VERSION, SPHINX_MEMORY_THREAT_CLASS, Severity,
-    SphinxMemoryAnswer, SphinxMemoryContribution, SphinxMemoryPayloadKind, SphinxMemoryQuery,
-    SwarmAction,
+    AgentId, ProvidenceFeedbackAction, SPHINX_MEMORY_PHEROMONE_SCHEMA_VERSION,
+    SPHINX_MEMORY_THREAT_CLASS, SWARM_PROVIDENCE_FEEDBACK_SCHEMA, Severity, SphinxMemoryAnswer,
+    SphinxMemoryContribution, SphinxMemoryPayloadKind, SphinxMemoryQuery, SwarmAction,
 };
 use swarm_crypto::sha256_hex;
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate};
@@ -232,6 +232,11 @@ impl SphinxAgent {
                 observed_at_ms,
                 related_entity_ids: entity_ids.clone(),
                 attack_technique_ids: technique_ids,
+                analyst_feedback_ids: BTreeSet::new(),
+                analyst_disposition: None,
+                analyst_note: None,
+                analyst_feedback_at_ms: None,
+                outcome_reward_override: None,
             }));
 
         if let (Some(parent), Some(process)) = (parent_process_node_id, process_node_id) {
@@ -309,6 +314,65 @@ impl SphinxAgent {
 
         self.graph.processed_observation_ids.insert(observation_id);
         Ok(true)
+    }
+
+    fn ingest_providence_feedback(
+        &mut self,
+        deposit: &PheromoneDeposit,
+        feedback: &ProvidenceFeedbackSignal,
+    ) -> bool {
+        if self
+            .graph
+            .processed_observation_ids
+            .contains(&feedback.feedback_id)
+        {
+            return false;
+        }
+
+        let updated_existing = feedback
+            .event_id
+            .as_deref()
+            .or(feedback.hunt_id.as_deref())
+            .and_then(|observation_id| self.graph.engagement_mut_by_observation_id(observation_id))
+            .map(|engagement| {
+                engagement
+                    .analyst_feedback_ids
+                    .insert(feedback.feedback_id.clone());
+                engagement.analyst_disposition = Some(feedback.action);
+                engagement.analyst_note = feedback.note.clone();
+                engagement.analyst_feedback_at_ms = Some(feedback.observed_at_ms);
+                engagement.outcome_reward_override = Some(analyst_outcome_reward(feedback.action));
+                engagement.observed_at_ms = engagement.observed_at_ms.max(feedback.observed_at_ms);
+            })
+            .is_some();
+
+        if !updated_existing {
+            self.graph
+                .upsert_node(KnowledgeGraphNode::Engagement(EngagementNode {
+                    node_id: format!("engagement:{}", sanitize_id(&feedback.feedback_id)),
+                    observation_id: feedback.feedback_id.clone(),
+                    source_agent_id: deposit.agent_id.to_string(),
+                    threat_class: threat_class_key(&deposit.threat_class),
+                    severity: deposit.severity,
+                    summary: feedback
+                        .note
+                        .clone()
+                        .unwrap_or_else(|| "analyst disposition feedback".to_string()),
+                    observed_at_ms: feedback.observed_at_ms,
+                    related_entity_ids: BTreeSet::new(),
+                    attack_technique_ids: BTreeSet::new(),
+                    analyst_feedback_ids: BTreeSet::from([feedback.feedback_id.clone()]),
+                    analyst_disposition: Some(feedback.action),
+                    analyst_note: feedback.note.clone(),
+                    analyst_feedback_at_ms: Some(feedback.observed_at_ms),
+                    outcome_reward_override: Some(analyst_outcome_reward(feedback.action)),
+                }));
+        }
+
+        self.graph
+            .processed_observation_ids
+            .insert(feedback.feedback_id.clone());
+        true
     }
 
     fn ingest_deception_inventory(
@@ -472,7 +536,9 @@ impl SphinxAgent {
                 requested_entities.len(),
                 matched_entity_values.len(),
             );
-            let outcome_reward = severity_reward(engagement.severity);
+            let outcome_reward = engagement
+                .outcome_reward_override
+                .unwrap_or_else(|| severity_reward(engagement.severity));
             let recency_decay = q_value_recency_decay(engagement.observed_at_ms, now_ms);
             let q_value = relevance * outcome_reward * recency_decay;
             contributions.push(SphinxMemoryContribution {
@@ -485,6 +551,8 @@ impl SphinxAgent {
                 outcome_reward,
                 recency_decay,
                 q_value,
+                analyst_disposition: engagement.analyst_disposition,
+                analyst_note: engagement.analyst_note,
             });
         }
 
@@ -578,6 +646,10 @@ impl SwarmAgent for SphinxAgent {
                         confidence: 0.0,
                     });
                 }
+                continue;
+            }
+            if let Some(feedback) = parse_providence_feedback_signal(deposit) {
+                changed |= self.ingest_providence_feedback(deposit, &feedback);
                 continue;
             }
             if is_memory_answer(deposit) {
@@ -708,6 +780,16 @@ pub struct EngagementNode {
     pub observed_at_ms: i64,
     pub related_entity_ids: BTreeSet<String>,
     pub attack_technique_ids: BTreeSet<String>,
+    #[serde(default)]
+    pub analyst_feedback_ids: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyst_disposition: Option<ProvidenceFeedbackAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyst_note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyst_feedback_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_reward_override: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -941,6 +1023,20 @@ impl KnowledgeGraphSnapshot {
             .collect()
     }
 
+    fn engagement_mut_by_observation_id(
+        &mut self,
+        observation_id: &str,
+    ) -> Option<&mut EngagementNode> {
+        self.nodes.iter_mut().find_map(|node| match node {
+            KnowledgeGraphNode::Engagement(engagement)
+                if engagement.observation_id == observation_id =>
+            {
+                Some(engagement)
+            }
+            _ => None,
+        })
+    }
+
     fn deception_assets(&self) -> Vec<DeceptionAssetNode> {
         self.nodes
             .iter()
@@ -996,7 +1092,12 @@ impl KnowledgeGraphSnapshot {
         let mut processed_observation_ids = self
             .engagements()
             .into_iter()
-            .map(|engagement| engagement.observation_id)
+            .flat_map(|engagement| {
+                let mut ids = BTreeSet::new();
+                ids.insert(engagement.observation_id);
+                ids.extend(engagement.analyst_feedback_ids);
+                ids
+            })
             .collect::<BTreeSet<_>>();
         processed_observation_ids.extend(
             self.deception_assets()
@@ -1289,9 +1390,24 @@ fn merge_node(target: &mut KnowledgeGraphNode, incoming: KnowledgeGraphNode) {
             target
                 .attack_technique_ids
                 .extend(incoming.attack_technique_ids);
+            target
+                .analyst_feedback_ids
+                .extend(incoming.analyst_feedback_ids);
             target.summary = incoming.summary;
             target.severity = incoming.severity;
             target.observed_at_ms = target.observed_at_ms.max(incoming.observed_at_ms);
+            if incoming.analyst_disposition.is_some() {
+                target.analyst_disposition = incoming.analyst_disposition;
+            }
+            if incoming.analyst_note.is_some() {
+                target.analyst_note = incoming.analyst_note;
+            }
+            if incoming.analyst_feedback_at_ms.is_some() {
+                target.analyst_feedback_at_ms = incoming.analyst_feedback_at_ms;
+            }
+            if incoming.outcome_reward_override.is_some() {
+                target.outcome_reward_override = incoming.outcome_reward_override;
+            }
         }
         (
             KnowledgeGraphNode::DeceptionAsset(target),
@@ -1587,6 +1703,16 @@ fn observation_summary(deposit: &PheromoneDeposit) -> String {
     )
 }
 
+#[derive(Debug, Clone)]
+struct ProvidenceFeedbackSignal {
+    feedback_id: String,
+    action: ProvidenceFeedbackAction,
+    observed_at_ms: i64,
+    event_id: Option<String>,
+    hunt_id: Option<String>,
+    note: Option<String>,
+}
+
 fn observation_timestamp_ms(deposit: &PheromoneDeposit) -> i64 {
     if let Some(value) = deposit
         .indicator
@@ -1626,6 +1752,43 @@ fn observation_id(deposit: &PheromoneDeposit) -> Result<String, KnowledgeGraphSt
         source,
     })?;
     Ok(format!("observation:{}", sha256_hex(&payload)))
+}
+
+fn parse_providence_feedback_signal(
+    deposit: &PheromoneDeposit,
+) -> Option<ProvidenceFeedbackSignal> {
+    let schema = deposit.indicator.get("schema")?.as_str()?;
+    if schema != SWARM_PROVIDENCE_FEEDBACK_SCHEMA {
+        return None;
+    }
+    Some(ProvidenceFeedbackSignal {
+        feedback_id: deposit
+            .indicator
+            .get("feedback_id")
+            .and_then(Value::as_str)?
+            .to_string(),
+        action: serde_json::from_value(deposit.indicator.get("action")?.clone()).ok()?,
+        observed_at_ms: deposit
+            .indicator
+            .get("observed_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or(deposit.timestamp),
+        event_id: deposit
+            .indicator
+            .get("event_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        hunt_id: deposit
+            .indicator
+            .get("hunt_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        note: deposit
+            .indicator
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
 }
 
 fn entity_node_id(kind: EntityKind, value: &str) -> String {
@@ -1738,6 +1901,14 @@ fn severity_reward(severity: Severity) -> f64 {
         Severity::Medium => 0.50,
         Severity::High => 0.75,
         Severity::Critical => 1.00,
+    }
+}
+
+fn analyst_outcome_reward(action: ProvidenceFeedbackAction) -> f64 {
+    match action {
+        ProvidenceFeedbackAction::Confirm => 1.0,
+        ProvidenceFeedbackAction::Dismiss => 0.0,
+        ProvidenceFeedbackAction::Investigate => 0.35,
     }
 }
 
@@ -1858,8 +2029,10 @@ mod tests {
     use swarm_core::agent::{AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode};
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::{
-        AgentId, SPHINX_MEMORY_PHEROMONE_SCHEMA_VERSION, SPHINX_MEMORY_THREAT_CLASS, Severity,
-        SphinxMemoryPayloadKind, SphinxMemoryQuery, SwarmAction,
+        AgentId, ProvidenceFeedbackAction, SPHINX_MEMORY_PHEROMONE_SCHEMA_VERSION,
+        SPHINX_MEMORY_THREAT_CLASS, SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+        SWARM_PROVIDENCE_FEEDBACK_SCHEMA_VERSION, Severity, SphinxMemoryPayloadKind,
+        SphinxMemoryQuery, SwarmAction,
     };
     use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
 
@@ -1959,6 +2132,46 @@ mod tests {
             agent_role: None,
             signature: Vec::new(),
             agent_key: Vec::new(),
+        }
+    }
+
+    fn providence_feedback_pheromone(
+        feedback_id: &str,
+        event_id: &str,
+        timestamp: i64,
+        action: ProvidenceFeedbackAction,
+        reason: &str,
+    ) -> PheromoneDeposit {
+        PheromoneDeposit {
+            indicator: serde_json::json!({
+                "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                "schema_version": SWARM_PROVIDENCE_FEEDBACK_SCHEMA_VERSION,
+                "feedback_id": feedback_id,
+                "action": action,
+                "status": match action {
+                    ProvidenceFeedbackAction::Confirm => "confirm",
+                    ProvidenceFeedbackAction::Dismiss => "dismiss",
+                    ProvidenceFeedbackAction::Investigate => "investigate",
+                },
+                "incident_id": "incident-1",
+                "finding_id": "finding-1",
+                "event_id": event_id,
+                "hunt_id": event_id,
+                "strategy_id": "office_baseline_control_kitten",
+                "analyst_id": "analyst-feedback",
+                "reason": reason,
+                "observed_at_ms": timestamp * 1000,
+            }),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.0,
+            timestamp: timestamp * 1000,
+            decay_half_life: 3_600.0,
+            agent_id: AgentId::new("ingest", "primary"),
+            agent_identity: String::new(),
+            agent_role: None,
+            signature: vec![7; 64],
+            agent_key: vec![9; 32],
         }
     }
 
@@ -2391,6 +2604,96 @@ mod tests {
             .map(|answer| answer.query_id == query.query_id)
             .unwrap_or(false)
         }));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn providence_feedback_updates_matching_engagement_memory_reward() {
+        let root = temp_root("feedback-memory");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+        let substrate = substrate(&config);
+
+        let mut agent = SphinxAgent::new(
+            AgentId::new("sphinx", "primary"),
+            config_path(),
+            config.clone(),
+            substrate.clone(),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![pheromone("evt-feedback", 1_800_705_000)],
+                1_800_705_001,
+            ))
+            .await
+            .expect("graph seed should succeed");
+        agent
+            .tick(&env(
+                vec![providence_feedback_pheromone(
+                    "feedback-evt-feedback-1",
+                    "evt-feedback",
+                    1_800_705_010,
+                    ProvidenceFeedbackAction::Dismiss,
+                    "known false positive",
+                )],
+                1_800_705_011,
+            ))
+            .await
+            .expect("feedback annotation should succeed");
+
+        let query = SphinxMemoryQuery {
+            schema_version: SPHINX_MEMORY_PHEROMONE_SCHEMA_VERSION,
+            kind: SphinxMemoryPayloadKind::Query,
+            query_id: "sphinx-feedback-query".to_string(),
+            requested_by_agent_id: AgentId::new("kitten", "primary").to_string(),
+            strategy_id: "office_baseline_control_kitten".to_string(),
+            selection_source: "feedback_fixture".to_string(),
+            observation_count: 1,
+            base_fitness: 0.80,
+            requested_at_ms: 1_800_705_020_000,
+            threat_classes: vec!["execution".to_string()],
+            attack_technique_ids: vec!["T1059".to_string()],
+            entity_values: vec!["host-1".to_string(), "alice".to_string()],
+        };
+        substrate
+            .deposit(signed_memory_query_deposit(
+                &query,
+                &config,
+                AgentId::new("kitten", "primary"),
+                1_800_705_020,
+            ))
+            .await
+            .expect("query deposit should persist");
+
+        let query_env = env(
+            substrate
+                .recent_deposits(10)
+                .await
+                .expect("recent deposits should load"),
+            1_800_705_021,
+        );
+        let actions = agent
+            .tick(&query_env)
+            .await
+            .expect("sphinx should answer feedback-adjusted query");
+        let SwarmAction::DepositPheromone { indicator, .. } = &actions[0] else {
+            panic!("expected memory answer pheromone action");
+        };
+        let answer: swarm_core::types::SphinxMemoryAnswer =
+            serde_json::from_value(indicator.clone()).expect("answer payload should decode");
+        assert_eq!(answer.matching_engagement_count, 1);
+        assert_eq!(
+            answer.contributions[0].analyst_disposition,
+            Some(ProvidenceFeedbackAction::Dismiss)
+        );
+        assert_eq!(
+            answer.contributions[0].analyst_note.as_deref(),
+            Some("known false positive")
+        );
+        assert_eq!(answer.contributions[0].outcome_reward, 0.0);
+        assert_eq!(answer.retrieval_score, 0.0);
 
         let _ = fs::remove_dir_all(root);
     }

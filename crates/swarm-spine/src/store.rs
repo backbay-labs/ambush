@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use swarm_core::config::BundleStoreConfig;
+use swarm_core::types::ResponseRehearsalPreview;
 
 /// Metadata for one persisted replay bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,6 +13,10 @@ pub struct ReplayBundleRecord {
     pub hunt_id: String,
     pub trail_id: String,
     pub action_kind: String,
+    #[serde(default)]
+    pub is_rehearsal: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rehearsal_id: Option<String>,
     pub response_kind: String,
     pub response_receipt_id: Option<String>,
     pub related_receipt_ids: Vec<String>,
@@ -26,6 +31,8 @@ impl ReplayBundleRecord {
             hunt_id: bundle.audit.hunt_id.clone(),
             trail_id: bundle.audit.trail_id.clone(),
             action_kind: bundle.action_kind().to_string(),
+            is_rehearsal: bundle.is_rehearsal(),
+            rehearsal_id: bundle.rehearsal_id().map(ToString::to_string),
             response_kind: bundle.audit.response_kind().to_string(),
             response_receipt_id: bundle.audit.response_receipt_id().map(ToString::to_string),
             related_receipt_ids: bundle.audit.all_receipt_ids(),
@@ -51,6 +58,8 @@ pub struct ReplayPreview {
     pub action_kind: String,
     pub response_kind: String,
     pub receipt_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rehearsal: Option<ResponseRehearsalPreview>,
     pub note: String,
 }
 
@@ -63,8 +72,14 @@ impl ReplayPreview {
             action_kind: bundle.action_kind().to_string(),
             response_kind: bundle.audit.response_kind().to_string(),
             receipt_ids: bundle.audit.all_receipt_ids(),
-            note: "replay preview uses persisted artifacts only; no live response action was re-executed"
-                .to_string(),
+            rehearsal: bundle.rehearsal.clone(),
+            note: if bundle.is_rehearsal() {
+                "rehearsal proof is backed by a persisted dry-run receipt; no live response action was executed"
+                    .to_string()
+            } else {
+                "replay preview uses persisted artifacts only; no live response action was re-executed"
+                    .to_string()
+            },
         }
     }
 }
@@ -543,6 +558,7 @@ mod tests {
                 severity: Severity::Critical,
                 evidence: serde_json::json!({"signal": "encoded-command"}),
             },
+            rehearsal: None,
             audit: AuditTrail {
                 trail_id: "trail:hunt-1:1".to_string(),
                 hunt_id: "hunt-1".to_string(),

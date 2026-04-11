@@ -3582,7 +3582,9 @@ mod tests {
                 .unwrap()
                 .report;
             proposal.assurance = Some(passed_assurance_summary());
-            proposal.blocking_reasons.retain(|r| r.source != "assurance");
+            proposal
+                .blocking_reasons
+                .retain(|r| r.source != "assurance");
             store.persist(&proposal).unwrap();
         }
 

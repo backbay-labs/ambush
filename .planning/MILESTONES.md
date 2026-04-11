@@ -2,26 +2,50 @@
 
 ## Latest Completed Milestone
 
-### v1.51 Assurance-Gated Evolution And Counterexample Loop
-**Executable phases:** 172-175
+### v1.53 Production Packaging, Recovery, And Operator Access
+**Executable phases:** 180-183
 **Status:** Complete
 **Shipped:** 2026-04-11
-**Goal:** Turn evasion coverage, solver proofs, and counterexamples into explicit gate inputs for queue, canary, promotion, and mutation decisions.
-**Progress:** Phases 172-175 complete
+**Goal:** Make the system credibly deployable with secure packaging, recovery drills, measured capacity guidance, and a real operator access model.
+**Progress:** Phases 180-183 complete
+
+## Active Milestone
+
+### v1.54 Panic Eradication And Error Contracts
+**Executable phases:** 184-187
+**Status:** Active
+**Activated:** 2026-04-11
+**Goal:** Eliminate unwrap/expect from non-test runtime code and establish typed error propagation contracts at every crate boundary.
+**Progress:** Phases 184-185 complete; Phase 186 planned next
 
 ## Queued Milestones
 
-### v1.52 Providence Reconciliation And Response Rehearsal
-**Executable phases:** 176-179
+### v1.55 JetStream Integration Tests And Load Baselines
+**Executable phases:** 188-191
 **Status:** Queued
-**Goal:** Close the Providence loop with bounded inbound reconciliation and add response rehearsal plus blast-radius proof before live action approval.
-
-### v1.53 Production Packaging, Recovery, And Operator Access
-**Executable phases:** 180-183
-**Status:** Queued
-**Goal:** Make the system credibly deployable with secure packaging, recovery drills, measured capacity guidance, and a real operator access model.
+**Goal:** Establish real JetStream test coverage and measured performance baselines for the production substrate and hot path.
 
 ## History
+
+## v1.53 Production Packaging, Recovery, And Operator Access (Shipped: 2026-04-11)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The Helm chart now ships one supported secure production profile with explicit runtime and JetStream state roots, hardened packaging defaults, and a consistent config-root contract under `/var/lib/swarm`.
+- Recovery evidence now covers backup, restore, upgrade, rollback, and durability boundaries for both bootstrap local-journal and production JetStream-backed deployments.
+- Measured ingest latency and capacity baselines now anchor published SLOs, scaling guidance, and alert thresholds instead of heuristic operator estimates.
+- Operator access now supports scoped multi-principal read, rehearse, approve, and maintenance authority with attributable approval and maintenance audit lineage across the operator and platform surfaces.
+
+## v1.52 Providence Reconciliation And Response Rehearsal (Shipped: 2026-04-11)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Swarm now accepts authenticated Providence lifecycle callbacks, persists explicit reconciliation state on incidents, and blocks automatic outbound synchronization while review-required drift is unresolved.
+- Providence analyst feedback now persists as signed durable evidence and feeds the matching Sphinx engagement plus bounded Kitten false-positive handling without widening the analyst side-effect lane.
+- Replay bundles now support typed rehearsal proof with blast-radius and rollback previews, and rehearsal reuses the live policy plus executor lane in forced `DryRun` mode from persisted replay artifacts.
+- The local operator review and platform API surfaces now join rehearsal proof with Providence reconciliation, Providence drilldown links land on that bounded review context, and rehearsal replay bundles export as signed proof through the existing evidence contract.
 
 ## v1.51 Assurance-Gated Evolution And Counterexample Loop (Shipped: 2026-04-11)
 

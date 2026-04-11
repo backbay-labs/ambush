@@ -4,9 +4,9 @@ use crate::replay::{ReplayScenarioInput, load_scenario_manifest};
 use crate::runtime_events::{ReplayEventPhase, RuntimeEvent, now_ms, parse_runtime_event_filter};
 use axum::extract::{Json, Query, State, rejection::JsonRejection};
 use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::Json as ResponseJson;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
-use axum::response::Json as ResponseJson;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -525,7 +525,7 @@ pub(crate) async fn demo_replay_handler(
         if let Err(error) =
             super::process_demo_replay_step(&state, &run_id, &requested_by, index, step).await
         {
-            let error_body = error.clone();
+            let error_body = error.to_string();
             state.publish_runtime_event(RuntimeEvent::Replay {
                 emitted_at_ms: now_ms(),
                 run_id: run_id.clone(),
@@ -537,7 +537,7 @@ pub(crate) async fn demo_replay_handler(
                 total_steps,
                 step_index: Some(index),
                 event_id: Some(event_id.clone()),
-                reason: Some(error.clone()),
+                reason: Some(error_body.clone()),
             });
             state.append_demo_timeline(
                 &run_id,
@@ -545,7 +545,7 @@ pub(crate) async fn demo_replay_handler(
                 json!({
                     "step_index": index,
                     "event_id": event_id,
-                    "reason": error,
+                    "reason": error_body,
                 }),
                 now_ms(),
             );
@@ -621,7 +621,9 @@ pub(crate) async fn demo_dashboard_snapshot_handler(
             return with_demo_cors(
                 (
                     StatusCode::UNAUTHORIZED,
-                    ResponseJson(DemoReplayErrorBody { error }),
+                    ResponseJson(DemoReplayErrorBody {
+                        error: error.to_string(),
+                    }),
                 )
                     .into_response(),
             );
@@ -822,7 +824,9 @@ pub(crate) async fn demo_approval_resume_handler(
         return with_demo_cors(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                ResponseJson(DemoReplayErrorBody { error }),
+                ResponseJson(DemoReplayErrorBody {
+                    error: error.to_string(),
+                }),
             )
                 .into_response(),
         );
@@ -1031,7 +1035,10 @@ pub(crate) async fn demo_widget_handler(
             return super::with_widget_headers(
                 (
                     StatusCode::UNAUTHORIZED,
-                    Html(format!("<!DOCTYPE html><html><body>{error}</body></html>")),
+                    Html(format!(
+                        "<!DOCTYPE html><html><body>{}</body></html>",
+                        error
+                    )),
                 )
                     .into_response(),
                 &operator,
@@ -1060,7 +1067,9 @@ pub(crate) async fn runtime_events_handler(
             return with_demo_cors(
                 (
                     StatusCode::UNAUTHORIZED,
-                    ResponseJson(DemoReplayErrorBody { error }),
+                    ResponseJson(DemoReplayErrorBody {
+                        error: error.to_string(),
+                    }),
                 )
                     .into_response(),
             );

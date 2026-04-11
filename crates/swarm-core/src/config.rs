@@ -1291,16 +1291,67 @@ pub enum PlatformApiScope {
     Read,
 }
 
+/// Operator scopes supported by the authenticated operator and platform surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatorScope {
+    Read,
+    Rehearse,
+    Approve,
+    Maintenance,
+}
+
+/// One scoped operator principal entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorPrincipalConfig {
+    /// Logical operator principal attached to authenticated requests.
+    pub operator_id: String,
+    /// Environment variable name that carries the bearer token for this principal.
+    pub token_env: String,
+    /// Scopes granted to this principal.
+    #[serde(default)]
+    pub scopes: Vec<OperatorScope>,
+}
+
 /// Authentication settings for the local operator surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperatorAuthConfig {
+    /// Environment variable name used to sign read-only Providence context tokens.
+    #[serde(default = "default_operator_context_token_env")]
+    pub context_token_env: String,
+    /// Supported multi-principal operator auth contract.
+    #[serde(default)]
+    pub principals: Vec<OperatorPrincipalConfig>,
     /// Logical operator principal attached to authenticated requests.
     #[serde(default = "default_operator_id")]
     pub operator_id: String,
     /// Environment variable name that carries the bearer token.
     #[serde(default = "default_operator_token_env")]
     pub token_env: String,
+}
+
+impl OperatorAuthConfig {
+    pub fn effective_principals(&self) -> Vec<OperatorPrincipalConfig> {
+        if !self.principals.is_empty() {
+            return self.principals.clone();
+        }
+        vec![OperatorPrincipalConfig {
+            operator_id: self.operator_id.clone(),
+            token_env: self.token_env.clone(),
+            scopes: vec![
+                OperatorScope::Read,
+                OperatorScope::Rehearse,
+                OperatorScope::Approve,
+                OperatorScope::Maintenance,
+            ],
+        }]
+    }
+
+    pub fn context_token_env(&self) -> &str {
+        self.context_token_env.trim()
+    }
 }
 
 /// Replay bundle storage backend selection.
@@ -2721,6 +2772,7 @@ impl SwarmConfig {
             || self
                 .notification_channels
                 .contains_key("providence_webhook");
+        let needs_operator_auth = self.operator.enabled || !self.platform_api.keys.is_empty();
 
         if needs_operator_urls {
             let runtime_base_url = self.operator.runtime_base_url.trim();
@@ -2759,6 +2811,67 @@ impl SwarmConfig {
             }
         }
 
+        if needs_operator_auth {
+            let principals = self.operator.auth.effective_principals();
+            if principals.is_empty() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.auth.principals",
+                    reason: "must contain at least one principal".to_string(),
+                });
+            }
+
+            let mut seen_operator_ids = BTreeSet::new();
+            let mut seen_token_envs = BTreeSet::new();
+            for (index, principal) in principals.iter().enumerate() {
+                if principal.operator_id.trim().is_empty() {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "operator_surface.auth.principals.operator_id",
+                        reason: format!("principal {index} must not have an empty operator_id"),
+                    });
+                }
+                if !seen_operator_ids.insert(principal.operator_id.trim().to_string()) {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "operator_surface.auth.principals.operator_id",
+                        reason: format!(
+                            "principal {index} duplicates operator_id `{}`",
+                            principal.operator_id.trim()
+                        ),
+                    });
+                }
+                if principal.token_env.trim().is_empty() {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "operator_surface.auth.principals.token_env",
+                        reason: format!("principal {index} must not have an empty token_env"),
+                    });
+                }
+                if !seen_token_envs.insert(principal.token_env.trim().to_string()) {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "operator_surface.auth.principals.token_env",
+                        reason: format!(
+                            "principal {index} reuses token_env `{}`; bearer secrets must map to one principal",
+                            principal.token_env.trim()
+                        ),
+                    });
+                }
+                if principal.scopes.is_empty() {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "operator_surface.auth.principals.scopes",
+                        reason: format!("principal {index} must grant at least one scope"),
+                    });
+                }
+            }
+
+            if !principals
+                .iter()
+                .any(|principal| principal.scopes.contains(&OperatorScope::Read))
+            {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "operator_surface.auth.principals.scopes",
+                    reason: "at least one principal must grant `read` scope".to_string(),
+                });
+            }
+        }
+
         if self.operator.enabled {
             if self.operator.max_list_results == 0 {
                 return Err(ConfigValidationError::InvalidField {
@@ -2775,16 +2888,9 @@ impl SwarmConfig {
                 });
             }
 
-            if self.operator.auth.operator_id.trim().is_empty() {
+            if self.operator.auth.context_token_env().is_empty() {
                 return Err(ConfigValidationError::InvalidField {
-                    field: "operator_surface.auth.operator_id",
-                    reason: "must not be empty when operator surface is enabled".to_string(),
-                });
-            }
-
-            if self.operator.auth.token_env.trim().is_empty() {
-                return Err(ConfigValidationError::InvalidField {
-                    field: "operator_surface.auth.token_env",
+                    field: "operator_surface.auth.context_token_env",
                     reason: "must not be empty when operator surface is enabled".to_string(),
                 });
             }
@@ -2795,12 +2901,7 @@ impl SwarmConfig {
                     reason: "must be a valid socket address".to_string(),
                 }
             })?;
-            if !bind_addr.ip().is_loopback() {
-                return Err(ConfigValidationError::InvalidField {
-                    field: "operator_surface.bind_addr",
-                    reason: "must bind to a loopback address".to_string(),
-                });
-            }
+            let _ = bind_addr;
         }
 
         for (index, origin) in self.operator.allowed_embed_origins.iter().enumerate() {
@@ -3405,7 +3506,6 @@ impl Default for IdentityConfig {
     }
 }
 
-
 impl Default for OperatorSurfaceConfig {
     fn default() -> Self {
         Self {
@@ -3424,6 +3524,8 @@ impl Default for OperatorSurfaceConfig {
 impl Default for OperatorAuthConfig {
     fn default() -> Self {
         Self {
+            context_token_env: default_operator_context_token_env(),
+            principals: Vec::new(),
             operator_id: default_operator_id(),
             token_env: default_operator_token_env(),
         }
@@ -3630,6 +3732,10 @@ fn default_operator_id() -> String {
 
 fn default_operator_token_env() -> String {
     "SWARM_OPERATOR_TOKEN".to_string()
+}
+
+fn default_operator_context_token_env() -> String {
+    default_operator_token_env()
 }
 
 const fn default_investigation_max_pending_jobs() -> usize {
@@ -4047,12 +4153,13 @@ mod tests {
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DeceptionConfig,
         DeceptionMonitoringConfig, DeceptionPlacementStrategy, DeceptionPlaybookConfig,
         DeceptionPlaybookEntry, EvolutionAssuranceCoverageOverrideConfig, EvolutionConfig,
-        InvestigationConfig, NotificationChannelConfig, OperatorSurfaceConfig,
-        PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig,
-        PlatformApiScope, PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
-        PolicyTimeWindowConfig, PromotionConfig, RequestSignatureConfig, ResponsePlaybookConfig,
-        ResponsePlaybookRule, RuntimeMode, RuntimeSettings, SentinelBridgeConfig, SwarmConfig,
-        TelemetryBridgeConfig, TelemetrySourceConfig,
+        InvestigationConfig, NotificationChannelConfig, OperatorPrincipalConfig, OperatorScope,
+        OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig,
+        PlatformApiKeyConfig, PlatformApiScope, PolicyActionSelector, PolicyConfig,
+        PolicyRuleConfig, PolicyRuleDecision, PolicyTimeWindowConfig, PromotionConfig,
+        RequestSignatureConfig, ResponsePlaybookConfig, ResponsePlaybookRule, RuntimeMode,
+        RuntimeSettings, SentinelBridgeConfig, SwarmConfig, TelemetryBridgeConfig,
+        TelemetrySourceConfig,
     };
     use crate::ThreatClass;
     use crate::types::{ResponseAction, Severity};
@@ -4320,6 +4427,72 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "invalid field `operator_surface.allowed_embed_origins`: origin 0 must be 'self' or start with http:// or https://"
+        );
+    }
+
+    #[test]
+    fn operator_surface_principals_require_scopes() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.auth.principals = vec![OperatorPrincipalConfig {
+            operator_id: "reader".to_string(),
+            token_env: "SWARM_OPERATOR_READER_TOKEN".to_string(),
+            scopes: Vec::new(),
+        }];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.auth.principals.scopes`: principal 0 must grant at least one scope"
+        );
+    }
+
+    #[test]
+    fn operator_surface_rejects_duplicate_principal_token_envs() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.auth.principals = vec![
+            OperatorPrincipalConfig {
+                operator_id: "reader".to_string(),
+                token_env: "SWARM_OPERATOR_SHARED_TOKEN".to_string(),
+                scopes: vec![OperatorScope::Read],
+            },
+            OperatorPrincipalConfig {
+                operator_id: "approver".to_string(),
+                token_env: "SWARM_OPERATOR_SHARED_TOKEN".to_string(),
+                scopes: vec![OperatorScope::Approve],
+            },
+        ];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.auth.principals.token_env`: principal 1 reuses token_env `SWARM_OPERATOR_SHARED_TOKEN`; bearer secrets must map to one principal"
+        );
+    }
+
+    #[test]
+    fn operator_surface_requires_read_scope_when_platform_api_is_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.platform_api.keys = vec![PlatformApiKeyConfig {
+            name: "reader".to_string(),
+            key_hash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_string(),
+            scopes: vec![PlatformApiScope::Read],
+        }];
+        config.operator.auth.principals = vec![OperatorPrincipalConfig {
+            operator_id: "maintainer".to_string(),
+            token_env: "SWARM_OPERATOR_MAINTAINER_TOKEN".to_string(),
+            scopes: vec![OperatorScope::Maintenance],
+        }];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.auth.principals.scopes`: at least one principal must grant `read` scope"
         );
     }
 

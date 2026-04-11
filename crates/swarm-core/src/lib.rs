@@ -32,8 +32,10 @@ pub use telemetry::{
     ThermalAnomalyEvent, ThermalSeverity,
 };
 pub use types::{
-    AgentId, EscalationEvent, HuntId, ProvidenceCreateIncidentBody, ProvidenceIncidentStatus,
-    SwarmAction, SwarmProvidenceAggregateContext, SwarmProvidenceFindingContext,
+    AgentId, EscalationEvent, HuntId, ProvidenceCallbackAuditEntry, ProvidenceCallbackEvent,
+    ProvidenceCreateIncidentBody, ProvidenceFeedbackEvidence, ProvidenceIncidentReconciliation,
+    ProvidenceIncidentStatus, ProvidenceReconciliationOutcome, SwarmAction,
+    SwarmProvidenceAggregateContext, SwarmProvidenceCallbackRequest, SwarmProvidenceFindingContext,
     SwarmProvidenceLinks, SwarmProvidenceRuntimeBridgeHealth, SwarmProvidenceRuntimeContext,
     SwarmProvidenceWebhookContract,
 };

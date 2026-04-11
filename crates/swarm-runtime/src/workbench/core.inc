@@ -2000,10 +2000,7 @@ pub struct DefaultReviewWorkbenchHarness {
 }
 
 impl DefaultReviewWorkbenchHarness {
-    pub fn from_paths(
-        actor: impl Into<String>,
-        paths: &OperatorSurfacePaths,
-    ) -> Result<Self, ReviewWorkbenchError> {
+    pub fn from_paths(paths: &OperatorSurfacePaths) -> Result<Self, ReviewWorkbenchError> {
         Ok(Self {
             signer_id: paths.evidence_signer_id.clone(),
             signing_key_env: paths.evidence_signing_key_env.clone(),
@@ -2012,7 +2009,7 @@ impl DefaultReviewWorkbenchHarness {
                 &paths.evidence_verification_results_dir,
                 &paths.promotion_evidence_results_dir,
             )?,
-            maintenance: OperatorMaintenanceService::from_paths(actor, paths)?,
+            maintenance: OperatorMaintenanceService::from_paths(paths)?,
             session_store: FileReviewSessionStore::open(&paths.review_session_results_dir)?,
             export_store: FileReviewSessionExportStore::open(
                 &paths.review_session_export_results_dir,
@@ -2613,6 +2610,7 @@ impl DefaultReviewWorkbenchHarness {
 
     pub fn create_reverify_handoff(
         &self,
+        actor: &str,
         request: ReviewSessionReverifyRequest,
     ) -> Result<ReviewSessionMaintenanceHandoffLookup, ReviewWorkbenchError> {
         let resolved = self.resolve_session(&request.session_id)?;
@@ -2639,13 +2637,14 @@ impl DefaultReviewWorkbenchHarness {
 
         let mut action_results = Vec::new();
         for bundle_id in &bundle_ids {
-            let execution =
-                self.maintenance
-                    .execute(OperatorMaintenanceRequest::ReverifyEvidenceBundle {
-                        bundle_id: bundle_id.clone(),
-                        expected_key_id: request.expected_key_id.clone(),
-                        reason: request.reason.clone(),
-                    })?;
+            let execution = self.maintenance.execute(
+                actor,
+                OperatorMaintenanceRequest::ReverifyEvidenceBundle {
+                    bundle_id: bundle_id.clone(),
+                    expected_key_id: request.expected_key_id.clone(),
+                    reason: request.reason.clone(),
+                },
+            )?;
             let lookup = execution.lookup();
             let verification_id = lookup
                 .record

@@ -11,6 +11,7 @@ image:
 service:
   type: ClusterIP
   port: 9090
+  annotations: {}
 
 resources:
   requests:
@@ -21,10 +22,20 @@ resources:
     memory: 1Gi
 
 podAnnotations: {}
+automountServiceAccountToken: false
+podSecurityContext: {}
+containerSecurityContext: {}
 imagePullSecrets: []
 nodeSelector: {}
 affinity: {}
 tolerations: []
+
+runtimePaths:
+  stateRoot: /var/lib/swarm
+
+scratchVolume:
+  enabled: false
+  mountPath: /tmp
 
 podDisruptionBudget:
   enabled: true
@@ -56,6 +67,14 @@ secrets:
   existingSecret: ""
   mountPath: /var/run/swarm-secrets
   files: {}
+
+tls:
+  enabled: false
+  existingSecret: ""
+  mountPath: /var/run/swarm-tls
+  certFile: server-cert.pem
+  keyFile: server-key.pem
+  clientCaFile: ""
 
 swarmConfig:
   schema_version: 1
@@ -101,9 +120,6 @@ swarmConfig:
     backend:
       kind: local_journal
       path: /var/lib/swarm/pheromones.jsonl
-      url: ""
-      connect_timeout_ms: 5000
-      gc_page_size: 512
   policy:
     human_gate_severity: HIGH
     lease_ttl_ms: 60000

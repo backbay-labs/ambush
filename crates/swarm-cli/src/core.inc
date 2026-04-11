@@ -2462,11 +2462,15 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         &cli.approval_set_results_dir,
         &cli.approval_ledger_results_dir,
     )?;
-    let review_workbench_harness = DefaultReviewWorkbenchHarness::from_paths(
-        repo_config.operator.auth.operator_id.clone(),
-        &OperatorSurfacePaths {
+    let review_workbench_harness =
+        DefaultReviewWorkbenchHarness::from_paths(&OperatorSurfacePaths {
             evidence_signer_id: cli.evidence_signer_id.clone(),
             evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
+            verification_results_dir: cli.verification_results_dir.clone(),
+            shadow_results_dir: cli.shadow_results_dir.clone(),
+            promotion_review_results_dir: cli.promotion_review_results_dir.clone(),
+            canary_results_dir: cli.canary_results_dir.clone(),
+            promotion_results_dir: cli.promotion_results_dir.clone(),
             evolution_ranking_results_dir: cli.evolution_ranking_results_dir.clone(),
             evolution_selection_results_dir: cli.evolution_selection_results_dir.clone(),
             evolution_portfolio_results_dir: cli.evolution_portfolio_results_dir.clone(),
@@ -2493,8 +2497,15 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             approval_ledger_results_dir: cli.approval_ledger_results_dir.clone(),
             approval_verdict_results_dir: cli.approval_verdict_results_dir.clone(),
             approval_receipt_pack_results_dir: cli.approval_receipt_pack_results_dir.clone(),
-        },
-    )?;
+        })?;
+    let review_workbench_actor = repo_config
+        .operator
+        .auth
+        .effective_principals()
+        .into_iter()
+        .next()
+        .map(|principal| principal.operator_id)
+        .unwrap_or_else(|| repo_config.operator.auth.operator_id.clone());
 
     let output = match cli.command {
         Command::Validate(_) | Command::Init(_) | Command::Identity(_) => {
@@ -2506,6 +2517,11 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 OperatorSurfacePaths {
                     evidence_signer_id: cli.evidence_signer_id.clone(),
                     evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
+                    verification_results_dir: cli.verification_results_dir.clone(),
+                    shadow_results_dir: cli.shadow_results_dir.clone(),
+                    promotion_review_results_dir: cli.promotion_review_results_dir.clone(),
+                    canary_results_dir: cli.canary_results_dir.clone(),
+                    promotion_results_dir: cli.promotion_results_dir.clone(),
                     evolution_ranking_results_dir: cli.evolution_ranking_results_dir.clone(),
                     evolution_selection_results_dir: cli.evolution_selection_results_dir.clone(),
                     evolution_portfolio_results_dir: cli.evolution_portfolio_results_dir.clone(),
@@ -3151,13 +3167,15 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Command::ReviewSessionHandoffReverify(args) => {
-            let lookup =
-                review_workbench_harness.create_reverify_handoff(ReviewSessionReverifyRequest {
+            let lookup = review_workbench_harness.create_reverify_handoff(
+                &review_workbench_actor,
+                ReviewSessionReverifyRequest {
                     session_id: args.session_id,
                     selected_artifact_refs: args.artifact_refs,
                     expected_key_id: args.expected_key_id,
                     reason: args.reason,
-                })?;
+                },
+            )?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&lookup.handoff)?);
             } else {

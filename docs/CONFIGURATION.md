@@ -2,7 +2,7 @@
 
 > Canonical runtime configuration surface, tuning parameters, and environment
 > variables.  
-> Last updated: 2026-04-10
+> Last updated: 2026-04-11
 
 ---
 
@@ -246,7 +246,9 @@ For Providence-native delivery, configure the `providence_webhook` notification 
 
 Swarm signs the canonical JSON request body as `X-Swarm-Signature: sha256=<hex>`, and Providence verifies that header before accepting the request.
 
-Phase 152 extends that integration with an embeddable `/v1/demo/widget` surface and short-lived context tokens. Swarm signs those read-only drilldown tokens with the operator bearer-token secret from `operator_surface.auth.token_env`, embeds them in Providence links, and accepts them as an alternative to bearer+API-key auth only for scoped `GET /v2/api/findings` and `GET /v2/api/incidents` reads.
+That same `providence_webhook.request_signature` configuration now covers Swarm's signed Providence ingress: `POST /v1/providence/feedback` and `POST /v1/providence/callback` both require the canonical-body HMAC header. Feedback persists a durable summary of the Swarm-signed evidence deposit on the incident audit trail, while callbacks persist reconciliation state and can pause outbound lifecycle sync when Providence and Swarm require manual review.
+
+Phase 152 extends that integration with an embeddable `/v1/demo/widget` surface and short-lived context tokens. Swarm signs those read-only drilldown tokens with the dedicated context-token secret from `operator_surface.auth.context_token_env`, embeds them in Providence links, and accepts them as an alternative to bearer+API-key auth only for scoped `GET /v2/api/findings` and `GET /v2/api/incidents` reads.
 
 Example:
 
@@ -334,16 +336,124 @@ Deployment bootstrap commands:
 
 The repo now ships a base Helm chart at `deploy/helm/swarm-team-six/` for `swarm_detect --serve`.
 
-The chart renders the runtime config from `values.yaml`, mounts secret files into `runtime.secret_dir`, wires the existing `/startupz`, `/readyz`, `/livez`, and `/prestop` surfaces, and includes an optional `charts/nats` subchart for JetStream-backed pheromone storage.
+The chart renders the runtime config from Helm values, mounts secret files into `runtime.secret_dir`, wires the existing `/startupz`, `/readyz`, `/livez`, and `/prestop` surfaces, and includes a declared `charts/nats` dependency for JetStream-backed pheromone storage.
 
-Typical workflow:
+There are now two distinct chart entrypoints:
+
+- `values.yaml`: bootstrap or local integration defaults
+- `values-production.yaml`: the supported secure production profile for `v1.53`
+
+Use the production profile for supported deployments:
 
 ```bash
-helm template swarm-team-six deploy/helm/swarm-team-six
+helm template swarm-team-six deploy/helm/swarm-team-six \
+  -f deploy/helm/swarm-team-six/values-production.yaml
+
 helm install swarm-team-six deploy/helm/swarm-team-six \
+  -f deploy/helm/swarm-team-six/values-production.yaml \
   --set image.repository=ghcr.io/example/swarm-team-six \
   --set image.tag=latest
 ```
+
+The supported production profile is intentionally narrow:
+
+- one detect-server deployment
+- one runtime PVC rooted at `/var/lib/swarm`
+- one optional bundled NATS StatefulSet with JetStream storage rooted at `/data`
+- runtime TLS and secret material mounted from Kubernetes Secrets
+- non-root execution, read-only root filesystem, explicit writable scratch volume, and `automountServiceAccountToken: false`
+- `operator_surface.enabled: false` until the operator-access milestone ships a supported non-loopback access model
+
+State-root contract for the supported production profile:
+
+- Runtime config: `/etc/swarm/config.yaml` from a read-only ConfigMap mount
+- Runtime secret root: `/var/run/swarm-secrets` from a Secret mount and wired to `runtime.secret_dir`
+- Runtime TLS root: `/var/run/swarm-tls` from a Secret mount and wired to top-level `tls.*`
+- Runtime durable state root: `/var/lib/swarm` from the runtime PVC
+- Runtime-owned durable subpaths:
+  - `/var/lib/swarm/replay`
+  - `/var/lib/swarm/investigations`
+  - `/var/lib/swarm/incidents`
+  - `/var/lib/swarm/agent-keys`
+  - `/var/lib/swarm/agent-identity`
+  - `/var/lib/swarm/pheromones/pheromones.jsonl` when the runtime uses `local_journal` instead of JetStream
+- Dependency durable state root: `/data` on the bundled NATS JetStream StatefulSet PVC when `nats.enabled=true`
+
+Supported durability matrix:
+
+| Surface | Backing store | Backup expectation | Restore source |
+| --- | --- | --- | --- |
+| `deploy/helm/swarm-team-six/values-production.yaml` and rendered `/etc/swarm/config.yaml` | Git plus Helm release history | Required, but backed up as repo and release metadata rather than PVC contents | Re-render with Helm, then reapply the release |
+| `/var/run/swarm-secrets` and `/var/run/swarm-tls` | Kubernetes Secret objects | Required | Restore the Secret objects before restarting the pod |
+| `/var/lib/swarm` runtime state root | Runtime PVC | Required | Restore the runtime PVC snapshot or clone before bringing the deployment back |
+| `/var/lib/swarm/pheromones/pheromones.jsonl` in bootstrap `local_journal` mode | Runtime PVC | Required when `nats.enabled=false` | Restored as part of the runtime PVC |
+| `/data` JetStream store | NATS StatefulSet PVC | Required when `nats.enabled=true` | Restore the JetStream PVC independently from the runtime PVC |
+| `/tmp` scratch volume | `emptyDir` | Not required | Recreated automatically on pod start |
+
+Operationally, this gives two supported durability topologies:
+
+- Bootstrap or local-journal: one durable runtime PVC under `/var/lib/swarm`; pheromone state is restored together with replay, investigation, incident, and identity state.
+- Supported production profile: one durable runtime PVC under `/var/lib/swarm` plus one separate JetStream PVC under `/data`; restore them independently and only treat the runtime PVC as sufficient when the deployment is not using JetStream.
+
+Repeatable backup, restore, upgrade, and rollback drills for these two topologies are defined in [docs/DR-RUNBOOK.md](DR-RUNBOOK.md).
+
+### Measured SLO And Capacity Envelope
+
+The supported runtime envelope now comes from the shipped benchmark and the
+runtime health surfaces, not from detector-only microbenchmarks or static agent
+count heuristics.
+
+Reference host and workload:
+
+- Apple M1 Max, 10 CPU cores, 32 GiB RAM, macOS 25.4.0
+- `cargo run -p swarm-runtime --release --example end_to_end_ingest_bench`
+- 25 warmup requests, 200 measured requests, 25 events per request
+- `detect_only`, `suspicious_process_tree`, `local_journal`, replay
+  `local_files`, no async lanes or outbound adapters
+
+Reference measured envelope on that host:
+
+| Contract slice | Result |
+| --- | --- |
+| p50 ingest request latency | 6.45 ms |
+| p95 ingest request latency | 8.18 ms |
+| p99 ingest request latency | 9.95 ms |
+| Sustained accepted-event throughput | 3,728.80 events/sec |
+| Post-run readiness | `/readyz`, `/healthz`, and `/metrics` all `200 OK` |
+
+Hot-path detector-only reference on the same host:
+
+| Contract slice | Result |
+| --- | --- |
+| p50 detect+deposit latency | 59.00 us |
+| p95 detect+deposit latency | 63.79 us |
+| p99 detect+deposit latency | 85.08 us |
+| Throughput | 16,186.91 events/sec |
+
+Interpret the two tables differently:
+
+- `fast_detection_bench` is a regression guard for detector and deposit work
+- `end_to_end_ingest_bench` is the operator-facing envelope for the shipped HTTP
+  ingest path on the measured host class
+- the Helm production profile switches the pheromone substrate to JetStream, so
+  re-run `end_to_end_ingest_bench` with `STS_E2E_BENCH_BACKEND=jet_stream` and
+  `NATS_URL=...` before treating the local-journal ceiling as a durable
+  production ceiling
+
+Alert baselines tied directly to shipped surfaces:
+
+| Signal | Source of truth | Warn | Page |
+| --- | --- | --- | --- |
+| Ingest request latency | `histogram_quantile(0.95, sum(rate(swarm_ingest_request_latency_microseconds_bucket[5m])) by (le))` | over `12,000` us for 15m | over `16,000` us for 5m |
+| Accepted ingest rate on the reference host | `rate(swarm_ingest_events_total{status="accepted"}[5m])` | over `2,600` events/sec | over `3,300` events/sec or coupled with latency breach |
+| Detector hot-path latency | `histogram_quantile(0.95, sum(rate(swarm_detect_latency_microseconds_bucket[5m])) by (le))` | over `125` us | over `250` us |
+| Heap pressure | `swarm_heap_pressure_ratio` and `/readyz` | over `0.75` | `>= runtime.max_heap_pressure` or `/readyz` returns `503` |
+| Substrate durability and readiness | `/readyz`, `/healthz`, `components.substrate.effective_ready` | n/a | anything other than ready |
+| Bridge intake health | `swarm_bridge_ready`, `swarm_bridge_lag_seconds` | lag rising for one scrape window | any required bridge reports `ready=0` or misses its intake SLA |
+
+These thresholds are reference-host defaults, not universal constants. When the
+detector mix, batch size, or substrate changes, re-run the benchmark and reset
+the alert numbers to the new measured baseline.
 
 Key value surfaces:
 
@@ -353,7 +463,9 @@ Key value surfaces:
 - `swarmConfig.response_adapter`
 - `swarmConfig.siem_forward`
 - `swarmConfig.notification_channels`
+- `runtimePaths.stateRoot`
 - `secrets.files`
+- `tls.enabled` and `tls.existingSecret`
 - `nats.enabled`
 
 ### Durable Agent Identity
@@ -432,34 +544,60 @@ It defines where the bounded runtime stores and surfaces each stage.
 
 ### Authenticated Local Operator Surface
 
-The repo now also ships a local authenticated HTTP surface above the existing CLI. This surface is intentionally narrow:
+The repo now ships a scoped authenticated operator HTTP surface above the existing CLI.
+It stays intentionally bounded, but it is no longer limited to one loopback-only shared bearer token.
 
-- bind address must stay on loopback
-- authentication is one bearer token loaded from env
-- the surface reuses existing serializable runtime and artifact views instead of defining a second operator model
-- multi-user auth, RBAC, and internet exposure remain out of scope
+Supported contract:
+
+- `operator_surface.bind_addr` may be loopback for local admin use or a non-loopback service address for a dedicated operator deployment
+- `operator_surface.auth.principals` defines distinct operator identities, each with one bearer-token env var and one or more scopes
+- `operator_surface.auth.context_token_env` separately signs Providence widget and drilldown context tokens; it is read-only and does not grant approval or maintenance authority
+- the operator HTTP surface and `/v2/api/*` reuse the same operator principal catalog instead of defining a second identity plane
+- external OIDC, SSO, or cloud-IAM federation are still out of scope here; the repo-owned contract is bearer principals plus optional TLS or mTLS at the transport layer
+
+Supported scopes:
+
+- `read`: read-only operator pages and JSON APIs, plus bearer access to `/v2/api/*` when combined with a scoped platform API key
+- `rehearse`: rehearsal-proof export from the review surface
+- `approve`: approval-set creation and signed approval vote submission
+- `maintenance`: threat-intel and threat-class mutation, dead-letter replay, review-driven reverify handoff, and direct maintenance actions
 
 Enable it in repo config:
 
 ```yaml
 operator_surface:
   enabled: true
-  bind_addr: "127.0.0.1:7766"
-  runtime_base_url: "http://127.0.0.1:9090"
-  public_base_url: "http://127.0.0.1:7766"
+  bind_addr: "0.0.0.0:7766"
+  runtime_base_url: "https://detect.example"
+  public_base_url: "https://operator.example"
   allowed_embed_origins:
     - https://providence.example
   max_list_results: 50
   widget_token_ttl_secs: 900
   auth:
-    operator_id: local-operator
-    token_env: SWARM_OPERATOR_TOKEN
+    context_token_env: SWARM_OPERATOR_CONTEXT_TOKEN
+    principals:
+      - operator_id: operator-readonly
+        token_env: SWARM_OPERATOR_READ_TOKEN
+        scopes: ["read"]
+      - operator_id: operator-rehearse
+        token_env: SWARM_OPERATOR_REHEARSE_TOKEN
+        scopes: ["read", "rehearse"]
+      - operator_id: swarm:ed25519:7d1f...
+        token_env: SWARM_OPERATOR_APPROVE_TOKEN
+        scopes: ["read", "approve"]
+      - operator_id: operator-maintenance
+        token_env: SWARM_OPERATOR_MAINT_TOKEN
+        scopes: ["read", "maintenance"]
 ```
 
 - `runtime_base_url` is the detect-server base URL used by the Providence widget and scoped drilldown links.
 - `public_base_url` remains the operator-surface base URL for replay, audit-trail, and review links.
 - `allowed_embed_origins` drives `Content-Security-Policy: frame-ancestors` and `X-Frame-Options` for `/v1/demo/widget`.
 - `widget_token_ttl_secs` controls the lifetime of the signed read-only context tokens included in Providence links.
+- `auth.context_token_env` should be a dedicated signing secret in production; local development may reuse one principal token, but production should keep context-token signing separate from mutable operator credentials.
+- every entry in `auth.principals` must use a distinct token env so one bearer secret maps to exactly one operator identity.
+- approval voters must authenticate as the same signer-derived operator ID they submit in `voter_id`, and approval sets may only list principals that grant `approve`.
 
 Optional TLS for both `swarm_detect --serve` and `swarmctl serve` is configured once at the top level:
 
@@ -470,7 +608,7 @@ tls:
   client_ca_cert: /etc/swarm/tls/client-ca.pem # optional; enables mTLS when set
 ```
 
-The versioned detect-server platform API now requires both the operator bearer token and a scoped platform API key:
+The versioned detect-server platform API now requires both a `read`-scoped operator bearer token and a scoped platform API key:
 
 ```yaml
 platform_api:
@@ -483,7 +621,11 @@ platform_api:
 Start it through the existing repo-owned binary:
 
 ```bash
-export SWARM_OPERATOR_TOKEN=replace-me-with-a-local-secret
+export SWARM_OPERATOR_CONTEXT_TOKEN=replace-me-with-a-readonly-context-secret
+export SWARM_OPERATOR_READ_TOKEN=replace-me-with-a-readonly-secret
+export SWARM_OPERATOR_REHEARSE_TOKEN=replace-me-with-a-rehearse-secret
+export SWARM_OPERATOR_APPROVE_TOKEN=replace-me-with-an-approve-secret
+export SWARM_OPERATOR_MAINT_TOKEN=replace-me-with-a-maintenance-secret
 
 cargo run -p swarm-runtime --bin swarmctl -- serve \
   --config rulesets/default.yaml \
@@ -505,38 +647,45 @@ cargo run -p swarm-runtime --bin swarmctl -- serve \
   --review-delegation-results-dir data/review-delegations
 ```
 
+Supported reference architecture:
+
+- run `swarm_detect --serve` as the primary runtime service
+- run `swarmctl serve` as a separate operator deployment, admin pod, or private service mounting the same state root and artifact directories
+- front the non-loopback operator address with TLS; prefer mTLS or a private network boundary if it leaves localhost
+- keep operator bearer secrets and the context-token signer in the mounted secret bundle, not in repo config
+
 Example authenticated reads:
 
 ```bash
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   http://127.0.0.1:7766/v1/operator/status
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/replay?receipt_id=receipt-123"
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evolution/portfolios/portfolio:red"
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evolution/governance-packets/packet:red:ready"
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evolution/packet-sets?cohort=red&limit=10"
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evolution/portfolio-histories?cohort=red&limit=10"
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evidence/bundles?subject_kind=production_promotion&limit=10"
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/evidence/verifications/EVIDENCE_VERIFICATION_ID"
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   http://127.0.0.1:7766/v1/operator/review
 
 curl \
-  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   -H "x-api-key: ${SWARM_PLATFORM_API_KEY}" \
   https://127.0.0.1:9090/v2/api/runtime/status
 ```
@@ -547,7 +696,7 @@ Example authenticated maintenance flow:
 
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_MAINT_TOKEN}" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:7766/v1/operator/maintenance/actions \
   -d '{
@@ -556,11 +705,29 @@ curl -X POST \
     "reason": "refresh local review snapshot"
   }'
 
-curl -H "Authorization: Bearer ${SWARM_OPERATOR_TOKEN}" \
+curl -H "Authorization: Bearer ${SWARM_OPERATOR_READ_TOKEN}" \
   "http://127.0.0.1:7766/v1/operator/maintenance/actions?status=blocked&limit=10"
 ```
 
-Maintenance actions inherit the authenticated local operator identity from `operator_surface.auth.operator_id`. Every maintenance request must include a non-empty `reason`, and every applied or blocked attempt is written to `data/operator-maintenance-actions/` as a stable-ID audit record.
+Example rehearsal and approval flows:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_REHEARSE_TOKEN}" \
+  http://127.0.0.1:7766/v1/operator/review/rehearsals/BUNDLE_ID/export
+
+curl -X POST \
+  -H "Authorization: Bearer ${SWARM_OPERATOR_APPROVE_TOKEN}" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:7766/v1/operator/approval-sets \
+  -d '{
+    "eligible_voters": ["swarm:ed25519:7d1f..."],
+    "threshold_required": 1,
+    "promotion_evidence_ref": "promotion_evidence:promotion:red"
+  }'
+```
+
+Maintenance actions now inherit the authenticated operator principal from the bearer token instead of a global config-wide operator ID. Every maintenance request must include a non-empty `reason`, and every applied or blocked attempt is written to `data/operator-maintenance-actions/` as a stable-ID audit record. Approval votes keep the signer-derived `voter_id`, but the authenticated bearer principal must match that same operator identity.
 
 Current authenticated surface:
 
@@ -2252,15 +2419,19 @@ With defaults (half_life=3600, confidence=1.0, threshold=0.01):
 
 Rule of thumb: set `tom.count >= 3 * max_byzantine_faults + 1`.
 
-### Population Scaling
+### Scaling Guidance
 
-Agent counts should match telemetry volume and investigation complexity:
+Scale from measured runtime behavior instead of fixed agent-count tables:
 
-| Telemetry Volume | Whiskers | Stalkers | Notes |
-|-----------------|----------|----------|-------|
-| Low (<1K events/sec) | 2-4 | 1-2 | Development or small environments |
-| Medium (1K-10K events/sec) | 4-8 | 2-4 | Typical production |
-| High (10K-100K events/sec) | 8-16 | 4-8 | Large-scale or high-security |
-| Very High (>100K events/sec) | 16+ | 8+ | Consider multiple swarm instances |
-
-Weavers scale with investigation concurrency, not telemetry volume. 1 Weaver handles up to ~50 concurrent investigations. Sphinx is always a singleton.
+- benchmark the target host and substrate with
+  `cargo run -p swarm-runtime --release --example end_to_end_ingest_bench`
+  before publishing a new ceiling
+- treat roughly 70% of the measured `accepted` ingest rate as the scale-warning
+  point and roughly 90% as the scale-before-degradation point
+- keep `/readyz` green and keep p95
+  `swarm_ingest_request_latency_microseconds` below 1.5x the measured baseline
+- size investigation and correlation workers from
+  `/healthz.components.async_lane` queue age, running jobs, budget remaining,
+  and recent failure counters rather than from telemetry-volume folklore
+- Sphinx remains singleton until a later milestone adds explicit sharding or
+  federation support

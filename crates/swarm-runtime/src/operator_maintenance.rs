@@ -309,7 +309,6 @@ impl OperatorMaintenanceExecution {
 /// Bounded maintenance service for the local operator surface.
 #[derive(Debug, Clone)]
 pub struct OperatorMaintenanceService {
-    actor: String,
     portfolio: DefaultEvolutionPortfolioHarness,
     governance_prep: DefaultEvolutionGovernancePrepHarness,
     evidence_store: FileEvidenceBundleStore,
@@ -318,12 +317,8 @@ pub struct OperatorMaintenanceService {
 }
 
 impl OperatorMaintenanceService {
-    pub fn from_paths(
-        actor: impl Into<String>,
-        paths: &OperatorSurfacePaths,
-    ) -> Result<Self, OperatorMaintenanceError> {
+    pub fn from_paths(paths: &OperatorSurfacePaths) -> Result<Self, OperatorMaintenanceError> {
         Ok(Self {
-            actor: actor.into(),
             portfolio: DefaultEvolutionPortfolioHarness::from_path(
                 &paths.evolution_ranking_results_dir,
                 &paths.evolution_selection_results_dir,
@@ -348,6 +343,7 @@ impl OperatorMaintenanceService {
 
     pub fn execute(
         &self,
+        actor: &str,
         request: OperatorMaintenanceRequest,
     ) -> Result<OperatorMaintenanceExecution, OperatorMaintenanceError> {
         let requested_at_ms = now_ms();
@@ -357,7 +353,7 @@ impl OperatorMaintenanceService {
             return self.persist_error_record(
                 base_record(
                     action_kind,
-                    &self.actor,
+                    actor,
                     requested_at_ms,
                     target_kind,
                     target_id,
@@ -369,7 +365,6 @@ impl OperatorMaintenanceService {
             );
         }
 
-        let actor = self.actor.clone();
         match &request {
             OperatorMaintenanceRequest::PortfolioEntryDecision {
                 portfolio_id,
@@ -384,7 +379,7 @@ impl OperatorMaintenanceService {
                     self.persist_record(
                         base_record(
                             "portfolio_entry_decision",
-                            &actor,
+                            actor,
                             requested_at_ms,
                             "portfolio_entry",
                             format!("{portfolio_id}:{entry_id}"),
@@ -409,7 +404,7 @@ impl OperatorMaintenanceService {
                 Err(error) => self.persist_error_record(
                     base_record(
                         "portfolio_entry_decision",
-                        &self.actor,
+                        actor,
                         requested_at_ms,
                         "portfolio_entry",
                         format!("{portfolio_id}:{entry_id}"),
@@ -435,7 +430,7 @@ impl OperatorMaintenanceService {
                     self.persist_record(
                         base_record(
                             "packet_set_split",
-                            &actor,
+                            actor,
                             requested_at_ms,
                             "packet_set",
                             parent_packet_set_id.clone(),
@@ -459,7 +454,7 @@ impl OperatorMaintenanceService {
                 Err(error) => self.persist_error_record(
                     base_record(
                         "packet_set_split",
-                        &self.actor,
+                        actor,
                         requested_at_ms,
                         "packet_set",
                         parent_packet_set_id.clone(),
@@ -478,7 +473,7 @@ impl OperatorMaintenanceService {
                     self.persist_record(
                         base_record(
                             "refresh_portfolio_history",
-                            &actor,
+                            actor,
                             requested_at_ms,
                             "packet_set",
                             packet_set_id.clone(),
@@ -502,7 +497,7 @@ impl OperatorMaintenanceService {
                 Err(error) => self.persist_error_record(
                     base_record(
                         "refresh_portfolio_history",
-                        &self.actor,
+                        actor,
                         requested_at_ms,
                         "packet_set",
                         packet_set_id.clone(),
@@ -544,7 +539,7 @@ impl OperatorMaintenanceService {
                     self.persist_execution_record(
                         base_record(
                             "reverify_evidence_bundle",
-                            &actor,
+                            actor,
                             requested_at_ms,
                             "evidence_bundle",
                             bundle_id.clone(),
@@ -563,7 +558,7 @@ impl OperatorMaintenanceService {
                 Err(error) => self.persist_error_record(
                     base_record(
                         "reverify_evidence_bundle",
-                        &self.actor,
+                        actor,
                         requested_at_ms,
                         "evidence_bundle",
                         bundle_id.clone(),

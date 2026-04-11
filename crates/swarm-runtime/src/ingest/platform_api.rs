@@ -4,14 +4,14 @@ use crate::evasion_coverage::EvasionCoverageSnapshot;
 use crate::providence::verify_providence_context_token;
 use crate::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
 use crate::serve::TlsClientIdentity;
+use axum::Router;
 use axum::extract::{Extension, Json, Path as AxumPath, Query, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
+use axum::response::Json as ResponseJson;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::response::Json as ResponseJson;
-use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -21,14 +21,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use swarm_core::ThreatClass;
 use swarm_core::agent::{AgentHealthEntry, SwarmMode, SwarmModeState};
-use swarm_core::config::{OperatorSurfaceConfig, PlatformApiConfig, PlatformApiScope};
+use swarm_core::config::{
+    OperatorScope, OperatorSurfaceConfig, PlatformApiConfig, PlatformApiScope,
+};
 use swarm_core::pheromone::PheromoneDeposit;
-use swarm_core::types::Severity;
+use swarm_core::types::{ProvidenceIncidentReconciliation, ResponseRehearsalPreview, Severity};
 use swarm_pheromone::{DepositQuery, PheromoneSubstrate};
 use swarm_response::SwarmFindingEnvelope;
 use swarm_spine::{
-    IncidentStore, InvestigationBundleStore, InvestigationStatus,
-    ReplayBundleLookup, ReplayBundleStore,
+    IncidentStore, InvestigationBundleStore, InvestigationStatus, ReplayBundleLookup,
+    ReplayBundleStore,
 };
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
@@ -49,13 +51,16 @@ pub(super) struct PlatformApiKeyRecord {
 #[derive(Debug, Clone)]
 pub(super) struct PlatformApiAuthState {
     pub(super) keys: Arc<Vec<PlatformApiKeyRecord>>,
-    pub(super) operator_id: Arc<str>,
-    pub(super) token_env: Arc<str>,
-    pub(super) expected_bearer_token: Option<Arc<str>>,
+    pub(super) bearer_principals: Arc<Vec<ResolvedPlatformApiBearerPrincipal>>,
+    pub(super) context_token_env: Arc<str>,
+    pub(super) context_token_secret: Option<Arc<str>>,
 }
 
 impl PlatformApiAuthState {
-    pub(super) fn from_config(config: &PlatformApiConfig, operator: &OperatorSurfaceConfig) -> Self {
+    pub(super) fn from_config(
+        config: &PlatformApiConfig,
+        operator: &OperatorSurfaceConfig,
+    ) -> Self {
         let keys = config
             .keys
             .iter()
@@ -65,24 +70,55 @@ impl PlatformApiAuthState {
                 scopes: key.scopes.clone(),
             })
             .collect();
-        let expected_bearer_token = std::env::var(&operator.auth.token_env)
+        let bearer_principals: Vec<ResolvedPlatformApiBearerPrincipal> = operator
+            .auth
+            .effective_principals()
+            .into_iter()
+            .filter_map(|principal| {
+                let expected_token = std::env::var(&principal.token_env)
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                if expected_token.is_none() {
+                    tracing::warn!(
+                        operator_id = %principal.operator_id,
+                        token_env = %principal.token_env,
+                        "platform API operator bearer token env is missing or empty"
+                    );
+                }
+                expected_token.map(|expected_token| ResolvedPlatformApiBearerPrincipal {
+                    principal: PlatformApiBearerPrincipal {
+                        operator_id: Arc::from(principal.operator_id),
+                        scopes: principal.scopes,
+                    },
+                    expected_token: Arc::from(expected_token),
+                })
+            })
+            .collect();
+        let context_token_env = Arc::from(operator.auth.context_token_env().to_string());
+        let context_token_secret = std::env::var(operator.auth.context_token_env())
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .map(Arc::from);
         if config.keys.is_empty() {
             tracing::debug!("platform API auth disabled because no API keys are configured");
-        } else if expected_bearer_token.is_none() {
+        } else if bearer_principals.is_empty() {
             tracing::warn!(
-                token_env = %operator.auth.token_env,
-                "platform API bearer token env is missing or empty"
+                "platform API operator bearer auth is unavailable because no readable bearer principals were resolved"
+            );
+        }
+        if context_token_secret.is_none() {
+            tracing::warn!(
+                token_env = %context_token_env,
+                "platform API Providence context token env is missing or empty"
             );
         }
         Self {
             keys: Arc::new(keys),
-            operator_id: Arc::from(operator.auth.operator_id.clone()),
-            token_env: Arc::from(operator.auth.token_env.clone()),
-            expected_bearer_token,
+            bearer_principals: Arc::new(bearer_principals),
+            context_token_env,
+            context_token_secret,
         }
     }
 
@@ -95,15 +131,34 @@ impl PlatformApiAuthState {
             })
         })
     }
+
+    pub(super) fn authenticate_bearer(&self, token: &str) -> Option<PlatformApiBearerPrincipal> {
+        self.bearer_principals.iter().find_map(|principal| {
+            (principal.expected_token.as_ref() == token).then(|| principal.principal.clone())
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct PlatformApiBearerPrincipal {
     pub(super) operator_id: Arc<str>,
+    pub(super) scopes: Vec<OperatorScope>,
+}
+
+impl PlatformApiBearerPrincipal {
+    pub(super) fn has_scope(&self, scope: OperatorScope) -> bool {
+        self.scopes.contains(&scope)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct PlatformApiContextTokenPrincipal;
+
+#[derive(Debug, Clone)]
+pub(super) struct ResolvedPlatformApiBearerPrincipal {
+    pub(super) principal: PlatformApiBearerPrincipal,
+    pub(super) expected_token: Arc<str>,
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct PlatformApiPrincipal {
@@ -134,6 +189,16 @@ pub(super) struct PlatformFindingSummary {
     pub(super) response_kind: String,
     pub(super) response_receipt_id: Option<String>,
     pub(super) related_receipt_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) latest_rehearsal_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) latest_rehearsal: Option<ResponseRehearsalPreview>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) related_incident_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) related_incident_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) related_incident_providence_reconciliation: Option<ProvidenceIncidentReconciliation>,
     pub(super) finding: SwarmFindingEnvelope,
 }
 
@@ -146,6 +211,14 @@ pub(super) struct PlatformIncidentSummary {
     pub(super) included_investigation_ids: Vec<String>,
     pub(super) related_receipt_ids: Vec<String>,
     pub(super) correlation_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) providence_reconciliation: Option<ProvidenceIncidentReconciliation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) latest_rehearsal_hunt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) latest_rehearsal_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) latest_rehearsal: Option<ResponseRehearsalPreview>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -380,7 +453,10 @@ pub(super) fn context_token_matches_platform_request(
     }
 }
 
-pub(super) fn is_after_platform_cursor(item: &PlatformCursorKey, cursor: &PlatformCursorKey) -> bool {
+pub(super) fn is_after_platform_cursor(
+    item: &PlatformCursorKey,
+    cursor: &PlatformCursorKey,
+) -> bool {
     item.created_at_ms < cursor.created_at_ms
         || (item.created_at_ms == cursor.created_at_ms && item.stable_id < cursor.stable_id)
 }
@@ -404,11 +480,44 @@ pub(super) fn finalize_platform_page<T>(
     }
 }
 
-pub(super) fn platform_finding_summary_from_lookup(lookup: &ReplayBundleLookup) -> PlatformFindingSummary {
+fn latest_rehearsal_for_hunt(
+    state: &IngestState,
+    hunt_id: &str,
+) -> Result<(Option<String>, Option<ResponseRehearsalPreview>), PlatformApiError> {
+    let lookup = state
+        .current_replay_store()
+        .load_by_hunt_id(hunt_id)
+        .map_err(|error| PlatformApiError::internal(error.to_string()))?;
+    Ok(
+        match lookup.and_then(|lookup| {
+            lookup
+                .bundle
+                .rehearsal
+                .as_ref()
+                .cloned()
+                .map(|preview| (lookup.bundle.bundle_id, preview))
+        }) {
+            Some((bundle_id, preview)) => (Some(bundle_id), Some(preview)),
+            None => (None, None),
+        },
+    )
+}
+
+pub(super) fn platform_finding_summary_from_lookup(
+    state: &IngestState,
+    lookup: &ReplayBundleLookup,
+) -> Result<PlatformFindingSummary, PlatformApiError> {
     let finding = &lookup.bundle.audit.detection;
-    PlatformFindingSummary {
+    let hunt_id = lookup.bundle.audit.hunt_id.clone();
+    let (latest_rehearsal_bundle_id, latest_rehearsal) =
+        latest_rehearsal_for_hunt(state, &hunt_id)?;
+    let related_incident = state
+        .current_incident_store()
+        .load_by_hunt_id(&hunt_id)
+        .map_err(|error| PlatformApiError::internal(error.to_string()))?;
+    Ok(PlatformFindingSummary {
         bundle_id: lookup.bundle.bundle_id.clone(),
-        hunt_id: lookup.bundle.audit.hunt_id.clone(),
+        hunt_id,
         trail_id: lookup.bundle.audit.trail_id.clone(),
         created_at_ms: lookup.bundle.audit.created_at_ms,
         host_id: lookup.bundle.event.host_id.clone(),
@@ -419,8 +528,18 @@ pub(super) fn platform_finding_summary_from_lookup(lookup: &ReplayBundleLookup) 
             .response_receipt_id()
             .map(ToString::to_string),
         related_receipt_ids: lookup.bundle.audit.all_receipt_ids(),
+        latest_rehearsal_bundle_id,
+        latest_rehearsal,
+        related_incident_id: related_incident
+            .as_ref()
+            .map(|lookup| lookup.record.incident_id.clone()),
+        related_incident_summary: related_incident
+            .as_ref()
+            .map(|lookup| lookup.record.summary.clone()),
+        related_incident_providence_reconciliation: related_incident
+            .and_then(|lookup| lookup.record.providence_reconciliation),
         finding: SwarmFindingEnvelope::from(finding),
-    }
+    })
 }
 
 pub(super) fn platform_finding_matches_query(
@@ -473,7 +592,7 @@ pub(super) fn load_platform_findings(
         if !platform_finding_matches_query(&lookup, query) {
             continue;
         }
-        findings.push(platform_finding_summary_from_lookup(&lookup));
+        findings.push(platform_finding_summary_from_lookup(state, &lookup)?);
     }
 
     findings.sort_by(|left, right| {
@@ -532,9 +651,7 @@ pub(super) fn finding_stream_matches_query(
             .threat_class
             .as_ref()
             .is_none_or(|value| finding.threat_class == *value)
-        && query
-            .severity
-            .is_none_or(|value| finding.severity == value)
+        && query.severity.is_none_or(|value| finding.severity == value)
 }
 
 pub(super) fn is_active_investigation_status(status: InvestigationStatus) -> bool {
@@ -650,10 +767,10 @@ async fn require_platform_api_bearer_auth(
     if request.method() == axum::http::Method::GET
         && let Some(raw_token) = request_query_param(&request, "context_token")
     {
-        let secret_material = auth.expected_bearer_token.as_deref().ok_or_else(|| {
+        let secret_material = auth.context_token_secret.as_deref().ok_or_else(|| {
             PlatformApiError::service_unavailable(format!(
-                "platform API bearer token env `{}` is missing or empty",
-                auth.token_env
+                "platform API Providence context token env `{}` is missing or empty",
+                auth.context_token_env
             ))
         })?;
         let claims = verify_providence_context_token(secret_material, &raw_token, now_ms())
@@ -668,12 +785,6 @@ async fn require_platform_api_bearer_auth(
             .insert(PlatformApiContextTokenPrincipal);
         return Ok(next.run(request).await);
     }
-    let expected_token = auth.expected_bearer_token.as_deref().ok_or_else(|| {
-        PlatformApiError::service_unavailable(format!(
-            "platform API bearer token env `{}` is missing or empty",
-            auth.token_env
-        ))
-    })?;
     let value = headers
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
@@ -681,13 +792,16 @@ async fn require_platform_api_bearer_auth(
     let token = value
         .strip_prefix("Bearer ")
         .ok_or_else(|| PlatformApiError::unauthorized("expected Authorization: Bearer <token>"))?;
-    if token != expected_token {
-        return Err(PlatformApiError::unauthorized("invalid bearer token"));
+    let principal = auth
+        .authenticate_bearer(token)
+        .ok_or_else(|| PlatformApiError::unauthorized("invalid bearer token"))?;
+    if !principal.has_scope(OperatorScope::Read) {
+        return Err(PlatformApiError::forbidden(
+            "operator bearer token does not grant read scope",
+        ));
     }
 
-    request.extensions_mut().insert(PlatformApiBearerPrincipal {
-        operator_id: Arc::clone(&auth.operator_id),
-    });
+    request.extensions_mut().insert(principal);
     Ok(next.run(request).await)
 }
 
@@ -881,16 +995,38 @@ async fn platform_incidents_handler(
                             .any(|value| value == correlation_key)
                     })
         })
-        .map(|record| PlatformIncidentSummary {
-            incident_id: record.incident_id,
-            summary: record.summary,
-            created_at_ms: record.created_at_ms,
-            included_hunt_ids: record.included_hunt_ids,
-            included_investigation_ids: record.included_investigation_ids,
-            related_receipt_ids: record.related_receipt_ids,
-            correlation_keys: record.correlation_keys,
+        .map(|record| {
+            let rehearsal_hunt_id = query
+                .hunt_id
+                .as_deref()
+                .filter(|hunt_id| {
+                    record
+                        .included_hunt_ids
+                        .iter()
+                        .any(|value| value == *hunt_id)
+                })
+                .map(ToString::to_string)
+                .or_else(|| record.included_hunt_ids.first().cloned());
+            let (latest_rehearsal_bundle_id, latest_rehearsal) = rehearsal_hunt_id
+                .as_deref()
+                .map(|hunt_id| latest_rehearsal_for_hunt(&state, hunt_id))
+                .transpose()?
+                .unwrap_or((None, None));
+            Ok(PlatformIncidentSummary {
+                incident_id: record.incident_id,
+                summary: record.summary,
+                created_at_ms: record.created_at_ms,
+                included_hunt_ids: record.included_hunt_ids,
+                included_investigation_ids: record.included_investigation_ids,
+                related_receipt_ids: record.related_receipt_ids,
+                correlation_keys: record.correlation_keys,
+                providence_reconciliation: record.providence_reconciliation,
+                latest_rehearsal_hunt_id: rehearsal_hunt_id,
+                latest_rehearsal_bundle_id,
+                latest_rehearsal,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, PlatformApiError>>()?;
 
     incidents.sort_by(|left, right| {
         right

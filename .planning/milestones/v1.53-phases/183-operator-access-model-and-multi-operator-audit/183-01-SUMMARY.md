@@ -1,0 +1,15 @@
+# Phase 183 Plan 01 Summary
+
+## Delivered
+
+- Replaced the single shared operator bearer-token shape in [config.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-core/src/config.rs) with a repo-owned multi-principal contract that can express distinct `read`, `rehearse`, `approve`, and `maintenance` scopes while preserving one legacy-principal fallback for older configs.
+- Refactored the operator HTTP surface in [core.inc](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/http/core.inc) so bearer auth resolves to one authenticated operator principal, each mutating route enforces least-privilege scope, approval voters must authenticate as the same operator identity they submit, and maintenance or handoff actions persist that authenticated actor through the normal audit lane.
+- Aligned the platform and context-token seams in [platform_api.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/ingest/platform_api.rs), [mod.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/ingest/mod.rs), and [providence.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/providence.rs) so read-scoped operator principals gate `/v2/api/*` bearer access while Providence and widget context tokens sign against a dedicated `context_token_env`.
+- Threaded authenticated operator identity through the review and maintenance helpers in [core.inc](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/workbench/core.inc), [operator_maintenance.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/operator_maintenance.rs), and [core.inc](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-cli/src/core.inc) so review-driven reverification and direct maintenance actions no longer attribute work to a startup-global actor.
+- Updated [CONFIGURATION.md](/Users/connor/Medica/backbay/standalone/swarm-team-six/docs/CONFIGURATION.md) and [values-production.yaml](/Users/connor/Medica/backbay/standalone/swarm-team-six/deploy/helm/swarm-team-six/values-production.yaml) with the supported reference architecture: a separate operator workload, non-loopback service boundary behind TLS or mTLS, dedicated context-token signer secret, and per-scope operator bearer secrets.
+
+## Notes
+
+- `operator_surface.auth.principals` is now the canonical multi-operator contract, but legacy `operator_id` plus `token_env` still collapse to one full-scope principal so older configs fail closed without an immediate migration cliff.
+- Approval lineage is intentionally tighter than before: the authenticated operator principal must match the submitted `voter_id`, and eligible voters must resolve to configured `approve`-scoped principals.
+- The chart still keeps `operator_surface.enabled: false` in the supported production profile; Phase 183 documents the supported operator deployment boundary and secret model without turning the operator workload into an always-on bundled service.

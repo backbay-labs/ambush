@@ -42,8 +42,8 @@ async fn main() {
 
     let detector = SuspiciousProcessTreeDetector::default();
     let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
-    let agent_id = AgentId("whisker-bench".to_string());
     let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+    let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
 
     let base_event = TelemetryEvent {
         source: "benchmark".to_string(),

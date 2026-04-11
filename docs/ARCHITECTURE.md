@@ -170,6 +170,23 @@ Operators interact with the runtime through shipped local and HTTP surfaces:
 - versioned platform APIs under `/v2/api/*`
 - repo-owned CLI and deployment surfaces such as `swarmctl` and Helm manifests
 
+### Operational Envelope
+
+Performance and capacity claims are part of the operator contract only when they
+come from shipped surfaces:
+
+- `/startupz`, `/readyz`, and `/healthz` define whether the runtime is fit to
+  accept work
+- `/metrics` carries the request, stage-latency, heap-pressure, bridge-health,
+  and ingest-rate series operators alert on
+- `docs/benchmarks/fast-detection.md` is hot-path regression data only
+- `docs/benchmarks/end-to-end-ingest.md` and `docs/CONFIGURATION.md` define the
+  measured reference envelope and alert thresholds
+
+Static agent-count folklore is not part of the active architecture. Capacity
+guidance must be backed by rerunning the shipped benchmark on the target host
+and substrate.
+
 ## Bounded And Deferred
 
 The active contract should mark these as out of scope or reference-only unless a

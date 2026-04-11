@@ -370,6 +370,7 @@ mod tests {
                 severity: Severity::High,
                 evidence: serde_json::json!({"signal": "test"}),
             },
+            rehearsal: None,
             audit: AuditTrail {
                 trail_id: format!("trail:{hunt_id}"),
                 hunt_id: hunt_id.to_string(),

@@ -356,8 +356,27 @@ where
         request: &ActionRequest,
         context: &ApprovalContext,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
-        self.audit_authorize_and_execute_instrumented_internal(detection, request, context, false)
-            .await
+        self.audit_authorize_and_execute_instrumented_internal(
+            detection, request, context, false, None,
+        )
+        .await
+    }
+
+    /// Execute a rehearsal through the normal policy lane while forcing a dry-run receipt.
+    pub async fn audit_rehearse_authorize_and_execute_instrumented(
+        &self,
+        detection: &DetectionFinding,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+    ) -> Result<RuntimeExecutionReport, RuntimeError> {
+        self.audit_authorize_and_execute_instrumented_internal(
+            detection,
+            request,
+            context,
+            true,
+            Some(ExecutionMode::DryRun),
+        )
+        .await
     }
 
     /// Execute a previously human-approved request through the normal runtime lane.
@@ -367,8 +386,10 @@ where
         request: &ActionRequest,
         context: &ApprovalContext,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
-        self.audit_authorize_and_execute_instrumented_internal(detection, request, context, true)
-            .await
+        self.audit_authorize_and_execute_instrumented_internal(
+            detection, request, context, true, None,
+        )
+        .await
     }
 
     async fn audit_authorize_and_execute_instrumented_internal(
@@ -377,10 +398,12 @@ where
         request: &ActionRequest,
         context: &ApprovalContext,
         allow_human_approved_execution: bool,
+        execution_mode_override: Option<ExecutionMode>,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         let policy_started = Instant::now();
         let decision = self.policy.evaluate(request, context)?;
         let policy_elapsed_us = policy_started.elapsed().as_micros() as u64;
+        let execution_mode = execution_mode_override.unwrap_or_else(|| self.execution_mode());
         tracing::info!(
             correlation_id = %Self::correlation_id(context),
             hunt_id = %request.hunt_id.0,
@@ -389,6 +412,7 @@ where
             rule_name = %decision.rule_name,
             reason = %decision.reason,
             mode = ?self.mode,
+            execution_mode = ?execution_mode,
             module = module_path!(),
             "building audit trail for response decision"
         );
@@ -442,7 +466,7 @@ where
                                 let response_started = Instant::now();
                                 let response = match self
                                     .response
-                                    .execute(request, &lease, self.execution_mode())
+                                    .execute(request, &lease, execution_mode)
                                     .await
                                 {
                                     Ok(receipt) if receipt.status.indicates_success() => {
@@ -493,7 +517,7 @@ where
                                         context.now_ms
                                     ),
                                     action: request.action.kind().to_string(),
-                                    mode: self.execution_mode(),
+                                    mode: execution_mode,
                                     status: ResponseStatus::Failed,
                                     summary: reason.clone(),
                                     details: serde_json::json!({
@@ -600,7 +624,7 @@ mod tests {
         Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
     };
     use swarm_policy::static_gate::StaticApprovalGate;
-    use swarm_policy::{ActionRequest, ApprovalContext};
+    use swarm_policy::{ActionRequest, ApprovalContext, PolicyVerdict};
     use swarm_response::{
         ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt, ResponseStatus,
         adapters::SandboxExecutor,
@@ -766,6 +790,55 @@ mod tests {
             AuditResponseRecord::Success(receipt) => {
                 assert_eq!(receipt.status, ResponseStatus::Executed);
                 assert_eq!(receipt.mode, ExecutionMode::Enforced);
+            }
+            other => panic!("expected success response, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn live_runtime_rehearsal_executes_human_gated_action_as_dry_run() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            RecordingExecutor {
+                calls: Arc::clone(&calls),
+            },
+        );
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-rehearsal".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::IsolateHost {
+                host_id: "host-1".to_string(),
+            },
+            severity: Severity::Critical,
+            evidence: serde_json::json!({"signal": "active-exploit"}),
+        };
+        let detection = swarm_whisker::DetectionFinding {
+            finding_id: "finding-rehearsal".to_string(),
+            event_id: "evt-rehearsal".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::Critical,
+            confidence: 0.99,
+            evidence: request.evidence.clone(),
+            strategy_id: "test".to_string(),
+        };
+
+        let report = runtime
+            .audit_rehearse_authorize_and_execute_instrumented(
+                &detection,
+                &request,
+                &sample_context(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(report.audit.policy.verdict, PolicyVerdict::RequireHuman);
+        match report.audit.response {
+            AuditResponseRecord::Success(receipt) => {
+                assert_eq!(receipt.status, ResponseStatus::Simulated);
+                assert_eq!(receipt.mode, ExecutionMode::DryRun);
             }
             other => panic!("expected success response, got {other:?}"),
         }
