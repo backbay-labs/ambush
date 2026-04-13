@@ -2,30 +2,135 @@
 
 ## Latest Completed Milestone
 
-### v1.63 Evolution Crate Decomposition And Schema Migration
-**Executable phases:** 220-223
+### v1.73 Stigmergic Feedback Loops And Baseline Resistance
+**Executable phases:** 260-263
 **Status:** Complete
-**Shipped:** 2026-04-12
-**Goal:** Pay down velocity debt by decomposing the evolution crate and establishing versioned wire formats.
-**Progress:** Phases 220-223 complete
+**Shipped:** 2026-04-13
+**Goal:** Implement real pheromone recruitment and quantify baseline poisoning resistance.
+**Progress:** Phases 260-263 complete
 
 ## Active Milestone
 
-`v1.64 Cross-Crate Path Hack Elimination` is active. Defining requirements and roadmap.
+### v1.74 Structural Integrity
+**Executable phases:** 264-267
+**Status:** Active
+**Started:** 2026-04-13
+**Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
+**Progress:** Phases 264-267 defined; Phase 264 ready to plan
 
 ## Queued Milestones
 
-- `v1.65 Config Crate Extraction And service.rs Decomposition`
-- `v1.66 Learned-State Integrity Signing`
-- `v1.67 Secret Zeroization And API Token Lifecycle`
-- `v1.68 Multi-Detector Evolution Genomes`
-- `v1.69 Command-Line Deobfuscation Pipeline`
-- `v1.70 Telemetry Source Breadth`
-- `v1.71 CI Hardening And Versioned Releases`
-- `v1.72 OpenAPI Spec And SOAR Bidirectional Sync`
-- `v1.73 Stigmergic Feedback Loops And Baseline Resistance`
+- `v1.75 Operator Packaging` — Curated default config, deployment docs, swarmctl quickstart, tested against Atomic Red Team corpus
+- `v1.76 External Signal Ingestion` — STIX/TAXII threat intel feed consumer, cloud audit log detection
+- `v1.77 Integration Proof` — Deep EDR and SIEM adapter integration with real telemetry
 
 ## History
+
+## v1.72 OpenAPI Spec And SOAR Bidirectional Sync (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The repo now emits and validates one checked-in OpenAPI 3.1 contract for the authenticated `/v2/api/` platform surface from one repo-owned generator.
+- The repo now ships a generated Python client plus a live router smoke test proving the emitted contract against real platform API responses.
+- The detect runtime now accepts bounded signed Splunk SOAR, Sentinel SOAR, and Chronicle SOAR verdicts on one ingress route and routes them into the existing feedback lane.
+- Incident audit entries and normalized false-positive measurements now persist durable SOAR source-system lineage and explicitly reject duplicate or incomplete verdict sync inputs.
+
+---
+
+## v1.71 CI Hardening And Versioned Releases (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The repo CI surface now runs bounded parallel jobs for format, panic-contract proof, build, clippy, tests, JetStream, benchmark regression, and supply-chain validation with shared cargo cache reuse.
+- The JetStream-backed `swarm-pheromone` integration suites now execute through a repo-owned NATS container harness instead of staying local-only proof.
+- The hot-path Criterion benchmark is now enforced by a repo-owned p99 regression gate with a tracked baseline JSON and refresh guidance in the repo docs.
+- Tagged releases now generate changelogs, build and publish multi-arch GHCR images, emit SBOM artifacts, sign image digests, attach provenance attestations, and publish a GitHub release through one repo-owned workflow.
+
+## v1.70 Telemetry Source Breadth (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The runtime config surface now supports repo-owned `windows_event_log`, `sysmon`, and `auditd` bridge-backed telemetry sources.
+- `swarm-ingest-json` now ships three host-log adapters that normalize representative Windows Event Log, Sysmon, and auditd records into the shared telemetry schema.
+- The runtime bridge registry and operator readiness surface now validate and build the new bridge family through the same generic path as the earlier bridges.
+- The milestone closes with an end-to-end proof that the three new host-log bridges report shared health and metrics and drive existing detector families through one Whisker pipeline.
+
+---
+
+## v1.69 Command-Line Deobfuscation Pipeline (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The `swarm-whisker` detector family now shares one bounded command-line normalization seam with raw-to-normalized evidence lineage instead of duplicating raw lowercase string checks in each detector.
+- The normalization seam now handles caret insertion, bounded environment-variable expansion, common Unicode homoglyph and fullwidth forms, and PowerShell-style encoded command decoding.
+- The repo now ships a dedicated command-line deobfuscation corpus plus baseline-vs-normalized benchmark helpers on the existing `evasion_coverage` surface.
+- The milestone closes with an executable proof that the targeted execution and defense-evasion lanes improve beyond the required catch-rate threshold while benign command-line controls remain zero-false-positive.
+
+---
+
+## v1.68 Multi-Detector Evolution Genomes (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Autonomous evolution now persists typed detector genomes for behavioral anomaly, fileless execution, and DNS exfiltration instead of assuming every mutation is a suspicious process-tree profile.
+- The bounded autonomous mutation lane now emits replayable seed-control, perturbation, and crossover variants for all supported detector genome families.
+- The measured benchmark harness now evaluates process-tree, behavioral anomaly, fileless execution, and DNS exfiltration detector families through one comparable generation-report surface.
+- The milestone closes with an executable proof that the fileless-execution detector improves above a conservative seed baseline on measured fitness and catch rate.
+
+---
+
+## v1.67 Secret Zeroization And API Token Lifecycle (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- Secret-bearing config and auth seams now use shared zeroizing storage instead of long-lived raw heap strings.
+- The shipped release binaries now prove `panic = "abort"` and `overflow-checks = true` through a repo-owned verification script.
+- Operator and platform bearer tokens now support expiry metadata and env-backed rotation without process restart.
+- The authenticated operator and platform HTTP surfaces now enforce shared per-source burst and sustained request limits with `429` plus recent-violation status visibility.
+
+---
+
+## v1.66 Learned-State Integrity Signing (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarm_core::signed_state` now provides typed signed envelopes, signer binding, and sequence-aware verification for learned-state persistence.
+- Behavioral baseline snapshots now sign before persistence and fail closed on tamper or replay during reload.
+- Sphinx graph snapshots plus evolution population and episode artifacts now restore only from trusted signed authoritative state.
+- Every signed learned-state artifact now carries a monotonic `sequence`, and restore paths reject replayed older state.
+
+---
+
+## v1.65 Config Crate Extraction And service.rs Decomposition (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The former 6009-line `swarm-core/src/config.rs` monolith is now a focused `config/` module tree while preserving the stable `swarm_core::config` API.
+- Touching `config/policy.rs` rebuilt 14 of 15 workspace crates, exactly matching the `swarm-core` reverse dependency set and leaving only `swarm-crypto` untouched.
+- `swarm-runtime/src/service.rs` is now a focused `service/` module tree that preserves the shipped `swarm_runtime::service::{...}` surface and keeps every extracted file under the 2000-line ceiling.
+- Request-facing execution now uses a separately swapped shared runtime handle, so ingest routing and human-approved demo replay no longer clone the full configured stack just to reach audited execution.
+
+---
+
+## v1.64 Cross-Crate Path Hack Elimination (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The repo now has a concrete inventory of the ten runtime path hacks plus a phased migration plan to replace them with a normal crate boundary.
+- The former path-hacked evolution modules now live under `swarm-runtime`, and `swarm-evolution` has been reduced to a compatibility facade.
+- The runtime/evolution seam now compiles through normal crate and module paths with no remaining `#[path]` directives in `swarm-runtime`.
+- The path-hack removal is build, library-test, and production-target clippy proven across `swarm-runtime` and `swarm-evolution`.
+
+---
 
 ## v1.63 Evolution Crate Decomposition And Schema Migration (Shipped: 2026-04-12)
 

@@ -987,6 +987,15 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | BASERES-01 | Phase 260 | Complete |
 | BASERES-02 | Phase 262 | Complete |
 | BASERES-03 | Phase 263 | Complete |
+| TESTFIX-01 | Phase 264 | Pending |
+| TESTFIX-02 | Phase 264 | Pending |
+| DEADCODE-01 | Phase 264 | Pending |
+| DECOMP-01 | Phase 265 | Pending |
+| DECOMP-02 | Phase 266 | Pending |
+| DECOMP-03 | Phase 266 | Pending |
+| EXTRACT-01 | Phase 267 | Pending |
+| EXTRACT-02 | Phase 267 | Pending |
+| EXTRACT-03 | Phase 267 | Pending |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
@@ -1026,8 +1035,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.71 complete: 5 requirements satisfied across phases 252-255
 - v1.72 complete: 4 requirements satisfied across phases 256-259
 - v1.73 complete: 6 satisfied across phases 260-263
-- v1.74 pending: 10 requirements (TESTFIX-01-02, DEADCODE-01, DECOMP-01-03, EXTRACT-01-03) across phases 264-267
+- v1.74 active: 10 requirements across phases 264-267 (TESTFIX-01-02 -> Phase 264; DEADCODE-01 -> Phase 264; DECOMP-01 -> Phase 265; DECOMP-02-03 -> Phase 266; EXTRACT-01-03 -> Phase 267)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-13 — Defined v1.74 Structural Integrity requirements*
+*Last updated: 2026-04-13 — Defined v1.74 Structural Integrity requirements and mapped 10 requirements to phases 264-267*

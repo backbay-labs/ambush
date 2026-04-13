@@ -199,6 +199,9 @@ Phases 1-115 shipped across milestones v1.0 through v1.37. Full history is in `.
 
 </details>
 
+<details>
+<summary>Shipped detail sections for v1.60-v1.63</summary>
+
 ## Recently Completed Milestone
 
 ### v1.60 Agent Lifecycle Isolation And Graceful Degradation
@@ -420,107 +423,311 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 2. Breaking response changes route through version negotiation instead of unannounced field changes.
 3. Existing operator and CLI clients keep one bounded compatibility path while newer schema versions roll out.
 
-## Queued Milestones
+</details>
 
-### v1.64 Cross-Crate Path Hack Elimination
+## Active Milestone
 
-**Goal:** Remove #[path] hacks that compile evolution source under the wrong crate root, restoring correct pub(crate) semantics and IDE tooling.
-**Executable phases:** 224-227
+<details>
+<summary>Shipped: v1.68 Multi-Detector Evolution Genomes (Phases 240-243)</summary>
 
-- [ ] **Phase 224: Audit Path Hack Dependencies And Migration Plan** - Catalog all #[path] directives, map which types/functions they expose, and design the re-export strategy. (PATHFIX-01) (queued)
-- [ ] **Phase 225: Extract Runtime-Evolution Bridge Types** - Move shared types to proper crate boundaries with re-exports replacing path hacks. (PATHFIX-02) (queued)
-- [ ] **Phase 226: Remove Remaining Path Directives And Fix Imports** - Delete all #[path] lines, fix all broken imports across the workspace. (PATHFIX-03) (queued)
-- [ ] **Phase 227: Path Hack Removal Integration Proof** - Verify build, tests, clippy, and IDE tooling after full removal. (PATHFIX-04) (queued)
+- [x] **Phase 240: Behavioral Anomaly Genome And Mutation Operators** - Added typed behavioral-anomaly genomes and bounded autonomous recipes without regressing the existing suspicious-process-tree flow. (GENOME-01) (completed 2026-04-13)
+- [x] **Phase 241: Fileless And DNS Detector Genomes** - Extended the typed-genome mutation lane to fileless execution and DNS exfiltration detectors with bounded perturbation and crossover support. (GENOME-02) (completed 2026-04-13)
+- [x] **Phase 242: Multi-Detector Evolution Benchmark** - Generalized the bounded measured benchmark harness across process-tree, behavioral anomaly, fileless execution, and DNS exfiltration detector families. (GENOME-03) (completed 2026-04-13)
+- [x] **Phase 243: Cross-Detector Fitness Improvement Proof** - Proved measured autonomous improvement above baseline for the fileless-execution detector through the shared benchmark surface. (GENOME-04) (completed 2026-04-13)
 
-### v1.65 Config Crate Extraction And service.rs Decomposition
+</details>
 
-**Goal:** Decompose the two remaining monolith files into focused modules.
-**Executable phases:** 228-231
+<details>
+<summary>Shipped: v1.69 Command-Line Deobfuscation Pipeline (Phases 244-247)</summary>
 
-- [ ] **Phase 228: Config Module Decomposition** - Split config.rs into focused sub-modules with no file exceeding 2000 lines. (CFGEXT-01) (queued)
-- [ ] **Phase 229: Config Compilation Boundary Verification** - Verify config changes only rebuild dependent crates. (CFGEXT-02) (queued)
-- [ ] **Phase 230: Service Module Decomposition** - Split service.rs into lifecycle, orchestration, and request handling. (SVCMOD-01) (queued)
-- [ ] **Phase 231: RuntimeService Arc Reduction** - Refactor RuntimeService to reduce Arc cloning on the request path. (SVCMOD-02) (queued)
+- [x] **Phase 244: Caret And Environment Variable Normalization** - Added one shared `swarm-whisker` command-line normalization seam for caret stripping and bounded env-var expansion with raw-to-normalized evidence lineage. (completed 2026-04-13)
+- [x] **Phase 245: Unicode Homoglyph And Encoding Normalization** - Extended the shared seam with bounded homoglyph folding and encoded-command / `FromBase64String(...)` decode support across the command-line detector family. (completed 2026-04-13)
+- [x] **Phase 246: Evasion Catch-Rate Improvement Measurement** - Added a repo-owned command-line deobfuscation corpus and baseline-vs-normalized benchmark helpers proving 15%+ gain on the targeted execution and defense-evasion lanes. (completed 2026-04-13)
+- [x] **Phase 247: Normalization False-Positive Regression Test** - Added benign normalization controls and a repo-owned regression proof showing zero false-positive increase across the command-line detector family. (completed 2026-04-13)
 
-### v1.66 Learned-State Integrity Signing
+</details>
 
-**Goal:** Sign behavioral baselines, Sphinx graph, and evolution population with Ed25519 keys and verify on restore.
-**Executable phases:** 232-235
+<details>
+<summary>Shipped: v1.67 Secret Zeroization And API Token Lifecycle (Phases 236-239)</summary>
 
-- [ ] **Phase 232: Behavioral Baseline Signing And Verification** - Sign baseline snapshots before persistence, verify on restore with fail-closed semantics. (STATESIG-01) (queued)
-- [ ] **Phase 233: Sphinx Graph State Signing** - Sign knowledge-graph state files with verification on restore. (STATESIG-02) (queued)
-- [ ] **Phase 234: Evolution Population Signing** - Sign population and episode artifacts with verification on restore. (STATESIG-03) (queued)
-- [ ] **Phase 235: Monotonic Sequence And Replay Prevention** - Add monotonic sequence numbers to all signed state artifacts. (STATESIG-04) (queued)
+- [x] **Phase 236: Secret Zeroization With zeroize Crate** - Zeroized resolved secrets from heap-backed config and auth state through a shared `SecretString` wrapper plus scrubbed resolver buffers. (completed 2026-04-13)
+- [x] **Phase 237: Release Build Hardening** - Made release hardening explicit with `panic = "abort"`, `overflow-checks = true`, and a repo-owned proof script for the shipped binaries. (completed 2026-04-13)
+- [x] **Phase 238: Rotatable Token Lifecycle** - Added expiry metadata and per-request bearer-token reload so operator and platform auth can rotate without restart. (completed 2026-04-13)
+- [x] **Phase 239: HTTP Rate Limiting** - Added shared per-source burst and sustained rate limiting with `429` responses, `Retry-After`, and recent-violation status context. (completed 2026-04-13)
 
-### v1.67 Secret Zeroization And API Token Lifecycle
+</details>
 
-**Goal:** Wipe secrets from memory, harden release builds, and add token expiry and rate limiting.
-**Executable phases:** 236-239
+<details>
+<summary>Shipped: v1.66 Learned-State Integrity Signing (Phases 232-235)</summary>
 
-- [ ] **Phase 236: Secret Zeroization With zeroize Crate** - Zeroize resolved secrets from heap after use. (ZERO-01) (queued)
-- [ ] **Phase 237: Release Build Hardening** - Set panic=abort in release profile, verify overflow checks. (ZERO-02) (queued)
-- [ ] **Phase 238: Rotatable Token Lifecycle** - Support configurable token expiry and rotation without restart. (TOKEN-01) (queued)
-- [ ] **Phase 239: HTTP Rate Limiting** - Per-source rate limiting with configurable burst and sustained thresholds. (TOKEN-02) (queued)
+- [x] **Phase 232: Behavioral Baseline Signing And Verification** - Signed behavioral baseline snapshots before persistence and verified them on restore with fail-closed semantics. (completed 2026-04-13)
+- [x] **Phase 233: Sphinx Graph State Signing** - Signed knowledge-graph state files with verification on restore. (completed 2026-04-13)
+- [x] **Phase 234: Evolution Population Signing** - Signed population and episode artifacts with verification on restore. (completed 2026-04-13)
+- [x] **Phase 235: Monotonic Sequence And Replay Prevention** - Added monotonic sequence numbers and replay rejection to all signed learned-state artifacts. (completed 2026-04-13)
 
-### v1.68 Multi-Detector Evolution Genomes
+</details>
 
-**Goal:** Extend evolution to BehavioralAnomaly, FilelessExecution, and DnsExfiltration detectors.
-**Executable phases:** 240-243
+<details>
+<summary>Shipped: v1.65 Config Crate Extraction And service.rs Decomposition (Phases 228-231)</summary>
 
-- [ ] **Phase 240: Behavioral Anomaly Genome And Mutation Operators** - Typed genome with perturbation and crossover for BehavioralAnomalyDetector. (GENOME-01, GENOME-02) (queued)
-- [ ] **Phase 241: Fileless And DNS Detector Genomes** - Typed genomes for FilelessExecution and DnsExfiltration detectors. (GENOME-01, GENOME-02) (queued)
-- [ ] **Phase 242: Multi-Detector Evolution Benchmark** - Benchmark measuring generation-over-generation fitness across all supported types. (GENOME-03) (queued)
-- [ ] **Phase 243: Cross-Detector Fitness Improvement Proof** - Demonstrate measurable autonomous improvement on at least one non-process-tree detector. (GENOME-04) (queued)
+- [x] **Phase 228: Config Module Decomposition** - Split `config.rs` into focused sub-modules with no file exceeding 2000 lines while preserving the `swarm_core::config` surface. (completed 2026-04-13)
+- [x] **Phase 229: Config Compilation Boundary Verification** - Proved a config-only touch rebuilds exactly the `swarm-core` dependent set instead of the whole workspace. (completed 2026-04-13)
+- [x] **Phase 230: Service Module Decomposition** - Split `service.rs` into lifecycle, orchestration, and request handling modules while preserving the shipped import surface. (completed 2026-04-13)
+- [x] **Phase 231: RuntimeService Arc Reduction** - Narrowed request-facing execution to a separately swapped shared runtime handle instead of cloning the full configured stack. (completed 2026-04-13)
 
-### v1.69 Command-Line Deobfuscation Pipeline
+</details>
 
-**Goal:** Pre-evaluation normalization to close string-match evasion blind spots.
-**Executable phases:** 244-247
+<details>
+<summary>Shipped: v1.64 Cross-Crate Path Hack Elimination (Phases 224-227)</summary>
 
-- [ ] **Phase 244: Caret And Environment Variable Normalization** - Handle caret insertion and env var expansion before detector evaluation. (DEOBF-01) (queued)
-- [ ] **Phase 245: Unicode Homoglyph And Encoding Normalization** - Handle Unicode homoglyphs and base64/encoded argument decoding. (DEOBF-02) (queued)
-- [ ] **Phase 246: Evasion Catch-Rate Improvement Measurement** - Measure 15%+ catch-rate improvement on defense_evasion and execution scenarios. (DEOBF-03) (queued)
-- [ ] **Phase 247: Normalization False-Positive Regression Test** - Verify zero FP regression on benign baseline corpus. (DEOBF-04) (queued)
+- [x] **Phase 224: Audit Path Hack Dependencies And Migration Plan** - Cataloged the ten runtime path hacks and defined the bounded migration order. (completed 2026-04-13)
+- [x] **Phase 225: Extract Runtime-Evolution Bridge Types** - Moved the formerly path-hacked source tree under `swarm-runtime` and kept `swarm-evolution` as a compatibility facade. (completed 2026-04-13)
+- [x] **Phase 226: Remove Remaining Path Directives And Fix Imports** - Removed the remaining `#[path]` directives and normalized runtime/evolution imports to ordinary crate/module paths. (completed 2026-04-13)
+- [x] **Phase 227: Path Hack Removal Integration Proof** - Proved build, library-test, and production-target clippy health after the full path-hack removal. (completed 2026-04-13)
 
-### v1.70 Telemetry Source Breadth
+</details>
 
-**Goal:** Ship Windows Event Log, Sysmon, and auditd bridge adapters.
-**Executable phases:** 248-251
-
-- [ ] **Phase 248: Windows Event Log Bridge** - TelemetryBridge implementation for Windows Event Log sources. (TELBR-01) (queued)
-- [ ] **Phase 249: Sysmon Bridge** - TelemetryBridge for Sysmon with process, network, and file mapping. (TELBR-02) (queued)
-- [ ] **Phase 250: Auditd Bridge** - TelemetryBridge for Linux auditd with syscall and auth mapping. (TELBR-03) (queued)
-- [ ] **Phase 251: Bridge Health And Metrics Integration** - Consistent health, event-count, and lag metrics for all new bridges. (TELBR-04) (queued)
+<details>
+<summary>Shipped: v1.71 CI Hardening And Versioned Releases (Phases 252-255)</summary>
 
 ### v1.71 CI Hardening And Versioned Releases
 
 **Goal:** Parallel CI, JetStream tests in CI, benchmark regression gate, versioned container images.
 **Executable phases:** 252-255
 
-- [ ] **Phase 252: CI Job Parallelization** - Split CI into parallel fmt/clippy/build/test jobs with artifact sharing. (CIHARD-01) (queued)
-- [ ] **Phase 253: JetStream Integration Tests In CI** - Containerized NATS running JetStream tests in CI. (CIHARD-02) (queued)
-- [ ] **Phase 254: Benchmark Regression Gate** - Criterion hot-path benchmark in CI with p99 regression threshold. (CIHARD-03) (queued)
-- [ ] **Phase 255: Release Pipeline And Container Publishing** - Multi-arch images, SBOM, signature attestation, CHANGELOG generation. (RELEASE-01, RELEASE-02) (queued)
+- [x] **Phase 252: CI Job Parallelization** - Split CI into parallel fmt/clippy/build/test jobs with shared cargo cache reuse and a stable serialized workspace test proof. (completed 2026-04-13)
+- [x] **Phase 253: JetStream Integration Tests In CI** - Added containerized NATS JetStream proof to CI through the repo-owned harness with actionable failure output. (completed 2026-04-13)
+- [x] **Phase 254: Benchmark Regression Gate** - Added the hot-path Criterion p99 gate, refreshed the tracked baseline, and documented repo-owned baseline refresh workflow. (completed 2026-04-13)
+- [x] **Phase 255: Release Pipeline And Container Publishing** - Added tagged multi-arch releases with changelog generation, SBOM, signing, provenance attestation, and GitHub release publication. (completed 2026-04-13)
 
-### v1.72 OpenAPI Spec And SOAR Bidirectional Sync
+### Phase 252: CI Job Parallelization
 
-**Goal:** Machine-readable API spec, Python client, and inbound SOAR analyst verdicts.
-**Executable phases:** 256-259
+**Goal:** Split the repo CI pipeline into bounded parallel jobs with artifact reuse instead of one monolithic serial run.
+**Requirements:** CIHARD-01
+**Depends on:** v1.70 milestone complete
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. CI runs separate fmt, clippy, build, and test jobs with explicit dependency edges instead of one serialized mega-job.
+2. Shared artifacts or caches avoid redundant rebuild work across the new job graph.
+3. The repo retains one clear green/red CI signal while the job breakdown becomes operator-readable.
 
-- [ ] **Phase 256: OpenAPI 3.1 Spec Generation** - Publish machine-readable spec for /v2/api/ platform surface. (APISPEC-01) (queued)
-- [ ] **Phase 257: Generated Python Client** - Ship and test a Python client generated from the OpenAPI spec. (APISPEC-02) (queued)
-- [ ] **Phase 258: Inbound SOAR Verdict Sync** - Accept analyst verdicts from Splunk/Sentinel/Chronicle SOAR into FP tracking and fitness. (SOARSYNC-01) (queued)
-- [ ] **Phase 259: SOAR Audit Lineage** - Durable audit linking external analyst identity, source system, and affected findings. (SOARSYNC-02) (queued)
+### Phase 253: JetStream Integration Tests In CI
+
+**Goal:** Run the JetStream-backed integration surface in CI against a containerized NATS instance.
+**Requirements:** CIHARD-02
+**Depends on:** Phase 252
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. CI provisions a containerized NATS instance with JetStream enabled for the relevant integration jobs.
+2. The repo-owned JetStream integration tests now execute in CI instead of remaining local-only proof.
+3. Failure output stays actionable enough to distinguish harness, service, and test regressions quickly.
+
+### Phase 254: Benchmark Regression Gate
+
+**Goal:** Add a CI regression gate for the Criterion hot-path benchmark.
+**Requirements:** CIHARD-03
+**Depends on:** Phase 253
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. CI runs the repo-owned hot-path benchmark in a dedicated regression job.
+2. The job fails when p99 latency regresses beyond the configured threshold relative to the tracked baseline.
+3. The repo documents how to refresh or review the benchmark baseline when intentional performance tradeoffs land.
+
+### Phase 255: Release Pipeline And Container Publishing
+
+**Goal:** Automate versioned releases with publishable multi-arch images, attestation, and changelog generation.
+**Requirements:** RELEASE-01, RELEASE-02
+**Depends on:** Phase 254
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. Tagged releases build and publish versioned multi-arch container images with SBOM and signature attestation.
+2. Release automation produces a human-readable CHANGELOG from conventional commit history.
+3. The release path is repo-owned and repeatable instead of relying on manual out-of-band steps.
+
+</details>
+
+<details>
+<summary>Shipped: v1.72 OpenAPI Spec And SOAR Bidirectional Sync (Phases 256-259)</summary>
+
+- [x] **Phase 256: OpenAPI 3.1 Spec Generation** - The repo now emits and validates one checked-in OpenAPI 3.1 contract for the authenticated `/v2/api/` platform surface. (completed 2026-04-13)
+- [x] **Phase 257: Generated Python Client** - The repo now generates a Python client from the checked-in OpenAPI contract and proves it against a live runtime router. (completed 2026-04-13)
+- [x] **Phase 258: Inbound SOAR Verdict Sync** - The detect router now accepts bounded Splunk SOAR, Sentinel SOAR, and Chronicle SOAR verdicts on one signed ingress surface and routes them into the existing feedback lane. (completed 2026-04-13)
+- [x] **Phase 259: SOAR Audit Lineage** - Incident audit entries and normalized false-positive measurements now persist durable SOAR source-system lineage and fail closed on duplicate or incomplete verdicts. (completed 2026-04-13)
+
+### Phase 256: OpenAPI 3.1 Spec Generation
+
+**Goal:** Publish a machine-readable OpenAPI 3.1 description for the shipped `/v2/api/` platform surface from one repo-owned source of truth.
+**Requirements:** APISPEC-01
+**Depends on:** v1.71 milestone complete
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. The repo can generate or derive one OpenAPI 3.1 spec for the authenticated `/v2/api/` platform surface without maintaining a second divergent contract by hand.
+2. The published spec covers the shipped request and response shapes, auth expectations, and error envelopes for the supported `/v2/api/` routes.
+3. The spec is checked in or emitted to a stable repo-owned path and validated as a real OpenAPI 3.1 document.
+
+### Phase 257: Generated Python Client
+
+**Goal:** Ship a generated Python client from the checked-in OpenAPI spec and prove it against the live platform API contract.
+**Requirements:** APISPEC-02
+**Depends on:** Phase 256
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. The repo generates a Python client from the same OpenAPI spec published in Phase 256 instead of introducing a handwritten parallel client surface.
+2. The generated client exposes the shipped `/v2/api/` auth and endpoint contracts in a usable package form.
+3. Repo-owned tests prove the generated client can talk to the live or test platform API surface without contract drift.
+
+### Phase 258: Inbound SOAR Verdict Sync
+
+**Goal:** Accept inbound analyst verdicts from supported SOAR systems and route them into Swarm's existing false-positive and evolution feedback paths.
+**Requirements:** SOARSYNC-01
+**Depends on:** Phase 257
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. Swarm accepts a bounded inbound verdict contract for Splunk SOAR, Sentinel SOAR, and Chronicle SOAR sources on one authenticated runtime-owned surface.
+2. Accepted verdicts update the existing false-positive tracking and evolution-fitness inputs instead of creating a disconnected side channel.
+3. Source system, verdict type, and referenced finding or incident identifiers are normalized well enough for later audit and replay use.
+
+### Phase 259: SOAR Audit Lineage
+
+**Goal:** Preserve durable audit lineage for each inbound SOAR verdict from the external analyst identity to the affected Swarm evidence.
+**Requirements:** SOARSYNC-02
+**Depends on:** Phase 258
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. Every synced verdict persists the external analyst identity, source system, verdict timestamp, and affected Swarm finding or incident identifiers.
+2. The stored lineage is attached to the same durable evidence or review surfaces that already carry operator and evolution audit context.
+3. Invalid, duplicate, or incomplete verdict sync inputs fail closed with explicit audit-visible rejection instead of silently mutating fitness or false-positive state.
+
+</details>
 
 ### v1.73 Stigmergic Feedback Loops And Baseline Resistance
 
 **Goal:** Implement real pheromone recruitment and quantify baseline poisoning resistance.
 **Executable phases:** 260-263
 
-- [ ] **Phase 260: Positive-Feedback Pheromone Recruitment** - High-concentration deposits lower detection thresholds for matching threat classes. (STIGM-01) (queued)
-- [ ] **Phase 261: Inhibitory Escalation Resolution Signaling** - Escalation resolution restores baseline thresholds. (STIGM-02) (queued)
-- [ ] **Phase 262: Recruitment Kill-Chain Benchmark** - Measure 20%+ improvement in time-to-alert on kill-chain scenarios. (STIGM-03) (queued)
-- [ ] **Phase 263: Baseline Poisoning Resistance And Staleness Policy** - Quantify sigma-shift bounds, sign snapshots, implement staleness-based confidence reduction. (BASERES-01, BASERES-02, BASERES-03) (queued)
+- [x] **Phase 260: Positive-Feedback Pheromone Recruitment** - High-concentration signed command-and-control deposits now lower the bounded network beacon threshold for the matching detector lane only. (STIGM-01, BASERES-01) (completed 2026-04-13)
+- [x] **Phase 261: Inhibitory Escalation Resolution Signaling** - Cooldown-driven de-escalation now persists one durable inhibitory `Normal` record that restores the recruited threshold back toward baseline across restart. (STIGM-02) (completed 2026-04-13)
+- [x] **Phase 262: Recruitment Kill-Chain Benchmark** - The repo now ships replay proof for 33.3% faster alerting plus checked-in sigma-shift poisoning bounds at `3σ=2`, `2σ=4`, and `1σ=13`. (STIGM-03, BASERES-02) (completed 2026-04-13)
+- [x] **Phase 263: Baseline Poisoning Resistance And Staleness Policy** - Aged signed behavioral baselines now trigger graduated confidence reduction with restart-proof evidence on the live runtime path. (BASERES-03) (completed 2026-04-13)
+
+### Phase 260: Positive-Feedback Pheromone Recruitment
+
+**Goal:** Lower matching detector thresholds when trusted pheromone concentration proves a threat class is already recruiting corroboration.
+**Requirements:** STIGM-01, BASERES-01
+**Depends on:** v1.72 milestone complete
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. Matching high-concentration pheromone state can lower the relevant detector threshold for one threat class without globally broadening the runtime.
+2. The recruitment effect is derived from trusted signed state instead of unsourced mutable counters.
+3. The recruited threshold state is observable enough to explain why a faster alert fired.
+
+### Phase 261: Inhibitory Escalation Resolution Signaling
+
+**Goal:** Restore recruited thresholds back toward baseline once escalation resolves so the runtime does not stay permanently over-sensitized.
+**Requirements:** STIGM-02
+**Depends on:** Phase 260
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. Escalation resolution emits one inhibitory signal that reduces or clears prior recruitment pressure for the affected threat class.
+2. Detector thresholds return toward baseline on the same bounded runtime-owned path that lowered them.
+3. The reset path is durable enough to survive restart without leaving a stale recruited state behind.
+
+### Phase 262: Recruitment Kill-Chain Benchmark
+
+**Goal:** Measure whether recruitment materially improves time-to-alert and quantify how resistant the learned baseline is to sigma-scale poisoning pressure.
+**Requirements:** STIGM-03, BASERES-02
+**Depends on:** Phase 261
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. The repo ships a benchmark or replay proof showing at least 20% faster alerting on the targeted kill-chain scenarios with recruitment enabled.
+2. The same proof surface quantifies the observation count needed to shift the baseline by 1, 2, and 3 sigma.
+3. The measured results are checked into the repo as repeatable evidence instead of remaining ad hoc local proof.
+
+### Phase 263: Baseline Poisoning Resistance And Staleness Policy
+
+**Goal:** Reduce trust in aged learned state instead of silently treating stale baselines as fresh truth.
+**Requirements:** BASERES-03
+**Depends on:** Phase 262
+**Status:** Complete
+**Plans:** 1/1 planned
+**Success Criteria**:
+1. Baseline snapshots older than a configurable staleness threshold trigger graduated confidence reduction.
+2. The stale-state policy composes cleanly with the signed baseline persistence path from the earlier learned-state integrity work.
+3. Repo-owned tests prove the stale-baseline confidence reduction path instead of relying on documentation-only expectations.
+
+### v1.74 Structural Integrity
+
+**Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing the worst oversized source files, and extracting agent implementations into a dedicated crate.
+**Executable phases:** 264-267
+
+- [ ] **Phase 264: Test Fixes And Dead Code Removal** - The 2 failing pheromone journal recovery tests pass, the 7 ignored tests are resolved, and the swarm-evolution facade crate is deleted from the workspace. (TESTFIX-01, TESTFIX-02, DEADCODE-01)
+- [ ] **Phase 265: kitten_agent.rs Decomposition** - kitten_agent.rs (4,479 lines) is replaced by a focused module tree with each submodule under 1,500 lines, preserving the existing public API. (DECOMP-01)
+- [ ] **Phase 266: drafting.rs And ingest/tests.rs Decomposition** - drafting.rs (3,763 lines) and ingest/tests.rs (5,751 lines) are each decomposed into focused submodule trees with unsafe env-var mutations replaced by config injection. (DECOMP-02, DECOMP-03)
+- [ ] **Phase 267: Agent Crate Extraction** - All eight agent implementations are moved into a dedicated swarm-agents crate; the workspace builds cleanly, all tests pass, and clippy is warning-free. (EXTRACT-01, EXTRACT-02, EXTRACT-03)
+
+### Phase 264: Test Fixes And Dead Code Removal
+
+**Goal:** Restore test-suite integrity and remove the swarm-evolution dead-code facade before structural work begins.
+**Requirements:** TESTFIX-01, TESTFIX-02, DEADCODE-01
+**Depends on:** v1.73 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `cargo test -p swarm-pheromone` passes with correct deposit and escalation counts after journal reopen for both previously-failing recovery tests.
+2. Every previously-ignored test in swarm-pheromone is either enabled with passing assertions or carries an explicit inline `#[ignore = "reason"]` skip comment.
+3. `cargo build --workspace` and `cargo test --workspace` complete without any reference to the swarm-evolution crate.
+4. No downstream crate imports swarm-evolution; all such imports have been redirected to swarm-runtime directly.
+
+### Phase 265: kitten_agent.rs Decomposition
+
+**Goal:** Replace the 4,479-line kitten_agent.rs monolith with a focused module tree that is navigable and maintainable without changing the public API.
+**Requirements:** DECOMP-01
+**Depends on:** Phase 264
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `swarm-runtime/src/kitten_agent.rs` no longer exists as a single flat file; it is replaced by `kitten_agent/mod.rs` plus focused submodules.
+2. No extracted submodule exceeds 1,500 lines.
+3. The existing `swarm-runtime` public API is preserved: all previously-public types and functions remain accessible at the same paths.
+4. `cargo test --workspace` continues to pass with no behavior change.
+
+### Phase 266: drafting.rs And ingest/tests.rs Decomposition
+
+**Goal:** Decompose the two remaining oversized files and eliminate unsafe global environment mutation from the test surface.
+**Requirements:** DECOMP-02, DECOMP-03
+**Depends on:** Phase 265
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `swarm-runtime/src/drafting.rs` is replaced by a focused module tree with each submodule under 1,500 lines and documented module responsibilities.
+2. `swarm-runtime/src/ingest/tests.rs` is decomposed into focused test submodules grouped by tested subsystem.
+3. The 7 `unsafe` blocks that mutate environment variables in ingest/tests.rs are replaced by config injection or test-scoped configuration patterns.
+4. `cargo test --workspace` passes with no test regressions after both decompositions.
+
+### Phase 267: Agent Crate Extraction
+
+**Goal:** Move all agent implementations out of swarm-runtime and into a dedicated swarm-agents crate so each can be reasoned about and tested in isolation.
+**Requirements:** EXTRACT-01, EXTRACT-02, EXTRACT-03
+**Depends on:** Phase 266
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. A new `swarm-agents` crate exists in the workspace containing all eight agent implementations: kitten_agent, sphinx_agent, tom_agent, calico_agent, pounce_agent, stalker_agent, weaver_agent, whisker_agent.
+2. `cargo build -p swarm-agents` succeeds independently without pulling in the full swarm-runtime surface.
+3. `swarm-agents` carries its own focused unit test suite and `swarm-runtime` integration tests continue to exercise the full agent pipeline through the swarm-agents dependency.
+4. `cargo build --workspace`, `cargo test --workspace`, and `cargo clippy --workspace -- -D warnings` all complete cleanly after extraction.
+
 
 ## Progress
 
@@ -595,6 +802,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **v1.72 execution order:** 256 -> 257 -> 258 -> 259
 
 **v1.73 execution order:** 260 -> 261 -> 262 -> 263
+
+**v1.74 execution order:** 264 -> 265 -> 266 -> 267
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -710,48 +919,51 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 221. Mutation Module Extraction | v1.63 | 1/1 | Complete | 2026-04-12 |
 | 222. Pheromone Wire Format Versioning | v1.63 | 1/1 | Complete | 2026-04-12 |
 | 223. API Response Schema Migration | v1.63 | 1/1 | Complete | 2026-04-12 |
-| 224. Audit Path Hack Dependencies And Migration Plan | v1.64 | 0/1 | Pending | - |
-| 225. Extract Runtime-Evolution Bridge Types | v1.64 | 0/1 | Pending | - |
-| 226. Remove Remaining Path Directives And Fix Imports | v1.64 | 0/1 | Pending | - |
-| 227. Path Hack Removal Integration Proof | v1.64 | 0/1 | Pending | - |
-| 228. Config Module Decomposition | v1.65 | 0/1 | Pending | - |
-| 229. Config Compilation Boundary Verification | v1.65 | 0/1 | Pending | - |
-| 230. Service Module Decomposition | v1.65 | 0/1 | Pending | - |
-| 231. RuntimeService Arc Reduction | v1.65 | 0/1 | Pending | - |
-| 232. Behavioral Baseline Signing And Verification | v1.66 | 0/1 | Pending | - |
-| 233. Sphinx Graph State Signing | v1.66 | 0/1 | Pending | - |
-| 234. Evolution Population Signing | v1.66 | 0/1 | Pending | - |
-| 235. Monotonic Sequence And Replay Prevention | v1.66 | 0/1 | Pending | - |
-| 236. Secret Zeroization With zeroize Crate | v1.67 | 0/1 | Pending | - |
-| 237. Release Build Hardening | v1.67 | 0/1 | Pending | - |
-| 238. Rotatable Token Lifecycle | v1.67 | 0/1 | Pending | - |
-| 239. HTTP Rate Limiting | v1.67 | 0/1 | Pending | - |
-| 240. Behavioral Anomaly Genome And Mutation Operators | v1.68 | 0/1 | Pending | - |
-| 241. Fileless And DNS Detector Genomes | v1.68 | 0/1 | Pending | - |
-| 242. Multi-Detector Evolution Benchmark | v1.68 | 0/1 | Pending | - |
-| 243. Cross-Detector Fitness Improvement Proof | v1.68 | 0/1 | Pending | - |
-| 244. Caret And Environment Variable Normalization | v1.69 | 0/1 | Pending | - |
-| 245. Unicode Homoglyph And Encoding Normalization | v1.69 | 0/1 | Pending | - |
-| 246. Evasion Catch-Rate Improvement Measurement | v1.69 | 0/1 | Pending | - |
-| 247. Normalization False-Positive Regression Test | v1.69 | 0/1 | Pending | - |
-| 248. Windows Event Log Bridge | v1.70 | 0/1 | Pending | - |
-| 249. Sysmon Bridge | v1.70 | 0/1 | Pending | - |
-| 250. Auditd Bridge | v1.70 | 0/1 | Pending | - |
-| 251. Bridge Health And Metrics Integration | v1.70 | 0/1 | Pending | - |
-| 252. CI Job Parallelization | v1.71 | 0/1 | Pending | - |
-| 253. JetStream Integration Tests In CI | v1.71 | 0/1 | Pending | - |
-| 254. Benchmark Regression Gate | v1.71 | 0/1 | Pending | - |
-| 255. Release Pipeline And Container Publishing | v1.71 | 0/1 | Pending | - |
-| 256. OpenAPI 3.1 Spec Generation | v1.72 | 0/1 | Pending | - |
-| 257. Generated Python Client | v1.72 | 0/1 | Pending | - |
-| 258. Inbound SOAR Verdict Sync | v1.72 | 0/1 | Pending | - |
-| 259. SOAR Audit Lineage | v1.72 | 0/1 | Pending | - |
-| 260. Positive-Feedback Pheromone Recruitment | v1.73 | 0/1 | Pending | - |
-| 261. Inhibitory Escalation Resolution Signaling | v1.73 | 0/1 | Pending | - |
-| 262. Recruitment Kill-Chain Benchmark | v1.73 | 0/1 | Pending | - |
-| 263. Baseline Poisoning Resistance And Staleness Policy | v1.73 | 0/1 | Pending | - |
+| 224. Audit Path Hack Dependencies And Migration Plan | v1.64 | 1/1 | Complete | 2026-04-13 |
+| 225. Extract Runtime-Evolution Bridge Types | v1.64 | 1/1 | Complete | 2026-04-13 |
+| 226. Remove Remaining Path Directives And Fix Imports | v1.64 | 1/1 | Complete | 2026-04-13 |
+| 227. Path Hack Removal Integration Proof | v1.64 | 1/1 | Complete | 2026-04-13 |
+| 228. Config Module Decomposition | v1.65 | 1/1 | Complete | 2026-04-13 |
+| 229. Config Compilation Boundary Verification | v1.65 | 1/1 | Complete | 2026-04-13 |
+| 230. Service Module Decomposition | v1.65 | 1/1 | Complete | 2026-04-13 |
+| 231. RuntimeService Arc Reduction | v1.65 | 1/1 | Complete | 2026-04-13 |
+| 232. Behavioral Baseline Signing And Verification | v1.66 | 1/1 | Complete | 2026-04-13 |
+| 233. Sphinx Graph State Signing | v1.66 | 1/1 | Complete | 2026-04-13 |
+| 234. Evolution Population Signing | v1.66 | 1/1 | Complete | 2026-04-13 |
+| 235. Monotonic Sequence And Replay Prevention | v1.66 | 1/1 | Complete | 2026-04-13 |
+| 236. Secret Zeroization With zeroize Crate | v1.67 | 1/1 | Complete | 2026-04-13 |
+| 237. Release Build Hardening | v1.67 | 1/1 | Complete | 2026-04-13 |
+| 238. Rotatable Token Lifecycle | v1.67 | 1/1 | Complete | 2026-04-13 |
+| 239. HTTP Rate Limiting | v1.67 | 1/1 | Complete | 2026-04-13 |
+| 240. Behavioral Anomaly Genome And Mutation Operators | v1.68 | 1/1 | Complete | 2026-04-13 |
+| 241. Fileless And DNS Detector Genomes | v1.68 | 1/1 | Complete | 2026-04-13 |
+| 242. Multi-Detector Evolution Benchmark | v1.68 | 1/1 | Complete | 2026-04-13 |
+| 243. Cross-Detector Fitness Improvement Proof | v1.68 | 1/1 | Complete | 2026-04-13 |
+| 244. Caret And Environment Variable Normalization | v1.69 | 1/1 | Complete | 2026-04-13 |
+| 245. Unicode Homoglyph And Encoding Normalization | v1.69 | 1/1 | Complete | 2026-04-13 |
+| 246. Evasion Catch-Rate Improvement Measurement | v1.69 | 1/1 | Complete | 2026-04-13 |
+| 247. Normalization False-Positive Regression Test | v1.69 | 1/1 | Complete | 2026-04-13 |
+| 248. Windows Event Log Bridge | v1.70 | 1/1 | Complete | 2026-04-13 |
+| 249. Sysmon Bridge | v1.70 | 1/1 | Complete | 2026-04-13 |
+| 250. Auditd Bridge | v1.70 | 1/1 | Complete | 2026-04-13 |
+| 251. Bridge Health And Metrics Integration | v1.70 | 1/1 | Complete | 2026-04-13 |
+| 252. CI Job Parallelization | v1.71 | 1/1 | Complete | 2026-04-13 |
+| 253. JetStream Integration Tests In CI | v1.71 | 1/1 | Complete | 2026-04-13 |
+| 254. Benchmark Regression Gate | v1.71 | 1/1 | Complete | 2026-04-13 |
+| 255. Release Pipeline And Container Publishing | v1.71 | 1/1 | Complete | 2026-04-13 |
+| 256. OpenAPI 3.1 Spec Generation | v1.72 | 1/1 | Complete | 2026-04-13 |
+| 257. Generated Python Client | v1.72 | 1/1 | Complete | 2026-04-13 |
+| 258. Inbound SOAR Verdict Sync | v1.72 | 1/1 | Complete | 2026-04-13 |
+| 259. SOAR Audit Lineage | v1.72 | 1/1 | Complete | 2026-04-13 |
+| 260. Positive-Feedback Pheromone Recruitment | v1.73 | 1/1 | Complete | 2026-04-13 |
+| 261. Inhibitory Escalation Resolution Signaling | v1.73 | 1/1 | Complete | 2026-04-13 |
+| 262. Recruitment Kill-Chain Benchmark | v1.73 | 1/1 | Complete | 2026-04-13 |
+| 263. Baseline Poisoning Resistance And Staleness Policy | v1.73 | 1/1 | Complete | 2026-04-13 |
+| 264. Test Fixes And Dead Code Removal | v1.74 | 0/TBD | Not started | - |
+| 265. kitten_agent.rs Decomposition | v1.74 | 0/TBD | Not started | - |
+| 266. drafting.rs And ingest/tests.rs Decomposition | v1.74 | 0/TBD | Not started | - |
+| 267. Agent Crate Extraction | v1.74 | 0/TBD | Not started | - |
 
 ---
-*No active milestone. Last shipped milestone: v1.63 Evolution Crate Decomposition And Schema Migration on 2026-04-12*
-*Next step: Execute `$gsd-autonomous` to work through v1.64 through v1.73*
-*Last updated: 2026-04-11 — Added milestones v1.64 through v1.73 (phases 224-263)*
+*Active milestone: v1.74 Structural Integrity*
+*Next step: Run `/gsd:plan-phase 264` to plan the first phase.*
