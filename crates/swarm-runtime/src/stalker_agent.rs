@@ -8,9 +8,13 @@ use swarm_core::agent::{
 use swarm_core::config::PheromoneConfig;
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
-use swarm_pheromone::{ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate};
-use swarm_spine::{ConfiguredReplayBundleStore, ReplayBundleStore};
+use swarm_pheromone::{
+    ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate, SubstrateError,
+};
+use swarm_spine::{ConfiguredReplayBundleStore, ReplayBundleStore, ReplayStoreError};
 
+use crate::AgentTickBoundaryError;
+use crate::investigation::InvestigationError;
 use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use swarm_spine::ConfiguredInvestigationBundleStore;
 
@@ -27,6 +31,32 @@ pub struct StalkerAgent {
     published_hunts: HashSet<String>,
     role: AgentRole,
     health: AgentHealth,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StalkerAgentTickError {
+    #[error(transparent)]
+    ReplayStore(#[from] ReplayStoreError),
+
+    #[error(transparent)]
+    Investigation(#[from] InvestigationError),
+
+    #[error(transparent)]
+    Serialization(#[from] serde_json::Error),
+
+    #[error(transparent)]
+    Substrate(#[from] SubstrateError),
+}
+
+impl StalkerAgentTickError {
+    pub fn boundary(&self) -> &'static str {
+        match self {
+            Self::ReplayStore(_) => "replay_store",
+            Self::Investigation(_) => "investigation",
+            Self::Serialization(_) => "serialization",
+            Self::Substrate(_) => "substrate",
+        }
+    }
 }
 
 impl StalkerAgent {
@@ -112,13 +142,13 @@ impl SwarmAgent for StalkerAgent {
                 let replay = self
                     .replay_store
                     .load_by_hunt_id(&hunt_id)
-                    .map_err(internal_error)?;
+                    .map_err(agent_tick_error)?;
                 let Some(replay) = replay else {
                     continue;
                 };
                 self.investigation
                     .submit(&replay.bundle)
-                    .map_err(internal_error)?;
+                    .map_err(agent_tick_error)?;
                 self.queued_hunts.insert(hunt_id.clone());
                 actions.push(SwarmAction::ClaimInvestigation {
                     hunt_id: HuntId(hunt_id.clone()),
@@ -133,7 +163,7 @@ impl SwarmAgent for StalkerAgent {
             let investigation = self
                 .investigation
                 .load_by_hunt_id(&hunt_id)
-                .map_err(internal_error)?;
+                .map_err(agent_tick_error)?;
             let Some(investigation) = investigation else {
                 continue;
             };
@@ -163,12 +193,13 @@ impl SwarmAgent for StalkerAgent {
                 .substrate
                 .query_threat_class_config(&investigation.bundle.threat_class)
                 .await
-                .map_err(internal_error)?;
+                .map_err(agent_tick_error)?;
             let policy = self
                 .pheromone_config
                 .resolve_threat_class_policy(threat_class_config.as_ref());
             let derived_identity = AgentId::from_verifying_key(&self.verifying_key);
             let mut deposit = PheromoneDeposit {
+                schema_version: PheromoneDeposit::current_schema_version(),
                 indicator: indicator.clone(),
                 threat_class: investigation.bundle.threat_class.clone(),
                 severity: investigation.bundle.severity,
@@ -182,6 +213,7 @@ impl SwarmAgent for StalkerAgent {
                 agent_key: Vec::new(),
             };
             let signing_payload = DepositSigningPayload {
+                schema_version: deposit.schema_version,
                 indicator: &deposit.indicator,
                 threat_class: &deposit.threat_class,
                 severity: &deposit.severity,
@@ -192,14 +224,14 @@ impl SwarmAgent for StalkerAgent {
                 agent_identity: &deposit.agent_identity,
                 agent_role: deposit.agent_role,
             };
-            let payload_bytes = serde_json::to_vec(&signing_payload).map_err(internal_error)?;
+            let payload_bytes = serde_json::to_vec(&signing_payload).map_err(agent_tick_error)?;
             let sig = self.signing_key.sign(&payload_bytes);
             deposit.signature = sig.to_bytes().to_vec();
             deposit.agent_key = self.signing_key.verifying_key().to_bytes().to_vec();
             self.substrate
                 .deposit(deposit)
                 .await
-                .map_err(internal_error)?;
+                .map_err(agent_tick_error)?;
             self.published_hunts.insert(hunt_id.clone());
 
             actions.push(SwarmAction::PublishFindings {
@@ -266,17 +298,21 @@ fn threat_class_name(threat_class: &swarm_core::pheromone::ThreatClass) -> Strin
     }
 }
 
-fn internal_error(error: impl std::error::Error) -> SwarmError {
-    SwarmError::Internal(std::io::Error::other(error.to_string()).into())
+fn agent_tick_error(error: impl Into<StalkerAgentTickError>) -> SwarmError {
+    SwarmError::Internal(AgentTickBoundaryError::from(error.into()).into())
 }
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::StalkerAgent;
+    use super::{StalkerAgent, StalkerAgentTickError};
+    use crate::AgentTickBoundaryError;
     use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
+    use std::fs;
+    use std::path::PathBuf;
     use std::time::Duration;
-    use swarm_core::agent::{AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use swarm_core::agent::{AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmMode};
     use swarm_core::config::{
         BundleStoreConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
     };
@@ -309,6 +345,19 @@ mod tests {
 
     fn substrate(config: &PheromoneConfig) -> ConfiguredPheromoneSubstrate {
         ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new(config.clone()))
+    }
+
+    fn temp_root(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "swarm-runtime-stalker-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 
     fn replay_store() -> ConfiguredReplayBundleStore {
@@ -412,6 +461,7 @@ mod tests {
     fn env(hunt_id: &str) -> SwarmEnvironment {
         SwarmEnvironment {
             pheromones: vec![PheromoneDeposit {
+                schema_version: PheromoneDeposit::current_schema_version(),
                 indicator: serde_json::json!({"event_id": hunt_id}),
                 threat_class: ThreatClass::Execution,
                 severity: Severity::High,
@@ -509,5 +559,41 @@ mod tests {
                         && deposit.agent_identity.starts_with("swarm:ed25519:")
                 })
         );
+    }
+
+    #[tokio::test]
+    async fn stalker_agent_surfaces_replay_store_failures_with_typed_boundary() {
+        let config = pheromone_config();
+        let root = temp_root("replay-store-failure");
+        let replay_store =
+            ConfiguredReplayBundleStore::from_config(&BundleStoreConfig::LocalFiles {
+                directory: root.display().to_string(),
+            })
+            .unwrap();
+        replay_store.persist(&replay_bundle("hunt-1")).unwrap();
+        fs::remove_dir_all(root.join("bundles")).unwrap();
+        let mut agent = StalkerAgent::new(
+            AgentId::new("stalker", "primary"),
+            replay_store,
+            investigation(),
+            substrate(&config),
+            config,
+        );
+
+        let error = agent.tick(&env("hunt-1")).await.unwrap_err();
+        let boundary = match &error {
+            SwarmError::Internal(error) => error
+                .downcast_ref::<AgentTickBoundaryError>()
+                .expect("stalker agent should preserve typed boundary error"),
+            other => panic!("expected internal boundary error, got {other:?}"),
+        };
+
+        assert!(matches!(
+            boundary,
+            AgentTickBoundaryError::Stalker(StalkerAgentTickError::ReplayStore(_))
+        ));
+        assert_eq!(boundary.boundary(), "replay_store");
+
+        let _ = fs::remove_dir_all(root);
     }
 }

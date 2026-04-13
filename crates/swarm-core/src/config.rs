@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 
+use crate::agent::SwarmMode;
 use crate::pheromone::ThreatClass;
 use crate::types::{ResponseAction, Severity};
 
@@ -83,6 +84,55 @@ pub enum RuntimeMode {
     LiveResponse,
 }
 
+/// Runtime-wide degradation ladder layered on top of the configured runtime mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDegradationLevel {
+    Full,
+    DetectOnly,
+    ReadOnly,
+    EmergencyDrain,
+}
+
+impl RuntimeDegradationLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::DetectOnly => "detect_only",
+            Self::ReadOnly => "read_only",
+            Self::EmergencyDrain => "emergency_drain",
+        }
+    }
+
+    pub fn accepts_ingest(self) -> bool {
+        matches!(self, Self::Full | Self::DetectOnly)
+    }
+
+    pub fn allows_detection(self) -> bool {
+        matches!(self, Self::Full | Self::DetectOnly)
+    }
+
+    pub fn allows_live_response(self, configured_mode: RuntimeMode) -> bool {
+        configured_mode == RuntimeMode::LiveResponse && matches!(self, Self::Full)
+    }
+
+    pub fn allows_artifact_writes(self) -> bool {
+        matches!(self, Self::Full | Self::DetectOnly)
+    }
+
+    pub fn drains_ingest(self) -> bool {
+        matches!(self, Self::EmergencyDrain)
+    }
+
+    pub fn operator_read_surfaces_ready(self) -> bool {
+        true
+    }
+
+    pub fn ready(self) -> bool {
+        matches!(self, Self::Full | Self::DetectOnly)
+    }
+}
+
 /// Runtime settings for the hot path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +158,12 @@ pub struct RuntimeSettings {
     /// Optional directory holding mounted secret files used by `@secret:` references.
     #[serde(default)]
     pub secret_dir: Option<String>,
+    /// Runtime self-protection settings for debugger and library tamper checks.
+    #[serde(default)]
+    pub anti_tamper: RuntimeAntiTamperConfig,
+    /// Bounded recent-event retention used by later sequence detectors.
+    #[serde(default)]
+    pub temporal_event_window: TemporalEventWindowConfig,
     /// Maximum time in milliseconds for a single agent tick before the dispatcher
     /// marks the agent Degraded and skips that cycle.
     #[serde(default = "default_agent_tick_timeout_ms")]
@@ -129,6 +185,42 @@ pub struct RuntimeSettings {
     /// suffix and a fresh file is started. When `None` (default), no rotation.
     #[serde(default)]
     pub max_dead_letter_bytes: Option<u64>,
+}
+
+/// Bounded runtime-owned recent-event retention for temporal sequence matching.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemporalEventWindowConfig {
+    /// Maximum age in milliseconds for retained telemetry.
+    #[serde(default = "default_temporal_event_window_retention_ms")]
+    pub retention_ms: i64,
+    /// Maximum number of retained telemetry events across the shared window.
+    #[serde(default = "default_temporal_event_window_max_events")]
+    pub max_events: usize,
+    /// Maximum span in milliseconds that one ordered predicate query may scan.
+    #[serde(default = "default_temporal_event_window_max_match_span_ms")]
+    pub max_match_span_ms: i64,
+    /// Maximum number of ordered predicates one query may request.
+    #[serde(default = "default_temporal_event_window_max_predicates_per_match")]
+    pub max_predicates_per_match: usize,
+}
+
+/// Runtime self-protection settings for Linux anti-tamper monitoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeAntiTamperConfig {
+    /// Whether runtime anti-tamper monitoring is active.
+    #[serde(default = "default_runtime_anti_tamper_enabled")]
+    pub enabled: bool,
+    /// Interval in milliseconds between anti-tamper checks.
+    #[serde(default = "default_runtime_anti_tamper_check_interval_ms")]
+    pub check_interval_ms: u64,
+    /// Whether a live-response runtime should fail closed when tamper is detected.
+    #[serde(default)]
+    pub fail_closed_live_response: bool,
+    /// Library path prefixes allowed to load after the initial runtime baseline.
+    #[serde(default = "default_runtime_anti_tamper_allowed_library_prefixes")]
+    pub allowed_library_prefixes: Vec<String>,
 }
 
 /// One configured telemetry source.
@@ -394,6 +486,7 @@ impl DetectionConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct DetectorProfilesConfig {
     pub suspicious_process_tree: Option<serde_json::Value>,
+    pub kill_chain_sequence: Option<serde_json::Value>,
     pub fileless_execution: Option<serde_json::Value>,
     pub behavioral_anomaly: Option<serde_json::Value>,
     pub dns_exfiltration: Option<serde_json::Value>,
@@ -451,8 +544,188 @@ pub struct ResponsePlaybookRule {
     pub min_confidence: f64,
     /// Inclusive upper confidence bound for the rule.
     pub max_confidence: f64,
-    /// Ordered response actions emitted when the rule matches.
+    /// Ordered fallback response actions emitted when the rule matches and no
+    /// branch-specific selector overrides them.
+    #[serde(default)]
     pub actions: Vec<ResponseAction>,
+    /// Ordered branch-specific action sequences evaluated after the base rule
+    /// matches. The first matching branch wins.
+    #[serde(default)]
+    pub branches: Vec<ResponsePlaybookBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponsePlaybookBranchResolution {
+    pub index: usize,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponsePlaybookRuleResolution {
+    pub rule_index: usize,
+    pub threat_class: ThreatClass,
+    pub severity: Severity,
+    pub min_confidence: f64,
+    pub max_confidence: f64,
+    pub actions: Vec<ResponseAction>,
+    pub branch: Option<ResponsePlaybookBranchResolution>,
+}
+
+/// One ordered conditional branch under a matched response playbook rule.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResponsePlaybookBranch {
+    /// Optional stable branch label for evidence and operator review.
+    pub name: Option<String>,
+    /// Additional bounded selectors evaluated against the live runtime context.
+    pub when: ResponsePlaybookCondition,
+    /// Ordered actions emitted when this branch matches.
+    pub actions: Vec<ResponseAction>,
+}
+
+
+/// Additional bounded selectors for one playbook branch.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResponsePlaybookCondition {
+    /// Optional threat-class override or refinement for this branch.
+    pub threat_class: Option<ThreatClass>,
+    /// Inclusive lower severity bound.
+    pub min_severity: Option<Severity>,
+    /// Inclusive upper severity bound.
+    pub max_severity: Option<Severity>,
+    /// Inclusive lower confidence bound.
+    pub min_confidence: Option<f64>,
+    /// Inclusive upper confidence bound.
+    pub max_confidence: Option<f64>,
+    /// Optional runtime modes where this branch is allowed to emit actions.
+    #[serde(default)]
+    pub modes: Vec<SwarmMode>,
+}
+
+impl ResponsePlaybookCondition {
+    pub fn matches(
+        &self,
+        threat_class: ThreatClass,
+        severity: Severity,
+        confidence: f64,
+        mode: SwarmMode,
+    ) -> bool {
+        if let Some(expected) = self.threat_class.as_ref()
+            && expected != &threat_class
+        {
+            return false;
+        }
+        if let Some(min_severity) = self.min_severity
+            && severity < min_severity
+        {
+            return false;
+        }
+        if let Some(max_severity) = self.max_severity
+            && severity > max_severity
+        {
+            return false;
+        }
+        if let Some(min_confidence) = self.min_confidence
+            && confidence < min_confidence
+        {
+            return false;
+        }
+        if let Some(max_confidence) = self.max_confidence
+            && confidence > max_confidence
+        {
+            return false;
+        }
+        if !self.modes.is_empty() && !self.modes.contains(&mode) {
+            return false;
+        }
+
+        true
+    }
+}
+
+impl ResponsePlaybookRule {
+    pub fn matches(&self, threat_class: &ThreatClass, severity: Severity, confidence: f64) -> bool {
+        self.threat_class == *threat_class
+            && self.severity == severity
+            && confidence >= self.min_confidence
+            && confidence <= self.max_confidence
+    }
+
+    pub fn resolve(
+        &self,
+        threat_class: &ThreatClass,
+        severity: Severity,
+        confidence: f64,
+        mode: SwarmMode,
+    ) -> Option<ResponsePlaybookRuleResolution> {
+        if !self.matches(threat_class, severity, confidence) {
+            return None;
+        }
+
+        self.resolve_with_index(0, threat_class, severity, confidence, mode)
+    }
+
+    pub fn resolve_with_index(
+        &self,
+        rule_index: usize,
+        threat_class: &ThreatClass,
+        severity: Severity,
+        confidence: f64,
+        mode: SwarmMode,
+    ) -> Option<ResponsePlaybookRuleResolution> {
+        if !self.matches(threat_class, severity, confidence) {
+            return None;
+        }
+
+        for (index, branch) in self.branches.iter().enumerate() {
+            if branch
+                .when
+                .matches(threat_class.clone(), severity, confidence, mode)
+            {
+                return Some(ResponsePlaybookRuleResolution {
+                    rule_index,
+                    threat_class: self.threat_class.clone(),
+                    severity: self.severity,
+                    min_confidence: self.min_confidence,
+                    max_confidence: self.max_confidence,
+                    actions: branch.actions.clone(),
+                    branch: Some(ResponsePlaybookBranchResolution {
+                        index,
+                        name: branch.name.clone(),
+                    }),
+                });
+            }
+        }
+
+        if self.actions.is_empty() {
+            return None;
+        }
+
+        Some(ResponsePlaybookRuleResolution {
+            rule_index,
+            threat_class: self.threat_class.clone(),
+            severity: self.severity,
+            min_confidence: self.min_confidence,
+            max_confidence: self.max_confidence,
+            actions: self.actions.clone(),
+            branch: None,
+        })
+    }
+}
+
+impl ResponsePlaybookConfig {
+    pub fn resolve(
+        &self,
+        threat_class: &ThreatClass,
+        severity: Severity,
+        confidence: f64,
+        mode: SwarmMode,
+    ) -> Option<ResponsePlaybookRuleResolution> {
+        self.rules.iter().enumerate().find_map(|(index, rule)| {
+            rule.resolve_with_index(index, threat_class, severity, confidence, mode)
+        })
+    }
 }
 
 /// Pheromone substrate backend selection.
@@ -546,6 +819,16 @@ pub enum PolicyActionSelector {
     BlockEgress,
     IsolateHost,
     RevokeCredential,
+    SinkholeDns,
+    TerminateUserSession,
+    TriggerEdrScan,
+    InjectFirewallRule,
+    QuarantineFile,
+    KillProcess,
+    SuspendProcess,
+    DisableUserAccount,
+    ForcePasswordReset,
+    RemoveScheduledTask,
     DeployDecoy,
     Escalate,
 }
@@ -559,6 +842,31 @@ impl PolicyActionSelector {
                 | (
                     Self::RevokeCredential,
                     ResponseAction::RevokeCredential { .. }
+                )
+                | (Self::SinkholeDns, ResponseAction::SinkholeDns { .. })
+                | (
+                    Self::TerminateUserSession,
+                    ResponseAction::TerminateUserSession { .. }
+                )
+                | (Self::TriggerEdrScan, ResponseAction::TriggerEdrScan { .. })
+                | (
+                    Self::InjectFirewallRule,
+                    ResponseAction::InjectFirewallRule { .. }
+                )
+                | (Self::QuarantineFile, ResponseAction::QuarantineFile { .. })
+                | (Self::KillProcess, ResponseAction::KillProcess { .. })
+                | (Self::SuspendProcess, ResponseAction::SuspendProcess { .. })
+                | (
+                    Self::DisableUserAccount,
+                    ResponseAction::DisableUserAccount { .. }
+                )
+                | (
+                    Self::ForcePasswordReset,
+                    ResponseAction::ForcePasswordReset { .. }
+                )
+                | (
+                    Self::RemoveScheduledTask,
+                    ResponseAction::RemoveScheduledTask { .. }
                 )
                 | (Self::DeployDecoy, ResponseAction::DeployDecoy { .. })
                 | (Self::Escalate, ResponseAction::Escalate { .. })
@@ -2349,12 +2657,69 @@ impl SwarmConfig {
                 reason: "must be greater than 0.0 and less than or equal to 1.0".to_string(),
             });
         }
+        if self.runtime.temporal_event_window.retention_ms <= 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.temporal_event_window.retention_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.runtime.temporal_event_window.max_events == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.temporal_event_window.max_events",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.runtime.temporal_event_window.max_match_span_ms <= 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.temporal_event_window.max_match_span_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.runtime.temporal_event_window.max_match_span_ms
+            > self.runtime.temporal_event_window.retention_ms
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.temporal_event_window.max_match_span_ms",
+                reason: "must be less than or equal to retention_ms".to_string(),
+            });
+        }
+        if self.runtime.temporal_event_window.max_predicates_per_match == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.temporal_event_window.max_predicates_per_match",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
         if let Some(secret_dir) = &self.runtime.secret_dir
             && secret_dir.trim().is_empty()
         {
             return Err(ConfigValidationError::InvalidField {
                 field: "runtime.secret_dir",
                 reason: "must not be empty when provided".to_string(),
+            });
+        }
+        if self.runtime.anti_tamper.enabled && self.runtime.anti_tamper.check_interval_ms == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.anti_tamper.check_interval_ms",
+                reason: "must be greater than zero when anti-tamper monitoring is enabled"
+                    .to_string(),
+            });
+        }
+        if !self.runtime.anti_tamper.enabled && self.runtime.anti_tamper.fail_closed_live_response {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.anti_tamper.fail_closed_live_response",
+                reason: "requires runtime.anti_tamper.enabled".to_string(),
+            });
+        }
+        if self
+            .runtime
+            .anti_tamper
+            .allowed_library_prefixes
+            .iter()
+            .any(|prefix| prefix.trim().is_empty())
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.anti_tamper.allowed_library_prefixes",
+                reason: "entries must not be empty".to_string(),
             });
         }
 
@@ -2972,12 +3337,107 @@ impl ResponsePlaybookRule {
                 ),
             });
         }
+        if self.actions.is_empty() && self.branches.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!(
+                    "rule {index} must declare fallback actions or at least one conditional branch"
+                ),
+            });
+        }
+        let mut branch_names = BTreeSet::new();
+        for (branch_index, branch) in self.branches.iter().enumerate() {
+            branch.validate(index, branch_index)?;
+            if let Some(name) = &branch.name {
+                let normalized = name.trim().to_string();
+                if !branch_names.insert(normalized.clone()) {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "pheromone.response_playbook",
+                        reason: format!(
+                            "rule {index} declares duplicate branch name `{normalized}`"
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ResponsePlaybookBranch {
+    fn validate(
+        &self,
+        rule_index: usize,
+        branch_index: usize,
+    ) -> Result<(), ConfigValidationError> {
+        if let Some(name) = &self.name
+            && name.trim().is_empty()
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!("rule {rule_index} branch {branch_index} name must not be empty"),
+            });
+        }
         if self.actions.is_empty() {
             return Err(ConfigValidationError::InvalidField {
                 field: "pheromone.response_playbook",
-                reason: format!("rule {index} must declare at least one response action"),
+                reason: format!(
+                    "rule {rule_index} branch {branch_index} must declare at least one response action"
+                ),
             });
         }
+        self.when.validate(rule_index, branch_index)
+    }
+}
+
+impl ResponsePlaybookCondition {
+    fn validate(
+        &self,
+        rule_index: usize,
+        branch_index: usize,
+    ) -> Result<(), ConfigValidationError> {
+        if let Some(min_confidence) = self.min_confidence
+            && !(0.0..=1.0).contains(&min_confidence)
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!(
+                    "rule {rule_index} branch {branch_index} min_confidence must be between 0.0 and 1.0"
+                ),
+            });
+        }
+        if let Some(max_confidence) = self.max_confidence
+            && !(0.0..=1.0).contains(&max_confidence)
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!(
+                    "rule {rule_index} branch {branch_index} max_confidence must be between 0.0 and 1.0"
+                ),
+            });
+        }
+        if let (Some(min_confidence), Some(max_confidence)) =
+            (self.min_confidence, self.max_confidence)
+            && max_confidence < min_confidence
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!(
+                    "rule {rule_index} branch {branch_index} max_confidence must be greater than or equal to min_confidence"
+                ),
+            });
+        }
+        if let (Some(min_severity), Some(max_severity)) = (self.min_severity, self.max_severity)
+            && max_severity < min_severity
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "pheromone.response_playbook",
+                reason: format!(
+                    "rule {rule_index} branch {branch_index} max_severity must be greater than or equal to min_severity"
+                ),
+            });
+        }
+
         Ok(())
     }
 }
@@ -3550,6 +4010,28 @@ impl Default for NotificationRoutingConfig {
     }
 }
 
+impl Default for RuntimeAntiTamperConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_runtime_anti_tamper_enabled(),
+            check_interval_ms: default_runtime_anti_tamper_check_interval_ms(),
+            fail_closed_live_response: false,
+            allowed_library_prefixes: default_runtime_anti_tamper_allowed_library_prefixes(),
+        }
+    }
+}
+
+impl Default for TemporalEventWindowConfig {
+    fn default() -> Self {
+        Self {
+            retention_ms: default_temporal_event_window_retention_ms(),
+            max_events: default_temporal_event_window_max_events(),
+            max_match_span_ms: default_temporal_event_window_max_match_span_ms(),
+            max_predicates_per_match: default_temporal_event_window_max_predicates_per_match(),
+        }
+    }
+}
+
 const fn default_recent_decisions_limit() -> usize {
     20
 }
@@ -3576,6 +4058,40 @@ const fn default_drain_timeout_ms() -> u64 {
 
 const fn default_max_heap_pressure() -> f64 {
     0.90
+}
+
+const fn default_temporal_event_window_retention_ms() -> i64 {
+    900_000
+}
+
+const fn default_temporal_event_window_max_events() -> usize {
+    512
+}
+
+const fn default_temporal_event_window_max_match_span_ms() -> i64 {
+    300_000
+}
+
+const fn default_temporal_event_window_max_predicates_per_match() -> usize {
+    8
+}
+
+const fn default_runtime_anti_tamper_enabled() -> bool {
+    true
+}
+
+const fn default_runtime_anti_tamper_check_interval_ms() -> u64 {
+    5_000
+}
+
+fn default_runtime_anti_tamper_allowed_library_prefixes() -> Vec<String> {
+    vec![
+        "/lib".to_string(),
+        "/lib64".to_string(),
+        "/usr/lib".to_string(),
+        "/usr/local/lib".to_string(),
+        "/nix/store".to_string(),
+    ]
 }
 
 const fn default_deception_monitoring_threat_class() -> ThreatClass {
@@ -4157,11 +4673,13 @@ mod tests {
         OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig,
         PlatformApiKeyConfig, PlatformApiScope, PolicyActionSelector, PolicyConfig,
         PolicyRuleConfig, PolicyRuleDecision, PolicyTimeWindowConfig, PromotionConfig,
-        RequestSignatureConfig, ResponsePlaybookConfig, ResponsePlaybookRule, RuntimeMode,
+        RequestSignatureConfig, ResponsePlaybookBranch, ResponsePlaybookCondition,
+        ResponsePlaybookConfig, ResponsePlaybookRule, RuntimeAntiTamperConfig, RuntimeMode,
         RuntimeSettings, SentinelBridgeConfig, SwarmConfig, TelemetryBridgeConfig,
-        TelemetrySourceConfig,
+        TelemetrySourceConfig, TemporalEventWindowConfig,
     };
     use crate::ThreatClass;
+    use crate::agent::SwarmMode;
     use crate::types::{ResponseAction, Severity};
 
     fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
@@ -4182,6 +4700,8 @@ mod tests {
                 require_durable_live_response: true,
                 max_heap_pressure: 0.90,
                 secret_dir: None,
+                anti_tamper: RuntimeAntiTamperConfig::default(),
+                temporal_event_window: TemporalEventWindowConfig::default(),
                 agent_tick_timeout_ms: 500,
                 governance_degraded_tick_threshold: 3,
                 partition_contingency_lease_ttl_ms: 300_000,
@@ -4267,6 +4787,73 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "invalid field `pheromone.backend.connect_timeout_ms`: must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn anti_tamper_requires_positive_check_interval_when_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.runtime.anti_tamper.check_interval_ms = 0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `runtime.anti_tamper.check_interval_ms`: must be greater than zero when anti-tamper monitoring is enabled"
+        );
+    }
+
+    #[test]
+    fn anti_tamper_fail_closed_requires_monitoring_enabled() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.runtime.anti_tamper.enabled = false;
+        config.runtime.anti_tamper.fail_closed_live_response = true;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `runtime.anti_tamper.fail_closed_live_response`: requires runtime.anti_tamper.enabled"
+        );
+    }
+
+    #[test]
+    fn anti_tamper_rejects_empty_allowed_library_prefixes() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.runtime.anti_tamper.allowed_library_prefixes = vec![" ".to_string()];
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `runtime.anti_tamper.allowed_library_prefixes`: entries must not be empty"
+        );
+    }
+
+    #[test]
+    fn temporal_event_window_requires_positive_retention() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.runtime.temporal_event_window.retention_ms = 0;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `runtime.temporal_event_window.retention_ms`: must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn temporal_event_window_match_span_cannot_exceed_retention() {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.runtime.temporal_event_window.retention_ms = 30_000;
+        config.runtime.temporal_event_window.max_match_span_ms = 60_000;
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `runtime.temporal_event_window.max_match_span_ms`: must be less than or equal to retention_ms"
         );
     }
 
@@ -5065,6 +5652,7 @@ mod tests {
                     summary: "review required".to_string(),
                     urgency: Severity::High,
                 }],
+                branches: Vec::new(),
             }],
         };
 
@@ -5072,6 +5660,36 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "invalid field `pheromone.response_playbook`: rule 0 max_confidence must be greater than or equal to min_confidence"
+        );
+    }
+
+    #[test]
+    fn response_playbook_branches_reject_empty_action_lists() {
+        let mut config = valid_config(PheromoneBackendConfig::LocalJournal {
+            path: "./journal.jsonl".to_string(),
+        });
+        config.pheromone.response_playbook = ResponsePlaybookConfig {
+            rules: vec![ResponsePlaybookRule {
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+                min_confidence: 0.8,
+                max_confidence: 1.0,
+                actions: Vec::new(),
+                branches: vec![ResponsePlaybookBranch {
+                    name: Some("incident-only".to_string()),
+                    when: ResponsePlaybookCondition {
+                        modes: vec![SwarmMode::Incident],
+                        ..ResponsePlaybookCondition::default()
+                    },
+                    actions: Vec::new(),
+                }],
+            }],
+        };
+
+        let error = config.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid field `pheromone.response_playbook`: rule 0 branch 0 must declare at least one response action"
         );
     }
 
@@ -5165,6 +5783,169 @@ mod tests {
         assert_eq!(config.policy.max_actions_per_scope_per_minute, 4);
         assert_eq!(config.policy.rules.len(), 1);
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn response_playbook_branches_deserialize_from_config_shape() {
+        let config: SwarmConfig = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "name": "test",
+            "description": "test config",
+            "runtime": {
+                "mode": "live_response",
+                "demo_mode": false,
+                "telemetry_sources": [
+                    {
+                        "name": "synthetic",
+                        "subject": "telemetry.synthetic.process"
+                    }
+                ],
+                "max_in_flight_actions": 4,
+                "drain_timeout_ms": 30000,
+                "require_durable_live_response": true,
+                "max_heap_pressure": 0.90,
+                "agent_tick_timeout_ms": 500,
+                "governance_degraded_tick_threshold": 3
+            },
+            "detection": {
+                "strategy": "suspicious_process_tree",
+                "high_confidence_threshold": 0.9,
+                "medium_confidence_threshold": 0.7
+            },
+            "pheromone": {
+                "default_half_life_secs": 3600.0,
+                "evaporation_threshold": 0.01,
+                "min_sources_for_escalation": 2,
+                "alert_threshold": 2.0,
+                "incident_threshold": 5.0,
+                "deescalation_cooldown_secs": 300,
+                "response_playbook": {
+                    "rules": [
+                        {
+                            "threat_class": "execution",
+                            "severity": "HIGH",
+                            "min_confidence": 0.9,
+                            "max_confidence": 1.0,
+                            "actions": [
+                                {
+                                    "type": "escalate",
+                                    "summary": "fallback review",
+                                    "urgency": "HIGH"
+                                }
+                            ],
+                            "branches": [
+                                {
+                                    "name": "incident_containment",
+                                    "when": {
+                                        "min_confidence": 0.97,
+                                        "modes": ["incident"]
+                                    },
+                                    "actions": [
+                                        {
+                                            "type": "block_egress",
+                                            "target": "203.0.113.10"
+                                        },
+                                        {
+                                            "type": "isolate_host",
+                                            "host_id": "host-1"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "backend": {
+                    "kind": "local_journal",
+                    "path": "./journal.jsonl"
+                }
+            },
+            "policy": {
+                "human_gate_severity": "HIGH",
+                "lease_ttl_ms": 60000
+            }
+        }))
+        .unwrap();
+
+        let rule = &config.pheromone.response_playbook.rules[0];
+        assert_eq!(rule.branches.len(), 1);
+        assert_eq!(
+            rule.branches[0].name.as_deref(),
+            Some("incident_containment")
+        );
+        assert_eq!(rule.branches[0].when.modes, vec![SwarmMode::Incident]);
+        assert_eq!(rule.branches[0].actions.len(), 2);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn response_playbook_resolve_prefers_first_matching_branch_and_fallback() {
+        let playbook = ResponsePlaybookConfig {
+            rules: vec![ResponsePlaybookRule {
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+                min_confidence: 0.9,
+                max_confidence: 1.0,
+                actions: vec![ResponseAction::Escalate {
+                    summary: "fallback review".to_string(),
+                    urgency: Severity::High,
+                }],
+                branches: vec![ResponsePlaybookBranch {
+                    name: Some("incident_containment".to_string()),
+                    when: ResponsePlaybookCondition {
+                        min_confidence: Some(0.97),
+                        modes: vec![SwarmMode::Incident],
+                        ..ResponsePlaybookCondition::default()
+                    },
+                    actions: vec![
+                        ResponseAction::BlockEgress {
+                            target: "203.0.113.10".to_string(),
+                        },
+                        ResponseAction::IsolateHost {
+                            host_id: "host-1".to_string(),
+                        },
+                    ],
+                }],
+            }],
+        };
+
+        let incident = playbook
+            .resolve(
+                &ThreatClass::Execution,
+                Severity::High,
+                0.98,
+                SwarmMode::Incident,
+            )
+            .unwrap();
+        assert_eq!(
+            incident.branch,
+            Some(super::ResponsePlaybookBranchResolution {
+                index: 0,
+                name: Some("incident_containment".to_string()),
+            })
+        );
+        assert_eq!(incident.actions.len(), 2);
+        assert!(matches!(
+            incident.actions[0],
+            ResponseAction::BlockEgress { .. }
+        ));
+
+        let fallback = playbook
+            .resolve(
+                &ThreatClass::Execution,
+                Severity::High,
+                0.93,
+                SwarmMode::Alert,
+            )
+            .unwrap();
+        assert_eq!(fallback.branch, None);
+        assert_eq!(
+            fallback.actions,
+            vec![ResponseAction::Escalate {
+                summary: "fallback review".to_string(),
+                urgency: Severity::High,
+            }]
+        );
     }
 
     #[test]

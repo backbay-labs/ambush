@@ -30,7 +30,10 @@ use swarm_core::types::{
 use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
 use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate};
 use swarm_response::notification::AggregatedNotification;
-use swarm_spine::{AnalystFeedbackAuditEntry, IncidentStore, ReplayBundleStore};
+use swarm_spine::{
+    AnalystFeedbackAuditEntry, FalsePositiveMeasurement, IncidentLookup, IncidentStore,
+    ReplayBundleStore,
+};
 
 use super::IngestState;
 use super::health::active_agent_counts;
@@ -136,6 +139,7 @@ pub(crate) async fn providence_feedback_handler(
         })?;
     let target = resolve_feedback_target(&lookup, request.finding_id.as_deref())
         .map_err(ProvidenceFeedbackError::not_found)?;
+    let target = enrich_feedback_target(&state, &lookup, &target)?;
     let received_at_ms = now_ms();
     let feedback_id = format!(
         "providence-feedback:{}:{}",
@@ -160,16 +164,18 @@ pub(crate) async fn providence_feedback_handler(
         payload: payload_value,
         outcome: applied.outcome.clone(),
     };
+    let mut incident = lookup.incident.clone();
+    incident.feedback_audit_entries.push(audit_entry);
+    incident.upsert_false_positive_measurement(false_positive_measurement(
+        &request,
+        &target,
+        &feedback_id,
+        received_at_ms,
+    ));
     state
         .current_incident_store()
-        .append_feedback_audit(&request.incident_id, audit_entry)
-        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
-        .ok_or_else(|| {
-            ProvidenceFeedbackError::not_found(format!(
-                "incident `{}` was not found",
-                request.incident_id
-            ))
-        })?;
+        .persist(&incident)
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
 
     Ok((
         StatusCode::OK,
@@ -446,6 +452,46 @@ async fn apply_providence_feedback(
     }
 }
 
+fn enrich_feedback_target(
+    state: &IngestState,
+    _lookup: &IncidentLookup,
+    target: &ProvidenceFeedbackTarget,
+) -> Result<ProvidenceFeedbackTarget, ProvidenceFeedbackError> {
+    let mut enriched = target.clone();
+    if let Some(replay) = state
+        .current_replay_store()
+        .load_by_hunt_id(&target.hunt_id)
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+    {
+        enriched.host_id = replay.bundle.event.host_id.clone().or(enriched.host_id);
+        enriched.strategy_id = Some(replay.bundle.audit.detection.strategy_id.clone());
+    }
+    Ok(enriched)
+}
+
+fn false_positive_measurement(
+    request: &SwarmProvidenceFeedbackRequest,
+    target: &ProvidenceFeedbackTarget,
+    feedback_id: &str,
+    reviewed_at_ms: i64,
+) -> FalsePositiveMeasurement {
+    FalsePositiveMeasurement {
+        finding_id: target.finding_id.clone(),
+        hunt_id: target.hunt_id.clone(),
+        strategy_id: target
+            .strategy_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
+        host_id: target.host_id.clone(),
+        feedback_id: feedback_id.to_string(),
+        reviewed_at_ms,
+        analyst_id: request.analyst_id.clone(),
+        action: request.action,
+        reason: request.reason.clone(),
+        false_positive: matches!(request.action, ProvidenceFeedbackAction::Dismiss),
+    }
+}
+
 async fn signed_providence_feedback_deposit(
     state: &IngestState,
     request: &SwarmProvidenceFeedbackRequest,
@@ -463,6 +509,7 @@ async fn signed_providence_feedback_deposit(
         .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
     let policy = pheromone_config.resolve_threat_class_policy(threat_class_config.as_ref());
     let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
         indicator: json!({
             "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
             "schema_version": SWARM_PROVIDENCE_FEEDBACK_SCHEMA_VERSION,
@@ -473,6 +520,7 @@ async fn signed_providence_feedback_deposit(
             "finding_id": target.finding_id,
             "event_id": target.event_id,
             "hunt_id": target.hunt_id,
+            "host_id": target.host_id,
             "strategy_id": target.strategy_id,
             "analyst_id": request.analyst_id,
             "reason": request.reason,
@@ -490,6 +538,7 @@ async fn signed_providence_feedback_deposit(
         agent_key: Vec::new(),
     };
     let payload = DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,

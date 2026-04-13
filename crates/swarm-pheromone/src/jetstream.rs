@@ -1,11 +1,13 @@
 use crate::substrate::{
     AdmissionControl, DepositQuery, PheromoneSubstrate, SubstrateError, SubstrateHealth,
-    concentration_for, filter_deposits, filter_escalations, normalize_threat_intel_value,
-    validate_deposit_signature,
+    concentration_for, decode_deposit_payload, filter_deposits, filter_escalations,
+    normalize_threat_intel_value, validate_deposit_signature,
 };
 use async_trait::async_trait;
 #[cfg(feature = "nats")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "nats")]
+use std::collections::BTreeMap;
 use std::fmt;
 #[cfg(feature = "nats")]
 use std::sync::{Arc, Mutex};
@@ -218,8 +220,7 @@ impl JetStreamPheromoneSubstrate {
             };
 
             let location = format!("jetstream://{}/{}", self.bucket, key);
-            let deposit = serde_json::from_slice::<PheromoneDeposit>(&payload)
-                .map_err(|source| SubstrateError::Decode { location, source })?;
+            let deposit = decode_deposit_payload(&payload, location)?;
 
             if let Some(threat_class) = threat_class
                 && &deposit.threat_class != threat_class
@@ -461,8 +462,7 @@ impl JetStreamPheromoneSubstrate {
             };
 
             let location = format!("jetstream://{}/{}", self.bucket, key);
-            let deposit = serde_json::from_slice::<PheromoneDeposit>(&payload)
-                .map_err(|source| SubstrateError::Decode { location, source })?;
+            let deposit = decode_deposit_payload(&payload, location)?;
             if deposit.is_evaporated(now, self.config.evaporation_threshold) {
                 connection
                     .store
@@ -613,6 +613,65 @@ impl JetStreamPheromoneSubstrate {
         } else {
             Some(end_page.saturating_add(1))
         };
+
+        Ok(removed)
+    }
+
+    #[cfg(feature = "nats")]
+    async fn gc_evaporated_with_policy_scan(&self, now: i64) -> Result<usize, SubstrateError> {
+        let threat_class_configs = self
+            .load_threat_class_configs()
+            .await?
+            .into_iter()
+            .map(|config| (config.threat_class.clone(), config))
+            .collect::<BTreeMap<_, _>>();
+        if threat_class_configs.is_empty() {
+            return Ok(0);
+        }
+
+        let connection = self.ensure_connected().await?;
+        let mut keys = connection
+            .store
+            .keys()
+            .await
+            .map_err(|error| nats_error("list keys", error))?;
+        let mut removed = 0usize;
+
+        while let Some(entry) = keys.next().await {
+            let key = entry.map_err(|error| nats_error("stream keys", error))?;
+            if is_escalation_key(&key)
+                || is_policy_key(&key)
+                || is_threat_intel_key(&key)
+                || is_behavioral_baseline_key(&key)
+            {
+                continue;
+            }
+
+            let Some(payload) = connection
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| nats_error("get value", error))?
+            else {
+                continue;
+            };
+
+            let location = format!("jetstream://{}/{}", self.bucket, key);
+            let deposit = decode_deposit_payload(&payload, location)?;
+            let policy = self
+                .config
+                .resolve_threat_class_policy(threat_class_configs.get(&deposit.threat_class));
+            if !deposit.is_evaporated(now, policy.evaporation_threshold) {
+                continue;
+            }
+
+            connection
+                .store
+                .delete(&key)
+                .await
+                .map_err(|error| nats_error("delete value", error))?;
+            removed = removed.saturating_add(1);
+        }
 
         Ok(removed)
     }
@@ -774,9 +833,15 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     }
 
     async fn gc_evaporated(&self, now: i64) -> Result<usize, SubstrateError> {
+        if self.load_threat_class_configs().await?.is_empty() {
+            let mut removed = 0usize;
+            removed = removed.saturating_add(self.gc_evaporated_legacy(now).await?);
+            removed = removed.saturating_add(self.gc_evaporated_by_page(now).await?);
+            return Ok(removed);
+        }
+
         let mut removed = 0usize;
-        removed = removed.saturating_add(self.gc_evaporated_legacy(now).await?);
-        removed = removed.saturating_add(self.gc_evaporated_by_page(now).await?);
+        removed = removed.saturating_add(self.gc_evaporated_with_policy_scan(now).await?);
         Ok(removed)
     }
 
@@ -1238,6 +1303,7 @@ mod tests {
 
     fn sample_deposit(agent_id: &str, timestamp: i64, confidence: f64) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({"signal": "jetstream-test"}),
             threat_class: ThreatClass::Execution,
             severity: Severity::High,

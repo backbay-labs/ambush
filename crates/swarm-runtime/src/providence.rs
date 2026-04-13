@@ -92,6 +92,7 @@ pub struct ProvidenceFeedbackTarget {
     pub finding_id: String,
     pub hunt_id: String,
     pub event_id: String,
+    pub host_id: Option<String>,
     pub strategy_id: Option<String>,
     pub threat_class: swarm_core::ThreatClass,
     pub severity: Severity,
@@ -822,6 +823,8 @@ pub fn resolve_feedback_target(
         finding_id: member.finding_id.clone(),
         hunt_id: member.hunt_id.clone(),
         event_id,
+        host_id: extract_host_id_from_keys(&member.shared_keys)
+            .or_else(|| extract_host_id_from_keys(&lookup.record.correlation_keys)),
         strategy_id: lookup.record.trigger_strategy_id.clone(),
         threat_class: lookup
             .record
@@ -830,6 +833,11 @@ pub fn resolve_feedback_target(
             .unwrap_or_else(|| swarm_core::ThreatClass::Custom("unknown".to_string())),
         severity: lookup.record.severity.unwrap_or(Severity::Medium),
     })
+}
+
+fn extract_host_id_from_keys(keys: &[String]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| key.strip_prefix("host:").map(ToString::to_string))
 }
 
 pub fn resolve_callback_incident(
@@ -1460,6 +1468,7 @@ pub mod tests {
             providence_reconciliation: None,
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
         }
     }
 

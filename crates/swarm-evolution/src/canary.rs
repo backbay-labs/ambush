@@ -1203,6 +1203,8 @@ mod tests {
                 require_durable_live_response: false,
                 max_heap_pressure: 0.90,
                 secret_dir: None,
+                anti_tamper: Default::default(),
+                temporal_event_window: swarm_core::config::TemporalEventWindowConfig::default(),
                 agent_tick_timeout_ms: 500,
                 governance_degraded_tick_threshold: 3,
                 partition_contingency_lease_ttl_ms: 300_000,

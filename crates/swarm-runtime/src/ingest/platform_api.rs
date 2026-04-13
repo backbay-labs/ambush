@@ -1,9 +1,16 @@
+use crate::alert_tuning::{AlertTuningReport, build_alert_tuning_report};
+use crate::anti_tamper::AntiTamperReport;
 use crate::bridge_runtime::bridge_health_report;
+use crate::control::{
+    CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
+    resolve_operator_api_schema_version,
+};
 use crate::escalation::standard_threat_classes;
 use crate::evasion_coverage::EvasionCoverageSnapshot;
 use crate::providence::verify_providence_context_token;
 use crate::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
 use crate::serve::TlsClientIdentity;
+use crate::service::RuntimeDegradationStatus;
 use axum::Router;
 use axum::extract::{Extension, Json, Path as AxumPath, Query, State};
 use axum::http::{StatusCode, header};
@@ -29,8 +36,8 @@ use swarm_core::types::{ProvidenceIncidentReconciliation, ResponseRehearsalPrevi
 use swarm_pheromone::{DepositQuery, PheromoneSubstrate};
 use swarm_response::SwarmFindingEnvelope;
 use swarm_spine::{
-    IncidentStore, InvestigationBundleStore, InvestigationStatus, ReplayBundleLookup,
-    ReplayBundleStore,
+    FalsePositiveMeasurementReport, IncidentStore, InvestigationBundleStore, InvestigationStatus,
+    ReplayBundleLookup, ReplayBundleStore, summarize_false_positive_measurements,
 };
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
@@ -174,9 +181,20 @@ impl PlatformApiPrincipal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct PlatformApiEnvelope<T> {
+    pub(super) schema_version: u32,
     pub(super) data: Vec<T>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) cursor: Option<String>,
+}
+
+impl<T> PlatformApiEnvelope<T> {
+    fn new(data: Vec<T>, cursor: Option<String>) -> Self {
+        Self {
+            schema_version: CURRENT_OPERATOR_API_SCHEMA_VERSION,
+            data,
+            cursor,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,10 +256,14 @@ pub(super) struct PlatformLifecycleStatus {
 pub(super) struct PlatformRuntimeStatus {
     pub(super) captured_at_ms: i64,
     pub(super) mode_state: SwarmModeState,
+    pub(super) degradation: RuntimeDegradationStatus,
     pub(super) agent_health: Vec<AgentHealthEntry>,
     pub(super) detector: PlatformDetectorStatus,
     pub(super) lifecycle: PlatformLifecycleStatus,
+    pub(super) anti_tamper: AntiTamperReport,
     pub(super) async_lane: AsyncLaneStatusSnapshot,
+    pub(super) false_positive_tracking: FalsePositiveMeasurementReport,
+    pub(super) alert_tuning: AlertTuningReport,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) bridge_health: Option<crate::bridge_runtime::BridgeStatusReport>,
 }
@@ -410,6 +432,30 @@ pub(super) fn platform_api_page_size(requested: Option<usize>) -> Result<usize, 
     }
 }
 
+fn parse_requested_schema_version_header(
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<u32>, PlatformApiError> {
+    headers
+        .get(OPERATOR_API_SCHEMA_VERSION_HEADER)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| {
+                    PlatformApiError::bad_request(format!(
+                        "{OPERATOR_API_SCHEMA_VERSION_HEADER} header must be valid UTF-8"
+                    ))
+                })?
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| {
+                    PlatformApiError::bad_request(format!(
+                        "{OPERATOR_API_SCHEMA_VERSION_HEADER} header must be an unsigned integer"
+                    ))
+                })
+        })
+        .transpose()
+}
+
 pub(super) fn request_query_param(request: &axum::extract::Request, key: &str) -> Option<String> {
     request.uri().query().and_then(|query| {
         query.split('&').find_map(|pair| {
@@ -474,10 +520,7 @@ pub(super) fn finalize_platform_page<T>(
         None
     };
     items.truncate(page_size);
-    PlatformApiEnvelope {
-        data: items,
-        cursor,
-    }
+    PlatformApiEnvelope::new(items, cursor)
 }
 
 fn latest_rehearsal_for_hunt(
@@ -685,6 +728,9 @@ pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
             PlatformApiAuthState::from_config(&config.platform_api, &config.operator),
             require_platform_api_bearer_auth,
         ))
+        .layer(middleware::from_fn(
+            require_supported_platform_api_schema_version,
+        ))
 }
 
 pub(super) fn legacy_evasion_api_router(state: &IngestState) -> Router<IngestState> {
@@ -701,9 +747,22 @@ pub(super) fn legacy_evasion_api_router(state: &IngestState) -> Router<IngestSta
             PlatformApiAuthState::from_config(&config.platform_api, &config.operator),
             require_platform_api_bearer_auth,
         ))
+        .layer(middleware::from_fn(
+            require_supported_platform_api_schema_version,
+        ))
 }
 
 // --- Auth middleware ---
+
+async fn require_supported_platform_api_schema_version(
+    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
+    next: Next,
+) -> Result<Response, PlatformApiError> {
+    let requested = parse_requested_schema_version_header(&headers)?;
+    resolve_operator_api_schema_version(requested).map_err(PlatformApiError::bad_request)?;
+    Ok(next.run(request).await)
+}
 
 async fn require_platform_api_key_auth(
     State(auth): State<PlatformApiAuthState>,
@@ -939,8 +998,8 @@ async fn platform_asset_posture_handler(
         host_id = %host_id,
         "served platform asset posture"
     );
-    Ok(Json(PlatformApiEnvelope {
-        data: vec![PlatformAssetPosture {
+    Ok(Json(PlatformApiEnvelope::new(
+        vec![PlatformAssetPosture {
             host_id,
             captured_at_ms: now_ms(),
             escalation_level,
@@ -948,8 +1007,8 @@ async fn platform_asset_posture_handler(
             active_investigations,
             recent_findings,
         }],
-        cursor: None,
-    }))
+        None,
+    )))
 }
 
 async fn platform_incidents_handler(
@@ -1066,13 +1125,26 @@ async fn platform_runtime_status_handler(
 ) -> Result<Json<PlatformApiEnvelope<PlatformRuntimeStatus>>, PlatformApiError> {
     let detector = state.detector_status();
     let bridge_health = state.bridge_health.as_ref().map(bridge_health_report);
+    let incident_summary_limit = state
+        .stack
+        .load_full()
+        .service
+        .config
+        .audit
+        .recent_decisions_limit;
+    let incidents = state
+        .current_incident_store()
+        .recent(incident_summary_limit)
+        .map_err(|error| PlatformApiError::internal(error.to_string()))?;
     let async_lane = state
         .current_async_lane_status()
         .await
         .map_err(|error| PlatformApiError::internal(error.to_string()))?;
+    let degradation = state.current_runtime_degradation().await;
     let status = PlatformRuntimeStatus {
         captured_at_ms: now_ms(),
         mode_state: state.current_mode_state(),
+        degradation,
         agent_health: state.current_agent_health(),
         detector: PlatformDetectorStatus {
             ready: detector.ready,
@@ -1083,7 +1155,10 @@ async fn platform_runtime_status_handler(
             draining: state.is_draining(),
             active_requests: state.active_requests(),
         },
+        anti_tamper: state.current_anti_tamper_report(),
         async_lane,
+        false_positive_tracking: summarize_false_positive_measurements(&incidents),
+        alert_tuning: build_alert_tuning_report(&incidents),
         bridge_health,
     };
 
@@ -1092,10 +1167,7 @@ async fn platform_runtime_status_handler(
         endpoint = "/v2/api/runtime/status",
         "served platform runtime status"
     );
-    Ok(Json(PlatformApiEnvelope {
-        data: vec![status],
-        cursor: None,
-    }))
+    Ok(Json(PlatformApiEnvelope::new(vec![status], None)))
 }
 
 pub(crate) async fn platform_evasion_coverage_handler(

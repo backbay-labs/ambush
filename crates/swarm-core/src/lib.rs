@@ -21,7 +21,8 @@ pub use agent::{
 };
 pub use pheromone::{
     BehavioralBaselineSnapshot, BehavioralFrequencyEntry, BehavioralHostBaseline,
-    BehavioralRoleToolFrequencyEntry, EscalationRecord, Pheromone, PheromoneDeposit, ThreatClass,
+    BehavioralOnlineDistributionSnapshot, BehavioralRoleToolFrequencyEntry,
+    BehavioralTelemetryFamilyBaseline, EscalationRecord, Pheromone, PheromoneDeposit, ThreatClass,
     ThreatClassConfig, ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
 pub use telemetry::{

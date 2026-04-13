@@ -676,7 +676,17 @@ fn response_action_value_basis_points(action: &ResponseAction) -> u16 {
     match action {
         ResponseAction::IsolateHost { .. } => 900,
         ResponseAction::RevokeCredential { .. } => 900,
+        ResponseAction::KillProcess { .. } => 900,
+        ResponseAction::DisableUserAccount { .. } => 900,
+        ResponseAction::ForcePasswordReset { .. } => 850,
+        ResponseAction::TerminateUserSession { .. } => 850,
+        ResponseAction::QuarantineFile { .. } => 850,
         ResponseAction::BlockEgress { .. } => 750,
+        ResponseAction::SinkholeDns { .. } => 750,
+        ResponseAction::InjectFirewallRule { .. } => 800,
+        ResponseAction::SuspendProcess { .. } => 700,
+        ResponseAction::RemoveScheduledTask { .. } => 700,
+        ResponseAction::TriggerEdrScan { .. } => 600,
         ResponseAction::Escalate { .. } => 650,
         ResponseAction::DeployDecoy { .. } => 500,
     }

@@ -965,11 +965,33 @@ fn is_destructive_action(action: &ResponseAction) -> bool {
         ResponseAction::BlockEgress { .. }
             | ResponseAction::IsolateHost { .. }
             | ResponseAction::RevokeCredential { .. }
+            | ResponseAction::SinkholeDns { .. }
+            | ResponseAction::TerminateUserSession { .. }
+            | ResponseAction::InjectFirewallRule { .. }
+            | ResponseAction::QuarantineFile { .. }
+            | ResponseAction::KillProcess { .. }
+            | ResponseAction::SuspendProcess { .. }
+            | ResponseAction::DisableUserAccount { .. }
+            | ResponseAction::ForcePasswordReset { .. }
+            | ResponseAction::RemoveScheduledTask { .. }
     )
 }
 
-fn destructive_action_kinds() -> [&'static str; 3] {
-    ["block_egress", "isolate_host", "revoke_credential"]
+fn destructive_action_kinds() -> [&'static str; 12] {
+    [
+        "block_egress",
+        "isolate_host",
+        "revoke_credential",
+        "sinkhole_dns",
+        "terminate_user_session",
+        "inject_firewall_rule",
+        "quarantine_file",
+        "kill_process",
+        "suspend_process",
+        "disable_user_account",
+        "force_password_reset",
+        "remove_scheduled_task",
+    ]
 }
 
 fn governance_quorum_threshold(total_governors: usize) -> usize {
@@ -1385,7 +1407,7 @@ mod tests {
         policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
         let healthy_status = policy.status_report();
         assert_eq!(healthy_status.partition_state, PartitionState::Healthy);
-        assert_eq!(healthy_status.active_contingency_leases, 3);
+        assert_eq!(healthy_status.active_contingency_leases, 12);
 
         let decision = policy.can_act(&ResponseAction::BlockEgress {
             target: "203.0.113.9".to_string(),

@@ -24,6 +24,9 @@ pub enum DetectorFactoryError {
 
 #[derive(Debug, Clone)]
 pub enum RuntimeDetector {
+    Noop {
+        strategy_id: String,
+    },
     SuspiciousProcessTree {
         strategy_id: String,
         detector: SuspiciousProcessTreeDetector,
@@ -84,6 +87,12 @@ impl RuntimeDetector {
                 }
             })?,
         })
+    }
+
+    fn noop(strategy_id: impl Into<String>) -> Self {
+        Self::Noop {
+            strategy_id: strategy_id.into(),
+        }
     }
 
     fn dns_exfiltration(
@@ -268,6 +277,7 @@ impl DetectionStrategy for RuntimeDetector {
 
     fn id(&self) -> &str {
         match self {
+            Self::Noop { strategy_id } => strategy_id.as_str(),
             Self::SuspiciousProcessTree { strategy_id, .. } => strategy_id.as_str(),
             Self::FilelessExecution { strategy_id, .. } => strategy_id.as_str(),
             Self::BehavioralAnomaly { strategy_id, .. } => strategy_id.as_str(),
@@ -284,6 +294,7 @@ impl DetectionStrategy for RuntimeDetector {
 
     fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
         match self {
+            Self::Noop { .. } => Vec::new(),
             Self::SuspiciousProcessTree {
                 strategy_id,
                 detector,
@@ -337,6 +348,7 @@ pub fn build_detector_from_strategy(
     config: &DetectionConfig,
 ) -> Result<RuntimeDetector, DetectorFactoryError> {
     match strategy_id {
+        "kill_chain_sequence" => Ok(RuntimeDetector::noop(strategy_id)),
         "suspicious_process_tree" => RuntimeDetector::suspicious_process_tree(
             strategy_id,
             suspicious_process_tree_profile(config)?,

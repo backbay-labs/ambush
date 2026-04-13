@@ -385,6 +385,7 @@ fn phase127_playbook() -> ResponsePlaybookConfig {
                     decoy_type: "honeypot".to_string(),
                     target_zone: "dmz".to_string(),
                 }],
+                branches: Vec::new(),
             },
             ResponsePlaybookRule {
                 threat_class: ThreatClass::CommandAndControl,
@@ -394,6 +395,7 @@ fn phase127_playbook() -> ResponsePlaybookConfig {
                 actions: vec![ResponseAction::BlockEgress {
                     target: "203.0.113.10".to_string(),
                 }],
+                branches: Vec::new(),
             },
         ],
     }
@@ -438,6 +440,7 @@ fn make_signed_deposit(
     let key = SigningKey::from_bytes(&[seed; 32]);
     let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
     let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
         indicator: serde_json::json!({
             "event_id": event_id,
             "hunt_id": event_id,
@@ -460,6 +463,7 @@ fn make_signed_deposit(
         agent_key: Vec::new(),
     };
     let payload = swarm_pheromone::DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,
@@ -921,6 +925,80 @@ async fn timeout_from_dispatched_webhook_records_failure() -> Result<(), Box<dyn
     };
     assert!(failure.message.contains("timed out"));
     assert_eq!(failure.details["status"], serde_json::json!("timeout"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn expanded_response_action_routes_through_runtime_executor() -> Result<(), Box<dyn Error>> {
+    let runtime = SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        StaticApprovalGate::default(),
+        DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox, None)?,
+    );
+    let request = sample_request(
+        ResponseAction::TriggerEdrScan {
+            host_id: "host-22".to_string(),
+            scan_profile: "memory_quick".to_string(),
+        },
+        Severity::Medium,
+    );
+    let report = runtime
+        .audit_authorize_and_execute_instrumented(&sample_detection(), &request, &sample_context())
+        .await?;
+
+    assert!(report.response_attempted);
+    assert!(report.response_succeeded);
+    let AuditResponseRecord::Success(receipt) = &report.audit.response else {
+        panic!("expected success receipt, got {:?}", report.audit.response);
+    };
+    assert_eq!(receipt.action, "trigger_edr_scan");
+    assert_eq!(receipt.status, ResponseStatus::Executed);
+    assert_eq!(receipt.details["scope"], serde_json::json!("host-22"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_webhook_action_fails_closed_in_runtime_audit() -> Result<(), Box<dyn Error>> {
+    let runtime = SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        StaticApprovalGate::default(),
+        DispatchingExecutor::from_config(
+            ResponseAdapterConfig::Webhook {
+                config: WebhookConfig {
+                    url: "http://127.0.0.1:1/".to_string(),
+                    timeout_ms: 50,
+                    channel: None,
+                    auth_token: None,
+                    retry: RetryConfig::default(),
+                    circuit_breaker: CircuitBreakerConfig::default(),
+                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                },
+            },
+            None,
+        )?,
+    );
+    let request = sample_request(
+        ResponseAction::TerminateUserSession {
+            host_id: "host-22".to_string(),
+            session_id: "session-9".to_string(),
+        },
+        Severity::Medium,
+    );
+    let report = runtime
+        .audit_authorize_and_execute_instrumented(&sample_detection(), &request, &sample_context())
+        .await?;
+
+    assert!(report.response_attempted);
+    assert!(!report.response_succeeded);
+    let AuditResponseRecord::Failure(failure) = &report.audit.response else {
+        panic!("expected failure receipt, got {:?}", report.audit.response);
+    };
+    assert!(failure.message.contains("does not support action"));
+    assert_eq!(failure.details["status"], serde_json::json!("failed"));
+    assert_eq!(
+        failure.details["details"]["adapter"],
+        serde_json::json!("webhook")
+    );
     Ok(())
 }
 

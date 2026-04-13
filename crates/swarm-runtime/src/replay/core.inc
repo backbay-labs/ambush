@@ -2388,7 +2388,7 @@ impl DefaultReplayHarness {
         loaded: &LoadedReplayScenario,
     ) -> Result<ReplayRunBundle, ReplayHarnessError> {
         let steps = self.materialize_steps(loaded)?;
-        let service = self.build_service();
+        let service = self.build_service()?;
         let substrate = InMemoryPheromoneSubstrate::new(self.config.pheromone.clone());
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
         let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
@@ -2449,7 +2449,9 @@ impl DefaultReplayHarness {
         })
     }
 
-    fn build_service(&self) -> RuntimeService<ConfigurableApprovalGate, SandboxExecutor> {
+    fn build_service(
+        &self,
+    ) -> Result<RuntimeService<ConfigurableApprovalGate, SandboxExecutor>, ReplayHarnessError> {
         let mut offline_config = self.config.clone();
         offline_config.runtime.mode = RuntimeMode::DetectOnly;
         offline_config.runtime.require_durable_live_response = false;
@@ -2458,7 +2460,7 @@ impl DefaultReplayHarness {
             ConfigurableApprovalGate::from_config(&offline_config.policy),
             SandboxExecutor,
         );
-        RuntimeService::new(offline_config, runtime)
+        Ok(RuntimeService::new(offline_config, runtime).with_configured_sequence_detector()?)
     }
 
     fn materialize_steps(

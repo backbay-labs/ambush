@@ -1,0 +1,27 @@
+{
+  "statement": {
+    "version": 1,
+    "issued_at_ms": 1760000000000,
+    "root": "rulesets",
+    "files": [
+      {
+        "path": "rulesets/default.yaml",
+        "sha256": "bc63f0e53780325317f638b6e22f4d6f638048fc7ba177485c18592f6104c324"
+      },
+      {
+        "path": "rulesets/evasion/attack-technique-catalog.yaml",
+        "sha256": "5e88ab40c0bc39b72c76f493901c2965281c2e5fe839f13438b2c22050ae8cae"
+      },
+      {
+        "path": "rulesets/safety/office-detector-admission.yaml",
+        "sha256": "17f3ce568cbe023e1c6d2b71e555236b6cd7bbe3c963e6eca4f25fd9b63ab949"
+      }
+    ]
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "1ea7877323c9e3a3e30e9daeb0dd9d48c39ec15fa34de42c3705e41840bcd023",
+    "public_key_hex": "172e740c4a651279713f27ead2f1fb15abdf52de7b7d3f6239c455edf609e164",
+    "signature_hex": "554f31fd44886c14621ef907392ca213f6a9f164df6b4ce57ababc5f8d24f33a59fa07755fb844304828c1d2f22ddd178a1756be6094481376e03c15aef3110b"
+  }
+}

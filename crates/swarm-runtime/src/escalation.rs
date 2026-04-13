@@ -430,6 +430,7 @@ mod tests {
     fn make_deposit(key: &SigningKey, confidence: f64, timestamp: i64) -> PheromoneDeposit {
         let agent_id = AgentId::from_verifying_key(&key.verifying_key());
         let mut deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({"signal": "process-tree"}),
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
@@ -443,6 +444,7 @@ mod tests {
             agent_key: Vec::new(),
         };
         let payload = DepositSigningPayload {
+            schema_version: deposit.schema_version,
             indicator: &deposit.indicator,
             threat_class: &deposit.threat_class,
             severity: &deposit.severity,

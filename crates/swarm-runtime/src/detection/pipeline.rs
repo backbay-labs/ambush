@@ -157,7 +157,7 @@ where
 }
 
 /// Sign a [`PheromoneDeposit`] in place using an Ed25519 signing key.
-fn sign_deposit(
+pub(crate) fn sign_deposit(
     deposit: &mut PheromoneDeposit,
     signing_key: &SigningKey,
     agent_role: Option<AgentRole>,
@@ -165,6 +165,7 @@ fn sign_deposit(
     deposit.agent_identity = AgentId::from_verifying_key(&signing_key.verifying_key()).0;
     deposit.agent_role = agent_role;
     let payload = DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,
@@ -344,7 +345,7 @@ fn normalized_timestamp_ms(timestamp: i64) -> i64 {
     }
 }
 
-async fn resolve_deposits<S>(
+pub(crate) async fn resolve_deposits<S>(
     substrate: &S,
     findings: &[DetectionFinding],
     event: &TelemetryEvent,
@@ -362,6 +363,7 @@ where
             .await?;
         let policy = pheromone.resolve_threat_class_policy(threat_class_config.as_ref());
         deposits.push(PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({
                 "event_id": finding.event_id,
                 "host_id": event.host_id,
@@ -383,7 +385,7 @@ where
     Ok(deposits)
 }
 
-fn infer_agent_role(agent_id: &AgentId) -> Option<AgentRole> {
+pub(crate) fn infer_agent_role(agent_id: &AgentId) -> Option<AgentRole> {
     let value = agent_id.0.as_str();
     if value.starts_with("whisker-") {
         Some(AgentRole::Whisker)
@@ -404,6 +406,27 @@ fn infer_agent_role(agent_id: &AgentId) -> Option<AgentRole> {
     } else {
         None
     }
+}
+
+pub(crate) async fn persist_findings_as_deposits<S>(
+    substrate: &S,
+    findings: &[DetectionFinding],
+    event: &TelemetryEvent,
+    agent_id: &AgentId,
+    agent_role: Option<AgentRole>,
+    pheromone: &PheromoneConfig,
+    signing_key: &SigningKey,
+) -> Result<Vec<PheromoneDeposit>, PipelineError>
+where
+    S: PheromoneSubstrate,
+{
+    let mut deposits =
+        resolve_deposits(substrate, findings, event, agent_id, agent_role, pheromone).await?;
+    for deposit in &mut deposits {
+        sign_deposit(deposit, signing_key, agent_role)?;
+        substrate.deposit(deposit.clone()).await?;
+    }
+    Ok(deposits)
 }
 
 #[cfg(test)]

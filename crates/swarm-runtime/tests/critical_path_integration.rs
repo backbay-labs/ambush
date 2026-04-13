@@ -10,6 +10,7 @@ use swarm_policy::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
 };
 use swarm_response::adapters::SandboxExecutor;
+use swarm_runtime::StrategyProposalRouteError;
 use swarm_runtime::config::load_config;
 use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{StrategyProposalOutcome, StrategyProposalRoute};
@@ -729,6 +730,39 @@ async fn evasion_to_canary_routes_gap_driven_candidate_into_existing_lane()
     assert!(report.bridge_id.is_some());
     assert!(report.handoff_id.is_some());
     assert!(report.canary_run_id.is_some());
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[tokio::test]
+async fn strategy_proposal_router_rejects_malformed_payload_without_panicking()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = temp_root("malformed-strategy-proposal");
+    let config_path = root.join("runtime.yaml");
+    let state = IngestState::from_config(
+        &config_path,
+        config_with_strategy("suspicious_process_tree")?,
+    )?;
+    let router = state.current_strategy_proposal_router();
+    let error = router
+        .route_proposal(StrategyProposalRoute {
+            proposed_by: AgentId("kitten-primary".to_string()),
+            strategy_id: "office_router_candidate".to_string(),
+            strategy: json!({
+                "source": "kitten_population_candidate",
+                "ranking_id": 7,
+            }),
+            fitness: 0.95,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        StrategyProposalRouteError::InvalidPayload(_)
+    ));
+    assert_eq!(error.boundary(), "payload");
 
     let _ = fs::remove_dir_all(root);
     Ok(())

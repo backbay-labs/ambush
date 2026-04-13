@@ -8,9 +8,12 @@ use super::{
     DemoReplayRequest, DemoReplayResponse, IngestRequest, IngestRequestError, IngestResponse,
     IngestState, StrategyProposalRoute, detect_http_router, ingest_router, validate_and_parse,
 };
+use crate::StrategyProposalRouteError;
+use crate::anti_tamper::AntiTamperReport;
 use crate::approval::DefaultApprovalHarness;
 use crate::bridge_runtime::{BridgeStatusSnapshot, SharedBridgeHealth};
-use crate::config::CURRENT_SCHEMA_VERSION;
+use crate::config::{CURRENT_SCHEMA_VERSION, write_debug_test_config_signature};
+use crate::control::CURRENT_OPERATOR_API_SCHEMA_VERSION;
 use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
 use crate::evasion_coverage::EvasionCoverageSnapshot;
 use crate::evolution::DefaultEvolutionProofHarness;
@@ -23,6 +26,7 @@ use crate::replay::{
     ReplayScenarioStep,
 };
 use crate::runtime_events::{ReplayEventPhase, RuntimeEvent, RuntimeEventBroadcaster, now_ms};
+use crate::startup_attestation::{StartupAttestationComponentReport, StartupAttestationReport};
 use crate::strategy::DefaultStrategyScorecardHarness;
 use crate::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 use arc_swap::ArcSwap;
@@ -48,8 +52,8 @@ use swarm_core::config::{
     OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, PheromoneBackendConfig,
     PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig, PlatformApiScope,
     PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PromotionConfig,
-    ResponseAdapterConfig, RetryConfig, RoutingRule, RuntimeMode, RuntimeSettings, SwarmConfig,
-    TelemetrySourceConfig, WebhookConfig,
+    ResponseAdapterConfig, RetryConfig, RoutingRule, RuntimeAntiTamperConfig, RuntimeMode,
+    RuntimeSettings, SwarmConfig, TelemetrySourceConfig, WebhookConfig,
 };
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{
@@ -62,8 +66,8 @@ use swarm_crypto::Ed25519Signer;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_response::SwarmFindingEnvelope;
 use swarm_spine::{
-    CorrelatedIncident, IncidentStore, InvestigationBundle, InvestigationBundleStore,
-    ReplayBundleStore,
+    CorrelatedIncident, FalsePositiveMeasurement, IncidentStore, InvestigationBundle,
+    InvestigationBundleStore, ReplayBundleStore,
 };
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
 use tower::ServiceExt;
@@ -100,6 +104,8 @@ fn test_config(strategy: &str) -> SwarmConfig {
             require_durable_live_response: false,
             max_heap_pressure: 0.90,
             secret_dir: None,
+            anti_tamper: RuntimeAntiTamperConfig::default(),
+            temporal_event_window: swarm_core::config::TemporalEventWindowConfig::default(),
             agent_tick_timeout_ms: 500,
             governance_degraded_tick_threshold: 3,
             partition_contingency_lease_ttl_ms: 300_000,
@@ -334,6 +340,66 @@ fn seed_platform_rehearsal_bundle(
     state.current_replay_store().persist(&bundle).unwrap();
 }
 
+fn seed_measured_incident(
+    state: &IngestState,
+    incident_id: &str,
+    hunt_id: &str,
+    host_id: &str,
+    strategy_id: &str,
+    false_positive: bool,
+    created_at_ms: i64,
+) {
+    state
+        .current_incident_store()
+        .persist(&CorrelatedIncident {
+            incident_id: incident_id.to_string(),
+            summary: format!("measured incident for {hunt_id}"),
+            created_at_ms,
+            window_start_ms: created_at_ms,
+            window_end_ms: created_at_ms + 1,
+            correlation_keys: vec![format!("host:{host_id}")],
+            related_receipt_ids: vec![format!("receipt:{hunt_id}")],
+            included_members: vec![swarm_spine::IncidentMemberDecision {
+                investigation_id: format!("investigation:{hunt_id}"),
+                hunt_id: hunt_id.to_string(),
+                finding_id: format!("finding:{hunt_id}"),
+                reason: "measured incident fixture".to_string(),
+                shared_keys: vec![format!("host:{host_id}")],
+                evidence_links: Vec::new(),
+                confidence_score: 1.0,
+            }],
+            rejected_members: Vec::new(),
+            graph_dimensions: Vec::new(),
+            confidence_score: 1.0,
+            trigger_event_id: Some(hunt_id.to_string()),
+            trigger_finding_id: Some(format!("finding:{hunt_id}")),
+            trigger_strategy_id: Some(strategy_id.to_string()),
+            threat_class: Some(ThreatClass::Execution),
+            severity: Some(Severity::High),
+            external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
+            feedback_audit_entries: Vec::new(),
+            false_positive_measurements: vec![FalsePositiveMeasurement {
+                finding_id: format!("finding:{hunt_id}"),
+                hunt_id: hunt_id.to_string(),
+                strategy_id: strategy_id.to_string(),
+                host_id: Some(host_id.to_string()),
+                feedback_id: format!("feedback:{hunt_id}"),
+                reviewed_at_ms: created_at_ms + 10,
+                analyst_id: "analyst-platform".to_string(),
+                action: if false_positive {
+                    swarm_core::types::ProvidenceFeedbackAction::Dismiss
+                } else {
+                    swarm_core::types::ProvidenceFeedbackAction::Confirm
+                },
+                reason: Some("runtime status fixture".to_string()),
+                false_positive,
+            }],
+        })
+        .unwrap();
+}
+
 async fn seed_platform_host_deposit(
     state: &IngestState,
     signing_key: &ed25519_dalek::SigningKey,
@@ -344,6 +410,7 @@ async fn seed_platform_host_deposit(
 ) {
     let agent_id = swarm_core::types::AgentId::from_verifying_key(&signing_key.verifying_key());
     let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
         indicator: json!({
             "event_id": format!("evt-{agent_id}"),
             "host_id": host_id,
@@ -366,6 +433,7 @@ async fn seed_platform_host_deposit(
         agent_key: Vec::new(),
     };
     let payload = swarm_pheromone::DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,
@@ -437,6 +505,7 @@ fn temp_path(label: &str) -> PathBuf {
 
 fn write_config(path: &Path, strategy: &str) {
     fs::write(path, serde_yaml::to_string(&test_config(strategy)).unwrap()).unwrap();
+    write_debug_test_config_signature(path).unwrap();
 }
 
 fn repo_root() -> PathBuf {
@@ -534,6 +603,81 @@ fn test_ingest_state() -> IngestState {
     IngestState::from_config(temp_path("inline"), test_config("suspicious_process_tree")).unwrap()
 }
 
+fn failed_startup_attestation_report() -> StartupAttestationReport {
+    StartupAttestationReport {
+        ready: false,
+        evaluated_at_ms: 1_710_000_000_000,
+        binary: StartupAttestationComponentReport {
+            ready: false,
+            subject: "binary".to_string(),
+            statement_path: "swarm_detect.attestation.json".to_string(),
+            status: "failed".to_string(),
+            details: "binary digest mismatch".to_string(),
+            key_id: Some("test-key".to_string()),
+            expected_sha256: Some("expected".to_string()),
+            observed_sha256: Some("observed".to_string()),
+            verified_items: None,
+        },
+        rulesets: StartupAttestationComponentReport {
+            ready: true,
+            subject: "rulesets".to_string(),
+            statement_path: "rulesets/attestation.json".to_string(),
+            status: "verified".to_string(),
+            details: "verified 3 repo-owned ruleset files".to_string(),
+            key_id: Some("test-key".to_string()),
+            expected_sha256: None,
+            observed_sha256: None,
+            verified_items: Some(3),
+        },
+    }
+}
+
+fn verified_startup_attestation_report() -> StartupAttestationReport {
+    StartupAttestationReport {
+        ready: true,
+        evaluated_at_ms: 1_710_000_000_500,
+        binary: StartupAttestationComponentReport {
+            ready: true,
+            subject: "binary".to_string(),
+            statement_path: "swarm_detect.attestation.json".to_string(),
+            status: "verified".to_string(),
+            details: "binary digest verified".to_string(),
+            key_id: Some("test-key".to_string()),
+            expected_sha256: Some("expected".to_string()),
+            observed_sha256: Some("expected".to_string()),
+            verified_items: Some(1),
+        },
+        rulesets: StartupAttestationComponentReport {
+            ready: true,
+            subject: "rulesets".to_string(),
+            statement_path: "rulesets/attestation.json".to_string(),
+            status: "verified".to_string(),
+            details: "verified 3 repo-owned ruleset files".to_string(),
+            key_id: Some("test-key".to_string()),
+            expected_sha256: None,
+            observed_sha256: None,
+            verified_items: Some(3),
+        },
+    }
+}
+
+fn tampered_anti_tamper_report(required: bool) -> AntiTamperReport {
+    AntiTamperReport {
+        enabled: true,
+        supported: true,
+        required,
+        ready: false,
+        checked_at_ms: 1_710_000_010_000,
+        status: "tampered".to_string(),
+        details: "debugger attached via TracerPid=77; 1 unexpected library load(s)".to_string(),
+        debugger_attached: true,
+        tracer_pid: Some(77),
+        unexpected_library_loads: vec!["/tmp/rogue.so".to_string()],
+        baseline_library_count: 12,
+        fail_closed_live_response: required,
+    }
+}
+
 fn degraded_ingest_state() -> IngestState {
     let state = test_ingest_state();
     state.detector_status.store(Arc::new(
@@ -543,6 +687,12 @@ fn degraded_ingest_state() -> IngestState {
         ),
     ));
     state
+}
+
+fn live_response_config(strategy: &str) -> SwarmConfig {
+    let mut config = test_config(strategy);
+    config.runtime.mode = RuntimeMode::LiveResponse;
+    config
 }
 
 #[tokio::test]
@@ -740,6 +890,30 @@ async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_l
     );
     assert!(!stored_candidate.ready_for_review);
     assert_eq!(paths.canary_results_dir, root.join("canaries"));
+}
+
+#[tokio::test]
+async fn strategy_proposal_router_rejects_malformed_payload_with_typed_error() {
+    let state = test_ingest_state();
+    let router = state.current_strategy_proposal_router();
+    let error = router
+        .route_proposal(StrategyProposalRoute {
+            proposed_by: AgentId("kitten-primary".to_string()),
+            strategy_id: "office_router_candidate".to_string(),
+            strategy: json!({
+                "source": "kitten_population_candidate",
+                "ranking_id": 7,
+            }),
+            fitness: 0.95,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        &error,
+        StrategyProposalRouteError::InvalidPayload(_)
+    ));
+    assert_eq!(error.boundary(), "payload");
 }
 
 fn demo_ingest_state() -> IngestState {
@@ -1660,6 +1834,7 @@ async fn platform_incidents_endpoint_returns_filtered_cursor_paginated_envelope(
             providence_reconciliation: None,
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
         })
         .unwrap();
     state
@@ -1693,6 +1868,7 @@ async fn platform_incidents_endpoint_returns_filtered_cursor_paginated_envelope(
             providence_reconciliation: None,
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
         })
         .unwrap();
     let app = detect_http_router(state);
@@ -1804,6 +1980,7 @@ async fn platform_surfaces_join_latest_rehearsal_and_providence_reconciliation()
             }),
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
         })
         .unwrap();
     let app = detect_http_router(state);
@@ -1916,15 +2093,152 @@ async fn platform_runtime_status_endpoint_returns_live_status_envelope() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body: PlatformApiEnvelope<PlatformRuntimeStatus> = parse_json(response).await;
+    assert_eq!(body.schema_version, CURRENT_OPERATOR_API_SCHEMA_VERSION);
     assert_eq!(body.data.len(), 1);
     assert!(body.cursor.is_none());
     assert_eq!(body.data[0].mode_state.current, SwarmMode::Alert);
+    assert_eq!(body.data[0].degradation.level.as_str(), "detect_only");
     assert_eq!(body.data[0].agent_health.len(), 1);
     assert_eq!(body.data[0].detector.strategy, "suspicious_process_tree");
+    assert!(body.data[0].anti_tamper.ready);
     assert!(body.data[0].async_lane.enabled);
     assert_eq!(body.data[0].async_lane.status.as_str(), "ok");
     assert!(body.data[0].async_lane.investigation_store_ready);
     assert!(body.data[0].async_lane.incident_store_ready);
+}
+
+#[tokio::test]
+async fn platform_runtime_status_surfaces_anti_tamper_report() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("platform-anti-tamper"), config)
+            .unwrap()
+            .with_anti_tamper_report(tampered_anti_tamper_report(false)),
+    );
+
+    let response = app
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/runtime/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: PlatformApiEnvelope<PlatformRuntimeStatus> = parse_json(response).await;
+    assert_eq!(body.schema_version, CURRENT_OPERATOR_API_SCHEMA_VERSION);
+    assert_eq!(body.data.len(), 1);
+    assert_eq!(body.data[0].anti_tamper.status, "tampered");
+    assert!(!body.data[0].anti_tamper.required);
+    assert_eq!(
+        body.data[0].anti_tamper.unexpected_library_loads,
+        vec!["/tmp/rogue.so".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn platform_runtime_status_surfaces_alert_tuning_recommendations() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    let state = IngestState::from_config(temp_path("platform-alert-tuning"), config).unwrap();
+    for (incident_id, hunt_id, host_id, false_positive, created_at_ms) in [
+        (
+            "incident-alert-a-1",
+            "hunt-alert-a-1",
+            "host-a",
+            true,
+            1_700_000_200_000,
+        ),
+        (
+            "incident-alert-a-2",
+            "hunt-alert-a-2",
+            "host-a",
+            true,
+            1_700_000_200_100,
+        ),
+        (
+            "incident-alert-b-1",
+            "hunt-alert-b-1",
+            "host-b",
+            true,
+            1_700_000_200_200,
+        ),
+        (
+            "incident-alert-c-1",
+            "hunt-alert-c-1",
+            "host-c",
+            false,
+            1_700_000_200_300,
+        ),
+        (
+            "incident-alert-d-1",
+            "hunt-alert-d-1",
+            "host-d",
+            false,
+            1_700_000_200_400,
+        ),
+    ] {
+        seed_measured_incident(
+            &state,
+            incident_id,
+            hunt_id,
+            host_id,
+            "suspicious_process_tree",
+            false_positive,
+            created_at_ms,
+        );
+    }
+    let app = detect_http_router(state);
+
+    let response = app
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/runtime/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: PlatformApiEnvelope<PlatformRuntimeStatus> = parse_json(response).await;
+    assert_eq!(body.schema_version, CURRENT_OPERATOR_API_SCHEMA_VERSION);
+    let tuning = &body.data[0].alert_tuning;
+    assert_eq!(tuning.recommendation_count, 2);
+    assert!(tuning.recommendations.iter().any(|entry| {
+        entry.host_id.as_deref() == Some("host-a") && entry.summary.contains("scoped exclusion")
+    }));
+    assert!(tuning.recommendations.iter().any(|entry| {
+        entry.strategy_id.as_deref() == Some("suspicious_process_tree")
+            && entry.summary.contains("thresholding")
+    }));
+}
+
+#[tokio::test]
+async fn platform_runtime_status_rejects_unsupported_schema_version_header() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("platform-status-schema-version"), config).unwrap(),
+    );
+
+    let response = app
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/runtime/status")
+                .header(crate::control::OPERATOR_API_SCHEMA_VERSION_HEADER, "99")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = parse_json(response).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unsupported operator API schema version")
+    );
 }
 
 #[tokio::test]
@@ -2481,6 +2795,7 @@ async fn providence_webhook_payload_includes_runtime_context_and_links() {
             providence_reconciliation: None,
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
         })
         .unwrap();
     tokio::time::sleep(Duration::from_millis(350)).await;
@@ -2766,6 +3081,7 @@ mod providence_callback {
                 providence_reconciliation: None,
                 providence_callback_audit_entries: Vec::new(),
                 feedback_audit_entries: Vec::new(),
+                false_positive_measurements: Vec::new(),
             })
             .unwrap();
     }
@@ -2954,6 +3270,7 @@ mod providence_feedback {
                 providence_reconciliation: None,
                 providence_callback_audit_entries: Vec::new(),
                 feedback_audit_entries: Vec::new(),
+                false_positive_measurements: Vec::new(),
             })
             .unwrap();
     }
@@ -2968,6 +3285,7 @@ mod providence_feedback {
     ) {
         let agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
         let mut deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: json!({
                 "event_id": event_id,
                 "host_id": host_id,
@@ -2990,6 +3308,7 @@ mod providence_feedback {
             agent_key: Vec::new(),
         };
         let payload = DepositSigningPayload {
+            schema_version: deposit.schema_version,
             indicator: &deposit.indicator,
             threat_class: &deposit.threat_class,
             severity: &deposit.severity,
@@ -3040,6 +3359,7 @@ mod providence_feedback {
                     baseline_fitness: None,
                     fitness,
                     evasion_pressure: None,
+                    autonomous_fitness: None,
                     proposed_at_ms: None,
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.95,
@@ -3257,6 +3577,136 @@ mod providence_feedback {
             .unwrap()
             .unwrap();
         assert_eq!(lookup.record.hunt_id, "evt-feedback-investigate");
+    }
+
+    #[tokio::test]
+    async fn feedback_persists_false_positive_measurements_and_surfaces_runtime_rollups() {
+        let mut config = super::test_config("suspicious_process_tree");
+        enable_platform_api(&mut config);
+        configure_feedback_channel(&mut config);
+        let state =
+            IngestState::from_config(super::temp_path("feedback-measurements"), config).unwrap();
+
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-feedback-measure-dismiss",
+            "host-dismiss",
+            1_700_110_100_000,
+        );
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-feedback-measure-confirm",
+            "host-confirm",
+            1_700_110_100_100,
+        );
+        seed_feedback_incident(
+            &state,
+            "incident-feedback-measure-dismiss",
+            "evt-feedback-measure-dismiss",
+            "host-dismiss",
+            "suspicious_process_tree",
+            1_700_110_100_000,
+        );
+        seed_feedback_incident(
+            &state,
+            "incident-feedback-measure-confirm",
+            "evt-feedback-measure-confirm",
+            "host-confirm",
+            "suspicious_process_tree",
+            1_700_110_100_100,
+        );
+
+        let app = detect_http_router(state.clone());
+        let dismiss = app
+            .clone()
+            .oneshot(signed_feedback_request(&SwarmProvidenceFeedbackRequest {
+                action: ProvidenceFeedbackAction::Dismiss,
+                incident_id: "incident-feedback-measure-dismiss".to_string(),
+                finding_id: Some("finding-evt-feedback-measure-dismiss".to_string()),
+                analyst_id: "analyst-dismiss".to_string(),
+                reason: Some("dismissed as benign".to_string()),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(dismiss.status(), StatusCode::OK);
+
+        let confirm = app
+            .clone()
+            .oneshot(signed_feedback_request(&SwarmProvidenceFeedbackRequest {
+                action: ProvidenceFeedbackAction::Confirm,
+                incident_id: "incident-feedback-measure-confirm".to_string(),
+                finding_id: Some("finding-evt-feedback-measure-confirm".to_string()),
+                analyst_id: "analyst-confirm".to_string(),
+                reason: Some("confirmed malicious".to_string()),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(confirm.status(), StatusCode::OK);
+
+        let dismiss_lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-feedback-measure-dismiss")
+            .unwrap()
+            .unwrap();
+        assert_eq!(dismiss_lookup.incident.false_positive_measurements.len(), 1);
+        let dismiss_measurement = &dismiss_lookup.incident.false_positive_measurements[0];
+        assert_eq!(dismiss_measurement.strategy_id, "suspicious_process_tree");
+        assert_eq!(dismiss_measurement.host_id.as_deref(), Some("host-dismiss"));
+        assert_eq!(
+            dismiss_measurement.action,
+            ProvidenceFeedbackAction::Dismiss
+        );
+        assert!(dismiss_measurement.false_positive);
+
+        let confirm_lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-feedback-measure-confirm")
+            .unwrap()
+            .unwrap();
+        assert_eq!(confirm_lookup.incident.false_positive_measurements.len(), 1);
+        let confirm_measurement = &confirm_lookup.incident.false_positive_measurements[0];
+        assert_eq!(confirm_measurement.host_id.as_deref(), Some("host-confirm"));
+        assert_eq!(
+            confirm_measurement.action,
+            ProvidenceFeedbackAction::Confirm
+        );
+        assert!(!confirm_measurement.false_positive);
+
+        let response = app
+            .oneshot(
+                authorized_platform_api_request("GET", "/v2/api/runtime/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: PlatformApiEnvelope<PlatformRuntimeStatus> = parse_json(response).await;
+        let tracking = &body.data[0].false_positive_tracking;
+        assert_eq!(tracking.reviewed_findings, 2);
+        assert_eq!(tracking.false_positive_findings, 1);
+        assert_eq!(tracking.false_positive_rate, 0.5);
+        let detector = tracking
+            .detectors
+            .iter()
+            .find(|entry| entry.strategy_id == "suspicious_process_tree")
+            .unwrap();
+        assert_eq!(detector.reviewed_findings, 2);
+        assert_eq!(detector.false_positive_findings, 1);
+        let dismiss_host = tracking
+            .hosts
+            .iter()
+            .find(|entry| entry.host_id == "host-dismiss")
+            .unwrap();
+        assert_eq!(dismiss_host.reviewed_findings, 1);
+        assert_eq!(dismiss_host.false_positive_findings, 1);
+        let confirm_host = tracking
+            .hosts
+            .iter()
+            .find(|entry| entry.host_id == "host-confirm")
+            .unwrap();
+        assert_eq!(confirm_host.reviewed_findings, 1);
+        assert_eq!(confirm_host.false_positive_findings, 0);
     }
 
     #[tokio::test]
@@ -3873,6 +4323,119 @@ async fn readyz_reports_providence_auth_failure() {
 }
 
 #[tokio::test]
+async fn readyz_reports_jetstream_unreachable_detect_only_transition() {
+    let mut config = live_response_config("suspicious_process_tree");
+    config.pheromone.backend = PheromoneBackendConfig::JetStream {
+        url: "nats://127.0.0.1:65535".to_string(),
+        connect_timeout_ms: 10,
+        gc_page_size: 64,
+    };
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("jetstream-down-readyz"), config)
+            .unwrap()
+            .with_startup_attestation(verified_startup_attestation_report()),
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["components"]["substrate"]["backend"], "jetstream");
+    assert_eq!(json["components"]["substrate"]["ready"], false);
+    assert_eq!(json["components"]["degradation"]["level"], "detect_only");
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["allows_live_response"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn readyz_reports_replay_store_write_failure_read_only_transition() {
+    let replay_root = temp_path("replay-store-read-only").with_extension("dir");
+    let mut config = live_response_config("suspicious_process_tree");
+    config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: replay_root.display().to_string(),
+    };
+    let state = IngestState::from_config(temp_path("replay-store-read-only-config"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report());
+    let bundles_dir = replay_root.join("bundles");
+    fs::remove_dir_all(&bundles_dir).unwrap();
+    fs::write(&bundles_dir, b"blocked").unwrap();
+    let app = detect_http_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "degraded");
+    assert_eq!(json["components"]["replay_store"]["ready"], false);
+    assert_eq!(json["components"]["degradation"]["level"], "read_only");
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["accepts_ingest"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn replay_store_write_failure_rejects_new_ingest_requests() {
+    let replay_root = temp_path("replay-store-ingest").with_extension("dir");
+    let mut config = live_response_config("suspicious_process_tree");
+    config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: replay_root.display().to_string(),
+    };
+    let state = IngestState::from_config(temp_path("replay-store-ingest-config"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report());
+    let bundles_dir = replay_root.join("bundles");
+    fs::remove_dir_all(&bundles_dir).unwrap();
+    fs::write(&bundles_dir, b"blocked").unwrap();
+    let app = ingest_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![valid_process_event_json()]))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|value| value.contains("read_only"))
+    );
+}
+
+#[tokio::test]
 async fn readyz_reports_detector_degradation() {
     let app = detect_http_router(degraded_ingest_state());
     let response = app
@@ -3891,6 +4454,11 @@ async fn readyz_reports_detector_degradation() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "degraded");
     assert_eq!(json["components"]["detector"]["ready"], false);
+    assert_eq!(json["components"]["degradation"]["level"], "read_only");
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["accepts_ingest"],
+        false
+    );
 }
 
 #[tokio::test]
@@ -3936,6 +4504,68 @@ async fn startupz_returns_ok_for_valid_state() {
 }
 
 #[tokio::test]
+async fn readyz_surfaces_telemetry_source_summary() {
+    let app = detect_http_router(test_ingest_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["components"]["telemetry_sources"]["configured"], 1);
+    assert_eq!(json["components"]["telemetry_sources"]["subject_backed"], 1);
+    assert_eq!(json["components"]["telemetry_sources"]["bridge_backed"], 0);
+    assert_eq!(
+        json["components"]["telemetry_sources"]["status"],
+        "configured"
+    );
+    assert_eq!(json["components"]["degradation"]["level"], "detect_only");
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["accepts_ingest"],
+        true
+    );
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["allows_live_response"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn startupz_surfaces_failed_attestation_without_blocking_detect_only() {
+    let app = detect_http_router(
+        test_ingest_state().with_startup_attestation(failed_startup_attestation_report()),
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/startupz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["checks"]["startup_attestation"]["ready"], false);
+    assert_eq!(json["checks"]["startup_attestation"]["required"], false);
+    assert_eq!(
+        json["checks"]["startup_attestation"]["effective_ready"],
+        true
+    );
+}
+
+#[tokio::test]
 async fn startupz_reports_unsupported_schema_version() {
     let mut config = test_config("suspicious_process_tree");
     config.schema_version = CURRENT_SCHEMA_VERSION + 1;
@@ -3959,6 +4589,76 @@ async fn startupz_reports_unsupported_schema_version() {
 }
 
 #[tokio::test]
+async fn readyz_requires_startup_attestation_for_live_response_mode() {
+    let mut config = test_config("suspicious_process_tree");
+    config.runtime.mode = RuntimeMode::LiveResponse;
+    let state = IngestState::from_config(temp_path("attestation-readyz"), config)
+        .unwrap()
+        .with_startup_attestation(failed_startup_attestation_report());
+    let app = detect_http_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["components"]["startup_attestation"]["required"], true);
+    assert_eq!(
+        json["components"]["startup_attestation"]["effective_ready"],
+        false
+    );
+    assert_eq!(
+        json["components"]["startup_attestation"]["binary"]["status"],
+        "failed"
+    );
+    assert_eq!(
+        json["components"]["degradation"]["level"],
+        "emergency_drain"
+    );
+}
+
+#[tokio::test]
+async fn readyz_requires_anti_tamper_when_live_response_fail_closed() {
+    let mut config = test_config("suspicious_process_tree");
+    config.runtime.mode = RuntimeMode::LiveResponse;
+    config.runtime.anti_tamper.fail_closed_live_response = true;
+    let state = IngestState::from_config(temp_path("anti-tamper-readyz"), config)
+        .unwrap()
+        .with_anti_tamper_report(tampered_anti_tamper_report(true));
+    let app = detect_http_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["components"]["anti_tamper"]["required"], true);
+    assert_eq!(json["components"]["anti_tamper"]["effective_ready"], false);
+    assert_eq!(json["components"]["anti_tamper"]["debugger_attached"], true);
+    assert_eq!(json["components"]["anti_tamper"]["tracer_pid"], 77);
+    assert_eq!(
+        json["components"]["degradation"]["level"],
+        "emergency_drain"
+    );
+}
+
+#[tokio::test]
 async fn readyz_reports_draining_state() {
     let state = test_ingest_state();
     state.begin_drain();
@@ -3979,6 +4679,14 @@ async fn readyz_reports_draining_state() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "draining");
     assert_eq!(json["components"]["lifecycle"]["draining"], true);
+    assert_eq!(
+        json["components"]["degradation"]["level"],
+        "emergency_drain"
+    );
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["drains_ingest"],
+        true
+    );
 }
 
 #[tokio::test]
@@ -4008,6 +4716,34 @@ async fn draining_runtime_rejects_new_ingest_requests() {
         json["error"]
             .as_str()
             .is_some_and(|value| value.contains("draining"))
+    );
+}
+
+#[tokio::test]
+async fn read_only_degraded_runtime_rejects_new_ingest_requests() {
+    let app = ingest_router(degraded_ingest_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![valid_process_event_json()]))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|value| value.contains("read_only"))
     );
 }
 
@@ -4067,6 +4803,51 @@ async fn readyz_reports_heap_pressure_degradation() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["components"]["heap"]["ready"], false);
     assert_eq!(json["components"]["heap"]["pressure_ratio"], 0.95);
+    assert_eq!(
+        json["components"]["degradation"]["level"],
+        "emergency_drain"
+    );
+}
+
+#[tokio::test]
+async fn readyz_reports_live_response_heap_pressure_emergency_drain_transition() {
+    let state = IngestState::from_config(
+        temp_path("heap-pressure-live-response"),
+        live_response_config("suspicious_process_tree"),
+    )
+    .unwrap()
+    .with_startup_attestation(verified_startup_attestation_report())
+    .with_heap_snapshot_provider(|| {
+        Some(HeapPressureSnapshot {
+            bytes: 95,
+            limit_bytes: 100,
+            pressure_ratio: 0.95,
+        })
+    });
+    let app = detect_http_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "draining");
+    assert_eq!(
+        json["components"]["degradation"]["level"],
+        "emergency_drain"
+    );
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["drains_ingest"],
+        true
+    );
 }
 
 #[tokio::test]

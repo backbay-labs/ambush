@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::SwarmConfig;
 use swarm_core::config::{PheromoneBackendConfig, RuntimeMode};
 use swarm_runtime::bridge_runtime::BridgeStatusSnapshot;
-use swarm_runtime::config::load_config;
+use swarm_runtime::config::{load_config, write_debug_test_config_signature};
 use swarm_runtime::ingest::IngestState;
 use swarm_runtime::ingest::detect_http_router;
 use tower::ServiceExt;
@@ -32,6 +32,15 @@ fn unique_temp_config_path(label: &str) -> PathBuf {
         "swarm-runtime-ingest-{label}-{}-{millis}.yaml",
         std::process::id()
     ))
+}
+
+fn write_signed_config(
+    path: &PathBuf,
+    config: &SwarmConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    fs::write(path, serde_yaml::to_string(config)?)?;
+    write_debug_test_config_signature(path)?;
+    Ok(())
 }
 
 fn valid_process_event(event_id: &str) -> Value {
@@ -140,6 +149,26 @@ async fn malformed_json_returns_structured_bad_request() -> Result<(), Box<dyn s
     let json: Value = serde_json::from_slice(&body)?;
     assert!(
         json["error"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn non_array_json_returns_structured_bad_request() -> Result<(), Box<dyn std::error::Error>> {
+    let (status, body) = ingest(
+        "suspicious_process_tree",
+        json!({
+            "source": "integration",
+            "event_id": "evt-not-array"
+        }),
+    )
+    .await?;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
             .as_str()
             .is_some_and(|message| !message.is_empty())
     );
@@ -302,13 +331,13 @@ async fn healthz_returns_service_unavailable_when_live_response_requires_durable
 async fn reload_from_disk_swaps_detector_strategy() -> Result<(), Box<dyn std::error::Error>> {
     let initial = config_with_strategy("suspicious_process_tree")?;
     let path = unique_temp_config_path("reload");
-    fs::write(&path, serde_yaml::to_string(&initial)?)?;
+    write_signed_config(&path, &initial)?;
 
     let state = IngestState::from_config(path.clone(), initial)?;
     assert_eq!(state.detector_strategy_name(), "suspicious_process_tree");
 
     let updated = config_with_strategy("dns_exfiltration")?;
-    fs::write(&path, serde_yaml::to_string(&updated)?)?;
+    write_signed_config(&path, &updated)?;
     state.reload_from_disk()?;
 
     assert_eq!(state.detector_strategy_name(), "dns_exfiltration");
@@ -320,12 +349,12 @@ async fn reload_from_disk_swaps_detector_strategy() -> Result<(), Box<dyn std::e
 async fn healthz_reports_detector_reload_failure() -> Result<(), Box<dyn std::error::Error>> {
     let initial = config_with_strategy("suspicious_process_tree")?;
     let path = unique_temp_config_path("reload-failure");
-    fs::write(&path, serde_yaml::to_string(&initial)?)?;
+    write_signed_config(&path, &initial)?;
 
     let state = IngestState::from_config(path.clone(), initial)?;
     let mut invalid = config_with_strategy("suspicious_process_tree")?;
     invalid.detection.strategy = "not_a_real_detector".to_string();
-    fs::write(&path, serde_yaml::to_string(&invalid)?)?;
+    write_signed_config(&path, &invalid)?;
     assert!(state.reload_from_disk().is_err());
 
     let app = detect_http_router(state);

@@ -6,10 +6,12 @@ mod providence_handlers;
 // Re-export the public API that was previously accessible as `crate::ingest::*`
 pub use demo::{
     DemoApprovalResumeRequest, DemoApprovalResumeResponse, DemoDashboardSnapshot, DemoProofLeaf,
-    DemoProofPackage, DemoProofQuery, DemoReplayRequest, DemoReplayResponse, DemoTimelineEntry,
+    DemoProofPackage, DemoProofQuery, DemoReplayRequest, DemoReplayResponse, DemoRunApprovalReport,
+    DemoRunReport, DemoTimelineEntry, FirstRunWizardArtifacts, FirstRunWizardError,
+    FirstRunWizardReport, FirstRunWizardRequest, FirstRunWizardStatus, run_first_run_wizard,
 };
 
-use crate::RuntimeError;
+use crate::anti_tamper::AntiTamperReport;
 use crate::approval::{
     ApprovalError, ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule,
 };
@@ -48,8 +50,13 @@ use crate::runtime_events::{
     now_ms,
 };
 use crate::selection::DefaultEvolutionSelectionHarness;
-use crate::service::{ConfiguredRuntimeStack, ServiceError};
+use crate::service::{
+    ConfiguredRuntimeStack, RuntimeDegradationSignals, RuntimeDegradationStatus, ServiceError,
+    derive_runtime_degradation_status,
+};
+use crate::startup_attestation::StartupAttestationReport;
 use crate::tom_agent::GovernancePolicy;
+use crate::{RuntimeError, StrategyProposalRouteError};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use axum::extract::{Json, State, rejection::JsonRejection};
@@ -66,15 +73,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use swarm_core::ThreatClass;
 use swarm_core::agent::{AgentHealthEntry, SwarmModeState};
-use swarm_core::config::{OperatorSurfaceConfig, ResponseAdapterConfig, RuntimeMode, SwarmConfig};
+use swarm_core::config::{
+    OperatorSurfaceConfig, ResponseAdapterConfig, RuntimeAntiTamperConfig, RuntimeMode, SwarmConfig,
+};
 use swarm_core::pheromone::EscalationRecord;
 use swarm_core::types::AgentId;
+use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::DispatchingExecutor;
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
-    ConfiguredReplayBundleStore, CorrelatedIncident,
+    ConfiguredReplayBundleStore, CorrelatedIncident, ReplayBundleStore,
 };
 use swarm_whisker::{CompositeDetector, DetectionFinding, TelemetryEvent};
 use tracing::Instrument;
@@ -86,7 +96,7 @@ use demo::{
 };
 use health::{
     DetectorRuntimeStatus, HeapPressureSnapshot, IngestLifecycleState, IngestRequestGuard,
-    sample_heap_pressure,
+    active_agent_counts, sample_heap_pressure,
 };
 use providence_handlers::{build_providence_notification_payload, publish_runtime_findings};
 
@@ -177,17 +187,16 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
     async fn route_proposal(
         &self,
         proposal: StrategyProposalRoute,
-    ) -> Result<StrategyProposalRouteReport, String> {
+    ) -> Result<StrategyProposalRouteReport, StrategyProposalRouteError> {
         let stack = self.stack.load_full();
         let config = stack.service.config.clone();
         let paths = resolve_strategy_proposal_paths(self.config_path.as_ref(), &config);
         let payload: KittenProposalPayload = serde_json::from_value(proposal.strategy.clone())
-            .map_err(|error| format!("invalid kitten proposal payload: {error}"))?;
+            .map_err(StrategyProposalRouteError::InvalidPayload)?;
         if payload.source.as_deref() != Some("kitten_population_candidate") {
-            return Err(format!(
-                "unsupported strategy proposal source `{}`",
-                payload.source.as_deref().unwrap_or("unknown")
-            ));
+            return Err(StrategyProposalRouteError::UnsupportedSource {
+                proposal_source: payload.source.unwrap_or_else(|| "unknown".to_string()),
+            });
         }
 
         let drafting = DefaultEvolutionDraftingHarness::from_config(
@@ -199,28 +208,27 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             &paths.evolution_materialization_results_dir,
             &paths.evolution_validation_results_dir,
             &paths.evolution_reconciliation_results_dir,
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
         let validation = drafting
-            .load_validation_bundle(&payload.validation_bundle_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| {
-                format!(
-                    "missing validation bundle `{}` for strategy proposal `{}`",
-                    payload.validation_bundle_id, proposal.strategy_id
-                )
+            .load_validation_bundle(&payload.validation_bundle_id)?
+            .ok_or_else(|| StrategyProposalRouteError::MissingArtifact {
+                artifact: "validation_bundle",
+                artifact_id: payload.validation_bundle_id.clone(),
+                strategy_id: proposal.strategy_id.clone(),
             })?;
         if validation.report.strategy_id != proposal.strategy_id {
-            return Err(format!(
-                "proposal strategy `{}` did not match validation bundle strategy `{}`",
-                proposal.strategy_id, validation.report.strategy_id
-            ));
+            return Err(StrategyProposalRouteError::ValidationStrategyMismatch {
+                proposal_strategy_id: proposal.strategy_id.clone(),
+                validation_strategy_id: validation.report.strategy_id.clone(),
+            });
         }
         if validation.report.materialization_id != payload.materialization_id {
-            return Err(format!(
-                "proposal materialization `{}` did not match validation bundle materialization `{}`",
-                payload.materialization_id, validation.report.materialization_id
-            ));
+            return Err(
+                StrategyProposalRouteError::ValidationMaterializationMismatch {
+                    proposal_materialization_id: payload.materialization_id.clone(),
+                    validation_materialization_id: validation.report.materialization_id.clone(),
+                },
+            );
         }
 
         let mutation = DefaultEvolutionMutationHarness::from_path(
@@ -228,17 +236,14 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
-        )
-        .map_err(|error| error.to_string())?;
-        let ranking = mutation
-            .load_ranking(&payload.ranking_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| {
-                format!(
-                    "missing ranking `{}` for strategy proposal",
-                    payload.ranking_id
-                )
-            })?;
+        )?;
+        let ranking = mutation.load_ranking(&payload.ranking_id)?.ok_or_else(|| {
+            StrategyProposalRouteError::MissingArtifact {
+                artifact: "ranking",
+                artifact_id: payload.ranking_id.clone(),
+                strategy_id: proposal.strategy_id.clone(),
+            }
+        })?;
         let packet = ranking
             .report
             .review_packets
@@ -248,11 +253,10 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
                     && packet.materialization_id == validation.report.materialization_id
                     && packet.strategy_id == proposal.strategy_id
             })
-            .ok_or_else(|| {
-                format!(
-                    "ranking `{}` has no review packet for strategy `{}` and validation bundle `{}`",
-                    payload.ranking_id, proposal.strategy_id, validation.report.validation_bundle_id
-                )
+            .ok_or_else(|| StrategyProposalRouteError::RankingPacketNotFound {
+                ranking_id: payload.ranking_id.clone(),
+                strategy_id: proposal.strategy_id.clone(),
+                validation_bundle_id: validation.report.validation_bundle_id.clone(),
             })?;
 
         let selection = DefaultEvolutionSelectionHarness::from_path(
@@ -260,49 +264,39 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             &paths.evolution_validation_results_dir,
             &paths.evolution_selection_results_dir,
             &paths.evolution_bridge_results_dir,
-        )
-        .map_err(|error| error.to_string())?;
-        let selection_lookup = selection
-            .create_selection(&payload.ranking_id, &packet.packet_id)
-            .map_err(|error| error.to_string())?;
+        )?;
+        let selection_lookup =
+            selection.create_selection(&payload.ranking_id, &packet.packet_id)?;
 
-        let experiment = crate::replay::load_detector_experiment_manifest(&payload.experiment_path)
-            .map_err(|error| error.to_string())?;
+        let experiment =
+            crate::replay::load_detector_experiment_manifest(&payload.experiment_path)?;
         let verification_store =
-            crate::replay::FileVerificationStore::open(&paths.verification_results_dir)
-                .map_err(|error| error.to_string())?;
+            crate::replay::FileVerificationStore::open(&paths.verification_results_dir)?;
         let verification = verification_store
-            .load(&validation.report.verification_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| {
-                format!(
-                    "missing verification `{}` for strategy `{}`",
-                    validation.report.verification_id, proposal.strategy_id
-                )
+            .load(&validation.report.verification_id)?
+            .ok_or_else(|| StrategyProposalRouteError::MissingArtifact {
+                artifact: "verification",
+                artifact_id: validation.report.verification_id.clone(),
+                strategy_id: proposal.strategy_id.clone(),
             })?;
-        let shadow_store = crate::replay::FileShadowStore::open(&paths.shadow_results_dir)
-            .map_err(|error| error.to_string())?;
+        let shadow_store = crate::replay::FileShadowStore::open(&paths.shadow_results_dir)?;
         let shadow = shadow_store
-            .load(&validation.report.shadow_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| {
-                format!(
-                    "missing shadow `{}` for strategy `{}`",
-                    validation.report.shadow_id, proposal.strategy_id
-                )
+            .load(&validation.report.shadow_id)?
+            .ok_or_else(|| StrategyProposalRouteError::MissingArtifact {
+                artifact: "shadow",
+                artifact_id: validation.report.shadow_id.clone(),
+                strategy_id: proposal.strategy_id.clone(),
             })?;
 
         let safety_gate =
             DefaultFormalSafetyGate::from_config(self.config_path.as_ref().clone(), config.clone());
-        let safety = safety_gate
-            .verify(&StrategyGenome {
-                strategy_id: proposal.strategy_id.clone(),
-                experiment_path: PathBuf::from(&payload.experiment_path),
-                experiment,
-                verification: verification.report.clone(),
-                shadow: shadow.report.clone(),
-            })
-            .map_err(|error| error.to_string())?;
+        let safety = safety_gate.verify(&StrategyGenome {
+            strategy_id: proposal.strategy_id.clone(),
+            experiment_path: PathBuf::from(&payload.experiment_path),
+            experiment,
+            verification: verification.report.clone(),
+            shadow: shadow.report.clone(),
+        })?;
 
         if !safety.passed {
             let reasons = safety
@@ -312,23 +306,19 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
                 .map(|invariant| invariant.name.clone())
                 .collect::<Vec<_>>();
             let summary = safety_rejection_summary(&safety);
-            let _ = selection
-                .record_decision(
-                    &selection_lookup.report.selection_id,
-                    EvolutionProposalDecisionAction::Reject,
-                    &summary,
-                )
-                .map_err(|error| error.to_string())?;
-            let _ = mutation
-                .record_population_candidate_review_outcome(
-                    &paths.evolution_population_results_dir,
-                    &proposal.strategy_id,
-                    EvolutionProposalReviewState::Rejected,
-                    &summary,
-                    &reasons,
-                    now_ms(),
-                )
-                .map_err(|error| error.to_string())?;
+            let _ = selection.record_decision(
+                &selection_lookup.report.selection_id,
+                EvolutionProposalDecisionAction::Reject,
+                &summary,
+            )?;
+            let _ = mutation.record_population_candidate_review_outcome(
+                &paths.evolution_population_results_dir,
+                &proposal.strategy_id,
+                EvolutionProposalReviewState::Rejected,
+                &summary,
+                &reasons,
+                now_ms(),
+            )?;
             self.publish_evolution_status(&config, "formal_safety_rejected");
             return Ok(StrategyProposalRouteReport {
                 strategy_id: proposal.strategy_id,
@@ -350,23 +340,18 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
                 .as_ref()
                 .map(|proof| proof.proof_id.as_str()),
             &safety.bundle_sha256,
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
 
-        let accepted = selection
-            .record_decision(
-                &selection_lookup.report.selection_id,
-                EvolutionProposalDecisionAction::AcceptForCanary,
-                "formal safety gate accepted candidate for canary admission",
-            )
-            .map_err(|error| error.to_string())?;
-        let bridge = selection
-            .bridge_selection(
-                &paths.evolution_queue_results_dir,
-                &accepted.report.selection_id,
-                "formal safety gate accepted candidate for canary admission",
-            )
-            .map_err(|error| error.to_string())?;
+        let accepted = selection.record_decision(
+            &selection_lookup.report.selection_id,
+            EvolutionProposalDecisionAction::AcceptForCanary,
+            "formal safety gate accepted candidate for canary admission",
+        )?;
+        let bridge = selection.bridge_selection(
+            &paths.evolution_queue_results_dir,
+            &accepted.report.selection_id,
+            "formal safety gate accepted candidate for canary admission",
+        )?;
 
         if !bridge.report.handoff_ready {
             let reasons = bridge
@@ -385,16 +370,14 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
                     .collect::<Vec<_>>()
                     .join("; ")
             );
-            let _ = mutation
-                .record_population_candidate_review_outcome(
-                    &paths.evolution_population_results_dir,
-                    &proposal.strategy_id,
-                    EvolutionProposalReviewState::Blocked,
-                    &summary,
-                    &reasons,
-                    now_ms(),
-                )
-                .map_err(|error| error.to_string())?;
+            let _ = mutation.record_population_candidate_review_outcome(
+                &paths.evolution_population_results_dir,
+                &proposal.strategy_id,
+                EvolutionProposalReviewState::Blocked,
+                &summary,
+                &reasons,
+                now_ms(),
+            )?;
             self.publish_evolution_status(&config, "canary_admission_blocked");
             return Ok(StrategyProposalRouteReport {
                 strategy_id: proposal.strategy_id,
@@ -407,10 +390,9 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
         }
 
         let queue_proposal_id = bridge.report.queue_proposal_id.clone().ok_or_else(|| {
-            format!(
-                "selection bridge `{}` did not persist a queue proposal id",
-                bridge.report.bridge_id
-            )
+            StrategyProposalRouteError::MissingQueueProposalId {
+                bridge_id: bridge.report.bridge_id.clone(),
+            }
         })?;
 
         // Attach assurance lineage to the queue proposal so the handoff
@@ -418,13 +400,13 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
         {
             let queue_store = crate::evolution::FileEvolutionProposalStore::open(
                 &paths.evolution_queue_results_dir,
-            )
-            .map_err(|error| error.to_string())?;
+            )?;
             let mut proposal_report = queue_store
-                .load(&queue_proposal_id)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| {
-                    format!("queue proposal `{queue_proposal_id}` not found after bridge")
+                .load(&queue_proposal_id)?
+                .ok_or_else(|| StrategyProposalRouteError::MissingArtifact {
+                    artifact: "queue_proposal",
+                    artifact_id: queue_proposal_id.clone(),
+                    strategy_id: proposal.strategy_id.clone(),
                 })?
                 .report;
             if proposal_report.assurance.is_none() {
@@ -447,9 +429,7 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
                         harvested_case_ids: Vec::new(),
                         waiver: None,
                     });
-                queue_store
-                    .persist(&proposal_report)
-                    .map_err(|error| error.to_string())?;
+                queue_store.persist(&proposal_report)?;
             }
         }
 
@@ -457,40 +437,32 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             self.config_path.as_ref().clone(),
             config.clone(),
             &paths.evolution_handoff_results_dir,
-        )
-        .map_err(|error| error.to_string())?;
-        let handoff = handoff_harness
-            .create_handoff(
-                &paths.evolution_queue_results_dir,
-                &queue_proposal_id,
-                &paths.shadow_results_dir,
-                &validation.report.shadow_id,
-            )
-            .map_err(|error| error.to_string())?;
+        )?;
+        let handoff = handoff_harness.create_handoff(
+            &paths.evolution_queue_results_dir,
+            &queue_proposal_id,
+            &paths.shadow_results_dir,
+            &validation.report.shadow_id,
+        )?;
         let canary_harness = DefaultCanaryHarness::from_config(
             self.config_path.as_ref().clone(),
             config.clone(),
             &paths.canary_results_dir,
-        )
-        .map_err(|error| error.to_string())?;
-        let canary = handoff_harness
-            .launch_canary(
-                &canary_harness,
-                &paths.verification_results_dir,
-                &paths.shadow_results_dir,
-                &handoff.report.handoff_id,
-            )
-            .map_err(|error| error.to_string())?;
-        let _ = mutation
-            .record_population_candidate_review_outcome(
-                &paths.evolution_population_results_dir,
-                &proposal.strategy_id,
-                EvolutionProposalReviewState::AcceptedForCanary,
-                "formal safety gate accepted candidate and launched canary admission",
-                &Vec::new(),
-                now_ms(),
-            )
-            .map_err(|error| error.to_string())?;
+        )?;
+        let canary = handoff_harness.launch_canary(
+            &canary_harness,
+            &paths.verification_results_dir,
+            &paths.shadow_results_dir,
+            &handoff.report.handoff_id,
+        )?;
+        let _ = mutation.record_population_candidate_review_outcome(
+            &paths.evolution_population_results_dir,
+            &proposal.strategy_id,
+            EvolutionProposalReviewState::AcceptedForCanary,
+            "formal safety gate accepted candidate and launched canary admission",
+            &Vec::new(),
+            now_ms(),
+        )?;
         self.publish_evolution_status(&config, "canary_admission_launched");
 
         Ok(StrategyProposalRouteReport {
@@ -740,7 +712,9 @@ fn runtime_event_matches_scope(event: &RuntimeEvent, scope: &ProvidenceContextSc
             .hunt_id
             .as_deref()
             .is_none_or(|value| event_id == value),
-        RuntimeEvent::EvolutionStatus { .. } | RuntimeEvent::AgentHealth { .. } => false,
+        RuntimeEvent::EvolutionStatus { .. }
+        | RuntimeEvent::AgentHealth { .. }
+        | RuntimeEvent::TamperAlert { .. } => false,
     }
 }
 
@@ -1327,6 +1301,9 @@ pub struct IngestState {
     providence_adapter: Option<Arc<ProvidenceIncidentAdapter>>,
     providence_task_started: Arc<AtomicBool>,
     governance_policy: Option<Arc<GovernancePolicy>>,
+    startup_attestation: Option<Arc<StartupAttestationReport>>,
+    anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
+    runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
 }
 
 impl IngestState {
@@ -1347,6 +1324,7 @@ impl IngestState {
     ) -> Result<Self, IngestBuildError> {
         let config_path = config_path.into();
         let template = config.clone();
+        let configured_mode = template.runtime.mode;
         let resolved = resolve_outbound_secrets(config, Some(&config_path)).map_err(|source| {
             RuntimeConfigError::Validation {
                 source_name: config_path.display().to_string(),
@@ -1387,6 +1365,23 @@ impl IngestState {
             providence_adapter,
             providence_task_started: Arc::new(AtomicBool::new(false)),
             governance_policy: None,
+            startup_attestation: None,
+            anti_tamper_report: Arc::new(ArcSwap::from_pointee(AntiTamperReport::disabled())),
+            runtime_degradation: Arc::new(ArcSwap::from_pointee(
+                derive_runtime_degradation_status(RuntimeDegradationSignals {
+                    configured_mode,
+                    detector_ready: true,
+                    substrate_ready: true,
+                    replay_store_ready: true,
+                    startup_attestation_ready: true,
+                    anti_tamper_ready: true,
+                    heap_ready: true,
+                    draining: false,
+                    degraded_agents: 0,
+                    failed_agents: 0,
+                    transitioned_at_ms: now_ms(),
+                }),
+            )),
         };
         state.install_notification_payload_builder();
         Ok(state)
@@ -1587,6 +1582,16 @@ impl IngestState {
         self
     }
 
+    pub fn with_startup_attestation(mut self, report: StartupAttestationReport) -> Self {
+        self.startup_attestation = Some(Arc::new(report));
+        self
+    }
+
+    pub fn with_anti_tamper_report(self, report: AntiTamperReport) -> Self {
+        self.anti_tamper_report.store(Arc::new(report));
+        self
+    }
+
     pub fn with_approval_harness(mut self, approval_harness: DefaultApprovalHarness) -> Self {
         self.approval_harness = Some(Arc::new(approval_harness));
         self
@@ -1698,6 +1703,94 @@ impl IngestState {
 
     pub fn current_prometheus_metrics(&self) -> Option<CriticalPathMetrics> {
         self.stack.load_full().service.prometheus_metrics().cloned()
+    }
+
+    pub fn current_runtime_mode(&self) -> RuntimeMode {
+        self.stack.load_full().service.mode()
+    }
+
+    pub fn current_anti_tamper_config(&self) -> RuntimeAntiTamperConfig {
+        self.stack
+            .load_full()
+            .service
+            .config
+            .runtime
+            .anti_tamper
+            .clone()
+    }
+
+    pub fn current_startup_attestation(&self) -> Option<StartupAttestationReport> {
+        self.startup_attestation
+            .as_ref()
+            .map(|report| report.as_ref().clone())
+    }
+
+    pub fn current_anti_tamper_report(&self) -> AntiTamperReport {
+        self.anti_tamper_report.load_full().as_ref().clone()
+    }
+
+    pub fn update_anti_tamper_report(&self, report: AntiTamperReport) {
+        self.anti_tamper_report.store(Arc::new(report));
+    }
+
+    pub async fn current_runtime_degradation(&self) -> RuntimeDegradationStatus {
+        let stack = self.stack.load_full();
+        let substrate_ready = match stack.substrate.health().await {
+            Ok(health) => {
+                health.ready
+                    && (!stack.service.config.runtime.require_durable_live_response
+                        || stack.service.mode() != RuntimeMode::LiveResponse
+                        || health.durable)
+            }
+            Err(_) => false,
+        };
+        let replay_store_ready = stack
+            .replay_store
+            .health()
+            .map(|health| health.ready)
+            .unwrap_or(false);
+        let startup_attestation_ready = self
+            .current_startup_attestation()
+            .map(|report| report.ready_for_mode(stack.service.mode()))
+            .unwrap_or(!matches!(stack.service.mode(), RuntimeMode::LiveResponse));
+        let anti_tamper_ready = self.current_anti_tamper_report().effective_ready();
+        let heap_ready = self.sample_heap_pressure().as_ref().is_none_or(|snapshot| {
+            snapshot.pressure_ratio <= stack.service.config.runtime.max_heap_pressure
+        });
+        let agent_health = self.current_agent_health();
+        let (_, degraded_agents, failed_agents) = active_agent_counts(&agent_health);
+        let detector_ready = self.detector_status().ready;
+        let previous = self.runtime_degradation.load_full();
+        let candidate = derive_runtime_degradation_status(RuntimeDegradationSignals {
+            configured_mode: stack.service.mode(),
+            detector_ready,
+            substrate_ready,
+            replay_store_ready,
+            startup_attestation_ready,
+            anti_tamper_ready,
+            heap_ready,
+            draining: self.is_draining(),
+            degraded_agents,
+            failed_agents,
+            transitioned_at_ms: now_ms(),
+        });
+        let degradation = if candidate.same_state_as(previous.as_ref()) {
+            RuntimeDegradationStatus {
+                transitioned_at_ms: previous.transitioned_at_ms,
+                ..candidate
+            }
+        } else {
+            candidate
+        };
+        self.runtime_degradation
+            .store(Arc::new(degradation.clone()));
+        degradation
+    }
+
+    pub fn request_shutdown(&self) {
+        if let Some(tx) = &self.shutdown_tx {
+            let _ = tx.send(true);
+        }
     }
 
     pub fn current_evasion_coverage(
@@ -2056,6 +2149,32 @@ pub async fn ingest_events_handler(
     payload: Result<Json<IngestRequest>, JsonRejection>,
 ) -> Response {
     let correlation_id = Uuid::new_v4().to_string();
+    let degradation = state.current_runtime_degradation().await;
+    if !degradation.capabilities.accepts_ingest {
+        tracing::warn!(
+            correlation_id = %correlation_id,
+            module = module_path!(),
+            level = degradation.level.as_str(),
+            summary = %degradation.summary,
+            "ingest rejected by runtime degradation gate"
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            ResponseJson(IngestErrorBody {
+                error: if degradation.capabilities.drains_ingest {
+                    "runtime is draining and not accepting new ingest requests".to_string()
+                } else {
+                    format!(
+                        "runtime degradation level `{}` is not accepting ingest requests: {}",
+                        degradation.level.as_str(),
+                        degradation.summary
+                    )
+                },
+                correlation_id,
+            }),
+        )
+            .into_response();
+    }
     let request_guard = match state.try_begin_ingest_request() {
         Ok(guard) => guard,
         Err(()) => {

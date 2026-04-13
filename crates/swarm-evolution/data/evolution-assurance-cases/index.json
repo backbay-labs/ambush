@@ -1,6 +1,816 @@
 {
   "entries": [
     {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040787208:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040787208",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040787208,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040787208:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040787208",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040787208,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040787208:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040787208",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040787208,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040787208:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040787208",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040787208,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040787208:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040787208",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040787208,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040787208:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040787208",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040787208,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040787208_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040770772:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040770772",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040770772,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040770772:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040770772",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040770772,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040770772:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040770772",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040770772,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040770772:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040770772",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040770772,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040770772:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040770772",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040770772,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040770772:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040770772",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040770772,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040770772_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040386633:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040386633",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040386633,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040386633:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040386633",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040386633,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040386633:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040386633",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040386633,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040386633:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040386633",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040386633,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040386633:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040386633",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040386633,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040386633:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040386633",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040386633,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040386633_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040359956:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040359956",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040359956,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040359956:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040359956",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040359956,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040359956:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040359956",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040359956,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040359956:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040359956",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040359956,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040359956:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040359956",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040359956,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040359956:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040359956",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040359956,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040359956_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040237700:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040237700",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040237700,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040237700:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040237700",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040237700,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040237700:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040237700",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040237700,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040237700:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040237700",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040237700,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040237700:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040237700",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040237700,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776040237700:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776040237700",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776040237700,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776040237700_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039594752:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039594752",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039594752,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039594752:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039594752",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039594752,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039594752:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039594752",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039594752,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039594752:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039594752",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039594752,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039594752:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039594752",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039594752,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039594752:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039594752",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039594752,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039594752_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039320771:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039320771",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039320771,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039320771:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039320771",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039320771,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039320771:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039320771",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039320771,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039320771:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039320771",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039320771,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039320771:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039320771",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039320771,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039320771:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039320771",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039320771,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039320771_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039066222:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039066222",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039066222,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039066222:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039066222",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039066222,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039066222:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039066222",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039066222,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039066222:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039066222",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039066222,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039066222:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039066222",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039066222,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039066222:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776039066222",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776039066222,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776039066222_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038927202:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038927202",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038927202,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038927202:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038927202",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038927202,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038927202:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038927202",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038927202,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038927202:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038927202",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038927202,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038927202:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038927202",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038927202,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038927202:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038927202",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038927202,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038927202_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038784594:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038784594",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038784594,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038784594:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038784594",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038784594,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038784594:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038784594",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038784594,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038784594:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038784594",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038784594,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038784594:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038784594",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038784594,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038784594:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038784594",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038784594,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038784594_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038256005:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038256005",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038256005,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038256005:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038256005",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038256005,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038256005:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038256005",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038256005,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038256005:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038256005",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038256005,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038256005:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038256005",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038256005,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038256005:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038256005",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038256005,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038256005_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038235545:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038235545",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038235545,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038235545:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038235545",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038235545,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038235545:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038235545",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038235545,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038235545:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038235545",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038235545,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038235545:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038235545",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038235545,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038235545:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038235545",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038235545,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038235545_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038218815:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038218815",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038218815,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038218815:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038218815",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038218815,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038218815:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038218815",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038218815,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038218815:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038218815",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038218815,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038218815:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038218815",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038218815,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776038218815:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776038218815",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776038218815,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776038218815_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776037093114:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776037093114",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776037093114,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776037093114:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776037093114",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776037093114,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776037093114:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776037093114",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776037093114,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776037093114:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776037093114",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776037093114,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776037093114:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776037093114",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776037093114,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776037093114:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776037093114",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776037093114,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776037093114_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776030361487:coverage_gap:evasion_command_and_control_network:0",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776030361487",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776030361487,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_command_and_control_network_0.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_command_and_control_network_0.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776030361487:coverage_gap:evasion_credential_access_harvest:1",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776030361487",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776030361487,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_credential_access_harvest_1.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_credential_access_harvest_1.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776030361487:coverage_gap:evasion_data_exfiltration_dns:2",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776030361487",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776030361487,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_data_exfiltration_dns_2.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_data_exfiltration_dns_2.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776030361487:coverage_gap:evasion_defense_evasion_fileless:3",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776030361487",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776030361487,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_defense_evasion_fileless_3.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_defense_evasion_fileless_3.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776030361487:coverage_gap:evasion_lateral_movement_remote_admin:4",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776030361487",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776030361487,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_lateral_movement_remote_admin_4.json"
+    },
+    {
+      "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776030361487:coverage_gap:evasion_persistence_autostart:5",
+      "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1776030361487",
+      "detector": "suspicious_process_tree",
+      "kind": "coverage_gap",
+      "created_at_ms": 1776030361487,
+      "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_persistence_autostart_5.yaml",
+      "bundle_path": "data/evolution-assurance-cases/reports/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1776030361487_coverage_gap_evasion_persistence_autostart_5.json"
+    },
+    {
       "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1775950889796:coverage_gap:evasion_command_and_control_network:0",
       "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1775950889796",
       "detector": "suspicious_process_tree",

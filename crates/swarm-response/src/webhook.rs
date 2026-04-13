@@ -63,20 +63,78 @@ impl WebhookAdapter {
 
     fn action_summary(action: &ResponseAction) -> String {
         match action {
-            ResponseAction::BlockEgress { target } => format!("block egress to {target}"),
-            ResponseAction::IsolateHost { host_id } => format!("isolate host {host_id}"),
-            ResponseAction::RevokeCredential { credential_id } => {
-                format!("revoke credential {credential_id}")
-            }
             ResponseAction::DeployDecoy {
                 decoy_type,
                 target_zone,
             } => format!("deploy {decoy_type} decoy in {target_zone}"),
             ResponseAction::Escalate { summary, .. } => summary.clone(),
+            ResponseAction::BlockEgress { target } => format!("block egress to {target}"),
+            ResponseAction::IsolateHost { host_id } => format!("isolate host {host_id}"),
+            ResponseAction::RevokeCredential { credential_id } => {
+                format!("revoke credential {credential_id}")
+            }
+            ResponseAction::SinkholeDns { domain } => format!("sinkhole DNS for {domain}"),
+            ResponseAction::TerminateUserSession {
+                host_id,
+                session_id,
+            } => format!("terminate session {session_id} on {host_id}"),
+            ResponseAction::TriggerEdrScan {
+                host_id,
+                scan_profile,
+            } => format!("run {scan_profile} EDR scan on {host_id}"),
+            ResponseAction::InjectFirewallRule {
+                host_id, rule_name, ..
+            } => format!("inject firewall rule {rule_name} on {host_id}"),
+            ResponseAction::QuarantineFile { host_id, file_path } => {
+                format!("quarantine file {file_path} on {host_id}")
+            }
+            ResponseAction::KillProcess {
+                host_id,
+                process_name,
+            } => format!("kill process {process_name} on {host_id}"),
+            ResponseAction::SuspendProcess {
+                host_id,
+                process_name,
+            } => format!("suspend process {process_name} on {host_id}"),
+            ResponseAction::DisableUserAccount { user_id } => {
+                format!("disable user account {user_id}")
+            }
+            ResponseAction::ForcePasswordReset { user_id } => {
+                format!("force password reset for {user_id}")
+            }
+            ResponseAction::RemoveScheduledTask { host_id, task_name } => {
+                format!("remove scheduled task {task_name} on {host_id}")
+            }
         }
     }
 
-    fn payload(&self, request: &ActionRequest, lease: &CapabilityLease) -> Value {
+    fn payload(
+        &self,
+        request: &ActionRequest,
+        lease: &CapabilityLease,
+    ) -> Result<Value, Box<ResponseReceipt>> {
+        if !matches!(
+            request.action,
+            ResponseAction::DeployDecoy { .. } | ResponseAction::Escalate { .. }
+        ) {
+            return Err(Box::new(ResponseReceipt {
+                receipt_id: self.receipt_id(request, lease),
+                action: request.action.kind().to_string(),
+                mode: ExecutionMode::Enforced,
+                status: ResponseStatus::Failed,
+                summary: format!(
+                    "webhook adapter does not support action `{}`",
+                    request.action.kind()
+                ),
+                details: json!({
+                    "adapter": "webhook",
+                    "url": self.config.url,
+                    "lease_id": lease.capability_id,
+                }),
+                audit: Default::default(),
+            }));
+        }
+
         let mut payload = json!({
             "text": format!(
                 "[{}] {}: {}",
@@ -101,7 +159,7 @@ impl WebhookAdapter {
             object.insert("channel".to_string(), json!(channel));
         }
 
-        payload
+        Ok(payload)
     }
 }
 
@@ -124,7 +182,10 @@ impl ResponseExecutor for WebhookAdapter {
         mode: ExecutionMode,
     ) -> Result<ResponseReceipt, ResponseError> {
         let receipt_id = self.receipt_id(request, lease);
-        let payload = self.payload(request, lease);
+        let payload = match self.payload(request, lease) {
+            Ok(payload) => payload,
+            Err(receipt) => return Ok(*receipt),
+        };
 
         if mode == ExecutionMode::DryRun {
             return Ok(ResponseReceipt {

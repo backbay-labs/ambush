@@ -377,7 +377,7 @@ pub enum Severity {
 }
 
 /// Response actions that Pouncers can execute (after consensus).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseAction {
     /// Block network egress to a target.
@@ -386,6 +386,41 @@ pub enum ResponseAction {
     IsolateHost { host_id: String },
     /// Revoke a credential or capability.
     RevokeCredential { credential_id: String },
+    /// Redirect one domain or DNS name to a defensive sinkhole.
+    SinkholeDns { domain: String },
+    /// Terminate one scoped user session on one host.
+    TerminateUserSession { host_id: String, session_id: String },
+    /// Trigger an EDR scan on one host with one named profile.
+    TriggerEdrScan {
+        host_id: String,
+        scan_profile: String,
+    },
+    /// Inject one firewall rule on one host.
+    InjectFirewallRule {
+        host_id: String,
+        rule_name: String,
+        direction: String,
+        cidr: String,
+        port: Option<u16>,
+    },
+    /// Quarantine one file on one host.
+    QuarantineFile { host_id: String, file_path: String },
+    /// Terminate one process on one host.
+    KillProcess {
+        host_id: String,
+        process_name: String,
+    },
+    /// Suspend one process on one host.
+    SuspendProcess {
+        host_id: String,
+        process_name: String,
+    },
+    /// Disable one user account.
+    DisableUserAccount { user_id: String },
+    /// Force a password reset for one user account.
+    ForcePasswordReset { user_id: String },
+    /// Remove one scheduled task on one host.
+    RemoveScheduledTask { host_id: String, task_name: String },
     /// Deploy a deception asset.
     DeployDecoy {
         decoy_type: String,
@@ -401,6 +436,11 @@ pub enum ResponseRehearsalScopeKind {
     NetworkTarget,
     Host,
     Credential,
+    UserSession,
+    File,
+    Process,
+    UserAccount,
+    ScheduledTask,
     Zone,
     OperatorQueue,
 }
@@ -411,6 +451,16 @@ pub enum ResponseBlastRadiusImpact {
     NetworkEgressBlocked,
     HostConnectivityIsolated,
     CredentialAccessRevoked,
+    DnsResolutionSinkholed,
+    UserSessionTerminated,
+    HostScanTriggered,
+    HostFirewallPolicyChanged,
+    FileQuarantined,
+    ProcessTerminated,
+    ProcessSuspended,
+    UserAccountDisabled,
+    PasswordResetEnforced,
+    ScheduledTaskRemoved,
     DeceptionCoverageChanged,
     OperatorEscalationOnly,
 }
@@ -431,6 +481,16 @@ pub enum ResponseRollbackStepKind {
     RemoveNetworkBlock,
     RestoreHostConnectivity,
     RestoreCredential,
+    RemoveDnsSinkhole,
+    ReauthenticateUserSession,
+    CancelHostScan,
+    RemoveFirewallRule,
+    ReleaseQuarantinedFile,
+    RestartProcess,
+    ResumeProcess,
+    ReenableUserAccount,
+    ClearPasswordResetRequirement,
+    RestoreScheduledTask,
     WithdrawDecoy,
     CloseEscalation,
 }
@@ -464,6 +524,16 @@ impl ResponseAction {
             Self::BlockEgress { .. } => "block_egress",
             Self::IsolateHost { .. } => "isolate_host",
             Self::RevokeCredential { .. } => "revoke_credential",
+            Self::SinkholeDns { .. } => "sinkhole_dns",
+            Self::TerminateUserSession { .. } => "terminate_user_session",
+            Self::TriggerEdrScan { .. } => "trigger_edr_scan",
+            Self::InjectFirewallRule { .. } => "inject_firewall_rule",
+            Self::QuarantineFile { .. } => "quarantine_file",
+            Self::KillProcess { .. } => "kill_process",
+            Self::SuspendProcess { .. } => "suspend_process",
+            Self::DisableUserAccount { .. } => "disable_user_account",
+            Self::ForcePasswordReset { .. } => "force_password_reset",
+            Self::RemoveScheduledTask { .. } => "remove_scheduled_task",
             Self::DeployDecoy { .. } => "deploy_decoy",
             Self::Escalate { .. } => "escalate",
         }

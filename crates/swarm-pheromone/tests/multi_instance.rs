@@ -3,14 +3,21 @@
 
 //! Ignored multi-instance integration tests for the shared JetStream substrate.
 //!
-//! These require a JetStream-enabled NATS server at `NATS_URL` or
-//! `nats://127.0.0.1:4222`.
+//! Run them through `tools/with-nats-jetstream.sh` so the repo owns the NATS
+//! lifecycle instead of relying on a manually started server.
+//!
+//! Example:
+//! `bash tools/with-nats-jetstream.sh cargo test -p swarm-pheromone --test multi_instance cross_instance_deposit_visibility -- --ignored --exact`
 
+use ed25519_dalek::{Signer, SigningKey};
+use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
 use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
 use swarm_core::types::{AgentId, Severity};
-use swarm_pheromone::{DepositQuery, JetStreamPheromoneSubstrate, PheromoneSubstrate};
+use swarm_pheromone::{
+    DepositQuery, DepositSigningPayload, JetStreamPheromoneSubstrate, PheromoneSubstrate,
+};
 
 fn nats_url() -> String {
     std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string())
@@ -52,19 +59,83 @@ where
 }
 
 fn test_deposit(agent: &str, ts: i64, confidence: f64) -> PheromoneDeposit {
-    PheromoneDeposit {
+    let signing_key = signing_key_for_label(agent);
+    let derived_agent_id = agent_id_for_label(agent);
+    let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
         indicator: serde_json::json!({"test": true}),
         threat_class: ThreatClass::Execution,
         severity: Severity::High,
         confidence,
         timestamp: ts,
         decay_half_life: 3600.0,
-        agent_id: AgentId(agent.to_string()),
-        agent_identity: String::new(),
+        agent_id: derived_agent_id.clone(),
+        agent_identity: derived_agent_id.0,
         agent_role: None,
         signature: Vec::new(),
         agent_key: Vec::new(),
-    }
+    };
+    sign_deposit(&mut deposit, &signing_key);
+    deposit
+}
+
+fn strategy_scoped_deposit(
+    base_agent: &str,
+    scope: &str,
+    ts: i64,
+    confidence: f64,
+) -> PheromoneDeposit {
+    let signing_key = signing_key_for_label(base_agent);
+    let derived_agent_id = agent_id_for_label(base_agent);
+    let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
+        indicator: serde_json::json!({
+            "test": true,
+            "scope": scope,
+        }),
+        threat_class: ThreatClass::Execution,
+        severity: Severity::High,
+        confidence,
+        timestamp: ts,
+        decay_half_life: 3600.0,
+        agent_id: AgentId(format!("{}:{scope}", derived_agent_id.0)),
+        agent_identity: derived_agent_id.0,
+        agent_role: None,
+        signature: Vec::new(),
+        agent_key: Vec::new(),
+    };
+    sign_deposit(&mut deposit, &signing_key);
+    deposit
+}
+
+fn signing_key_for_label(label: &str) -> SigningKey {
+    let digest = Sha256::digest(label.as_bytes());
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&digest);
+    SigningKey::from_bytes(&seed)
+}
+
+fn agent_id_for_label(label: &str) -> AgentId {
+    AgentId::from_verifying_key(&signing_key_for_label(label).verifying_key())
+}
+
+fn sign_deposit(deposit: &mut PheromoneDeposit, key: &SigningKey) {
+    let payload = DepositSigningPayload {
+        schema_version: deposit.schema_version,
+        indicator: &deposit.indicator,
+        threat_class: &deposit.threat_class,
+        severity: &deposit.severity,
+        confidence: deposit.confidence,
+        timestamp: deposit.timestamp,
+        decay_half_life: deposit.decay_half_life,
+        agent_id: &deposit.agent_id,
+        agent_identity: &deposit.agent_identity,
+        agent_role: deposit.agent_role,
+    };
+    let payload_bytes = serde_json::to_vec(&payload).expect("deposit signing payload");
+    let signature = key.sign(&payload_bytes);
+    deposit.signature = signature.to_bytes().to_vec();
+    deposit.agent_key = key.verifying_key().to_bytes().to_vec();
 }
 
 fn unique_bucket(label: &str) -> String {
@@ -106,7 +177,7 @@ async fn connect_pair(
 }
 
 #[tokio::test]
-#[ignore = "requires a JetStream-enabled NATS server"]
+#[ignore = "run via tools/with-nats-jetstream.sh"]
 async fn cross_instance_deposit_visibility() {
     let Some((alpha, beta)) = connect_pair("visibility").await else {
         return;
@@ -152,7 +223,7 @@ async fn cross_instance_deposit_visibility() {
 }
 
 #[tokio::test]
-#[ignore = "requires a JetStream-enabled NATS server"]
+#[ignore = "run via tools/with-nats-jetstream.sh"]
 async fn escalation_requires_min_sources() {
     let Some((alpha, beta)) = connect_pair("threshold").await else {
         return;
@@ -160,10 +231,12 @@ async fn escalation_requires_min_sources() {
     let ts = now_timestamp();
     let mut first = test_deposit("instance-alpha", ts, 1.0);
     first.indicator = serde_json::json!({"test": true, "sequence": 1});
+    sign_deposit(&mut first, &signing_key_for_label("instance-alpha"));
     alpha.deposit(first).await.unwrap();
 
     let mut second = test_deposit("instance-alpha", ts, 1.0);
     second.indicator = serde_json::json!({"test": true, "sequence": 2});
+    sign_deposit(&mut second, &signing_key_for_label("instance-alpha"));
     alpha.deposit(second).await.unwrap();
     wait_until(|| async {
         alpha
@@ -202,7 +275,7 @@ async fn escalation_requires_min_sources() {
 }
 
 #[tokio::test]
-#[ignore = "requires a JetStream-enabled NATS server"]
+#[ignore = "run via tools/with-nats-jetstream.sh"]
 async fn single_instance_no_inflation() {
     let Some((alpha, _beta)) = connect_pair("single-source").await else {
         return;
@@ -233,7 +306,7 @@ async fn single_instance_no_inflation() {
 }
 
 #[tokio::test]
-#[ignore = "requires a JetStream-enabled NATS server"]
+#[ignore = "run via tools/with-nats-jetstream.sh"]
 async fn cross_instance_query_deposits() {
     let Some((alpha, beta)) = connect_pair("query").await else {
         return;
@@ -263,14 +336,95 @@ async fn cross_instance_query_deposits() {
     assert!(
         deposits
             .iter()
-            .any(|deposit| deposit.agent_id.0 == "instance-alpha")
+            .any(|deposit| deposit.agent_id == agent_id_for_label("instance-alpha"))
     );
     assert!(
         deposits
             .iter()
-            .any(|deposit| deposit.agent_id.0 == "instance-beta")
+            .any(|deposit| deposit.agent_id == agent_id_for_label("instance-beta"))
     );
 
     let mirrored = beta.query_deposits(DepositQuery::recent(10)).await.unwrap();
     assert_eq!(mirrored.len(), 2);
+}
+
+#[tokio::test]
+#[ignore = "run via tools/with-nats-jetstream.sh"]
+async fn strategy_scoped_agent_ids_count_as_distinct_sources_across_instances() {
+    let Some((alpha, beta)) = connect_pair("strategy-scope-distinct").await else {
+        return;
+    };
+    let ts = now_timestamp();
+    alpha
+        .deposit(strategy_scoped_deposit(
+            "shared-whisker",
+            "suspicious_process_tree",
+            ts,
+            0.9,
+        ))
+        .await
+        .unwrap();
+    beta.deposit(strategy_scoped_deposit(
+        "shared-whisker",
+        "dns_exfiltration",
+        ts + 1,
+        0.9,
+    ))
+    .await
+    .unwrap();
+    wait_until(|| async {
+        alpha
+            .query_concentration(&ThreatClass::Execution, ts + 2)
+            .await
+            .map(|concentration| concentration.distinct_sources == 2)
+            .unwrap_or(false)
+    })
+    .await;
+
+    let concentration = alpha
+        .query_concentration(&ThreatClass::Execution, ts + 2)
+        .await
+        .unwrap();
+    assert_eq!(concentration.distinct_sources, 2);
+}
+
+#[tokio::test]
+#[ignore = "run via tools/with-nats-jetstream.sh"]
+async fn repeated_strategy_scoped_agent_id_collapses_to_one_source() {
+    let Some((alpha, _beta)) = connect_pair("strategy-scope-collapsed").await else {
+        return;
+    };
+    let ts = now_timestamp();
+    alpha
+        .deposit(strategy_scoped_deposit(
+            "shared-whisker",
+            "behavioral_anomaly",
+            ts,
+            0.9,
+        ))
+        .await
+        .unwrap();
+    alpha
+        .deposit(strategy_scoped_deposit(
+            "shared-whisker",
+            "behavioral_anomaly",
+            ts + 1,
+            0.8,
+        ))
+        .await
+        .unwrap();
+    wait_until(|| async {
+        alpha
+            .query_concentration(&ThreatClass::Execution, ts + 2)
+            .await
+            .map(|concentration| concentration.distinct_sources == 1)
+            .unwrap_or(false)
+    })
+    .await;
+
+    let concentration = alpha
+        .query_concentration(&ThreatClass::Execution, ts + 2)
+        .await
+        .unwrap();
+    assert_eq!(concentration.distinct_sources, 1);
 }

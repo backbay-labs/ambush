@@ -1,0 +1,34 @@
+{
+  "entries": [
+    {
+      "verdict_id": "approval-verdict:1775999669108:ddaf2fede53b",
+      "approval_set_id": "approval-set:1775999669082:8115c0109f59",
+      "ledger_id": "approval-ledger:1775999669082:b4154e22f68c",
+      "status": "approved",
+      "approve_count": 1,
+      "reject_count": 0,
+      "created_at_ms": 1775999669108,
+      "bundle_path": "data/approval-verdicts/reports/approval-verdict_1775999669108_ddaf2fede53b.json"
+    },
+    {
+      "verdict_id": "approval-verdict:1775999389015:1b6903d82da2",
+      "approval_set_id": "approval-set:1775999389010:78f831a60ffb",
+      "ledger_id": "approval-ledger:1775999389010:af0e7ffe9869",
+      "status": "approved",
+      "approve_count": 1,
+      "reject_count": 0,
+      "created_at_ms": 1775999389015,
+      "bundle_path": "data/approval-verdicts/reports/approval-verdict_1775999389015_1b6903d82da2.json"
+    },
+    {
+      "verdict_id": "approval-verdict:1775999320345:defd1f49d3f4",
+      "approval_set_id": "approval-set:1775999320340:f9616609ea12",
+      "ledger_id": "approval-ledger:1775999320340:182fce43b8b8",
+      "status": "approved",
+      "approve_count": 1,
+      "reject_count": 0,
+      "created_at_ms": 1775999320345,
+      "bundle_path": "data/approval-verdicts/reports/approval-verdict_1775999320345_defd1f49d3f4.json"
+    }
+  ]
+}

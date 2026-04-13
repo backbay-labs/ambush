@@ -228,6 +228,7 @@ impl CorrelationEngine {
             providence_reconciliation: None,
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
         }
     }
 }

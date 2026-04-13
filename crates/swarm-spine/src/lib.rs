@@ -31,9 +31,11 @@ pub use envelope::{
 };
 pub use incident::{
     AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
-    FileIncidentStore, IncidentEvidenceLink, IncidentGraphDimension, IncidentLookup,
-    IncidentMemberDecision, IncidentRecord, IncidentStore, IncidentStoreError, IncidentStoreHealth,
-    MemoryIncidentStore,
+    FalsePositiveDetectorSummary, FalsePositiveHostSummary, FalsePositiveMeasurement,
+    FalsePositiveMeasurementReport, FileIncidentStore, IncidentEvidenceLink,
+    IncidentGraphDimension, IncidentLookup, IncidentMemberDecision, IncidentRecord, IncidentStore,
+    IncidentStoreError, IncidentStoreHealth, MemoryIncidentStore,
+    summarize_false_positive_measurements,
 };
 pub use investigation::{
     ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,

@@ -1,0 +1,104 @@
+version: 1
+rules:
+  - id: outlook_mshta_transfer
+    name: Outlook installer proxy to mshta download chain
+    description: Detects an Outlook-delivered installer that hands off to mshta before an outbound transfer.
+    threat_class: command_and_control
+    severity: CRITICAL
+    confidence: 0.96
+    max_span_ms: 180000
+    tags:
+      - sequence
+      - kill_chain
+      - outlook
+      - mshta
+    attack_chain:
+      - technique_id: T1218.007
+        name: Msiexec
+        kill_chain_stage: execution
+      - technique_id: T1218.005
+        name: Mshta
+        kill_chain_stage: defense_evasion
+      - technique_id: T1105
+        name: Ingress Tool Transfer
+        kill_chain_stage: command_and_control
+    steps:
+      - kind: process_start
+        parent_process_in: [outlook]
+        process_name_in: [msiexec]
+        command_line_contains_any: [".msi"]
+      - kind: process_start
+        parent_process_in: [msiexec]
+        process_name_in: [mshta]
+        command_line_contains_any: [".hta"]
+      - kind: network_connect
+        process_name_in: [mshta]
+        destination_port_in: [443]
+  - id: remote_service_stager
+    name: Remote service controller stages an operator script
+    description: Detects an NTLM service-controller authentication followed by service execution and staged script write.
+    threat_class: lateral_movement
+    severity: HIGH
+    confidence: 0.91
+    max_span_ms: 180000
+    tags:
+      - sequence
+      - kill_chain
+      - service
+      - lateral
+    attack_chain:
+      - technique_id: T1021.002
+        name: SMB/Windows Admin Shares
+        kill_chain_stage: lateral_movement
+      - technique_id: T1569.002
+        name: Service Execution
+        kill_chain_stage: execution
+      - technique_id: T1570
+        name: Lateral Tool Transfer
+        kill_chain_stage: lateral_movement
+    steps:
+      - kind: authentication_event
+        auth_type_in: [ntlm]
+        target_service_in: [svcctl]
+        success: true
+      - kind: process_start
+        parent_process_in: [services]
+        process_name_in: [cmd]
+        command_line_contains_any: ["copy ", "programdata"]
+      - kind: file_persistence
+        process_name_in: [cmd]
+        file_path_contains_any: ["svc.bat"]
+  - id: msbuild_installutil_transfer
+    name: Office-spawned msbuild hands off to installutil before transfer
+    description: Detects a staged Office-to-msbuild chain that hands off to installutil before outbound connectivity.
+    threat_class: command_and_control
+    severity: HIGH
+    confidence: 0.9
+    max_span_ms: 180000
+    tags:
+      - sequence
+      - kill_chain
+      - msbuild
+      - installutil
+    attack_chain:
+      - technique_id: T1127.001
+        name: MSBuild
+        kill_chain_stage: execution
+      - technique_id: T1218.004
+        name: InstallUtil
+        kill_chain_stage: defense_evasion
+      - technique_id: T1105
+        name: Ingress Tool Transfer
+        kill_chain_stage: command_and_control
+    steps:
+      - kind: process_start
+        parent_process_in: [excel]
+        process_name_in: [msbuild]
+        command_line_contains_any: [".xml"]
+      - kind: process_start
+        parent_process_in: [msbuild]
+        process_name_in: [installutil]
+        command_line_contains_any: [".dll"]
+      - kind: network_connect
+        process_name_in: [installutil]
+        destination_port_in: [443]

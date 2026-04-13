@@ -6,13 +6,18 @@ use crate::evasion_coverage::{
 use crate::evolution::DefaultEvolutionProofHarness;
 use crate::evolution_status::{FileKittenStatusStore, KittenExecutionState, KittenStatusRecord};
 use crate::mutation::{
-    DefaultEvolutionMutationHarness, EvolutionAdversarialPressureRequest, EvolutionEvasionGapFocus,
-    EvolutionEvasionPressureInput, EvolutionMutationProfileOverrides,
-    EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
-    EvolutionPopulationCandidate, FileEvolutionPopulationStore,
+    DefaultEvolutionMutationHarness, EvolutionAdversarialPressureRequest,
+    EvolutionAutonomousFitnessMeasurement, EvolutionAutonomousMutationSpecCreateRequest,
+    EvolutionBenchmarkRunLookup, EvolutionBenchmarkRunReport, EvolutionEvasionGapFocus,
+    EvolutionEvasionPressureInput, EvolutionMutationError, EvolutionPopulationCandidate,
+    FileEvolutionBenchmarkStore, FileEvolutionPopulationStore, benchmark_fitness_delta,
+    summarize_evolution_benchmark_baseline, summarize_evolution_benchmark_generation,
 };
 use crate::red_swarm::{SuiteRedSwarmAdapter, ThreatContext};
-use crate::replay::{DefaultReplayHarness, DetectorVerificationRecord, DetectorVerificationReport};
+use crate::replay::{
+    DefaultReplayHarness, DetectorCandidateManifest, DetectorVerificationRecord,
+    DetectorVerificationReport, load_detector_experiment_manifest,
+};
 use crate::strategy::{
     DefaultStrategyScorecardHarness, StrategyAdvisoryRecommendation, StrategyMemoryOutcomeKind,
     StrategyMemoryRecord, StrategyScorecard, StrategyScorecardRecord,
@@ -59,6 +64,7 @@ pub struct KittenAgent {
     last_cycle_error: Option<String>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum KittenState {
     AwaitingDrift,
     Mutating(PendingMutationCycle),
@@ -112,11 +118,50 @@ struct ProposedCandidate {
     validation_bundle_id: String,
     base_fitness: f64,
     fitness: f64,
+    autonomous_fitness: Option<EvolutionAutonomousFitnessMeasurement>,
     strategy: Value,
 }
 
 struct ValidationTaskOutput {
     validation_batch_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EvolutionBenchmarkRequest {
+    pub benchmark_id: String,
+    pub label: String,
+    pub generation_count: usize,
+    pub baseline_experiment_path: PathBuf,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EvolutionBenchmarkError {
+    #[error(transparent)]
+    Replay(#[from] crate::replay::ReplayHarnessError),
+
+    #[error(transparent)]
+    Strategy(#[from] crate::strategy::StrategyAdvisorError),
+
+    #[error(transparent)]
+    Drafting(#[from] crate::drafting::EvolutionDraftingError),
+
+    #[error(transparent)]
+    Mutation(#[from] EvolutionMutationError),
+
+    #[error(transparent)]
+    BenchmarkStore(#[from] crate::mutation::EvolutionBenchmarkStoreError),
+
+    #[error("failed to build benchmark evasion pressure input: {0}")]
+    EvasionPressure(String),
+
+    #[error("benchmark validation task failed: {0}")]
+    ValidationTask(String),
+
+    #[error("invalid benchmark request: {reason}")]
+    InvalidRequest { reason: String },
+
+    #[error("benchmark run `{benchmark_id}` could not be reloaded after persistence")]
+    MissingPersistedRun { benchmark_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -560,28 +605,22 @@ impl KittenAgent {
             .map_err(|error| error.to_string())?;
 
         let spec = mutation
-            .create_mutation_spec(
+            .create_autonomous_mutation_spec(
                 &drafting,
-                EvolutionMutationSpecCreateRequest {
-                    draft_id: Some(draft.report.draft_id.clone()),
-                    materialization_id: None,
-                    base_experiment_path: None,
+                &paths.evolution_population_results_dir,
+                EvolutionAutonomousMutationSpecCreateRequest {
+                    draft_id: draft.report.draft_id.clone(),
+                    strategy_root: draft.report.strategy_id.clone(),
                     rationale: draft.report.lineage_rationale.clone(),
+                    max_variants: self.runtime_config.evolution.max_variants_per_cycle.max(1),
+                    base_experiment_path: None,
+                    evasion_pressure: evasion_pressure.clone(),
                 },
             )
             .map_err(|error| error.to_string())?;
 
-        let mut spec_lookup = spec;
-        for request in
-            self.build_variant_requests(&draft.report.strategy_id, evasion_pressure.as_ref())
-        {
-            spec_lookup = mutation
-                .append_variant(&spec_lookup.report.mutation_spec_id, request)
-                .map_err(|error| error.to_string())?;
-        }
-
         let batch = mutation
-            .materialize_batch(&drafting, &spec_lookup.report.mutation_spec_id)
+            .materialize_batch(&drafting, &spec.report.mutation_spec_id)
             .map_err(|error| error.to_string())?;
 
         let config_path = self.config_path.clone();
@@ -600,7 +639,7 @@ impl KittenAgent {
                 pressure_id: pressure.1.report.pressure_id.clone(),
                 evasion_pressure,
                 draft_id: draft.report.draft_id.clone(),
-                mutation_spec_id: spec_lookup.report.mutation_spec_id.clone(),
+                mutation_spec_id: spec.report.mutation_spec_id.clone(),
                 materialization_batch_id: batch.report.batch_id.clone(),
             },
             task: validation_task,
@@ -824,6 +863,7 @@ impl KittenAgent {
             validation_bundle_id: validation.report.validation_bundle_id,
             base_fitness: evasion_adjusted_fitness,
             fitness: evasion_adjusted_fitness,
+            autonomous_fitness: candidate.autonomous_fitness.clone(),
             strategy,
         })
     }
@@ -1174,6 +1214,7 @@ impl KittenAgent {
                     experiment_path: proposal.experiment_path.clone(),
                     materialization_id: proposal.materialization_id.clone(),
                     validation_bundle_id: proposal.validation_bundle_id.clone(),
+                    autonomous_fitness: proposal.autonomous_fitness.clone(),
                     replay_fitness,
                     evasion_adjusted_fitness,
                     evasion_pressure_score,
@@ -1288,89 +1329,13 @@ impl KittenAgent {
         Ok(())
     }
 
-    fn build_variant_requests(
-        &self,
-        strategy_root: &str,
-        evasion_pressure: Option<&EvolutionEvasionPressureInput>,
-    ) -> Vec<EvolutionMutationVariantCreateRequest> {
-        let max_variants = self.runtime_config.evolution.max_variants_per_cycle.max(1);
-        let mut requests = Vec::new();
-        let base_medium = self.runtime_config.detection.medium_confidence_threshold;
-        let base_high = self.runtime_config.detection.high_confidence_threshold;
-        let gap_summary = evasion_gap_summary(evasion_pressure);
-        let nudge_multiplier = evasion_nudge_multiplier(evasion_pressure);
-
-        if max_variants == 1 {
-            requests.push(EvolutionMutationVariantCreateRequest {
-                variant_id: Some("threshold-nudge".to_string()),
-                strategy_id: format!("{}_nudge", sanitize_id(strategy_root)),
-                strategy_description: "Kitten threshold-nudge candidate".to_string(),
-                mutation: "lower_confidence_thresholds".to_string(),
-                rationale: format!(
-                    "respond to verification drift by widening suspicious-process coverage{}",
-                    gap_summary
-                ),
-                overrides: threshold_nudge_overrides(base_medium, base_high, nudge_multiplier),
-            });
-            return requests;
-        }
-
-        requests.push(EvolutionMutationVariantCreateRequest {
-            variant_id: Some("control-copy".to_string()),
-            strategy_id: format!("{}_control_copy", sanitize_id(strategy_root)),
-            strategy_description: "Kitten control copy candidate".to_string(),
-            mutation: "profile_copy".to_string(),
-            rationale: "preserve a known-good control candidate in the same batch".to_string(),
-            overrides: EvolutionMutationProfileOverrides::default(),
-        });
-
-        for index in 1..max_variants {
-            requests.push(EvolutionMutationVariantCreateRequest {
-                variant_id: Some(format!("threshold-nudge-{index}")),
-                strategy_id: format!("{}_nudge_{index}", sanitize_id(strategy_root)),
-                strategy_description: format!("Kitten threshold-nudge candidate {index}"),
-                mutation: "lower_confidence_thresholds".to_string(),
-                rationale: format!(
-                    "respond to drift by widening suspicious-process coverage (step {index}){}",
-                    gap_summary
-                ),
-                overrides: threshold_nudge_overrides(
-                    base_medium,
-                    base_high,
-                    index as f64 * nudge_multiplier,
-                ),
-            });
-        }
-
-        requests
-    }
-
     fn current_evasion_pressure_input(
         &self,
     ) -> Result<Option<EvolutionEvasionPressureInput>, String> {
-        let repo_root = resolve_repo_root(&self.config_path);
-        let snapshot = evaluate_repo_evasion_coverage(&self.runtime_config, &repo_root)
-            .map_err(|error| error.to_string())?;
-        let gaps = actionable_gaps_for_detector(&snapshot, &self.runtime_config.detection.strategy);
-        if gaps.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(EvolutionEvasionPressureInput {
-            detector: self.runtime_config.detection.strategy.clone(),
-            suite_name: snapshot.suite_name,
-            suite_path: PathBuf::from(snapshot.suite_path),
-            corpus_version: snapshot.corpus_version,
-            gaps: gaps
-                .into_iter()
-                .map(|gap| EvolutionEvasionGapFocus {
-                    threat_class: gap.threat_class,
-                    total_payloads: gap.total_payloads,
-                    missed_payloads: gap.missed_payloads,
-                    catch_rate: gap.catch_rate,
-                    actionable_techniques: gap.actionable_techniques,
-                })
-                .collect(),
-        }))
+        Ok(Some(build_evasion_pressure_input(
+            &self.config_path,
+            &self.runtime_config,
+        )?))
     }
 
     fn persist_status(&self, now_ms: i64) {
@@ -1907,6 +1872,7 @@ fn signed_memory_pheromone_deposit(
     let policy = runtime_config.pheromone.resolve_threat_class_policy(None);
     let derived_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
     let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
         indicator,
         threat_class,
         severity: Severity::Low,
@@ -1920,6 +1886,7 @@ fn signed_memory_pheromone_deposit(
         agent_key: Vec::new(),
     };
     let signing_payload = DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,
@@ -2001,54 +1968,294 @@ async fn run_validation_task(
     })
 }
 
-fn threshold_nudge_overrides(
-    base_medium: f64,
-    base_high: f64,
-    step_multiplier: f64,
-) -> EvolutionMutationProfileOverrides {
-    let step = 0.03 * step_multiplier.max(1.0);
-    let nudged_medium = (base_medium - step).clamp(0.05, 0.95);
-    let nudged_high = (base_high - step).clamp(nudged_medium, 0.99);
-    EvolutionMutationProfileOverrides {
-        add_suspicious_parents: Vec::new(),
-        remove_suspicious_parents: Vec::new(),
-        add_suspicious_children: Vec::new(),
-        remove_suspicious_children: Vec::new(),
-        high_confidence_threshold: Some(format!("{nudged_high:.3}")),
-        medium_confidence_threshold: Some(format!("{nudged_medium:.3}")),
+fn build_evasion_pressure_input(
+    config_path: &Path,
+    runtime_config: &SwarmConfig,
+) -> Result<EvolutionEvasionPressureInput, String> {
+    let repo_root = resolve_repo_root(config_path);
+    let snapshot = evaluate_repo_evasion_coverage(runtime_config, &repo_root)
+        .map_err(|error| error.to_string())?;
+    let gaps = actionable_gaps_for_detector(&snapshot, &runtime_config.detection.strategy);
+    Ok(EvolutionEvasionPressureInput {
+        detector: runtime_config.detection.strategy.clone(),
+        suite_name: snapshot.suite_name,
+        suite_path: PathBuf::from(snapshot.suite_path),
+        corpus_version: snapshot.corpus_version,
+        gaps: gaps
+            .into_iter()
+            .map(|gap| EvolutionEvasionGapFocus {
+                threat_class: gap.threat_class,
+                total_payloads: gap.total_payloads,
+                missed_payloads: gap.missed_payloads,
+                catch_rate: gap.catch_rate,
+                actionable_techniques: gap.actionable_techniques,
+            })
+            .collect(),
+    })
+}
+
+fn build_benchmark_evasion_pressure_input(
+    config_path: &Path,
+    runtime_config: &SwarmConfig,
+    baseline_experiment_path: &Path,
+) -> Result<EvolutionEvasionPressureInput, String> {
+    let manifest = load_detector_experiment_manifest(baseline_experiment_path)
+        .map_err(|error| error.to_string())?;
+    let mut benchmark_config = runtime_config.clone();
+    let detector = match &manifest.candidate {
+        DetectorCandidateManifest::SuspiciousProcessTree { profile, .. } => {
+            benchmark_config.detection.strategy = "suspicious_process_tree".to_string();
+            benchmark_config.detection.profiles.suspicious_process_tree =
+                Some(serde_json::to_value(profile).map_err(|error| error.to_string())?);
+            benchmark_config.detection.high_confidence_threshold =
+                profile.high_confidence_threshold;
+            benchmark_config.detection.medium_confidence_threshold =
+                profile.medium_confidence_threshold;
+            "suspicious_process_tree".to_string()
+        }
+        other => {
+            return Err(format!(
+                "benchmark evasion pressure is not yet supported for detector `{}`",
+                other.strategy_id()
+            ));
+        }
+    };
+    let repo_root = resolve_repo_root(config_path);
+    let snapshot = evaluate_repo_evasion_coverage(&benchmark_config, &repo_root)
+        .map_err(|error| error.to_string())?;
+    let gaps = actionable_gaps_for_detector(&snapshot, &detector);
+    Ok(EvolutionEvasionPressureInput {
+        detector,
+        suite_name: snapshot.suite_name,
+        suite_path: PathBuf::from(snapshot.suite_path),
+        corpus_version: snapshot.corpus_version,
+        gaps: gaps
+            .into_iter()
+            .map(|gap| EvolutionEvasionGapFocus {
+                threat_class: gap.threat_class,
+                total_payloads: gap.total_payloads,
+                missed_payloads: gap.missed_payloads,
+                catch_rate: gap.catch_rate,
+                actionable_techniques: gap.actionable_techniques,
+            })
+            .collect(),
+    })
+}
+
+pub async fn run_bounded_evolution_benchmark(
+    config_path: impl AsRef<Path>,
+    runtime_config: SwarmConfig,
+    request: EvolutionBenchmarkRequest,
+) -> Result<EvolutionBenchmarkRunLookup, EvolutionBenchmarkError> {
+    if !runtime_config.evolution.enabled {
+        return Err(EvolutionBenchmarkError::InvalidRequest {
+            reason: "evolution must be enabled for the measured benchmark harness".to_string(),
+        });
     }
-}
+    if request.generation_count == 0 {
+        return Err(EvolutionBenchmarkError::InvalidRequest {
+            reason: "generation_count must be greater than zero".to_string(),
+        });
+    }
+    if request.benchmark_id.trim().is_empty() {
+        return Err(EvolutionBenchmarkError::InvalidRequest {
+            reason: "benchmark_id must not be empty".to_string(),
+        });
+    }
+    if !request.baseline_experiment_path.exists() {
+        return Err(EvolutionBenchmarkError::InvalidRequest {
+            reason: format!(
+                "baseline experiment `{}` does not exist",
+                request.baseline_experiment_path.display()
+            ),
+        });
+    }
 
-fn evasion_gap_summary(evasion_pressure: Option<&EvolutionEvasionPressureInput>) -> String {
-    let Some(evasion_pressure) = evasion_pressure else {
-        return String::new();
+    let config_path = config_path.as_ref().to_path_buf();
+    let paths = resolve_evolution_paths(&config_path, &runtime_config.evolution.paths);
+    let replay = DefaultReplayHarness::from_config(
+        config_path.clone(),
+        runtime_config.clone(),
+        &paths.replay_results_dir,
+    )?;
+    let scorecards = DefaultStrategyScorecardHarness::from_config(
+        config_path.clone(),
+        runtime_config.clone(),
+        &paths.strategy_memory_results_dir,
+        &paths.strategy_scorecard_results_dir,
+    )?;
+    let drafting = DefaultEvolutionDraftingHarness::from_config(
+        config_path.clone(),
+        runtime_config.clone(),
+        &paths.evolution_pressure_results_dir,
+        &paths.evolution_draft_results_dir,
+        &paths.evolution_draft_promotion_results_dir,
+        &paths.evolution_materialization_results_dir,
+        &paths.evolution_validation_results_dir,
+        &paths.evolution_reconciliation_results_dir,
+    )?;
+    let mutation = DefaultEvolutionMutationHarness::from_path(
+        &paths.evolution_mutation_results_dir,
+        &paths.evolution_mutation_materialization_batch_results_dir,
+        &paths.evolution_mutation_validation_batch_results_dir,
+        &paths.evolution_ranking_results_dir,
+    )?;
+    let benchmark_store = FileEvolutionBenchmarkStore::open(
+        paths.evolution_population_results_dir.join("benchmarks"),
+    )?;
+    let evasion_pressure = build_benchmark_evasion_pressure_input(
+        &config_path,
+        &runtime_config,
+        &request.baseline_experiment_path,
+    )
+    .map_err(EvolutionBenchmarkError::EvasionPressure)?;
+    let verification = replay
+        .evaluate_verification_path(
+            &request.baseline_experiment_path,
+            &paths.verification_results_dir,
+        )
+        .await?;
+    let scorecard = scorecards
+        .create_scorecard(
+            &replay,
+            &request.baseline_experiment_path,
+            &paths.experiment_results_dir,
+            &paths.verification_results_dir,
+            &verification.report.verification_id,
+        )
+        .await?;
+    let pressure =
+        drafting.create_pressure_from_scorecard(&scorecards, &scorecard.report.scorecard_id)?;
+    let experiment = replay
+        .load_experiment(
+            &paths.experiment_results_dir,
+            &scorecard.report.experiment_id,
+        )?
+        .ok_or_else(|| EvolutionBenchmarkError::InvalidRequest {
+            reason: format!(
+                "experiment `{}` was not found after scorecard creation",
+                scorecard.report.experiment_id
+            ),
+        })?;
+    let mut report = EvolutionBenchmarkRunReport {
+        benchmark_id: request.benchmark_id.clone(),
+        label: if request.label.trim().is_empty() {
+            request.benchmark_id.clone()
+        } else {
+            request.label.clone()
+        },
+        detector: evasion_pressure.detector.clone(),
+        baseline_experiment_path: request.baseline_experiment_path.display().to_string(),
+        baseline: summarize_evolution_benchmark_baseline(
+            &request.baseline_experiment_path,
+            &experiment.report,
+            &verification.report,
+            &runtime_config.evolution.fitness_weights,
+            Some(&evasion_pressure),
+        )?,
+        created_at_ms: scorecard.report.created_at_ms,
+        updated_at_ms: scorecard.report.created_at_ms,
+        requested_generation_count: request.generation_count,
+        completed_generation_count: 0,
+        max_variants_per_generation: runtime_config.evolution.max_variants_per_cycle.max(1),
+        population_size: runtime_config.evolution.population_size,
+        corpus_suite_name: evasion_pressure.suite_name.clone(),
+        corpus_version: evasion_pressure.corpus_version.clone(),
+        suite_path: evasion_pressure.suite_path.display().to_string(),
+        notes: "Single bounded benchmark run using Phase 197 autonomous measured-fitness artifacts; includes explicit staged-baseline measurement plus raw generation deltas only.".to_string(),
+        generations: Vec::new(),
     };
-    let techniques = evasion_pressure
-        .gaps
-        .iter()
-        .flat_map(|gap| gap.actionable_techniques.iter().cloned())
-        .take(3)
-        .collect::<Vec<_>>();
-    let focus = if techniques.is_empty() {
-        "measured evasion gaps".to_string()
-    } else {
-        format!("measured evasion gaps ({})", techniques.join(", "))
-    };
-    format!(" while targeting {focus}")
-}
+    benchmark_store.persist(&report)?;
 
-fn evasion_nudge_multiplier(evasion_pressure: Option<&EvolutionEvasionPressureInput>) -> f64 {
-    let Some(evasion_pressure) = evasion_pressure else {
-        return 1.0;
-    };
-    let gap_count = evasion_pressure.gaps.len() as f64;
-    let average_gap_severity = evasion_pressure
-        .gaps
-        .iter()
-        .map(|gap| gap.missed_payloads as f64 / gap.total_payloads.max(1) as f64)
-        .sum::<f64>()
-        / gap_count.max(1.0);
-    (1.0 + average_gap_severity + (gap_count - 1.0).min(2.0) * 0.25).clamp(1.0, 2.0)
+    let strategy_root = sanitize_id(&format!("{}_benchmark", report.label));
+    for generation in 1..=request.generation_count {
+        let draft = drafting.create_draft(EvolutionDraftCreateRequest {
+            pressure_id: pressure.report.pressure_id.clone(),
+            strategy_id: format!("{strategy_root}_g{generation}"),
+            strategy_description: format!(
+                "Measured evolution benchmark generation {generation} candidate root"
+            ),
+            mutation: "measured_evolution_benchmark".to_string(),
+            rationale: format!(
+                "Run bounded measured evolution benchmark generation {generation} of {}",
+                request.generation_count
+            ),
+        })?;
+        let spec = mutation.create_autonomous_mutation_spec(
+            &drafting,
+            &paths.evolution_population_results_dir,
+            EvolutionAutonomousMutationSpecCreateRequest {
+                draft_id: draft.report.draft_id.clone(),
+                strategy_root: draft.report.strategy_id.clone(),
+                rationale: draft.report.lineage_rationale.clone(),
+                max_variants: runtime_config.evolution.max_variants_per_cycle.max(1),
+                base_experiment_path: Some(request.baseline_experiment_path.clone()),
+                evasion_pressure: Some(evasion_pressure.clone()),
+            },
+        )?;
+        let batch = mutation.materialize_batch(&drafting, &spec.report.mutation_spec_id)?;
+        let validation = run_validation_task(
+            config_path.clone(),
+            runtime_config.clone(),
+            paths.clone(),
+            batch.report.batch_id.clone(),
+        )
+        .await
+        .map_err(EvolutionBenchmarkError::ValidationTask)?;
+        let validation_batch = mutation
+            .load_validation_batch(&validation.validation_batch_id)?
+            .ok_or_else(|| EvolutionBenchmarkError::InvalidRequest {
+                reason: format!(
+                    "validation batch `{}` was not found after refresh",
+                    validation.validation_batch_id
+                ),
+            })?;
+        let ranking = mutation.rank_candidates(
+            &paths.evolution_queue_results_dir,
+            &validation_batch.report.validation_batch_id,
+            runtime_config.evolution.shortlist_count,
+        )?;
+        let population = mutation.refresh_population(
+            &paths.evolution_population_results_dir,
+            &drafting,
+            &paths.experiment_results_dir,
+            &paths.verification_results_dir,
+            &ranking.report,
+            runtime_config.evolution.population_size,
+            runtime_config.evolution.pareto_tournament_size,
+            &runtime_config.evolution.fitness_weights,
+            Some(&evasion_pressure),
+        )?;
+        let mut generation_report = summarize_evolution_benchmark_generation(
+            &report.benchmark_id,
+            generation,
+            population.updated_at_ms,
+            &draft.report.draft_id,
+            &spec.report.mutation_spec_id,
+            &batch.report.batch_id,
+            &validation_batch.report.validation_batch_id,
+            &ranking.report.ranking_id,
+            &population,
+        )?;
+        if let Some(previous) = report.generations.last() {
+            generation_report.delta_from_previous =
+                Some(benchmark_fitness_delta(&generation_report, previous));
+        }
+        if let Some(first) = report.generations.first() {
+            generation_report.delta_from_first =
+                Some(benchmark_fitness_delta(&generation_report, first));
+        }
+        report.completed_generation_count = generation;
+        report.updated_at_ms = generation_report.created_at_ms;
+        report.generations.push(generation_report);
+        benchmark_store.persist(&report)?;
+    }
+
+    benchmark_store.load(&report.benchmark_id)?.ok_or(
+        EvolutionBenchmarkError::MissingPersistedRun {
+            benchmark_id: report.benchmark_id,
+        },
+    )
 }
 
 fn resolve_evolution_paths(
@@ -2240,14 +2447,19 @@ where
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{KittenAgent, ProposedCandidate, resolve_evolution_paths, run_validation_task};
+    use super::{
+        EvolutionBenchmarkRequest, KittenAgent, ProposedCandidate,
+        build_benchmark_evasion_pressure_input, build_evasion_pressure_input,
+        resolve_evolution_paths, run_bounded_evolution_benchmark, run_validation_task,
+    };
     use crate::calico_agent::{CalicoDeceptionInteractionPayload, CalicoLifecycleStage};
     use crate::config::load_config;
     use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
     use crate::evasion_coverage::{actionable_gaps_for_detector, evaluate_repo_evasion_coverage};
     use crate::mutation::{
-        DefaultEvolutionMutationHarness, EvolutionEvasionGapFocus, EvolutionEvasionPressureInput,
-        EvolutionMutationSpecCreateRequest,
+        DefaultEvolutionMutationHarness, EvolutionAutonomousMutationSpecCreateRequest,
+        EvolutionEvasionGapFocus, EvolutionEvasionPressureInput, FileEvolutionBenchmarkStore,
+        FileEvolutionEpisodeStore,
     };
     use crate::replay::{
         DefaultReplayHarness, DetectorVerificationRecord, DetectorVerificationReport,
@@ -2274,6 +2486,51 @@ mod tests {
 
     fn office_control_experiment() -> PathBuf {
         repo_root().join("experiments/office-baseline-control.yaml")
+    }
+
+    fn office_conservative_experiment() -> PathBuf {
+        repo_root().join("experiments/office-conservative-control.yaml")
+    }
+
+    fn copy_dir_recursive(source: &Path, destination: &Path) {
+        if !source.exists() {
+            return;
+        }
+
+        fs::create_dir_all(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let entry_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_dir_recursive(&entry_path, &destination_path);
+            } else {
+                fs::copy(&entry_path, &destination_path).unwrap();
+            }
+        }
+    }
+
+    fn stage_experiment(root: &Path, source: &Path) -> PathBuf {
+        let experiments_dir = root.join("experiments");
+        fs::create_dir_all(&experiments_dir).unwrap();
+        let destination = experiments_dir.join(source.file_name().unwrap());
+        fs::copy(&source, &destination).unwrap();
+        if let Some(source_root) = source.parent().and_then(Path::parent) {
+            copy_dir_recursive(
+                &source_root.join("scenario-suites"),
+                &root.join("scenario-suites"),
+            );
+            copy_dir_recursive(
+                &source_root.join("verifications"),
+                &root.join("verifications"),
+            );
+            copy_dir_recursive(&source_root.join("scenarios"), &root.join("scenarios"));
+        }
+        destination
+    }
+
+    fn stage_baseline_experiment(root: &Path) -> PathBuf {
+        stage_experiment(root, &office_control_experiment())
     }
 
     fn sample_evasion_pressure_input(detector: &str) -> EvolutionEvasionPressureInput {
@@ -2387,29 +2644,162 @@ mod tests {
     }
 
     #[test]
-    fn evasion_variant_requests_increase_threshold_nudge_for_measured_gaps() {
+    fn benchmark_evasion_pressure_uses_staged_baseline_profile() {
+        let root = temp_root("benchmark-evasion-pressure");
+        let config_path = config_path();
+        let mut config = load_config(&config_path).unwrap();
+        configure_paths(&mut config, &root);
+        let conservative_experiment = stage_experiment(&root, &office_conservative_experiment());
+
+        let default_pressure = build_evasion_pressure_input(&config_path, &config).unwrap();
+        let benchmark_pressure =
+            build_benchmark_evasion_pressure_input(&config_path, &config, &conservative_experiment)
+                .unwrap();
+
+        let default_execution_missed = default_pressure
+            .gaps
+            .iter()
+            .find(|gap| gap.threat_class == ThreatClass::Execution)
+            .map(|gap| gap.missed_payloads)
+            .unwrap_or(0);
+        let benchmark_execution_gap = benchmark_pressure
+            .gaps
+            .iter()
+            .find(|gap| gap.threat_class == ThreatClass::Execution)
+            .expect("conservative baseline should expose an execution gap");
+
+        assert_eq!(benchmark_pressure.detector, "suspicious_process_tree");
+        assert!(
+            benchmark_execution_gap.missed_payloads > default_execution_missed,
+            "benchmark pressure should be derived from the staged baseline profile"
+        );
+        assert!(
+            benchmark_execution_gap
+                .actionable_techniques
+                .contains(&"T1204.002".to_string())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn autonomous_variants_increase_threshold_nudge_for_measured_gaps() {
         let root = temp_root("evasion-variants");
         let config_path = config_path();
         let mut config = load_config(&config_path).unwrap();
         configure_paths(&mut config, &root);
 
-        let agent = KittenAgent::new(
-            AgentId::new("kitten", "primary"),
-            &config_path,
+        let paths = resolve_evolution_paths(&config_path, &config.evolution.paths);
+        let replay = DefaultReplayHarness::from_config(
+            config_path.clone(),
             config.clone(),
-            substrate(&config),
-        );
+            &paths.replay_results_dir,
+        )
+        .unwrap();
+        let verification = replay
+            .evaluate_verification_path(
+                office_control_experiment(),
+                &paths.verification_results_dir,
+            )
+            .await
+            .unwrap();
+        let scorecards = DefaultStrategyScorecardHarness::from_config(
+            config_path.clone(),
+            config.clone(),
+            &paths.strategy_memory_results_dir,
+            &paths.strategy_scorecard_results_dir,
+        )
+        .unwrap();
+        let scorecard = scorecards
+            .create_scorecard(
+                &replay,
+                office_control_experiment(),
+                &paths.experiment_results_dir,
+                &paths.verification_results_dir,
+                &verification.report.verification_id,
+            )
+            .await
+            .unwrap();
+        let drafting = DefaultEvolutionDraftingHarness::from_config(
+            config_path.clone(),
+            config.clone(),
+            &paths.evolution_pressure_results_dir,
+            &paths.evolution_draft_results_dir,
+            &paths.evolution_draft_promotion_results_dir,
+            &paths.evolution_materialization_results_dir,
+            &paths.evolution_validation_results_dir,
+            &paths.evolution_reconciliation_results_dir,
+        )
+        .unwrap();
+        let mutation = DefaultEvolutionMutationHarness::from_path(
+            &paths.evolution_mutation_results_dir,
+            &paths.evolution_mutation_materialization_batch_results_dir,
+            &paths.evolution_mutation_validation_batch_results_dir,
+            &paths.evolution_ranking_results_dir,
+        )
+        .unwrap();
+        let pressure = drafting
+            .create_pressure_from_scorecard(&scorecards, &scorecard.report.scorecard_id)
+            .unwrap();
+        let baseline_draft = drafting
+            .create_draft(EvolutionDraftCreateRequest {
+                pressure_id: pressure.report.pressure_id.clone(),
+                strategy_id: format!("{}_kitten_baseline", pressure.report.strategy_id),
+                strategy_description: "Kitten autonomous baseline fixture".to_string(),
+                mutation: "runtime_drift_response".to_string(),
+                rationale: "seed a baseline autonomous perturbation".to_string(),
+            })
+            .unwrap();
+        let pressured_draft = drafting
+            .create_draft(EvolutionDraftCreateRequest {
+                pressure_id: pressure.report.pressure_id.clone(),
+                strategy_id: format!("{}_kitten_pressured", pressure.report.strategy_id),
+                strategy_description: "Kitten autonomous pressure fixture".to_string(),
+                mutation: "runtime_drift_response".to_string(),
+                rationale: "seed a gap-aware autonomous perturbation".to_string(),
+            })
+            .unwrap();
         let pressure = sample_evasion_pressure_input(&config.detection.strategy);
-        let baseline = agent.build_variant_requests("office_baseline_control", None);
-        let pressured = agent.build_variant_requests("office_baseline_control", Some(&pressure));
+        let baseline = mutation
+            .create_autonomous_mutation_spec(
+                &drafting,
+                &paths.evolution_population_results_dir,
+                EvolutionAutonomousMutationSpecCreateRequest {
+                    draft_id: baseline_draft.report.draft_id.clone(),
+                    strategy_root: baseline_draft.report.strategy_id.clone(),
+                    rationale: baseline_draft.report.lineage_rationale.clone(),
+                    max_variants: config.evolution.max_variants_per_cycle,
+                    base_experiment_path: None,
+                    evasion_pressure: None,
+                },
+            )
+            .unwrap();
+        let pressured = mutation
+            .create_autonomous_mutation_spec(
+                &drafting,
+                &paths.evolution_population_results_dir,
+                EvolutionAutonomousMutationSpecCreateRequest {
+                    draft_id: pressured_draft.report.draft_id.clone(),
+                    strategy_root: pressured_draft.report.strategy_id.clone(),
+                    rationale: pressured_draft.report.lineage_rationale.clone(),
+                    max_variants: config.evolution.max_variants_per_cycle,
+                    base_experiment_path: None,
+                    evasion_pressure: Some(pressure.clone()),
+                },
+            )
+            .unwrap();
         let baseline_nudge = baseline
+            .report
+            .variants
             .iter()
-            .find(|request| request.mutation == "lower_confidence_thresholds")
-            .expect("baseline request set should contain a threshold nudge");
+            .find(|request| request.mutation == "autonomous_bounded_perturbation")
+            .expect("baseline spec should contain a perturbation variant");
         let pressured_nudge = pressured
+            .report
+            .variants
             .iter()
-            .find(|request| request.mutation == "lower_confidence_thresholds")
-            .expect("pressured request set should contain a threshold nudge");
+            .find(|request| request.mutation == "autonomous_bounded_perturbation")
+            .expect("pressured spec should contain a perturbation variant");
         let baseline_high = baseline_nudge
             .overrides
             .high_confidence_threshold
@@ -2429,6 +2819,111 @@ mod tests {
         assert!(
             pressured_high < baseline_high,
             "gap pressure should make the threshold nudge more aggressive"
+        );
+        assert_eq!(
+            pressured
+                .report
+                .autonomous_generation
+                .as_ref()
+                .unwrap()
+                .generator,
+            "bounded_population_variants_v1"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn measured_evolution_benchmark_persists_generation_deltas() {
+        let root = temp_root("measured-benchmark");
+        let config_path = config_path();
+        let mut config = load_config(&config_path).unwrap();
+        configure_paths(&mut config, &root);
+        let baseline_experiment_path = stage_baseline_experiment(&root);
+
+        let run = run_bounded_evolution_benchmark(
+            &config_path,
+            config.clone(),
+            EvolutionBenchmarkRequest {
+                benchmark_id: "benchmark:test".to_string(),
+                label: "office benchmark".to_string(),
+                generation_count: 3,
+                baseline_experiment_path,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(run.report.completed_generation_count, 3);
+        assert_eq!(run.report.generations.len(), 3);
+        assert_eq!(run.report.detector, config.detection.strategy);
+        assert_eq!(run.report.corpus_suite_name, "evasion_breadth_v1");
+        assert!(run.report.baseline.is_some());
+        assert!(
+            run.report
+                .generations
+                .iter()
+                .all(|generation| !generation.leader_strategy_id.is_empty())
+        );
+        assert!(
+            run.report.generations[1].delta_from_previous.is_some(),
+            "second generation should capture a delta from generation one"
+        );
+        assert!(
+            run.report.generations[2].delta_from_first.is_some(),
+            "final generation should capture a delta from the opening generation"
+        );
+
+        let benchmark_store =
+            FileEvolutionBenchmarkStore::open(root.join("evolution-population").join("benchmarks"))
+                .unwrap();
+        let latest = benchmark_store.latest(1).unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].benchmark_id, "benchmark:test".to_string());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn measured_evolution_benchmark_improves_over_conservative_seed() {
+        let root = temp_root("measured-benchmark-conservative");
+        let config_path = config_path();
+        let mut config = load_config(&config_path).unwrap();
+        configure_paths(&mut config, &root);
+        config.evolution.max_variants_per_cycle = 2;
+        let conservative_experiment = stage_experiment(&root, &office_conservative_experiment());
+
+        let run = run_bounded_evolution_benchmark(
+            &config_path,
+            config,
+            EvolutionBenchmarkRequest {
+                benchmark_id: "benchmark:conservative".to_string(),
+                label: "office conservative".to_string(),
+                generation_count: 1,
+                baseline_experiment_path: conservative_experiment,
+            },
+        )
+        .await
+        .unwrap();
+
+        let baseline = run
+            .report
+            .baseline
+            .as_ref()
+            .expect("benchmark run should persist baseline metrics");
+        let generation = run
+            .report
+            .generations
+            .first()
+            .expect("benchmark run should persist generation one");
+
+        assert!(
+            generation.leader_measured_fitness > baseline.measured_fitness,
+            "gap expansion should outperform the conservative seed baseline"
+        );
+        assert!(
+            generation.leader_catch_rate > baseline.catch_rate,
+            "generation leader should close the conservative execution gap"
         );
 
         let _ = fs::remove_dir_all(root);
@@ -2508,24 +3003,21 @@ mod tests {
                 rationale: "seed a proposal-ready candidate with evasion pressure".to_string(),
             })
             .unwrap();
-        let mut spec = mutation
-            .create_mutation_spec(
+        let evasion_input = sample_evasion_pressure_input(&config.detection.strategy);
+        let spec = mutation
+            .create_autonomous_mutation_spec(
                 &drafting,
-                EvolutionMutationSpecCreateRequest {
-                    draft_id: Some(draft.report.draft_id.clone()),
-                    materialization_id: None,
-                    base_experiment_path: None,
+                &paths.evolution_population_results_dir,
+                EvolutionAutonomousMutationSpecCreateRequest {
+                    draft_id: draft.report.draft_id.clone(),
+                    strategy_root: draft.report.strategy_id.clone(),
                     rationale: draft.report.lineage_rationale.clone(),
+                    max_variants: config.evolution.max_variants_per_cycle,
+                    base_experiment_path: None,
+                    evasion_pressure: Some(evasion_input.clone()),
                 },
             )
             .unwrap();
-        let evasion_input = sample_evasion_pressure_input(&config.detection.strategy);
-        for request in agent.build_variant_requests(&draft.report.strategy_id, Some(&evasion_input))
-        {
-            spec = mutation
-                .append_variant(&spec.report.mutation_spec_id, request)
-                .unwrap();
-        }
         let batch = mutation
             .materialize_batch(&drafting, &spec.report.mutation_spec_id)
             .unwrap();
@@ -2574,6 +3066,13 @@ mod tests {
             candidate.baseline_fitness.is_some(),
             "population candidate should retain replay fitness separately"
         );
+        let autonomous_fitness = candidate
+            .autonomous_fitness
+            .as_ref()
+            .expect("autonomous candidate should retain measured fitness attribution");
+        assert_eq!(autonomous_fitness.lineage.parent_strategy_ids.len(), 1);
+        assert!(autonomous_fitness.catch_rate > 0.0);
+        assert!(autonomous_fitness.measured_fitness > 0.0);
 
         let proposal = agent
             .build_population_proposal(&paths, candidate.clone(), "evasion_test", None)
@@ -2605,12 +3104,48 @@ mod tests {
                 .as_ref()
                 .map(|summary| summary.gap_count as u64)
         );
+        assert!(
+            proposal.strategy.get("autonomous_fitness").is_none(),
+            "autonomous measured fitness should stay runtime-owned, not widen the proposal payload"
+        );
+
+        let proposal = agent
+            .apply_adversarial_pressure(proposal, 1_800_730_001_000)
+            .await
+            .unwrap();
+        let episode_id = proposal
+            .strategy
+            .get("adversarial_pressure")
+            .and_then(|value| value.get("episode_id"))
+            .and_then(serde_json::Value::as_str)
+            .expect("adversarial evaluation should persist an episode");
+        let episode = FileEvolutionEpisodeStore::open(
+            paths.evolution_population_results_dir.join("episodes"),
+        )
+        .unwrap()
+        .load(episode_id)
+        .unwrap()
+        .expect("episode should load from durable store");
+        let persisted_autonomous = episode
+            .report
+            .autonomous_fitness
+            .as_ref()
+            .expect("episode should preserve autonomous measured fitness lineage");
+        assert_eq!(
+            persisted_autonomous.lineage.parent_strategy_ids,
+            autonomous_fitness.lineage.parent_strategy_ids
+        );
+        assert_eq!(
+            persisted_autonomous.catch_rate,
+            autonomous_fitness.catch_rate
+        );
 
         let _ = fs::remove_dir_all(root);
     }
 
     fn runtime_pheromone(event_id: &str, timestamp: i64) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({
                 "event_id": event_id,
                 "summary": "suspicious powershell execution",
@@ -2640,6 +3175,7 @@ mod tests {
 
     fn calico_interaction_pheromone(asset_id: &str, timestamp: i64) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::to_value(CalicoDeceptionInteractionPayload {
                 schema: crate::calico_agent::CALICO_DECEPTION_INTERACTION_SCHEMA.to_string(),
                 schema_version: 1,
@@ -2942,7 +3478,7 @@ mod tests {
         configure_paths(&mut config, &root);
         seed_failed_verifications(&root, now_ms, 3);
 
-        let agent = KittenAgent::new(
+        let _agent = KittenAgent::new(
             AgentId::new("kitten", "primary"),
             &config_path,
             config.clone(),
@@ -2990,22 +3526,20 @@ mod tests {
                 rationale: "seed a direct validation cycle for the runtime kitten".to_string(),
             })
             .unwrap();
-        let mut spec = mutation
-            .create_mutation_spec(
+        let spec = mutation
+            .create_autonomous_mutation_spec(
                 &drafting,
-                EvolutionMutationSpecCreateRequest {
-                    draft_id: Some(draft.report.draft_id.clone()),
-                    materialization_id: None,
-                    base_experiment_path: None,
+                &paths.evolution_population_results_dir,
+                EvolutionAutonomousMutationSpecCreateRequest {
+                    draft_id: draft.report.draft_id.clone(),
+                    strategy_root: draft.report.strategy_id.clone(),
                     rationale: draft.report.lineage_rationale.clone(),
+                    max_variants: config.evolution.max_variants_per_cycle,
+                    base_experiment_path: None,
+                    evasion_pressure: None,
                 },
             )
             .unwrap();
-        for request in agent.build_variant_requests(&draft.report.strategy_id, None) {
-            spec = mutation
-                .append_variant(&spec.report.mutation_spec_id, request)
-                .unwrap();
-        }
         let batch = mutation
             .materialize_batch(&drafting, &spec.report.mutation_spec_id)
             .unwrap();
@@ -3041,7 +3575,7 @@ mod tests {
         let mut config = load_config(&config_path).unwrap();
         configure_paths(&mut config, &root);
 
-        let seed_agent = KittenAgent::new(
+        let _seed_agent = KittenAgent::new(
             AgentId::new("kitten", "seed"),
             &config_path,
             config.clone(),
@@ -3109,22 +3643,20 @@ mod tests {
                     .to_string(),
             })
             .unwrap();
-        let mut spec = mutation
-            .create_mutation_spec(
+        let spec = mutation
+            .create_autonomous_mutation_spec(
                 &drafting,
-                EvolutionMutationSpecCreateRequest {
-                    draft_id: Some(draft.report.draft_id.clone()),
-                    materialization_id: None,
-                    base_experiment_path: None,
+                &paths.evolution_population_results_dir,
+                EvolutionAutonomousMutationSpecCreateRequest {
+                    draft_id: draft.report.draft_id.clone(),
+                    strategy_root: draft.report.strategy_id.clone(),
                     rationale: draft.report.lineage_rationale.clone(),
+                    max_variants: config.evolution.max_variants_per_cycle,
+                    base_experiment_path: None,
+                    evasion_pressure: None,
                 },
             )
             .unwrap();
-        for request in seed_agent.build_variant_requests(&draft.report.strategy_id, None) {
-            spec = mutation
-                .append_variant(&spec.report.mutation_spec_id, request)
-                .unwrap();
-        }
         let batch = mutation
             .materialize_batch(&drafting, &spec.report.mutation_spec_id)
             .unwrap();
@@ -3244,6 +3776,7 @@ mod tests {
             validation_bundle_id: "validation-bundle:test:7".to_string(),
             base_fitness: 0.55,
             fitness: 0.55,
+            autonomous_fitness: None,
             strategy: json!({
                 "source": "kitten_population_candidate",
                 "selection_source": "restored_population",
@@ -3343,6 +3876,7 @@ mod tests {
             validation_bundle_id: "validation-bundle:test:7".to_string(),
             base_fitness: 0.61,
             fitness: 0.61,
+            autonomous_fitness: None,
             strategy: json!({
                 "source": "kitten_population_candidate",
                 "selection_source": "restored_population",
@@ -3425,6 +3959,7 @@ mod tests {
             validation_bundle_id: "validation-bundle:test:7".to_string(),
             base_fitness: 0.55,
             fitness: 0.62,
+            autonomous_fitness: None,
             strategy: json!({
                 "source": "kitten_population_candidate",
                 "selection_source": "restored_population",
@@ -3493,6 +4028,7 @@ mod tests {
             validation_bundle_id: "validation-bundle:test:9".to_string(),
             base_fitness: 0.55,
             fitness: 0.62,
+            autonomous_fitness: None,
             strategy: json!({
                 "source": "kitten_population_candidate",
                 "selection_source": "restored_population",
@@ -3568,6 +4104,7 @@ mod tests {
                 validation_bundle_id: format!("validation-bundle:{strategy_id}"),
                 base_fitness: 0.60,
                 fitness: 0.60,
+                autonomous_fitness: None,
                 strategy: json!({
                     "source": "kitten_population_candidate",
                     "selection_source": "restored_population",

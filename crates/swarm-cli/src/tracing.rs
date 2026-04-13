@@ -33,7 +33,8 @@ pub fn init_tracing(
         .json()
         .flatten_event(true)
         .with_current_span(true)
-        .with_span_list(false);
+        .with_span_list(false)
+        .with_writer(std::io::stderr);
 
     if let Some(endpoint) = otlp_endpoint.filter(|value| !value.trim().is_empty()) {
         let exporter = opentelemetry_otlp::SpanExporter::builder()

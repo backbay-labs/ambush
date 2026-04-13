@@ -10,8 +10,9 @@ use crate::approval::{
 use crate::canary::{DefaultCanaryHarness, render_canary_run_report};
 use crate::config::{CURRENT_SCHEMA_VERSION, load_config};
 use crate::control::{
-    DefaultControlPlane, IncidentLookupSelector, InvestigationLookupSelector,
-    OperatorControlOutput, ReplayLookupSelector, render_output,
+    DefaultControlPlane, FirstRunStatus, FirstRunWizardOptions, FirstRunWizardPaths,
+    IncidentLookupSelector, InvestigationLookupSelector, OperatorControlOutput,
+    ReplayLookupSelector, render_output, resolve_operator_api_schema_version,
 };
 use crate::drafting::{
     DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest,
@@ -76,11 +77,14 @@ use crate::strategy::{
 };
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
-use swarm_core::agent::AgentRole;
+use swarm_core::agent::{AgentRole, SwarmMode};
 use swarm_core::config::{
     PheromoneBackendConfig, ResponseAdapterConfig, RuntimeMode, SiemForwardConfig, SwarmConfig,
 };
+use swarm_core::pheromone::ThreatClass;
+use swarm_core::types::Severity;
 use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
+use swarm_runtime::service::ResponsePlaybookPreviewRequest;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -90,6 +94,9 @@ use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
 pub struct Cli {
     #[arg(long, global = true, default_value = "rulesets/default.yaml")]
     config: std::path::PathBuf,
+
+    #[arg(long = "output-schema-version", global = true)]
+    output_schema_version: Option<u32>,
 
     #[arg(long, global = true, default_value = "data/replay-runs")]
     replay_results_dir: std::path::PathBuf,
@@ -274,6 +281,9 @@ impl Cli {
 enum Command {
     Validate(ValidateArgs),
     Init(InitArgs),
+    Readiness,
+    FirstRun(FirstRunArgs),
+    PlaybookPreview(PlaybookPreviewArgs),
     Identity(IdentityArgs),
     Serve,
     Status,
@@ -417,6 +427,33 @@ struct InitArgs {
 struct IdentityArgs {
     #[command(subcommand)]
     command: IdentityCommand,
+}
+
+#[derive(Debug, Args)]
+struct FirstRunArgs {
+    #[arg(long)]
+    scenario: Option<std::path::PathBuf>,
+
+    #[arg(long, default_value_t = 0)]
+    pace_ms: u64,
+
+    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY")]
+    voter_signing_key_env: String,
+}
+
+#[derive(Debug, Args)]
+struct PlaybookPreviewArgs {
+    #[arg(long, value_parser = parse_preview_threat_class)]
+    threat_class: ThreatClass,
+
+    #[arg(long, value_parser = parse_preview_severity)]
+    severity: Severity,
+
+    #[arg(long, value_parser = parse_preview_confidence)]
+    confidence: f64,
+
+    #[arg(long, value_parser = parse_preview_mode)]
+    mode: SwarmMode,
 }
 
 #[derive(Debug, Subcommand)]
@@ -566,6 +603,35 @@ impl From<EvidenceSubjectKindArg> for EvidenceSubjectKind {
             EvidenceSubjectKindArg::PromotionReview => Self::PromotionReview,
         }
     }
+}
+
+fn parse_preview_threat_class(value: &str) -> Result<ThreatClass, String> {
+    let normalized = value.trim().to_lowercase();
+    serde_json::from_value(serde_json::Value::String(normalized))
+        .map_err(|_| format!("unsupported threat class `{value}`"))
+}
+
+fn parse_preview_severity(value: &str) -> Result<Severity, String> {
+    let normalized = value.trim().to_uppercase();
+    serde_json::from_value(serde_json::Value::String(normalized))
+        .map_err(|_| format!("unsupported severity `{value}`"))
+}
+
+fn parse_preview_mode(value: &str) -> Result<SwarmMode, String> {
+    let normalized = value.trim().to_lowercase();
+    serde_json::from_value(serde_json::Value::String(normalized))
+        .map_err(|_| format!("unsupported swarm mode `{value}`"))
+}
+
+fn parse_preview_confidence(value: &str) -> Result<f64, String> {
+    let parsed = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| format!("invalid confidence `{value}`"))?;
+    if !(0.0..=1.0).contains(&parsed) {
+        return Err("confidence must be between 0.0 and 1.0".to_string());
+    }
+    Ok(parsed)
 }
 
 fn parse_review_artifact_ref_arg(value: &str) -> Result<ReviewArtifactRef, String> {
@@ -1646,6 +1712,7 @@ struct InitCommandReport {
     output_path: String,
     mode: String,
     overwritten: bool,
+    readiness_command: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1682,6 +1749,16 @@ runtime:
   governance_degraded_tick_threshold: 3
   # Set secret_dir when using file-backed `@secret:file-name` references.
   secret_dir:
+  anti_tamper:
+    enabled: true
+    check_interval_ms: 5000
+    fail_closed_live_response: false
+    allowed_library_prefixes:
+      - /lib
+      - /lib64
+      - /usr/lib
+      - /usr/local/lib
+      - /nix/store
 
 detection:
   # Supported strategies: suspicious_process_tree, dns_exfiltration,
@@ -1840,6 +1917,16 @@ runtime:
   governance_degraded_tick_threshold: 3
   # File-backed `@secret:file-name` references resolve relative to this directory.
   secret_dir: /var/run/swarm-secrets
+  anti_tamper:
+    enabled: true
+    check_interval_ms: 5000
+    fail_closed_live_response: true
+    allowed_library_prefixes:
+      - /lib
+      - /lib64
+      - /usr/lib
+      - /usr/local/lib
+      - /nix/store
 
 detection:
   # Supported strategies: suspicious_process_tree, dns_exfiltration,
@@ -2265,7 +2352,10 @@ fn render_validate_report(report: &ValidateCommandReport) -> String {
 }
 
 fn render_init_report(report: &InitCommandReport) -> String {
-    format!("Wrote {} template to {}", report.mode, report.output_path)
+    format!(
+        "Wrote {} template to {}\nNext: {}",
+        report.mode, report.output_path, report.readiness_command
+    )
 }
 
 fn current_time_ms() -> i64 {
@@ -2308,6 +2398,117 @@ async fn run_validate_command(
     }
 }
 
+async fn run_readiness_command(
+    config_path: &std::path::Path,
+    output_schema_version: Option<u32>,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_output_schema_version(output_schema_version)?;
+    let plane = DefaultControlPlane::from_path(config_path)?;
+    let output = OperatorControlOutput::Readiness(Box::new(plane.readiness().await?));
+    if json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", render_output(&output));
+    }
+
+    let ready = match &output {
+        OperatorControlOutput::Readiness(envelope) => envelope.data.ready,
+        _ => unreachable!("readiness command always renders a readiness envelope"),
+    };
+    if ready {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "readiness diagnostic failed",
+        )
+        .into())
+    }
+}
+
+async fn run_first_run_command(
+    cli: &Cli,
+    args: &FirstRunArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_output_schema_version(cli.output_schema_version)?;
+    let plane = DefaultControlPlane::from_path(&cli.config)?;
+    let output = OperatorControlOutput::FirstRun(Box::new(
+        plane
+            .first_run(FirstRunWizardOptions {
+                scenario_path: args.scenario.clone(),
+                pace_ms: args.pace_ms,
+                voter_signing_key_env: args.voter_signing_key_env.clone(),
+                evidence_signer_id: cli.evidence_signer_id.clone(),
+                evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
+                paths: FirstRunWizardPaths {
+                    approval_verdict_results_dir: cli.approval_verdict_results_dir.clone(),
+                    approval_receipt_pack_results_dir: cli
+                        .approval_receipt_pack_results_dir
+                        .clone(),
+                    approval_set_results_dir: cli.approval_set_results_dir.clone(),
+                    approval_ledger_results_dir: cli.approval_ledger_results_dir.clone(),
+                },
+            })
+            .await?,
+    ));
+
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", render_output(&output));
+    }
+
+    let completed = matches!(
+        &output,
+        OperatorControlOutput::FirstRun(envelope)
+            if matches!(envelope.data.status, FirstRunStatus::Completed)
+    );
+    if completed {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "first-run wizard is blocked by readiness failures",
+        )
+        .into())
+    }
+}
+
+fn run_playbook_preview_command(
+    config_path: &std::path::Path,
+    args: &PlaybookPreviewArgs,
+    output_schema_version: Option<u32>,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_output_schema_version(output_schema_version)?;
+    let plane = DefaultControlPlane::from_path(config_path)?;
+    let output = OperatorControlOutput::PlaybookPreview(Box::new(plane.playbook_preview(
+        ResponsePlaybookPreviewRequest {
+            threat_class: args.threat_class.clone(),
+            severity: args.severity,
+            confidence: args.confidence,
+            mode: args.mode,
+        },
+    )?));
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{}", render_output(&output));
+    }
+
+    Ok(())
+}
+
+fn ensure_output_schema_version(
+    output_schema_version: Option<u32>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    resolve_operator_api_schema_version(output_schema_version)
+        .map(|_| ())
+        .map_err(|reason| std::io::Error::new(std::io::ErrorKind::InvalidInput, reason).into())
+}
+
 fn run_init_command(args: &InitArgs, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let output_path = args.output.clone().unwrap_or_else(default_init_output_path);
     let existed = output_path.exists();
@@ -2330,6 +2531,7 @@ fn run_init_command(args: &InitArgs, json: bool) -> Result<(), Box<dyn std::erro
         output_path: output_path.display().to_string(),
         mode: args.mode.as_config_value().to_string(),
         overwritten: existed,
+        readiness_command: format!("swarmctl readiness --config {}", output_path.display()),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -2387,6 +2589,18 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Command::Validate(args) => return run_validate_command(&cli.config, args, cli.json).await,
         Command::Init(args) => return run_init_command(args, cli.json),
+        Command::Readiness => {
+            return run_readiness_command(&cli.config, cli.output_schema_version, cli.json).await;
+        }
+        Command::FirstRun(args) => return run_first_run_command(&cli, args).await,
+        Command::PlaybookPreview(args) => {
+            return run_playbook_preview_command(
+                &cli.config,
+                args,
+                cli.output_schema_version,
+                cli.json,
+            );
+        }
         Command::Identity(args) => return run_identity_command(&cli.config, args, cli.json),
         _ => {}
     }
@@ -2507,8 +2721,20 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .map(|principal| principal.operator_id)
         .unwrap_or_else(|| repo_config.operator.auth.operator_id.clone());
 
+    if matches!(
+        cli.command,
+        Command::Status | Command::Replay(_) | Command::Investigation(_) | Command::Incident(_)
+    ) {
+        ensure_output_schema_version(cli.output_schema_version)?;
+    }
+
     let output = match cli.command {
-        Command::Validate(_) | Command::Init(_) | Command::Identity(_) => {
+        Command::Validate(_)
+        | Command::Init(_)
+        | Command::Readiness
+        | Command::FirstRun(_)
+        | Command::PlaybookPreview(_)
+        | Command::Identity(_) => {
             unreachable!("handled before harness bootstrap")
         }
         Command::Serve => {
@@ -4461,13 +4687,17 @@ mod tests {
     use super::{
         Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, build_validate_report,
         default_init_output_path, parse_review_artifact_ref_arg, render_init_template,
-        run_init_command,
+        run_init_command, run_playbook_preview_command, run_readiness_command,
     };
+    use crate::config::write_debug_test_config_signature;
     use clap::Parser;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use swarm_core::agent::SwarmMode;
+    use swarm_core::pheromone::ThreatClass;
+    use swarm_core::types::Severity;
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         let suffix = SystemTime::now()
@@ -4530,6 +4760,36 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_readiness_command() {
+        let cli = Cli::parse_from(["swarmctl", "--output-schema-version", "1", "readiness"]);
+        assert_eq!(cli.output_schema_version, Some(1));
+        assert!(matches!(cli.command, Command::Readiness));
+    }
+
+    #[test]
+    fn cli_parses_first_run_command() {
+        let cli = Cli::parse_from(["swarmctl", "first-run", "--pace-ms", "25"]);
+        assert!(matches!(cli.command, Command::FirstRun(_)));
+    }
+
+    #[test]
+    fn cli_parses_playbook_preview_command() {
+        let cli = Cli::parse_from([
+            "swarmctl",
+            "playbook-preview",
+            "--threat-class",
+            "execution",
+            "--severity",
+            "HIGH",
+            "--confidence",
+            "0.97",
+            "--mode",
+            "incident",
+        ]);
+        assert!(matches!(cli.command, Command::PlaybookPreview(_)));
+    }
+
+    #[test]
     fn cli_parses_identity_rotate_command() {
         let cli = Cli::parse_from([
             "swarmctl", "identity", "rotate", "--role", "tom", "--slot", "primary",
@@ -4559,6 +4819,7 @@ mod tests {
             "response_adapter:\n  kind: webhook\n  url: http://127.0.0.1:1/hook\n  auth_token: replace-me\n  timeout_ms: 5000\n  dead_letter_path: data/dead-letter.jsonl",
         );
         fs::write(&config_path, template).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
 
         let report = build_validate_report(&config_path, true).await;
         assert!(!report.passed);
@@ -4575,6 +4836,65 @@ mod tests {
         assert_eq!(json["endpoint_checks_requested"], true);
         assert_eq!(json["endpoint_checks"][0]["target"], "response_adapter");
         assert_eq!(json["endpoint_checks"][0]["reachable"], false);
+    }
+
+    #[tokio::test]
+    async fn readiness_command_accepts_signed_init_template() {
+        let dir = unique_temp_dir("readiness");
+        let config_path = dir.join("config.yaml");
+        fs::write(&config_path, render_init_template(InitMode::DetectOnly)).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
+
+        let result = run_readiness_command(&config_path, Some(1), true).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn playbook_preview_command_accepts_signed_init_template() {
+        let dir = unique_temp_dir("playbook-preview");
+        let config_path = dir.join("config.yaml");
+        fs::write(&config_path, render_init_template(InitMode::DetectOnly)).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
+
+        let result = run_playbook_preview_command(
+            &config_path,
+            &super::PlaybookPreviewArgs {
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+                confidence: 0.97,
+                mode: SwarmMode::Incident,
+            },
+            Some(1),
+            true,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn playbook_preview_command_rejects_unsupported_output_schema_version() {
+        let dir = unique_temp_dir("playbook-preview-schema");
+        let config_path = dir.join("config.yaml");
+        fs::write(&config_path, render_init_template(InitMode::DetectOnly)).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
+
+        let error = run_playbook_preview_command(
+            &config_path,
+            &super::PlaybookPreviewArgs {
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+                confidence: 0.97,
+                mode: SwarmMode::Incident,
+            },
+            Some(99),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported operator API schema version")
+        );
     }
 
     #[test]

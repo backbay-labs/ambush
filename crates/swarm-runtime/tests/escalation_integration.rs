@@ -66,6 +66,7 @@ fn make_deposit(
 ) -> PheromoneDeposit {
     let agent_id = AgentId::from_verifying_key(&key.verifying_key());
     let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
         indicator: serde_json::json!({"signal": "execution"}),
         threat_class,
         severity: Severity::High,
@@ -79,6 +80,7 @@ fn make_deposit(
         agent_key: Vec::new(),
     };
     let payload = swarm_pheromone::DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,

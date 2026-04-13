@@ -1,14 +1,21 @@
+use crate::alert_tuning::{AlertTuningReport, build_alert_tuning_report};
 use crate::bridge_runtime::BridgeStatusReport;
-use crate::config::RuntimeConfig;
+use crate::config::{DetectorProfileError, RuntimeConfig, kill_chain_sequence_profile};
 use crate::correlation::{CorrelationEngine, CorrelationError, CorrelationOutcome};
 use crate::detection::metrics::CriticalPathMetrics;
-use crate::detection::pipeline::{DetectionPipelineOutcome, PipelineError, detect_and_deposit};
+use crate::detection::pipeline::{
+    DetectionPipelineOutcome, PipelineError, detect_and_deposit, infer_agent_role,
+    persist_findings_as_deposits,
+};
 use crate::evolution_status::EvolutionStatusReport;
 use crate::investigation::{
     InvestigationCoordinator, InvestigationError, InvestigationQueueSnapshot, InvestigationStrategy,
 };
 use crate::providence::{PROVIDENCE_CHANNEL, ProvidenceHealthStatus};
-use crate::runtime_events::{AsyncLaneStatusLevel, AsyncLaneStatusSnapshot};
+use crate::runtime_events::{AsyncLaneStatusLevel, AsyncLaneStatusSnapshot, now_ms};
+use crate::sequence_detector::{
+    KILL_CHAIN_SEQUENCE_STRATEGY_ID, KillChainSequenceDetector, KillChainSequenceDetectorError,
+};
 use crate::{RuntimeError, RuntimeMode, SwarmRuntime};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,14 +25,15 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use swarm_core::config::SwarmConfig;
+use swarm_core::agent::SwarmMode;
+use swarm_core::config::{ResponsePlaybookRuleResolution, RuntimeDegradationLevel, SwarmConfig};
 use swarm_core::observability::with_trace_id;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::telemetry::TelemetryPayload;
 use swarm_core::types::{
     AgentId, ResponseAction, ResponseBlastRadiusImpact, ResponseBlastRadiusPreview,
     ResponseRehearsalPreview, ResponseRehearsalScopeKind, ResponseRollbackPreview,
-    ResponseRollbackStep, ResponseRollbackStepKind,
+    ResponseRollbackStep, ResponseRollbackStepKind, Severity,
 };
 use swarm_pheromone::{
     ConfiguredPheromoneSubstrate, PheromoneSubstrate, SubstrateError, SubstrateHealth,
@@ -33,16 +41,17 @@ use swarm_pheromone::{
 use swarm_policy::ApprovalGate;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
 use swarm_policy::static_gate::scope_for_response_action;
-use swarm_policy::{ActionRequest, ApprovalContext, PolicyVerdict};
+use swarm_policy::{ActionRequest, ApprovalContext, ApprovalError, PolicyVerdict};
 use swarm_response::{
     DispatchingExecutor, NotificationRouter, ResponseExecutor, SiemFindingForwarder,
 };
 use swarm_spine::{
     AuditResponseRecord, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
-    ConfiguredReplayBundleStore, IncidentLookup, IncidentRecord, IncidentStore,
-    IncidentStoreHealth, InvestigationBundleLookup, InvestigationBundleRecord,
+    ConfiguredReplayBundleStore, FalsePositiveMeasurementReport, IncidentLookup, IncidentRecord,
+    IncidentStore, IncidentStoreHealth, InvestigationBundleLookup, InvestigationBundleRecord,
     InvestigationBundleStore, InvestigationStoreHealth, ReplayBundle, ReplayBundleLookup,
     ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError, ReplayStoreHealth,
+    summarize_false_positive_measurements,
 };
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 use tracing::Instrument as _;
@@ -67,6 +76,15 @@ pub enum ServiceError {
 
     #[error(transparent)]
     Correlation(#[from] CorrelationError),
+
+    #[error(transparent)]
+    DetectorProfile(#[from] DetectorProfileError),
+
+    #[error(transparent)]
+    SequenceDetector(#[from] KillChainSequenceDetectorError),
+
+    #[error(transparent)]
+    Approval(#[from] ApprovalError),
 
     #[error("failed to write replay bundle `{path}`: {source}")]
     Write {
@@ -103,6 +121,9 @@ pub enum RehearsalPreviewError {
 
     #[error("{action} did not produce a scoped lease target")]
     MissingScopeTarget { action: &'static str },
+
+    #[error("{action} does not have preview metadata")]
+    UnsupportedAction { action: &'static str },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -152,9 +173,97 @@ pub struct ComponentStatus {
     pub details: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDegradationTriggerKind {
+    ConfiguredMode,
+    AgentHealth,
+    Detector,
+    Substrate,
+    ReplayStore,
+    StartupAttestation,
+    AntiTamper,
+    HeapPressure,
+    Draining,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeDegradationTrigger {
+    pub kind: RuntimeDegradationTriggerKind,
+    pub details: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeDegradationCapabilities {
+    pub accepts_ingest: bool,
+    pub allows_detection: bool,
+    pub allows_live_response: bool,
+    pub allows_artifact_writes: bool,
+    pub operator_read_surfaces_ready: bool,
+    pub drains_ingest: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeDegradationStatus {
+    pub level: RuntimeDegradationLevel,
+    pub configured_mode: RuntimeMode,
+    pub ready: bool,
+    pub summary: String,
+    pub capabilities: RuntimeDegradationCapabilities,
+    #[serde(default)]
+    pub triggers: Vec<RuntimeDegradationTrigger>,
+    pub transitioned_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeDegradationSignals {
+    pub configured_mode: RuntimeMode,
+    pub detector_ready: bool,
+    pub substrate_ready: bool,
+    pub replay_store_ready: bool,
+    pub startup_attestation_ready: bool,
+    pub anti_tamper_ready: bool,
+    pub heap_ready: bool,
+    pub draining: bool,
+    pub degraded_agents: usize,
+    pub failed_agents: usize,
+    pub transitioned_at_ms: i64,
+}
+
+impl RuntimeDegradationStatus {
+    pub fn same_state_as(&self, other: &Self) -> bool {
+        self.level == other.level
+            && self.configured_mode == other.configured_mode
+            && self.ready == other.ready
+            && self.summary == other.summary
+            && self.capabilities == other.capabilities
+            && self.triggers == other.triggers
+    }
+}
+
+impl Default for RuntimeDegradationStatus {
+    fn default() -> Self {
+        let configured_mode = RuntimeMode::DetectOnly;
+        let level = RuntimeDegradationLevel::DetectOnly;
+        Self {
+            level,
+            configured_mode,
+            ready: level.ready(),
+            summary: "runtime is limited to detect-only execution by configuration".to_string(),
+            capabilities: runtime_degradation_capabilities(level, configured_mode),
+            triggers: vec![RuntimeDegradationTrigger {
+                kind: RuntimeDegradationTriggerKind::ConfiguredMode,
+                details: "configured runtime mode is detect_only".to_string(),
+            }],
+            transitioned_at_ms: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorStatusReport {
     pub mode: RuntimeMode,
+    pub degradation: RuntimeDegradationStatus,
     pub detector: ComponentStatus,
     pub substrate: ComponentStatus,
     pub policy: ComponentStatus,
@@ -169,6 +278,8 @@ pub struct OperatorStatusReport {
     pub incident_review: Option<IncidentReviewStatus>,
     pub freshness: ReviewFreshness,
     pub evolution: Option<EvolutionStatusReport>,
+    pub false_positive_tracking: FalsePositiveMeasurementReport,
+    pub alert_tuning: AlertTuningReport,
     pub warnings: Vec<String>,
 }
 
@@ -204,6 +315,61 @@ pub struct PersistedReplayBundleWithInvestigation {
     pub investigation: Option<InvestigationBundleRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponsePlaybookPreviewRequest {
+    pub threat_class: ThreatClass,
+    pub severity: Severity,
+    pub confidence: f64,
+    pub mode: SwarmMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsePlaybookPreviewStatus {
+    Matched,
+    NoMatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponsePlaybookPolicyPreview {
+    pub verdict: PolicyVerdict,
+    pub rule_name: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_expires_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponsePlaybookActionPreview {
+    pub order: usize,
+    pub action: ResponseAction,
+    pub rehearsal: ResponseRehearsalPreview,
+    pub policy: ResponsePlaybookPolicyPreview,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponsePlaybookApprovalSummary {
+    pub allow_count: usize,
+    pub require_human_count: usize,
+    pub deny_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponsePlaybookPreviewReport {
+    pub status: ResponsePlaybookPreviewStatus,
+    pub configured_runtime_mode: RuntimeMode,
+    pub request: ResponsePlaybookPreviewRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_rule: Option<ResponsePlaybookRuleResolution>,
+    #[serde(default)]
+    pub actions: Vec<ResponsePlaybookActionPreview>,
+    pub approval_summary: ResponsePlaybookApprovalSummary,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
 impl OperatorStatusReport {
     pub fn with_bridges(mut self, bridges: BridgeStatusReport) -> Self {
         if bridges.has_degraded() {
@@ -217,6 +383,125 @@ impl OperatorStatusReport {
     pub fn with_evolution(mut self, evolution: EvolutionStatusReport) -> Self {
         self.evolution = Some(evolution);
         self
+    }
+}
+
+pub fn derive_runtime_degradation_status(
+    signals: RuntimeDegradationSignals,
+) -> RuntimeDegradationStatus {
+    let mut detect_only_triggers = Vec::new();
+    let mut read_only_triggers = Vec::new();
+    let mut emergency_triggers = Vec::new();
+
+    if signals.configured_mode == RuntimeMode::DetectOnly {
+        detect_only_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::ConfiguredMode,
+            details: "configured runtime mode is detect_only".to_string(),
+        });
+    }
+    if !signals.substrate_ready {
+        detect_only_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::Substrate,
+            details: "substrate health is not ready for live response".to_string(),
+        });
+    }
+    if signals.degraded_agents > 0 || signals.failed_agents > 0 {
+        detect_only_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::AgentHealth,
+            details: format!(
+                "{} degraded and {} failed agent(s) are active",
+                signals.degraded_agents, signals.failed_agents
+            ),
+        });
+    }
+
+    if !signals.detector_ready {
+        read_only_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::Detector,
+            details: "detector runtime is not ready".to_string(),
+        });
+    }
+    if !signals.replay_store_ready {
+        read_only_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::ReplayStore,
+            details: "replay store health is not ready".to_string(),
+        });
+    }
+
+    if !signals.startup_attestation_ready {
+        emergency_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::StartupAttestation,
+            details: "startup attestation is not ready for the configured runtime mode".to_string(),
+        });
+    }
+    if !signals.anti_tamper_ready {
+        emergency_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::AntiTamper,
+            details: "anti-tamper monitoring is not effectively ready".to_string(),
+        });
+    }
+    if !signals.heap_ready {
+        emergency_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::HeapPressure,
+            details: "heap pressure exceeded the configured readiness threshold".to_string(),
+        });
+    }
+    if signals.draining {
+        emergency_triggers.push(RuntimeDegradationTrigger {
+            kind: RuntimeDegradationTriggerKind::Draining,
+            details: "runtime drain has been requested".to_string(),
+        });
+    }
+
+    let (level, triggers, summary) = if !emergency_triggers.is_empty() {
+        (
+            RuntimeDegradationLevel::EmergencyDrain,
+            emergency_triggers,
+            "runtime is in emergency drain and rejecting new ingest".to_string(),
+        )
+    } else if !read_only_triggers.is_empty() {
+        (
+            RuntimeDegradationLevel::ReadOnly,
+            read_only_triggers,
+            "runtime is limited to operator read surfaces while critical write-path health is degraded"
+                .to_string(),
+        )
+    } else if !detect_only_triggers.is_empty() {
+        (
+            RuntimeDegradationLevel::DetectOnly,
+            detect_only_triggers,
+            "runtime is limited to detect-only execution".to_string(),
+        )
+    } else {
+        (
+            RuntimeDegradationLevel::Full,
+            Vec::new(),
+            "runtime is operating with full response capability".to_string(),
+        )
+    };
+
+    RuntimeDegradationStatus {
+        level,
+        configured_mode: signals.configured_mode,
+        ready: level.ready(),
+        summary,
+        capabilities: runtime_degradation_capabilities(level, signals.configured_mode),
+        triggers,
+        transitioned_at_ms: signals.transitioned_at_ms,
+    }
+}
+
+fn runtime_degradation_capabilities(
+    level: RuntimeDegradationLevel,
+    configured_mode: RuntimeMode,
+) -> RuntimeDegradationCapabilities {
+    RuntimeDegradationCapabilities {
+        accepts_ingest: level.accepts_ingest(),
+        allows_detection: level.allows_detection(),
+        allows_live_response: level.allows_live_response(configured_mode),
+        allows_artifact_writes: level.allows_artifact_writes(),
+        operator_read_surfaces_ready: level.operator_read_surfaces_ready(),
+        drains_ingest: level.drains_ingest(),
     }
 }
 
@@ -435,6 +720,35 @@ fn build_rehearsal_preview(
         Ok(trimmed.to_string())
     }
 
+    fn preview(
+        rehearsal_id: &str,
+        source_bundle_id: &str,
+        prepared_at_ms: i64,
+        blast_radius: ResponseBlastRadiusPreview,
+        rollback: ResponseRollbackPreview,
+    ) -> ResponseRehearsalPreview {
+        ResponseRehearsalPreview {
+            rehearsal_id: rehearsal_id.to_string(),
+            source_bundle_id: source_bundle_id.to_string(),
+            prepared_at_ms,
+            simulated_only: true,
+            blast_radius,
+            rollback,
+        }
+    }
+
+    fn rollback_step(
+        kind: ResponseRollbackStepKind,
+        summary: impl Into<String>,
+    ) -> ResponseRollbackStep {
+        ResponseRollbackStep {
+            kind,
+            summary: summary.into(),
+        }
+    }
+
+    let rehearsal_id = format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms);
+
     let preview = match &request.action {
         ResponseAction::BlockEgress { .. } => {
             let scope_value = scope_for_response_action(&request.action).ok_or(
@@ -443,12 +757,11 @@ fn build_rehearsal_preview(
                 },
             )?;
             let target = require_value("block target", &scope_value)?;
-            ResponseRehearsalPreview {
-                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
-                source_bundle_id: source_bundle_id.to_string(),
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
                 prepared_at_ms,
-                simulated_only: true,
-                blast_radius: ResponseBlastRadiusPreview {
+                ResponseBlastRadiusPreview {
                     scope_kind: ResponseRehearsalScopeKind::NetworkTarget,
                     scope_value: target.clone(),
                     impact: ResponseBlastRadiusImpact::NetworkEgressBlocked,
@@ -458,19 +771,19 @@ fn build_rehearsal_preview(
                         "Blocks outbound connectivity to the scoped network target `{target}`"
                     ),
                 },
-                rollback: ResponseRollbackPreview {
+                ResponseRollbackPreview {
                     required: true,
                     summary: format!(
                         "Remove the temporary egress deny rule for `{target}` to restore traffic"
                     ),
-                    steps: vec![ResponseRollbackStep {
-                        kind: ResponseRollbackStepKind::RemoveNetworkBlock,
-                        summary: format!(
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::RemoveNetworkBlock,
+                        format!(
                             "Remove the egress deny rule for `{target}` and confirm traffic flows normally"
                         ),
-                    }],
+                    )],
                 },
-            }
+            )
         }
         ResponseAction::IsolateHost { .. } => {
             let scope_value = scope_for_response_action(&request.action).ok_or(
@@ -479,12 +792,11 @@ fn build_rehearsal_preview(
                 },
             )?;
             let host_id = require_value("host_id", &scope_value)?;
-            ResponseRehearsalPreview {
-                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
-                source_bundle_id: source_bundle_id.to_string(),
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
                 prepared_at_ms,
-                simulated_only: true,
-                blast_radius: ResponseBlastRadiusPreview {
+                ResponseBlastRadiusPreview {
                     scope_kind: ResponseRehearsalScopeKind::Host,
                     scope_value: host_id.clone(),
                     impact: ResponseBlastRadiusImpact::HostConnectivityIsolated,
@@ -497,19 +809,19 @@ fn build_rehearsal_preview(
                         "Cuts the scoped host `{host_id}` off from normal network communication"
                     ),
                 },
-                rollback: ResponseRollbackPreview {
+                ResponseRollbackPreview {
                     required: true,
                     summary: format!(
                         "Restore normal connectivity for the isolated host `{host_id}`"
                     ),
-                    steps: vec![ResponseRollbackStep {
-                        kind: ResponseRollbackStepKind::RestoreHostConnectivity,
-                        summary: format!(
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::RestoreHostConnectivity,
+                        format!(
                             "Remove the isolation policy for `{host_id}` and verify host reachability"
                         ),
-                    }],
+                    )],
                 },
-            }
+            )
         }
         ResponseAction::RevokeCredential { .. } => {
             let scope_value = scope_for_response_action(&request.action).ok_or(
@@ -518,12 +830,11 @@ fn build_rehearsal_preview(
                 },
             )?;
             let credential_id = require_value("credential_id", &scope_value)?;
-            ResponseRehearsalPreview {
-                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
-                source_bundle_id: source_bundle_id.to_string(),
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
                 prepared_at_ms,
-                simulated_only: true,
-                blast_radius: ResponseBlastRadiusPreview {
+                ResponseBlastRadiusPreview {
                     scope_kind: ResponseRehearsalScopeKind::Credential,
                     scope_value: credential_id.clone(),
                     impact: ResponseBlastRadiusImpact::CredentialAccessRevoked,
@@ -533,19 +844,380 @@ fn build_rehearsal_preview(
                         "Removes the scoped credential `{credential_id}` from future authentication attempts"
                     ),
                 },
-                rollback: ResponseRollbackPreview {
+                ResponseRollbackPreview {
                     required: true,
                     summary: format!(
                         "Restore or rotate the revoked credential `{credential_id}` with bounded access"
                     ),
-                    steps: vec![ResponseRollbackStep {
-                        kind: ResponseRollbackStepKind::RestoreCredential,
-                        summary: format!(
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::RestoreCredential,
+                        format!(
                             "Reissue or restore `{credential_id}` after validation of the owning principal"
                         ),
-                    }],
+                    )],
                 },
-            }
+            )
+        }
+        ResponseAction::SinkholeDns { domain } => {
+            let domain = require_value("domain", domain)?;
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::NetworkTarget,
+                    scope_value: domain.clone(),
+                    impact: ResponseBlastRadiusImpact::DnsResolutionSinkholed,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "dns_resolution".to_string(),
+                        "domain_reachability".to_string(),
+                    ],
+                    summary: format!(
+                        "Redirects name resolution for the scoped domain `{domain}` to a controlled sinkhole target"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Remove the sinkhole override for `{domain}` to restore normal DNS answers"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::RemoveDnsSinkhole,
+                        format!(
+                            "Delete the sinkhole record for `{domain}` and confirm DNS responses return to baseline"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::TerminateUserSession {
+            host_id,
+            session_id,
+        } => {
+            let host_id = require_value("host_id", host_id)?;
+            let session_id = require_value("session_id", session_id)?;
+            let scope_value = format!("{host_id}:{session_id}");
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::UserSession,
+                    scope_value: scope_value.clone(),
+                    impact: ResponseBlastRadiusImpact::UserSessionTerminated,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "interactive_session".to_string(),
+                        "session_bound_credentials".to_string(),
+                    ],
+                    summary: format!(
+                        "Ends the scoped session `{session_id}` on host `{host_id}` and forces that principal to reconnect"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: false,
+                    summary: format!(
+                        "The terminated session `{session_id}` cannot be resumed; if this was a false positive, the user must establish a fresh session on `{host_id}`"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::ReauthenticateUserSession,
+                        format!(
+                            "After validation, allow the principal tied to `{session_id}` to authenticate again on `{host_id}`"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::TriggerEdrScan {
+            host_id,
+            scan_profile,
+        } => {
+            let host_id = require_value("host_id", host_id)?;
+            let scan_profile = require_value("scan_profile", scan_profile)?;
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::Host,
+                    scope_value: host_id.clone(),
+                    impact: ResponseBlastRadiusImpact::HostScanTriggered,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "endpoint_scan_capacity".to_string(),
+                        "cpu_headroom".to_string(),
+                    ],
+                    summary: format!(
+                        "Starts the EDR scan profile `{scan_profile}` on host `{host_id}`, consuming bounded endpoint inspection capacity"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: false,
+                    summary: format!(
+                        "The scan job is non-destructive; cancel the `{scan_profile}` scan on `{host_id}` only if it was launched in error"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::CancelHostScan,
+                        format!(
+                            "Cancel the active `{scan_profile}` EDR scan on `{host_id}` or allow it to complete if the load is acceptable"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::InjectFirewallRule {
+            host_id,
+            rule_name,
+            direction,
+            cidr,
+            port,
+        } => {
+            let host_id = require_value("host_id", host_id)?;
+            let rule_name = require_value("rule_name", rule_name)?;
+            let direction = require_value("direction", direction)?;
+            let cidr = require_value("cidr", cidr)?;
+            let port_clause = port
+                .map(|value| format!(" on port `{value}`"))
+                .unwrap_or_default();
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::Host,
+                    scope_value: host_id.clone(),
+                    impact: ResponseBlastRadiusImpact::HostFirewallPolicyChanged,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "host_network_connectivity".to_string(),
+                        "firewall_policy".to_string(),
+                    ],
+                    summary: format!(
+                        "Adds firewall rule `{rule_name}` on host `{host_id}` for {direction} traffic matching `{cidr}`{port_clause}"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Remove firewall rule `{rule_name}` from `{host_id}` to restore the pre-action policy"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::RemoveFirewallRule,
+                        format!(
+                            "Delete firewall rule `{rule_name}` from `{host_id}` and verify expected traffic resumes"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::QuarantineFile { host_id, file_path } => {
+            let host_id = require_value("host_id", host_id)?;
+            let file_path = require_value("file_path", file_path)?;
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::File,
+                    scope_value: format!("{host_id}:{file_path}"),
+                    impact: ResponseBlastRadiusImpact::FileQuarantined,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "file_access".to_string(),
+                        "file_execution".to_string(),
+                    ],
+                    summary: format!(
+                        "Moves the scoped file `{file_path}` on host `{host_id}` into quarantine, blocking normal access and execution"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Release `{file_path}` from quarantine on `{host_id}` only after validating it is benign"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::ReleaseQuarantinedFile,
+                        format!(
+                            "Restore `{file_path}` to its original location on `{host_id}` and confirm the file hash matches the approved baseline"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::KillProcess {
+            host_id,
+            process_name,
+        } => {
+            let host_id = require_value("host_id", host_id)?;
+            let process_name = require_value("process_name", process_name)?;
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::Process,
+                    scope_value: format!("{host_id}:{process_name}"),
+                    impact: ResponseBlastRadiusImpact::ProcessTerminated,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "process_execution".to_string(),
+                        "task_continuity".to_string(),
+                    ],
+                    summary: format!(
+                        "Terminates process `{process_name}` on host `{host_id}`, immediately interrupting that workload"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: false,
+                    summary: format!(
+                        "The terminated process `{process_name}` does not resume automatically; restart it only if post-review confirms the workload is benign"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::RestartProcess,
+                        format!(
+                            "Relaunch the approved `{process_name}` workload on `{host_id}` with normal supervision if business impact warrants recovery"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::SuspendProcess {
+            host_id,
+            process_name,
+        } => {
+            let host_id = require_value("host_id", host_id)?;
+            let process_name = require_value("process_name", process_name)?;
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::Process,
+                    scope_value: format!("{host_id}:{process_name}"),
+                    impact: ResponseBlastRadiusImpact::ProcessSuspended,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "process_execution".to_string(),
+                        "interactive_task_progress".to_string(),
+                    ],
+                    summary: format!(
+                        "Suspends process `{process_name}` on host `{host_id}`, pausing its execution without removing it from memory"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Resume suspended process `{process_name}` on `{host_id}` if the action is later judged unnecessary"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::ResumeProcess,
+                        format!(
+                            "Resume process `{process_name}` on `{host_id}` and confirm it returns to the expected execution state"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::DisableUserAccount { user_id } => {
+            let user_id = require_value("user_id", user_id)?;
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::UserAccount,
+                    scope_value: user_id.clone(),
+                    impact: ResponseBlastRadiusImpact::UserAccountDisabled,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "interactive_authentication".to_string(),
+                        "privileged_access".to_string(),
+                    ],
+                    summary: format!(
+                        "Disables user account `{user_id}`, blocking new authentication and inherited access"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Re-enable account `{user_id}` only after identity validation and scope review"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::ReenableUserAccount,
+                        format!(
+                            "Restore account `{user_id}` and confirm its expected group membership and MFA state before the next login"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::ForcePasswordReset { user_id } => {
+            let user_id = require_value("user_id", user_id)?;
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::UserAccount,
+                    scope_value: user_id.clone(),
+                    impact: ResponseBlastRadiusImpact::PasswordResetEnforced,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "interactive_authentication".to_string(),
+                        "credential_rotation".to_string(),
+                    ],
+                    summary: format!(
+                        "Marks account `{user_id}` for password reset before the next successful login"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Clear the forced-reset requirement for `{user_id}` only if the reset was queued in error"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::ClearPasswordResetRequirement,
+                        format!(
+                            "Remove the forced-reset flag for `{user_id}` or issue a controlled temporary credential after validation"
+                        ),
+                    )],
+                },
+            )
+        }
+        ResponseAction::RemoveScheduledTask { host_id, task_name } => {
+            let host_id = require_value("host_id", host_id)?;
+            let task_name = require_value("task_name", task_name)?;
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
+                prepared_at_ms,
+                ResponseBlastRadiusPreview {
+                    scope_kind: ResponseRehearsalScopeKind::ScheduledTask,
+                    scope_value: format!("{host_id}:{task_name}"),
+                    impact: ResponseBlastRadiusImpact::ScheduledTaskRemoved,
+                    max_affected_scopes: 1,
+                    affected_capabilities: vec![
+                        "scheduled_automation".to_string(),
+                        "task_execution".to_string(),
+                    ],
+                    summary: format!(
+                        "Deletes scheduled task `{task_name}` from host `{host_id}`, preventing future automated execution"
+                    ),
+                },
+                ResponseRollbackPreview {
+                    required: true,
+                    summary: format!(
+                        "Recreate scheduled task `{task_name}` on `{host_id}` if the removal was not justified"
+                    ),
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::RestoreScheduledTask,
+                        format!(
+                            "Restore scheduled task `{task_name}` on `{host_id}` with its approved trigger and command definition"
+                        ),
+                    )],
+                },
+            )
         }
         ResponseAction::DeployDecoy { decoy_type, .. } => {
             let decoy_type = require_value("decoy_type", decoy_type)?;
@@ -555,12 +1227,11 @@ fn build_rehearsal_preview(
                 },
             )?;
             let zone = require_value("target_zone", &zone)?;
-            ResponseRehearsalPreview {
-                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
-                source_bundle_id: source_bundle_id.to_string(),
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
                 prepared_at_ms,
-                simulated_only: true,
-                blast_radius: ResponseBlastRadiusPreview {
+                ResponseBlastRadiusPreview {
                     scope_kind: ResponseRehearsalScopeKind::Zone,
                     scope_value: zone.clone(),
                     impact: ResponseBlastRadiusImpact::DeceptionCoverageChanged,
@@ -570,28 +1241,27 @@ fn build_rehearsal_preview(
                         "Adds a `{decoy_type}` deception asset inside the bounded zone `{zone}`"
                     ),
                 },
-                rollback: ResponseRollbackPreview {
+                ResponseRollbackPreview {
                     required: true,
                     summary: format!(
                         "Withdraw the rehearsal-scoped `{decoy_type}` decoy from zone `{zone}` if it is promoted"
                     ),
-                    steps: vec![ResponseRollbackStep {
-                        kind: ResponseRollbackStepKind::WithdrawDecoy,
-                        summary: format!(
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::WithdrawDecoy,
+                        format!(
                             "Remove the `{decoy_type}` decoy from `{zone}` and confirm sensors return to baseline"
                         ),
-                    }],
+                    )],
                 },
-            }
+            )
         }
         ResponseAction::Escalate { summary, .. } => {
             let summary = require_value("summary", summary)?;
-            ResponseRehearsalPreview {
-                rehearsal_id: format!("rehearsal:{}:{}", request.hunt_id.0, prepared_at_ms),
-                source_bundle_id: source_bundle_id.to_string(),
+            preview(
+                &rehearsal_id,
+                source_bundle_id,
                 prepared_at_ms,
-                simulated_only: true,
-                blast_radius: ResponseBlastRadiusPreview {
+                ResponseBlastRadiusPreview {
                     scope_kind: ResponseRehearsalScopeKind::OperatorQueue,
                     scope_value: "human_review".to_string(),
                     impact: ResponseBlastRadiusImpact::OperatorEscalationOnly,
@@ -601,22 +1271,60 @@ fn build_rehearsal_preview(
                         "Queues one bounded operator review using the escalation summary `{summary}`"
                     ),
                 },
-                rollback: ResponseRollbackPreview {
+                ResponseRollbackPreview {
                     required: false,
                     summary:
                         "No containment rollback is required; only the queued escalation note may need closure"
                             .to_string(),
-                    steps: vec![ResponseRollbackStep {
-                        kind: ResponseRollbackStepKind::CloseEscalation,
-                        summary: "Close or supersede the rehearsal-only escalation note after review"
-                            .to_string(),
-                    }],
+                    steps: vec![rollback_step(
+                        ResponseRollbackStepKind::CloseEscalation,
+                        "Close or supersede the rehearsal-only escalation note after review",
+                    )],
                 },
-            }
+            )
         }
     };
 
     Ok(preview)
+}
+
+fn playbook_preview_approval_context(prepared_at_ms: i64, live_mode: bool) -> ApprovalContext {
+    ApprovalContext {
+        live_mode,
+        receipt_chain: vec![format!("playbook-preview:{prepared_at_ms}")],
+        correlation_id: Some(format!("playbook-preview-{prepared_at_ms}")),
+        now_ms: prepared_at_ms,
+    }
+}
+
+fn playbook_preview_hunt_id(prepared_at_ms: i64) -> swarm_core::types::HuntId {
+    swarm_core::types::HuntId(format!("playbook-preview-{prepared_at_ms}"))
+}
+
+fn playbook_preview_evidence(
+    request: &ResponsePlaybookPreviewRequest,
+    resolution: &ResponsePlaybookRuleResolution,
+) -> serde_json::Value {
+    json!({
+        "preview": true,
+        "escalation": {
+            "threat_class": request.threat_class,
+            "severity": request.severity,
+            "confidence": request.confidence,
+            "mode": request.mode,
+        },
+        "playbook_match": {
+            "rule_index": resolution.rule_index,
+            "threat_class": resolution.threat_class,
+            "severity": resolution.severity,
+            "min_confidence": resolution.min_confidence,
+            "max_confidence": resolution.max_confidence,
+            "branch": resolution.branch.as_ref().map(|branch| json!({
+                "index": branch.index,
+                "name": branch.name,
+            })),
+        }
+    })
 }
 
 fn enrich_finding_evidence(
@@ -749,6 +1457,7 @@ pub struct RuntimeService<P, E> {
     pub runtime: SwarmRuntime<P, E>,
     metrics: RuntimeMetrics,
     prometheus: Option<CriticalPathMetrics>,
+    sequence_detector: Option<KillChainSequenceDetector>,
     siem_forwarder: Option<SiemFindingForwarder>,
     notification_router: Option<NotificationRouter>,
 }
@@ -758,7 +1467,8 @@ where
     P: ApprovalGate,
     E: ResponseExecutor,
 {
-    pub fn new(config: SwarmConfig, runtime: SwarmRuntime<P, E>) -> Self {
+    pub fn new(config: SwarmConfig, mut runtime: SwarmRuntime<P, E>) -> Self {
+        runtime.configure_temporal_event_window(config.runtime.temporal_event_window.clone());
         let siem_forwarder = config.siem_forward.clone().map(SiemFindingForwarder::new);
         let (notification_channels, notification_routing) =
             notification_config_without_providence(&config);
@@ -777,6 +1487,7 @@ where
             runtime,
             metrics: RuntimeMetrics::default(),
             prometheus: None,
+            sequence_detector: None,
             siem_forwarder,
             notification_router,
         }
@@ -785,6 +1496,29 @@ where
     pub fn with_prometheus(mut self, metrics: CriticalPathMetrics) -> Self {
         self.prometheus = Some(metrics);
         self
+    }
+
+    pub fn with_sequence_detector(mut self, detector: KillChainSequenceDetector) -> Self {
+        self.sequence_detector = Some(detector);
+        self
+    }
+
+    pub fn with_configured_sequence_detector(mut self) -> Result<Self, ServiceError> {
+        if self
+            .config
+            .detection
+            .active_strategies()
+            .iter()
+            .any(|strategy| strategy == KILL_CHAIN_SEQUENCE_STRATEGY_ID)
+        {
+            let detector = KillChainSequenceDetector::from_profile(
+                KILL_CHAIN_SEQUENCE_STRATEGY_ID,
+                kill_chain_sequence_profile(&self.config.detection)?,
+                self.runtime.temporal_event_window(),
+            )?;
+            self = self.with_sequence_detector(detector);
+        }
+        Ok(self)
     }
 
     pub fn mode(&self) -> RuntimeMode {
@@ -824,6 +1558,42 @@ where
             }
         }
         Ok(health)
+    }
+
+    async fn evaluate_sequence_findings<S>(
+        &self,
+        substrate: &S,
+        event: &TelemetryEvent,
+        agent_id: &AgentId,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<
+        (
+            Vec<DetectionFinding>,
+            Vec<swarm_core::pheromone::PheromoneDeposit>,
+        ),
+        ServiceError,
+    >
+    where
+        S: PheromoneSubstrate,
+    {
+        let Some(detector) = &self.sequence_detector else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        let findings = detector.evaluate(event);
+        if findings.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let deposits = persist_findings_as_deposits(
+            substrate,
+            &findings,
+            event,
+            agent_id,
+            infer_agent_role(agent_id),
+            &self.config.pheromone,
+            signing_key,
+        )
+        .await?;
+        Ok((findings, deposits))
     }
 
     /// Run the full critical lane for one event and build a replay bundle.
@@ -886,6 +1656,7 @@ where
                     ready = substrate_health.ready,
                     "substrate health verified"
                 );
+                self.runtime.record_temporal_event(event);
 
                 let detect_started = Instant::now();
                 let detection_result = detect_and_deposit(
@@ -912,6 +1683,18 @@ where
                     findings,
                     deposits,
                 } = detection_result?;
+                let (sequence_findings, sequence_deposits) = self
+                    .evaluate_sequence_findings(
+                        substrate,
+                        &event,
+                        execution.agent_id,
+                        execution.signing_key,
+                    )
+                    .await?;
+                let mut findings = findings;
+                findings.extend(sequence_findings);
+                let mut deposits = deposits;
+                deposits.extend(sequence_deposits);
                 let detected_at_ms = execution.approval.now_ms;
                 let findings = FindingEnrichmentService.enrich(&event, findings, detected_at_ms);
                 observe_findings(&event, &findings);
@@ -1466,6 +2249,100 @@ where
         build_rehearsal_preview(request, source_bundle_id, prepared_at_ms)
     }
 
+    pub fn playbook_preview(
+        &self,
+        request: ResponsePlaybookPreviewRequest,
+        prepared_at_ms: i64,
+    ) -> Result<ResponsePlaybookPreviewReport, ServiceError> {
+        let mut notes = Vec::new();
+        if self.runtime.mode() != RuntimeMode::LiveResponse {
+            notes.push(
+                "configured runtime mode is detect_only; preview still evaluates the playbook and policy path without executor side effects"
+                    .to_string(),
+            );
+        }
+
+        let Some(matched_rule) = self.config.pheromone.response_playbook.resolve(
+            &request.threat_class,
+            request.severity,
+            request.confidence,
+            request.mode,
+        ) else {
+            notes.push(
+                "no response playbook rule matched the supplied threat class, severity, confidence, and swarm mode"
+                    .to_string(),
+            );
+            return Ok(ResponsePlaybookPreviewReport {
+                status: ResponsePlaybookPreviewStatus::NoMatch,
+                configured_runtime_mode: self.runtime.mode(),
+                request,
+                matched_rule: None,
+                actions: Vec::new(),
+                approval_summary: ResponsePlaybookApprovalSummary::default(),
+                notes,
+            });
+        };
+
+        let source_bundle_id = format!("playbook-preview:{prepared_at_ms}");
+        let approval = playbook_preview_approval_context(
+            prepared_at_ms,
+            self.runtime.mode() == RuntimeMode::LiveResponse,
+        );
+        let hunt_id = playbook_preview_hunt_id(prepared_at_ms);
+        let requested_by = AgentId("operator-preview".to_string());
+        let evidence = playbook_preview_evidence(&request, &matched_rule);
+        let gate = ConfigurableApprovalGate::from_config(&self.config.policy);
+        let mut approval_summary = ResponsePlaybookApprovalSummary::default();
+        let mut actions = Vec::with_capacity(matched_rule.actions.len());
+
+        for (order, action) in matched_rule.actions.iter().cloned().enumerate() {
+            let request_action = ActionRequest {
+                hunt_id: hunt_id.clone(),
+                requested_by: requested_by.clone(),
+                action: action.clone(),
+                severity: request.severity,
+                evidence: evidence.clone(),
+            };
+            let policy = gate.evaluate(&request_action, &approval)?;
+            let lease = if policy.verdict == PolicyVerdict::Allow {
+                Some(gate.issue_lease(&request_action, &approval)?)
+            } else {
+                None
+            };
+            let rehearsal =
+                build_rehearsal_preview(&request_action, &source_bundle_id, prepared_at_ms)?;
+
+            match policy.verdict {
+                PolicyVerdict::Allow => approval_summary.allow_count += 1,
+                PolicyVerdict::RequireHuman => approval_summary.require_human_count += 1,
+                PolicyVerdict::Deny => approval_summary.deny_count += 1,
+            }
+
+            actions.push(ResponsePlaybookActionPreview {
+                order,
+                action,
+                rehearsal,
+                policy: ResponsePlaybookPolicyPreview {
+                    verdict: policy.verdict,
+                    rule_name: policy.rule_name,
+                    reason: policy.reason,
+                    lease_scope: lease.as_ref().and_then(|value| value.scope.clone()),
+                    lease_expires_at_ms: lease.as_ref().map(|value| value.expires_at_ms),
+                },
+            });
+        }
+
+        Ok(ResponsePlaybookPreviewReport {
+            status: ResponsePlaybookPreviewStatus::Matched,
+            configured_runtime_mode: self.runtime.mode(),
+            request,
+            matched_rule: Some(matched_rule),
+            actions,
+            approval_summary,
+            notes,
+        })
+    }
+
     pub async fn operator_status<D, S, Store>(
         &self,
         detector: &D,
@@ -1499,9 +2376,26 @@ where
             warnings.push("durable replay store is not ready".to_string());
         }
         let recent_decisions = store.recent(self.config.audit.recent_decisions_limit)?;
+        let degradation = derive_runtime_degradation_status(RuntimeDegradationSignals {
+            configured_mode: self.runtime.mode(),
+            detector_ready: true,
+            substrate_ready: substrate_health.ready
+                && (!self.config.runtime.require_durable_live_response
+                    || self.runtime.mode() != RuntimeMode::LiveResponse
+                    || substrate_health.durable),
+            replay_store_ready: replay_store_health.ready,
+            startup_attestation_ready: true,
+            anti_tamper_ready: true,
+            heap_ready: true,
+            draining: false,
+            degraded_agents: 0,
+            failed_agents: 0,
+            transitioned_at_ms: now_ms(),
+        });
 
         Ok(OperatorStatusReport {
             mode: self.runtime.mode(),
+            degradation,
             detector: ComponentStatus {
                 ready: true,
                 durable: None,
@@ -1534,6 +2428,8 @@ where
                 latest_incident_at_ms: None,
             },
             evolution: None,
+            false_positive_tracking: FalsePositiveMeasurementReport::default(),
+            alert_tuning: AlertTuningReport::default(),
             warnings,
         })
     }
@@ -1609,6 +2505,8 @@ where
             store: component_status_from_incident_store(&incident_store_health),
             recent: recent_incidents.clone(),
         });
+        report.false_positive_tracking = summarize_false_positive_measurements(&recent_incidents);
+        report.alert_tuning = build_alert_tuning_report(&recent_incidents);
         report.async_lane = async_lane;
         report.freshness.latest_investigation_update_at_ms = recent_investigations
             .first()
@@ -1722,8 +2620,8 @@ where
             investigation_store.clone(),
         );
         let correlation = CorrelationEngine::new(config.correlation.clone());
-        let service =
-            RuntimeService::new(config, runtime).with_prometheus(CriticalPathMetrics::new());
+        let service = RuntimeService::new(config, runtime).with_configured_sequence_detector()?;
+        let service = service.with_prometheus(CriticalPathMetrics::new());
 
         Ok(Self {
             service,
@@ -2049,7 +2947,8 @@ fn extend_unique_warnings(target: &mut Vec<String>, new_warnings: Vec<String>) {
 mod tests {
     use super::{
         ConfiguredRuntimeStack, EventExecutionContext, ReadinessError, RehearsalPreviewError,
-        RuntimeService, ServiceError,
+        ResponsePlaybookPreviewRequest, ResponsePlaybookPreviewStatus, RuntimeService,
+        ServiceError,
     };
     use crate::bridge_runtime::{BridgeStatusReport, BridgeStatusSnapshot};
     use crate::correlation::CorrelationEngine;
@@ -2062,14 +2961,19 @@ mod tests {
     use axum::routing::post;
     use axum::{Json, Router};
     use serde_json::{Value, json};
+    use swarm_core::agent::SwarmMode;
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CircuitBreakerConfig, CorrelationConfig,
         InvestigationConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PromotionConfig, RetryConfig, RuntimeSettings, SiemForwardConfig, SwarmConfig,
-        TelemetrySourceConfig,
+        PolicyRuleConfig, PolicyRuleDecision, PromotionConfig, ResponsePlaybookBranch,
+        ResponsePlaybookCondition, ResponsePlaybookConfig, ResponsePlaybookRule, RetryConfig,
+        RuntimeSettings, SiemForwardConfig, SwarmConfig, TelemetrySourceConfig,
+        TemporalEventWindowConfig,
     };
+    use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::{
-        AgentId, ResponseAction, ResponseRehearsalScopeKind, ResponseRollbackStepKind, Severity,
+        AgentId, HuntId, ResponseAction, ResponseBlastRadiusImpact, ResponseRehearsalScopeKind,
+        ResponseRollbackStepKind, Severity,
     };
     use swarm_guard::{
         Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
@@ -2086,7 +2990,8 @@ mod tests {
         MemoryInvestigationBundleStore, MemoryReplayBundleStore, ReplayBundle, ReplayBundleStore,
     };
     use swarm_whisker::{
-        ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryPayload,
+        ProcessStartEvent, SuspiciousProcessTreeDetector, TelemetryEvent, TelemetryEventPredicate,
+        TelemetryPayload,
     };
     use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
@@ -2120,6 +3025,8 @@ mod tests {
                 require_durable_live_response: require_durable,
                 max_heap_pressure: 0.90,
                 secret_dir: None,
+                anti_tamper: Default::default(),
+                temporal_event_window: TemporalEventWindowConfig::default(),
                 agent_tick_timeout_ms: 500,
                 governance_degraded_tick_threshold: 3,
                 partition_contingency_lease_ttl_ms: 300_000,
@@ -2189,6 +3096,70 @@ mod tests {
         runtime_service().with_prometheus(CriticalPathMetrics::new())
     }
 
+    fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
+        vec![PolicyRuleConfig {
+            name: "service-preview-allow-execution".to_string(),
+            decision: PolicyRuleDecision::Allow,
+            threat_class: ThreatClass::Execution,
+            actions: Vec::new(),
+            min_severity: Severity::Low,
+            max_severity: Severity::Critical,
+            time_window_utc: None,
+            max_actions_per_agent_per_minute: None,
+            reason: Some("service preview tests allow execution responses".to_string()),
+        }]
+    }
+
+    fn branching_playbook() -> ResponsePlaybookConfig {
+        ResponsePlaybookConfig {
+            rules: vec![ResponsePlaybookRule {
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+                min_confidence: 0.90,
+                max_confidence: 1.0,
+                actions: vec![ResponseAction::Escalate {
+                    summary: "fallback execution review".to_string(),
+                    urgency: Severity::High,
+                }],
+                branches: vec![ResponsePlaybookBranch {
+                    name: Some("incident_containment".to_string()),
+                    when: ResponsePlaybookCondition {
+                        min_confidence: Some(0.97),
+                        modes: vec![SwarmMode::Incident],
+                        ..ResponsePlaybookCondition::default()
+                    },
+                    actions: vec![
+                        ResponseAction::BlockEgress {
+                            target: "203.0.113.10".to_string(),
+                        },
+                        ResponseAction::IsolateHost {
+                            host_id: "host-1".to_string(),
+                        },
+                    ],
+                }],
+            }],
+        }
+    }
+
+    fn runtime_service_with_branching_playbook()
+    -> RuntimeService<StaticApprovalGate, SandboxExecutor> {
+        let mut config = service_config(
+            RuntimeMode::LiveResponse,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        config.policy.rules = permissive_policy_rules();
+        config.pheromone.response_playbook = branching_playbook();
+        RuntimeService::new(
+            config,
+            SwarmRuntime::new(
+                RuntimeMode::LiveResponse,
+                StaticApprovalGate::default(),
+                SandboxExecutor,
+            ),
+        )
+    }
+
     fn suspicious_event(event_id: &str, command_line: &str) -> TelemetryEvent {
         TelemetryEvent {
             source: "synthetic".to_string(),
@@ -2213,6 +3184,18 @@ mod tests {
             receipt_chain: vec![format!("receipt-upstream-{now_ms}")],
             correlation_id: Some(correlation_id.to_string()),
             now_ms,
+        }
+    }
+
+    fn preview_request(action: ResponseAction) -> ActionRequest {
+        ActionRequest {
+            hunt_id: HuntId("hunt-preview".to_string()),
+            requested_by: test_agent_id(),
+            action,
+            severity: Severity::High,
+            evidence: json!({
+                "test": "phase_213_preview"
+            }),
         }
     }
 
@@ -2460,6 +3443,124 @@ mod tests {
         assert_eq!(replayed.audit.trail_id, bundle.audit.trail_id);
         assert_eq!(replayed.findings.len(), 1);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn process_event_records_temporal_window_state_without_findings() {
+        let mut config = service_config(
+            RuntimeMode::DetectOnly,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        config.runtime.temporal_event_window = TemporalEventWindowConfig {
+            retention_ms: 120_000,
+            max_events: 4,
+            max_match_span_ms: 120_000,
+            max_predicates_per_match: 4,
+        };
+        let service = RuntimeService::new(
+            config,
+            SwarmRuntime::new(
+                RuntimeMode::DetectOnly,
+                StaticApprovalGate::default(),
+                SandboxExecutor,
+            ),
+        );
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let agent_id = test_agent_id();
+        let first_event = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-seq-a".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "explorer".to_string(),
+                process_name: "cmd".to_string(),
+                command_line: "cmd.exe /c whoami".to_string(),
+                user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
+            }),
+        };
+        let second_event = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-seq-b".to_string(),
+            timestamp: 1_700_000_030,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "cmd".to_string(),
+                process_name: "whoami".to_string(),
+                command_line: "whoami".to_string(),
+                user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
+            }),
+        };
+        let first_context = ApprovalContext {
+            live_mode: false,
+            receipt_chain: vec!["receipt-seq-a".to_string()],
+            correlation_id: None,
+            now_ms: 1_700_000_000_000,
+        };
+        let second_context = ApprovalContext {
+            live_mode: false,
+            receipt_chain: vec!["receipt-seq-b".to_string()],
+            correlation_id: None,
+            now_ms: 1_700_000_030_000,
+        };
+
+        assert!(
+            service
+                .process_event(
+                    &detector,
+                    &substrate,
+                    &first_event,
+                    EventExecutionContext {
+                        agent_id: &agent_id,
+                        approval: &first_context,
+                        signing_key: &test_signing_key(),
+                    },
+                    |_finding| None,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            service
+                .process_event(
+                    &detector,
+                    &substrate,
+                    &second_event,
+                    EventExecutionContext {
+                        agent_id: &agent_id,
+                        approval: &second_context,
+                        signing_key: &test_signing_key(),
+                    },
+                    |_finding| None,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let snapshot = service.runtime.temporal_event_window_snapshot();
+        assert_eq!(snapshot.retained_events, 2);
+
+        let first_step = |event: &TelemetryEvent| event.event_id == "evt-seq-a";
+        let second_step = |event: &TelemetryEvent| event.event_id == "evt-seq-b";
+        let predicates: [&dyn TelemetryEventPredicate; 2] = [&first_step, &second_step];
+        let matched = service
+            .runtime
+            .match_temporal_sequence(&predicates, Some(60_000))
+            .unwrap()
+            .unwrap();
+        assert_eq!(matched.matched_events.len(), 2);
+        assert_eq!(matched.matched_events[0].event_id, "evt-seq-a");
+        assert_eq!(matched.matched_events[1].event_id, "evt-seq-b");
     }
 
     #[tokio::test]
@@ -3036,6 +4137,213 @@ mod tests {
         assert!(preview.note.contains("dry-run receipt"));
     }
 
+    #[test]
+    fn rehearsal_preview_covers_expanded_response_action_catalog() {
+        let service = runtime_service();
+        let source_bundle_id = "bundle-expanded-catalog";
+        let prepared_at_ms = 1_700_000_000_250;
+        let cases = vec![
+            (
+                ResponseAction::SinkholeDns {
+                    domain: "sinkhole.example".to_string(),
+                },
+                ResponseRehearsalScopeKind::NetworkTarget,
+                "sinkhole.example".to_string(),
+                ResponseBlastRadiusImpact::DnsResolutionSinkholed,
+                true,
+                ResponseRollbackStepKind::RemoveDnsSinkhole,
+            ),
+            (
+                ResponseAction::TerminateUserSession {
+                    host_id: "host-77".to_string(),
+                    session_id: "session-9".to_string(),
+                },
+                ResponseRehearsalScopeKind::UserSession,
+                "host-77:session-9".to_string(),
+                ResponseBlastRadiusImpact::UserSessionTerminated,
+                false,
+                ResponseRollbackStepKind::ReauthenticateUserSession,
+            ),
+            (
+                ResponseAction::TriggerEdrScan {
+                    host_id: "host-22".to_string(),
+                    scan_profile: "memory_quick".to_string(),
+                },
+                ResponseRehearsalScopeKind::Host,
+                "host-22".to_string(),
+                ResponseBlastRadiusImpact::HostScanTriggered,
+                false,
+                ResponseRollbackStepKind::CancelHostScan,
+            ),
+            (
+                ResponseAction::InjectFirewallRule {
+                    host_id: "host-44".to_string(),
+                    rule_name: "deny-c2".to_string(),
+                    direction: "egress".to_string(),
+                    cidr: "203.0.113.0/24".to_string(),
+                    port: Some(443),
+                },
+                ResponseRehearsalScopeKind::Host,
+                "host-44".to_string(),
+                ResponseBlastRadiusImpact::HostFirewallPolicyChanged,
+                true,
+                ResponseRollbackStepKind::RemoveFirewallRule,
+            ),
+            (
+                ResponseAction::QuarantineFile {
+                    host_id: "host-55".to_string(),
+                    file_path: "/tmp/payload.exe".to_string(),
+                },
+                ResponseRehearsalScopeKind::File,
+                "host-55:/tmp/payload.exe".to_string(),
+                ResponseBlastRadiusImpact::FileQuarantined,
+                true,
+                ResponseRollbackStepKind::ReleaseQuarantinedFile,
+            ),
+            (
+                ResponseAction::KillProcess {
+                    host_id: "host-88".to_string(),
+                    process_name: "powershell.exe".to_string(),
+                },
+                ResponseRehearsalScopeKind::Process,
+                "host-88:powershell.exe".to_string(),
+                ResponseBlastRadiusImpact::ProcessTerminated,
+                false,
+                ResponseRollbackStepKind::RestartProcess,
+            ),
+            (
+                ResponseAction::SuspendProcess {
+                    host_id: "host-99".to_string(),
+                    process_name: "cmd.exe".to_string(),
+                },
+                ResponseRehearsalScopeKind::Process,
+                "host-99:cmd.exe".to_string(),
+                ResponseBlastRadiusImpact::ProcessSuspended,
+                true,
+                ResponseRollbackStepKind::ResumeProcess,
+            ),
+            (
+                ResponseAction::DisableUserAccount {
+                    user_id: "alice@example.com".to_string(),
+                },
+                ResponseRehearsalScopeKind::UserAccount,
+                "alice@example.com".to_string(),
+                ResponseBlastRadiusImpact::UserAccountDisabled,
+                true,
+                ResponseRollbackStepKind::ReenableUserAccount,
+            ),
+            (
+                ResponseAction::ForcePasswordReset {
+                    user_id: "bob@example.com".to_string(),
+                },
+                ResponseRehearsalScopeKind::UserAccount,
+                "bob@example.com".to_string(),
+                ResponseBlastRadiusImpact::PasswordResetEnforced,
+                true,
+                ResponseRollbackStepKind::ClearPasswordResetRequirement,
+            ),
+            (
+                ResponseAction::RemoveScheduledTask {
+                    host_id: "host-66".to_string(),
+                    task_name: "DailyUpdater".to_string(),
+                },
+                ResponseRehearsalScopeKind::ScheduledTask,
+                "host-66:DailyUpdater".to_string(),
+                ResponseBlastRadiusImpact::ScheduledTaskRemoved,
+                true,
+                ResponseRollbackStepKind::RestoreScheduledTask,
+            ),
+        ];
+
+        for (
+            action,
+            expected_scope_kind,
+            expected_scope_value,
+            expected_impact,
+            expected_rollback_required,
+            expected_step_kind,
+        ) in cases
+        {
+            let preview = service
+                .rehearsal_preview(&preview_request(action), source_bundle_id, prepared_at_ms)
+                .expect("expanded action preview");
+            assert_eq!(preview.source_bundle_id, source_bundle_id);
+            assert!(preview.simulated_only);
+            assert_eq!(preview.blast_radius.scope_kind, expected_scope_kind);
+            assert_eq!(preview.blast_radius.scope_value, expected_scope_value);
+            assert_eq!(preview.blast_radius.impact, expected_impact);
+            assert_eq!(preview.rollback.required, expected_rollback_required);
+            assert_eq!(preview.rollback.steps.len(), 1);
+            assert_eq!(preview.rollback.steps[0].kind, expected_step_kind);
+        }
+    }
+
+    #[tokio::test]
+    async fn rehearse_bundle_supports_expanded_firewall_action_preview() {
+        let (service, modes) = runtime_service_with_recording_modes();
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let event = suspicious_event("evt-rehearsal-firewall", "powershell.exe -enc AAA=");
+        let source_context = approval_context(1_700_000_000_320, "corr-rehearsal-firewall");
+        let agent_id = test_agent_id();
+
+        let source = service
+            .process_event(
+                &detector,
+                &substrate,
+                &event,
+                EventExecutionContext {
+                    agent_id: &agent_id,
+                    approval: &source_context,
+                    signing_key: &test_signing_key(),
+                },
+                |_finding| {
+                    Some(ResponseAction::InjectFirewallRule {
+                        host_id: "host-22".to_string(),
+                        rule_name: "deny-c2".to_string(),
+                        direction: "egress".to_string(),
+                        cidr: "203.0.113.0/24".to_string(),
+                        port: Some(443),
+                    })
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            source.audit.response,
+            AuditResponseRecord::Skipped { .. }
+        ));
+        assert!(modes.lock().await.is_empty());
+
+        let store = MemoryReplayBundleStore::default();
+        let rehearsal_context = approval_context(1_700_000_000_321, "corr-rehearsal-run");
+        let persisted = service
+            .rehearse_bundle_with_store(&store, &source, &rehearsal_context)
+            .await
+            .unwrap();
+
+        assert_eq!(&*modes.lock().await, &[ExecutionMode::DryRun]);
+        let rehearsal = persisted
+            .bundle
+            .rehearsal
+            .as_ref()
+            .expect("rehearsal preview");
+        assert_eq!(
+            rehearsal.blast_radius.scope_kind,
+            ResponseRehearsalScopeKind::Host
+        );
+        assert_eq!(
+            rehearsal.blast_radius.impact,
+            ResponseBlastRadiusImpact::HostFirewallPolicyChanged
+        );
+        assert_eq!(
+            rehearsal.rollback.steps[0].kind,
+            ResponseRollbackStepKind::RemoveFirewallRule
+        );
+    }
+
     #[tokio::test]
     async fn rehearse_bundle_fails_closed_before_executor_when_scope_metadata_is_missing() {
         let (service, modes) = runtime_service_with_recording_modes();
@@ -3083,6 +4391,72 @@ mod tests {
         ));
         assert!(modes.lock().await.is_empty());
         assert!(store.recent(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn playbook_preview_matches_branch_and_projects_policy_requirements() {
+        let service = runtime_service_with_branching_playbook();
+
+        let report = service
+            .playbook_preview(
+                ResponsePlaybookPreviewRequest {
+                    threat_class: ThreatClass::Execution,
+                    severity: Severity::High,
+                    confidence: 0.98,
+                    mode: SwarmMode::Incident,
+                },
+                1_700_000_000_777,
+            )
+            .expect("playbook preview");
+
+        assert_eq!(report.status, ResponsePlaybookPreviewStatus::Matched);
+        assert_eq!(report.actions.len(), 2);
+        assert_eq!(report.approval_summary.allow_count, 2);
+        let matched = report.matched_rule.expect("matched rule");
+        assert_eq!(matched.rule_index, 0);
+        assert_eq!(
+            matched
+                .branch
+                .as_ref()
+                .and_then(|branch| branch.name.as_deref()),
+            Some("incident_containment")
+        );
+        assert!(matches!(
+            report.actions[0].action,
+            ResponseAction::BlockEgress { .. }
+        ));
+        assert_eq!(
+            report.actions[0].rehearsal.blast_radius.scope_kind,
+            ResponseRehearsalScopeKind::NetworkTarget
+        );
+        assert_eq!(report.actions[0].policy.verdict, PolicyVerdict::Allow);
+        assert!(report.actions[0].policy.lease_scope.is_some());
+    }
+
+    #[test]
+    fn playbook_preview_uses_fallback_actions_when_no_branch_matches() {
+        let service = runtime_service_with_branching_playbook();
+
+        let report = service
+            .playbook_preview(
+                ResponsePlaybookPreviewRequest {
+                    threat_class: ThreatClass::Execution,
+                    severity: Severity::High,
+                    confidence: 0.93,
+                    mode: SwarmMode::Alert,
+                },
+                1_700_000_000_778,
+            )
+            .expect("playbook preview");
+
+        assert_eq!(report.status, ResponsePlaybookPreviewStatus::Matched);
+        assert_eq!(report.actions.len(), 1);
+        assert_eq!(report.approval_summary.allow_count, 1);
+        assert_eq!(report.matched_rule.expect("matched rule").branch, None);
+        assert!(matches!(
+            report.actions[0].action,
+            ResponseAction::Escalate { .. }
+        ));
     }
 
     #[tokio::test]

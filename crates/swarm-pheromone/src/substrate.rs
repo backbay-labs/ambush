@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use ed25519_dalek::{Signature as DalekSignature, Verifier, VerifyingKey};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -83,6 +84,7 @@ pub enum SubstrateError {
 /// bytes that are signed; `validate_deposit_signature` deserializes and re-verifies.
 #[derive(Serialize)]
 pub struct DepositSigningPayload<'a> {
+    pub schema_version: u32,
     pub indicator: &'a serde_json::Value,
     pub threat_class: &'a ThreatClass,
     pub severity: &'a Severity,
@@ -94,10 +96,87 @@ pub struct DepositSigningPayload<'a> {
     pub agent_role: Option<AgentRole>,
 }
 
+#[derive(Serialize)]
+struct LegacyDepositSigningPayload<'a> {
+    pub indicator: &'a serde_json::Value,
+    pub threat_class: &'a ThreatClass,
+    pub severity: &'a Severity,
+    pub confidence: f64,
+    pub timestamp: i64,
+    pub decay_half_life: f64,
+    pub agent_id: &'a AgentId,
+    pub agent_identity: &'a str,
+    pub agent_role: Option<AgentRole>,
+}
+
+fn signing_payload_bytes_for_deposit(
+    deposit: &PheromoneDeposit,
+) -> Result<Vec<u8>, serde_json::Error> {
+    if deposit.schema_version == PheromoneDeposit::previous_schema_version() {
+        let payload = LegacyDepositSigningPayload {
+            indicator: &deposit.indicator,
+            threat_class: &deposit.threat_class,
+            severity: &deposit.severity,
+            confidence: deposit.confidence,
+            timestamp: deposit.timestamp,
+            decay_half_life: deposit.decay_half_life,
+            agent_id: &deposit.agent_id,
+            agent_identity: &deposit.agent_identity,
+            agent_role: deposit.agent_role,
+        };
+        serde_json::to_vec(&payload)
+    } else {
+        let payload = DepositSigningPayload {
+            schema_version: deposit.schema_version,
+            indicator: &deposit.indicator,
+            threat_class: &deposit.threat_class,
+            severity: &deposit.severity,
+            confidence: deposit.confidence,
+            timestamp: deposit.timestamp,
+            decay_half_life: deposit.decay_half_life,
+            agent_id: &deposit.agent_id,
+            agent_identity: &deposit.agent_identity,
+            agent_role: deposit.agent_role,
+        };
+        serde_json::to_vec(&payload)
+    }
+}
+
+fn ensure_supported_deposit_schema_version(schema_version: u32) -> Result<(), SubstrateError> {
+    if PheromoneDeposit::supports_schema_version(schema_version) {
+        return Ok(());
+    }
+
+    Err(SubstrateError::InvalidDeposit {
+        reason: format!("unsupported pheromone deposit schema version `{schema_version}`"),
+    })
+}
+
+pub(crate) fn decode_deposit_payload(
+    payload: &[u8],
+    location: impl Into<String>,
+) -> Result<PheromoneDeposit, SubstrateError> {
+    let location = location.into();
+    let raw =
+        serde_json::from_slice::<JsonValue>(payload).map_err(|source| SubstrateError::Decode {
+            location: location.clone(),
+            source,
+        })?;
+    let schema_version = raw
+        .get("schema_version")
+        .and_then(JsonValue::as_u64)
+        .map(|value| value as u32)
+        .unwrap_or_else(PheromoneDeposit::previous_schema_version);
+    ensure_supported_deposit_schema_version(schema_version)?;
+    serde_json::from_value::<PheromoneDeposit>(raw)
+        .map_err(|source| SubstrateError::Decode { location, source })
+}
+
 /// Validate that a [`PheromoneDeposit`] carries a valid Ed25519 signature
 /// over its canonical content. Returns `Err(SubstrateError::InvalidDeposit)`
 /// when the signature is missing, malformed, or does not verify.
 pub fn validate_deposit_signature(deposit: &PheromoneDeposit) -> Result<(), SubstrateError> {
+    ensure_supported_deposit_schema_version(deposit.schema_version)?;
     if deposit.signature.is_empty() {
         return Err(SubstrateError::InvalidDeposit {
             reason: "empty signature".into(),
@@ -138,21 +217,11 @@ pub fn validate_deposit_signature(deposit: &PheromoneDeposit) -> Result<(), Subs
             })?;
     let signature = DalekSignature::from_bytes(&sig_bytes);
 
-    let payload = DepositSigningPayload {
-        indicator: &deposit.indicator,
-        threat_class: &deposit.threat_class,
-        severity: &deposit.severity,
-        confidence: deposit.confidence,
-        timestamp: deposit.timestamp,
-        decay_half_life: deposit.decay_half_life,
-        agent_id: &deposit.agent_id,
-        agent_identity: &deposit.agent_identity,
-        agent_role: deposit.agent_role,
-    };
-    let payload_bytes = serde_json::to_vec(&payload).map_err(|err| SubstrateError::Encode {
-        context: "deposit signing payload".into(),
-        source: err,
-    })?;
+    let payload_bytes =
+        signing_payload_bytes_for_deposit(deposit).map_err(|source| SubstrateError::Encode {
+            context: "deposit signing payload".into(),
+            source,
+        })?;
 
     verifying_key
         .verify(&payload_bytes, &signature)
@@ -809,7 +878,7 @@ impl LocalJournalPheromoneSubstrate {
         let threat_intel_journal_path = threat_intel_journal_path(&journal_path);
         let behavioral_baseline_journal_path = behavioral_baseline_journal_path(&journal_path);
         ensure_parent_dir(&journal_path)?;
-        let deposits = load_jsonl(&journal_path)?;
+        let deposits = load_deposit_jsonl(&journal_path)?;
         let escalations = load_jsonl(&escalation_journal_path)?;
         let threat_class_configs = load_threat_class_configs(&threat_class_config_journal_path)?;
         let threat_intel_entries = load_threat_intel_entries(&threat_intel_journal_path)?;
@@ -1306,6 +1375,34 @@ where
     Ok(entries)
 }
 
+fn load_deposit_jsonl(path: &Path) -> Result<Vec<PheromoneDeposit>, SubstrateError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = fs::File::open(path).map_err(|source| SubstrateError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line.map_err(|source| SubstrateError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let location = format!("{} line {}", path.display(), index + 1);
+        let entry = decode_deposit_payload(line.as_bytes(), location)?;
+        entries.push(entry);
+    }
+
+    Ok(entries)
+}
+
 fn append_jsonl_line<T>(path: &Path, entry: &T) -> Result<(), SubstrateError>
 where
     T: Serialize,
@@ -1449,8 +1546,8 @@ fn threat_intel_key(indicator_type: &ThreatIntelIndicatorType, value: &str) -> T
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConfiguredPheromoneSubstrate, DepositQuery, DepositSigningPayload,
-        InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate, PheromoneSubstrate,
+        ConfiguredPheromoneSubstrate, DepositQuery, InMemoryPheromoneSubstrate,
+        LocalJournalPheromoneSubstrate, PheromoneSubstrate,
     };
     use ed25519_dalek::{Signer, SigningKey};
     use sha2::{Digest, Sha256};
@@ -1459,8 +1556,8 @@ mod tests {
     use swarm_core::pheromone::{
         BehavioralBaselineSnapshot, BehavioralFrequencyEntry, BehavioralHostBaseline,
         BehavioralIdentityBaseline, BehavioralPeerGroupBaseline, BehavioralRoleToolFrequencyEntry,
-        EscalationRecord, PheromoneDeposit, ThreatClass, ThreatClassConfig, ThreatIntelEntry,
-        ThreatIntelIndicatorType,
+        BehavioralTelemetryFamilyBaseline, EscalationRecord, PheromoneDeposit, ThreatClass,
+        ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
     };
     use swarm_core::types::{AgentId, Severity};
 
@@ -1476,18 +1573,7 @@ mod tests {
     }
 
     fn sign_deposit(deposit: &mut PheromoneDeposit, key: &SigningKey) {
-        let payload = DepositSigningPayload {
-            indicator: &deposit.indicator,
-            threat_class: &deposit.threat_class,
-            severity: &deposit.severity,
-            confidence: deposit.confidence,
-            timestamp: deposit.timestamp,
-            decay_half_life: deposit.decay_half_life,
-            agent_id: &deposit.agent_id,
-            agent_identity: &deposit.agent_identity,
-            agent_role: deposit.agent_role,
-        };
-        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        let payload_bytes = super::signing_payload_bytes_for_deposit(deposit).unwrap();
         let sig = key.sign(&payload_bytes);
         deposit.signature = sig.to_bytes().to_vec();
         deposit.agent_key = key.verifying_key().to_bytes().to_vec();
@@ -1506,6 +1592,7 @@ mod tests {
         let key = signing_key_for_label(agent_id);
         let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
         let mut deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({
                 "signal": "process-tree",
                 "host_id": host_id,
@@ -1527,6 +1614,7 @@ mod tests {
 
     fn unsigned_deposit() -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({"signal": "process-tree"}),
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
@@ -1588,6 +1676,26 @@ mod tests {
             hosts: vec![BehavioralHostBaseline {
                 host_id: "host-1".to_string(),
                 observation_count: 3,
+                novelty_distribution: swarm_core::pheromone::BehavioralOnlineDistributionSnapshot {
+                    sample_count: 2,
+                    mean: 0.0,
+                    m2: 0.0,
+                },
+                telemetry_families: vec![BehavioralTelemetryFamilyBaseline {
+                    family: "network_connect".to_string(),
+                    observation_count: 2,
+                    novelty_distribution:
+                        swarm_core::pheromone::BehavioralOnlineDistributionSnapshot {
+                            sample_count: 1,
+                            mean: 0.0,
+                            m2: 0.0,
+                        },
+                    features: vec![BehavioralFrequencyEntry {
+                        key: "network:svchost.exe->10.0.0.5:443/tcp".to_string(),
+                        weight: 2.0,
+                        last_seen_at: 1_700_000_450,
+                    }],
+                }],
                 parent_child_pairs: vec![BehavioralFrequencyEntry {
                     key: "explorer.exe->notepad.exe".to_string(),
                     weight: 2.0,
@@ -1608,6 +1716,26 @@ mod tests {
             identities: vec![BehavioralIdentityBaseline {
                 identity_id: "alice".to_string(),
                 observation_count: 3,
+                novelty_distribution: swarm_core::pheromone::BehavioralOnlineDistributionSnapshot {
+                    sample_count: 2,
+                    mean: 0.0,
+                    m2: 0.0,
+                },
+                telemetry_families: vec![BehavioralTelemetryFamilyBaseline {
+                    family: "dns_query".to_string(),
+                    observation_count: 2,
+                    novelty_distribution:
+                        swarm_core::pheromone::BehavioralOnlineDistributionSnapshot {
+                            sample_count: 1,
+                            mean: 0.0,
+                            m2: 0.0,
+                        },
+                    features: vec![BehavioralFrequencyEntry {
+                        key: "dns:chrome.exe->example.com:a".to_string(),
+                        weight: 2.0,
+                        last_seen_at: 1_700_000_450,
+                    }],
+                }],
                 parent_child_pairs: vec![BehavioralFrequencyEntry {
                     key: "explorer.exe->notepad.exe".to_string(),
                     weight: 2.0,
@@ -1628,6 +1756,26 @@ mod tests {
             peer_groups: vec![BehavioralPeerGroupBaseline {
                 peer_group_id: "role:interactive".to_string(),
                 observation_count: 4,
+                novelty_distribution: swarm_core::pheromone::BehavioralOnlineDistributionSnapshot {
+                    sample_count: 3,
+                    mean: 0.0,
+                    m2: 0.0,
+                },
+                telemetry_families: vec![BehavioralTelemetryFamilyBaseline {
+                    family: "process_memory_access".to_string(),
+                    observation_count: 2,
+                    novelty_distribution:
+                        swarm_core::pheromone::BehavioralOnlineDistributionSnapshot {
+                            sample_count: 1,
+                            mean: 0.0,
+                            m2: 0.0,
+                        },
+                    features: vec![BehavioralFrequencyEntry {
+                        key: "memory:winword.exe->lsass.exe:virtual_alloc_ex".to_string(),
+                        weight: 2.0,
+                        last_seen_at: 1_700_000_450,
+                    }],
+                }],
                 parent_child_pairs: vec![BehavioralFrequencyEntry {
                     key: "explorer.exe->notepad.exe".to_string(),
                     weight: 2.0,
@@ -1979,6 +2127,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_journal_recovers_legacy_deposits_without_schema_version_after_reopen() {
+        let path = std::env::temp_dir().join("swarm-pheromone-legacy-journal.jsonl");
+        let escalation_path = super::escalation_journal_path(&path);
+        let config_path = super::threat_class_config_journal_path(&path);
+        let threat_intel_path = super::threat_intel_journal_path(&path);
+        let config = PheromoneConfig {
+            backend: PheromoneBackendConfig::LocalJournal {
+                path: path.display().to_string(),
+            },
+            ..substrate_config()
+        };
+
+        let mut legacy_deposit = sample_deposit("whisker-legacy", 100, 0.9);
+        legacy_deposit.schema_version = PheromoneDeposit::previous_schema_version();
+        sign_deposit(
+            &mut legacy_deposit,
+            &signing_key_for_label("whisker-legacy"),
+        );
+        let mut raw = serde_json::to_value(&legacy_deposit).unwrap();
+        raw.as_object_mut().unwrap().remove("schema_version");
+        std::fs::write(&path, format!("{}\n", serde_json::to_string(&raw).unwrap())).unwrap();
+
+        let reopened = LocalJournalPheromoneSubstrate::open(config, &path).unwrap();
+        let deposits = reopened.recent_deposits(10).await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(
+            deposits[0].schema_version,
+            PheromoneDeposit::previous_schema_version()
+        );
+        assert_eq!(deposits[0].agent_id, legacy_deposit.agent_id);
+        assert_eq!(deposits[0].timestamp, legacy_deposit.timestamp);
+
+        let health = reopened.health().await.unwrap();
+        assert!(health.ready);
+        assert!(health.durable);
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(escalation_path);
+        let _ = std::fs::remove_file(config_path);
+        let _ = std::fs::remove_file(threat_intel_path);
+    }
+
+    #[tokio::test]
     async fn local_journal_recovers_escalations_after_reopen() {
         let path = std::env::temp_dir().join("swarm-pheromone-escalations.jsonl");
         let escalation_path = super::escalation_journal_path(&path);
@@ -2231,6 +2422,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deposit_accepts_previous_schema_version_signed_deposit() {
+        let substrate = in_memory();
+        let mut deposit = sample_deposit("whisker-test", 100, 0.9);
+        deposit.schema_version = PheromoneDeposit::previous_schema_version();
+        sign_deposit(&mut deposit, &signing_key_for_label("whisker-test"));
+
+        substrate.deposit(deposit).await.unwrap();
+
+        let deposits = substrate.recent_deposits(10).await.unwrap();
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(
+            deposits[0].schema_version,
+            PheromoneDeposit::previous_schema_version()
+        );
+    }
+
+    #[tokio::test]
+    async fn deposit_rejects_unsupported_schema_version() {
+        let substrate = in_memory();
+        let mut deposit = sample_deposit("whisker-test", 100, 0.9);
+        deposit.schema_version = PheromoneDeposit::current_schema_version() + 1;
+        sign_deposit(&mut deposit, &signing_key_for_label("whisker-test"));
+
+        let err = substrate.deposit(deposit).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unsupported pheromone deposit schema version"),
+            "expected schema version rejection, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn deposit_accepts_strategy_scoped_agent_id_when_base_identity_matches_signing_key() {
         let substrate = in_memory();
         let key = signing_key_for_label("whisker-test");
@@ -2444,6 +2667,7 @@ mod tests {
         let key = test_signing_key();
         let derived_agent_id = AgentId::from_verifying_key(&key.verifying_key());
         let mut deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({"cmd": "whoami"}),
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
@@ -2465,6 +2689,7 @@ mod tests {
         assert_eq!(d.indicator, serde_json::json!({"cmd": "whoami"}));
         assert_eq!(d.threat_class, ThreatClass::Execution);
         assert_eq!(d.severity, Severity::High);
+        assert_eq!(d.schema_version, PheromoneDeposit::current_schema_version());
         assert!((d.confidence - 0.95).abs() < f64::EPSILON);
         assert_eq!(d.timestamp, 500);
         assert!((d.decay_half_life - 3600.0).abs() < f64::EPSILON);

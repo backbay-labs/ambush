@@ -1,6 +1,10 @@
-use crate::approval::{ApprovalReceiptPackReport, ApprovalVerdictStatus, verify_receipt_pack};
+use crate::approval::{
+    ApprovalError, ApprovalReceiptPackReport, ApprovalVerdictStatus, verify_receipt_pack,
+};
 use crate::providence::ProvidenceContextScope;
-use crate::replay::{ReplayScenarioInput, load_scenario_manifest};
+use crate::replay::{
+    ReplayHarnessError, ReplayScenarioInput, ReplayScenarioStep, load_scenario_manifest,
+};
 use crate::runtime_events::{ReplayEventPhase, RuntimeEvent, now_ms, parse_runtime_event_filter};
 use axum::extract::{Json, Query, State, rejection::JsonRejection};
 use axum::http::{HeaderValue, StatusCode, header};
@@ -16,12 +20,13 @@ use swarm_core::ThreatClass;
 use swarm_core::agent::SwarmModeState;
 use swarm_core::config::RuntimeMode;
 use swarm_core::pheromone::EscalationRecord;
-use swarm_core::types::AgentId;
+use swarm_core::types::{AgentId, ResponseAction};
+use swarm_crypto::Ed25519Signer;
 use swarm_crypto::{MerkleProof, MerkleTree, canonical_json_bytes};
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_spine::{AuditTrail, CorrelatedIncident};
-use swarm_whisker::DetectionFinding;
+use swarm_whisker::{DetectionFinding, TelemetryEvent};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -147,6 +152,90 @@ pub struct DemoProofPackage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DemoRunApprovalReport {
+    pub approval_set_id: String,
+    pub approval_ledger_id: String,
+    pub step_index: usize,
+    pub action_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DemoRunReport {
+    pub run_id: String,
+    pub scenario_name: String,
+    pub scenario_path: String,
+    pub requested_by: String,
+    pub pace_ms: u64,
+    pub total_steps: usize,
+    pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<i64>,
+    pub timeline: Vec<DemoTimelineEntry>,
+    pub approvals: Vec<DemoRunApprovalReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_incident: Option<CorrelatedIncident>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FirstRunWizardStatus {
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirstRunWizardStep {
+    pub name: String,
+    pub status: String,
+    pub details: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FirstRunWizardArtifacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_set_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_ledger_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_pack_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incident_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_merkle_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FirstRunWizardRequest {
+    #[serde(default)]
+    pub scenario_path: Option<String>,
+    #[serde(default)]
+    pub pace_ms: u64,
+    pub voter_signing_key_env: String,
+    pub evidence_signer_id: String,
+    pub evidence_signing_key_env: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirstRunWizardReport {
+    pub status: FirstRunWizardStatus,
+    pub scenario_name: String,
+    pub scenario_path: String,
+    pub requested_by: String,
+    pub run_id: String,
+    pub injected_events: usize,
+    pub steps: Vec<FirstRunWizardStep>,
+    pub artifacts: FirstRunWizardArtifacts,
+    pub run: DemoRunReport,
+    pub proof: DemoProofPackage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DemoDashboardSnapshot {
     pub captured_at_ms: i64,
@@ -213,6 +302,60 @@ pub(super) struct DemoReplayErrorBody {
     pub(super) error: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum FirstRunWizardError {
+    #[error("demo mode is disabled for the first-run wizard")]
+    DemoModeDisabled,
+
+    #[error("approval harness is not configured for the first-run wizard")]
+    ApprovalHarnessNotConfigured,
+
+    #[error(transparent)]
+    Approval(#[from] ApprovalError),
+
+    #[error(transparent)]
+    InvalidEvent(#[from] super::IngestRequestError),
+
+    #[error("approval voter signing key env `{env_name}` is missing or empty")]
+    MissingVoterSigningKey { env_name: String },
+
+    #[error("first-run scenario `{path}` could not be loaded: {source}")]
+    ScenarioLoad {
+        path: String,
+        #[source]
+        source: ReplayHarnessError,
+    },
+
+    #[error("first-run wizard only supports event-backed scenarios")]
+    UnsupportedScenarioInput,
+
+    #[error("first-run replay failed at step {step_index}: {reason}")]
+    ReplayFailed { step_index: usize, reason: String },
+
+    #[error("first-run wizard did not create an approval decision for run `{run_id}`")]
+    MissingApproval { run_id: String },
+
+    #[error("approval set `{approval_set_id}` does not have a ledger")]
+    MissingApprovalLedger { approval_set_id: String },
+
+    #[error("demo run `{run_id}` was not found")]
+    DemoRunNotFound { run_id: String },
+
+    #[error("demo run `{run_id}` did not produce a correlated incident")]
+    MissingIncident { run_id: String },
+
+    #[error("demo proof for run `{run_id}` could not be built: {reason}")]
+    ProofUnavailable { run_id: String, reason: String },
+}
+
+#[derive(Debug, Clone)]
+struct PreparedFirstRunScenario {
+    scenario_name: String,
+    scenario_path: String,
+    requested_by: String,
+    events: Vec<ReplayScenarioStep>,
+}
+
 pub(super) fn with_demo_cors(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(
@@ -221,6 +364,448 @@ pub(super) fn with_demo_cors(mut response: Response) -> Response {
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+fn demo_run_report(run: DemoRunState) -> DemoRunReport {
+    DemoRunReport {
+        run_id: run.run_id,
+        scenario_name: run.scenario_name,
+        scenario_path: run.scenario_path,
+        requested_by: run.requested_by,
+        pace_ms: run.pace_ms,
+        total_steps: run.total_steps,
+        created_at_ms: run.created_at_ms,
+        completed_at_ms: run.completed_at_ms,
+        timeline: run.timeline,
+        approvals: run
+            .approvals
+            .into_iter()
+            .map(|approval| DemoRunApprovalReport {
+                approval_set_id: approval.approval_set_id,
+                approval_ledger_id: approval.approval_ledger_id,
+                step_index: approval.step_index,
+                action_kind: approval.action_kind,
+                receipt_pack_id: approval
+                    .receipt_pack
+                    .as_ref()
+                    .map(|pack| pack.pack_id.clone()),
+                verdict_id: approval
+                    .receipt_pack
+                    .as_ref()
+                    .map(|pack| pack.verdict.verdict_id.clone()),
+            })
+            .collect(),
+        final_incident: run.final_incident,
+    }
+}
+
+fn demo_proof_package(state: &IngestState, run_id: &str) -> Result<DemoProofPackage, String> {
+    let Some(run) = state.load_demo_run(run_id) else {
+        return Err(format!("demo run `{run_id}` was not found"));
+    };
+    let Some(completed_at_ms) = run.completed_at_ms else {
+        return Err("demo run has not completed yet".to_string());
+    };
+    let Some(final_incident) = run.final_incident.clone() else {
+        return Err("demo run does not have a correlated incident yet".to_string());
+    };
+    if run
+        .approvals
+        .iter()
+        .any(|approval| approval.receipt_pack.is_none() || approval.resumed_audit.is_none())
+    {
+        return Err("demo run still has unresolved approval decisions".to_string());
+    }
+
+    let mut leaves = Vec::new();
+    let mut leaf_specs = Vec::new();
+    for approval in &run.approvals {
+        let paused_payload = serde_json::to_value(&approval.initial_audit).unwrap_or(Value::Null);
+        leaf_specs.push(("paused_audit".to_string(), paused_payload.clone()));
+        leaves.push(canonical_json_bytes(&paused_payload).unwrap_or_default());
+
+        let Some(pack) = approval.receipt_pack.as_ref() else {
+            return Err("demo run still has unresolved approval decisions".to_string());
+        };
+        let pack_payload = serde_json::to_value(pack).unwrap_or(Value::Null);
+        leaf_specs.push(("approval_receipt_pack".to_string(), pack_payload.clone()));
+        leaves.push(canonical_json_bytes(&pack_payload).unwrap_or_default());
+
+        let Some(resumed) = approval.resumed_audit.as_ref() else {
+            return Err("demo run still has unresolved approval decisions".to_string());
+        };
+        let resumed_payload = serde_json::to_value(resumed).unwrap_or(Value::Null);
+        leaf_specs.push(("resumed_audit".to_string(), resumed_payload.clone()));
+        leaves.push(canonical_json_bytes(&resumed_payload).unwrap_or_default());
+    }
+
+    let incident_payload = serde_json::to_value(&final_incident).unwrap_or(Value::Null);
+    leaf_specs.push(("final_incident".to_string(), incident_payload.clone()));
+    leaves.push(canonical_json_bytes(&incident_payload).unwrap_or_default());
+
+    let timeline_payload = serde_json::to_value(&run.timeline).unwrap_or(Value::Null);
+    leaf_specs.push(("decision_timeline".to_string(), timeline_payload.clone()));
+    leaves.push(canonical_json_bytes(&timeline_payload).unwrap_or_default());
+
+    let tree = MerkleTree::from_leaves(&leaves).map_err(|error| error.to_string())?;
+    let merkle_leaves = leaf_specs
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, (label, payload))| {
+            tree.inclusion_proof(index).ok().map(|proof| DemoProofLeaf {
+                label,
+                payload,
+                proof,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(DemoProofPackage {
+        run_id: run.run_id,
+        scenario_name: run.scenario_name,
+        scenario_path: run.scenario_path,
+        requested_by: run.requested_by,
+        created_at_ms: run.created_at_ms,
+        completed_at_ms,
+        signed_receipts: run
+            .approvals
+            .iter()
+            .filter_map(|approval| approval.receipt_pack.clone())
+            .collect(),
+        final_incident,
+        decision_timeline: run.timeline,
+        merkle_root: tree.root().to_hex_prefixed(),
+        merkle_leaves,
+    })
+}
+
+fn built_in_first_run_event() -> Result<TelemetryEvent, FirstRunWizardError> {
+    Ok(super::validate_and_parse(json!({
+        "source": "synthetic",
+        "event_id": "evt-first-run-1",
+        "timestamp": 1_700_000_000_000i64,
+        "host_id": "host-first-run",
+        "payload": {
+            "kind": "process_start",
+            "parent_process": "WINWORD",
+            "process_name": "powershell",
+            "command_line": "powershell.exe -enc AAA=",
+            "user": "alice"
+        }
+    }))?)
+}
+
+fn built_in_first_run_scenario() -> Result<PreparedFirstRunScenario, FirstRunWizardError> {
+    Ok(PreparedFirstRunScenario {
+        scenario_name: "guided first-run".to_string(),
+        scenario_path: "builtin://first-run-guided-detection".to_string(),
+        requested_by: "swarmctl-first-run".to_string(),
+        events: vec![ReplayScenarioStep {
+            action: ResponseAction::IsolateHost {
+                host_id: "host-first-run".to_string(),
+            },
+            event: built_in_first_run_event()?,
+        }],
+    })
+}
+
+fn load_first_run_scenario(
+    scenario_path: Option<&str>,
+) -> Result<PreparedFirstRunScenario, FirstRunWizardError> {
+    match scenario_path {
+        Some(path) => {
+            let loaded = load_scenario_manifest(path).map_err(|source| {
+                FirstRunWizardError::ScenarioLoad {
+                    path: path.to_string(),
+                    source,
+                }
+            })?;
+            let ReplayScenarioInput::Events { events } = loaded.manifest.input.clone() else {
+                return Err(FirstRunWizardError::UnsupportedScenarioInput);
+            };
+            Ok(PreparedFirstRunScenario {
+                scenario_name: loaded.manifest.name,
+                scenario_path: loaded.path.display().to_string(),
+                requested_by: loaded.manifest.requested_by,
+                events,
+            })
+        }
+        None => built_in_first_run_scenario(),
+    }
+}
+
+fn load_demo_run_report(
+    state: &IngestState,
+    run_id: &str,
+) -> Result<DemoRunReport, FirstRunWizardError> {
+    state
+        .load_demo_run(run_id)
+        .map(demo_run_report)
+        .ok_or_else(|| FirstRunWizardError::DemoRunNotFound {
+            run_id: run_id.to_string(),
+        })
+}
+
+pub async fn run_first_run_wizard(
+    state: IngestState,
+    request: FirstRunWizardRequest,
+) -> Result<FirstRunWizardReport, FirstRunWizardError> {
+    if !state.demo_mode_enabled() {
+        return Err(FirstRunWizardError::DemoModeDisabled);
+    }
+
+    let scenario = load_first_run_scenario(request.scenario_path.as_deref())?;
+    let requested_by = AgentId(scenario.requested_by.clone());
+    let run_id = format!("demo_replay:{}", uuid::Uuid::new_v4());
+    let total_steps = scenario.events.len();
+
+    state.begin_demo_run(
+        &run_id,
+        &scenario.scenario_name,
+        &scenario.scenario_path,
+        &scenario.requested_by,
+        request.pace_ms,
+        total_steps,
+    );
+    state.publish_runtime_event(RuntimeEvent::Replay {
+        emitted_at_ms: now_ms(),
+        run_id: run_id.clone(),
+        scenario_name: scenario.scenario_name.clone(),
+        scenario_path: scenario.scenario_path.clone(),
+        requested_by: scenario.requested_by.clone(),
+        phase: ReplayEventPhase::Started,
+        pace_ms: request.pace_ms,
+        total_steps,
+        step_index: None,
+        event_id: None,
+        reason: None,
+    });
+
+    for (index, step) in scenario.events.into_iter().enumerate() {
+        let event_id = step.event.event_id.clone();
+        state.publish_runtime_event(RuntimeEvent::Replay {
+            emitted_at_ms: now_ms(),
+            run_id: run_id.clone(),
+            scenario_name: scenario.scenario_name.clone(),
+            scenario_path: scenario.scenario_path.clone(),
+            requested_by: scenario.requested_by.clone(),
+            phase: ReplayEventPhase::Step,
+            pace_ms: request.pace_ms,
+            total_steps,
+            step_index: Some(index),
+            event_id: Some(event_id.clone()),
+            reason: None,
+        });
+        state.append_demo_timeline(
+            &run_id,
+            "replay_step_started",
+            json!({
+                "step_index": index,
+                "event_id": event_id,
+                "action_kind": step.action.kind(),
+            }),
+            now_ms(),
+        );
+        if let Err(error) =
+            super::process_demo_replay_step(&state, &run_id, &requested_by, index, step).await
+        {
+            let reason = error.to_string();
+            state.publish_runtime_event(RuntimeEvent::Replay {
+                emitted_at_ms: now_ms(),
+                run_id: run_id.clone(),
+                scenario_name: scenario.scenario_name.clone(),
+                scenario_path: scenario.scenario_path.clone(),
+                requested_by: scenario.requested_by.clone(),
+                phase: ReplayEventPhase::Failed,
+                pace_ms: request.pace_ms,
+                total_steps,
+                step_index: Some(index),
+                event_id: Some(event_id.clone()),
+                reason: Some(reason.clone()),
+            });
+            state.append_demo_timeline(
+                &run_id,
+                "replay_failed",
+                json!({
+                    "step_index": index,
+                    "event_id": event_id,
+                    "reason": reason.clone(),
+                }),
+                now_ms(),
+            );
+            return Err(FirstRunWizardError::ReplayFailed {
+                step_index: index,
+                reason,
+            });
+        }
+        if request.pace_ms > 0 && index + 1 < total_steps {
+            tokio::time::sleep(Duration::from_millis(request.pace_ms)).await;
+        }
+    }
+
+    state.publish_runtime_event(RuntimeEvent::Replay {
+        emitted_at_ms: now_ms(),
+        run_id: run_id.clone(),
+        scenario_name: scenario.scenario_name.clone(),
+        scenario_path: scenario.scenario_path.clone(),
+        requested_by: scenario.requested_by.clone(),
+        phase: ReplayEventPhase::Completed,
+        pace_ms: request.pace_ms,
+        total_steps,
+        step_index: None,
+        event_id: None,
+        reason: None,
+    });
+    state.append_demo_timeline(
+        &run_id,
+        "replay_completed",
+        json!({
+            "scenario_name": scenario.scenario_name,
+            "total_steps": total_steps,
+        }),
+        now_ms(),
+    );
+    state.mark_demo_completed(&run_id);
+
+    let run = load_demo_run_report(&state, &run_id)?;
+    let approval =
+        run.approvals
+            .first()
+            .cloned()
+            .ok_or_else(|| FirstRunWizardError::MissingApproval {
+                run_id: run_id.clone(),
+            })?;
+    let harness = state
+        .approval_harness
+        .as_ref()
+        .cloned()
+        .ok_or(FirstRunWizardError::ApprovalHarnessNotConfigured)?;
+    let voter_secret = std::env::var(&request.voter_signing_key_env)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| FirstRunWizardError::MissingVoterSigningKey {
+            env_name: request.voter_signing_key_env.clone(),
+        })?;
+    let voter = Ed25519Signer::from_secret_material(&voter_secret);
+    harness.append_vote(&approval.approval_set_id, &state.operator_id(), &voter)?;
+
+    let approval_ledger_id = harness
+        .list_ledgers(Some(&approval.approval_set_id))?
+        .ledgers
+        .into_iter()
+        .next()
+        .map(|ledger| ledger.ledger_id)
+        .ok_or_else(|| FirstRunWizardError::MissingApprovalLedger {
+            approval_set_id: approval.approval_set_id.clone(),
+        })?;
+    let verdict = harness.create_verdict(&approval.approval_set_id, &approval_ledger_id)?;
+    let receipt_pack = harness.export_receipt_pack(
+        &verdict.report.verdict_id,
+        &request.evidence_signer_id,
+        &request.evidence_signing_key_env,
+    )?;
+
+    let context = ApprovalContext {
+        live_mode: state.stack.load_full().service.runtime.mode() == RuntimeMode::LiveResponse,
+        receipt_chain: vec![receipt_pack.report.pack_id.clone()],
+        correlation_id: Some(run_id.clone()),
+        now_ms: now_ms(),
+    };
+    let pending = state
+        .take_pending_demo_approval(&approval.approval_set_id)
+        .ok_or_else(|| FirstRunWizardError::MissingApproval {
+            run_id: run_id.clone(),
+        })?;
+    let stack = state.stack.load_full();
+    let execution = stack
+        .service
+        .runtime
+        .audit_authorize_and_execute_human_approved_instrumented(
+            &pending.detection,
+            &pending.request,
+            &context,
+        )
+        .await
+        .map_err(|error| FirstRunWizardError::ReplayFailed {
+            step_index: approval.step_index,
+            reason: error.to_string(),
+        })?;
+    let audit = execution.audit.clone();
+    if let Err(error) = state.complete_demo_approval(&pending, receipt_pack.report.clone(), audit) {
+        return Err(FirstRunWizardError::ReplayFailed {
+            step_index: approval.step_index,
+            reason: error.to_string(),
+        });
+    }
+    if let Ok(Some(outcome)) = stack.correlate_hunt(&pending.request.hunt_id.0) {
+        state.update_demo_incident(&pending.run_id, outcome.incident);
+    }
+
+    let run = load_demo_run_report(&state, &run_id)?;
+    let incident_id = run
+        .final_incident
+        .as_ref()
+        .map(|incident| incident.incident_id.clone())
+        .ok_or_else(|| FirstRunWizardError::MissingIncident {
+            run_id: run_id.clone(),
+        })?;
+    let proof = demo_proof_package(&state, &run_id).map_err(|reason| {
+        FirstRunWizardError::ProofUnavailable {
+            run_id: run_id.clone(),
+            reason,
+        }
+    })?;
+
+    Ok(FirstRunWizardReport {
+        status: FirstRunWizardStatus::Completed,
+        scenario_name: run.scenario_name.clone(),
+        scenario_path: run.scenario_path.clone(),
+        requested_by: run.requested_by.clone(),
+        run_id,
+        injected_events: total_steps,
+        steps: vec![
+            FirstRunWizardStep {
+                name: "readiness".to_string(),
+                status: "passed".to_string(),
+                details: "configuration passed the repo-owned first-run readiness gate".to_string(),
+            },
+            FirstRunWizardStep {
+                name: "synthetic_detection".to_string(),
+                status: "completed".to_string(),
+                details: format!(
+                    "replayed {} synthetic event(s) through scenario `{}`",
+                    total_steps, run.scenario_name
+                ),
+            },
+            FirstRunWizardStep {
+                name: "approval".to_string(),
+                status: "completed".to_string(),
+                details: format!(
+                    "created approval set `{}` and exported receipt pack `{}`",
+                    approval.approval_set_id, receipt_pack.report.pack_id
+                ),
+            },
+            FirstRunWizardStep {
+                name: "proof_export".to_string(),
+                status: "completed".to_string(),
+                details: format!(
+                    "exported proof for incident `{incident_id}` with Merkle root `{}`",
+                    proof.merkle_root
+                ),
+            },
+        ],
+        artifacts: FirstRunWizardArtifacts {
+            approval_set_id: Some(approval.approval_set_id),
+            approval_ledger_id: Some(approval_ledger_id),
+            verdict_id: Some(verdict.report.verdict_id),
+            receipt_pack_id: Some(receipt_pack.report.pack_id),
+            incident_id: Some(incident_id),
+            proof_merkle_root: Some(proof.merkle_root.clone()),
+        },
+        run,
+        proof,
+    })
 }
 
 pub(super) fn render_demo_widget_html(

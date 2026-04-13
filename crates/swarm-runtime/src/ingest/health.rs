@@ -1,8 +1,10 @@
+use crate::anti_tamper::AntiTamperReport;
 use crate::bridge_runtime::bridge_health_report;
 use crate::config::CURRENT_SCHEMA_VERSION;
 use crate::detection::metrics::encode_metrics;
 use crate::evasion_coverage::publish_snapshot_to_metrics;
 use crate::providence::ProvidenceHealthStatus;
+use crate::startup_attestation::StartupAttestationReport;
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
@@ -120,6 +122,49 @@ impl DetectorRuntimeStatus {
     }
 }
 
+fn startup_attestation_payload(
+    report: Option<&StartupAttestationReport>,
+    mode: RuntimeMode,
+) -> Value {
+    let required = matches!(mode, RuntimeMode::LiveResponse);
+    match report {
+        Some(report) => json!({
+            "ready": report.ready,
+            "required": required,
+            "effective_ready": report.ready_for_mode(mode),
+            "status": report.status(),
+            "evaluated_at_ms": report.evaluated_at_ms,
+            "binary": report.binary,
+            "rulesets": report.rulesets,
+        }),
+        None => json!({
+            "ready": false,
+            "required": required,
+            "effective_ready": !required,
+            "status": "unavailable",
+            "details": "startup attestation was not evaluated for this runtime state",
+        }),
+    }
+}
+
+fn anti_tamper_payload(report: &AntiTamperReport) -> Value {
+    json!({
+        "ready": report.ready,
+        "supported": report.supported,
+        "required": report.required,
+        "effective_ready": report.effective_ready(),
+        "enabled": report.enabled,
+        "status": report.status,
+        "checked_at_ms": report.checked_at_ms,
+        "details": report.details,
+        "debugger_attached": report.debugger_attached,
+        "tracer_pid": report.tracer_pid,
+        "unexpected_library_loads": report.unexpected_library_loads,
+        "baseline_library_count": report.baseline_library_count,
+        "fail_closed_live_response": report.fail_closed_live_response,
+    })
+}
+
 pub(crate) async fn startupz_handler(State(state): State<IngestState>) -> impl IntoResponse {
     startup_response(state).await
 }
@@ -188,6 +233,7 @@ pub(crate) async fn prestop_handler(State(state): State<IngestState>) -> impl In
 
 pub(super) async fn startup_response(state: IngestState) -> (StatusCode, ResponseJson<Value>) {
     let stack = state.stack.load_full();
+    let startup_attestation = state.current_startup_attestation();
     let schema_supported = stack.service.config.schema_version <= CURRENT_SCHEMA_VERSION
         && stack.service.config.schema_version > 0;
     let telemetry_sources_configured = !stack.service.config.runtime.telemetry_sources.is_empty();
@@ -211,7 +257,12 @@ pub(super) async fn startup_response(state: IngestState) -> (StatusCode, Respons
             }),
         ),
     };
-    let ready = schema_supported && telemetry_sources_configured && substrate_ready;
+    let attestation_ready = startup_attestation
+        .as_ref()
+        .map(|report| report.ready_for_mode(stack.service.mode()))
+        .unwrap_or(!matches!(stack.service.mode(), RuntimeMode::LiveResponse));
+    let ready =
+        schema_supported && telemetry_sources_configured && substrate_ready && attestation_ready;
     (
         if ready {
             StatusCode::OK
@@ -232,7 +283,11 @@ pub(super) async fn startup_response(state: IngestState) -> (StatusCode, Respons
                 "telemetry_sources": {
                     "ready": telemetry_sources_configured,
                     "configured": stack.service.config.runtime.telemetry_sources.len(),
-                }
+                },
+                "startup_attestation": startup_attestation_payload(
+                    startup_attestation.as_ref(),
+                    stack.service.mode(),
+                ),
             }
         })),
     )
@@ -249,64 +304,69 @@ pub(super) async fn readiness_response(
     let replay_store_health = stack.replay_store.health();
     let require_durable = stack.service.config.runtime.require_durable_live_response
         && stack.service.mode() == RuntimeMode::LiveResponse;
+    let startup_attestation = state.current_startup_attestation();
+    let anti_tamper = state.current_anti_tamper_report();
     let draining = state.is_draining();
     let heap_snapshot = state.sample_heap_pressure();
+    let telemetry_source_count = stack.service.config.runtime.telemetry_sources.len();
+    let subject_source_count = stack
+        .service
+        .config
+        .runtime
+        .telemetry_sources
+        .iter()
+        .filter(|source| !source.subject.trim().is_empty())
+        .count();
+    let bridge_source_count = stack
+        .service
+        .config
+        .runtime
+        .telemetry_sources
+        .iter()
+        .filter(|source| source.bridge.is_some())
+        .count();
+    let bridge_report = state.bridge_health.as_ref().map(bridge_health_report);
+    let degradation = state.current_runtime_degradation().await;
     if let Some(metrics) = stack.service.prometheus_metrics()
         && let Some(snapshot) = &heap_snapshot
     {
         metrics.observe_heap(snapshot.bytes, snapshot.pressure_ratio);
     }
 
-    let (substrate_ready, substrate_payload) = match substrate_health {
+    let substrate_payload = match substrate_health {
         Ok(health) => {
             let ready = health.ready && (!require_durable || health.durable);
-            (
-                ready,
-                json!({
-                    "ready": health.ready,
-                    "durable": health.durable,
-                    "backend": health.backend,
-                    "details": health.details,
-                    "effective_ready": ready,
-                }),
-            )
-        }
-        Err(error) => (
-            false,
-            json!({
-                "ready": false,
-                "durable": false,
-                "backend": "unknown",
-                "details": error.to_string(),
-                "effective_ready": false,
-            }),
-        ),
-    };
-
-    let (replay_ready, replay_payload) = match replay_store_health {
-        Ok(health) => (
-            health.ready,
             json!({
                 "ready": health.ready,
                 "durable": health.durable,
                 "backend": health.backend,
                 "details": health.details,
-            }),
-        ),
-        Err(error) => (
-            false,
-            json!({
-                "ready": false,
-                "durable": false,
-                "backend": "unknown",
-                "details": error.to_string(),
-            }),
-        ),
+                "effective_ready": ready,
+            })
+        }
+        Err(error) => json!({
+            "ready": false,
+            "durable": false,
+            "backend": "unknown",
+            "details": error.to_string(),
+            "effective_ready": false,
+        }),
     };
 
-    let heap_ready = heap_snapshot.as_ref().is_none_or(|snapshot| {
-        snapshot.pressure_ratio <= stack.service.config.runtime.max_heap_pressure
-    });
+    let replay_payload = match replay_store_health {
+        Ok(health) => json!({
+            "ready": health.ready,
+            "durable": health.durable,
+            "backend": health.backend,
+            "details": health.details,
+        }),
+        Err(error) => json!({
+            "ready": false,
+            "durable": false,
+            "backend": "unknown",
+            "details": error.to_string(),
+        }),
+    };
     let providence_ready = providence_health
         .as_ref()
         .is_none_or(ProvidenceHealthStatus::ready);
@@ -358,13 +418,7 @@ pub(super) async fn readiness_response(
             }),
         ),
     };
-    let ready = detector_status.ready
-        && substrate_ready
-        && replay_ready
-        && heap_ready
-        && providence_ready
-        && async_ready
-        && !draining;
+    let ready = degradation.ready && providence_ready && async_ready;
     let status = if ready {
         StatusCode::OK
     } else {
@@ -381,6 +435,35 @@ pub(super) async fn readiness_response(
         "response": {
             "ready": true,
             "adapter": response_adapter_kind(&stack.service.config.response_adapter),
+        },
+        "startup_attestation": startup_attestation_payload(
+            startup_attestation.as_ref(),
+            stack.service.mode(),
+        ),
+        "anti_tamper": anti_tamper_payload(&anti_tamper),
+        "telemetry_sources": {
+            "ready": telemetry_source_count > 0,
+            "status": if telemetry_source_count == 0 {
+                "missing"
+            } else if bridge_report.as_ref().is_some_and(|report| report.has_degraded()) {
+                "degraded"
+            } else {
+                "configured"
+            },
+            "configured": telemetry_source_count,
+            "subject_backed": subject_source_count,
+            "bridge_backed": bridge_source_count,
+            "details": if telemetry_source_count == 0 {
+                "no telemetry sources are configured".to_string()
+            } else if let Some(report) = &bridge_report {
+                format!(
+                    "{} bridge-backed source(s); bridge status={}",
+                    bridge_source_count,
+                    report.status()
+                )
+            } else {
+                "telemetry sources are configured; bridge runtime status is unavailable on this surface".to_string()
+            },
         },
         "lifecycle": {
             "ready": !draining,
@@ -405,7 +488,8 @@ pub(super) async fn readiness_response(
                 "max_pressure": stack.service.config.runtime.max_heap_pressure,
                 "details": "heap pressure unavailable",
             }),
-        }
+        },
+        "degradation": json!(degradation),
     });
 
     if let Some(health) = providence_health
@@ -498,7 +582,7 @@ pub(super) async fn readiness_response(
         ResponseJson(json!({
             "status": if ready {
                 "ok"
-            } else if draining {
+            } else if degradation.capabilities.drains_ingest {
                 "draining"
             } else {
                 "degraded"

@@ -217,6 +217,7 @@ mod tests {
     fn env(hunt_id: &str) -> SwarmEnvironment {
         SwarmEnvironment {
             pheromones: vec![PheromoneDeposit {
+                schema_version: PheromoneDeposit::current_schema_version(),
                 indicator: serde_json::json!({"hunt_id": hunt_id}),
                 threat_class: ThreatClass::Execution,
                 severity: Severity::High,

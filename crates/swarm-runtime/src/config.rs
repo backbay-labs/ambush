@@ -1,10 +1,15 @@
-use serde::Serialize;
+use crate::sequence_detector::KillChainSequenceProfile;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_yaml::Value as YamlValue;
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use swarm_crypto::{
+    DetachedSignature, canonical_json_bytes, sha256_hex, verify_detached_signature,
+};
 use swarm_whisker::{
     BehavioralAnomalyProfile, CredentialAccessProfile, DnsExfiltrationProfile,
     FilelessExecutionProfile, InfrastructureAnomalyProfile, LateralMovementProfile,
@@ -20,13 +25,19 @@ pub use swarm_core::config::{
     IdentityConfig, InvestigationConfig, JsonFileSourceConfig, NotificationChannelConfig,
     NotificationRateLimitConfig, NotificationRoutingConfig, OperatorAuthConfig,
     OperatorSurfaceConfig, PheromoneConfig, PolicyConfig, PromotionConfig, ResponseAdapterConfig,
-    RetryConfig, RoutingRule, RuntimeMode, RuntimeSettings, SentinelBridgeConfig,
-    SiemForwardConfig, SwarmConfig, TelemetryBridgeConfig, TelemetrySourceConfig,
-    TetragonBridgeConfig, WebhookConfig,
+    RetryConfig, RoutingRule, RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings,
+    SentinelBridgeConfig, SiemForwardConfig, SwarmConfig, TelemetryBridgeConfig,
+    TelemetrySourceConfig, TemporalEventWindowConfig, TetragonBridgeConfig, WebhookConfig,
 };
 
 pub type RuntimeConfig = RuntimeSettings;
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CONFIG_SIGNATURE_TRUST_KEY_ID: &str =
+    "854cb2ac6a51da46daf5bdbb0d5b34d9831e5aa60290b94ea2f810f5999f2521";
+const CONFIG_SIGNATURE_TRUST_PUBLIC_KEY_HEX: &str =
+    "25e6e1874dbaedbf86dd50afcadeb0067d973c35e88dbf6ea3c3dc30281753f5";
+#[cfg(debug_assertions)]
+const DEBUG_TEST_CONFIG_SIGNING_SECRET: &str = "swarm-runtime-debug-config-signature-test-key";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConfigMigrationSummary {
@@ -222,15 +233,123 @@ pub enum RuntimeConfigError {
         #[source]
         source: DetectorProfileError,
     },
+
+    #[error("config signature verification failed for `{source_name}`: {source}")]
+    Signature {
+        source_name: String,
+        #[source]
+        source: ConfigSignatureError,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigSignatureError {
+    #[error("missing config signature sidecar `{path}`")]
+    MissingSidecar { path: PathBuf },
+
+    #[error("failed to read config signature sidecar `{path}`: {source}")]
+    ReadSidecar {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse config signature sidecar `{path}`: {source}")]
+    ParseSidecar {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("config signature for `{path}` was not signed by a trusted key")]
+    UntrustedSigner { path: PathBuf },
+
+    #[error("failed to canonicalize config signature statement `{path}`: {source}")]
+    Canonicalize {
+        path: PathBuf,
+        #[source]
+        source: swarm_crypto::CryptoError,
+    },
+
+    #[error("config signature verification failed for `{path}`: {source}")]
+    InvalidSignature {
+        path: PathBuf,
+        #[source]
+        source: swarm_crypto::CryptoError,
+    },
+
+    #[error(
+        "config signature subject mismatch for `{path}`: expected `{expected}`, got `{actual}`"
+    )]
+    SubjectMismatch {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
+
+    #[error(
+        "config digest mismatch for `{path}`: expected {expected_sha256}, observed {observed_sha256}"
+    )]
+    DigestMismatch {
+        path: PathBuf,
+        expected_sha256: String,
+        observed_sha256: String,
+    },
+
+    #[error(
+        "config size mismatch for `{path}`: expected {expected_size_bytes}, observed {observed_size_bytes}"
+    )]
+    SizeMismatch {
+        path: PathBuf,
+        expected_size_bytes: u64,
+        observed_size_bytes: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigSignatureTrustRoot {
+    key_id: String,
+    public_key_hex: String,
+}
+
+impl ConfigSignatureTrustRoot {
+    fn production() -> Self {
+        Self {
+            key_id: CONFIG_SIGNATURE_TRUST_KEY_ID.to_string(),
+            public_key_hex: CONFIG_SIGNATURE_TRUST_PUBLIC_KEY_HEX.to_string(),
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn debug_test() -> Self {
+        let signer =
+            swarm_crypto::Ed25519Signer::from_secret_material(DEBUG_TEST_CONFIG_SIGNING_SECRET);
+        Self {
+            key_id: signer.key_id().to_string(),
+            public_key_hex: signer.public_key_hex().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SignedConfigSignature {
+    statement: ConfigSignatureStatement,
+    signature: DetachedSignature,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConfigSignatureStatement {
+    version: u32,
+    issued_at_ms: i64,
+    config_file_name: String,
+    sha256: String,
+    size_bytes: u64,
 }
 
 /// Load a repository-owned runtime config file from disk.
 pub fn load_config(path: impl AsRef<Path>) -> Result<SwarmConfig, RuntimeConfigError> {
     let path = path.as_ref();
-    let raw = fs::read_to_string(path).map_err(|source| RuntimeConfigError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let raw = read_verified_config_text(path)?;
 
     parse_config_with_base(&raw, path.display().to_string(), Some(path))
 }
@@ -242,12 +361,153 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<SwarmConfig, RuntimeConfigE
 /// string values. Use [`resolve_outbound_secrets`] to resolve them afterwards.
 pub fn load_config_unresolved(path: impl AsRef<Path>) -> Result<SwarmConfig, RuntimeConfigError> {
     let path = path.as_ref();
+    let raw = read_verified_config_text(path)?;
+
+    parse_config_unresolved(&raw, path.display().to_string())
+}
+
+pub fn config_signature_sidecar_path(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    let mut sidecar = OsString::from(path.as_os_str());
+    sidecar.push(".sig.json");
+    PathBuf::from(sidecar)
+}
+
+pub fn verify_config_signature(
+    path: impl AsRef<Path>,
+    raw: &[u8],
+) -> Result<(), ConfigSignatureError> {
+    let path = path.as_ref();
+    let sidecar_path = config_signature_sidecar_path(path);
+    let signed = read_config_signature_sidecar(&sidecar_path)?;
+    let payload = canonical_json_bytes(&signed.statement).map_err(|source| {
+        ConfigSignatureError::Canonicalize {
+            path: sidecar_path.clone(),
+            source,
+        }
+    })?;
+
+    let trusted = active_config_signature_trust_roots()
+        .into_iter()
+        .any(|root| {
+            signed.signature.key_id == root.key_id
+                && signed.signature.public_key_hex == root.public_key_hex
+        });
+    if !trusted {
+        return Err(ConfigSignatureError::UntrustedSigner { path: sidecar_path });
+    }
+
+    verify_detached_signature(&payload, &signed.signature).map_err(|source| {
+        ConfigSignatureError::InvalidSignature {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+
+    let expected_file_name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .ok_or_else(|| ConfigSignatureError::SubjectMismatch {
+            path: path.to_path_buf(),
+            expected: "<file-name>".to_string(),
+            actual: signed.statement.config_file_name.clone(),
+        })?;
+    if signed.statement.config_file_name != expected_file_name {
+        return Err(ConfigSignatureError::SubjectMismatch {
+            path: path.to_path_buf(),
+            expected: expected_file_name,
+            actual: signed.statement.config_file_name,
+        });
+    }
+
+    let observed_sha256 = sha256_hex(raw);
+    if signed.statement.sha256 != observed_sha256 {
+        return Err(ConfigSignatureError::DigestMismatch {
+            path: path.to_path_buf(),
+            expected_sha256: signed.statement.sha256,
+            observed_sha256,
+        });
+    }
+
+    let observed_size_bytes = raw.len() as u64;
+    if signed.statement.size_bytes != observed_size_bytes {
+        return Err(ConfigSignatureError::SizeMismatch {
+            path: path.to_path_buf(),
+            expected_size_bytes: signed.statement.size_bytes,
+            observed_size_bytes,
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+pub fn write_debug_test_config_signature(path: impl AsRef<Path>) -> Result<(), std::io::Error> {
+    let path = path.as_ref();
+    let raw = fs::read(path)?;
+    let signer =
+        swarm_crypto::Ed25519Signer::from_secret_material(DEBUG_TEST_CONFIG_SIGNING_SECRET);
+    let statement = ConfigSignatureStatement {
+        version: 1,
+        issued_at_ms: 1_760_000_000_000,
+        config_file_name: path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "config.yaml".to_string()),
+        sha256: sha256_hex(&raw),
+        size_bytes: raw.len() as u64,
+    };
+    let payload = canonical_json_bytes(&statement).map_err(std::io::Error::other)?;
+    let signed = SignedConfigSignature {
+        signature: signer.sign(&payload),
+        statement,
+    };
+    fs::write(
+        config_signature_sidecar_path(path),
+        serde_json::to_vec_pretty(&signed).map_err(std::io::Error::other)?,
+    )
+}
+
+fn read_verified_config_text(path: &Path) -> Result<String, RuntimeConfigError> {
     let raw = fs::read_to_string(path).map_err(|source| RuntimeConfigError::Read {
         path: path.to_path_buf(),
         source,
     })?;
+    verify_config_signature(path, raw.as_bytes()).map_err(|source| {
+        RuntimeConfigError::Signature {
+            source_name: path.display().to_string(),
+            source,
+        }
+    })?;
+    Ok(raw)
+}
 
-    parse_config_unresolved(&raw, path.display().to_string())
+fn read_config_signature_sidecar(
+    path: &Path,
+) -> Result<SignedConfigSignature, ConfigSignatureError> {
+    let raw = fs::read_to_string(path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ConfigSignatureError::MissingSidecar {
+                path: path.to_path_buf(),
+            }
+        } else {
+            ConfigSignatureError::ReadSidecar {
+                path: path.to_path_buf(),
+                source,
+            }
+        }
+    })?;
+    serde_json::from_str(&raw).map_err(|source| ConfigSignatureError::ParseSidecar {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn active_config_signature_trust_roots() -> Vec<ConfigSignatureTrustRoot> {
+    let mut roots = vec![ConfigSignatureTrustRoot::production()];
+    #[cfg(debug_assertions)]
+    roots.push(ConfigSignatureTrustRoot::debug_test());
+    roots
 }
 
 /// Parse and validate a runtime config from raw YAML.
@@ -534,6 +794,17 @@ pub(crate) fn suspicious_process_tree_profile(
     )
 }
 
+pub(crate) fn kill_chain_sequence_profile(
+    config: &DetectionConfig,
+) -> Result<KillChainSequenceProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "kill_chain_sequence",
+        KillChainSequenceProfile::default(),
+        config.profiles.kill_chain_sequence.as_ref(),
+        KillChainSequenceProfile::validate,
+    )
+}
+
 pub(crate) fn fileless_execution_profile(
     config: &DetectionConfig,
 ) -> Result<FilelessExecutionProfile, DetectorProfileError> {
@@ -690,6 +961,9 @@ pub(crate) fn validate_detector_profiles(
     if config.profiles.suspicious_process_tree.is_some() {
         suspicious_process_tree_profile(config)?;
     }
+    if config.profiles.kill_chain_sequence.is_some() {
+        kill_chain_sequence_profile(config)?;
+    }
     if config.profiles.fileless_execution.is_some() {
         fileless_execution_profile(config)?;
     }
@@ -730,6 +1004,9 @@ pub(crate) fn validate_all_detector_profiles(
         match strategy.as_str() {
             "suspicious_process_tree" => {
                 suspicious_process_tree_profile(config)?;
+            }
+            "kill_chain_sequence" => {
+                kill_chain_sequence_profile(config)?;
             }
             "fileless_execution" => {
                 fileless_execution_profile(config)?;
@@ -810,7 +1087,7 @@ mod tests {
         CURRENT_SCHEMA_VERSION, GenericJsonPayloadMappingConfig, RuntimeConfigError, RuntimeMode,
         TelemetryBridgeConfig, behavioral_anomaly_profile, fileless_execution_profile,
         infrastructure_anomaly_profile, load_config, network_connect_profile, parse_config,
-        suspicious_process_tree_profile,
+        suspicious_process_tree_profile, write_debug_test_config_signature,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -827,6 +1104,147 @@ mod tests {
         assert_eq!(config.runtime.governance_degraded_tick_threshold, 3);
         assert!(config.canary.enabled);
         assert!(config.promotion.enabled);
+    }
+
+    #[test]
+    fn unsigned_file_backed_config_is_rejected() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "swarm-runtime-config-unsigned-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("runtime.yaml");
+        fs::write(
+            &config_path,
+            r#"
+schema_version: 1
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#,
+        )
+        .unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(matches!(
+            error,
+            RuntimeConfigError::Signature {
+                source_name: _,
+                source: _
+            }
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("missing config signature sidecar")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tampered_file_backed_config_is_rejected() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "swarm-runtime-config-tampered-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("runtime.yaml");
+        fs::write(
+            &config_path,
+            r#"
+schema_version: 1
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#,
+        )
+        .unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
+        fs::write(
+            &config_path,
+            r#"
+schema_version: 1
+name: test
+description: tampered
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.9
+  medium_confidence_threshold: 0.7
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#,
+        )
+        .unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(matches!(
+            error,
+            RuntimeConfigError::Signature {
+                source_name: _,
+                source: _
+            }
+        ));
+        assert!(error.to_string().contains("config digest mismatch"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1334,6 +1752,9 @@ detection:
       min_peer_group_observations: 5
       min_feature_weight: 0.4
       baseline_half_life_secs: 7200
+      distribution_min_observations: 3
+      distribution_stddev_floor: 0.15
+      high_confidence_z_score: 2.5
       rare_role_tools: ["powershell.exe", "wmic.exe"]
 pheromone:
   default_half_life_secs: 3600.0
@@ -1353,6 +1774,9 @@ policy:
         assert_eq!(profile.min_peer_group_observations, 5);
         assert!((profile.min_feature_weight - 0.4).abs() < f64::EPSILON);
         assert!((profile.baseline_half_life_secs - 7200.0).abs() < f64::EPSILON);
+        assert_eq!(profile.distribution_min_observations, 3);
+        assert!((profile.distribution_stddev_floor - 0.15).abs() < f64::EPSILON);
+        assert!((profile.high_confidence_z_score - 2.5).abs() < f64::EPSILON);
         assert_eq!(
             profile.rare_role_tools,
             vec!["powershell.exe".to_string(), "wmic.exe".to_string()]
@@ -1844,6 +2268,7 @@ response_adapter:
   auth_token: "@secret:edr-token"
 "#;
         fs::write(&config_path, yaml).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
 
         let config = load_config(&config_path).unwrap();
         match config.response_adapter {
@@ -1900,6 +2325,7 @@ response_adapter:
   auth_token: "@secret:../outside-token"
 "#;
         fs::write(&config_path, yaml).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
 
         let error = load_config(&config_path).unwrap_err();
         assert!(matches!(
@@ -1966,6 +2392,7 @@ response_adapter:
             absolute_secret.display()
         );
         fs::write(&config_path, yaml).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
 
         let error = load_config(&config_path).unwrap_err();
         assert!(
@@ -2026,6 +2453,7 @@ response_adapter:
   auth_token: "@secret:edr-token"
 "#;
         fs::write(&config_path, yaml).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
 
         let error = load_config(&config_path).unwrap_err();
         assert!(

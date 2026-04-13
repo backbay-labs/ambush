@@ -22,7 +22,11 @@ use swarm_core::types::{
     SphinxMemoryContribution, SphinxMemoryPayloadKind, SphinxMemoryQuery, SwarmAction,
 };
 use swarm_crypto::sha256_hex;
-use swarm_pheromone::{ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate};
+use swarm_pheromone::{
+    ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate, SubstrateError,
+};
+
+use crate::AgentTickBoundaryError;
 
 const KNOWLEDGE_GRAPH_SCHEMA_VERSION: u32 = 1;
 
@@ -38,6 +42,28 @@ pub struct SphinxAgent {
     store: FileKnowledgeGraphStore,
     graph: KnowledgeGraphSnapshot,
     answered_query_ids: BTreeSet<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SphinxAgentTickError {
+    #[error(transparent)]
+    Store(#[from] KnowledgeGraphStoreError),
+
+    #[error(transparent)]
+    Serialization(#[from] serde_json::Error),
+
+    #[error(transparent)]
+    Substrate(#[from] SubstrateError),
+}
+
+impl SphinxAgentTickError {
+    pub fn boundary(&self) -> &'static str {
+        match self {
+            Self::Store(_) => "knowledge_graph_store",
+            Self::Serialization(_) => "serialization",
+            Self::Substrate(_) => "substrate",
+        }
+    }
 }
 
 impl SphinxAgent {
@@ -570,6 +596,7 @@ impl SphinxAgent {
         let threat_class = ThreatClass::Custom(SPHINX_MEMORY_THREAT_CLASS.to_string());
         let derived_agent_id = AgentId::from_verifying_key(&self.verifying_key);
         let mut deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator,
             threat_class,
             severity: Severity::Low,
@@ -583,6 +610,7 @@ impl SphinxAgent {
             agent_key: Vec::new(),
         };
         let signing_payload = DepositSigningPayload {
+            schema_version: deposit.schema_version,
             indicator: &deposit.indicator,
             threat_class: &deposit.threat_class,
             severity: &deposit.severity,
@@ -1960,11 +1988,11 @@ where
 }
 
 fn internal_error(error: KnowledgeGraphStoreError) -> SwarmError {
-    SwarmError::Internal(std::io::Error::other(error.to_string()).into())
+    SwarmError::Internal(AgentTickBoundaryError::from(SphinxAgentTickError::from(error)).into())
 }
 
-fn internal_runtime_error(error: impl std::fmt::Display) -> SwarmError {
-    SwarmError::Internal(std::io::Error::other(error.to_string()).into())
+fn internal_runtime_error(error: impl Into<SphinxAgentTickError>) -> SwarmError {
+    SwarmError::Internal(AgentTickBoundaryError::from(error.into()).into())
 }
 
 #[cfg(test)]
@@ -1980,6 +2008,7 @@ fn signed_memory_query_deposit(
     let indicator = serde_json::to_value(query).expect("query should encode");
     let derived_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
     let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
         indicator,
         threat_class,
         severity: Severity::Low,
@@ -1993,6 +2022,7 @@ fn signed_memory_query_deposit(
         agent_key: Vec::new(),
     };
     let signing_payload = DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,
@@ -2015,9 +2045,10 @@ fn signed_memory_query_deposit(
 mod tests {
     use super::{
         DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
-        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, parse_memory_query,
-        signed_memory_query_deposit,
+        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, SphinxAgentTickError,
+        parse_memory_query, signed_memory_query_deposit,
     };
+    use crate::AgentTickBoundaryError;
     use crate::calico_agent::{
         CALICO_DECEPTION_INVENTORY_THREAT_CLASS, CalicoDeceptionInteractionPayload,
         CalicoDeceptionInventoryPayload, CalicoLifecycleStage,
@@ -2026,7 +2057,9 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use swarm_core::agent::{AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode};
+    use swarm_core::agent::{
+        AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmMode,
+    };
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::{
         AgentId, ProvidenceFeedbackAction, SPHINX_MEMORY_PHEROMONE_SCHEMA_VERSION,
@@ -2072,6 +2105,7 @@ mod tests {
 
     fn pheromone(event_id: &str, timestamp: i64) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({
                 "event_id": event_id,
                 "summary": "suspicious powershell execution",
@@ -2108,6 +2142,7 @@ mod tests {
         destination_ip: &str,
     ) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({
                 "event_id": event_id,
                 "summary": format!("{process_name} execution"),
@@ -2143,6 +2178,7 @@ mod tests {
         reason: &str,
     ) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({
                 "schema": SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
                 "schema_version": SWARM_PROVIDENCE_FEEDBACK_SCHEMA_VERSION,
@@ -2181,6 +2217,7 @@ mod tests {
         generation: usize,
     ) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::to_value(CalicoDeceptionInventoryPayload {
                 schema: crate::calico_agent::CALICO_DECEPTION_INVENTORY_SCHEMA.to_string(),
                 schema_version: 1,
@@ -2215,6 +2252,7 @@ mod tests {
 
     fn calico_interaction_pheromone(asset_id: &str, timestamp: i64) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::to_value(CalicoDeceptionInteractionPayload {
                 schema: crate::calico_agent::CALICO_DECEPTION_INTERACTION_SCHEMA.to_string(),
                 schema_version: 1,
@@ -2277,6 +2315,41 @@ mod tests {
         .expect("sphinx agent should initialize");
         assert_eq!(agent.role(), AgentRole::Sphinx);
         assert_eq!(agent.health(), AgentHealth::Healthy);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_surfaces_store_failures_with_typed_boundary() {
+        let root = temp_root("store-failure");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new(
+            AgentId::new("sphinx", "primary"),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        fs::remove_dir_all(root.join("knowledge-graph")).unwrap();
+
+        let error = agent
+            .tick(&env(vec![pheromone("evt-1", 1_800_500_000)], 1_800_500_001))
+            .await
+            .unwrap_err();
+        let boundary = match &error {
+            SwarmError::Internal(error) => error
+                .downcast_ref::<AgentTickBoundaryError>()
+                .expect("sphinx agent should preserve typed boundary error"),
+            other => panic!("expected internal boundary error, got {other:?}"),
+        };
+
+        assert!(matches!(
+            boundary,
+            AgentTickBoundaryError::Sphinx(SphinxAgentTickError::Store(_))
+        ));
+        assert_eq!(boundary.boundary(), "knowledge_graph_store");
 
         let _ = fs::remove_dir_all(root);
     }

@@ -447,7 +447,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### JetStream Testing
 
-- **JTEST-01**: A containerized NATS JetStream test harness runs the full pheromone substrate test suite against a real JetStream backend in CI
+- **JTEST-01**: A containerized NATS JetStream test harness can bootstrap a real backend in CI and local development, export stable connection details, and run at least one repo-owned JetStream-backed verification path without manual infrastructure setup
 - **JTEST-02**: Substrate tests covering deposit, query, escalation, threat-class config, threat-intel, and GC run against both in-memory and JetStream backends with identical assertions
 - **JTEST-03**: `criterion` benchmarks measure hot-path latency (ingest → detect → deposit → escalate) at p50, p95, and p99 under sustained synthetic load
 
@@ -459,28 +459,28 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Startup Attestation
 
-- **ATTEST-01**: The runtime verifies its own binary hash and repo-owned ruleset signatures at startup; live-response mode is refused if attestation fails
-- **ATTEST-02**: Configuration files loaded at startup are verified against Ed25519 signatures from the config-signing key; unsigned or tampered configs fail closed with structured error
+- [x] **ATTEST-01**: The runtime verifies its own binary hash and repo-owned ruleset signatures at startup; live-response mode is refused if attestation fails
+- [x] **ATTEST-02**: Configuration files loaded at startup are verified against Ed25519 signatures from the config-signing key; unsigned or tampered configs fail closed with structured error
 
 #### Runtime Self-Monitoring
 
-- **ATTEST-03**: The runtime detects debugger attachment (TracerPid on Linux) and unexpected library loads at configurable intervals; detection emits structured alerts and optionally fails closed for live-response mode
+- [x] **ATTEST-03**: The runtime detects debugger attachment (TracerPid on Linux) and unexpected library loads at configurable intervals; detection emits structured alerts and optionally fails closed for live-response mode
 
 #### Supply Chain
 
-- **ATTEST-04**: `deny.toml` denies advisory violations and wildcard licenses; `cargo-audit` runs as a hard CI gate; SBOM artifacts are generated per release
+- [x] **ATTEST-04**: `deny.toml` denies advisory violations and wildcard licenses; `cargo-audit` runs as a hard CI gate; SBOM artifacts are generated per release
 
 ### Autonomous Parameter Evolution With Measured Fitness (v1.57)
 
 #### Algorithmic Mutation
 
-- **AUTOEVO-01**: KittenAgent generates parameter variant candidates algorithmically (bounded random perturbation, crossover of top-performing genomes) without requiring operator-authored experiment specs
-- **AUTOEVO-02**: Generated candidates are evaluated against the repo-owned evasion corpus with measured catch rate, false-positive rate, and latency as fitness dimensions
+- [x] **AUTOEVO-01**: KittenAgent generates parameter variant candidates algorithmically (bounded random perturbation, crossover of top-performing genomes) without requiring operator-authored experiment specs
+- [x] **AUTOEVO-02**: Generated candidates are evaluated against the repo-owned evasion corpus with measured catch rate, false-positive rate, and latency as fitness dimensions
 
 #### Measured Evolution
 
-- **AUTOEVO-03**: The evolution loop runs for N configurable generations and reports generation-over-generation fitness improvement with statistical significance
-- **AUTOEVO-04**: At least one detector strategy shows measurable autonomous improvement (target: 5%+ evasion catch-rate gain over 10 generations) validated against the tracked evasion corpus
+- [x] **AUTOEVO-03**: The evolution loop runs for N configurable generations and reports generation-over-generation measured fitness deltas with reproducible benchmark context
+- [x] **AUTOEVO-04**: At least one detector strategy shows measurable autonomous improvement (target: 5%+ evasion catch-rate gain over 10 generations) validated against the tracked evasion corpus
 
 ### Multi-Event Sequence Detection (v1.58)
 
@@ -546,8 +546,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Crate Decomposition
 
-- **DECOMP-01**: `evolution.rs` and `mutation.rs` are decomposed into focused sub-modules with explicit `pub(crate)` API boundaries and no file exceeding 2000 lines
-- **DECOMP-02**: Public API surface of `swarm-evolution` is documented with module-level doc comments describing each sub-module's responsibility
+- **DECOMP-01**: `crates/swarm-evolution/src/evolution.rs` is decomposed into focused sub-modules with explicit `pub(crate)` API boundaries and no extracted file exceeding 2000 lines
+- **DECOMP-02**: `crates/swarm-evolution/src/mutation.rs` is decomposed into focused sub-modules with documented module responsibilities and no extracted file exceeding 2000 lines
 
 #### Schema Migration
 
@@ -775,44 +775,44 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | ACCESS-03 | Phase 183 | Completed |
 | PANIC-01 | Phase 184 | Completed |
 | PANIC-02 | Phase 184 | Completed |
-| PANIC-03 | Phases 185-186 | Pending |
-| PANIC-04 | Phase 187 | Pending |
-| JTEST-01 | Phase 188 | Pending |
-| JTEST-02 | Phase 189 | Pending |
-| JTEST-03 | Phase 190 | Pending |
-| JTEST-04 | Phase 191 | Pending |
-| ATTEST-01 | Phase 192 | Pending |
-| ATTEST-02 | Phase 193 | Pending |
-| ATTEST-03 | Phase 194 | Pending |
-| ATTEST-04 | Phase 195 | Pending |
-| AUTOEVO-01 | Phase 196 | Pending |
-| AUTOEVO-02 | Phase 197 | Pending |
-| AUTOEVO-03 | Phase 198 | Pending |
-| AUTOEVO-04 | Phase 199 | Pending |
-| SEQDET-01 | Phase 200 | Pending |
-| SEQDET-02 | Phase 201 | Pending |
-| SEQDET-03 | Phase 202 | Pending |
-| SEQDET-04 | Phase 203 | Pending |
-| ONBOARD-01 | Phase 204 | Pending |
-| ONBOARD-02 | Phase 205 | Pending |
-| ONBOARD-03 | Phase 206 | Pending |
-| ONBOARD-04 | Phase 207 | Pending |
-| ISOLATE-01 | Phase 208 | Pending |
-| ISOLATE-02 | Phase 209 | Pending |
-| ISOLATE-03 | Phase 210 | Pending |
-| ISOLATE-04 | Phase 211 | Pending |
-| RESPONSE-01 | Phase 212 | Pending |
-| RESPONSE-02 | Phase 213 | Pending |
-| RESPONSE-03 | Phase 214 | Pending |
-| RESPONSE-04 | Phase 215 | Pending |
-| ANOMALY-01 | Phase 216 | Pending |
-| ANOMALY-02 | Phase 217 | Pending |
-| ANOMALY-03 | Phase 218 | Pending |
-| ANOMALY-04 | Phase 219 | Pending |
-| DECOMP-01 | Phase 220 | Pending |
-| DECOMP-02 | Phase 221 | Pending |
-| DECOMP-03 | Phase 222 | Pending |
-| DECOMP-04 | Phase 223 | Pending |
+| PANIC-03 | Phases 185-186 | Completed |
+| PANIC-04 | Phase 187 | Completed |
+| JTEST-01 | Phase 188 | Completed |
+| JTEST-02 | Phase 189 | Completed |
+| JTEST-03 | Phase 190 | Completed |
+| JTEST-04 | Phase 191 | Completed |
+| ATTEST-01 | Phase 192 | Completed |
+| ATTEST-02 | Phase 193 | Completed |
+| ATTEST-03 | Phase 194 | Completed |
+| ATTEST-04 | Phase 195 | Completed |
+| AUTOEVO-01 | Phase 196 | Completed |
+| AUTOEVO-02 | Phase 197 | Completed |
+| AUTOEVO-03 | Phase 198 | Completed |
+| AUTOEVO-04 | Phase 199 | Completed |
+| SEQDET-01 | Phase 200 | Completed |
+| SEQDET-02 | Phase 201 | Completed |
+| SEQDET-03 | Phase 202 | Completed |
+| SEQDET-04 | Phase 203 | Completed |
+| ONBOARD-01 | Phase 204 | Completed |
+| ONBOARD-02 | Phase 205 | Completed |
+| ONBOARD-03 | Phase 206 | Completed |
+| ONBOARD-04 | Phase 207 | Completed |
+| ISOLATE-01 | Phase 208 | Completed |
+| ISOLATE-02 | Phase 209 | Completed |
+| ISOLATE-03 | Phase 210 | Completed |
+| ISOLATE-04 | Phase 211 | Completed |
+| RESPONSE-01 | Phase 212 | Completed |
+| RESPONSE-02 | Phase 213 | Completed |
+| RESPONSE-03 | Phase 214 | Completed |
+| RESPONSE-04 | Phase 215 | Completed |
+| ANOMALY-01 | Phase 216 | Completed |
+| ANOMALY-02 | Phase 217 | Completed |
+| ANOMALY-03 | Phase 218 | Completed |
+| ANOMALY-04 | Phase 219 | Completed |
+| DECOMP-01 | Phase 220 | Completed |
+| DECOMP-02 | Phase 221 | Completed |
+| DECOMP-03 | Phase 222 | Completed |
+| DECOMP-04 | Phase 223 | Completed |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
@@ -832,18 +832,18 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.51 complete: 7 requirements satisfied across phases 172-175
 - v1.52 complete: 7 requirements satisfied across phases 176-179
 - v1.53 complete: 7 requirements satisfied across phases 180-183
-- v1.54 in progress: 2 of 4 requirements completed across phases 184-187; Phase 185 completed the ingest/service/http tranche of PANIC-03 and Phase 186 now owns the remaining agent/evolution boundary pass
-- v1.55 planned: 4 requirements across phases 188-191
-- v1.56 planned: 4 requirements across phases 192-195
-- v1.57 planned: 4 requirements across phases 196-199
-- v1.58 planned: 4 requirements across phases 200-203
-- v1.59 planned: 4 requirements across phases 204-207
-- v1.60 planned: 4 requirements across phases 208-211
-- v1.61 planned: 4 requirements across phases 212-215
-- v1.62 planned: 4 requirements across phases 216-219
-- v1.63 planned: 4 requirements across phases 220-223
-- Total remaining in v1.54-v1.63: 42
+- v1.54 complete: 4 requirements satisfied across phases 184-187
+- v1.55 complete: 4 requirements satisfied across phases 188-191
+- v1.56 complete: 4 requirements satisfied across phases 192-195
+- v1.57 complete: 4 requirements satisfied across phases 196-199
+- v1.58 complete: 4 requirements satisfied across phases 200-203
+- v1.59 complete: 4 requirements satisfied across phases 204-207
+- v1.60 complete: 4 requirements satisfied across phases 208-211
+- v1.61 complete: 4 requirements satisfied across phases 212-215
+- v1.62 complete: 4 requirements satisfied across phases 216-219
+- v1.63 complete: 4 requirements satisfied across phases 220-223
+- No active milestone: next milestone is not defined yet
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-11 — Completed Phase 185 typed ingest, service, and HTTP error-boundary conversion and queued Phase 186*
+*Last updated: 2026-04-12 — Completed Phase 223 API response schema migration and closed v1.63*

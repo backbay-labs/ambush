@@ -1,0 +1,52 @@
+{
+  "entries": [
+    {
+      "set_id": "approval-set:1775999669082:8115c0109f59",
+      "voter_count": 1,
+      "threshold": {
+        "at_least": {
+          "required": 1
+        }
+      },
+      "promotion_evidence_ref": "demo_approval:demo_replay:d5589339-b36d-47c3-9562-e6369b409659:0:evt-first-run-1",
+      "created_at_ms": 1775999669082,
+      "bundle_path": "data/approval-sets/reports/approval-set_1775999669082_8115c0109f59.json"
+    },
+    {
+      "set_id": "approval-set:1775999389010:78f831a60ffb",
+      "voter_count": 1,
+      "threshold": {
+        "at_least": {
+          "required": 1
+        }
+      },
+      "promotion_evidence_ref": "demo_approval:demo_replay:c3b7c9e2-3bac-48be-b3e5-960aac5e3616:0:evt-first-run-1",
+      "created_at_ms": 1775999389010,
+      "bundle_path": "data/approval-sets/reports/approval-set_1775999389010_78f831a60ffb.json"
+    },
+    {
+      "set_id": "approval-set:1775999320340:f9616609ea12",
+      "voter_count": 1,
+      "threshold": {
+        "at_least": {
+          "required": 1
+        }
+      },
+      "promotion_evidence_ref": "demo_approval:demo_replay:2d8bdf54-02bd-4dac-b51c-79fc6999b45e:0:evt-first-run-1",
+      "created_at_ms": 1775999320340,
+      "bundle_path": "data/approval-sets/reports/approval-set_1775999320340_f9616609ea12.json"
+    },
+    {
+      "set_id": "approval-set:1775999234089:01a6b25e01cc",
+      "voter_count": 1,
+      "threshold": {
+        "at_least": {
+          "required": 1
+        }
+      },
+      "promotion_evidence_ref": "demo_approval:demo_replay:b1d28324-3680-42a1-93ec-1e7a98684e1a:0:evt-first-run-1",
+      "created_at_ms": 1775999234089,
+      "bundle_path": "data/approval-sets/reports/approval-set_1775999234089_01a6b25e01cc.json"
+    }
+  ]
+}

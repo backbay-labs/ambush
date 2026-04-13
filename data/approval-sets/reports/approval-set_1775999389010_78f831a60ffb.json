@@ -1,0 +1,13 @@
+{
+  "set_id": "approval-set:1775999389010:78f831a60ffb",
+  "eligible_voters": [
+    "swarm:ed25519:540dcaf002221dd1e8afecd4fa6169d3512682b92268935abcecfb3ee6ec6a6d"
+  ],
+  "threshold": {
+    "at_least": {
+      "required": 1
+    }
+  },
+  "promotion_evidence_ref": "demo_approval:demo_replay:c3b7c9e2-3bac-48be-b3e5-960aac5e3616:0:evt-first-run-1",
+  "created_at_ms": 1775999389010
+}

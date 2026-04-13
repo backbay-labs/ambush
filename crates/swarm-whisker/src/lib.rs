@@ -72,8 +72,8 @@ pub use detector::{
     AuthenticationEventData, DetectionFinding, DetectionStrategy, DnsQueryEvent, ExhaustedResource,
     FilePersistenceEvent, InfrastructureHealthEvent, NetworkConnectEvent, ProcessMemoryAccessEvent,
     ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent,
-    SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
-    ThermalAnomalyEvent, ThermalSeverity,
+    SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile, TelemetryEvent,
+    TelemetryEventPredicate, TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity,
 };
 pub use dns_exfiltration::{DnsExfiltrationDetector, DnsExfiltrationProfile};
 pub use fileless_execution::{FilelessExecutionDetector, FilelessExecutionProfile};

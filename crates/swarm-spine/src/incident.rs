@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -36,6 +37,59 @@ pub struct AnalystFeedbackAuditEntry {
     pub evidence: Option<ProvidenceFeedbackEvidence>,
     pub payload: Value,
     pub outcome: Value,
+}
+
+/// Normalized latest analyst disposition for one reviewed finding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FalsePositiveMeasurement {
+    pub finding_id: String,
+    pub hunt_id: String,
+    pub strategy_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+    pub feedback_id: String,
+    pub reviewed_at_ms: i64,
+    pub analyst_id: String,
+    pub action: ProvidenceFeedbackAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub false_positive: bool,
+}
+
+/// Aggregate detector-level false-positive rate summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FalsePositiveDetectorSummary {
+    pub strategy_id: String,
+    pub reviewed_findings: usize,
+    pub false_positive_findings: usize,
+    pub false_positive_rate: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_feedback_at_ms: Option<i64>,
+}
+
+/// Aggregate host-level false-positive rate summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FalsePositiveHostSummary {
+    pub host_id: String,
+    pub reviewed_findings: usize,
+    pub false_positive_findings: usize,
+    pub false_positive_rate: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_feedback_at_ms: Option<i64>,
+}
+
+/// Compact operator-facing summary derived from normalized analyst feedback.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct FalsePositiveMeasurementReport {
+    pub reviewed_findings: usize,
+    pub false_positive_findings: usize,
+    pub false_positive_rate: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_feedback_at_ms: Option<i64>,
+    #[serde(default)]
+    pub detectors: Vec<FalsePositiveDetectorSummary>,
+    #[serde(default)]
+    pub hosts: Vec<FalsePositiveHostSummary>,
 }
 
 /// One candidate investigation evaluated during incident assembly.
@@ -107,6 +161,8 @@ pub struct CorrelatedIncident {
     pub providence_callback_audit_entries: Vec<ProvidenceCallbackAuditEntry>,
     #[serde(default)]
     pub feedback_audit_entries: Vec<AnalystFeedbackAuditEntry>,
+    #[serde(default)]
+    pub false_positive_measurements: Vec<FalsePositiveMeasurement>,
 }
 
 impl CorrelatedIncident {
@@ -124,6 +180,24 @@ impl CorrelatedIncident {
                 .iter()
                 .map(|member| member.investigation_id.clone()),
         )
+    }
+
+    pub fn upsert_false_positive_measurement(&mut self, measurement: FalsePositiveMeasurement) {
+        if let Some(existing) = self
+            .false_positive_measurements
+            .iter_mut()
+            .find(|existing| existing.finding_id == measurement.finding_id)
+        {
+            *existing = measurement;
+        } else {
+            self.false_positive_measurements.push(measurement);
+        }
+        self.false_positive_measurements.sort_by(|left, right| {
+            right
+                .reviewed_at_ms
+                .cmp(&left.reviewed_at_ms)
+                .then_with(|| left.finding_id.cmp(&right.finding_id))
+        });
     }
 }
 
@@ -160,6 +234,8 @@ pub struct IncidentRecord {
     pub providence_callback_audit_entries: Vec<ProvidenceCallbackAuditEntry>,
     #[serde(default)]
     pub feedback_audit_entries: Vec<AnalystFeedbackAuditEntry>,
+    #[serde(default)]
+    pub false_positive_measurements: Vec<FalsePositiveMeasurement>,
 }
 
 impl IncidentRecord {
@@ -184,6 +260,7 @@ impl IncidentRecord {
             providence_reconciliation: incident.providence_reconciliation.clone(),
             providence_callback_audit_entries: incident.providence_callback_audit_entries.clone(),
             feedback_audit_entries: incident.feedback_audit_entries.clone(),
+            false_positive_measurements: incident.false_positive_measurements.clone(),
         }
     }
 }
@@ -697,6 +774,125 @@ where
     output
 }
 
+pub fn summarize_false_positive_measurements(
+    records: &[IncidentRecord],
+) -> FalsePositiveMeasurementReport {
+    let mut report = FalsePositiveMeasurementReport::default();
+    let mut detector_counts: BTreeMap<String, (usize, usize, Option<i64>)> = BTreeMap::new();
+    let mut host_counts: BTreeMap<String, (usize, usize, Option<i64>)> = BTreeMap::new();
+
+    for record in records {
+        for measurement in &record.false_positive_measurements {
+            report.reviewed_findings += 1;
+            if measurement.false_positive {
+                report.false_positive_findings += 1;
+            }
+            report.latest_feedback_at_ms = max_optional_timestamp(
+                report.latest_feedback_at_ms,
+                Some(measurement.reviewed_at_ms),
+            );
+
+            let detector = detector_counts
+                .entry(measurement.strategy_id.clone())
+                .or_insert((0, 0, None));
+            detector.0 += 1;
+            if measurement.false_positive {
+                detector.1 += 1;
+            }
+            detector.2 = max_optional_timestamp(detector.2, Some(measurement.reviewed_at_ms));
+
+            if let Some(host_id) = &measurement.host_id {
+                let host = host_counts.entry(host_id.clone()).or_insert((0, 0, None));
+                host.0 += 1;
+                if measurement.false_positive {
+                    host.1 += 1;
+                }
+                host.2 = max_optional_timestamp(host.2, Some(measurement.reviewed_at_ms));
+            }
+        }
+    }
+
+    report.false_positive_rate =
+        false_positive_rate(report.false_positive_findings, report.reviewed_findings);
+    report.detectors = detector_counts
+        .into_iter()
+        .map(
+            |(strategy_id, (reviewed_findings, false_positive_findings, latest_feedback_at_ms))| {
+                FalsePositiveDetectorSummary {
+                    strategy_id,
+                    reviewed_findings,
+                    false_positive_findings,
+                    false_positive_rate: false_positive_rate(
+                        false_positive_findings,
+                        reviewed_findings,
+                    ),
+                    latest_feedback_at_ms,
+                }
+            },
+        )
+        .collect();
+    report.hosts = host_counts
+        .into_iter()
+        .map(
+            |(host_id, (reviewed_findings, false_positive_findings, latest_feedback_at_ms))| {
+                FalsePositiveHostSummary {
+                    host_id,
+                    reviewed_findings,
+                    false_positive_findings,
+                    false_positive_rate: false_positive_rate(
+                        false_positive_findings,
+                        reviewed_findings,
+                    ),
+                    latest_feedback_at_ms,
+                }
+            },
+        )
+        .collect();
+    report.detectors.sort_by(|left, right| {
+        right
+            .reviewed_findings
+            .cmp(&left.reviewed_findings)
+            .then_with(|| {
+                right
+                    .false_positive_rate
+                    .partial_cmp(&left.false_positive_rate)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.strategy_id.cmp(&right.strategy_id))
+    });
+    report.hosts.sort_by(|left, right| {
+        right
+            .reviewed_findings
+            .cmp(&left.reviewed_findings)
+            .then_with(|| {
+                right
+                    .false_positive_rate
+                    .partial_cmp(&left.false_positive_rate)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.host_id.cmp(&right.host_id))
+    });
+
+    report
+}
+
+fn false_positive_rate(false_positive_findings: usize, reviewed_findings: usize) -> f64 {
+    if reviewed_findings == 0 {
+        0.0
+    } else {
+        false_positive_findings as f64 / reviewed_findings as f64
+    }
+}
+
+fn max_optional_timestamp(current: Option<i64>, candidate: Option<i64>) -> Option<i64> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) => Some(current.max(candidate)),
+        (Some(current), None) => Some(current),
+        (None, Some(candidate)) => Some(candidate),
+        (None, None) => None,
+    }
+}
+
 fn upsert_external_reference_list(
     references: &mut Vec<ExternalReference>,
     external_reference: ExternalReference,
@@ -789,6 +985,7 @@ mod tests {
             providence_reconciliation: None,
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
         }
     }
 

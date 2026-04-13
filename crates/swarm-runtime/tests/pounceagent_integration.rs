@@ -7,7 +7,8 @@ use swarm_core::agent::{
     AgentFinding, AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode,
 };
 use swarm_core::config::{
-    PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig, ResponsePlaybookRule,
+    PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookBranch, ResponsePlaybookCondition,
+    ResponsePlaybookConfig, ResponsePlaybookRule,
 };
 use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
 use swarm_core::types::{AgentId, ResponseAction, Severity, SwarmAction};
@@ -27,6 +28,7 @@ fn playbook() -> ResponsePlaybookConfig {
                     decoy_type: "honeypot".to_string(),
                     target_zone: "dmz".to_string(),
                 }],
+                branches: Vec::new(),
             },
             ResponsePlaybookRule {
                 threat_class: ThreatClass::Execution,
@@ -37,6 +39,7 @@ fn playbook() -> ResponsePlaybookConfig {
                     summary: "review medium-confidence execution activity".to_string(),
                     urgency: Severity::Medium,
                 }],
+                branches: Vec::new(),
             },
             ResponsePlaybookRule {
                 threat_class: ThreatClass::CommandAndControl,
@@ -46,6 +49,7 @@ fn playbook() -> ResponsePlaybookConfig {
                 actions: vec![ResponseAction::BlockEgress {
                     target: "203.0.113.10".to_string(),
                 }],
+                branches: Vec::new(),
             },
         ],
     }
@@ -64,6 +68,37 @@ fn test_config() -> PheromoneConfig {
     }
 }
 
+fn branching_playbook() -> ResponsePlaybookConfig {
+    ResponsePlaybookConfig {
+        rules: vec![ResponsePlaybookRule {
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            min_confidence: 0.90,
+            max_confidence: 1.0,
+            actions: vec![ResponseAction::Escalate {
+                summary: "fallback execution review".to_string(),
+                urgency: Severity::High,
+            }],
+            branches: vec![ResponsePlaybookBranch {
+                name: Some("incident_containment".to_string()),
+                when: ResponsePlaybookCondition {
+                    min_confidence: Some(0.97),
+                    modes: vec![SwarmMode::Incident],
+                    ..ResponsePlaybookCondition::default()
+                },
+                actions: vec![
+                    ResponseAction::BlockEgress {
+                        target: "203.0.113.10".to_string(),
+                    },
+                    ResponseAction::IsolateHost {
+                        host_id: "host-1".to_string(),
+                    },
+                ],
+            }],
+        }],
+    }
+}
+
 fn make_deposit(
     event_id: &str,
     threat_class: ThreatClass,
@@ -73,6 +108,7 @@ fn make_deposit(
 ) -> PheromoneDeposit {
     let key = SigningKey::from_bytes(&[42u8; 32]);
     let mut deposit = PheromoneDeposit {
+        schema_version: PheromoneDeposit::current_schema_version(),
         indicator: serde_json::json!({
             "event_id": event_id,
             "source": "integration-test",
@@ -94,6 +130,7 @@ fn make_deposit(
         agent_key: Vec::new(),
     };
     let payload = swarm_pheromone::DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,
@@ -133,6 +170,16 @@ fn request_action(actions: &[SwarmAction]) -> &ResponseAction {
         panic!("expected request_response action, got {:?}", actions);
     };
     action
+}
+
+fn request_actions(actions: &[SwarmAction]) -> Vec<&ResponseAction> {
+    actions
+        .iter()
+        .map(|action| match action {
+            SwarmAction::RequestResponse { action, .. } => action,
+            other => panic!("expected request_response action, got {other:?}"),
+        })
+        .collect()
 }
 
 fn sample_partition_governance_policy() -> Arc<GovernancePolicy> {
@@ -328,6 +375,77 @@ async fn response_playbook_selects_actions_by_threat_severity_and_confidence() {
         request_action(&high_actions),
         ResponseAction::DeployDecoy { target_zone, .. } if target_zone == "dmz"
     ));
+}
+
+#[tokio::test]
+async fn response_playbook_branches_emit_ordered_actions_from_runtime_context() {
+    let mut agent = PounceAgent::new(AgentId::new("pouncer", "branching"), branching_playbook());
+
+    let incident_env = env(
+        SwarmMode::Incident,
+        Some(1_700_000_110),
+        1_700_000_120,
+        vec![make_deposit(
+            "evt-branch-incident",
+            ThreatClass::Execution,
+            Severity::High,
+            0.98,
+            1_700_000_115,
+        )],
+        Vec::new(),
+    );
+    let incident_actions = agent.tick(&incident_env).await.unwrap();
+    assert_eq!(incident_actions.len(), 2);
+    let incident_requests = request_actions(&incident_actions);
+    assert!(matches!(
+        incident_requests[0],
+        ResponseAction::BlockEgress { target } if target == "203.0.113.10"
+    ));
+    assert!(matches!(
+        incident_requests[1],
+        ResponseAction::IsolateHost { host_id } if host_id == "host-1"
+    ));
+    let SwarmAction::RequestResponse { evidence, .. } = &incident_actions[0] else {
+        panic!("expected request_response action");
+    };
+    assert_eq!(evidence["playbook_match"]["branch"]["index"], 0);
+    assert_eq!(
+        evidence["playbook_match"]["branch"]["name"],
+        serde_json::json!("incident_containment")
+    );
+
+    let normal_env = env(
+        SwarmMode::Normal,
+        None,
+        1_700_000_130,
+        Vec::new(),
+        Vec::new(),
+    );
+    assert!(agent.tick(&normal_env).await.unwrap().is_empty());
+
+    let alert_env = env(
+        SwarmMode::Alert,
+        Some(1_700_000_140),
+        1_700_000_150,
+        vec![make_deposit(
+            "evt-branch-alert",
+            ThreatClass::Execution,
+            Severity::High,
+            0.98,
+            1_700_000_145,
+        )],
+        Vec::new(),
+    );
+    let alert_actions = agent.tick(&alert_env).await.unwrap();
+    assert_eq!(alert_actions.len(), 1);
+    assert!(matches!(
+        request_action(&alert_actions),
+        ResponseAction::Escalate { urgency, .. } if *urgency == Severity::High
+    ));
+    let SwarmAction::RequestResponse { evidence, .. } = &alert_actions[0] else {
+        panic!("expected request_response action");
+    };
+    assert!(evidence["playbook_match"]["branch"].is_null());
 }
 
 #[tokio::test]

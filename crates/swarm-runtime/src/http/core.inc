@@ -6,7 +6,8 @@ use crate::config::{RuntimeConfigError, load_config};
 use crate::control::{
     ControlEnvelope, ControlError, DefaultControlPlane, IncidentArtifactView,
     IncidentLookupSelector, InvestigationArtifactView, InvestigationLookupSelector,
-    ReplayArtifactView, ReplayLookupSelector,
+    OPERATOR_API_SCHEMA_VERSION_HEADER, ReplayArtifactView, ReplayLookupSelector,
+    resolve_operator_api_schema_version,
 };
 use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use crate::evidence::{
@@ -856,6 +857,9 @@ impl LocalOperatorSurface {
             .layer(middleware::from_fn_with_state(
                 self.state.auth.clone(),
                 require_bearer_auth,
+            ))
+            .layer(middleware::from_fn(
+                require_supported_operator_api_schema_version,
             ));
 
         Router::new()
@@ -1007,6 +1011,40 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+fn parse_requested_operator_api_schema_version(
+    headers: &HeaderMap,
+) -> Result<Option<u32>, OperatorApiError> {
+    headers
+        .get(OPERATOR_API_SCHEMA_VERSION_HEADER)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| {
+                    OperatorApiError::bad_request(format!(
+                        "{OPERATOR_API_SCHEMA_VERSION_HEADER} header must be valid UTF-8"
+                    ))
+                })?
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| {
+                    OperatorApiError::bad_request(format!(
+                        "{OPERATOR_API_SCHEMA_VERSION_HEADER} header must be an unsigned integer"
+                    ))
+                })
+        })
+        .transpose()
+}
+
+async fn require_supported_operator_api_schema_version(
+    headers: HeaderMap,
+    request: axum::extract::Request,
+    next: Next,
+) -> Result<Response, OperatorApiError> {
+    let requested = parse_requested_operator_api_schema_version(&headers)?;
+    resolve_operator_api_schema_version(requested).map_err(OperatorApiError::bad_request)?;
+    Ok(next.run(request).await)
 }
 
 fn require_operator_api_scope(
@@ -4943,6 +4981,7 @@ fn related_ref_path(kind: &str, id: &str) -> Option<String> {
 mod tests {
     use super::{LocalOperatorSurface, OperatorSurfacePaths};
     use crate::approval::DefaultApprovalHarness;
+    use crate::control::{CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER};
     use crate::evidence::{
         EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
         EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
@@ -5048,6 +5087,8 @@ mod tests {
                 require_durable_live_response: false,
                 max_heap_pressure: 0.90,
                 secret_dir: None,
+                anti_tamper: Default::default(),
+                temporal_event_window: swarm_core::config::TemporalEventWindowConfig::default(),
                 agent_tick_timeout_ms: 500,
                 governance_degraded_tick_threshold: 3,
                 partition_contingency_lease_ttl_ms: 300_000,
@@ -5907,6 +5948,7 @@ mod tests {
             }),
             providence_callback_audit_entries: Vec::new(),
             feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
         }
     }
 
@@ -5953,8 +5995,40 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["schema_version"], CURRENT_OPERATOR_API_SCHEMA_VERSION);
         assert_eq!(json["origin"], "live_runtime_status");
         assert_eq!(json["config_name"], "operator-http");
+    }
+
+    #[tokio::test]
+    async fn status_route_rejects_unsupported_schema_version_header() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+        let surface = LocalOperatorSurface::from_config("inline", operator_config()).unwrap();
+        let app = surface.router();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer secret-token")
+                    .header(OPERATOR_API_SCHEMA_VERSION_HEADER, "99")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("unsupported operator API schema version")
+        );
     }
 
     #[tokio::test]

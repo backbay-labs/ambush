@@ -2,7 +2,7 @@
 
 > Canonical runtime configuration surface, tuning parameters, and environment
 > variables.  
-> Last updated: 2026-04-11
+> Last updated: 2026-04-12
 
 ---
 
@@ -51,6 +51,11 @@ runtime:
   drain_timeout_ms: 30000
   require_durable_live_response: true
   max_heap_pressure: 0.90
+  temporal_event_window:
+    retention_ms: 900000
+    max_events: 512
+    max_match_span_ms: 300000
+    max_predicates_per_match: 8
   governance_degraded_tick_threshold: 3
   partition_contingency_lease_ttl_ms: 300000
   partition_contingency_blast_radius_cap: 1
@@ -61,10 +66,12 @@ detection:
                                      # credential_access, suspicious_scripting,
                                      # persistence, supply_chain, network_connect,
                                      # infrastructure_anomaly, fileless_execution,
-                                     # behavioral_anomaly
+                                     # behavioral_anomaly, kill_chain_sequence
   high_confidence_threshold: 0.90
   medium_confidence_threshold: 0.70
   profiles:
+    kill_chain_sequence:
+      rules_path: sequences/kill-chain-v1.yaml
     fileless_execution:
       min_region_size_bytes: 8192
       privileged_target_processes: [lsass, winlogon]
@@ -82,6 +89,26 @@ pheromone:
   backend:
     kind: in_memory | local_journal
     path: data/pheromones.jsonl   # local_journal only
+  response_playbook:
+    rules:
+      - threat_class: execution
+        severity: HIGH
+        min_confidence: 0.90
+        max_confidence: 1.0
+        actions:
+          - type: escalate
+            summary: analyst review required for high-confidence execution
+            urgency: HIGH
+        branches:
+          - name: incident_containment
+            when:
+              min_confidence: 0.97
+              modes: [incident]
+            actions:
+              - type: block_egress
+                target: 203.0.113.10
+              - type: isolate_host
+                host_id: host-1
 
 policy:
   human_gate_severity: HIGH
@@ -188,6 +215,29 @@ deception:
 - `candidate_limit`: how many recent investigation bundles to scan when assembling one incident.
 - `incident_store`: where correlated incidents are persisted for operator review.
 
+### Pheromone Response Playbooks
+
+- `pheromone.response_playbook.rules[*]` defines the top-level match band. A
+  rule still anchors on one `threat_class`, one exact `severity`, and one
+  inclusive confidence range.
+- `rules[*].actions` is now the fallback ordered action sequence. The runtime
+  uses it only when the rule matches and no branch-specific selector overrides
+  it.
+- `rules[*].branches[*]` adds bounded conditional composition under one matched
+  rule. Branches are evaluated in YAML order, and the first matching branch
+  wins.
+- `branches[*].when` may refine execution by `threat_class`,
+  `min_severity`, `max_severity`, `min_confidence`, `max_confidence`, and
+  `modes` (`normal`, `alert`, or `incident`).
+- Each branch must declare at least one `actions` entry, and branch names are
+  optional but must be unique within a rule when present.
+- A rule must declare fallback `actions`, at least one branch, or both. This
+  keeps the playbook deterministic and fail-closed instead of allowing empty
+  matches.
+- Branch and fallback actions still route through the normal Pounce -> policy
+  -> governance -> executor path. The playbook schema does not introduce a
+  second orchestration surface or bypass approval requirements.
+
 ### Deception / Calico
 
 - `deception.enabled`: registers `CalicoAgent` in serve mode and enables baseline decoy deployment plus decoy-hit pheromone publication.
@@ -210,10 +260,26 @@ deception:
 
 - `drain_timeout_ms`: maximum time the serve-mode runtime waits for accepted ingest work to finish after entering drain mode.
 - `max_heap_pressure`: readiness threshold for `swarm_heap_pressure_ratio`. When the measured ratio exceeds this value, `/readyz` returns HTTP 503.
+- `temporal_event_window.retention_ms`: maximum age of retained accepted telemetry available to later sequence detectors. The shipped default is `900000` (15 minutes).
+- `temporal_event_window.max_events`: hard cap on retained telemetry records in the shared window. When the cap is exceeded, the oldest retained events are dropped first.
+- `temporal_event_window.max_match_span_ms`: maximum temporal span one ordered predicate query may request from the shared window. This must stay less than or equal to `retention_ms`.
+- `temporal_event_window.max_predicates_per_match`: hard cap on ordered predicates per query so later sequence rules cannot widen matching cost without an operator-visible config change.
+- `detection.profiles.kill_chain_sequence.rules_path`: repo-owned YAML rule pack used by the sequence detector. The shipped detector profile points at `sequences/kill-chain-v1.yaml`.
 - `governance_degraded_tick_threshold`: number of consecutive degraded governance-health observations before Tom marks the committee as degraded instead of healthy.
 - `partition_contingency_lease_ttl_ms`: default lifetime for pre-staged contingency leases that can be redeemed only while the committee is partitioned.
 - `partition_contingency_blast_radius_cap`: maximum number of distinct scopes or hosts one contingency lease can authorize before further destructive actions fail closed.
 - `secret_dir`: optional directory used for file-backed `@secret:` references. Relative paths resolve relative to the config file location.
+- `anti_tamper.enabled`: turns the runtime self-monitor on or off. The shipped default is `true`.
+- `anti_tamper.check_interval_ms`: polling interval for Linux anti-tamper checks.
+- `anti_tamper.fail_closed_live_response`: when `true`, a Linux live-response runtime drains and shuts down after anti-tamper detects a debugger attach, probe failure, or unexpected library load.
+- `anti_tamper.allowed_library_prefixes`: path prefixes allowed to appear after the initial shared-library baseline without being treated as tamper.
+
+`swarm_detect` now also evaluates startup attestation before live-response mode can activate:
+
+- repo ruleset attestation lives at `rulesets/attestation.json` and signs the full checked-in `rulesets/**/*.yaml` set with the repo attestation key
+- binary attestation lives beside the launched executable as `<binary>.attestation.json` and signs that exact binary digest plus size
+- `detect_only` continues to start if attestation fails, but `/startupz` and `/readyz` surface the failed `startup_attestation` component so operators can see why the runtime is unverified
+- `live_response` fails closed before the server starts unless both the binary sidecar and the repo ruleset manifest verify
 
 Serve mode now exposes separate lifecycle routes:
 
@@ -223,7 +289,57 @@ Serve mode now exposes separate lifecycle routes:
 - `/healthz`: legacy readiness-compatible status surface with component detail
 - `/prestop`: Kubernetes-friendly drain hook that stops new ingest work, waits for in-flight work up to `drain_timeout_ms`, and then triggers clean shutdown
 
+The startup and readiness surfaces now include `checks.startup_attestation` or `components.startup_attestation` with:
+
+- `required`: whether the current runtime mode enforces fail-closed attestation (`true` only for `live_response`)
+- `effective_ready`: whether the attestation result currently blocks runtime admission or readiness
+- `binary` and `rulesets`: per-artifact verification status, statement path, and failure details
+
+The steady-state readiness and runtime-status surfaces now also include anti-tamper state:
+
+- Linux checks read `TracerPid` from `/proc/self/status` and compare newly mapped shared objects from `/proc/self/maps` against the startup baseline
+- `/readyz` and `/healthz` expose `components.anti_tamper` with `ready`, `required`, `effective_ready`, `debugger_attached`, `tracer_pid`, and `unexpected_library_loads`
+- `/v2/api/runtime/status` carries the same `anti_tamper` report for operator-visible runtime status
+- when `anti_tamper.fail_closed_live_response` is enabled, only supported Linux live-response runtimes fail closed; unsupported platforms surface `status: unsupported` without creating a readiness bypass
+
 When multi-instance governance is active, `/healthz` and `/readyz` also expose a `governance` component that reports partition state, quorum counts, active contingency leases, and the latest reconciliation report marker. The partition-authority state is persisted under `data/governance-partition-state.json` relative to the repo or config root so restart and healing paths can reconcile redeemed versus unauthorized partition-era actions.
+
+### Config Signature Verification
+
+File-backed runtime config now also requires an adjacent detached-signature sidecar:
+
+- config files are verified from `<config-path>.sig.json` before YAML parsing becomes trusted runtime state
+- the signed statement currently binds `config_file_name`, `sha256`, and `size_bytes` for the exact config bytes on disk
+- `swarm_detect` startup and full config reload both fail closed when the sidecar is missing, signed by an untrusted key, or no longer matches the config bytes
+- secret-only reloads remain scoped to `runtime.secret_dir` changes and do not re-sign or re-verify the YAML file
+
+This applies to the shipped repo config too:
+
+- [default.yaml](/Users/connor/Medica/backbay/standalone/swarm-team-six/rulesets/default.yaml)
+- [default.yaml.sig.json](/Users/connor/Medica/backbay/standalone/swarm-team-six/rulesets/default.yaml.sig.json)
+
+Operationally:
+
+- treat the config file and `.sig.json` sidecar as one deployment unit
+- update the sidecar whenever the YAML changes, before restarting `swarm_detect` or asking the runtime to reload from disk
+- expect `swarmctl validate`, `swarm_detect`, and any runtime-owned file loader using the shared config loader to reject unsigned or tampered config files
+
+### Supply Chain Hardening And SBOM
+
+The repository now treats dependency hygiene and release inventory as part of the same integrity story:
+
+- `Cargo.toml` now pins every first-party workspace dependency to an explicit internal version instead of inheriting wildcard path requirements through `[workspace.dependencies]`
+- `deny.toml` now denies wildcard dependency requirements, broadens the explicit license allowlist to match the shipped transitive graph, and documents the two currently accepted RustSec advisories that do not yet have safe upstream replacements in the current shipped stack
+- `tools/check-supply-chain.sh` runs `cargo deny check advisories licenses sources`, then `cargo deny check bans -A duplicate`, plus a hard `cargo audit --deny warnings` gate with three repo-owned temporary advisory exceptions, including the transitive `rand` advisory currently pinned by `async-nats` and `opentelemetry_sdk`
+- `.github/workflows/ci.yml` installs both `cargo-deny` and `cargo-audit`, then fails the build through that shared supply-chain check
+- `tools/generate-sbom.sh` generates one CycloneDX JSON SBOM per workspace crate and stages the files into a chosen output directory
+- `.github/workflows/release-sbom.yml` runs that script on version-tag pushes and uploads the resulting `*.cdx.json` files as the release SBOM artifact set
+
+Operator workflow:
+
+- before shipping a release candidate locally, run `bash tools/check-supply-chain.sh` and `bash tools/generate-sbom.sh artifacts/sbom`
+- publish the generated `artifacts/sbom/*.cdx.json` files alongside the tagged build so operators can compare the shipped dependency inventory with startup attestation, config signatures, and any downstream approval requirements
+- treat the SBOM artifact set as release metadata; it complements binary and config attestation, but it does not replace those runtime verification contracts
 
 ### Bridge-Backed Telemetry Sources
 
@@ -298,6 +414,8 @@ The production recovery procedures for JetStream loss, dead-letter disk-full, st
 - investigation queue state, including `last_failure_reason`
 - recent persisted investigation summaries and status
 - recent incidents and linked hunt IDs
+- bounded analyst false-positive rollups derived from the latest signed Providence feedback per reviewed finding, with detector and host summaries over the recent incident window
+- bounded advisory alert-tuning recommendations derived from those measured false-positive patterns, including host-scoped exclusion review and detector-threshold review guidance
 - freshness markers for hot-path decisions, investigation updates, and incidents
 
 Degraded investigation or incident stores surface as warnings in the operator report. They do not block startup in this milestone.
@@ -315,6 +433,9 @@ cargo run -p swarm-runtime --bin swarmctl -- investigation --hunt-id evt-123 --c
 cargo run -p swarm-runtime --bin swarmctl -- incident --incident-id incident:evt-123:1 --config rulesets/default.yaml
 cargo run -p swarm-runtime --bin swarmctl -- validate --config rulesets/default.yaml
 cargo run -p swarm-runtime --bin swarmctl -- validate --config rulesets/default.yaml --check-endpoints --json
+cargo run -p swarm-runtime --bin swarmctl -- readiness --config rulesets/default.yaml
+cargo run -p swarm-runtime --bin swarmctl -- first-run --config rulesets/default.yaml
+cargo run -p swarm-runtime --bin swarmctl -- playbook-preview --config rulesets/default.yaml --threat-class execution --severity HIGH --confidence 0.97 --mode incident --json
 cargo run -p swarm-runtime --bin swarmctl -- init --mode detect_only
 cargo run -p swarm-runtime --bin swarmctl -- init --mode live_response --output rulesets/custom-live.yaml
 ```
@@ -322,15 +443,33 @@ cargo run -p swarm-runtime --bin swarmctl -- init --mode live_response --output 
 The CLI labels output by origin:
 
 - `live_runtime_status`: current operator review report from the configured runtime stack
+- `config_diagnostic`: repo-owned readiness diagnostics derived from config, substrate health, and first-run telemetry or detector probes
+- `guided_first_run`: the bounded onboarding walkthrough that joins readiness, synthetic replay, approval artifacts, and proof export in one report
 - `persisted_runtime_artifact`: replay, investigation, or incident artifacts loaded from durable runtime stores
 - `offline_replay_artifact`: reserved for the offline replay workflows added in later milestones
+
+The repo-owned control outputs now also carry one explicit top-level envelope
+version:
+
+- JSON output from `swarmctl status`, `readiness`, `first-run`,
+  `playbook-preview`, `replay`, `investigation`, and `incident` includes
+  `schema_version: 1` beside the existing `kind`, `origin`, and payload fields.
+- Text output prints the same value as `Schema version: 1` near the report
+  header so humans and machine parsers are grounded on the same contract.
+- `swarmctl ... --output-schema-version 1` is accepted explicitly today, and
+  unsupported values fail closed before rendering output.
 
 Deployment bootstrap commands:
 
 - `swarmctl validate` reuses the runtime config loader, including schema migration, detector-profile validation, and `@secret:` resolution.
 - `--check-endpoints` adds 5-second TCP reachability probes for configured response-adapter, SIEM, and notification-channel URLs.
 - `--json` emits one structured validation report suitable for CI gates.
-- `swarmctl init --mode detect_only|live_response` writes a complete `rulesets/custom.yaml` template with inline comments. The live-response template defaults to a durable local-journal pheromone backend.
+- `swarmctl init --mode detect_only|live_response` writes a complete `rulesets/custom.yaml` template with inline comments and prints the matching `swarmctl readiness --config ...` follow-up command. The live-response template defaults to a durable local-journal pheromone backend.
+- `swarmctl readiness` runs the first-run readiness diagnostic and fails non-zero when telemetry sources, detector activation, or substrate readiness are not good enough for onboarding. Subject-backed telemetry sources are reported as configuration-validated, while bridge-backed sources are probed or validated according to their transport.
+- `swarmctl first-run` reruns the readiness gate, then launches one sandboxed synthetic walkthrough that forces the approval path, exports a signed receipt pack, and emits a proof bundle for the resulting incident. It requires `SWARM_VOTER_SIGNING_KEY` plus the normal evidence-signing env (default `SWARM_EVIDENCE_SIGNING_KEY`) and can take `--scenario path/to/custom.yaml` when the built-in process-start sample is not appropriate for the active detector mix.
+- `swarmctl playbook-preview` evaluates the checked-in `pheromone.response_playbook` config with one explicit `--threat-class`, `--severity`, `--confidence`, and `--mode` tuple, then returns the matched rule or branch, typed rehearsal blast-radius and rollback metadata for each ordered action, and the approval verdict summary that would govern the live path. The command is side-effect free: it does not call live executors, mint governance receipts, or mutate durable runtime state.
+- `swarmctl status` now carries `false_positive_tracking` in JSON and prints the recent reviewed-finding count plus the top detector and host false-positive rates in text mode. The rollup is bounded to the same recent-incident window used by the operator review surface.
+- `swarmctl status` now also carries `alert_tuning` in JSON and prints the current recommendation count plus the highest-priority advisory recommendation in text mode. These recommendations remain advisory; the CLI does not write exclusions or detector thresholds automatically.
 
 ### Helm Deployment
 
@@ -403,11 +542,14 @@ The supported runtime envelope now comes from the shipped benchmark and the
 runtime health surfaces, not from detector-only microbenchmarks or static agent
 count heuristics.
 
-Reference host and workload:
+Reference host and benchmark commands:
 
-- Apple M1 Max, 10 CPU cores, 32 GiB RAM, macOS 25.4.0
-- `cargo run -p swarm-runtime --release --example end_to_end_ingest_bench`
-- 25 warmup requests, 200 measured requests, 25 events per request
+- Apple M1 Max, 10 CPU cores, 32 GiB RAM, Darwin 26.4 (kernel 25.4.0)
+- steady-state envelope:
+  `cargo run -p swarm-runtime --release --example end_to_end_ingest_bench`
+- readiness-shed ceiling:
+  `STS_E2E_BENCH_MODE=ramp_until_shed STS_E2E_BENCH_MAX_HEAP_PRESSURE=0.00335 STS_E2E_BENCH_MAX_CONCURRENCY=16 cargo run -p swarm-runtime --release --example end_to_end_ingest_bench`
+- 25 warmup requests, 25 events per request
 - `detect_only`, `suspicious_process_tree`, `local_journal`, replay
   `local_files`, no async lanes or outbound adapters
 
@@ -415,44 +557,56 @@ Reference measured envelope on that host:
 
 | Contract slice | Result |
 | --- | --- |
-| p50 ingest request latency | 6.45 ms |
-| p95 ingest request latency | 8.18 ms |
-| p99 ingest request latency | 9.95 ms |
-| Sustained accepted-event throughput | 3,728.80 events/sec |
-| Post-run readiness | `/readyz`, `/healthz`, and `/metrics` all `200 OK` |
+| Fixed-profile p50 ingest request latency | 6.64 ms |
+| Fixed-profile p95 ingest request latency | 8.14 ms |
+| Fixed-profile p99 ingest request latency | 9.75 ms |
+| Fixed-profile sustained accepted-event throughput | 3,645.23 events/sec |
+| Fixed-profile post-run readiness | `/readyz`, `/healthz`, and `/metrics` all `200 OK` |
+| Highest stable ramp stage before shed | concurrency `2`, p95 `16.79 ms`, `4,394.19` events/sec |
+| First readiness-shedding stage | concurrency `4`, peak heap pressure `0.003383636474609375`, `/readyz` returns `503` |
 
 Hot-path detector-only reference on the same host:
 
 | Contract slice | Result |
 | --- | --- |
-| p50 detect+deposit latency | 59.00 us |
-| p95 detect+deposit latency | 63.79 us |
-| p99 detect+deposit latency | 85.08 us |
-| Throughput | 16,186.91 events/sec |
+| p50 hot-path latency | 103.04 us |
+| p95 hot-path latency | 109.29 us |
+| p99 hot-path latency | 139.21 us |
+| Throughput | 8,401.69 events/sec |
 
 Interpret the two tables differently:
 
-- `fast_detection_bench` is a regression guard for detector and deposit work
-- `end_to_end_ingest_bench` is the operator-facing envelope for the shipped HTTP
-  ingest path on the measured host class
+- `docs/benchmarks/fast-detection.md` is the Criterion regression guard for the
+  bounded ingest -> detect -> deposit -> escalate hot path only
+- the `fixed` `end_to_end_ingest_bench` profile is the steady-state operator
+  envelope for the shipped HTTP ingest path on the measured host class
+- the `ramp_until_shed` `end_to_end_ingest_bench` profile captures the highest
+  stable accepted-event rate before `/readyz` sheds for the configured
+  `runtime.max_heap_pressure`
 - the Helm production profile switches the pheromone substrate to JetStream, so
-  re-run `end_to_end_ingest_bench` with `STS_E2E_BENCH_BACKEND=jet_stream` and
-  `NATS_URL=...` before treating the local-journal ceiling as a durable
+  re-run both profiles with `STS_E2E_BENCH_BACKEND=jet_stream`,
+  `NATS_URL=...`, and the deployment-specific `runtime.max_heap_pressure` or
+  cgroup memory limit before treating the local-journal ceiling as a durable
   production ceiling
+- the reference ramp run intentionally lowers `runtime.max_heap_pressure` to
+  `0.00335` so heap-pressure shedding is observable in a single-process loopback
+  harness on a 32 GiB developer machine; treat that as a reproducible sizing
+  fixture, not a universal production default
 
 Alert baselines tied directly to shipped surfaces:
 
 | Signal | Source of truth | Warn | Page |
 | --- | --- | --- | --- |
 | Ingest request latency | `histogram_quantile(0.95, sum(rate(swarm_ingest_request_latency_microseconds_bucket[5m])) by (le))` | over `12,000` us for 15m | over `16,000` us for 5m |
-| Accepted ingest rate on the reference host | `rate(swarm_ingest_events_total{status="accepted"}[5m])` | over `2,600` events/sec | over `3,300` events/sec or coupled with latency breach |
+| Accepted ingest rate on the reference host | `rate(swarm_ingest_events_total{status="accepted"}[5m])` | over `2,500` events/sec | over `3,200` events/sec or coupled with latency breach |
 | Detector hot-path latency | `histogram_quantile(0.95, sum(rate(swarm_detect_latency_microseconds_bucket[5m])) by (le))` | over `125` us | over `250` us |
 | Heap pressure | `swarm_heap_pressure_ratio` and `/readyz` | over `0.75` | `>= runtime.max_heap_pressure` or `/readyz` returns `503` |
 | Substrate durability and readiness | `/readyz`, `/healthz`, `components.substrate.effective_ready` | n/a | anything other than ready |
 | Bridge intake health | `swarm_bridge_ready`, `swarm_bridge_lag_seconds` | lag rising for one scrape window | any required bridge reports `ready=0` or misses its intake SLA |
 
-These thresholds are reference-host defaults, not universal constants. When the
-detector mix, batch size, or substrate changes, re-run the benchmark and reset
+These thresholds are reference-host defaults from the steady-state `fixed`
+profile, not universal constants. When the detector mix, batch size, substrate,
+or `runtime.max_heap_pressure` changes, re-run the benchmark profiles and reset
 the alert numbers to the new measured baseline.
 
 Key value surfaces:
@@ -689,6 +843,22 @@ curl \
   -H "x-api-key: ${SWARM_PLATFORM_API_KEY}" \
   https://127.0.0.1:9090/v2/api/runtime/status
 ```
+
+Response-envelope contract:
+
+- authenticated operator JSON reads under `/v1/operator/*` that return the
+  repo-owned control envelope now include top-level `schema_version: 1`
+  alongside `origin`, `generated_at_ms`, `config_name`, and `data`
+- platform reads under `/v2/api/findings`, `/v2/api/incidents`,
+  `/v2/api/assets/{host_id}/posture`, and `/v2/api/runtime/status` now include
+  top-level `schema_version: 1` alongside `data` and optional `cursor`
+- clients can negotiate the current response contract explicitly with
+  `X-Swarm-Schema-Version: 1`; unsupported values fail closed with `400 Bad Request`
+- this keeps one bounded compatibility lane for existing operator and CLI
+  consumers while future breaking response changes can add a later negotiated
+  schema instead of silently changing the envelope shape
+
+`GET /v2/api/runtime/status` now includes `false_positive_tracking` and `alert_tuning` beside the existing detector, anti-tamper, and async-lane fields. `false_positive_tracking` reports recent reviewed findings, false-positive findings, overall rate, and grouped detector or host rates derived from signed analyst feedback persisted on incidents. `alert_tuning` turns that bounded measured state into advisory host-exclusion, detector-threshold, or detector-rule review recommendations without mutating runtime config automatically.
 
 When `tls.client_ca_cert` is set, both HTTP servers require a client certificate signed by that CA before any request reaches the router.
 

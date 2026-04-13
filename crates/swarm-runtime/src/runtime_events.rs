@@ -129,6 +129,7 @@ pub enum RuntimeEventKind {
     Finding,
     Replay,
     AgentAction,
+    TamperAlert,
     EvolutionStatus,
     ResponseExecution,
     AgentHealth,
@@ -144,6 +145,7 @@ impl RuntimeEventKind {
             Self::Finding => "finding",
             Self::Replay => "replay",
             Self::AgentAction => "agent_action",
+            Self::TamperAlert => "tamper_alert",
             Self::EvolutionStatus => "evolution_status",
             Self::ResponseExecution => "response_execution",
             Self::AgentHealth => "agent_health",
@@ -159,6 +161,7 @@ impl RuntimeEventKind {
             "finding" => Some(Self::Finding),
             "replay" => Some(Self::Replay),
             "agent_action" => Some(Self::AgentAction),
+            "tamper_alert" => Some(Self::TamperAlert),
             "evolution_status" => Some(Self::EvolutionStatus),
             "response_execution" => Some(Self::ResponseExecution),
             "agent_health" => Some(Self::AgentHealth),
@@ -244,6 +247,14 @@ pub enum RuntimeEvent {
         hunt_id: Option<String>,
         details: serde_json::Value,
     },
+    TamperAlert {
+        emitted_at_ms: i64,
+        debugger_attached: bool,
+        tracer_pid: Option<u32>,
+        unexpected_library_loads: Vec<String>,
+        fail_closed: bool,
+        details: String,
+    },
     EvolutionStatus {
         emitted_at_ms: i64,
         source: String,
@@ -300,6 +311,7 @@ impl RuntimeEvent {
             | Self::Finding { emitted_at_ms, .. }
             | Self::Replay { emitted_at_ms, .. }
             | Self::AgentAction { emitted_at_ms, .. }
+            | Self::TamperAlert { emitted_at_ms, .. }
             | Self::EvolutionStatus { emitted_at_ms, .. }
             | Self::ResponseExecution { emitted_at_ms, .. }
             | Self::AgentHealth { emitted_at_ms, .. }
@@ -315,6 +327,7 @@ impl RuntimeEvent {
             Self::Finding { .. } => RuntimeEventKind::Finding,
             Self::Replay { .. } => RuntimeEventKind::Replay,
             Self::AgentAction { .. } => RuntimeEventKind::AgentAction,
+            Self::TamperAlert { .. } => RuntimeEventKind::TamperAlert,
             Self::EvolutionStatus { .. } => RuntimeEventKind::EvolutionStatus,
             Self::ResponseExecution { .. } => RuntimeEventKind::ResponseExecution,
             Self::AgentHealth { .. } => RuntimeEventKind::AgentHealth,

@@ -31,6 +31,7 @@ pub fn findings_to_deposits(
     findings
         .iter()
         .map(|finding| PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::json!({
                 "event_id": finding.event_id,
                 "host_id": event.host_id,

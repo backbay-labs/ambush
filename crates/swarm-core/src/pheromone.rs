@@ -85,11 +85,41 @@ pub struct BehavioralBaselineSnapshot {
     pub peer_groups: Vec<BehavioralPeerGroupBaseline>,
 }
 
+/// Durable restart-safe online distribution state for one behavioral scope.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BehavioralOnlineDistributionSnapshot {
+    /// Number of samples incorporated into the online distribution.
+    pub sample_count: u64,
+    /// Running mean maintained by the online learner.
+    pub mean: f64,
+    /// Running second central moment maintained by the online learner.
+    pub m2: f64,
+}
+
+/// One restart-safe learned baseline for a non-process telemetry family.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BehavioralTelemetryFamilyBaseline {
+    /// Telemetry family identifier such as `network_connect` or `dns_query`.
+    pub family: String,
+    /// Number of observations incorporated for this family within the scope.
+    pub observation_count: u64,
+    /// Restart-safe online novelty distribution for this family within the scope.
+    #[serde(default)]
+    pub novelty_distribution: BehavioralOnlineDistributionSnapshot,
+    /// Decayed learned feature observations for this family within the scope.
+    #[serde(default)]
+    pub features: Vec<BehavioralFrequencyEntry>,
+}
+
 /// Behavioral baseline state for one host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BehavioralHostBaseline {
     pub host_id: String,
     pub observation_count: u64,
+    #[serde(default)]
+    pub novelty_distribution: BehavioralOnlineDistributionSnapshot,
+    #[serde(default)]
+    pub telemetry_families: Vec<BehavioralTelemetryFamilyBaseline>,
     pub parent_child_pairs: Vec<BehavioralFrequencyEntry>,
     pub binaries: Vec<BehavioralFrequencyEntry>,
     pub role_tools: Vec<BehavioralRoleToolFrequencyEntry>,
@@ -100,6 +130,10 @@ pub struct BehavioralHostBaseline {
 pub struct BehavioralIdentityBaseline {
     pub identity_id: String,
     pub observation_count: u64,
+    #[serde(default)]
+    pub novelty_distribution: BehavioralOnlineDistributionSnapshot,
+    #[serde(default)]
+    pub telemetry_families: Vec<BehavioralTelemetryFamilyBaseline>,
     pub parent_child_pairs: Vec<BehavioralFrequencyEntry>,
     pub binaries: Vec<BehavioralFrequencyEntry>,
     pub role_tools: Vec<BehavioralRoleToolFrequencyEntry>,
@@ -110,6 +144,10 @@ pub struct BehavioralIdentityBaseline {
 pub struct BehavioralPeerGroupBaseline {
     pub peer_group_id: String,
     pub observation_count: u64,
+    #[serde(default)]
+    pub novelty_distribution: BehavioralOnlineDistributionSnapshot,
+    #[serde(default)]
+    pub telemetry_families: Vec<BehavioralTelemetryFamilyBaseline>,
     pub parent_child_pairs: Vec<BehavioralFrequencyEntry>,
     pub binaries: Vec<BehavioralFrequencyEntry>,
     pub role_tools: Vec<BehavioralRoleToolFrequencyEntry>,
@@ -142,9 +180,23 @@ pub struct ThreatClassPolicy {
     pub incident_threshold: f64,
 }
 
+pub const PHEROMONE_DEPOSIT_PREVIOUS_SCHEMA_VERSION: u32 = 1;
+pub const PHEROMONE_DEPOSIT_CURRENT_SCHEMA_VERSION: u32 = 2;
+
+fn default_pheromone_deposit_schema_version() -> u32 {
+    PHEROMONE_DEPOSIT_PREVIOUS_SCHEMA_VERSION
+}
+
 /// A pheromone deposit — a signed threat indicator in the substrate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PheromoneDeposit {
+    /// Explicit wire-format schema version for the serialized deposit payload.
+    ///
+    /// Missing values deserialize as the previous supported schema version so
+    /// legacy stored deposits can still be migrated through the bounded
+    /// current-plus-previous compatibility path.
+    #[serde(default = "default_pheromone_deposit_schema_version")]
+    pub schema_version: u32,
     /// What was observed.
     pub indicator: serde_json::Value,
     /// Classification of the threat.
@@ -197,6 +249,21 @@ pub struct Pheromone {
 }
 
 impl PheromoneDeposit {
+    pub const fn current_schema_version() -> u32 {
+        PHEROMONE_DEPOSIT_CURRENT_SCHEMA_VERSION
+    }
+
+    pub const fn previous_schema_version() -> u32 {
+        PHEROMONE_DEPOSIT_PREVIOUS_SCHEMA_VERSION
+    }
+
+    pub const fn supports_schema_version(schema_version: u32) -> bool {
+        matches!(
+            schema_version,
+            PHEROMONE_DEPOSIT_PREVIOUS_SCHEMA_VERSION | PHEROMONE_DEPOSIT_CURRENT_SCHEMA_VERSION
+        )
+    }
+
     /// Compute effective strength at a given time, accounting for exponential decay.
     ///
     /// `strength(t) = confidence * 0.5^((t - timestamp) / half_life)`

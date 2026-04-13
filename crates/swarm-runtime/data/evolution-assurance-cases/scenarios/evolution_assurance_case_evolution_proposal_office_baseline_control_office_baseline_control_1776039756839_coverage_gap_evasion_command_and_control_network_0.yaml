@@ -1,0 +1,177 @@
+name: evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776039756839:coverage_gap:evasion_command_and_control_network:0-harvest
+description: Harvested assurance coverage-gap replay derived from `evasion_command_and_control_network`
+seed_time_ms: 1776039756839
+requested_by: evolution-assurance-harvest
+receipt_chain:
+- seed-receipt
+- evolution_proposal:office_baseline_control:office_baseline_control:1776039756839
+- verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
+- evolution_proof:office_baseline_control:office_baseline_control:1776039756837
+metadata:
+  class: adversarial
+  threat_class: command_and_control
+  campaign: adversarial.robustness
+  techniques:
+  - T1071.001
+  - T1071.004
+  - T1105
+  tags:
+  - command-and-control
+  - beacon
+  - egress
+  - assurance_case
+  - coverage_gap
+  - suspicious_process_tree
+  - evolution_proposal:office_baseline_control:office_baseline_control:1776039756839
+input:
+  kind: events
+  events:
+  - action:
+      type: block_egress
+      target: 203.0.113.10
+    event:
+      source: synthetic
+      event_id: evasion-c2-1
+      timestamp: 1701000200100
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: powershell.exe
+        destination_ip: 203.0.113.10
+        destination_port: 4444
+        protocol: tcp
+  - action:
+      type: block_egress
+      target: 203.0.113.11
+    event:
+      source: synthetic
+      event_id: evasion-c2-2
+      timestamp: 1701000200200
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: curl
+        destination_ip: 203.0.113.11
+        destination_port: 5555
+        protocol: tcp
+  - action:
+      type: block_egress
+      target: 203.0.113.12
+    event:
+      source: synthetic
+      event_id: evasion-c2-3
+      timestamp: 1701000200300
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: rundll32.exe
+        destination_ip: 203.0.113.12
+        destination_port: 6667
+        protocol: tcp
+  - action:
+      type: block_egress
+      target: 203.0.113.13
+    event:
+      source: synthetic
+      event_id: evasion-c2-4
+      timestamp: 1701000200400
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: mshta.exe
+        destination_ip: 203.0.113.13
+        destination_port: 31337
+        protocol: tcp
+  - action:
+      type: block_egress
+      target: 198.51.100.55
+    event:
+      source: synthetic
+      event_id: evasion-c2-5
+      timestamp: 1701000200500
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: powershell.exe
+        destination_ip: 198.51.100.55
+        destination_port: 443
+        protocol: tcp
+  - action:
+      type: block_egress
+      target: 198.51.100.55
+    event:
+      source: synthetic
+      event_id: evasion-c2-6
+      timestamp: 1701000220500
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: powershell.exe
+        destination_ip: 198.51.100.55
+        destination_port: 443
+        protocol: tcp
+  - action:
+      type: block_egress
+      target: 198.51.100.55
+    event:
+      source: synthetic
+      event_id: evasion-c2-7
+      timestamp: 1701000240500
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: powershell.exe
+        destination_ip: 198.51.100.55
+        destination_port: 443
+        protocol: tcp
+  - action:
+      type: block_egress
+      target: 198.51.100.55
+    event:
+      source: synthetic
+      event_id: evasion-c2-8
+      timestamp: 1701000260500
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: powershell.exe
+        destination_ip: 198.51.100.55
+        destination_port: 443
+        protocol: tcp
+  - action:
+      type: block_egress
+      target: 203.0.113.20
+    event:
+      source: synthetic
+      event_id: evasion-c2-9
+      timestamp: 1701000260600
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: cmd.exe
+        destination_ip: 203.0.113.20
+        destination_port: 4444
+        protocol: udp
+  - action:
+      type: block_egress
+      target: 203.0.113.21
+    event:
+      source: synthetic
+      event_id: evasion-c2-10
+      timestamp: 1701000260700
+      host_id: host-evasion-c2-1
+      payload:
+        kind: network_connect
+        process_name: python.exe
+        destination_ip: 203.0.113.21
+        destination_port: 5555
+        protocol: tcp
+expectations:
+  replay_bundle_count: null
+  investigation_count: null
+  incident_count: null
+  hunts: []
+  incident_hunt_groups: []
+  max_detect_latency_us: null
+  max_policy_latency_us: null
+  max_response_latency_us: null

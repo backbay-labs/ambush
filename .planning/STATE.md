@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.54
-milestone_name: Panic Eradication And Error Contracts
-current_phase: 186
-current_phase_name: Agent Tick And Evolution Error Boundaries
-status: active
-last_updated: "2026-04-11T23:37:53Z"
-last_activity: 2026-04-11 — Completed Phase 185 typed ingest, service, and HTTP error-boundary conversion, and queued Phase 186 agent and evolution boundary cleanup
+milestone: v1.63
+milestone_name: Evolution Crate Decomposition And Schema Migration
+current_phase: none
+current_phase_name: none
+status: completed
+last_updated: "2026-04-12T23:00:51Z"
+last_activity: 2026-04-12 — Completed Phase 223 API response schema migration and closed v1.63 with no next milestone queued
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 4
   total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_plans: 4
+  percent: 100
 ---
 
 # State
@@ -22,22 +22,95 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-11)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.54 Panic Eradication And Error Contracts` is active. Phases 184 and 185 are complete, Phase 186 is planned next, and the autonomous execution queue remains v1.54 through v1.63 (phases 186-223).
+**Current focus:** No active milestone. `v1.63 Evolution Crate Decomposition And Schema Migration` is complete, and the next milestone has not been defined yet.
 
 ## Current Position
 
-Phase: 186 (planned)
-Current Phase: 186
-Current Phase Name: Agent Tick And Evolution Error Boundaries
-Status: v1.54 is active; Phases 184 and 185 are complete and Phase 186 is next
-Last activity: 2026-04-11 — Completed Phase 185 typed ingest, service, and HTTP error-boundary conversion, and queued Phase 186 agent and evolution boundary cleanup
+Phase: none
+Current Phase: none
+Current Phase Name: none
+Status: No active milestone; v1.63 is complete
+Last activity: 2026-04-12 — Completed Phase 223 API response schema migration and closed v1.63 with no next milestone queued
 Total Phases: 4
-Total Plans in Phase: 1
+Total Plans in Phase: 0
 
-Progress: [#####.....] 50%
+Progress: [##########] 100%
 
 ## Memory
 
+- Phase 223 is complete: operator-facing control and platform API envelopes
+  now carry explicit `schema_version` metadata, both authenticated surfaces
+  negotiate through the shared `x-swarm-schema-version` header, and `swarmctl`
+  now validates `--output-schema-version` while preserving the current
+  compatibility lane at schema version `1`.
+- The v1.63 lifecycle is complete: milestone audit passed, roadmap and
+  requirements snapshots are current, and phase directories `220` through
+  `223` are archived under `.planning/milestones/v1.63-phases/`.
+- Phase 222 is complete: `PheromoneDeposit` now carries an explicit shared
+  `schema_version`, the substrate and JetStream hydration paths accept only the
+  current and previous wire versions with explicit fail-closed rejection for
+  unsupported versions, and repo-owned tests now prove both previous-version
+  signature compatibility and local-journal recovery for legacy deposits that
+  omitted the new field.
+- Phase 221 is complete: `swarm-evolution/src/mutation.rs` is now a thin
+  composition root over an extracted `mutation/` module tree with explicit
+  `#[path]` wiring, shared internal helpers behind `pub(crate)` boundaries, and
+  split unit coverage across `tests_core.rs` and `tests_autonomous.rs`; the
+  focused extracted mutation suite passed 12 unit tests and every extracted file
+  stayed below the 2000-line cap.
+- Phase 220 is complete: `swarm-evolution/src/evolution.rs` is now a thin
+  composition root over the extracted `evolution/` module tree, the public
+  crate contract stayed stable through explicit re-exports, and the focused
+  extracted test module passed 34 unit tests after the relocation-safe path
+  fix for the moved `include_str!` fixture.
+- Phase 219 is complete: the repo now ships a labeled-telemetry behavioral
+  anomaly benchmark in `crates/swarm-runtime/examples/behavioral_anomaly_quality_benchmark.rs`
+  with a checked-in artifact in `docs/benchmarks/behavioral-anomaly-quality.md`,
+  and the measured reference run preserved catch rate at `1.000` while reducing
+  actionable false-positive rate from `1.000` to `0.000` relative to the
+  bounded legacy fixed-arithmetic control.
+- The v1.62 lifecycle is complete: milestone audit passed, roadmap and
+  requirements snapshots are current, and phase directories `216` through
+  `219` are archived under `.planning/milestones/v1.62-phases/`.
+- Phase 218 is complete: `BehavioralAnomalyDetector` now evaluates network, DNS, authentication, registry access, registry persistence, file persistence, and process memory telemetry through the same explicit deviation-scoring model, and the shared behavioral snapshot seam now persists per-family learned state for those non-process telemetry families.
+- Phase 217 is complete: `BehavioralAnomalyDetector` now derives finding confidence from an explicit support-weighted z-score model built on the persisted per-scope novelty distributions, and finding evidence now exposes `deviation_scoring` with per-scope z-scores, sample support, and aggregate deviation score.
+- Phase 216 is complete: `BehavioralAnomalyDetector` now persists per-scope online novelty distributions through the shared baseline snapshot seam, derives confidence from learned scope pressure instead of the old fixed signal-count arithmetic, and emits the learned-distribution state needed for the explicit deviation model now shipped in Phase 217.
+- Phase 215 is complete: `ResponsePlaybookConfig` and `PounceAgent` now share deterministic rule-plus-branch resolution, `RuntimeService::playbook_preview` reuses the typed rehearsal and approval seams for dry-run projection, and `swarmctl playbook-preview` plus the control plane now expose one bounded repo-owned preview report without live side effects.
+- The v1.61 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are current, and phase directories `212` through `215` now live under `.planning/milestones/v1.61-phases/`.
+- Phase 214 is complete: repo-owned `pheromone.response_playbook` rules now support deterministic ordered branches with bounded selectors over threat class, severity, confidence, and runtime mode; Pounce records matched branch identity in request evidence and still routes the resulting actions through the normal guarded response lane.
+- Phase 213 is complete: the expanded response action catalog now carries typed blast-radius, scope, and rollback metadata through the shared rehearsal seam, and rehearsal no longer fails closed for the new actions added in Phase 212.
+- Phase 212 is complete: the shared response seam now supports fifteen concrete action types, policy and governance understand the expanded action catalog, sandbox and HTTP EDR route the new actions through the normal executor lane, and webhook now fails closed when asked to execute unsupported live actions.
+- The v1.60 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are current, and phase directories `208` through `211` are archived under `.planning/milestones/v1.60-phases/`.
+- Phase 211 is complete: repo-owned runtime tests now prove JetStream outage forces `detect_only`, replay-store write-path failure forces `read_only` with ingest rejection, and high heap pressure forces `emergency_drain` on `/readyz`.
+- Phase 210 is complete: the runtime now owns an explicit degradation ladder with shared triggers, capabilities, transition timestamps, bounded ingest gating for `read_only` and `emergency_drain`, and the same degradation contract now surfaces on `/readyz`, `/healthz`, `swarmctl status`, and `/v2/api/runtime/status`.
+- Phase 209 is complete: the dispatcher now owns per-agent restart factories, replaces only failed agents in-place once health crosses the failed boundary, keeps restarted agents degraded until a clean tick clears them, and `swarm_detect` now registers every runtime agent through the same reusable startup-and-restart construction path.
+- Phase 208 is complete: the dispatcher now wraps each agent tick in a runtime-owned async panic boundary, preserves typed panic attribution with agent identity and role, degrades only the crashing agent, and keeps healthy peers ticking in the same run loop.
+- The v1.59 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are current, and phase directories `204` through `207` are archived under `.planning/milestones/v1.59-phases/`.
+- Phase 207 is complete: the runtime now derives bounded advisory alert-tuning recommendations from persisted false-positive measurements, and both `swarmctl status` and `/v2/api/runtime/status` surface the same `alert_tuning` report for operators.
+- Phase 206 is complete: signed Providence analyst feedback now persists one bounded latest-disposition measurement per reviewed finding on incidents, `swarmctl status` now exposes recent detector and host false-positive rollups, and `/v2/api/runtime/status` carries the same `false_positive_tracking` report for operator API consumers.
+- Phase 205 is complete: `swarmctl first-run` now reruns the repo-owned readiness gate, launches a sandboxed synthetic approval-gated replay, exports a signed receipt pack plus proof bundle, and returns one bounded walkthrough report with approval, incident, and proof identifiers.
+- Phase 204 is complete: `swarmctl` now ships a structured readiness diagnostic backed by repo-owned telemetry, detector, and substrate checks, `swarmctl init` prints the readiness follow-up command, and `/readyz` now surfaces telemetry source summary alongside the existing detector and substrate health components.
+- The v1.58 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are current, and phase directories `200` through `203` are archived under `.planning/milestones/v1.58-phases/`.
+- Phase 203 is complete: sequence findings now reuse the normal signed pheromone, replay, investigation, and incident lanes, and the replay harness now attaches the configured sequence detector just like the live runtime service.
+- Phase 202 is complete: the repo now ships three chain-only replay scenarios plus the `kill_chain_sequences_v1` suite, and focused runtime integration proof shows the shipped deterministic single-event detectors stay quiet on those chains.
+- Phase 201 is complete: Swarm now loads ATT&CK kill-chain rules from repo-owned YAML in `sequences/kill-chain-v1.yaml` and emits bounded partial or full matches against the shared temporal window.
+- Phase 200 is complete: the runtime now owns a bounded temporal event window with configurable retention, span, and predicate-count limits, and accepted telemetry is recorded into that window on the hot path before detection runs.
+- Phase 199 is complete: the bounded benchmark now derives pressure from the staged seed experiment, `swarm-evolution` can materialize a bounded `autonomous_gap_expansion` recipe from focused evasion scenarios, and the checked-in benchmark artifact now records a real conservative-seed gain from measured fitness `0.633` / catch-rate `0.086` to `0.656` / `0.143`.
+- The v1.57 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are current, and phase directories `196` through `199` are archived under `.planning/milestones/v1.57-phases/`.
+- Phase 198 is complete: the repo now runs a bounded multi-generation autonomous benchmark through the normal mutation and validation seams, persists durable generation-over-generation fitness deltas plus latest benchmark status, and ships a checked-in benchmark artifact that records the current no-gain baseline for `suspicious_process_tree`.
+- Phase 197 is complete: autonomous population candidates now persist measured catch-rate, false-positive, and latency fitness with replayable lineage, Kitten keeps that attribution runtime-owned through adversarial episode persistence, and the shared evolution status surface now exposes the bounded autonomous fitness state for operators.
+- Phase 196 is complete: `swarm-evolution` now generates bounded perturbation and crossover variants from durable winning genomes with replayable parent lineage, and Kitten requests that autonomous generator directly while keeping the existing proposal lane unchanged.
+- The v1.56 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are current, and phase directories `192` through `195` now live under `.planning/milestones/v1.56-phases/`.
+- Phase 195 is complete: first-party workspace dependencies are explicitly version-pinned, CI now runs the shared supply-chain gate, `cargo audit` exceptions are documented, and release automation publishes one CycloneDX SBOM per workspace crate without leaving generated JSON in the repo tree.
+- Phase 194 is complete: the runtime now evaluates Linux anti-tamper signals for debugger attachment and unexpected library loads before serve startup, continues the monitor in the background, emits structured tamper alerts, and surfaces the latest anti-tamper report on `/readyz`, `/healthz`, and `/v2/api/runtime/status`.
+- Phase 193 is complete: file-backed runtime config now requires a detached `.sig.json` sidecar signed by a trusted Ed25519 key, and both startup and full config reload fail closed on unsigned or tampered config files.
+- Phase 192 is complete: `swarm_detect` now verifies a signed repo ruleset manifest plus adjacent binary sidecar at startup, refuses `live_response` mode on failed attestation, and surfaces `startup_attestation` through `/startupz`, `/readyz`, and `/healthz`.
+- The v1.55 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are current, and phase directories `188` through `191` now live under `.planning/milestones/v1.55-phases/`.
+- Phase 191 is complete: the shipped `end_to_end_ingest_bench` now supports both fixed steady-state measurement and a monotonic `ramp_until_shed` mode, and the checked-in reference run captures the first `/readyz` shed threshold on the measured host.
+- Phase 190 is complete: `swarm-runtime` now ships a Criterion-owned `hot_path` benchmark with checked-in `in_memory` and `local_journal` percentile baselines for ingest -> detect -> deposit -> escalate.
+- Phase 189 is complete: JetStream now runs the same deposit, query, escalation, threat-class-config, threat-intel, and GC assertions as the in-memory substrate contract through the compose-backed harness, CI executes that broader suite, and policy-aware GC now preserves parity when threat-class overrides tighten evaporation thresholds.
+- Phase 188 is complete: the repo now owns a compose-backed JetStream harness with deterministic lifecycle, dynamic loopback port export, and CI smoke coverage, and the old ignored JetStream tests now build signed deposits that satisfy the current substrate validation contract.
+- Phase 187 is complete: CI now runs a repo-owned `#[cfg(test)]`-aware checker that fails on new live `.unwrap(` or `.expect(` in `swarm-runtime`, and integration tests now prove malformed ingest and Kitten proposal payloads fail closed instead of panicking.
 - Phase 164 is complete: the canonical doc set now distinguishes active runtime contract material from historical reference material, and the architecture, agent, governance, evolution, and config references now describe the shipped Rust runtime instead of the removed Python-heavy plan.
 - Phase 165 is complete: the canonical docs now define one bounded governance contract spanning observation, guarded response, receipt-backed destructive response, maintenance-only operation, identity admission, approval lineage, and continuity-preserving rotation.
 - Phase 166 is complete: degraded, partitioned, and healing governance states now have one fail-closed contract across the architecture doc, governance doc, config reference, and disaster-recovery runbook.
@@ -120,11 +193,12 @@ Progress: [#####.....] 50%
 - The v1.53 lifecycle is complete: milestone audit passed, roadmap and requirements snapshots are archived in `.planning/milestones/`, and phase directories `180` through `183` now live under `.planning/milestones/v1.53-phases/`.
 - Phase 184 is complete: the runtime panic audit confirms zero live non-test `unwrap()` and `expect()` sites across `swarm-runtime` entrypoints, the serve and TLS seam now has an explicit `ServeError` boundary, and the deferred string-only propagation work for ingest, service, and HTTP is mapped for Phase 185.
 - Phase 185 is complete: request-facing ingest paths now use typed `IngestRequestError` and `IngestProcessingError`, service rehearsal and readiness seams now use typed sub-errors under `ServiceError`, and the operator HTTP surface maps typed runtime, evidence, portfolio, governance, and maintenance failures through explicit adapters instead of inline blanket string flattening.
+- Phase 186 is complete: runtime-owned `AgentTickBoundaryError` and `StrategyProposalRouteError` now preserve typed Stalker, Sphinx, drafting, mutation, selection, formal-safety, queue, proposal-store, and canary failure context through the agent tick and Kitten proposal-routing seams instead of flattening those paths into strings.
 
 ## Issues
 
-- No active implementation blockers. Phase 186 is queued on top of the shipped runtime request-boundary pass, and the autonomous execution queue runs v1.54 through v1.63 (38 phases, 186-223).
+- No known implementation blockers are open. No next milestone is queued yet.
 
 ## Next Command
 
-`$gsd-autonomous` — execute v1.54 through v1.63 sequentially
+`$gsd-new-milestone` — define and activate the next milestone

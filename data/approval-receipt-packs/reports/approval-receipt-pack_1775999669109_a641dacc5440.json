@@ -1,0 +1,61 @@
+{
+  "pack_id": "approval-receipt-pack:1775999669109:a641dacc5440",
+  "signer_id": "local-evidence-signer",
+  "approval_set": {
+    "set_id": "approval-set:1775999669082:8115c0109f59",
+    "eligible_voters": [
+      "swarm:ed25519:540dcaf002221dd1e8afecd4fa6169d3512682b92268935abcecfb3ee6ec6a6d"
+    ],
+    "threshold": {
+      "at_least": {
+        "required": 1
+      }
+    },
+    "promotion_evidence_ref": "demo_approval:demo_replay:d5589339-b36d-47c3-9562-e6369b409659:0:evt-first-run-1",
+    "created_at_ms": 1775999669082
+  },
+  "ledger": {
+    "ledger_id": "approval-ledger:1775999669082:b4154e22f68c",
+    "approval_set_id": "approval-set:1775999669082:8115c0109f59",
+    "entries": [
+      {
+        "entry_id": "approval-ledger-entry:approval-ledger_1775999669082_b4154e22f68c:1",
+        "voter_id": "swarm:ed25519:540dcaf002221dd1e8afecd4fa6169d3512682b92268935abcecfb3ee6ec6a6d",
+        "vote": "approve",
+        "signature": {
+          "algorithm": "ed25519",
+          "key_id": "d0b6fb3dd363202ae97278d1217e390bacb316b50abcc359c89a26b594acfdd0",
+          "public_key_hex": "540dcaf002221dd1e8afecd4fa6169d3512682b92268935abcecfb3ee6ec6a6d",
+          "signature_hex": "0a7961dfa0c9113706c4a8ca00217baecece535321a428da4998726072a991e8a073f155c0a6765a59a31d35bc13ff87e528047d8b42e69a57d82a5594afa507"
+        },
+        "timestamp_ms": 1775999669106,
+        "envelope_hash": "0x17b2d4762e5c148e113e18c2e047efea9416a3c39a9dcf497da2af870dac31df"
+      }
+    ],
+    "created_at_ms": 1775999669082
+  },
+  "verdict": {
+    "verdict_id": "approval-verdict:1775999669108:ddaf2fede53b",
+    "approval_set_id": "approval-set:1775999669082:8115c0109f59",
+    "ledger_id": "approval-ledger:1775999669082:b4154e22f68c",
+    "status": "approved",
+    "approve_count": 1,
+    "reject_count": 0,
+    "threshold_required": "at least 1",
+    "threshold_required_count": 1,
+    "eligible_count": 1,
+    "missing_voters": [],
+    "evaluated_at_ms": 1775999669108
+  },
+  "audit_refs": [
+    "demo_approval:demo_replay:d5589339-b36d-47c3-9562-e6369b409659:0:evt-first-run-1"
+  ],
+  "content_hash": "8ea1a3e18368dbfe350e6fe29dacb95429345683cca2cfd02005d4ab8e180751",
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "101ac20b2ae73c3f1d0f76b9ba2d0079a1dd142022a21d98e4679a681c397d6d",
+    "public_key_hex": "3f43b14c478c29a6abcd1a4901afa636024074a9911c5c32378265e4b1504222",
+    "signature_hex": "ecaae356c8c9c336560fc20d830dbd84e31c0d5ae42842d62237fc02a12482ed85722822073312552d2d17f82895c05cb329e73c94c720e0360039174ffc2404"
+  },
+  "created_at_ms": 1775999669109
+}

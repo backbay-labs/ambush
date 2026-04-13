@@ -1,0 +1,219 @@
+name: evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1776037093114:coverage_gap:evasion_defense_evasion_fileless:3-harvest
+description: Harvested assurance coverage-gap replay derived from `evasion_defense_evasion_fileless`
+seed_time_ms: 1776037093114
+requested_by: evolution-assurance-harvest
+receipt_chain:
+- seed-receipt
+- evolution_proposal:office_baseline_control:office_baseline_control:1776037093114
+- verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
+- evolution_proof:office_baseline_control:office_baseline_control:1776037093113
+metadata:
+  class: adversarial
+  threat_class: defense_evasion
+  campaign: adversarial.robustness
+  techniques:
+  - T1055
+  - T1620
+  - T1055.012
+  - T1106
+  - T1059.001
+  tags:
+  - defense-evasion
+  - fileless
+  - reflective
+  - assurance_case
+  - coverage_gap
+  - suspicious_process_tree
+  - evolution_proposal:office_baseline_control:office_baseline_control:1776037093114
+input:
+  kind: events
+  events:
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 1
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-1
+      timestamp: 1701000100100
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_memory_access
+        source_process: rundll32.exe
+        target_process: explorer.exe
+        allocation_type: VirtualAllocEx
+        protection_flags:
+        - PAGE_EXECUTE_READWRITE
+        region_size: 16384
+        call_stack_hint: ntdll!NtWriteVirtualMemory kernel32!CreateRemoteThread
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 2
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-2
+      timestamp: 1701000100200
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_memory_access
+        source_process: dllhost.exe
+        target_process: notepad.exe
+        allocation_type: MapViewOfSection
+        protection_flags:
+        - PAGE_EXECUTE_READWRITE
+        region_size: 32768
+        call_stack_hint: ntdll!NtMapViewOfSection kernel32!WriteProcessMemory
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 3
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-3
+      timestamp: 1701000100300
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_memory_access
+        source_process: regsvr32.exe
+        target_process: svchost.exe
+        allocation_type: VirtualAllocEx
+        protection_flags:
+        - PAGE_EXECUTE_WRITECOPY
+        region_size: 24576
+        call_stack_hint: kernelbase!VirtualAllocEx ntdll!NtWriteVirtualMemory
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 4
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-4
+      timestamp: 1701000100400
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_memory_access
+        source_process: powershell.exe
+        target_process: msedge.exe
+        allocation_type: VirtualAllocEx
+        protection_flags:
+        - PAGE_EXECUTE_READWRITE
+        region_size: 12288
+        call_stack_hint: ntdll!NtWriteVirtualMemory kernel32!QueueUserAPC
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 5
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-5
+      timestamp: 1701000100500
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_memory_access
+        source_process: wscript.exe
+        target_process: runtimebroker.exe
+        allocation_type: VirtualAllocEx
+        protection_flags:
+        - PAGE_EXECUTE_READWRITE
+        region_size: 20480
+        call_stack_hint: ntdll!NtWriteVirtualMemory direct syscall stub
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 6
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-6
+      timestamp: 1701000100600
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_start
+        parent_process: explorer.exe
+        process_name: powershell.exe
+        command_line: powershell.exe -enc QQBBQQ==; $x=[Convert]::FromBase64String('QQ=='); iex ([Text.Encoding]::Unicode.GetString($x))
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 7
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-7
+      timestamp: 1701000100700
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_start
+        parent_process: explorer.exe
+        process_name: pwsh.exe
+        command_line: pwsh.exe -EncodedCommand QkJCQg==; [Convert]::FromBase64String('QQ=='); Invoke-Expression 'Write-Host hi'
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 8
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-8
+      timestamp: 1701000100800
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_start
+        parent_process: explorer.exe
+        process_name: powershell.exe
+        command_line: powershell.exe -enc Q0NDQw==; [System.Reflection.Assembly]::Load([Convert]::FromBase64String('QQ==')) | Out-Null
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 9
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-9
+      timestamp: 1701000100900
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_start
+        parent_process: explorer.exe
+        process_name: powershell.exe
+        command_line: powershell.exe -encodedcommand RERERA==; IEX ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('QQ==')))
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: escalate
+      summary: Fileless evasion pattern 10
+      urgency: HIGH
+    event:
+      source: synthetic
+      event_id: evasion-def-10
+      timestamp: 1701000101000
+      host_id: host-evasion-def-1
+      payload:
+        kind: process_start
+        parent_process: explorer.exe
+        process_name: pwsh.exe
+        command_line: pwsh.exe -enc RUVFRQ==; iex (New-Object IO.StreamReader([IO.MemoryStream][Convert]::FromBase64String('QQ=='))).ReadToEnd()
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+expectations:
+  replay_bundle_count: null
+  investigation_count: null
+  incident_count: null
+  hunts: []
+  incident_hunt_groups: []
+  max_detect_latency_us: null
+  max_policy_latency_us: null
+  max_response_latency_us: null

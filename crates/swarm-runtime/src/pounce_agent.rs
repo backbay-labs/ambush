@@ -8,7 +8,9 @@ use swarm_core::agent::{
     AgentFinding, AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmEvent,
     SwarmMode,
 };
-use swarm_core::config::{ResponsePlaybookConfig, ResponsePlaybookRule};
+use swarm_core::config::{
+    ResponsePlaybookBranchResolution, ResponsePlaybookConfig, ResponsePlaybookRule,
+};
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{AgentId, HuntId, ResponseAction, SwarmAction};
 use swarm_policy::static_gate::scope_for_response_action;
@@ -42,6 +44,12 @@ struct PlaybookMatch {
     hunt_id: HuntId,
     evidence: serde_json::Value,
     actions: Vec<ResponseAction>,
+}
+
+#[derive(Debug, Clone)]
+struct MatchedPlaybookBranch {
+    index: usize,
+    name: Option<String>,
 }
 
 impl PounceAgent {
@@ -122,11 +130,28 @@ impl PounceAgent {
             let Some(hunt_id) = extract_hunt_id(deposit) else {
                 continue;
             };
+            let Some(resolution) = rule.resolve(
+                &deposit.threat_class,
+                deposit.severity,
+                deposit.confidence,
+                env.mode,
+            ) else {
+                continue;
+            };
 
             return Some(PlaybookMatch {
                 hunt_id: HuntId(hunt_id.to_string()),
-                evidence: build_request_evidence(deposit, env, rule, hunt_id),
-                actions: rule.actions.clone(),
+                evidence: build_request_evidence(
+                    deposit,
+                    env,
+                    rule,
+                    hunt_id,
+                    resolution
+                        .branch
+                        .as_ref()
+                        .map(MatchedPlaybookBranch::from_resolution),
+                ),
+                actions: resolution.actions,
             });
         }
 
@@ -284,6 +309,7 @@ fn build_request_evidence(
     env: &SwarmEnvironment,
     rule: &ResponsePlaybookRule,
     hunt_id: &str,
+    branch: Option<MatchedPlaybookBranch>,
 ) -> serde_json::Value {
     serde_json::json!({
         "lineage": {
@@ -304,6 +330,19 @@ fn build_request_evidence(
             "severity": rule.severity,
             "min_confidence": rule.min_confidence,
             "max_confidence": rule.max_confidence,
+            "branch": branch.map(|matched| serde_json::json!({
+                "index": matched.index,
+                "name": matched.name,
+            })),
         }
     })
+}
+
+impl MatchedPlaybookBranch {
+    fn from_resolution(resolution: &ResponsePlaybookBranchResolution) -> Self {
+        Self {
+            index: resolution.index,
+            name: resolution.name.clone(),
+        }
+    }
 }

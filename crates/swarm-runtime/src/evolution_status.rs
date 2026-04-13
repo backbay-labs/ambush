@@ -7,8 +7,9 @@ use crate::evolution::{
     FileEvolutionProposalStore, active_assurance_waiver, assurance_rollout_state,
 };
 use crate::mutation::{
-    EvolutionEpisodeRecord, EvolutionEpisodeStoreError, EvolutionMutationRankingRecord,
-    EvolutionMutationRankingReport, EvolutionPopulationState, FileEvolutionEpisodeStore,
+    EvolutionAutonomousVariantRecipeKind, EvolutionBenchmarkRunReport, EvolutionEpisodeRecord,
+    EvolutionEpisodeStoreError, EvolutionMutationRankingRecord, EvolutionMutationRankingReport,
+    EvolutionPopulationState, FileEvolutionBenchmarkStore, FileEvolutionEpisodeStore,
 };
 use crate::selection::EvolutionRankedCandidateSelectionRecord;
 use serde::de::DeserializeOwned;
@@ -206,6 +207,39 @@ pub struct EvolutionAdversarialSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvolutionAutonomousFitnessSummary {
+    pub evaluated_candidate_count: usize,
+    pub latest_strategy_id: Option<String>,
+    pub latest_recipe_kind: Option<EvolutionAutonomousVariantRecipeKind>,
+    pub latest_parent_strategy_ids: Vec<String>,
+    pub latest_measured_fitness: Option<f64>,
+    pub latest_catch_rate: Option<f64>,
+    pub latest_false_positive_rate: Option<f64>,
+    pub latest_false_positive_fitness: Option<f64>,
+    pub latest_max_detect_latency_us: Option<u64>,
+    pub latest_latency_budget_us: Option<u64>,
+    pub latest_latency_fitness: Option<f64>,
+    pub latest_corpus_suite_name: Option<String>,
+    pub latest_corpus_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvolutionBenchmarkSummary {
+    pub latest_benchmark_id: Option<String>,
+    pub label: Option<String>,
+    pub requested_generation_count: usize,
+    pub completed_generation_count: usize,
+    pub latest_leader_strategy_id: Option<String>,
+    pub latest_leader_generation: Option<usize>,
+    pub latest_measured_fitness: Option<f64>,
+    pub latest_catch_rate: Option<f64>,
+    pub latest_delta_from_previous: Option<f64>,
+    pub latest_delta_from_first: Option<f64>,
+    pub corpus_suite_name: Option<String>,
+    pub corpus_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvolutionStatusReport {
     pub enabled: bool,
     pub generation_count: usize,
@@ -223,6 +257,8 @@ pub struct EvolutionStatusReport {
     pub formal_proof: EvolutionFormalProofSummary,
     pub assurance: EvolutionAssuranceStatusSummary,
     pub adversarial: EvolutionAdversarialSummary,
+    pub autonomous: EvolutionAutonomousFitnessSummary,
+    pub benchmark: EvolutionBenchmarkSummary,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -235,6 +271,9 @@ pub enum EvolutionStatusError {
 
     #[error(transparent)]
     EpisodeStore(#[from] EvolutionEpisodeStoreError),
+
+    #[error(transparent)]
+    BenchmarkStore(#[from] crate::mutation::EvolutionBenchmarkStoreError),
 
     #[error(transparent)]
     ProofStore(#[from] EvolutionProofStoreError),
@@ -265,6 +304,7 @@ struct EvolutionStatusPaths {
     handoff_results_dir: PathBuf,
     population_results_dir: PathBuf,
     episode_results_dir: PathBuf,
+    benchmark_results_dir: PathBuf,
     proof_results_dir: PathBuf,
     queue_results_dir: PathBuf,
 }
@@ -308,6 +348,7 @@ impl DefaultEvolutionStatusHarness {
                     &paths.evolution_handoff_results_dir,
                 ),
                 episode_results_dir: population_results_dir.join("episodes"),
+                benchmark_results_dir: population_results_dir.join("benchmarks"),
                 population_results_dir,
                 proof_results_dir: resolve_repo_relative_path(
                     base,
@@ -358,6 +399,23 @@ impl DefaultEvolutionStatusHarness {
             None => Vec::new(),
         };
         let latest_episode = episode_records.first().cloned();
+        let latest_episode_report = match (&episode_store, latest_episode.as_ref()) {
+            (Some(store), Some(record)) => {
+                store.load(&record.episode_id)?.map(|lookup| lookup.report)
+            }
+            _ => None,
+        };
+        let latest_benchmark_report = if self.paths.benchmark_results_dir.exists() {
+            let store = FileEvolutionBenchmarkStore::open(&self.paths.benchmark_results_dir)?;
+            match store.latest(1)?.first() {
+                Some(record) => store
+                    .load(&record.benchmark_id)?
+                    .map(|lookup| lookup.report),
+                None => None,
+            }
+        } else {
+            None
+        };
         let best_episode = episode_records.iter().cloned().max_by(|left, right| {
             left.final_fitness
                 .partial_cmp(&right.final_fitness)
@@ -464,6 +522,11 @@ impl DefaultEvolutionStatusHarness {
                 latest_episode.as_ref(),
                 best_genome_hash,
             ),
+            autonomous: build_autonomous_fitness_summary(
+                population.as_ref(),
+                latest_episode_report.as_ref(),
+            ),
+            benchmark: build_benchmark_summary(latest_benchmark_report.as_ref()),
         })
     }
 }
@@ -600,6 +663,55 @@ pub fn render_evolution_status(report: &EvolutionStatusReport) -> String {
     if let Some(genome_hash) = &report.adversarial.best_genome_hash {
         lines.push(format!("Best genome: {genome_hash}"));
     }
+    if report.autonomous.evaluated_candidate_count > 0 {
+        lines.push(format!(
+            "Autonomous fitness: candidates={} strategy={} measured={} catch_rate={} fp_rate={} latency={}/{} recipe={}",
+            report.autonomous.evaluated_candidate_count,
+            report.autonomous.latest_strategy_id.as_deref().unwrap_or("n/a"),
+            format_optional_f64(report.autonomous.latest_measured_fitness),
+            format_optional_f64(report.autonomous.latest_catch_rate),
+            format_optional_f64(report.autonomous.latest_false_positive_rate),
+            format_optional_u64(report.autonomous.latest_max_detect_latency_us),
+            format_optional_u64(report.autonomous.latest_latency_budget_us),
+            report
+                .autonomous
+                .latest_recipe_kind
+                .map(autonomous_recipe_label)
+                .unwrap_or("n/a")
+        ));
+        if !report.autonomous.latest_parent_strategy_ids.is_empty() {
+            lines.push(format!(
+                "Autonomous parents: {}",
+                report.autonomous.latest_parent_strategy_ids.join(", ")
+            ));
+        }
+    }
+    if report.benchmark.completed_generation_count > 0 {
+        lines.push(format!(
+            "Benchmark: run={} generations={}/{} leader={} gen={} measured={} catch_rate={} delta_prev={} delta_first={}",
+            report
+                .benchmark
+                .latest_benchmark_id
+                .as_deref()
+                .unwrap_or("n/a"),
+            report.benchmark.completed_generation_count,
+            report.benchmark.requested_generation_count,
+            report
+                .benchmark
+                .latest_leader_strategy_id
+                .as_deref()
+                .unwrap_or("n/a"),
+            report
+                .benchmark
+                .latest_leader_generation
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            format_optional_f64(report.benchmark.latest_measured_fitness),
+            format_optional_f64(report.benchmark.latest_catch_rate),
+            format_optional_f64(report.benchmark.latest_delta_from_previous),
+            format_optional_f64(report.benchmark.latest_delta_from_first),
+        ));
+    }
     if let Some(observation_count) = report.observation_count {
         lines.push(format!("Latest observation window: {observation_count}"));
     }
@@ -640,6 +752,133 @@ fn build_adversarial_summary(
         latest_event_evasion_rate: latest_episode.map(|record| record.event_evasion_rate),
         latest_threat_class_detection_rate: latest_episode
             .map(|record| record.threat_class_detection_rate),
+    }
+}
+
+fn build_autonomous_fitness_summary(
+    population: Option<&EvolutionPopulationState>,
+    latest_episode_report: Option<&crate::mutation::EvolutionEpisodeReport>,
+) -> EvolutionAutonomousFitnessSummary {
+    let population_autonomous_count = population
+        .map(|state| {
+            state
+                .members
+                .iter()
+                .filter(|candidate| candidate.autonomous_fitness.is_some())
+                .count()
+        })
+        .unwrap_or_default();
+    let latest_population_candidate = population.and_then(|state| {
+        state
+            .members
+            .iter()
+            .filter_map(|candidate| {
+                candidate
+                    .autonomous_fitness
+                    .as_ref()
+                    .map(|measurement| (candidate, measurement))
+            })
+            .max_by(|(left, _), (right, _)| {
+                left.generation
+                    .cmp(&right.generation)
+                    .then_with(|| {
+                        left.generation_created_at_ms
+                            .cmp(&right.generation_created_at_ms)
+                    })
+                    .then_with(|| right.population_rank.cmp(&left.population_rank))
+            })
+    });
+    let selected = latest_episode_report
+        .and_then(|report| {
+            report
+                .autonomous_fitness
+                .as_ref()
+                .map(|measurement| (report.strategy_id.as_str(), measurement))
+        })
+        .or_else(|| {
+            latest_population_candidate
+                .map(|(candidate, measurement)| (candidate.strategy_id.as_str(), measurement))
+        });
+
+    let evaluated_candidate_count = if population_autonomous_count == 0 && selected.is_some() {
+        1
+    } else {
+        population_autonomous_count
+    };
+
+    match selected {
+        Some((strategy_id, measurement)) => EvolutionAutonomousFitnessSummary {
+            evaluated_candidate_count,
+            latest_strategy_id: Some(strategy_id.to_string()),
+            latest_recipe_kind: Some(measurement.lineage.recipe_kind),
+            latest_parent_strategy_ids: measurement.lineage.parent_strategy_ids.clone(),
+            latest_measured_fitness: Some(measurement.measured_fitness),
+            latest_catch_rate: Some(measurement.catch_rate),
+            latest_false_positive_rate: Some(measurement.false_positive_rate),
+            latest_false_positive_fitness: Some(measurement.false_positive_fitness),
+            latest_max_detect_latency_us: Some(measurement.max_detect_latency_us),
+            latest_latency_budget_us: Some(measurement.latency_budget_us),
+            latest_latency_fitness: Some(measurement.latency_fitness),
+            latest_corpus_suite_name: Some(measurement.corpus_suite_name.clone()),
+            latest_corpus_version: Some(measurement.corpus_version.clone()),
+        },
+        None => EvolutionAutonomousFitnessSummary {
+            evaluated_candidate_count,
+            latest_strategy_id: None,
+            latest_recipe_kind: None,
+            latest_parent_strategy_ids: Vec::new(),
+            latest_measured_fitness: None,
+            latest_catch_rate: None,
+            latest_false_positive_rate: None,
+            latest_false_positive_fitness: None,
+            latest_max_detect_latency_us: None,
+            latest_latency_budget_us: None,
+            latest_latency_fitness: None,
+            latest_corpus_suite_name: None,
+            latest_corpus_version: None,
+        },
+    }
+}
+
+fn build_benchmark_summary(
+    latest_benchmark_report: Option<&EvolutionBenchmarkRunReport>,
+) -> EvolutionBenchmarkSummary {
+    let Some(report) = latest_benchmark_report else {
+        return EvolutionBenchmarkSummary {
+            latest_benchmark_id: None,
+            label: None,
+            requested_generation_count: 0,
+            completed_generation_count: 0,
+            latest_leader_strategy_id: None,
+            latest_leader_generation: None,
+            latest_measured_fitness: None,
+            latest_catch_rate: None,
+            latest_delta_from_previous: None,
+            latest_delta_from_first: None,
+            corpus_suite_name: None,
+            corpus_version: None,
+        };
+    };
+    let latest_generation = report.generations.last();
+    EvolutionBenchmarkSummary {
+        latest_benchmark_id: Some(report.benchmark_id.clone()),
+        label: Some(report.label.clone()),
+        requested_generation_count: report.requested_generation_count,
+        completed_generation_count: report.completed_generation_count,
+        latest_leader_strategy_id: latest_generation
+            .map(|generation| generation.leader_strategy_id.clone()),
+        latest_leader_generation: latest_generation.map(|generation| generation.leader_generation),
+        latest_measured_fitness: latest_generation
+            .map(|generation| generation.leader_measured_fitness),
+        latest_catch_rate: latest_generation.map(|generation| generation.leader_catch_rate),
+        latest_delta_from_previous: latest_generation
+            .and_then(|generation| generation.delta_from_previous.as_ref())
+            .map(|delta| delta.measured_fitness),
+        latest_delta_from_first: latest_generation
+            .and_then(|generation| generation.delta_from_first.as_ref())
+            .map(|delta| delta.measured_fitness),
+        corpus_suite_name: Some(report.corpus_suite_name.clone()),
+        corpus_version: Some(report.corpus_version.clone()),
     }
 }
 
@@ -977,6 +1216,21 @@ fn format_optional_f64(value: Option<f64>) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
+fn format_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn autonomous_recipe_label(kind: EvolutionAutonomousVariantRecipeKind) -> &'static str {
+    match kind {
+        EvolutionAutonomousVariantRecipeKind::SeedControl => "seed_control",
+        EvolutionAutonomousVariantRecipeKind::BoundedPerturbation => "bounded_perturbation",
+        EvolutionAutonomousVariantRecipeKind::GapExpansion => "gap_expansion",
+        EvolutionAutonomousVariantRecipeKind::BoundedCrossover => "bounded_crossover",
+    }
+}
+
 fn solver_proof_status_label(status: EvolutionSolverProofStatus) -> &'static str {
     match status {
         EvolutionSolverProofStatus::Proved => "proved",
@@ -1090,11 +1344,15 @@ mod tests {
         build_assurance_waiver_summary,
     };
     use crate::mutation::{
-        EvolutionCandidateRankingEntry, EvolutionEpisodeBlueFitnessVector,
-        EvolutionEpisodeRedFitnessVector, EvolutionEpisodeReport,
-        EvolutionEpisodeThreatClassCoverage, EvolutionMutationRankingRecord,
-        EvolutionMutationRankingReport, EvolutionPopulationCandidate,
-        EvolutionPopulationFitnessObjectives, EvolutionPopulationState, FileEvolutionEpisodeStore,
+        EvolutionAutonomousFitnessMeasurement, EvolutionAutonomousVariantLineage,
+        EvolutionAutonomousVariantRecipeKind, EvolutionBenchmarkBaselineReport,
+        EvolutionBenchmarkFitnessDelta, EvolutionBenchmarkGenerationReport,
+        EvolutionBenchmarkRunReport, EvolutionCandidateRankingEntry,
+        EvolutionEpisodeBlueFitnessVector, EvolutionEpisodeRedFitnessVector,
+        EvolutionEpisodeReport, EvolutionEpisodeThreatClassCoverage,
+        EvolutionMutationRankingRecord, EvolutionMutationRankingReport,
+        EvolutionPopulationCandidate, EvolutionPopulationFitnessObjectives,
+        EvolutionPopulationState, FileEvolutionBenchmarkStore, FileEvolutionEpisodeStore,
     };
     use crate::replay::ExperimentLineage;
     use crate::selection::EvolutionRankedCandidateSelectionRecord;
@@ -1130,6 +1388,34 @@ mod tests {
             "bounded status waiver",
         )
         .unwrap()
+    }
+
+    fn sample_autonomous_fitness() -> EvolutionAutonomousFitnessMeasurement {
+        EvolutionAutonomousFitnessMeasurement {
+            lineage: EvolutionAutonomousVariantLineage {
+                recipe_kind: EvolutionAutonomousVariantRecipeKind::BoundedPerturbation,
+                base_parent_strategy_id: "office_baseline_control".to_string(),
+                parent_strategy_ids: vec!["office_baseline_control".to_string()],
+                parent_materialization_ids: vec!["materialization-parent".to_string()],
+                parent_genome_sha256: vec!["genome-parent".to_string()],
+                inherited_suspicious_parents: Vec::new(),
+                inherited_suspicious_children: Vec::new(),
+                target_high_confidence_threshold: Some("0.880".to_string()),
+                target_medium_confidence_threshold: Some("0.640".to_string()),
+            },
+            corpus_suite_name: "evasion_breadth_v1".to_string(),
+            corpus_version: "2026-04-10".to_string(),
+            measured_event_count: 4,
+            detected_event_count: 3,
+            catch_rate: 0.75,
+            false_positive_rate: 0.05,
+            false_positive_fitness: 0.95,
+            max_detect_latency_us: 800,
+            latency_budget_us: 1_000,
+            latency_fitness: 0.556,
+            verification_threat_class_coverage: 1.0,
+            measured_fitness: 0.802,
+        }
     }
 
     #[test]
@@ -1252,6 +1538,7 @@ mod tests {
                     baseline_fitness: None,
                     fitness: 0.88,
                     evasion_pressure: None,
+                    autonomous_fitness: Some(sample_autonomous_fitness()),
                     proposed_at_ms: Some(1_700_000_003_000),
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 1.0,
@@ -1284,6 +1571,7 @@ mod tests {
                     baseline_fitness: None,
                     fitness: 0.64,
                     evasion_pressure: None,
+                    autonomous_fitness: None,
                     proposed_at_ms: None,
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.9,
@@ -1382,6 +1670,7 @@ mod tests {
                     detection_coverage: 1.0,
                     evasion_coverage: 0.0,
                 }],
+                autonomous_fitness: Some(sample_autonomous_fitness()),
                 blue_fitness: EvolutionEpisodeBlueFitnessVector {
                     replay_fitness: 0.88,
                     evasion_adjusted_fitness: 0.89,
@@ -1401,6 +1690,121 @@ mod tests {
                     threat_class_detection_rate: 1.0,
                     threat_class_evasion_rate: 0.0,
                 },
+            })
+            .unwrap();
+        FileEvolutionBenchmarkStore::open(population_dir.join("benchmarks"))
+            .unwrap()
+            .persist(&EvolutionBenchmarkRunReport {
+                benchmark_id: "benchmark-1".to_string(),
+                label: "office benchmark".to_string(),
+                detector: "suspicious_process_tree".to_string(),
+                baseline_experiment_path: "experiments/office-baseline-control.yaml".to_string(),
+                baseline: Some(EvolutionBenchmarkBaselineReport {
+                    strategy_id: "office_baseline_control".to_string(),
+                    corpus_suite_name: "evasion_breadth_v1".to_string(),
+                    corpus_version: "2026-04-10".to_string(),
+                    measured_event_count: 4,
+                    detected_event_count: 3,
+                    measured_fitness: 0.802,
+                    catch_rate: 0.75,
+                    false_positive_rate: 0.05,
+                    false_positive_fitness: 0.95,
+                    latency_fitness: 0.556,
+                    max_detect_latency_us: 800,
+                    latency_budget_us: 1_000,
+                }),
+                created_at_ms: 1_700_000_008_250,
+                updated_at_ms: 1_700_000_008_900,
+                requested_generation_count: 3,
+                completed_generation_count: 3,
+                max_variants_per_generation: 2,
+                population_size: 4,
+                corpus_suite_name: "evasion_breadth_v1".to_string(),
+                corpus_version: "2026-04-10".to_string(),
+                suite_path: "scenario-suites/evasion-breadth-v1.yaml".to_string(),
+                notes: "raw deltas only".to_string(),
+                generations: vec![
+                    EvolutionBenchmarkGenerationReport {
+                        benchmark_id: "benchmark-1".to_string(),
+                        generation: 1,
+                        created_at_ms: 1_700_000_008_300,
+                        draft_id: "draft-1".to_string(),
+                        mutation_spec_id: "mutation-1".to_string(),
+                        materialization_batch_id: "batch-1".to_string(),
+                        validation_batch_id: "validation-1".to_string(),
+                        ranking_id: "ranking-1".to_string(),
+                        tracked_candidate_count: 1,
+                        leader_generation: 1,
+                        leader_population_rank: 1,
+                        leader_strategy_id: "strategy-a".to_string(),
+                        leader_variant_id: "variant-a".to_string(),
+                        leader_materialization_id: "materialization-a".to_string(),
+                        leader_validation_bundle_id: "validation-a".to_string(),
+                        leader_recipe_kind:
+                            EvolutionAutonomousVariantRecipeKind::BoundedPerturbation,
+                        leader_parent_strategy_ids: vec!["office_baseline_control".to_string()],
+                        corpus_suite_name: "evasion_breadth_v1".to_string(),
+                        corpus_version: "2026-04-10".to_string(),
+                        measured_event_count: 4,
+                        detected_event_count: 3,
+                        leader_measured_fitness: 0.802,
+                        mean_measured_fitness: 0.802,
+                        leader_catch_rate: 0.75,
+                        leader_false_positive_rate: 0.05,
+                        leader_false_positive_fitness: 0.95,
+                        leader_latency_fitness: 0.556,
+                        leader_max_detect_latency_us: 800,
+                        leader_latency_budget_us: 1_000,
+                        delta_from_previous: None,
+                        delta_from_first: None,
+                    },
+                    EvolutionBenchmarkGenerationReport {
+                        benchmark_id: "benchmark-1".to_string(),
+                        generation: 2,
+                        created_at_ms: 1_700_000_008_600,
+                        draft_id: "draft-2".to_string(),
+                        mutation_spec_id: "mutation-2".to_string(),
+                        materialization_batch_id: "batch-2".to_string(),
+                        validation_batch_id: "validation-2".to_string(),
+                        ranking_id: "ranking-2".to_string(),
+                        tracked_candidate_count: 2,
+                        leader_generation: 2,
+                        leader_population_rank: 1,
+                        leader_strategy_id: "strategy-b".to_string(),
+                        leader_variant_id: "variant-b".to_string(),
+                        leader_materialization_id: "materialization-b".to_string(),
+                        leader_validation_bundle_id: "validation-b".to_string(),
+                        leader_recipe_kind:
+                            EvolutionAutonomousVariantRecipeKind::BoundedPerturbation,
+                        leader_parent_strategy_ids: vec!["strategy-a".to_string()],
+                        corpus_suite_name: "evasion_breadth_v1".to_string(),
+                        corpus_version: "2026-04-10".to_string(),
+                        measured_event_count: 4,
+                        detected_event_count: 4,
+                        leader_measured_fitness: 0.824,
+                        mean_measured_fitness: 0.813,
+                        leader_catch_rate: 1.0,
+                        leader_false_positive_rate: 0.05,
+                        leader_false_positive_fitness: 0.95,
+                        leader_latency_fitness: 0.556,
+                        leader_max_detect_latency_us: 800,
+                        leader_latency_budget_us: 1_000,
+                        delta_from_previous: Some(EvolutionBenchmarkFitnessDelta {
+                            measured_fitness: 0.022,
+                            catch_rate: 0.25,
+                            false_positive_rate: 0.0,
+                            false_positive_fitness: 0.0,
+                            latency_fitness: 0.0,
+                        }),
+                        delta_from_first: Some(EvolutionBenchmarkFitnessDelta {
+                            measured_fitness: 0.022,
+                            catch_rate: 0.25,
+                            false_positive_rate: 0.0,
+                            false_positive_fitness: 0.0,
+                            latency_fitness: 0.0,
+                        }),
+                    },
+                ],
             })
             .unwrap();
 
@@ -1648,6 +2052,44 @@ mod tests {
             Some(
                 "handoff assurance_gate_unsatisfied: assurance decision `blocked` does not permit rollout progression"
             )
+        );
+        assert_eq!(report.autonomous.evaluated_candidate_count, 1);
+        assert_eq!(
+            report.autonomous.latest_strategy_id.as_deref(),
+            Some("strategy-a")
+        );
+        assert_eq!(
+            report.autonomous.latest_recipe_kind,
+            Some(EvolutionAutonomousVariantRecipeKind::BoundedPerturbation)
+        );
+        assert_eq!(report.autonomous.latest_measured_fitness, Some(0.802));
+        assert_eq!(report.autonomous.latest_catch_rate, Some(0.75));
+        assert_eq!(report.autonomous.latest_false_positive_rate, Some(0.05));
+        assert_eq!(report.autonomous.latest_latency_fitness, Some(0.556));
+        assert_eq!(
+            report.autonomous.latest_parent_strategy_ids,
+            vec!["office_baseline_control".to_string()]
+        );
+        assert_eq!(
+            report.benchmark.latest_benchmark_id.as_deref(),
+            Some("benchmark-1")
+        );
+        assert_eq!(report.benchmark.completed_generation_count, 3);
+        assert_eq!(report.benchmark.requested_generation_count, 3);
+        assert_eq!(
+            report.benchmark.latest_leader_strategy_id.as_deref(),
+            Some("strategy-b")
+        );
+        assert_eq!(report.benchmark.latest_leader_generation, Some(2));
+        assert_eq!(report.benchmark.latest_measured_fitness, Some(0.824));
+        assert_eq!(report.benchmark.latest_delta_from_previous, Some(0.022));
+        assert!(
+            render_evolution_status(&report).contains("Autonomous fitness:"),
+            "rendered status should surface measured autonomous fitness"
+        );
+        assert!(
+            render_evolution_status(&report).contains("Benchmark: run=benchmark-1"),
+            "rendered status should surface the latest benchmark summary"
         );
     }
 

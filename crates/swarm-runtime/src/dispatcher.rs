@@ -1,11 +1,15 @@
-use crate::RuntimeError;
 use crate::detection::metrics::CriticalPathMetrics;
 use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster, now_ms};
 use crate::tom_agent::{GovernancePolicy, GovernanceRuntimeEvent};
+use crate::{
+    RuntimeError, StrategyProposalRouteError, agent_tick_error_boundary, agent_tick_panic_error,
+};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use swarm_consensus::ConsensusGovernanceReceipt;
@@ -70,6 +74,15 @@ impl AgentRegistry {
 
     pub fn deregister(&mut self, agent_id: &AgentId) -> bool {
         self.agents.remove(agent_id).is_some()
+    }
+
+    pub fn replace(&mut self, agent: Box<dyn SwarmAgent>) -> Result<(), &'static str> {
+        let agent_id = agent.id().clone();
+        if !self.agents.contains_key(&agent_id) {
+            return Err("agent registry does not contain that id");
+        }
+        self.agents.insert(agent_id, agent);
+        Ok(())
     }
 
     fn iter(&self) -> impl Iterator<Item = (&AgentId, &Box<dyn SwarmAgent>)> {
@@ -151,11 +164,12 @@ pub trait StrategyProposalRouter: Send + Sync {
     async fn route_proposal(
         &self,
         proposal: StrategyProposalRoute,
-    ) -> Result<StrategyProposalRouteReport, String>;
+    ) -> Result<StrategyProposalRouteReport, StrategyProposalRouteError>;
 }
 
 pub struct AgentDispatcher {
     registry: AgentRegistry,
+    restart_factories: HashMap<AgentId, AgentRestartFactory>,
     health_overrides: HashMap<AgentId, AgentHealth>,
     admitted_identities: Option<HashSet<AgentId>>,
     config: AgentDispatcherConfig,
@@ -171,6 +185,8 @@ pub struct AgentDispatcher {
     governance_policy: Option<Arc<GovernancePolicy>>,
 }
 
+pub type AgentRestartFactory = Arc<dyn Fn() -> Result<Box<dyn SwarmAgent>, String> + Send + Sync>;
+
 impl AgentDispatcher {
     pub fn new(
         config: AgentDispatcherConfig,
@@ -180,6 +196,7 @@ impl AgentDispatcher {
     ) -> Self {
         Self {
             registry: AgentRegistry::new(),
+            restart_factories: HashMap::new(),
             health_overrides: HashMap::new(),
             admitted_identities: None,
             config,
@@ -266,9 +283,21 @@ impl AgentDispatcher {
         Ok(())
     }
 
+    pub fn register_restartable(
+        &mut self,
+        agent: Box<dyn SwarmAgent>,
+        restart_factory: AgentRestartFactory,
+    ) -> Result<(), &'static str> {
+        let agent_id = agent.id().clone();
+        self.register(agent)?;
+        self.restart_factories.insert(agent_id, restart_factory);
+        Ok(())
+    }
+
     pub fn deregister(&mut self, agent_id: &AgentId) -> bool {
         let removed = self.registry.deregister(agent_id);
         if removed {
+            self.restart_factories.remove(agent_id);
             self.health_overrides.remove(agent_id);
             self.recent_findings.remove(agent_id);
             tracing::info!(
@@ -351,8 +380,9 @@ impl AgentDispatcher {
             };
             let tick_role = agent.role();
             let tick_timeout = Duration::from_millis(self.config.agent_tick_timeout_ms);
-            match tokio::time::timeout(tick_timeout, agent.tick(&env)).await {
-                Ok(Ok(actions)) => {
+            let tick_future = AssertUnwindSafe(agent.tick(&env)).catch_unwind();
+            match tokio::time::timeout(tick_timeout, tick_future).await {
+                Ok(Ok(Ok(actions))) => {
                     self.health_overrides.remove(agent_id);
                     tracing::info!(
                         agent_id = %agent_id,
@@ -367,13 +397,29 @@ impl AgentDispatcher {
                         actions,
                     });
                 }
-                Ok(Err(error)) => {
+                Ok(Ok(Err(error))) => {
+                    let error_boundary = agent_tick_error_boundary(&error).unwrap_or("swarm");
                     tracing::warn!(
                         agent_id = %agent_id,
                         role = agent_role_label(tick_role),
+                        boundary = error_boundary,
                         reason = %error,
                         module = module_path!(),
                         "agent tick failed"
+                    );
+                    self.health_overrides
+                        .insert(agent_id.clone(), AgentHealth::Degraded);
+                }
+                Ok(Err(panic_payload)) => {
+                    let error = agent_tick_panic_error(agent_id, tick_role, panic_payload);
+                    let error_boundary = agent_tick_error_boundary(&error).unwrap_or("swarm");
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        role = agent_role_label(tick_role),
+                        boundary = error_boundary,
+                        reason = %error,
+                        module = module_path!(),
+                        "agent tick panicked"
                     );
                     self.health_overrides
                         .insert(agent_id.clone(), AgentHealth::Degraded);
@@ -397,6 +443,7 @@ impl AgentDispatcher {
         }
 
         self.apply_actions(completed_ticks, now).await;
+        self.restart_failed_agents();
         self.publish_governance_events();
         self.log_health_transitions(before_health);
         self.refresh_health_snapshot();
@@ -753,6 +800,7 @@ impl AgentDispatcher {
                                         agent_id = %proposed_by,
                                         strategy_id = %strategy_id,
                                         fitness = %fitness,
+                                        boundary = error.boundary(),
                                         reason = %error,
                                         module = module_path!(),
                                         "strategy proposal failed during runtime routing"
@@ -1001,6 +1049,116 @@ impl AgentDispatcher {
             });
         }
     }
+
+    fn restart_failed_agents(&mut self) {
+        let failed_agents = self
+            .current_health_map()
+            .into_iter()
+            .filter_map(|(agent_id, health)| (health == AgentHealth::Failed).then_some(agent_id))
+            .collect::<Vec<_>>();
+
+        for agent_id in failed_agents {
+            let Some(current_role) = self.registry.get(&agent_id).map(SwarmAgent::role) else {
+                continue;
+            };
+            let Some(restart_factory) = self.restart_factories.get(&agent_id).cloned() else {
+                tracing::warn!(
+                    agent_id = %agent_id,
+                    role = agent_role_label(current_role),
+                    module = module_path!(),
+                    "agent reached failed health without a configured restart factory"
+                );
+                continue;
+            };
+
+            match (restart_factory.as_ref())() {
+                Ok(agent) => {
+                    if agent.id() != &agent_id {
+                        tracing::warn!(
+                            agent_id = %agent_id,
+                            role = agent_role_label(current_role),
+                            rebuilt_agent_id = %agent.id(),
+                            module = module_path!(),
+                            "agent restart factory returned a mismatched identity"
+                        );
+                        self.publish_agent_restart(
+                            &agent_id,
+                            current_role,
+                            "failed",
+                            Some("restart factory returned mismatched identity".to_string()),
+                        );
+                        continue;
+                    }
+
+                    let restarted_role = agent.role();
+                    if let Err(error) = self.registry.replace(agent) {
+                        tracing::warn!(
+                            agent_id = %agent_id,
+                            role = agent_role_label(current_role),
+                            reason = error,
+                            module = module_path!(),
+                            "failed to replace agent during targeted restart"
+                        );
+                        self.publish_agent_restart(
+                            &agent_id,
+                            current_role,
+                            "failed",
+                            Some(error.to_string()),
+                        );
+                        continue;
+                    }
+
+                    self.health_overrides
+                        .insert(agent_id.clone(), AgentHealth::Degraded);
+                    tracing::info!(
+                        agent_id = %agent_id,
+                        previous_role = agent_role_label(current_role),
+                        restarted_role = agent_role_label(restarted_role),
+                        module = module_path!(),
+                        "agent restarted after crossing failed health boundary"
+                    );
+                    self.publish_agent_restart(&agent_id, restarted_role, "succeeded", None);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        role = agent_role_label(current_role),
+                        reason = %error,
+                        module = module_path!(),
+                        "agent restart failed after crossing failed health boundary"
+                    );
+                    self.publish_agent_restart(&agent_id, current_role, "failed", Some(error));
+                }
+            }
+        }
+    }
+
+    fn publish_agent_restart(
+        &self,
+        agent_id: &AgentId,
+        role: AgentRole,
+        outcome: &str,
+        reason: Option<String>,
+    ) {
+        let Some(runtime_events) = &self.runtime_events else {
+            return;
+        };
+
+        runtime_events.publish(RuntimeEvent::AgentAction {
+            emitted_at_ms: now_ms(),
+            agent_id: agent_id.to_string(),
+            role,
+            action_kind: "agent_restart".to_string(),
+            hunt_id: None,
+            details: json!({
+                "agent_id": agent_id,
+                "role": role,
+                "trigger_health": "failed",
+                "outcome": outcome,
+                "reason": reason,
+            }),
+        });
+    }
 }
 
 fn agent_finding_from_action(
@@ -1129,6 +1287,15 @@ fn response_action_requires_governance_receipt(action: &ResponseAction) -> bool 
         ResponseAction::BlockEgress { .. }
             | ResponseAction::IsolateHost { .. }
             | ResponseAction::RevokeCredential { .. }
+            | ResponseAction::SinkholeDns { .. }
+            | ResponseAction::TerminateUserSession { .. }
+            | ResponseAction::InjectFirewallRule { .. }
+            | ResponseAction::QuarantineFile { .. }
+            | ResponseAction::KillProcess { .. }
+            | ResponseAction::SuspendProcess { .. }
+            | ResponseAction::DisableUserAccount { .. }
+            | ResponseAction::ForcePasswordReset { .. }
+            | ResponseAction::RemoveScheduledTask { .. }
     )
 }
 
@@ -1241,12 +1408,17 @@ fn unix_timestamp_millis() -> i64 {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        AgentDispatcher, AgentDispatcherConfig, StrategyProposalOutcome, StrategyProposalRoute,
-        StrategyProposalRouteReport, StrategyProposalRouter, agent_role_label,
+        AgentDispatcher, AgentDispatcherConfig, AgentRestartFactory, StrategyProposalOutcome,
+        StrategyProposalRoute, StrategyProposalRouteReport, StrategyProposalRouter,
+        agent_role_label,
     };
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
-    use crate::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
+    use crate::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
+    use crate::{
+        StrategyProposalRouteError, agent_tick_error_boundary, agent_tick_error_role,
+        agent_tick_panic_error,
+    };
     use arc_swap::ArcSwap;
     use async_trait::async_trait;
     use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -1361,7 +1533,9 @@ mod tests {
 
     struct MockStrategyProposalRouter {
         tx: mpsc::UnboundedSender<StrategyProposalRoute>,
-        result: Result<StrategyProposalRouteReport, String>,
+        result: std::sync::Mutex<
+            Option<Result<StrategyProposalRouteReport, StrategyProposalRouteError>>,
+        >,
     }
 
     #[async_trait]
@@ -1369,9 +1543,13 @@ mod tests {
         async fn route_proposal(
             &self,
             proposal: StrategyProposalRoute,
-        ) -> Result<StrategyProposalRouteReport, String> {
+        ) -> Result<StrategyProposalRouteReport, StrategyProposalRouteError> {
             let _ = self.tx.send(proposal);
-            self.result.clone()
+            self.result
+                .lock()
+                .expect("mock strategy proposal router mutex poisoned")
+                .take()
+                .expect("mock strategy proposal router result missing")
         }
     }
 
@@ -1885,6 +2063,52 @@ mod tests {
         }
     }
 
+    struct PanicMockAgent {
+        id: AgentId,
+        verifying_key: VerifyingKey,
+        role: AgentRole,
+        ticks: Arc<AtomicUsize>,
+        message: &'static str,
+    }
+
+    impl PanicMockAgent {
+        fn new(id: &str, role: AgentRole, ticks: Arc<AtomicUsize>, message: &'static str) -> Self {
+            let signing_key = SigningKey::from_bytes(&[11; 32]);
+            Self {
+                id: AgentId(id.to_string()),
+                verifying_key: signing_key.verifying_key(),
+                role,
+                ticks,
+                message,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SwarmAgent for PanicMockAgent {
+        fn identity(&self) -> &VerifyingKey {
+            &self.verifying_key
+        }
+
+        fn id(&self) -> &AgentId {
+            &self.id
+        }
+
+        fn role(&self) -> AgentRole {
+            self.role
+        }
+
+        async fn tick(&mut self, _env: &SwarmEnvironment) -> Result<Vec<SwarmAction>, SwarmError> {
+            self.ticks.fetch_add(1, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            panic!("{}", self.message);
+        }
+
+        fn health(&self) -> AgentHealth {
+            AgentHealth::Healthy
+        }
+    }
+
     #[tokio::test]
     async fn dispatcher_marks_slow_agent_degraded_on_tick_timeout() {
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -1990,6 +2214,227 @@ mod tests {
     }
 
     #[test]
+    fn agent_tick_panic_error_preserves_boundary_and_role() {
+        let error = agent_tick_panic_error(
+            &AgentId::new("kitten", "evolver"),
+            AgentRole::Kitten,
+            Box::new("kitten exploded"),
+        );
+
+        assert_eq!(agent_tick_error_boundary(&error), Some("panic"));
+        assert_eq!(agent_tick_error_role(&error), Some(AgentRole::Kitten));
+        assert!(error.to_string().contains("kitten-evolver"));
+        assert!(error.to_string().contains("kitten exploded"));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_isolates_panicking_agent_and_keeps_run_loop_alive() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let panic_ticks = Arc::new(AtomicUsize::new(0));
+        let healthy_ticks = Arc::new(AtomicUsize::new(0));
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig {
+                tick_interval_ms: 5,
+                ..AgentDispatcherConfig::default()
+            },
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        );
+        dispatcher
+            .register(Box::new(PanicMockAgent::new(
+                "kitten-evolver",
+                AgentRole::Kitten,
+                Arc::clone(&panic_ticks),
+                "kitten panic",
+            )))
+            .unwrap();
+        dispatcher
+            .register(Box::new(MockAgent::new(
+                "whisker-primary",
+                AgentRole::Whisker,
+                AgentHealth::Healthy,
+                Arc::clone(&healthy_ticks),
+                false,
+            )))
+            .unwrap();
+
+        let handle = tokio::spawn(async move {
+            dispatcher.run().await;
+        });
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        shutdown_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(panic_ticks.load(Ordering::SeqCst) > 0);
+        assert!(healthy_ticks.load(Ordering::SeqCst) > 0);
+
+        let snapshot = health_state.load_full();
+        let panicking = snapshot
+            .iter()
+            .find(|entry| entry.id == "kitten-evolver")
+            .unwrap();
+        let healthy = snapshot
+            .iter()
+            .find(|entry| entry.id == "whisker-primary")
+            .unwrap();
+        assert_eq!(panicking.health, AgentHealth::Degraded);
+        assert_eq!(healthy.health, AgentHealth::Healthy);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_restarts_failed_agent_after_tom_failure_boundary() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
+        let restart_builds = Arc::new(AtomicUsize::new(0));
+        let restarted_agent_ticks = Arc::new(AtomicUsize::new(0));
+        let healthy_peer_ticks = Arc::new(AtomicUsize::new(0));
+        let restart_factory: AgentRestartFactory = Arc::new({
+            let restart_builds = Arc::clone(&restart_builds);
+            let restarted_agent_ticks = Arc::clone(&restarted_agent_ticks);
+            move || {
+                let build_index = restart_builds.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(MockAgent::new(
+                    "whisker-primary",
+                    AgentRole::Whisker,
+                    AgentHealth::Healthy,
+                    Arc::clone(&restarted_agent_ticks),
+                    build_index == 0,
+                )) as Box<dyn SwarmAgent>)
+            }
+        });
+        let initial_agent = (restart_factory.as_ref())().unwrap();
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        )
+        .with_governance_policy(Arc::clone(&governance_policy));
+        dispatcher
+            .register_restartable(initial_agent, Arc::clone(&restart_factory))
+            .unwrap();
+        dispatcher
+            .register(Box::new(TomAgent::new_with_signing_key(
+                AgentId::new("tom", "primary"),
+                SigningKey::from_bytes(&[17; 32]),
+                1,
+                Arc::clone(&governance_policy),
+            )))
+            .unwrap();
+        dispatcher
+            .register(Box::new(MockAgent::new(
+                "observer-whisker",
+                AgentRole::Whisker,
+                AgentHealth::Healthy,
+                Arc::clone(&healthy_peer_ticks),
+                false,
+            )))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+        let snapshot = health_state.load_full();
+        assert_eq!(
+            snapshot
+                .iter()
+                .find(|entry| entry.id == "whisker-primary")
+                .unwrap()
+                .health,
+            AgentHealth::Degraded
+        );
+
+        dispatcher.tick_agents().await;
+        let snapshot = health_state.load_full();
+        assert_eq!(restart_builds.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            snapshot
+                .iter()
+                .find(|entry| entry.id == "whisker-primary")
+                .unwrap()
+                .health,
+            AgentHealth::Degraded
+        );
+
+        dispatcher.tick_agents().await;
+        let snapshot = health_state.load_full();
+        assert_eq!(
+            snapshot
+                .iter()
+                .find(|entry| entry.id == "whisker-primary")
+                .unwrap()
+                .health,
+            AgentHealth::Healthy
+        );
+        assert!(healthy_peer_ticks.load(Ordering::SeqCst) > 0);
+        assert!(restarted_agent_ticks.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_leaves_agent_failed_when_restart_factory_errors() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let health_state = empty_health_state();
+        let restart_attempts = Arc::new(AtomicUsize::new(0));
+        let restart_factory: AgentRestartFactory = Arc::new({
+            let restart_attempts = Arc::clone(&restart_attempts);
+            move || {
+                restart_attempts.fetch_add(1, Ordering::SeqCst);
+                Err("restart build failed".to_string())
+            }
+        });
+        let mut dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate(),
+            Arc::clone(&health_state),
+        );
+        dispatcher
+            .register_restartable(
+                Box::new(MockAgent::new(
+                    "whisker-primary",
+                    AgentRole::Whisker,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )),
+                restart_factory,
+            )
+            .unwrap();
+        dispatcher
+            .register(Box::new(
+                MockAgent::new(
+                    "tom-primary",
+                    AgentRole::Tom,
+                    AgentHealth::Healthy,
+                    Arc::new(AtomicUsize::new(0)),
+                    false,
+                )
+                .with_actions(vec![vec![SwarmAction::HealthReport {
+                    target_agent_id: AgentId::new("whisker", "primary"),
+                    status: AgentHealth::Failed,
+                }]]),
+            ))
+            .unwrap();
+
+        dispatcher.tick_agents().await;
+
+        let snapshot = health_state.load_full();
+        assert_eq!(restart_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            snapshot
+                .iter()
+                .find(|entry| entry.id == "whisker-primary")
+                .unwrap()
+                .health,
+            AgentHealth::Failed
+        );
+    }
+
+    #[test]
     fn default_agent_tick_timeout_is_500() {
         let config = AgentDispatcherConfig::default();
         assert_eq!(config.agent_tick_timeout_ms, 500);
@@ -2048,14 +2493,14 @@ mod tests {
         )
         .with_strategy_proposal_router(Arc::new(MockStrategyProposalRouter {
             tx,
-            result: Ok(StrategyProposalRouteReport {
+            result: std::sync::Mutex::new(Some(Ok(StrategyProposalRouteReport {
                 strategy_id: "strategy-1".to_string(),
                 outcome: StrategyProposalOutcome::Accepted,
                 selection_id: Some("selection-1".to_string()),
                 bridge_id: Some("bridge-1".to_string()),
                 handoff_id: Some("handoff-1".to_string()),
                 canary_run_id: Some("canary-1".to_string()),
-            }),
+            }))),
         }));
         dispatcher
             .register(Box::new(

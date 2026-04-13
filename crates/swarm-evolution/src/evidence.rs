@@ -1987,6 +1987,8 @@ mod tests {
                 require_durable_live_response: false,
                 max_heap_pressure: 0.90,
                 secret_dir: None,
+                anti_tamper: Default::default(),
+                temporal_event_window: swarm_core::config::TemporalEventWindowConfig::default(),
                 agent_tick_timeout_ms: 500,
                 governance_degraded_tick_threshold: 3,
                 partition_contingency_lease_ttl_ms: 300_000,
@@ -2059,6 +2061,7 @@ mod tests {
     fn write_config(root: &std::path::Path) -> PathBuf {
         let path = root.join("config.yaml");
         fs::write(&path, serde_yaml::to_string(&config(root)).unwrap()).unwrap();
+        swarm_runtime::config::write_debug_test_config_signature(&path).unwrap();
         path
     }
 

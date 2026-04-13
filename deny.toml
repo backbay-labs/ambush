@@ -5,7 +5,10 @@ all-features = false
 [advisories]
 db-path = "$CARGO_HOME/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = []
+ignore = [
+  { id = "RUSTSEC-2024-0384", reason = "notify v7 still pulls instant transitively and there is no safe replacement available in the current major line" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is still used transitively by the shipped rustls stack and the upstream replacement requires a coordinated dependency migration" },
+]
 
 [licenses]
 allow = [
@@ -14,6 +17,10 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   "BSD-3-Clause",
   "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT-0",
   "Unicode-3.0",
   "Unlicense",
   "BSD-1-Clause",
@@ -23,7 +30,7 @@ exceptions = []
 
 [bans]
 multiple-versions = "warn"
-wildcards = "allow"
+wildcards = "deny"
 highlight = "all"
 
 [sources]

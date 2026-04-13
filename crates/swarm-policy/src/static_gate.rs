@@ -40,6 +40,15 @@ impl StaticApprovalGate {
             ResponseAction::BlockEgress { .. }
                 | ResponseAction::IsolateHost { .. }
                 | ResponseAction::RevokeCredential { .. }
+                | ResponseAction::SinkholeDns { .. }
+                | ResponseAction::TerminateUserSession { .. }
+                | ResponseAction::InjectFirewallRule { .. }
+                | ResponseAction::QuarantineFile { .. }
+                | ResponseAction::KillProcess { .. }
+                | ResponseAction::SuspendProcess { .. }
+                | ResponseAction::DisableUserAccount { .. }
+                | ResponseAction::ForcePasswordReset { .. }
+                | ResponseAction::RemoveScheduledTask { .. }
         )
     }
 
@@ -68,6 +77,76 @@ impl StaticApprovalGate {
                     "credential_id must not be empty".to_string(),
                 ));
             }
+            ResponseAction::SinkholeDns { domain } if domain.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "domain must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::TerminateUserSession {
+                host_id,
+                session_id,
+            } if host_id.trim().is_empty() || session_id.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "host_id and session_id must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::TriggerEdrScan {
+                host_id,
+                scan_profile,
+            } if host_id.trim().is_empty() || scan_profile.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "host_id and scan_profile must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::InjectFirewallRule {
+                host_id,
+                rule_name,
+                direction,
+                cidr,
+                ..
+            } if host_id.trim().is_empty()
+                || rule_name.trim().is_empty()
+                || direction.trim().is_empty()
+                || cidr.trim().is_empty() =>
+            {
+                return Err(ApprovalError::InvalidRequest(
+                    "host_id, rule_name, direction, and cidr must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::QuarantineFile { host_id, file_path }
+                if host_id.trim().is_empty() || file_path.trim().is_empty() =>
+            {
+                return Err(ApprovalError::InvalidRequest(
+                    "host_id and file_path must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::KillProcess {
+                host_id,
+                process_name,
+            }
+            | ResponseAction::SuspendProcess {
+                host_id,
+                process_name,
+            } if host_id.trim().is_empty() || process_name.trim().is_empty() => {
+                return Err(ApprovalError::InvalidRequest(
+                    "host_id and process_name must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::DisableUserAccount { user_id }
+            | ResponseAction::ForcePasswordReset { user_id }
+                if user_id.trim().is_empty() =>
+            {
+                return Err(ApprovalError::InvalidRequest(
+                    "user_id must not be empty".to_string(),
+                ));
+            }
+            ResponseAction::RemoveScheduledTask { host_id, task_name }
+                if host_id.trim().is_empty() || task_name.trim().is_empty() =>
+            {
+                return Err(ApprovalError::InvalidRequest(
+                    "host_id and task_name must not be empty".to_string(),
+                ));
+            }
             ResponseAction::DeployDecoy {
                 decoy_type,
                 target_zone,
@@ -91,6 +170,16 @@ impl StaticApprovalGate {
             ResponseAction::BlockEgress { .. } => "block_egress",
             ResponseAction::IsolateHost { .. } => "isolate_host",
             ResponseAction::RevokeCredential { .. } => "revoke_credential",
+            ResponseAction::SinkholeDns { .. } => "sinkhole_dns",
+            ResponseAction::TerminateUserSession { .. } => "terminate_user_session",
+            ResponseAction::TriggerEdrScan { .. } => "trigger_edr_scan",
+            ResponseAction::InjectFirewallRule { .. } => "inject_firewall_rule",
+            ResponseAction::QuarantineFile { .. } => "quarantine_file",
+            ResponseAction::KillProcess { .. } => "kill_process",
+            ResponseAction::SuspendProcess { .. } => "suspend_process",
+            ResponseAction::DisableUserAccount { .. } => "disable_user_account",
+            ResponseAction::ForcePasswordReset { .. } => "force_password_reset",
+            ResponseAction::RemoveScheduledTask { .. } => "remove_scheduled_task",
             ResponseAction::DeployDecoy { .. } => "deploy_decoy",
             ResponseAction::Escalate { .. } => "escalate",
         }
@@ -144,6 +233,31 @@ pub fn scope_for_response_action(action: &ResponseAction) -> Option<String> {
         ResponseAction::BlockEgress { target } => Some(target.clone()),
         ResponseAction::IsolateHost { host_id } => Some(host_id.clone()),
         ResponseAction::RevokeCredential { credential_id } => Some(credential_id.clone()),
+        ResponseAction::SinkholeDns { domain } => Some(domain.clone()),
+        ResponseAction::TerminateUserSession {
+            host_id,
+            session_id,
+        } => Some(format!("{host_id}:{session_id}")),
+        ResponseAction::TriggerEdrScan { host_id, .. } => Some(host_id.clone()),
+        ResponseAction::InjectFirewallRule {
+            host_id, rule_name, ..
+        } => Some(format!("{host_id}:{rule_name}")),
+        ResponseAction::QuarantineFile { host_id, file_path } => {
+            Some(format!("{host_id}:{file_path}"))
+        }
+        ResponseAction::KillProcess {
+            host_id,
+            process_name,
+        }
+        | ResponseAction::SuspendProcess {
+            host_id,
+            process_name,
+        } => Some(format!("{host_id}:{process_name}")),
+        ResponseAction::DisableUserAccount { user_id }
+        | ResponseAction::ForcePasswordReset { user_id } => Some(user_id.clone()),
+        ResponseAction::RemoveScheduledTask { host_id, task_name } => {
+            Some(format!("{host_id}:{task_name}"))
+        }
         ResponseAction::DeployDecoy { target_zone, .. } => Some(target_zone.clone()),
         ResponseAction::Escalate { .. } => None,
     }

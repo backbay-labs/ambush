@@ -21,6 +21,16 @@ impl ResponseExecutor for SandboxExecutor {
             swarm_core::types::ResponseAction::BlockEgress { .. }
                 | swarm_core::types::ResponseAction::IsolateHost { .. }
                 | swarm_core::types::ResponseAction::RevokeCredential { .. }
+                | swarm_core::types::ResponseAction::SinkholeDns { .. }
+                | swarm_core::types::ResponseAction::TerminateUserSession { .. }
+                | swarm_core::types::ResponseAction::TriggerEdrScan { .. }
+                | swarm_core::types::ResponseAction::InjectFirewallRule { .. }
+                | swarm_core::types::ResponseAction::QuarantineFile { .. }
+                | swarm_core::types::ResponseAction::KillProcess { .. }
+                | swarm_core::types::ResponseAction::SuspendProcess { .. }
+                | swarm_core::types::ResponseAction::DisableUserAccount { .. }
+                | swarm_core::types::ResponseAction::ForcePasswordReset { .. }
+                | swarm_core::types::ResponseAction::RemoveScheduledTask { .. }
                 | swarm_core::types::ResponseAction::DeployDecoy { .. }
         ) && lease.scope.is_none()
         {

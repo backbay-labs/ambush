@@ -29,6 +29,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check runtime panic contract
+        run: bash tools/check-runtime-panic-contract.sh
+
       - name: Lint with clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -38,8 +41,14 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Run JetStream substrate suite
+        run: bash tools/with-nats-jetstream.sh cargo test -p swarm-pheromone --test jetstream --test multi_instance -- --ignored
+
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
-      - name: Check dependencies
-        run: cargo deny check
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run supply-chain checks
+        run: bash tools/check-supply-chain.sh

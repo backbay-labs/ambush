@@ -2,30 +2,123 @@
 
 ## Latest Completed Milestone
 
-### v1.53 Production Packaging, Recovery, And Operator Access
-**Executable phases:** 180-183
+### v1.63 Evolution Crate Decomposition And Schema Migration
+**Executable phases:** 220-223
 **Status:** Complete
-**Shipped:** 2026-04-11
-**Goal:** Make the system credibly deployable with secure packaging, recovery drills, measured capacity guidance, and a real operator access model.
-**Progress:** Phases 180-183 complete
+**Shipped:** 2026-04-12
+**Goal:** Pay down velocity debt by decomposing the evolution crate and establishing versioned wire formats.
+**Progress:** Phases 220-223 complete
 
 ## Active Milestone
 
-### v1.54 Panic Eradication And Error Contracts
-**Executable phases:** 184-187
-**Status:** Active
-**Activated:** 2026-04-11
-**Goal:** Eliminate unwrap/expect from non-test runtime code and establish typed error propagation contracts at every crate boundary.
-**Progress:** Phases 184-185 complete; Phase 186 planned next
+No active milestone. `v1.63 Evolution Crate Decomposition And Schema Migration`
+completed on 2026-04-12, and the next milestone has not been activated yet.
 
 ## Queued Milestones
 
-### v1.55 JetStream Integration Tests And Load Baselines
-**Executable phases:** 188-191
-**Status:** Queued
-**Goal:** Establish real JetStream test coverage and measured performance baselines for the production substrate and hot path.
+No queued milestones currently defined.
 
 ## History
+
+## v1.63 Evolution Crate Decomposition And Schema Migration (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarm-evolution/src/evolution.rs` is now a thin composition root over a focused internal module tree, keeping the public crate contract stable while removing the earlier oversized file bottleneck.
+- `swarm-evolution/src/mutation.rs` now routes through extracted submodules with explicit responsibilities and stable public re-exports instead of one monolithic implementation file.
+- `PheromoneDeposit` now carries explicit wire-version metadata, and the substrate plus local-journal reopen paths accept only the current and bounded previous legacy version with fail-closed rejection for unsupported payloads.
+- Operator-facing control and platform API envelopes now carry explicit `schema_version` metadata, negotiate through one bounded `x-swarm-schema-version` request header, and keep repo-owned CLI compatibility on schema version `1`.
+
+## v1.62 Statistical Anomaly Scoring And Behavioral Breadth (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `BehavioralAnomalyDetector` now derives confidence from restart-safe learned online distributions instead of the older fixed signal-count arithmetic.
+- Behavioral findings now expose explicit support-weighted z-score evidence so operator surfaces can explain why an event scored as anomalous.
+- The learned baseline seam now spans network, DNS, authentication, registry, file, and process-memory telemetry rather than remaining process-start only.
+- The repo now ships a reproducible labeled-telemetry benchmark showing the widened deviation-scoring detector preserved catch rate while reducing actionable false positives relative to the bounded legacy control.
+
+## v1.61 Response Action Library And Playbook Builder (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The shared response seam now carries fifteen concrete action types through the existing guarded executor path instead of the earlier narrow adapter set.
+- Every supported response action now exposes typed blast-radius scope plus rollback metadata through the shared rehearsal contract.
+- Repo-owned response playbooks now support deterministic ordered conditional branches with fail-closed fallback behavior.
+- Operators can now dry-run one matched playbook through `swarmctl playbook-preview` and inspect projected blast radius, rollback expectations, and approval requirements without live side effects.
+
+## v1.60 Agent Lifecycle Isolation And Graceful Degradation (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The dispatcher now wraps each agent tick in a runtime-owned async panic boundary, so a single panicking agent degrades in place instead of unwinding the shared runtime task.
+- Persistent agent-boundary failures now trigger dispatcher-owned in-place restart factories that replace only the failed agent while healthy peers keep running.
+- The runtime now exposes explicit `full`, `detect_only`, `read_only`, and `emergency_drain` degradation levels with bounded capabilities and operator-visible status surfaces.
+- Repo-owned transition tests now prove the shipped degradation ladder reaches detect-only on JetStream outage, read-only on replay-store write failure, and emergency-drain under heap pressure.
+
+## v1.59 Guided First-Run And Alert Quality Scoring (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarmctl` now ships a repo-owned readiness diagnostic that gives one bounded verdict over telemetry, detector activation, and substrate health before the first-run walkthrough begins.
+- `swarmctl first-run` now reuses that readiness contract, drives a sandboxed synthetic detection -> approval -> proof walkthrough, and returns durable artifact identifiers in one operator-visible report.
+- Signed Providence analyst feedback now persists bounded per-finding false-positive measurements with detector and host attribution, and both `swarmctl status` and `/v2/api/runtime/status` expose the resulting rollups.
+- The runtime now derives concrete advisory alert-tuning recommendations from those measured false-positive patterns and surfaces the same `alert_tuning` contract on both repo-owned status surfaces.
+
+## v1.58 Multi-Event Sequence Detection (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The runtime now owns a bounded shared temporal event window with configurable retention, span, and predicate-count limits, and the service records accepted telemetry into that substrate before detection executes.
+- Swarm now ships a repo-owned kill-chain detector that loads ATT&CK chain metadata from `sequences/kill-chain-v1.yaml` and evaluates partial or full matches against the shared temporal window.
+- The repo now includes three chain-only replay scenarios plus a named suite that stay quiet under deterministic single-event detectors and pass with the sequence detector active.
+- Sequence findings now reuse the normal signed pheromone, replay, investigation, and incident lanes, and partial matches emit lower-confidence intermediate deposits instead of a special-case persistence artifact.
+
+## v1.57 Autonomous Parameter Evolution With Measured Fitness (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarm-evolution` now generates bounded perturbation, crossover, and gap-expansion variants from durable winning genomes with replayable parent lineage instead of requiring operator-authored experiment specs.
+- Autonomous population candidates and episode artifacts now persist measured catch-rate, false-positive, and latency fitness against the tracked evasion corpus, and the shared status surface exposes that bounded evaluation state.
+- The repo now owns a reproducible multi-generation benchmark with durable generation reports and an explicit no-gain reference artifact for the production-like suspicious-process-tree baseline.
+- Phase 199 closed the loop with a conservative-seed benchmark that shows a real bounded gain: `suspicious_process_tree` improves from catch-rate `0.086` to `0.143` and from measured fitness `0.633` to `0.656` through `autonomous_gap_expansion`.
+
+## v1.56 Binary Attestation And Configuration Integrity (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- `swarm_detect` now verifies signed startup artifacts for the binary, repo-owned ruleset manifest, and file-backed runtime config before `live_response` mode can start.
+- Full config reload now uses the same detached-signature contract as startup, so unsigned or tampered file-backed config cannot silently replace trusted runtime state.
+- The runtime now monitors live Linux anti-tamper signals for debugger attachment and unexpected shared-library loads, surfaces the latest report on health and platform status routes, and can fail closed when configured for `live_response`.
+- CI and release automation now use shared repo-owned supply-chain scripts, enforce dependency-policy gates, and publish one CycloneDX SBOM per workspace crate.
+
+## v1.55 JetStream Integration Tests And Load Baselines (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The repo now owns a compose-backed JetStream harness with deterministic lifecycle and CI coverage, so real-backend tests no longer depend on manually started infrastructure.
+- The pheromone substrate contract now runs against JetStream with the same assertion breadth as the in-memory backend, including policy-aware garbage-collection parity under threat-class overrides.
+- `swarm-runtime` now ships a Criterion-owned hot-path benchmark with checked-in `in_memory` and `local_journal` percentile baselines for ingest -> detect -> deposit -> escalate.
+- The operator-facing ingest benchmark now measures both steady-state HTTP ingest behavior and the first `/readyz` shed threshold, giving the docs a measured host-profile and throughput-ceiling artifact.
+
+## v1.54 Panic Eradication And Error Contracts (Shipped: 2026-04-12)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The runtime now has a repo-owned audit baseline and typed top-level error contracts for serve, ingest, service, agent, and strategy-routing seams instead of relying on ad hoc panic cleanup.
+- Ingest, service, and operator-facing request paths now fail closed with typed runtime-owned errors on malformed input or dependency failures instead of string-only propagation or implicit panic.
+- Agent tick, replay-store, knowledge-graph, and Kitten proposal-routing seams now preserve typed boundary classification through the runtime dispatcher without changing the outward execution contract.
+- CI now enforces the runtime panic contract with a `#[cfg(test)]`-aware checker, and integration tests prove malformed ingest and Kitten proposal inputs return errors instead of crashing the process.
 
 ## v1.53 Production Packaging, Recovery, And Operator Access (Shipped: 2026-04-11)
 

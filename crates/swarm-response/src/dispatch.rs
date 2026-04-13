@@ -274,6 +274,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_edr_config_dispatches_expanded_scan_action_payload() {
+        let (endpoint, state, shutdown_tx, handle) = spawn_server(StatusCode::OK).await;
+        let executor = DispatchingExecutor::from_config(
+            ResponseAdapterConfig::HttpEdr {
+                config: HttpEdrConfig {
+                    endpoint,
+                    auth_token: "secret".to_string(),
+                    timeout_ms: 500,
+                    retry: RetryConfig::default(),
+                    circuit_breaker: CircuitBreakerConfig::default(),
+                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                },
+            },
+            None,
+        )
+        .unwrap();
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-edr-scan".to_string()),
+            requested_by: AgentId("agent-1".to_string()),
+            action: ResponseAction::TriggerEdrScan {
+                host_id: "host-77".to_string(),
+                scan_profile: "memory_quick".to_string(),
+            },
+            severity: Severity::Medium,
+            evidence: serde_json::json!({"signal": "test"}),
+        };
+        let lease = CapabilityLease {
+            capability_id: "lease-edr-scan".to_string(),
+            expires_at_ms: 1_000,
+            action: request.action.kind().to_string(),
+            scope: Some("host-77".to_string()),
+        };
+
+        let receipt = executor
+            .execute(&request, &lease, ExecutionMode::Enforced)
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.status, ResponseStatus::Executed);
+        let payload = state.payload.lock().await.clone().unwrap();
+        assert_eq!(payload["action"], "trigger_edr_scan");
+        assert_eq!(payload["host_id"], "host-77");
+        assert_eq!(payload["scan_profile"], "memory_quick");
+
+        let _ = shutdown_tx.send(());
+        handle.abort();
+    }
+
+    #[tokio::test]
     async fn webhook_config_dispatches_to_webhook_adapter() {
         let (url, state, shutdown_tx, handle) = spawn_server(StatusCode::OK).await;
         let executor = DispatchingExecutor::from_config(

@@ -435,6 +435,7 @@ impl CalicoAgent {
             monitoring: monitoring_payload(&entry.monitoring),
         };
         let mut deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::to_value(payload).map_err(internal_error)?,
             threat_class: ThreatClass::Custom(CALICO_DECEPTION_INVENTORY_THREAT_CLASS.to_string()),
             severity: Severity::Low,
@@ -490,6 +491,7 @@ impl CalicoAgent {
             source_indicator: source_deposit.indicator.clone(),
         };
         let mut deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator: serde_json::to_value(payload).map_err(internal_error)?,
             threat_class: entry.monitoring.threat_class.clone(),
             severity: entry.monitoring.severity,
@@ -880,6 +882,7 @@ fn sign_deposit(
     signing_key: &SigningKey,
 ) -> Result<(), SwarmError> {
     let payload = DepositSigningPayload {
+        schema_version: deposit.schema_version,
         indicator: &deposit.indicator,
         threat_class: &deposit.threat_class,
         severity: &deposit.severity,
@@ -1011,6 +1014,7 @@ mod tests {
 
     fn source_deposit(indicator: serde_json::Value) -> PheromoneDeposit {
         PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
             indicator,
             threat_class: ThreatClass::Discovery,
             severity: Severity::Medium,

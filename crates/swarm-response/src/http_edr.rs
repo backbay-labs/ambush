@@ -72,6 +72,98 @@ impl HttpEdrAdapter {
                 }
                 Ok(payload)
             }
+            ResponseAction::RevokeCredential { credential_id } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("credential_id".to_string(), json!(credential_id));
+                }
+                Ok(payload)
+            }
+            ResponseAction::SinkholeDns { domain } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("domain".to_string(), json!(domain));
+                }
+                Ok(payload)
+            }
+            ResponseAction::TerminateUserSession {
+                host_id,
+                session_id,
+            } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("host_id".to_string(), json!(host_id));
+                    object.insert("session_id".to_string(), json!(session_id));
+                }
+                Ok(payload)
+            }
+            ResponseAction::TriggerEdrScan {
+                host_id,
+                scan_profile,
+            } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("host_id".to_string(), json!(host_id));
+                    object.insert("scan_profile".to_string(), json!(scan_profile));
+                }
+                Ok(payload)
+            }
+            ResponseAction::InjectFirewallRule {
+                host_id,
+                rule_name,
+                direction,
+                cidr,
+                port,
+            } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("host_id".to_string(), json!(host_id));
+                    object.insert("rule_name".to_string(), json!(rule_name));
+                    object.insert("direction".to_string(), json!(direction));
+                    object.insert("cidr".to_string(), json!(cidr));
+                    object.insert("port".to_string(), json!(port));
+                }
+                Ok(payload)
+            }
+            ResponseAction::QuarantineFile { host_id, file_path } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("host_id".to_string(), json!(host_id));
+                    object.insert("file_path".to_string(), json!(file_path));
+                }
+                Ok(payload)
+            }
+            ResponseAction::KillProcess {
+                host_id,
+                process_name,
+            }
+            | ResponseAction::SuspendProcess {
+                host_id,
+                process_name,
+            } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("host_id".to_string(), json!(host_id));
+                    object.insert("process_name".to_string(), json!(process_name));
+                }
+                Ok(payload)
+            }
+            ResponseAction::DisableUserAccount { user_id }
+            | ResponseAction::ForcePasswordReset { user_id } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("user_id".to_string(), json!(user_id));
+                }
+                Ok(payload)
+            }
+            ResponseAction::RemoveScheduledTask { host_id, task_name } => {
+                let mut payload = base;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("host_id".to_string(), json!(host_id));
+                    object.insert("task_name".to_string(), json!(task_name));
+                }
+                Ok(payload)
+            }
             _ => Err(Box::new(ResponseReceipt {
                 receipt_id: self.receipt_id(request, lease),
                 action: request.action.kind().to_string(),

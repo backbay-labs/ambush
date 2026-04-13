@@ -14,11 +14,13 @@ use swarm_whisker::{CompositeDetector, TelemetryEvent};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
+pub type SharedTelemetryReceiver = Arc<Mutex<mpsc::Receiver<TelemetryEvent>>>;
+
 pub struct WhiskerAgent {
     id: AgentId,
     signing_key: SigningKey,
     verifying_key: VerifyingKey,
-    event_rx: Mutex<mpsc::Receiver<TelemetryEvent>>,
+    event_rx: SharedTelemetryReceiver,
     detector: Arc<CompositeDetector>,
     substrate: ConfiguredPheromoneSubstrate,
     pheromone_config: PheromoneConfig,
@@ -27,6 +29,10 @@ pub struct WhiskerAgent {
 }
 
 impl WhiskerAgent {
+    pub fn shared_receiver(event_rx: mpsc::Receiver<TelemetryEvent>) -> SharedTelemetryReceiver {
+        Arc::new(Mutex::new(event_rx))
+    }
+
     pub fn new(
         id: AgentId,
         event_rx: mpsc::Receiver<TelemetryEvent>,
@@ -52,12 +58,47 @@ impl WhiskerAgent {
         substrate: ConfiguredPheromoneSubstrate,
         pheromone_config: PheromoneConfig,
     ) -> Self {
+        Self::new_with_shared_receiver_and_signing_key(
+            id,
+            signing_key,
+            Self::shared_receiver(event_rx),
+            detector,
+            substrate,
+            pheromone_config,
+        )
+    }
+
+    pub fn new_with_shared_receiver(
+        id: AgentId,
+        event_rx: SharedTelemetryReceiver,
+        detector: Arc<CompositeDetector>,
+        substrate: ConfiguredPheromoneSubstrate,
+        pheromone_config: PheromoneConfig,
+    ) -> Self {
+        Self::new_with_shared_receiver_and_signing_key(
+            id,
+            SigningKey::generate(&mut OsRng),
+            event_rx,
+            detector,
+            substrate,
+            pheromone_config,
+        )
+    }
+
+    pub fn new_with_shared_receiver_and_signing_key(
+        id: AgentId,
+        signing_key: SigningKey,
+        event_rx: SharedTelemetryReceiver,
+        detector: Arc<CompositeDetector>,
+        substrate: ConfiguredPheromoneSubstrate,
+        pheromone_config: PheromoneConfig,
+    ) -> Self {
         let verifying_key = signing_key.verifying_key();
         Self {
             id,
             signing_key,
             verifying_key,
-            event_rx: Mutex::new(event_rx),
+            event_rx,
             detector,
             substrate,
             pheromone_config,

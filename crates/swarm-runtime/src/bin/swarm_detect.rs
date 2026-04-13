@@ -4,19 +4,20 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use swarm_core::agent::{AgentRole, SwarmModeState};
+use swarm_core::agent::{AgentRole, SwarmAgent, SwarmModeState};
 use swarm_core::types::AgentId;
 use swarm_policy::ApprovalContext;
 use swarm_runtime::agent_identity::{
     FileAgentIdentityRegistry, FileAgentKeyStore, PersistedAgentIdentity, RegistryAdmission,
     resolve_agent_key_dir, resolve_identity_registry_dir,
 };
+use swarm_runtime::anti_tamper::{AntiTamperFailure, AntiTamperMonitor};
 use swarm_runtime::approval::DefaultApprovalHarness;
 use swarm_runtime::bridge_runtime::BridgeRuntimeRegistry;
 use swarm_runtime::calico_agent::CalicoAgent;
 use swarm_runtime::config::load_config;
 use swarm_runtime::control::build_composite_detector;
-use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
+use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig, AgentRestartFactory};
 use swarm_runtime::escalation::ConcentrationMonitor;
 use swarm_runtime::ingest::{IngestState, detect_http_router};
 use swarm_runtime::investigation::SummaryInvestigator;
@@ -28,6 +29,7 @@ use swarm_runtime::serve::serve_with_listener;
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
 use swarm_runtime::sphinx_agent::SphinxAgent;
 use swarm_runtime::stalker_agent::StalkerAgent;
+use swarm_runtime::startup_attestation::{StartupAttestationFailure, StartupAttestationReport};
 use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
 use swarm_runtime::weaver_agent::WeaverAgent;
 use swarm_runtime::whisker_agent::WhiskerAgent;
@@ -71,7 +73,7 @@ fn register_optional_sphinx_agent(
     dispatcher: &mut AgentDispatcher,
     config_path: &std::path::Path,
     config: &swarm_core::config::SwarmConfig,
-    substrate: swarm_pheromone::ConfiguredPheromoneSubstrate,
+    state: &IngestState,
     identity_store: &FileAgentKeyStore,
     identity_registry: &FileAgentIdentityRegistry,
     now_ms: i64,
@@ -79,36 +81,39 @@ fn register_optional_sphinx_agent(
     if !config.memory.enabled {
         return Ok(None);
     }
-    let identity = load_persisted_agent_identity(identity_store, AgentRole::Sphinx, "primary")?;
-    if !admit_runtime_identity(
+    register_persisted_runtime_agent(
+        dispatcher,
+        identity_store,
         identity_registry,
         AgentRole::Sphinx,
         "primary",
-        &identity,
         now_ms,
-    )? {
-        return Ok(None);
-    }
-    let agent_id = identity.id.clone();
-    let agent = SphinxAgent::new_with_signing_key(
-        identity.id,
-        identity.signing_key,
-        config_path.to_path_buf(),
-        config.clone(),
-        substrate,
+        {
+            let config_path = config_path.to_path_buf();
+            let config = config.clone();
+            let state = state.clone();
+            move |identity| {
+                build_restartable_agent(move || {
+                    SphinxAgent::new_with_signing_key(
+                        identity.id.clone(),
+                        identity.signing_key.clone(),
+                        config_path.clone(),
+                        config.clone(),
+                        state.current_substrate(),
+                    )
+                    .map(|agent| Box::new(agent) as Box<dyn SwarmAgent>)
+                    .map_err(|error| error.to_string())
+                })
+            }
+        },
     )
-    .map_err(std::io::Error::other)?;
-    dispatcher
-        .register(Box::new(agent))
-        .map_err(std::io::Error::other)?;
-    Ok(Some(agent_id))
 }
 
 fn register_optional_calico_agent(
     dispatcher: &mut AgentDispatcher,
     config_path: &std::path::Path,
     config: &swarm_core::config::SwarmConfig,
-    substrate: swarm_pheromone::ConfiguredPheromoneSubstrate,
+    state: &IngestState,
     identity_store: &FileAgentKeyStore,
     identity_registry: &FileAgentIdentityRegistry,
     now_ms: i64,
@@ -116,29 +121,32 @@ fn register_optional_calico_agent(
     if !config.deception.enabled {
         return Ok(None);
     }
-    let identity = load_persisted_agent_identity(identity_store, AgentRole::Calico, "primary")?;
-    if !admit_runtime_identity(
+    register_persisted_runtime_agent(
+        dispatcher,
+        identity_store,
         identity_registry,
         AgentRole::Calico,
         "primary",
-        &identity,
         now_ms,
-    )? {
-        return Ok(None);
-    }
-    let agent_id = identity.id.clone();
-    let agent = CalicoAgent::new_with_signing_key(
-        identity.id,
-        identity.signing_key,
-        config_path.to_path_buf(),
-        config.clone(),
-        substrate,
+        {
+            let config_path = config_path.to_path_buf();
+            let config = config.clone();
+            let state = state.clone();
+            move |identity| {
+                build_restartable_agent(move || {
+                    CalicoAgent::new_with_signing_key(
+                        identity.id.clone(),
+                        identity.signing_key.clone(),
+                        config_path.clone(),
+                        config.clone(),
+                        state.current_substrate(),
+                    )
+                    .map(|agent| Box::new(agent) as Box<dyn SwarmAgent>)
+                    .map_err(|error| error.to_string())
+                })
+            }
+        },
     )
-    .map_err(std::io::Error::other)?;
-    dispatcher
-        .register(Box::new(agent))
-        .map_err(std::io::Error::other)?;
-    Ok(Some(agent_id))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -216,6 +224,49 @@ fn admit_runtime_identity(
         }
         Err(error) => Err(std::io::Error::other(error)),
     }
+}
+
+fn build_restartable_agent<F>(
+    build: F,
+) -> Result<(Box<dyn SwarmAgent>, AgentRestartFactory), String>
+where
+    F: Fn() -> Result<Box<dyn SwarmAgent>, String> + Send + Sync + 'static,
+{
+    let restart_factory: AgentRestartFactory = Arc::new(build);
+    let agent = (restart_factory.as_ref())()?;
+    Ok((agent, restart_factory))
+}
+
+fn register_persisted_runtime_agent<F>(
+    dispatcher: &mut AgentDispatcher,
+    identity_store: &FileAgentKeyStore,
+    identity_registry: &FileAgentIdentityRegistry,
+    role: AgentRole,
+    slot: &str,
+    now_ms: i64,
+    build: F,
+) -> Result<Option<AgentId>, std::io::Error>
+where
+    F: FnOnce(PersistedAgentIdentity) -> Result<(Box<dyn SwarmAgent>, AgentRestartFactory), String>,
+{
+    let identity = load_persisted_agent_identity(identity_store, role, slot)?;
+    if !admit_runtime_identity(identity_registry, role, slot, &identity, now_ms)? {
+        return Ok(None);
+    }
+
+    let expected_agent_id = identity.id.clone();
+    let (agent, restart_factory) = build(identity).map_err(std::io::Error::other)?;
+    if agent.id() != &expected_agent_id {
+        return Err(std::io::Error::other(format!(
+            "restartable agent builder for {role:?}/{slot} returned mismatched id `{}` (expected `{expected_agent_id}`)",
+            agent.id()
+        )));
+    }
+
+    dispatcher
+        .register_restartable(agent, restart_factory)
+        .map_err(std::io::Error::other)?;
+    Ok(Some(expected_agent_id))
 }
 
 fn spawn_secret_reload_watcher(
@@ -597,6 +648,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _tracing =
         swarm_runtime::cli::tracing::init_tracing("swarm_detect", cli.otlp_endpoint.as_deref())?;
     let config = load_config(&cli.config)?;
+    let startup_attestation = StartupAttestationReport::verify(&cli.config);
+    let anti_tamper_monitor = AntiTamperMonitor::new();
+    let anti_tamper =
+        anti_tamper_monitor.evaluate(&config.runtime.anti_tamper, config.runtime.mode);
 
     if cli.json {
         println!(
@@ -607,6 +662,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "strategy": config.detection.strategy,
                 "serve": cli.serve,
                 "bind": cli.bind,
+                "startup_attestation": startup_attestation.clone(),
+                "anti_tamper": anti_tamper.clone(),
             }))?
         );
     } else if cli.serve {
@@ -633,14 +690,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    if !startup_attestation.ready_for_mode(config.runtime.mode) {
+        return Err(StartupAttestationFailure::new(&startup_attestation).into());
+    }
+    if !anti_tamper.effective_ready() {
+        return Err(AntiTamperFailure::new(&anti_tamper).into());
+    }
+
     if cli.serve {
-        let state = IngestState::from_config(cli.config.clone(), config.clone())?;
+        let state = IngestState::from_config(cli.config.clone(), config.clone())?
+            .with_startup_attestation(startup_attestation.clone())
+            .with_anti_tamper_report(anti_tamper.clone());
         let approval_harness = DefaultApprovalHarness::from_paths(
             &cli.approval_set_results_dir,
             &cli.approval_ledger_results_dir,
         )?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::channel(10_000);
+        let telemetry_rx = WhiskerAgent::shared_receiver(telemetry_rx);
         let agent_health = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
         let mode_state = Arc::new(arc_swap::ArcSwap::from_pointee(SwarmModeState::new()));
         let bridge_registry = BridgeRuntimeRegistry::from_config(&config)?;
@@ -688,155 +755,189 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(metrics) = state.current_prometheus_metrics() {
             dispatcher = dispatcher.with_metrics(metrics);
         }
-        let whisker_identity =
-            load_persisted_agent_identity(&identity_store, AgentRole::Whisker, "primary")?;
-        if admit_runtime_identity(
+        if let Some(whisker_id) = register_persisted_runtime_agent(
+            &mut dispatcher,
+            &identity_store,
             &identity_registry,
             AgentRole::Whisker,
             "primary",
-            &whisker_identity,
             now_ms,
+            {
+                let state = state.clone();
+                let telemetry_rx = Arc::clone(&telemetry_rx);
+                move |identity| {
+                    build_restartable_agent(move || {
+                        Ok(Box::new(
+                            WhiskerAgent::new_with_shared_receiver_and_signing_key(
+                                identity.id.clone(),
+                                identity.signing_key.clone(),
+                                Arc::clone(&telemetry_rx),
+                                state.current_detector(),
+                                state.current_substrate(),
+                                state.current_pheromone_config(),
+                            ),
+                        ))
+                    })
+                }
+            },
         )? {
-            admitted_identities.push(whisker_identity.id.clone());
-            dispatcher
-                .register(Box::new(WhiskerAgent::new_with_signing_key(
-                    whisker_identity.id,
-                    whisker_identity.signing_key,
-                    telemetry_rx,
-                    state.current_detector(),
-                    state.current_substrate(),
-                    state.current_pheromone_config(),
-                )))
-                .map_err(std::io::Error::other)?;
+            admitted_identities.push(whisker_id);
         }
         if let Some(calico_id) = register_optional_calico_agent(
             &mut dispatcher,
             &cli.config,
             &config,
-            state.current_substrate(),
+            &state,
             &identity_store,
             &identity_registry,
             now_ms,
         )? {
             admitted_identities.push(calico_id);
         }
-        let tom_identity =
-            load_persisted_agent_identity(&identity_store, AgentRole::Tom, "primary")?;
-        if admit_runtime_identity(
+        if let Some(tom_id) = register_persisted_runtime_agent(
+            &mut dispatcher,
+            &identity_store,
             &identity_registry,
             AgentRole::Tom,
             "primary",
-            &tom_identity,
             now_ms,
+            {
+                let governance_policy = Arc::clone(&governance_policy);
+                let degraded_tick_threshold = config.runtime.governance_degraded_tick_threshold;
+                move |identity| {
+                    let governance_policy = Arc::clone(&governance_policy);
+                    build_restartable_agent(move || {
+                        Ok(Box::new(TomAgent::new_with_signing_key(
+                            identity.id.clone(),
+                            identity.signing_key.clone(),
+                            degraded_tick_threshold,
+                            Arc::clone(&governance_policy),
+                        )))
+                    })
+                }
+            },
         )? {
-            admitted_identities.push(tom_identity.id.clone());
-            dispatcher
-                .register(Box::new(TomAgent::new_with_signing_key(
-                    tom_identity.id,
-                    tom_identity.signing_key,
-                    config.runtime.governance_degraded_tick_threshold,
-                    Arc::clone(&governance_policy),
-                )))
-                .map_err(std::io::Error::other)?;
+            admitted_identities.push(tom_id);
         }
-        let pounce_identity =
-            load_persisted_agent_identity(&identity_store, AgentRole::Pouncer, "primary")?;
-        if admit_runtime_identity(
+        if let Some(pounce_id) = register_persisted_runtime_agent(
+            &mut dispatcher,
+            &identity_store,
             &identity_registry,
             AgentRole::Pouncer,
             "primary",
-            &pounce_identity,
             now_ms,
+            {
+                let governance_policy = Arc::clone(&governance_policy);
+                let state = state.clone();
+                move |identity| {
+                    let governance_policy = Arc::clone(&governance_policy);
+                    let state = state.clone();
+                    build_restartable_agent(move || {
+                        Ok(Box::new(
+                            PounceAgent::new_with_signing_key(
+                                identity.id.clone(),
+                                identity.signing_key.clone(),
+                                state.current_pheromone_config().response_playbook.clone(),
+                            )
+                            .with_governance_policy(Arc::clone(&governance_policy)),
+                        ))
+                    })
+                }
+            },
         )? {
-            admitted_identities.push(pounce_identity.id.clone());
-            dispatcher
-                .register(Box::new(
-                    PounceAgent::new_with_signing_key(
-                        pounce_identity.id,
-                        pounce_identity.signing_key,
-                        state.current_pheromone_config().response_playbook.clone(),
-                    )
-                    .with_governance_policy(Arc::clone(&governance_policy)),
-                ))
-                .map_err(std::io::Error::other)?;
+            admitted_identities.push(pounce_id);
         }
-        if config.evolution.enabled {
-            let kitten_identity =
-                load_persisted_agent_identity(&identity_store, AgentRole::Kitten, "primary")?;
-            if admit_runtime_identity(
+        if config.evolution.enabled
+            && let Some(kitten_id) = register_persisted_runtime_agent(
+                &mut dispatcher,
+                &identity_store,
                 &identity_registry,
                 AgentRole::Kitten,
                 "primary",
-                &kitten_identity,
                 now_ms,
-            )? {
-                admitted_identities.push(kitten_identity.id.clone());
-                dispatcher
-                    .register(Box::new(KittenAgent::new_with_signing_key(
-                        kitten_identity.id,
-                        kitten_identity.signing_key,
-                        cli.config.clone(),
-                        config.clone(),
-                        state.current_substrate(),
-                    )))
-                    .map_err(std::io::Error::other)?;
-            }
+                {
+                    let config_path = cli.config.clone();
+                    let config = config.clone();
+                    let state = state.clone();
+                    move |identity| {
+                        build_restartable_agent(move || {
+                            Ok(Box::new(KittenAgent::new_with_signing_key(
+                                identity.id.clone(),
+                                identity.signing_key.clone(),
+                                config_path.clone(),
+                                config.clone(),
+                                state.current_substrate(),
+                            )))
+                        })
+                    }
+                },
+            )?
+        {
+            admitted_identities.push(kitten_id);
         }
         if let Some(sphinx_id) = register_optional_sphinx_agent(
             &mut dispatcher,
             &cli.config,
             &config,
-            state.current_substrate(),
+            &state,
             &identity_store,
             &identity_registry,
             now_ms,
         )? {
             admitted_identities.push(sphinx_id);
         }
-        if config.investigation.enabled {
-            let stalker_identity =
-                load_persisted_agent_identity(&identity_store, AgentRole::Stalker, "primary")?;
-            if admit_runtime_identity(
+        if config.investigation.enabled
+            && let Some(stalker_id) = register_persisted_runtime_agent(
+                &mut dispatcher,
+                &identity_store,
                 &identity_registry,
                 AgentRole::Stalker,
                 "primary",
-                &stalker_identity,
                 now_ms,
-            )? {
-                admitted_identities.push(stalker_identity.id.clone());
-                dispatcher
-                    .register(Box::new(StalkerAgent::new_with_signing_key(
-                        stalker_identity.id,
-                        stalker_identity.signing_key,
-                        state.current_replay_store(),
-                        state.current_investigation(),
-                        state.current_substrate(),
-                        state.current_pheromone_config(),
-                    )))
-                    .map_err(std::io::Error::other)?;
-            }
+                {
+                    let state = state.clone();
+                    move |identity| {
+                        build_restartable_agent(move || {
+                            Ok(Box::new(StalkerAgent::new_with_signing_key(
+                                identity.id.clone(),
+                                identity.signing_key.clone(),
+                                state.current_replay_store(),
+                                state.current_investigation(),
+                                state.current_substrate(),
+                                state.current_pheromone_config(),
+                            )))
+                        })
+                    }
+                },
+            )?
+        {
+            admitted_identities.push(stalker_id);
         }
-        if config.correlation.enabled {
-            let weaver_identity =
-                load_persisted_agent_identity(&identity_store, AgentRole::Weaver, "primary")?;
-            if admit_runtime_identity(
+        if config.correlation.enabled
+            && let Some(weaver_id) = register_persisted_runtime_agent(
+                &mut dispatcher,
+                &identity_store,
                 &identity_registry,
                 AgentRole::Weaver,
                 "primary",
-                &weaver_identity,
                 now_ms,
-            )? {
-                admitted_identities.push(weaver_identity.id.clone());
-                dispatcher
-                    .register(Box::new(WeaverAgent::new_with_signing_key(
-                        weaver_identity.id,
-                        weaver_identity.signing_key,
-                        state.current_correlation_engine(),
-                        state.current_investigation_store(),
-                        state.current_incident_store(),
-                    )))
-                    .map_err(std::io::Error::other)?;
-            }
+                {
+                    let state = state.clone();
+                    move |identity| {
+                        build_restartable_agent(move || {
+                            Ok(Box::new(WeaverAgent::new_with_signing_key(
+                                identity.id.clone(),
+                                identity.signing_key.clone(),
+                                state.current_correlation_engine(),
+                                state.current_investigation_store(),
+                                state.current_incident_store(),
+                            )))
+                        })
+                    }
+                },
+            )?
+        {
+            admitted_identities.push(weaver_id);
         }
         dispatcher.set_admitted_identities(admitted_identities);
         let mut dispatcher_handle = Some(tokio::spawn(async move {
@@ -857,6 +958,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut bridge_handles =
             Some(bridge_registry.spawn(telemetry_tx, shutdown_rx.clone(), bridge_metrics));
         let mut reload_handles = Some(spawn_reload_tasks(state.clone(), shutdown_tx.clone()));
+        let anti_tamper_state = state.clone();
+        let anti_tamper_shutdown = shutdown_rx.clone();
+        let mut anti_tamper_handle = Some(tokio::spawn(async move {
+            anti_tamper_monitor
+                .run_until_shutdown(anti_tamper_state, anti_tamper_shutdown)
+                .await;
+        }));
         let listener = tokio::net::TcpListener::bind(&cli.bind).await?;
         let serve_state = state.clone();
         let server = serve_with_listener(
@@ -881,6 +989,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handles) = reload_handles.take() {
                     await_reload_tasks(handles).await;
+                }
+                if let Some(handle) = anti_tamper_handle.take() {
+                    await_background_task("anti_tamper_monitor", handle).await;
                 }
                 result?;
             }
@@ -927,6 +1038,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handles) = reload_handles.take() {
                     await_reload_tasks(handles).await;
+                }
+                if let Some(handle) = anti_tamper_handle.take() {
+                    await_background_task("anti_tamper_monitor", handle).await;
                 }
             }
         }
@@ -1083,6 +1197,7 @@ mod tests {
         resolve_identity_registry_dir,
     };
     use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
+    use swarm_runtime::ingest::IngestState;
     use swarm_runtime::runtime_events::RuntimeEventBroadcaster;
 
     #[test]
@@ -1123,6 +1238,8 @@ mod tests {
         let health_state = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
         let substrate = ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
             .expect("substrate should build");
+        let state = IngestState::from_config(config_path.clone(), config.clone())
+            .expect("ingest state should build");
         let mut dispatcher = AgentDispatcher::new(
             AgentDispatcherConfig::default(),
             shutdown_rx,
@@ -1146,7 +1263,7 @@ mod tests {
             &mut dispatcher,
             &config_path,
             &config,
-            substrate,
+            &state,
             &identity_store,
             &identity_registry,
             swarm_runtime::runtime_events::now_ms(),
@@ -1196,6 +1313,8 @@ mod tests {
         let health_state = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
         let substrate = ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
             .expect("substrate should build");
+        let state = IngestState::from_config(config_path.clone(), config.clone())
+            .expect("ingest state should build");
         let mut dispatcher = AgentDispatcher::new(
             AgentDispatcherConfig::default(),
             shutdown_rx,
@@ -1219,7 +1338,7 @@ mod tests {
             &mut dispatcher,
             &config_path,
             &config,
-            substrate,
+            &state,
             &identity_store,
             &identity_registry,
             swarm_runtime::runtime_events::now_ms(),

@@ -1,4 +1,5 @@
 //! Evolution-owned workflows extracted from `swarm-runtime`.
+#![allow(clippy::result_large_err)]
 
 pub use swarm_runtime::RuntimeMode;
 

@@ -1,0 +1,79 @@
+name: remote_service_stager_chain
+description: NTLM service-controller access followed by service execution and staged script write should only alert as a chain.
+seed_time_ms: 1700000300000
+requested_by: replay-whisker
+receipt_chain:
+  - seed-receipt
+metadata:
+  class: adversarial
+  threat_class: lateral_movement
+  campaign: multi_event.kill_chain
+  techniques:
+    - T1021.002
+    - T1569.002
+    - T1570
+  tags:
+    - sequence
+    - kill_chain
+    - service
+    - lateral
+
+input:
+  kind: events
+  events:
+    - action:
+        type: escalate
+        summary: sequence detector partial chain
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: chain-2-step-1
+        timestamp: 1700000300000
+        host_id: app-srv-01
+        payload:
+          kind: authentication_event
+          auth_type: NTLM
+          source_host: WS-22
+          target_host: APP-SRV-01
+          target_service: svcctl
+          process_name: services
+          success: true
+          user: svc-backup
+    - action:
+        type: escalate
+        summary: sequence detector partial chain
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: chain-2-step-2
+        timestamp: 1700000304000
+        host_id: app-srv-01
+        payload:
+          kind: process_start
+          parent_process: services
+          process_name: cmd
+          command_line: cmd.exe /c copy \\fileshare\ops\svc.bat C:\ProgramData\svc.bat
+          user: SYSTEM
+    - action:
+        type: escalate
+        summary: sequence detector full chain
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: chain-2-step-3
+        timestamp: 1700000309000
+        host_id: app-srv-01
+        payload:
+          kind: file_persistence
+          file_path: C:\ProgramData\svc.bat
+          operation: write
+          process_name: cmd
+          content_preview: "@echo off\r\nsc start spooler"
+
+expectations:
+  replay_bundle_count: 2
+  investigation_count: 2
+  incident_count: 1
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

@@ -30,6 +30,20 @@ pub trait DetectionStrategy: Send + Sync + 'static {
     fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding>;
 }
 
+/// Predicate seam used by later multi-event sequence matching over telemetry.
+pub trait TelemetryEventPredicate: Send + Sync {
+    fn matches(&self, event: &TelemetryEvent) -> bool;
+}
+
+impl<F> TelemetryEventPredicate for F
+where
+    F: Fn(&TelemetryEvent) -> bool + Send + Sync,
+{
+    fn matches(&self, event: &TelemetryEvent) -> bool {
+        self(event)
+    }
+}
+
 /// A concrete structured finding produced by a detector.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectionFinding {
