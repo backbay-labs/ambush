@@ -728,6 +728,65 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 3. `swarm-agents` carries its own focused unit test suite and `swarm-runtime` integration tests continue to exercise the full agent pipeline through the swarm-agents dependency.
 4. `cargo build --workspace`, `cargo test --workspace`, and `cargo clippy --workspace -- -D warnings` all complete cleanly after extraction.
 
+### v1.75 Operator Packaging
+
+**Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
+**Executable phases:** 268-271
+
+- [ ] **Phase 268: Curated Defaults And Operator UX** - A curated rulesets/default.yaml ships for detect_only mode, swarmctl init generates a working config, swarmctl status outputs an operator-readable runtime summary, and config/bridge error messages include actionable remediation guidance. (DEFAULTS-01, DEFAULTS-02, OPEXP-01, OPEXP-02)
+- [ ] **Phase 269: Deployment Documentation** - A getting-started guide walks operators from zero to first detection in under 15 minutes using Docker Compose; deployment documentation covers Docker single-container, Docker Compose with NATS, Helm, and bare-metal paths with prerequisites, config, and verification steps. (DEPLOY-01, DEPLOY-02)
+- [ ] **Phase 270: Adversary Emulation Corpus** - A mapped Atomic Red Team corpus of 20+ techniques ships as replay scenarios; cargo test includes an adversary emulation integration suite with a technique-to-detector mapping; a coverage report summarizes per-MITRE-technique detection status with a 60%+ coverage target. (EMULATION-01, EMULATION-02, EMULATION-03)
+- [ ] **Phase 271: Quickstart Command And End-To-End Validation** - swarmctl quickstart orchestrates first-run end-to-end: validates config, starts runtime, injects a synthetic attack, waits for detection, and reports the finding with an elapsed-time measurement. (DEPLOY-03)
+
+### Phase 268: Curated Defaults And Operator UX
+
+**Goal:** Operators can reach a working detect_only runtime on first run using curated defaults, and the operator status surface and error messages are clear enough to self-serve.
+**Requirements:** DEFAULTS-01, DEFAULTS-02, OPEXP-01, OPEXP-02
+**Depends on:** v1.74 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `rulesets/default.yaml` ships with documented detection profiles for all 12 shipped detector strategies; an operator can run `swarmctl init` and `swarmctl validate` without modification.
+2. The runtime boots to a ready state on first run using the generated config without manual config editing.
+3. `swarmctl status` outputs a single-screen summary of runtime mode, active detectors, bridge health, recent findings count, and escalation state.
+4. Error messages from config validation, startup failures, and bridge connection issues include a specific remediation step, not just an error code.
+
+### Phase 269: Deployment Documentation
+
+**Goal:** An operator who has never run Swarm can follow a getting-started guide and reach first detection in under 15 minutes, and the deployment reference covers all supported paths.
+**Requirements:** DEPLOY-01, DEPLOY-02
+**Depends on:** Phase 268
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `docs/QUICKSTART.md` walks an operator from zero to first detection using Docker Compose including telemetry injection, detection observation, and finding inspection via `swarmctl`.
+2. A hands-on path through the guide from a clean state produces a visible detection finding within the 15-minute time target.
+3. Deployment documentation covers Docker single-container, Docker Compose with NATS, Helm chart, and bare-metal binary paths, each with prerequisites, config snippets, and a verification step.
+
+### Phase 270: Adversary Emulation Corpus
+
+**Goal:** Operators and CI can verify detection coverage against public adversary emulation scenarios and read a per-technique coverage report.
+**Requirements:** EMULATION-01, EMULATION-02, EMULATION-03
+**Depends on:** Phase 269
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. The repo includes at least 20 Atomic Red Team techniques adapted as replay scenarios spanning execution, persistence, credential access, lateral movement, and defense evasion tactics.
+2. `cargo test` runs an adversary emulation integration suite that replays the corpus through the full detection pipeline and passes with a documented technique-to-detector mapping.
+3. A coverage report is generated showing per-MITRE-technique detection status (detected, partial, not covered) and overall technique coverage percentage, meeting the 60%+ coverage target against the mapped corpus.
+
+### Phase 271: Quickstart Command And End-To-End Validation
+
+**Goal:** A new operator can run one command and get to first detection with a measured time-to-detect proof, validating the full operator packaging end-to-end.
+**Requirements:** DEPLOY-03
+**Depends on:** Phase 270
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `swarmctl quickstart` validates the config, starts the runtime, injects a built-in synthetic attack scenario, waits for detection, and prints the finding with elapsed time in one command.
+2. The quickstart command completes successfully on a clean install without requiring manual runtime management steps.
+3. The end-to-end flow from `swarmctl quickstart` through reported finding serves as the integration-level proof that curated defaults, deployment docs, and corpus validation are all coherent.
+
 
 ## Progress
 
@@ -804,6 +863,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **v1.73 execution order:** 260 -> 261 -> 262 -> 263
 
 **v1.74 execution order:** 264 -> 265 -> 266 -> 267
+
+**v1.75 execution order:** 268 -> 269 -> 270 -> 271
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -963,7 +1024,11 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 265. kitten_agent.rs Decomposition | v1.74 | 0/TBD | Not started | - |
 | 266. drafting.rs And ingest/tests.rs Decomposition | v1.74 | 0/TBD | Not started | - |
 | 267. Agent Crate Extraction | v1.74 | 0/TBD | Not started | - |
+| 268. Curated Defaults And Operator UX | v1.75 | 0/TBD | Not started | - |
+| 269. Deployment Documentation | v1.75 | 0/TBD | Not started | - |
+| 270. Adversary Emulation Corpus | v1.75 | 0/TBD | Not started | - |
+| 271. Quickstart Command And End-To-End Validation | v1.75 | 0/TBD | Not started | - |
 
 ---
 *Active milestone: v1.74 Structural Integrity*
-*Next step: Run `/gsd:plan-phase 264` to plan the first phase.*
+*v1.75 queued: Run `/gsd:plan-phase 268` after v1.74 completes.*

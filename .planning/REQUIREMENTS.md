@@ -1020,6 +1020,16 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | EXTRACT-01 | Phase 267 | Pending |
 | EXTRACT-02 | Phase 267 | Pending |
 | EXTRACT-03 | Phase 267 | Pending |
+| DEFAULTS-01 | Phase 268 | Pending |
+| DEFAULTS-02 | Phase 268 | Pending |
+| OPEXP-01 | Phase 268 | Pending |
+| OPEXP-02 | Phase 268 | Pending |
+| DEPLOY-01 | Phase 269 | Pending |
+| DEPLOY-02 | Phase 269 | Pending |
+| EMULATION-01 | Phase 270 | Pending |
+| EMULATION-02 | Phase 270 | Pending |
+| EMULATION-03 | Phase 270 | Pending |
+| DEPLOY-03 | Phase 271 | Pending |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
@@ -1060,7 +1070,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.72 complete: 4 requirements satisfied across phases 256-259
 - v1.73 complete: 6 satisfied across phases 260-263
 - v1.74 active: 10 requirements across phases 264-267 (TESTFIX-01-02 -> Phase 264; DEADCODE-01 -> Phase 264; DECOMP-01 -> Phase 265; DECOMP-02-03 -> Phase 266; EXTRACT-01-03 -> Phase 267)
+- v1.75 queued: 10 requirements across phases 268-271 (DEFAULTS-01-02, OPEXP-01-02 -> Phase 268; DEPLOY-01-02 -> Phase 269; EMULATION-01-03 -> Phase 270; DEPLOY-03 -> Phase 271)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-13 — Defined v1.74 Structural Integrity requirements and mapped 10 requirements to phases 264-267*
+*Last updated: 2026-04-13 — Defined v1.75 Operator Packaging requirements and mapped 10 requirements to phases 268-271*

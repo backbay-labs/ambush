@@ -20,7 +20,12 @@
 
 ## Queued Milestones
 
-- `v1.75 Operator Packaging` — Curated default config, deployment docs, swarmctl quickstart, tested against Atomic Red Team corpus
+### v1.75 Operator Packaging
+**Executable phases:** 268-271
+**Status:** Queued
+**Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
+**Progress:** Phases 268-271 defined; ready to activate after v1.74 completes
+
 - `v1.76 External Signal Ingestion` — STIX/TAXII threat intel feed consumer, cloud audit log detection
 - `v1.77 Integration Proof` — Deep EDR and SIEM adapter integration with real telemetry
 
