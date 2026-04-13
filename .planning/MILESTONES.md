@@ -11,12 +11,19 @@
 
 ## Active Milestone
 
-No active milestone. `v1.63 Evolution Crate Decomposition And Schema Migration`
-completed on 2026-04-12, and the next milestone has not been activated yet.
+`v1.64 Cross-Crate Path Hack Elimination` is active. Defining requirements and roadmap.
 
 ## Queued Milestones
 
-No queued milestones currently defined.
+- `v1.65 Config Crate Extraction And service.rs Decomposition`
+- `v1.66 Learned-State Integrity Signing`
+- `v1.67 Secret Zeroization And API Token Lifecycle`
+- `v1.68 Multi-Detector Evolution Genomes`
+- `v1.69 Command-Line Deobfuscation Pipeline`
+- `v1.70 Telemetry Source Breadth`
+- `v1.71 CI Hardening And Versioned Releases`
+- `v1.72 OpenAPI Spec And SOAR Bidirectional Sync`
+- `v1.73 Stigmergic Feedback Loops And Baseline Resistance`
 
 ## History
 

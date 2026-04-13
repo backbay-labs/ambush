@@ -554,6 +554,114 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - **DECOMP-03**: Pheromone deposit wire format includes an explicit schema version; the substrate accepts deposits from the current and previous version with automatic migration
 - **DECOMP-04**: API response envelopes include schema versions; breaking changes are gated behind version negotiation rather than silent field addition
 
+### Cross-Crate Path Hack Elimination (v1.64)
+
+#### Crate Boundary Cleanup
+
+- **PATHFIX-01**: All `#[path = "../../swarm-evolution/..."]` directives in `swarm-runtime/src/lib.rs` are replaced with proper crate-level dependency edges or re-exports
+- **PATHFIX-02**: `pub(crate)` items in evolution source files resolve against the correct crate root (`swarm-evolution`, not `swarm-runtime`)
+- **PATHFIX-03**: IDE go-to-definition and rename-symbol work correctly across the evolution/runtime crate boundary after the path hacks are removed
+- **PATHFIX-04**: The workspace builds, all tests pass, and clippy is clean after path hack removal with no regression in public API surface
+
+### Config Crate Extraction And service.rs Decomposition (v1.65)
+
+#### Config Extraction
+
+- **CFGEXT-01**: `swarm-core/src/config.rs` is extracted into a dedicated `swarm-config` crate or decomposed into focused sub-modules with no file exceeding 2000 lines
+- **CFGEXT-02**: Config struct changes no longer trigger recompilation of the entire workspace; only dependent crates rebuild
+
+#### Service Decomposition
+
+- **SVCMOD-01**: `swarm-runtime/src/service.rs` is decomposed into focused sub-modules for lifecycle management, agent orchestration, and request handling with no file exceeding 2000 lines
+- **SVCMOD-02**: The `RuntimeService` god object is refactored to reduce `Arc` cloning overhead on the request path
+
+### Learned-State Integrity Signing (v1.66)
+
+#### State Signing
+
+- **STATESIG-01**: Behavioral baseline snapshots are signed with the agent's Ed25519 key before persistence and verified on restore; tampered snapshots fail closed with structured error
+- **STATESIG-02**: Sphinx knowledge-graph state files are signed before persistence and verified on restore
+- **STATESIG-03**: Evolution population and episode artifacts are signed before persistence and verified on restore
+- **STATESIG-04**: All signed state artifacts include a monotonic sequence number to prevent replay of older state
+
+### Secret Zeroization And API Token Lifecycle (v1.67)
+
+#### Memory Hygiene
+
+- **ZERO-01**: Plaintext secrets resolved from `@secret:` paths are zeroized from heap memory after use via the `zeroize` crate
+- **ZERO-02**: Release builds use `panic = "abort"` to prevent stack-unwinding information disclosure
+
+#### Token Lifecycle
+
+- **TOKEN-01**: Operator API bearer tokens support configurable expiry and rotation without restart
+- **TOKEN-02**: HTTP API surfaces enforce per-source request rate limiting with configurable burst and sustained thresholds
+
+### Multi-Detector Evolution Genomes (v1.68)
+
+#### Genome Breadth
+
+- **GENOME-01**: The evolution mutation/fitness pipeline supports `BehavioralAnomalyDetector`, `FilelessExecutionDetector`, and `DnsExfiltrationDetector` alongside `SuspiciousProcessTreeDetector`
+- **GENOME-02**: Each supported detector type has a typed genome representation with perturbation and crossover operators
+- **GENOME-03**: The evolution benchmark measures generation-over-generation fitness for all supported detector types
+- **GENOME-04**: At least one non-process-tree detector shows measurable autonomous fitness improvement above the current baseline
+
+### Command-Line Deobfuscation Pipeline (v1.69)
+
+#### Normalization
+
+- **DEOBF-01**: A pre-evaluation normalization pass handles caret insertion, environment variable expansion, and Unicode homoglyph substitution before detectors evaluate command-line arguments
+- **DEOBF-02**: Base64 and common encoded argument patterns are decoded to plaintext before detector evaluation
+- **DEOBF-03**: The evasion corpus catch-rate for `defense_evasion` and `execution` scenarios improves by at least 15% from normalization alone
+- **DEOBF-04**: Normalization introduces zero false-positive regression on the benign baseline corpus
+
+### Telemetry Source Breadth (v1.70)
+
+#### Bridge Adapters
+
+- **TELBR-01**: A `WindowsEventLogBridge` implements `TelemetryBridge` for Windows Event Log sources mapped to the shared telemetry schema
+- **TELBR-02**: A `SysmonBridge` implements `TelemetryBridge` for Sysmon event sources with process, network, and file telemetry mapping
+- **TELBR-03**: An `AuditdBridge` implements `TelemetryBridge` for Linux auditd sources with syscall and authentication telemetry mapping
+- **TELBR-04**: All new bridges expose health, event-count, and lag metrics consistent with existing bridge patterns
+
+### CI Hardening And Versioned Releases (v1.71)
+
+#### CI Pipeline
+
+- **CIHARD-01**: CI runs fmt, clippy, build, and test as parallel jobs with proper dependency edges and artifact sharing
+- **CIHARD-02**: JetStream integration tests run in CI against a containerized NATS instance
+- **CIHARD-03**: The Criterion hot-path benchmark runs in CI and fails the build if p99 latency regresses beyond a configurable threshold
+
+#### Release Pipeline
+
+- **RELEASE-01**: Tagged releases build and publish multi-arch container images with SBOM and signature attestation
+- **RELEASE-02**: A CHANGELOG is generated from conventional commit history on each release
+
+### OpenAPI Spec And SOAR Bidirectional Sync (v1.72)
+
+#### API Spec
+
+- **APISPEC-01**: A machine-readable OpenAPI 3.1 spec is published for the `/v2/api/` platform surface
+- **APISPEC-02**: A generated Python client is shipped from the OpenAPI spec and tested against the live platform API
+
+#### SOAR Sync
+
+- **SOARSYNC-01**: Inbound analyst verdicts from Splunk SOAR, Sentinel SOAR, or Chronicle SOAR flow into Swarm's false-positive tracking and evolution fitness
+- **SOARSYNC-02**: SOAR verdict sync preserves durable audit lineage linking the external analyst identity, source system, and affected finding/incident IDs
+
+### Stigmergic Feedback Loops And Baseline Resistance (v1.73)
+
+#### Pheromone Recruitment
+
+- **STIGM-01**: High-concentration pheromone deposits cause agents to lower detection thresholds for matching threat classes (positive-feedback recruitment)
+- **STIGM-02**: Escalation resolution causes agents to restore baseline detection thresholds (inhibitory signaling)
+- **STIGM-03**: Time from first-stage detection to SwarmMode::Alert on kill-chain replay scenarios decreases by at least 20% with recruitment enabled
+
+#### Baseline Resistance
+
+- **BASERES-01**: Behavioral baseline snapshots are signed with HMAC using the agent's Ed25519 key (building on STATESIG-01)
+- **BASERES-02**: The minimum number of observations needed to shift baselines by 1, 2, and 3 sigma is empirically quantified and published
+- **BASERES-03**: Baseline snapshots older than a configurable staleness threshold trigger graduated confidence reduction instead of being silently trusted
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -813,6 +921,49 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | DECOMP-02 | Phase 221 | Completed |
 | DECOMP-03 | Phase 222 | Completed |
 | DECOMP-04 | Phase 223 | Completed |
+| PATHFIX-01 | Phase 224 | Pending |
+| PATHFIX-02 | Phase 225 | Pending |
+| PATHFIX-03 | Phase 226 | Pending |
+| PATHFIX-04 | Phase 227 | Pending |
+| CFGEXT-01 | Phase 228 | Pending |
+| CFGEXT-02 | Phase 229 | Pending |
+| SVCMOD-01 | Phase 230 | Pending |
+| SVCMOD-02 | Phase 231 | Pending |
+| STATESIG-01 | Phase 232 | Pending |
+| STATESIG-02 | Phase 233 | Pending |
+| STATESIG-03 | Phase 234 | Pending |
+| STATESIG-04 | Phase 235 | Pending |
+| ZERO-01 | Phase 236 | Pending |
+| ZERO-02 | Phase 237 | Pending |
+| TOKEN-01 | Phase 238 | Pending |
+| TOKEN-02 | Phase 239 | Pending |
+| GENOME-01 | Phase 240 | Pending |
+| GENOME-02 | Phase 241 | Pending |
+| GENOME-03 | Phase 242 | Pending |
+| GENOME-04 | Phase 243 | Pending |
+| DEOBF-01 | Phase 244 | Pending |
+| DEOBF-02 | Phase 245 | Pending |
+| DEOBF-03 | Phase 246 | Pending |
+| DEOBF-04 | Phase 247 | Pending |
+| TELBR-01 | Phase 248 | Pending |
+| TELBR-02 | Phase 249 | Pending |
+| TELBR-03 | Phase 250 | Pending |
+| TELBR-04 | Phase 251 | Pending |
+| CIHARD-01 | Phase 252 | Pending |
+| CIHARD-02 | Phase 253 | Pending |
+| CIHARD-03 | Phase 254 | Pending |
+| RELEASE-01 | Phase 255 | Pending |
+| RELEASE-02 | Phase 255 | Pending |
+| APISPEC-01 | Phase 256 | Pending |
+| APISPEC-02 | Phase 257 | Pending |
+| SOARSYNC-01 | Phase 258 | Pending |
+| SOARSYNC-02 | Phase 259 | Pending |
+| STIGM-01 | Phase 260 | Pending |
+| STIGM-02 | Phase 261 | Pending |
+| STIGM-03 | Phase 262 | Pending |
+| BASERES-01 | Phase 260 | Pending |
+| BASERES-02 | Phase 262 | Pending |
+| BASERES-03 | Phase 263 | Pending |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
@@ -842,8 +993,17 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.61 complete: 4 requirements satisfied across phases 212-215
 - v1.62 complete: 4 requirements satisfied across phases 216-219
 - v1.63 complete: 4 requirements satisfied across phases 220-223
-- No active milestone: next milestone is not defined yet
+- v1.64 pending: 4 requirements across phases 224-227
+- v1.65 pending: 4 requirements across phases 228-231
+- v1.66 pending: 4 requirements across phases 232-235
+- v1.67 pending: 4 requirements across phases 236-239
+- v1.68 pending: 4 requirements across phases 240-243
+- v1.69 pending: 4 requirements across phases 244-247
+- v1.70 pending: 4 requirements across phases 248-251
+- v1.71 pending: 5 requirements across phases 252-255
+- v1.72 pending: 4 requirements across phases 256-259
+- v1.73 pending: 6 requirements across phases 260-263
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-12 — Completed Phase 223 API response schema migration and closed v1.63*
+*Last updated: 2026-04-11 — Added v1.64-v1.73 requirements (phases 224-263)*
