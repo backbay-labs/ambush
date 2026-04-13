@@ -26,19 +26,17 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.69` added a shared command-line deobfuscation seam, benchmark corpus, and benign-regression proof across the detector family.
 - `v1.70` expanded telemetry-source breadth across Windows Event Log, Sysmon, and auditd so the hardened CI and release paths now cover the broader ingest surface too.
 
-## Current Milestone: v1.75 Operator Packaging
+## Current Milestone: v1.76 External Signal Ingestion
 
-**Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
+**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
 
 **Target features:**
-- Curated default config with sensible detection profiles for common deployment modes
-- Deployment documentation covering Docker, Helm, and bare-metal quickstart paths
-- `swarmctl quickstart` command that gets an operator to first detection in under 15 minutes
-- Validation against Atomic Red Team corpus proving detection coverage on public adversary emulation scenarios
-- Operator-facing getting-started guide with worked examples
+- STIX/TAXII 2.1 threat intelligence feed consumer that populates the existing threat-intel substrate
+- CloudTrail detection strategy identifying IAM abuse, credential compromise, and resource hijacking in AWS audit logs
+- Kubernetes audit log detection strategy identifying privilege escalation, RBAC abuse, and container escape patterns
+- Finding enrichment with IOC context when behavioral detections correlate with known-bad indicators
 
 **Queued milestones:**
-- `v1.76 External Signal Ingestion` — STIX/TAXII threat intel feed consumer, cloud audit log detection
 - `v1.77 Integration Proof` — Deep EDR and SIEM adapter integration with real telemetry
 
 ## Current State
@@ -282,4 +280,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-13 after defining v1.75 Operator Packaging*
+*Last updated: 2026-04-13 after defining v1.76 External Signal Ingestion*
