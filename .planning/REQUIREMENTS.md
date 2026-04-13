@@ -696,6 +696,30 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [ ] **EXTRACT-02**: `swarm-agents` compiles independently with `cargo build -p swarm-agents` and carries its own focused unit test suite, while `swarm-runtime` integration tests continue to exercise the full agent pipeline
 - [ ] **EXTRACT-03**: The workspace builds cleanly (`cargo build --workspace`), all existing tests pass (`cargo test --workspace`), and clippy remains warning-free (`cargo clippy --workspace -- -D warnings`) after extraction
 
+### Operator Packaging (v1.75)
+
+#### Default Configuration
+
+- [ ] **DEFAULTS-01**: A curated `rulesets/default.yaml` ships with sensible detection profiles for a `detect_only` deployment covering all 12 shipped detector strategies, with documented inline comments explaining each threshold and its rationale
+- [ ] **DEFAULTS-02**: `swarmctl init` generates a working config from `rulesets/default.yaml` that passes `swarmctl validate` without modification and boots the runtime to a ready state on the first run
+
+#### Deployment Documentation
+
+- [ ] **DEPLOY-01**: A repo-owned getting-started guide (`docs/QUICKSTART.md`) walks an operator from zero to first detection in under 15 minutes using Docker Compose, including telemetry injection, detection observation, and finding inspection via `swarmctl`
+- [ ] **DEPLOY-02**: Deployment documentation covers Docker single-container, Docker Compose with NATS, Helm chart, and bare-metal binary paths with prerequisites, config, and verification steps
+- [ ] **DEPLOY-03**: A `swarmctl quickstart` command orchestrates first-run: validates config, starts the runtime, injects a built-in synthetic attack scenario, waits for detection, and reports the finding with an elapsed-time measurement
+
+#### Adversary Emulation Validation
+
+- [ ] **EMULATION-01**: The repo includes a mapped Atomic Red Team scenario corpus (minimum 20 techniques across execution, persistence, credential access, lateral movement, and defense evasion tactics) adapted as replay scenarios
+- [ ] **EMULATION-02**: `cargo test` includes an adversary emulation integration test suite that replays the Atomic Red Team corpus through the full detection pipeline and asserts coverage with a documented technique-to-detector mapping
+- [ ] **EMULATION-03**: A coverage report summarizes per-MITRE-technique detection status (detected, partial, not covered) and overall technique coverage percentage, with the target of 60%+ coverage across the mapped corpus
+
+#### Operator Experience
+
+- [ ] **OPEXP-01**: `swarmctl status` outputs a concise operator-readable summary including runtime mode, active detectors, bridge health, recent findings count, and escalation state in a single screen of output
+- [ ] **OPEXP-02**: Error messages from config validation, runtime startup failures, and bridge connection issues include actionable remediation guidance (not just error codes)
+
 ## Traceability
 
 | Requirement | Phase | Status |
