@@ -1050,6 +1050,15 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | EMULATION-02 | Phase 270 | Pending |
 | EMULATION-03 | Phase 270 | Pending |
 | DEPLOY-03 | Phase 271 | Pending |
+| THREATINTEL-01 | Phase 272 | Pending |
+| THREATINTEL-02 | Phase 272 | Pending |
+| THREATINTEL-03 | Phase 272 | Pending |
+| CLOUDBR-01 | Phase 273 | Pending |
+| CLOUDBR-02 | Phase 273 | Pending |
+| CLOUDBR-03 | Phase 273 | Pending |
+| CLOUDDET-01 | Phase 274 | Pending |
+| CLOUDDET-02 | Phase 275 | Pending |
+| CLOUDDET-03 | Phase 275 | Pending |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
@@ -1091,6 +1100,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.73 complete: 6 satisfied across phases 260-263
 - v1.74 active: 10 requirements across phases 264-267 (TESTFIX-01-02 -> Phase 264; DEADCODE-01 -> Phase 264; DECOMP-01 -> Phase 265; DECOMP-02-03 -> Phase 266; EXTRACT-01-03 -> Phase 267)
 - v1.75 queued: 10 requirements across phases 268-271 (DEFAULTS-01-02, OPEXP-01-02 -> Phase 268; DEPLOY-01-02 -> Phase 269; EMULATION-01-03 -> Phase 270; DEPLOY-03 -> Phase 271)
+- v1.76 queued: 9 requirements across phases 272-275 (THREATINTEL-01-03 -> Phase 272; CLOUDBR-01-03 -> Phase 273; CLOUDDET-01 -> Phase 274; CLOUDDET-02-03 -> Phase 275)
 
 ---
 *Requirements defined: 2026-04-05*

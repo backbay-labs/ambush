@@ -26,7 +26,12 @@
 **Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
 **Progress:** Phases 268-271 defined; ready to activate after v1.74 completes
 
-- `v1.76 External Signal Ingestion` — STIX/TAXII threat intel feed consumer, cloud audit log detection
+### v1.76 External Signal Ingestion
+**Executable phases:** 272-275
+**Status:** Queued
+**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
+**Progress:** Phases 272-275 defined; ready to activate after v1.75 completes
+
 - `v1.77 Integration Proof` — Deep EDR and SIEM adapter integration with real telemetry
 
 ## History

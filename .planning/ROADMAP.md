@@ -738,6 +738,16 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 - [ ] **Phase 270: Adversary Emulation Corpus** - A mapped Atomic Red Team corpus of 20+ techniques ships as replay scenarios; cargo test includes an adversary emulation integration suite with a technique-to-detector mapping; a coverage report summarizes per-MITRE-technique detection status with a 60%+ coverage target. (EMULATION-01, EMULATION-02, EMULATION-03)
 - [ ] **Phase 271: Quickstart Command And End-To-End Validation** - swarmctl quickstart orchestrates first-run end-to-end: validates config, starts runtime, injects a synthetic attack, waits for detection, and reports the finding with an elapsed-time measurement. (DEPLOY-03)
 
+### v1.76 External Signal Ingestion
+
+**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
+**Executable phases:** 272-275
+
+- [ ] **Phase 272: STIX/TAXII Consumer And Threat Intel Enrichment** - A swarm-ingest-taxii crate polls STIX/TAXII 2.1 collection feeds on a bounded interval, maps indicator objects into ThreatIntelEntry records with confidence scores and TTL, deduplicates on re-observation, and enriches behavioral detection findings with IOC context including feed source, STIX indicator ID, and confidence boost. (THREATINTEL-01, THREATINTEL-02, THREATINTEL-03)
+- [ ] **Phase 273: Cloud Telemetry Bridges** - swarm-ingest-json gains a cloudtrail bridge variant parsing AWS CloudTrail JSON into TelemetryPayload::CloudTrailEvent and a kubernetes_audit bridge variant parsing Kubernetes audit webhook JSON into TelemetryPayload::KubernetesAuditEvent; both bridges register in SwarmConfig, expose health metrics on the existing bridge surface, and are validated by integration tests. (CLOUDBR-01, CLOUDBR-02, CLOUDBR-03)
+- [ ] **Phase 274: CloudTrail Detector** - A CloudTrailDetector implements DetectionStrategy and detects IAM abuse, resource hijacking, and credential compromise patterns from CloudTrailEvent telemetry, maps findings to existing ThreatClass variants and MITRE ATT&CK cloud technique IDs, produces signed pheromone deposits through the standard pipeline, and carries cloud-specific evidence in finding payloads. (CLOUDDET-01)
+- [ ] **Phase 275: Kubernetes Audit Detector And Cross-Cloud Integration Proof** - A KubernetesAuditDetector implements DetectionStrategy and detects privilege escalation, RBAC abuse, and container escape indicators from KubernetesAuditEvent telemetry; the milestone closes with an end-to-end integration proof that both cloud detectors produce signed findings with cloud-specific evidence through the full detection pipeline. (CLOUDDET-02, CLOUDDET-03)
+
 ### Phase 268: Curated Defaults And Operator UX
 
 **Goal:** Operators can reach a working detect_only runtime on first run using curated defaults, and the operator status surface and error messages are clear enough to self-serve.
@@ -786,6 +796,58 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 1. `swarmctl quickstart` validates the config, starts the runtime, injects a built-in synthetic attack scenario, waits for detection, and prints the finding with elapsed time in one command.
 2. The quickstart command completes successfully on a clean install without requiring manual runtime management steps.
 3. The end-to-end flow from `swarmctl quickstart` through reported finding serves as the integration-level proof that curated defaults, deployment docs, and corpus validation are all coherent.
+
+### Phase 272: STIX/TAXII Consumer And Threat Intel Enrichment
+
+**Goal:** The runtime can consume external STIX/TAXII 2.1 threat intelligence feeds and enrich behavioral detection findings with matched IOC context.
+**Requirements:** THREATINTEL-01, THREATINTEL-02, THREATINTEL-03
+**Depends on:** v1.75 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `swarm-ingest-taxii` polls a configured STIX/TAXII 2.1 collection URL on a bounded interval and writes IPv4, domain, file hash, and URL indicator objects into the existing pheromone substrate as ThreatIntelEntry records with confidence scores, TTL derived from STIX `valid_until`, and source attribution.
+2. Re-observed indicators update confidence and TTL in place rather than creating duplicate entries; the deduplication key is type+value.
+3. Feed health (last poll time, indicators ingested, error count) is visible on the existing `/healthz` surface without requiring a separate status command.
+4. A behavioral detection finding that matches a threat-intel indicator carries enriched evidence including the IOC value, feed source, STIX indicator ID, and the confidence boost applied, visible in `swarmctl` finding inspection and signed finding envelopes.
+
+### Phase 273: Cloud Telemetry Bridges
+
+**Goal:** The runtime can ingest AWS CloudTrail and Kubernetes audit log telemetry through two new bridge variants that participate in the existing bridge health and metrics surface.
+**Requirements:** CLOUDBR-01, CLOUDBR-02, CLOUDBR-03
+**Depends on:** Phase 272
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `swarm-ingest-json` ships a `cloudtrail` bridge variant that parses AWS CloudTrail JSON records into `TelemetryPayload::CloudTrailEvent` with field mapping for `eventName`, `userIdentity`, `sourceIPAddress`, `requestParameters`, and `responseElements`.
+2. `swarm-ingest-json` ships a `kubernetes_audit` bridge variant that parses Kubernetes audit log JSON (webhook backend format) into `TelemetryPayload::KubernetesAuditEvent` with field mapping for `verb`, `user`, `objectRef`, `responseStatus`, and `annotations`.
+3. Both cloud bridges register as named entries under `SwarmConfig.runtime.telemetry_sources` and appear in `swarmctl status` bridge health output alongside the existing host-log bridges.
+4. Integration tests prove end-to-end delivery from raw cloud JSON through the bridge into `TelemetryPayload` variants without data loss on mapped fields.
+
+### Phase 274: CloudTrail Detector
+
+**Goal:** The runtime can detect IAM abuse, resource hijacking, and credential compromise patterns from AWS CloudTrail telemetry and produce signed findings with cloud-specific evidence.
+**Requirements:** CLOUDDET-01
+**Depends on:** Phase 273
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `CloudTrailDetector` implements `DetectionStrategy` and fires on at least three IAM abuse patterns (CreateAccessKey from unusual principal, ConsoleLogin without MFA from new geography, AssumeRole to privilege-escalation-capable roles), two resource hijacking patterns (RunInstances with crypto-mining AMI patterns, large instance type from unusual principal), and two credential compromise patterns (GetSecretValue/GetParameter from unusual callers).
+2. Detected findings include cloud-specific evidence fields: AWS account ID, principal ARN, and the triggering event name.
+3. Findings map to existing `ThreatClass` variants and carry MITRE ATT&CK cloud technique IDs in finding metadata.
+4. `CloudTrailDetector` produces signed pheromone deposits through the standard pipeline and findings appear in `swarmctl` finding inspection with full evidence payloads.
+
+### Phase 275: Kubernetes Audit Detector And Cross-Cloud Integration Proof
+
+**Goal:** The runtime can detect privilege escalation, RBAC abuse, and container escape from Kubernetes audit telemetry, and both cloud detectors are proven end-to-end through the full detection pipeline.
+**Requirements:** CLOUDDET-02, CLOUDDET-03
+**Depends on:** Phase 274
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `KubernetesAuditDetector` implements `DetectionStrategy` and fires on at least two privilege escalation patterns (create/update ClusterRoleBinding, exec into privileged pod), two RBAC abuse patterns (impersonation, wildcard permissions), and two container escape indicators (privileged container creation, hostPID or hostNetwork).
+2. Detected findings include cloud-specific evidence fields: Kubernetes namespace, requesting user or ServiceAccount, and the triggering audit verb plus object reference.
+3. Both `CloudTrailDetector` and `KubernetesAuditDetector` findings map to existing `ThreatClass` variants, carry MITRE ATT&CK cloud technique IDs, and produce signed pheromone deposits through the standard pipeline.
+4. An integration test proves the full path: cloud bridge JSON ingestion -> `TelemetryPayload` normalization -> detector evaluation -> signed finding with cloud-specific evidence -> `swarmctl` finding inspection for both cloud detectors.
 
 
 ## Progress
@@ -865,6 +927,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **v1.74 execution order:** 264 -> 265 -> 266 -> 267
 
 **v1.75 execution order:** 268 -> 269 -> 270 -> 271
+
+**v1.76 execution order:** 272 -> 273 -> 274 -> 275
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -1028,7 +1092,12 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 269. Deployment Documentation | v1.75 | 0/TBD | Not started | - |
 | 270. Adversary Emulation Corpus | v1.75 | 0/TBD | Not started | - |
 | 271. Quickstart Command And End-To-End Validation | v1.75 | 0/TBD | Not started | - |
+| 272. STIX/TAXII Consumer And Threat Intel Enrichment | v1.76 | 0/TBD | Not started | - |
+| 273. Cloud Telemetry Bridges | v1.76 | 0/TBD | Not started | - |
+| 274. CloudTrail Detector | v1.76 | 0/TBD | Not started | - |
+| 275. Kubernetes Audit Detector And Cross-Cloud Integration Proof | v1.76 | 0/TBD | Not started | - |
 
 ---
 *Active milestone: v1.74 Structural Integrity*
+*v1.76 queued: Run `/gsd:plan-phase 272` after v1.75 completes.*
 *v1.75 queued: Run `/gsd:plan-phase 268` after v1.74 completes.*
