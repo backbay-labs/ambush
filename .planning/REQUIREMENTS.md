@@ -720,6 +720,26 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [ ] **OPEXP-01**: `swarmctl status` outputs a concise operator-readable summary including runtime mode, active detectors, bridge health, recent findings count, and escalation state in a single screen of output
 - [ ] **OPEXP-02**: Error messages from config validation, runtime startup failures, and bridge connection issues include actionable remediation guidance (not just error codes)
 
+### External Signal Ingestion (v1.76)
+
+#### Threat Intelligence Feeds
+
+- [ ] **THREATINTEL-01**: A `swarm-ingest-taxii` crate implements a STIX/TAXII 2.1 collection consumer that polls configured feed URLs on a bounded interval and maps STIX indicator objects (IPv4, domain, file hash, URL) into `ThreatIntelEntry` records in the existing pheromone substrate with confidence scores, TTL from STIX `valid_until`, and source attribution
+- [ ] **THREATINTEL-02**: The threat-intel substrate consumer deduplicates indicators by type+value, updates confidence and TTL on re-observation, and exposes feed health (last poll time, indicators ingested, errors) on the existing `/healthz` surface
+- [ ] **THREATINTEL-03**: Detection findings that match threat-intel indicators carry enriched evidence including the IOC value, feed source, STIX indicator ID, and confidence boost applied, visible in `swarmctl` finding inspection and signed finding envelopes
+
+#### Cloud Audit Log Detection
+
+- [ ] **CLOUDDET-01**: A `CloudTrailDetector` implements `DetectionStrategy` and detects IAM abuse patterns (CreateAccessKey from unusual principal, ConsoleLogin without MFA from new geography, AssumeRole to privilege-escalation-capable roles), resource hijacking (RunInstances with crypto-mining AMI patterns, large instance types from unusual principals), and credential compromise (GetSecretValue/GetParameter from unusual callers) from `TelemetryPayload::CloudTrailEvent` events
+- [ ] **CLOUDDET-02**: A `KubernetesAuditDetector` implements `DetectionStrategy` and detects privilege escalation (create/update ClusterRoleBinding, exec into privileged pods, hostPath volume mounts), RBAC abuse (impersonation, wildcard permissions), and container escape indicators (privileged container creation, hostPID/hostNetwork) from `TelemetryPayload::KubernetesAuditEvent` events
+- [ ] **CLOUDDET-03**: Both cloud detectors map findings to existing `ThreatClass` variants and MITRE ATT&CK cloud technique IDs, produce signed pheromone deposits through the standard pipeline, and carry cloud-specific evidence (AWS account ID, K8s namespace, principal ARN) in finding payloads
+
+#### Telemetry Bridge Extensions
+
+- [ ] **CLOUDBR-01**: `swarm-ingest-json` extends with a `cloudtrail` bridge variant that parses AWS CloudTrail JSON records (from S3, SQS, or local file) into `TelemetryPayload::CloudTrailEvent` with field mapping for `eventName`, `userIdentity`, `sourceIPAddress`, `requestParameters`, and `responseElements`
+- [ ] **CLOUDBR-02**: `swarm-ingest-json` extends with a `kubernetes_audit` bridge variant that parses Kubernetes audit log JSON (webhook backend format) into `TelemetryPayload::KubernetesAuditEvent` with field mapping for `verb`, `user`, `objectRef`, `responseStatus`, and `annotations`
+- [ ] **CLOUDBR-03**: Both cloud bridges register in `SwarmConfig.runtime.telemetry_sources`, expose health metrics on the existing bridge surface, and are validated by integration tests proving end-to-end detection through the cloud detector pipeline
+
 ## Traceability
 
 | Requirement | Phase | Status |
