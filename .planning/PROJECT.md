@@ -10,90 +10,48 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.51 Assurance-Gated Evolution And Counterexample Loop` shipped on 2026-04-11.
+`v1.73 Stigmergic Feedback Loops And Baseline Resistance` shipped on 2026-04-13.
 
 **Goal:**
-- Turn `v1.48` artifacts into real gate inputs by feeding evasion coverage, solver proofs, and counterexamples into queue, canary, promotion, and mutation decisions.
+- Machine-readable API spec, generated Python client, and inbound SOAR analyst verdict sync.
 
-**Target features:**
-- Shared repo-owned assurance policy over evasion coverage floors and solver proof outcomes
-- Durable harvested replay cases from solver counterexamples and measured evasion misses
-- Fail-closed assurance enforcement across queue, canary, and promotion
-- Signed, bounded waivers and exported assurance lineage through the shipped review and status surfaces
+**Delivered:**
+- The repo now emits and validates one checked-in OpenAPI 3.1 contract for the authenticated `/v2/api/` platform surface from repo-owned code.
+- The repo now generates a Python client from that contract and proves it against a live runtime router.
+- The detect surface now accepts signed Splunk SOAR, Sentinel SOAR, and Chronicle SOAR verdicts on one bounded ingress path.
+- Incident audit entries and normalized false-positive measurements now persist durable SOAR lineage and explicitly reject duplicate or incomplete synced verdicts.
 
 **Supporting foundation:**
-- `v1.48` already ships evasion coverage, solver proofs, and machine-readable counterexamples, but those artifacts are still mostly advisory.
-- `v1.50` made the async lane first-class and operator-visible, so assurance decisions can now build on stronger correlation, scheduling, and evidence quality.
-- `v1.52` and `v1.53` both benefit from a fail-closed rollout and review contract before Providence reconciliation and production packaging add more operator surface area.
+- `v1.68` broadened the autonomous evolution lane beyond suspicious process trees and left the benchmark surface ready to measure detector improvements instead of just process-tree variants.
+- `v1.69` added a shared command-line deobfuscation seam, benchmark corpus, and benign-regression proof across the detector family.
+- `v1.70` expanded telemetry-source breadth across Windows Event Log, Sysmon, and auditd so the hardened CI and release paths now cover the broader ingest surface too.
 
-## Current Milestone: v1.64 Cross-Crate Path Hack Elimination
+## Current Milestone: v1.74 Structural Integrity
 
-**Goal:** Remove the 10 `#[path]` hacks in `swarm-runtime/src/lib.rs` that compile evolution source files under the wrong crate root, breaking `pub(crate)` semantics, IDE tooling, and safe refactoring.
+**Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
 
 **Target features:**
-- Proper crate-level re-exports replacing all `#[path = "../../swarm-evolution/..."]` directives
-- Stable `pub(crate)` boundaries that resolve against the correct crate root
-- IDE go-to-definition and refactoring working correctly across evolution/runtime boundary
+- Fix the 2 failing pheromone journal recovery tests in swarm-pheromone
+- Delete the swarm-evolution facade crate (8-line dead re-export)
+- Decompose the 3 worst oversized files (kitten_agent.rs, drafting.rs, ingest/tests.rs)
+- Begin swarm-runtime extraction by moving agent implementations into a dedicated swarm-agents crate
 
-**Queued milestones (v1.65-v1.73):**
-- `v1.65 Config Crate Extraction And service.rs Decomposition`
-- `v1.66 Learned-State Integrity Signing`
-- `v1.67 Secret Zeroization And API Token Lifecycle`
-- `v1.68 Multi-Detector Evolution Genomes`
-- `v1.69 Command-Line Deobfuscation Pipeline`
-- `v1.70 Telemetry Source Breadth`
-- `v1.71 CI Hardening And Versioned Releases`
-- `v1.72 OpenAPI Spec And SOAR Bidirectional Sync`
-- `v1.73 Stigmergic Feedback Loops And Baseline Resistance`
+**Queued milestones:**
+- `v1.75 Operator Packaging` — Curated default config, deployment docs, swarmctl quickstart, tested against Atomic Red Team corpus
+- `v1.76 External Signal Ingestion` — STIX/TAXII threat intel feed consumer, cloud audit log detection
+- `v1.77 Integration Proof` — Deep EDR and SIEM adapter integration with real telemetry
 
 ## Current State
 
-`v1.52 Providence Reconciliation And Response Rehearsal` is active. The full autonomous execution queue runs v1.52 through v1.63 (phases 176-223) covering Providence reconciliation, production packaging, operational hardening, self-protection, autonomous evolution, sequence detection, operator onboarding, agent isolation, response expansion, anomaly depth, and codebase decomposition.
-
-**What v1.37.1 hardened:**
-- Pheromone deposits are now Ed25519-signed by agents and validated by the substrate on all backends
-- Agent ticks are bounded by configurable timeout (500ms default); hanging agents are marked Degraded
-- Expired threat-intel entries are garbage-collected on in-memory, local-journal, and JetStream backends
-- TetragonBridge detects silent gRPC stream hangs (30s default) and accepts init-spawned processes
-- Secret rotation happens independently of config reload via dedicated secret-dir file-watch
-- Dead-letter journals rotate by size with configurable threshold
-- swarm-pheromone has 37+ focused substrate tests (was zero before)
+`v1.73` is active and complete. The repo has completed the contiguous milestone run from `v1.52` through `v1.73`, covering Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, large-file decomposition, runtime/evolution crate-boundary cleanup, config and service monolith decomposition, learned-state integrity signing, secret zeroization, release-build hardening, restart-free bearer lifecycle handling, shipped HTTP request throttling, multi-detector evolution breadth, command-line deobfuscation hardening, telemetry-source breadth across Windows Event Log, Sysmon, and auditd, hardened CI plus repo-owned versioned release automation, a machine-readable platform API contract with generated client proof plus inbound SOAR verdict sync and lineage, and now stigmergic feedback plus baseline-resistance proof.
 
 **What is now real:**
-- `POST /v1/demo/replay` injects repo-owned scenarios into the live telemetry lane, and `GET /v1/events/stream` exposes typed runtime events for downstream demo surfaces.
-- The operator review workbench now boots from runtime snapshot plus SSE and renders live swarm mode, agent health, pheromone pressure, and escalation timeline state.
-- Human-gated demo actions now pause cleanly, resume through the canonical signed approval flow, and export one proof package with the full decision chain.
-- `providence_webhook` notifications now carry Providence-shaped finding payloads with absolute Swarm drilldown links, runtime status, and bridge-health summary.
-- `swarm-detect` now runs a keyed multi-agent registry during serve mode with runtime role-shift propagation, peer-finding snapshots, and shared lifecycle telemetry.
-- `whisker-primary`, `stalker-primary`, and `weaver-primary` now execute against the same live dispatcher and shared runtime stack when investigation and correlation are enabled.
-- `StalkerAgent` now consumes Whisker pheromones, submits replay bundles into the async investigation pipeline, and republishes completed investigation results back into the substrate.
-- `WeaverAgent` now consumes investigation-result pheromones and persists `CorrelatedIncident` records through the shipped correlation engine.
-- Integration coverage now proves the bounded detect -> investigate -> correlate pipeline, and the full workspace build, clippy, and test suites remained green.
-- Shared telemetry schema and bridge ownership now live in `swarm-core`, which removes the crate-cycle blocker for first-class bridge orchestration.
-- `TetragonBridge` now implements the shared `TelemetryBridge` contract and consumes the core-owned normalized schema directly.
-- `swarm-ingest-json` now provides `CloudTrailBridge` and `GenericJsonBridge`, and bridge-backed telemetry sources can be described from repo-owned YAML with JSON Pointer mappings.
-- Serve mode now constructs only configured bridge instances, runs them through `BridgeRuntimeRegistry`, and forwards normalized bridge output into the live `WhiskerAgent` telemetry lane.
-- `/healthz`, operator status, and `/metrics` now expose per-bridge readiness, processed events, error counts, and lag without failing the core detector/substrate readiness path.
-- The runtime now has a deterministic concurrent bridge proof showing CloudTrail and generic JSON bridge workers can feed the shared detection path and deposit pheromones together.
-- The substrate now persists durable `EscalationRecord` history across in-memory, local-journal, and JetStream backends, and runtime escalation writes only true upward mode transitions.
-- Agents now receive explicit `current_mode()` and `mode_transition_at()` accessors through `SwarmEnvironment`, which makes mode-aware runtime behavior a first-class contract instead of a raw field convention.
-- `ThreatClassConfig` records now persist across in-memory, local-journal, and JetStream substrates, and live deposit plus escalation paths resolve threat-class-specific half-life, evaporation, alert, and incident thresholds.
-- The authenticated operator surface now exposes threat-class pheromone policy list and upsert routes, and operator-written overrides are visible to the live runtime without restart.
-- `ThreatIntelEntry` records now persist across every substrate backend, and the authenticated operator surface can seed and query exact TTL-bound threat-intel entries without direct storage edits.
-- The shared live detection pipeline now enriches DNS and network findings with substrate-backed threat-intel matches before writing pheromone deposits.
-- A seeded DNS threat-intel entry can now push live finding confidence above alert threshold and record a durable `SwarmMode::Alert` escalation in the substrate.
-- Serve mode now supports bounded drain-aware PreStop shutdown, rejects new ingest traffic while draining, and exposes a dedicated `/startupz` contract for startup-only checks.
-- Runtime config is now schema-aware, can migrate supported legacy payloads, and resolves response-adapter secrets from mounted files or environment variables with live secret-dir reload.
-- Prometheus now exports live heap pressure gauges, and `/readyz` fails closed when runtime memory pressure exceeds the configured threshold.
-- The repo now ships a disaster-recovery runbook and updated configuration guidance for Kubernetes lifecycle operation.
-- The response layer now forwards canonical `swarm_finding` payloads into Splunk, ELK, or Chronicle through resilient execution instead of ad hoc webhook reuse.
-- Every finding is now enriched with normalized ancestry, host metadata, and deterministic detection latency before replay persistence or external delivery.
-- Repo-owned notification channels and routing rules now fan findings out by severity, threat class, and UTC windows without going through the response-action policy gate.
-- Operators can now inspect and replay suppressed notifications through the authenticated `/v1/notifications/dead-letter/{channel}` surface.
-- Shared telemetry now includes `RegistryPersistence` and `FilePersistence` payloads, and `ProcessStart` carries optional signer metadata for supply-chain evaluation.
-- `PersistenceDetector` and `SupplyChainDetector` now ship as config-selectable strategies across live runtime, replay, canary, and promotion lanes, with ATT&CK-tagged evidence and deposit proof.
+- The live runtime can detect, investigate, correlate, rehearse, review, and export signed evidence through one Rust-first operator workflow.
+- Serve mode now carries production packaging, recovery guidance, measured SLO baselines, binary/config attestation, anti-tamper reporting, and scoped multi-operator auth.
+- Autonomous evaluation, sequence detection, statistical anomaly scoring, and bounded response playbooks are all shipped on the same runtime and replay substrate.
+- The former runtime/evolution source-inclusion escape hatch is gone, the config and service monoliths are now split into focused module trees, learned-state persistence rejects tampered or replayed older artifacts, secret-bearing seams zeroize shared plaintext, the shipped HTTP auth surfaces now support restart-free token rotation plus bounded request throttling, the evolution lane now benchmarks multiple detector genome families instead of only process-tree variants, the command-line detector family now shares one bounded deobfuscation seam with measured gain and benign-regression proof, the runtime now ingests Windows Event Log, Sysmon, and auditd telemetry through the same shared bridge runtime, the repo now ships one hardened CI plus tagged-release path to prove and publish that surface, and the command-and-control lane now recruits corroboration from trusted pheromone pressure while stale behavioral baselines lose confidence instead of being silently trusted.
 
-## Current Milestone
+## Historical Milestone Notes
 
 - `v1.47 Calico And Detection Breadth` is complete.
 - `v1.48 Adversarial Robustness` is complete.
@@ -210,7 +168,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 - ✓ Evidence review now supports subject-kind and verification-status filtering, stable-ID drill-down, signer metadata, verification checks, and related lineage links — v1.19
 - ✓ Promotion evidence review now presents recommendation state, fallback lineage, and supporting evidence status in one advisory-only flow without bypassing audit trails — v1.19
 
-### Current Milestone
+### Historical Milestone Notes
 
 - `v1.48 Adversarial Robustness` is complete.
 - `v1.49 Canonical Runtime Contract And Governance Modes` is complete.
@@ -324,4 +282,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-11 after completing Phase 175 and closing v1.51 Assurance-Gated Evolution And Counterexample Loop*
+*Last updated: 2026-04-13 after starting v1.74 Structural Integrity*
