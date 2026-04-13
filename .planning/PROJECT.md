@@ -26,18 +26,15 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.69` added a shared command-line deobfuscation seam, benchmark corpus, and benign-regression proof across the detector family.
 - `v1.70` expanded telemetry-source breadth across Windows Event Log, Sysmon, and auditd so the hardened CI and release paths now cover the broader ingest surface too.
 
-## Current Milestone: v1.76 External Signal Ingestion
+## Current Milestone: v1.77 Integration Proof
 
-**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
+**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
 
 **Target features:**
-- STIX/TAXII 2.1 threat intelligence feed consumer that populates the existing threat-intel substrate
-- CloudTrail detection strategy identifying IAM abuse, credential compromise, and resource hijacking in AWS audit logs
-- Kubernetes audit log detection strategy identifying privilege escalation, RBAC abuse, and container escape patterns
-- Finding enrichment with IOC context when behavioral detections correlate with known-bad indicators
-
-**Queued milestones:**
-- `v1.77 Integration Proof` — Deep EDR and SIEM adapter integration with real telemetry
+- Deep CrowdStrike RTR response adapter replacing the generic HTTP EDR wrapper with tested host isolation, process kill, and file quarantine actions
+- Deep Splunk HEC finding delivery adapter replacing the generic SIEM forward wrapper with indexed fields, source types, and CIM-compliant field mapping
+- End-to-end deployment proof consuming real telemetry from at least one source (CrowdStrike Falcon Data Replicator, Elastic Agent, or osquery) through detection to SIEM finding delivery
+- Integration test harness with mocked EDR/SIEM API endpoints proving adapter correctness without requiring live vendor credentials
 
 ## Current State
 
@@ -280,4 +277,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-13 after defining v1.76 External Signal Ingestion*
+*Last updated: 2026-04-13 after defining v1.77 Integration Proof*
