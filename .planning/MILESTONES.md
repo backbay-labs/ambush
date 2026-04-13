@@ -11,20 +11,20 @@
 
 ## Active Milestone
 
-### v1.74 Structural Integrity
-**Executable phases:** 264-267
+### v1.75 Operator Packaging
+**Executable phases:** 268-271
 **Status:** Active
 **Started:** 2026-04-13
-**Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
-**Progress:** Phases 264-267 defined; Phase 264 ready to plan
+**Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
+**Progress:** Phases 268-271 defined; Phase 268 ready to execute
 
 ## Queued Milestones
 
-### v1.75 Operator Packaging
-**Executable phases:** 268-271
-**Status:** Queued
-**Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
-**Progress:** Phases 268-271 defined; ready to activate after v1.74 completes
+### v1.74 Structural Integrity
+**Executable phases:** 264-267
+**Status:** Deferred
+**Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
+**Progress:** Phases 264-267 remain defined; deferred while v1.75 executes
 
 ### v1.76 External Signal Ingestion
 **Executable phases:** 272-275
@@ -32,7 +32,11 @@
 **Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
 **Progress:** Phases 272-275 defined; ready to activate after v1.75 completes
 
-- `v1.77 Integration Proof` — Deep EDR and SIEM adapter integration with real telemetry
+### v1.77 Integration Proof
+**Executable phases:** 276-279
+**Status:** Queued
+**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
+**Progress:** Phases 276-279 defined; ready to activate after v1.76 completes
 
 ## History
 

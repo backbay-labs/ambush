@@ -748,11 +748,22 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 - [ ] **Phase 274: CloudTrail Detector** - A CloudTrailDetector implements DetectionStrategy and detects IAM abuse, resource hijacking, and credential compromise patterns from CloudTrailEvent telemetry, maps findings to existing ThreatClass variants and MITRE ATT&CK cloud technique IDs, produces signed pheromone deposits through the standard pipeline, and carries cloud-specific evidence in finding payloads. (CLOUDDET-01)
 - [ ] **Phase 275: Kubernetes Audit Detector And Cross-Cloud Integration Proof** - A KubernetesAuditDetector implements DetectionStrategy and detects privilege escalation, RBAC abuse, and container escape indicators from KubernetesAuditEvent telemetry; the milestone closes with an end-to-end integration proof that both cloud detectors produce signed findings with cloud-specific evidence through the full detection pipeline. (CLOUDDET-02, CLOUDDET-03)
 
+### v1.77 Integration Proof
+
+**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
+**Executable phases:** 276-279
+
+- [ ] **Phase 276: CrowdStrike RTR Adapter** - A CrowdStrikeRtrAdapter implements ResponseExecutor with OAuth2 service-to-service authentication, session management, host isolation, process kill, and file quarantine actions; it inherits ResilientExecutor retry and circuit-breaker behavior and is validated by a repo-owned mock RTR API integration test suite. (EDRINT-01, EDRINT-02, EDRINT-03)
+- [ ] **Phase 277: Splunk HEC Adapter** - A SplunkHecAdapter implements ResponseExecutor delivering DetectionFinding payloads to Splunk HEC with CIM-compliant field mapping, configurable batching, secret-resolved HEC token auth, and delivery metrics; it inherits ResilientExecutor retry and circuit-breaker behavior and is validated by a repo-owned mock HEC integration test suite. (SIEMINT-01, SIEMINT-02, SIEMINT-03)
+- [ ] **Phase 278: E2E Deployment Proof Compose Stack** - A repo-owned Docker Compose stack provisions the runtime with mocked CrowdStrike RTR and Splunk HEC adapters plus one telemetry source bridge; a scripted scenario injects attack telemetry and proves the full detect -> respond -> deliver loop with observable finding delivery, response receipts, and correct CIM field mapping. (E2EPROOF-01, E2EPROOF-02)
+- [ ] **Phase 279: Integration Architecture Validation** - The deployment proof is completed with a repo-owned integration architecture diagram documenting the telemetry-to-finding-to-response-to-SIEM flow, and all adapter metrics, health endpoints, and audit receipts are validated as correctly populated in the running Compose stack. (E2EPROOF-03)
+
+
 ### Phase 268: Curated Defaults And Operator UX
 
 **Goal:** Operators can reach a working detect_only runtime on first run using curated defaults, and the operator status surface and error messages are clear enough to self-serve.
 **Requirements:** DEFAULTS-01, DEFAULTS-02, OPEXP-01, OPEXP-02
-**Depends on:** v1.74 milestone complete
+**Depends on:** v1.73 milestone complete; v1.74 deferred by operator request
 **Status:** Not started
 **Plans:** TBD
 **Success Criteria**:
@@ -849,6 +860,56 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 3. Both `CloudTrailDetector` and `KubernetesAuditDetector` findings map to existing `ThreatClass` variants, carry MITRE ATT&CK cloud technique IDs, and produce signed pheromone deposits through the standard pipeline.
 4. An integration test proves the full path: cloud bridge JSON ingestion -> `TelemetryPayload` normalization -> detector evaluation -> signed finding with cloud-specific evidence -> `swarmctl` finding inspection for both cloud detectors.
 
+### Phase 276: CrowdStrike RTR Adapter
+
+**Goal:** The runtime can execute host isolation, process kill, and file quarantine against CrowdStrike-managed hosts through a tested, resilient RTR adapter backed by a repo-owned mock server.
+**Requirements:** EDRINT-01, EDRINT-02, EDRINT-03
+**Depends on:** Phase 275
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `CrowdStrikeRtrAdapter` implements `ResponseExecutor` and translates `ResponseAction::IsolateHost`, `ResponseAction::KillProcess`, and `ResponseAction::QuarantineFile` into CrowdStrike RTR API calls with OAuth2 service-to-service authentication, session creation, command dispatch, and result retrieval.
+2. The adapter uses the existing `ResilientExecutor` retry loop and `CircuitBreakerState` circuit-breaker without duplicating resilience logic, and failed actions land in the dead-letter journal.
+3. An integration test suite runs against a repo-owned mock RTR API server and covers session creation, each command variant, successful result retrieval, timeout handling, and error status propagation — all without requiring live CrowdStrike credentials.
+4. Adapter behavior on auth failure, session expiry, and network timeout is deterministic and observable through structured audit receipts.
+
+### Phase 277: Splunk HEC Adapter
+
+**Goal:** The runtime can deliver detection findings to Splunk HTTP Event Collector with CIM-compliant field mapping, configurable batching, and a tested resilience contract backed by a repo-owned mock endpoint.
+**Requirements:** SIEMINT-01, SIEMINT-02, SIEMINT-03
+**Depends on:** Phase 276
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `SplunkHecAdapter` implements `ResponseExecutor` and delivers `DetectionFinding` payloads to Splunk HEC with configurable index, source, and sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication resolved via `@secret:` references.
+2. The adapter batches findings within a configurable flush interval and max batch size; it inherits the existing `ResilientExecutor` retry and `CircuitBreakerState` circuit-breaker without duplicating resilience logic.
+3. Delivery metrics — events sent, bytes delivered, error count, and p99 delivery latency — appear on the existing `/metrics` surface without requiring a separate endpoint.
+4. An integration test suite runs against a repo-owned mock HEC endpoint and covers batch delivery, CIM field mapping correctness, authentication, backpressure (HTTP 429), and error status propagation without requiring live Splunk credentials.
+
+### Phase 278: E2E Deployment Proof Compose Stack
+
+**Goal:** A repo-owned Docker Compose stack proves the full detect-to-respond-to-deliver loop with mocked EDR and SIEM endpoints and a scripted attack scenario, observable without live vendor credentials.
+**Requirements:** E2EPROOF-01, E2EPROOF-02
+**Depends on:** Phase 277
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. A repo-owned `docker-compose.yml` starts the runtime with the CrowdStrike RTR adapter pointed at a mocked RTR server, the Splunk HEC adapter pointed at a mocked HEC endpoint, and at least one telemetry source bridge active — all from a single `docker compose up` without manual config editing.
+2. A scripted scenario injects attack telemetry into the running stack, and an operator can observe a detection finding generated, a policy-gated response action dispatched through the CrowdStrike adapter (with a receipt), and the finding delivered to the Splunk adapter with correct CIM field mapping.
+3. The Compose stack's health surface (`/healthz`, `/metrics`) reports all adapter and bridge components as healthy after scenario completion.
+
+### Phase 279: Integration Architecture Validation
+
+**Goal:** The detect-to-respond-to-SIEM flow is documented in a repo-owned integration architecture diagram, and the Compose stack proves all adapter metrics, health endpoints, and audit receipts are correctly populated.
+**Requirements:** E2EPROOF-03
+**Depends on:** Phase 278
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. A repo-owned integration architecture diagram (Mermaid or equivalent, checked into `docs/`) depicts the telemetry source bridge -> detection -> policy gate -> CrowdStrike RTR adapter -> Splunk HEC adapter flow with named crate boundaries, data types crossing each boundary, and health/metrics surfaces.
+2. After running the scripted Compose scenario, all adapter metrics (events sent, errors, circuit-breaker state), all health endpoint fields for both adapters, and all audit receipts for the dispatched response action are confirmed populated with non-zero/non-null values.
+3. The integration proof as a whole is executable as a single scripted validation step (`make integration-proof` or equivalent) that passes in CI without live vendor credentials.
+
 
 ## Progress
 
@@ -924,11 +985,11 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 
 **v1.73 execution order:** 260 -> 261 -> 262 -> 263
 
-**v1.74 execution order:** 264 -> 265 -> 266 -> 267
-
 **v1.75 execution order:** 268 -> 269 -> 270 -> 271
 
 **v1.76 execution order:** 272 -> 273 -> 274 -> 275
+
+**v1.77 execution order:** 276 -> 277 -> 278 -> 279
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -1096,8 +1157,13 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 273. Cloud Telemetry Bridges | v1.76 | 0/TBD | Not started | - |
 | 274. CloudTrail Detector | v1.76 | 0/TBD | Not started | - |
 | 275. Kubernetes Audit Detector And Cross-Cloud Integration Proof | v1.76 | 0/TBD | Not started | - |
+| 276. CrowdStrike RTR Adapter | v1.77 | 0/TBD | Not started | - |
+| 277. Splunk HEC Adapter | v1.77 | 0/TBD | Not started | - |
+| 278. E2E Deployment Proof Compose Stack | v1.77 | 0/TBD | Not started | - |
+| 279. Integration Architecture Validation | v1.77 | 0/TBD | Not started | - |
 
 ---
-*Active milestone: v1.74 Structural Integrity*
+*Active milestone: v1.75 Operator Packaging*
+*v1.77 queued: Run `/gsd:plan-phase 276` after v1.76 completes.*
 *v1.76 queued: Run `/gsd:plan-phase 272` after v1.75 completes.*
-*v1.75 queued: Run `/gsd:plan-phase 268` after v1.74 completes.*
+*v1.74 deferred: Run `/gsd:plan-phase 264` when structural-integrity work is reactivated.*
