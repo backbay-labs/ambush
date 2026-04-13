@@ -10,7 +10,7 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.73 Stigmergic Feedback Loops And Baseline Resistance` shipped on 2026-04-13.
+`v1.74 Structural Integrity` queued (phases 264-267). `v1.73` shipped on 2026-04-13.
 
 **Goal:**
 - Machine-readable API spec, generated Python client, and inbound SOAR analyst verdict sync.
@@ -26,18 +26,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.69` added a shared command-line deobfuscation seam, benchmark corpus, and benign-regression proof across the detector family.
 - `v1.70` expanded telemetry-source breadth across Windows Event Log, Sysmon, and auditd so the hardened CI and release paths now cover the broader ingest surface too.
 
-## Current Milestone: v1.74 Structural Integrity
+## Current Milestone: v1.75 Operator Packaging
 
-**Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
+**Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
 
 **Target features:**
-- Fix the 2 failing pheromone journal recovery tests in swarm-pheromone
-- Delete the swarm-evolution facade crate (8-line dead re-export)
-- Decompose the 3 worst oversized files (kitten_agent.rs, drafting.rs, ingest/tests.rs)
-- Begin swarm-runtime extraction by moving agent implementations into a dedicated swarm-agents crate
+- Curated default config with sensible detection profiles for common deployment modes
+- Deployment documentation covering Docker, Helm, and bare-metal quickstart paths
+- `swarmctl quickstart` command that gets an operator to first detection in under 15 minutes
+- Validation against Atomic Red Team corpus proving detection coverage on public adversary emulation scenarios
+- Operator-facing getting-started guide with worked examples
 
 **Queued milestones:**
-- `v1.75 Operator Packaging` — Curated default config, deployment docs, swarmctl quickstart, tested against Atomic Red Team corpus
 - `v1.76 External Signal Ingestion` — STIX/TAXII threat intel feed consumer, cloud audit log detection
 - `v1.77 Integration Proof` — Deep EDR and SIEM adapter integration with real telemetry
 
@@ -282,4 +282,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-13 after starting v1.74 Structural Integrity*
+*Last updated: 2026-04-13 after defining v1.75 Operator Packaging*
