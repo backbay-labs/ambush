@@ -740,6 +740,26 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [ ] **CLOUDBR-02**: `swarm-ingest-json` extends with a `kubernetes_audit` bridge variant that parses Kubernetes audit log JSON (webhook backend format) into `TelemetryPayload::KubernetesAuditEvent` with field mapping for `verb`, `user`, `objectRef`, `responseStatus`, and `annotations`
 - [ ] **CLOUDBR-03**: Both cloud bridges register in `SwarmConfig.runtime.telemetry_sources`, expose health metrics on the existing bridge surface, and are validated by integration tests proving end-to-end detection through the cloud detector pipeline
 
+### Integration Proof (v1.77)
+
+#### EDR Response Adapter
+
+- [ ] **EDRINT-01**: A `CrowdStrikeRtrAdapter` implements the existing `ResponseExecutor` trait and translates `ResponseAction` variants (isolate host, kill process, quarantine file) into CrowdStrike Real Time Response API calls with OAuth2 service-to-service authentication, session management, and response status tracking
+- [ ] **EDRINT-02**: The CrowdStrike adapter inherits the existing `ResilientExecutor` retry, `CircuitBreakerState` circuit-breaker, and dead-letter journaling behaviors without duplicating resilience logic
+- [ ] **EDRINT-03**: An integration test suite validates the CrowdStrike adapter against a repo-owned mock RTR API server covering session creation, command execution, result retrieval, and error/timeout handling without requiring live CrowdStrike credentials
+
+#### SIEM Delivery Adapter
+
+- [ ] **SIEMINT-01**: A `SplunkHecAdapter` implements the existing `ResponseExecutor` trait and delivers `DetectionFinding` payloads to Splunk HTTP Event Collector with configurable index, source, sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication via `@secret:` resolution
+- [ ] **SIEMINT-02**: The Splunk adapter batches findings within a configurable flush interval and max batch size, inherits `ResilientExecutor` retry and circuit-breaker behavior, and exposes delivery metrics (events sent, bytes delivered, errors, latency) on the existing `/metrics` surface
+- [ ] **SIEMINT-03**: An integration test suite validates the Splunk adapter against a repo-owned mock HEC endpoint covering batch delivery, CIM field mapping, authentication, and error/backpressure handling
+
+#### End-to-End Deployment Proof
+
+- [ ] **E2EPROOF-01**: A repo-owned Docker Compose stack provisions the runtime with CrowdStrike RTR adapter (mocked), Splunk HEC adapter (mocked), and one telemetry source bridge, proving the full detect -> respond -> deliver loop with observable finding delivery and response receipt generation
+- [ ] **E2EPROOF-02**: The deployment proof includes a scripted scenario that injects attack telemetry, observes detection, triggers a policy-gated response action through the CrowdStrike adapter, and verifies finding delivery to the Splunk adapter with correct CIM field mapping
+- [ ] **E2EPROOF-03**: The deployment proof documents the telemetry-to-finding-to-response-to-SIEM flow in a repo-owned integration architecture diagram and validates that all adapter metrics, health endpoints, and audit receipts are populated correctly
+
 ## Traceability
 
 | Requirement | Phase | Status |
