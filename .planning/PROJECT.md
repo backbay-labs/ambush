@@ -26,19 +26,25 @@ Detect real threats quickly enough to take safe action before the window to resp
 - `v1.50` made the async lane first-class and operator-visible, so assurance decisions can now build on stronger correlation, scheduling, and evidence quality.
 - `v1.52` and `v1.53` both benefit from a fail-closed rollout and review contract before Providence reconciliation and production packaging add more operator surface area.
 
-**Queued milestones (v1.52-v1.63):**
-- `v1.52 Providence Reconciliation And Response Rehearsal`
-- `v1.53 Production Packaging, Recovery, And Operator Access`
-- `v1.54 Panic Eradication And Error Contracts`
-- `v1.55 JetStream Integration Tests And Load Baselines`
-- `v1.56 Binary Attestation And Configuration Integrity`
-- `v1.57 Autonomous Parameter Evolution With Measured Fitness`
-- `v1.58 Multi-Event Sequence Detection`
-- `v1.59 Guided First-Run And Alert Quality Scoring`
-- `v1.60 Agent Lifecycle Isolation And Graceful Degradation`
-- `v1.61 Response Action Library And Playbook Builder`
-- `v1.62 Statistical Anomaly Scoring And Behavioral Breadth`
-- `v1.63 Evolution Crate Decomposition And Schema Migration`
+## Current Milestone: v1.64 Cross-Crate Path Hack Elimination
+
+**Goal:** Remove the 10 `#[path]` hacks in `swarm-runtime/src/lib.rs` that compile evolution source files under the wrong crate root, breaking `pub(crate)` semantics, IDE tooling, and safe refactoring.
+
+**Target features:**
+- Proper crate-level re-exports replacing all `#[path = "../../swarm-evolution/..."]` directives
+- Stable `pub(crate)` boundaries that resolve against the correct crate root
+- IDE go-to-definition and refactoring working correctly across evolution/runtime boundary
+
+**Queued milestones (v1.65-v1.73):**
+- `v1.65 Config Crate Extraction And service.rs Decomposition`
+- `v1.66 Learned-State Integrity Signing`
+- `v1.67 Secret Zeroization And API Token Lifecycle`
+- `v1.68 Multi-Detector Evolution Genomes`
+- `v1.69 Command-Line Deobfuscation Pipeline`
+- `v1.70 Telemetry Source Breadth`
+- `v1.71 CI Hardening And Versioned Releases`
+- `v1.72 OpenAPI Spec And SOAR Bidirectional Sync`
+- `v1.73 Stigmergic Feedback Loops And Baseline Resistance`
 
 ## Current State
 
