@@ -86,10 +86,10 @@ export function ChannelMembersBar({
 
   return (
     <React.Fragment>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
         <Button
           aria-label="Add agent"
-          className="h-9 w-9 rounded-full"
+          className="h-7 w-7 rounded-full"
           data-testid="channel-add-bot-trigger"
           disabled={!canAddAgents}
           onClick={() => {
@@ -99,10 +99,11 @@ export function ChannelMembersBar({
           type="button"
           variant="outline"
         >
-          <Plus className="h-4 w-4" />
+          <Plus className="h-3 w-3" />
         </Button>
 
         <HuddleIndicator
+          className="h-7 w-7"
           channelId={channel.id}
           onStart={async () => {
             try {
@@ -119,28 +120,28 @@ export function ChannelMembersBar({
 
         <Button
           aria-label={`View channel members (${memberCount})`}
-          className="h-9 gap-1.5 rounded-full px-3"
+          className="h-7 gap-1 rounded-full px-2"
           data-testid="channel-members-trigger"
           onClick={onToggleMembers}
           type="button"
           variant="outline"
         >
-          <Users className="h-4 w-4" />
-          <span className="min-w-[1ch] text-sm font-medium tabular-nums">
+          <Users className="h-3 w-3" />
+          <span className="min-w-[1ch] text-[11px] font-medium tabular-nums">
             {memberCount}
           </span>
         </Button>
 
         <Button
           aria-label="Manage channel"
-          className="h-9 w-9 rounded-full"
+          className="h-7 w-7 rounded-full"
           data-testid="channel-management-trigger"
           onClick={onManageChannel}
           size="icon"
           type="button"
           variant="outline"
         >
-          <Settings2 className="h-4 w-4" />
+          <Settings2 className="h-3 w-3" />
         </Button>
       </div>
 
