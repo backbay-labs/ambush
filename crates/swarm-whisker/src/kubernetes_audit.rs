@@ -158,6 +158,7 @@ impl KubernetesAuditDetector {
         findings
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finding(
         &self,
         event: &TelemetryEvent,

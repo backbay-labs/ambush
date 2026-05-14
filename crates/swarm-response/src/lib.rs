@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 //! Execution layer for live response actions.
 //!
 //! The first milestone is intentionally small: expose a single trait for

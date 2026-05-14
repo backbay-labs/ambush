@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use axum::{Router, routing::get};
 use std::collections::BTreeSet;
 use std::fs;

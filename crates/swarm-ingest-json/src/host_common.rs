@@ -163,10 +163,11 @@ fn value_to_u16(value: &Value) -> Option<u16> {
 fn parse_timestamp_value(value: &Value) -> Option<i64> {
     match value {
         Value::String(value) => parse_timestamp_str(value),
-        Value::Number(value) => value
-            .as_i64()
-            .map(normalize_epoch_seconds)
-            .or_else(|| value.as_f64().map(|value| value.trunc() as i64)),
+        Value::Number(value) => value.as_i64().map(normalize_epoch_seconds).or_else(|| {
+            value
+                .as_f64()
+                .map(|value| normalize_epoch_seconds(value.trunc() as i64))
+        }),
         Value::Object(map) => map
             .get("@SystemTime")
             .or_else(|| map.get("SystemTime"))
@@ -191,7 +192,7 @@ fn parse_timestamp_str(raw: &str) -> Option<i64> {
     }
 
     if let Ok(value) = trimmed.parse::<f64>() {
-        return Some(value.trunc() as i64);
+        return Some(normalize_epoch_seconds(value.trunc() as i64));
     }
 
     trimmed

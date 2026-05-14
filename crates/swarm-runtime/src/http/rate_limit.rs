@@ -52,7 +52,7 @@ impl HttpRateLimiter {
         path: &str,
         now_ms: i64,
     ) -> Result<(), HttpRateLimitRejection> {
-        let source = request_source(headers);
+        let source = request_source(headers, self.config.trust_forwarded_headers);
         self.check_source(source, path.to_string(), now_ms)
     }
 
@@ -136,7 +136,11 @@ impl HttpRateLimiter {
     }
 }
 
-fn request_source(headers: &HeaderMap) -> String {
+fn request_source(headers: &HeaderMap, trust_forwarded_headers: bool) -> String {
+    if !trust_forwarded_headers {
+        return "unknown".to_string();
+    }
+
     if let Some(source) = headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())

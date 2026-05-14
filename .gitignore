@@ -27,6 +27,11 @@ experiments/materialized-*.yaml
 experiments/mutation-*.yaml
 crates/swarm-runtime/data/evolution-assurance-cases/reports/
 crates/swarm-runtime/data/evolution-assurance-cases/scenarios/
+crates/swarm-cli/data/approval-ledgers/
+crates/swarm-cli/data/approval-receipt-packs/
+crates/swarm-cli/data/approval-sets/
+crates/swarm-cli/data/approval-verdicts/
+.claude/
 data/replay-runs/
 data/experiments/
 data/verifications/

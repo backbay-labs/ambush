@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 use clap::Parser;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde_json::json;

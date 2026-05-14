@@ -261,6 +261,7 @@ impl CloudTrailDetector {
         findings
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finding(
         &self,
         event: &TelemetryEvent,
@@ -320,7 +321,7 @@ impl CloudTrailDetector {
         }
 
         DetectionFinding {
-            finding_id: format!("{}:{}", self.id(), event.event_id),
+            finding_id: format!("{}:{}:{}", self.id(), mode, event.event_id),
             event_id: event.event_id.clone(),
             threat_class,
             severity,
@@ -431,11 +432,14 @@ impl CloudTrailDetector {
 
     fn record_baselines(&self, cloudtrail: &CloudTrailEvent) {
         let principal = principal_key(cloudtrail);
+        let event_name = normalize(&cloudtrail.event_name);
         let mut guard = self
             .state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if let Some(source_ip) = cloudtrail.source_ip_address.as_deref() {
+        if event_name == "consolelogin"
+            && let Some(source_ip) = cloudtrail.source_ip_address.as_deref()
+        {
             guard
                 .console_login_ips_by_principal
                 .entry(principal.clone())

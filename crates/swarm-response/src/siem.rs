@@ -391,6 +391,7 @@ impl SiemFindingForwarder {
                 let mut receipts = Vec::new();
                 for (batch_index, batch) in adapter.build_batches(findings).into_iter().enumerate()
                 {
+                    #[allow(clippy::expect_used)]
                     let first = batch
                         .findings
                         .first()

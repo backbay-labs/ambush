@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 //! Core types, traits, and primitives for Swarm Team Six.
 //!
 //! This crate defines the fundamental abstractions:

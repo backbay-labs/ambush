@@ -280,6 +280,12 @@ fn apply_base64_padding(candidate: &str) -> String {
 }
 
 fn decode_text_bytes(bytes: &[u8]) -> Option<String> {
+    if let Ok(decoded) = String::from_utf8(bytes.to_vec()) {
+        let trimmed = decoded.trim_matches('\0').trim().to_string();
+        if is_readable_text(&trimmed) {
+            return Some(trimmed);
+        }
+    }
     if let Some(decoded) = decode_utf16le(bytes) {
         return Some(decoded);
     }
@@ -290,10 +296,7 @@ fn decode_text_bytes(bytes: &[u8]) -> Option<String> {
             return Some(decoded);
         }
     }
-
-    let decoded = String::from_utf8(bytes.to_vec()).ok()?;
-    let decoded = decoded.trim_matches('\0').trim().to_string();
-    is_readable_text(&decoded).then_some(decoded)
+    None
 }
 
 fn decode_utf16le(bytes: &[u8]) -> Option<String> {

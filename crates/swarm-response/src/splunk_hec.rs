@@ -190,6 +190,7 @@ impl SplunkHecAdapter {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     fn render_body(
         &self,
         findings: &[SwarmFindingEnvelope],

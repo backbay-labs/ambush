@@ -119,6 +119,7 @@ impl CrowdStrikeRtrAdapter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn failed_receipt(
         &self,
         request: &ActionRequest,
@@ -352,6 +353,7 @@ impl CrowdStrikeRtrAdapter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_json_call(
         &self,
         request: &ActionRequest,
@@ -513,6 +515,7 @@ impl ResponseExecutor for CrowdStrikeRtrAdapter {
             };
         }
 
+        #[allow(clippy::expect_used)]
         let host_id = session_host.expect("session_host set for command-backed actions");
         let session_id = match self
             .create_session(request, lease, &token, host_id, &payload, mode)
@@ -521,6 +524,7 @@ impl ResponseExecutor for CrowdStrikeRtrAdapter {
             Ok(session_id) => session_id,
             Err(receipt) => return Ok(*receipt),
         };
+        #[allow(clippy::expect_used)]
         let (command_name, argument_value) =
             command.expect("command set for command-backed actions");
         let argument_key = if command_name == "kill_process" {
