@@ -12,6 +12,11 @@ pub fn validate_uuid(s: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Parse and validate a UUID string, returning the parsed Uuid value.
+pub fn parse_uuid(s: &str) -> Result<uuid::Uuid, CliError> {
+    uuid::Uuid::parse_str(s).map_err(|_| CliError::Usage(format!("invalid UUID: {s}")))
+}
+
 /// Validate 64-character lowercase hex string (event_id, pubkey).
 pub fn validate_hex64(s: &str) -> Result<(), CliError> {
     if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -139,6 +144,16 @@ pub fn infer_language(file_path: &str) -> Option<String> {
         _ => return None,
     };
     Some(lang.to_string())
+}
+
+/// Map `SdkError` to the appropriate `CliError` variant.
+///
+/// `InvalidInput` is a user error (exit 1), everything else is internal (exit 4).
+pub fn sdk_err(e: sprout_sdk::SdkError) -> CliError {
+    match e {
+        sprout_sdk::SdkError::InvalidInput(msg) => CliError::Usage(msg),
+        other => CliError::Other(other.to_string()),
+    }
 }
 
 /// Read content from a string value or stdin if the value is "-".
