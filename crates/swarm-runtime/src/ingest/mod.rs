@@ -1021,7 +1021,7 @@ async fn process_runtime_event(
                 live_mode,
                 receipt_chain: Vec::new(),
                 correlation_id: Some(correlation_id.to_string()),
-                now_ms: event.timestamp,
+                now_ms: now_ms(),
             };
             let signing_agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
             let stack = state.stack.load_full();

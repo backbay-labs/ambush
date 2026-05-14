@@ -897,9 +897,13 @@ async fn require_platform_api_bearer_auth(
     mut request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, PlatformApiError> {
+    let peer_addr = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0);
     state
         .rate_limiter
-        .check_request(&headers, request.uri().path(), now_ms())
+        .check_request(&headers, peer_addr, request.uri().path(), now_ms())
         .map_err(map_platform_rate_limit_rejection)?;
     if request.method() == axum::http::Method::GET
         && let Some(raw_token) = request_query_param(&request, "context_token")

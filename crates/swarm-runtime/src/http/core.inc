@@ -2125,9 +2125,13 @@ async fn require_bearer_auth(
     mut request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, OperatorApiError> {
+    let peer_addr = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0);
     state
         .rate_limiter
-        .check_request(&headers, request.uri().path(), now_ms())
+        .check_request(&headers, peer_addr, request.uri().path(), now_ms())
         .map_err(map_operator_rate_limit_rejection)?;
     let value = headers
         .get(axum::http::header::AUTHORIZATION)

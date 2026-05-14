@@ -1,5 +1,6 @@
 use axum::Router;
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use hyper::Request;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -7,6 +8,7 @@ use hyper_util::rt::TokioIo;
 use std::convert::Infallible;
 use std::future::Future;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use swarm_core::config::TlsConfig;
@@ -62,10 +64,13 @@ where
     if let Some(tls) = tls {
         serve_tls_with_listener(listener, app, tls, shutdown).await
     } else {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown)
-            .await
-            .map_err(ServeError::Http)
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown)
+        .await
+        .map_err(ServeError::Http)
     }
 }
 
@@ -124,6 +129,9 @@ where
                         async move {
                             let (parts, body) = request.into_parts();
                             let mut request = Request::from_parts(parts, Body::new(body));
+                            request
+                                .extensions_mut()
+                                .insert(ConnectInfo(peer_addr));
                             if let Some(identity) = client_identity {
                                 request
                                     .extensions_mut()

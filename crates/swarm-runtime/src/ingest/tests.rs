@@ -205,7 +205,11 @@ fn authorized_platform_api_request_from_source(
     uri: impl Into<String>,
     source: &str,
 ) -> axum::http::request::Builder {
-    authorized_platform_api_request(method, uri).header("x-forwarded-for", source)
+    let ip: std::net::IpAddr = source
+        .parse()
+        .expect("test source must parse as an IP address");
+    let socket_addr = std::net::SocketAddr::new(ip, 0);
+    authorized_platform_api_request(method, uri).extension(axum::extract::ConnectInfo(socket_addr))
 }
 
 fn process_event_json(event_id: &str, host_id: &str, timestamp: i64) -> Value {

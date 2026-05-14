@@ -116,7 +116,6 @@ impl CloudTrailDetector {
         cloudtrail: &CloudTrailEvent,
     ) -> Vec<DetectionFinding> {
         if cloudtrail.error_code.is_some() {
-            self.record_baselines(cloudtrail);
             return Vec::new();
         }
 
@@ -446,8 +445,9 @@ impl CloudTrailDetector {
                 .or_default()
                 .insert(normalize(source_ip));
         }
-        if let Some(instance_type) =
-            json_string_pointer(&cloudtrail.request_parameters, "/instanceType")
+        if event_name == "runinstances"
+            && let Some(instance_type) =
+                json_string_pointer(&cloudtrail.request_parameters, "/instanceType")
         {
             guard
                 .instance_types_by_principal
@@ -455,14 +455,23 @@ impl CloudTrailDetector {
                 .or_default()
                 .insert(normalize(&instance_type));
         }
-        for pointer in ["/secretId", "/name"] {
-            if let Some(resource) = json_string_pointer(&cloudtrail.request_parameters, pointer) {
-                guard
-                    .secret_callers_by_resource
-                    .entry(normalize(&resource))
-                    .or_default()
-                    .insert(principal.clone());
-            }
+        if event_name == "getsecretvalue"
+            && let Some(resource) = json_string_pointer(&cloudtrail.request_parameters, "/secretId")
+        {
+            guard
+                .secret_callers_by_resource
+                .entry(normalize(&resource))
+                .or_default()
+                .insert(principal.clone());
+        }
+        if event_name == "getparameter"
+            && let Some(resource) = json_string_pointer(&cloudtrail.request_parameters, "/name")
+        {
+            guard
+                .secret_callers_by_resource
+                .entry(normalize(&resource))
+                .or_default()
+                .insert(principal.clone());
         }
     }
 }

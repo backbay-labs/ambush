@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::http::HeaderMap;
@@ -49,10 +50,11 @@ impl HttpRateLimiter {
     pub fn check_request(
         &self,
         headers: &HeaderMap,
+        peer_addr: Option<SocketAddr>,
         path: &str,
         now_ms: i64,
     ) -> Result<(), HttpRateLimitRejection> {
-        let source = request_source(headers, self.config.trust_forwarded_headers);
+        let source = request_source(headers, peer_addr, self.config.trust_forwarded_headers);
         self.check_source(source, path.to_string(), now_ms)
     }
 
@@ -136,35 +138,41 @@ impl HttpRateLimiter {
     }
 }
 
-fn request_source(headers: &HeaderMap, trust_forwarded_headers: bool) -> String {
-    if !trust_forwarded_headers {
-        return "unknown".to_string();
+fn request_source(
+    headers: &HeaderMap,
+    peer_addr: Option<SocketAddr>,
+    trust_forwarded_headers: bool,
+) -> String {
+    if trust_forwarded_headers {
+        if let Some(source) = headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(first_forwarded_source)
+        {
+            return source;
+        }
+
+        if let Some(source) = headers
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+        {
+            return source;
+        }
+
+        if let Some(source) = headers
+            .get("forwarded")
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_forwarded_header_source)
+        {
+            return source;
+        }
     }
 
-    if let Some(source) = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(first_forwarded_source)
-    {
-        return source;
-    }
-
-    if let Some(source) = headers
-        .get("x-real-ip")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-    {
-        return source;
-    }
-
-    if let Some(source) = headers
-        .get("forwarded")
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse_forwarded_header_source)
-    {
-        return source;
+    if let Some(addr) = peer_addr {
+        return addr.ip().to_string();
     }
 
     "unknown".to_string()
