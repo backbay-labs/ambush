@@ -27,6 +27,8 @@ These files define the active runtime contract:
 | `docs/CONSENSUS.md` | Active governance, approval, identity-admission, and receipt-backed response contract |
 | `docs/EVOLUTION.md` | Active replay, proof, queue, canary, promotion, and status contract |
 | `docs/CONFIGURATION.md` | Repo-owned YAML and serve-surface configuration contract |
+| `docs/QUICKSTART.md` | Operator first-run path from zero to first detection |
+| `docs/DEPLOYMENT.md` | Supported deployment profiles, prerequisites, and verification steps |
 | `docs/REFERENCE-STATUS.md` | Active versus historical policy for the documentation set |
 
 These planning and config artifacts must stay aligned with the canonical docs:

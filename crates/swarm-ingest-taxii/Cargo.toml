@@ -1,0 +1,20 @@
+[package]
+name = "swarm-ingest-taxii"
+description = "TAXII-backed threat-intel feed ingestion for the Swarm substrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,12 +1,22 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+mod auditd;
+mod host_common;
+mod kubernetes_audit;
+mod sysmon;
+mod windows_event_log;
+
 pub mod cloudtrail;
 pub mod generic_json;
 pub mod source;
 
+pub use auditd::AuditdBridge;
 pub use cloudtrail::CloudTrailBridge;
 pub use generic_json::GenericJsonBridge;
+pub use kubernetes_audit::KubernetesAuditBridge;
 pub use source::{JsonRecordSource, JsonRecordSourceError};
+pub use sysmon::SysmonBridge;
+pub use windows_event_log::WindowsEventLogBridge;
 
 use swarm_core::{BridgeHealth, TelemetryBridgeError, TelemetryEvent, TelemetryPayload};
 
@@ -47,6 +57,12 @@ fn validate_event_schema(event: &TelemetryEvent, source_id: &str) -> bool {
         }
         TelemetryPayload::DnsQuery(query) => {
             !query.query_name.trim().is_empty() && !query.query_type.trim().is_empty()
+        }
+        TelemetryPayload::CloudTrail(event) => {
+            !event.event_name.trim().is_empty() && !event.event_source.trim().is_empty()
+        }
+        TelemetryPayload::KubernetesAudit(event) => {
+            !event.verb.trim().is_empty() && !event.resource.trim().is_empty()
         }
         TelemetryPayload::RegistryAccess(access) => {
             !access.process_name.trim().is_empty()

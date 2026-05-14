@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-04-13",
+  "command": "cargo bench -p swarm-runtime --bench hot_path -- --noplot",
+  "backend": "in_memory",
+  "warmup_iterations": 1000,
+  "measured_iterations": 20000,
+  "metrics": {
+    "p50_latency_us": 132.79,
+    "p95_latency_us": 153.25,
+    "p99_latency_us": 224.54,
+    "throughput_eps": 6363.65
+  },
+  "thresholds": {
+    "max_p99_regression_percent": 20.0
+  }
+}

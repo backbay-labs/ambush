@@ -294,6 +294,8 @@ impl DetectionStrategy for DnsExfiltrationDetector {
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
             | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),

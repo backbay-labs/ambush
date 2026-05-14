@@ -707,7 +707,7 @@ pub async fn run_first_run_wizard(
     )?;
 
     let context = ApprovalContext {
-        live_mode: state.stack.load_full().service.runtime.mode() == RuntimeMode::LiveResponse,
+        live_mode: state.current_runtime_mode() == RuntimeMode::LiveResponse,
         receipt_chain: vec![receipt_pack.report.pack_id.clone()],
         correlation_id: Some(run_id.clone()),
         now_ms: now_ms(),
@@ -718,9 +718,8 @@ pub async fn run_first_run_wizard(
             run_id: run_id.clone(),
         })?;
     let stack = state.stack.load_full();
-    let execution = stack
-        .service
-        .runtime
+    let runtime = state.request_runtime.load_full();
+    let execution = runtime
         .audit_authorize_and_execute_human_approved_instrumented(
             &pending.detection,
             &pending.request,
@@ -1357,15 +1356,14 @@ pub(crate) async fn demo_approval_resume_handler(
     };
 
     let context = ApprovalContext {
-        live_mode: state.stack.load_full().service.runtime.mode() == RuntimeMode::LiveResponse,
+        live_mode: state.current_runtime_mode() == RuntimeMode::LiveResponse,
         receipt_chain: vec![request.receipt_pack.pack_id.clone()],
         correlation_id: Some(pending.run_id.clone()),
         now_ms: now_ms(),
     };
     let stack = state.stack.load_full();
-    let execution = match stack
-        .service
-        .runtime
+    let runtime = state.request_runtime.load_full();
+    let execution = match runtime
         .audit_authorize_and_execute_human_approved_instrumented(
             &pending.detection,
             &pending.request,

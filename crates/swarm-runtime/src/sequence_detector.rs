@@ -384,6 +384,8 @@ fn payload_kind(payload: &TelemetryPayload) -> &'static str {
         TelemetryPayload::ProcessMemoryAccess(_) => "process_memory_access",
         TelemetryPayload::NetworkConnect(_) => "network_connect",
         TelemetryPayload::DnsQuery(_) => "dns_query",
+        TelemetryPayload::CloudTrail(_) => "cloudtrail",
+        TelemetryPayload::KubernetesAudit(_) => "kubernetes_audit",
         TelemetryPayload::RegistryAccess(_) => "registry_access",
         TelemetryPayload::RegistryPersistence(_) => "registry_persistence",
         TelemetryPayload::FilePersistence(_) => "file_persistence",

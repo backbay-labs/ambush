@@ -33,6 +33,17 @@ struct AdapterOutcomeLabels {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct DeliveryBatchLabels {
+    transport: String,
+    outcome: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct DeliveryTransportLabels {
+    transport: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 struct FindingLabels {
     threat_class: String,
     detector: String,
@@ -69,6 +80,9 @@ pub struct CriticalPathMetrics {
     verdict_total: Family<VerdictLabels, Counter>,
     guard_rejections_total: Family<GuardRejectionLabels, Counter>,
     adapter_outcomes_total: Family<AdapterOutcomeLabels, Counter>,
+    delivery_batches_total: Family<DeliveryBatchLabels, Counter>,
+    delivery_events_total: Family<DeliveryTransportLabels, Counter>,
+    delivery_payload_bytes_total: Family<DeliveryTransportLabels, Counter>,
     findings_total: Family<FindingLabels, Counter>,
     agent_ticks_total: Family<AgentRoleLabels, Counter>,
     agent_role_shifts_total: Family<AgentRoleLabels, Counter>,
@@ -94,6 +108,9 @@ impl CriticalPathMetrics {
         let verdict_total = Family::<VerdictLabels, Counter>::default();
         let guard_rejections_total = Family::<GuardRejectionLabels, Counter>::default();
         let adapter_outcomes_total = Family::<AdapterOutcomeLabels, Counter>::default();
+        let delivery_batches_total = Family::<DeliveryBatchLabels, Counter>::default();
+        let delivery_events_total = Family::<DeliveryTransportLabels, Counter>::default();
+        let delivery_payload_bytes_total = Family::<DeliveryTransportLabels, Counter>::default();
         let findings_total = Family::<FindingLabels, Counter>::default();
         let agent_ticks_total = Family::<AgentRoleLabels, Counter>::default();
         let agent_role_shifts_total = Family::<AgentRoleLabels, Counter>::default();
@@ -157,6 +174,21 @@ impl CriticalPathMetrics {
             "adapter_outcomes",
             "Response adapter outcome counter",
             adapter_outcomes_total.clone(),
+        );
+        registry.register(
+            "delivery_batches",
+            "Outbound finding delivery batch counter by transport and outcome",
+            delivery_batches_total.clone(),
+        );
+        registry.register(
+            "delivery_events",
+            "Outbound finding delivery event counter by transport",
+            delivery_events_total.clone(),
+        );
+        registry.register(
+            "delivery_payload_bytes",
+            "Outbound finding delivery payload bytes by transport",
+            delivery_payload_bytes_total.clone(),
         );
         registry.register(
             "findings",
@@ -225,6 +257,9 @@ impl CriticalPathMetrics {
             verdict_total,
             guard_rejections_total,
             adapter_outcomes_total,
+            delivery_batches_total,
+            delivery_events_total,
+            delivery_payload_bytes_total,
             findings_total,
             agent_ticks_total,
             agent_role_shifts_total,
@@ -290,6 +325,31 @@ impl CriticalPathMetrics {
                 outcome: outcome.to_string(),
             })
             .inc();
+    }
+
+    pub fn observe_delivery_batch(
+        &self,
+        transport: &str,
+        outcome: &str,
+        event_count: u64,
+        payload_bytes: u64,
+    ) {
+        self.delivery_batches_total
+            .get_or_create(&DeliveryBatchLabels {
+                transport: transport.to_string(),
+                outcome: outcome.to_string(),
+            })
+            .inc();
+        self.delivery_events_total
+            .get_or_create(&DeliveryTransportLabels {
+                transport: transport.to_string(),
+            })
+            .inc_by(event_count);
+        self.delivery_payload_bytes_total
+            .get_or_create(&DeliveryTransportLabels {
+                transport: transport.to_string(),
+            })
+            .inc_by(payload_bytes);
     }
 
     pub fn observe_finding(&self, threat_class: &str, detector: &str) {
@@ -456,6 +516,25 @@ mod tests {
         assert!(encoded.contains("swarm_adapter_outcomes_total{outcome=\"success\"} 1"));
         assert!(encoded.contains("swarm_adapter_outcomes_total{outcome=\"timeout\"} 1"));
         assert!(encoded.contains("swarm_adapter_outcomes_total{outcome=\"failure\"} 1"));
+    }
+
+    #[test]
+    fn encode_metrics_renders_delivery_counters() {
+        let metrics = CriticalPathMetrics::new();
+        metrics.observe_delivery_batch("splunk_hec", "success", 2, 512);
+
+        let encoded = encode_metrics(&metrics);
+        assert!(
+            encoded.contains(
+                "swarm_delivery_batches_total{outcome=\"success\",transport=\"splunk_hec\"} 1"
+            ) || encoded.contains(
+                "swarm_delivery_batches_total{transport=\"splunk_hec\",outcome=\"success\"} 1"
+            )
+        );
+        assert!(encoded.contains("swarm_delivery_events_total{transport=\"splunk_hec\"} 2"));
+        assert!(
+            encoded.contains("swarm_delivery_payload_bytes_total{transport=\"splunk_hec\"} 512")
+        );
     }
 
     #[test]

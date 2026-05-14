@@ -5,6 +5,7 @@ members = [
     "crates/swarm-whisker",
     "crates/swarm-ingest-tetragon",
     "crates/swarm-ingest-json",
+    "crates/swarm-ingest-taxii",
     "crates/swarm-ingest-sentinel",
     "crates/swarm-pheromone",
     "crates/swarm-policy",
@@ -30,6 +31,7 @@ swarm-core = { version = "0.1.0", path = "crates/swarm-core" }
 swarm-whisker = { version = "0.1.0", path = "crates/swarm-whisker" }
 swarm-ingest-tetragon = { version = "0.1.0", path = "crates/swarm-ingest-tetragon" }
 swarm-ingest-json = { version = "0.1.0", path = "crates/swarm-ingest-json" }
+swarm-ingest-taxii = { version = "0.1.0", path = "crates/swarm-ingest-taxii" }
 swarm-ingest-sentinel = { version = "0.1.0", path = "crates/swarm-ingest-sentinel" }
 swarm-pheromone = { version = "0.1.0", path = "crates/swarm-pheromone" }
 swarm-policy = { version = "0.1.0", path = "crates/swarm-policy" }
@@ -63,6 +65,7 @@ sysinfo = "0.33"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+base64 = "0.22"
 
 # Crypto
 ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
@@ -84,6 +87,7 @@ tracing-opentelemetry = "0.32.1"
 # Error handling
 thiserror = "2"
 anyhow = "1"
+zeroize = { version = "1", features = ["zeroize_derive"] }
 
 # Testing
 proptest = "1"
@@ -91,3 +95,7 @@ proptest = "1"
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+[profile.release]
+panic = "abort"
+overflow-checks = true

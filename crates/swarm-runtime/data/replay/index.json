@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "bundle_id": "bundle:evt-first-run-1:1700000000000",
+      "hunt_id": "evt-first-run-1",
+      "trail_id": "trail:evt-first-run-1:1700000000000",
+      "action_kind": "isolate_host",
+      "is_rehearsal": false,
+      "response_kind": "skipped",
+      "response_receipt_id": null,
+      "related_receipt_ids": [],
+      "created_at_ms": 1700000000000,
+      "bundle_path": "bundles/bundle_evt-first-run-1_1700000000000.json"
+    }
+  ]
+}

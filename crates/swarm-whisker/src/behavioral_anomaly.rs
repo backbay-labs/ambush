@@ -46,6 +46,8 @@ pub struct BehavioralAnomalyProfile {
     pub distribution_stddev_floor: f64,
     #[serde(default = "default_high_confidence_z_score")]
     pub high_confidence_z_score: f64,
+    #[serde(default)]
+    pub baseline_staleness: BehavioralBaselineStalenessProfile,
     #[serde(default = "default_high_confidence_threshold")]
     pub high_confidence_threshold: f64,
     #[serde(default = "default_medium_confidence_threshold")]
@@ -69,8 +71,29 @@ impl Default for BehavioralAnomalyProfile {
             distribution_min_observations: default_distribution_min_observations(),
             distribution_stddev_floor: default_distribution_stddev_floor(),
             high_confidence_z_score: default_high_confidence_z_score(),
+            baseline_staleness: BehavioralBaselineStalenessProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BehavioralBaselineStalenessProfile {
+    pub enabled: bool,
+    pub threshold_secs: i64,
+    pub confidence_reduction_per_window: f64,
+    pub minimum_confidence_multiplier: f64,
+}
+
+impl Default for BehavioralBaselineStalenessProfile {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold_secs: default_baseline_staleness_threshold_secs(),
+            confidence_reduction_per_window: default_baseline_staleness_reduction_per_window(),
+            minimum_confidence_multiplier: default_baseline_staleness_minimum_multiplier(),
         }
     }
 }
@@ -91,6 +114,7 @@ pub struct BehavioralAnomalyDetector {
     distribution_min_observations: u64,
     distribution_stddev_floor: f64,
     high_confidence_z_score: f64,
+    baseline_staleness: BehavioralBaselineStalenessProfile,
     high_confidence_threshold: f64,
     medium_confidence_threshold: f64,
     state: Arc<RwLock<BehavioralDetectorState>>,
@@ -100,6 +124,7 @@ pub struct BehavioralAnomalyDetector {
 struct BehavioralDetectorState {
     hydrated: bool,
     dirty: bool,
+    snapshot_captured_at: Option<i64>,
     hosts: HashMap<String, ScopeBaselineState>,
     identities: HashMap<String, ScopeBaselineState>,
     peer_groups: HashMap<String, ScopeBaselineState>,
@@ -167,6 +192,15 @@ struct FeatureObservationSummary {
 }
 
 #[derive(Debug, Clone)]
+struct BehavioralBaselineStalenessContext {
+    snapshot_captured_at: i64,
+    snapshot_age_secs: i64,
+    threshold_secs: i64,
+    windows_over_threshold: i64,
+    confidence_multiplier: f64,
+}
+
+#[derive(Debug, Clone)]
 struct TelemetryFeatureInput {
     label: &'static str,
     key: String,
@@ -193,6 +227,7 @@ impl Default for BehavioralAnomalyDetector {
             distribution_min_observations: profile.distribution_min_observations,
             distribution_stddev_floor: profile.distribution_stddev_floor,
             high_confidence_z_score: profile.high_confidence_z_score,
+            baseline_staleness: profile.baseline_staleness.clone(),
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
             state: Arc::default(),
@@ -263,6 +298,7 @@ impl BehavioralAnomalyProfile {
                 reason: "must be greater than zero".to_string(),
             });
         }
+        self.baseline_staleness.validate()?;
         Ok(())
     }
 }
@@ -285,6 +321,7 @@ impl BehavioralAnomalyDetector {
             distribution_min_observations: profile.distribution_min_observations,
             distribution_stddev_floor: profile.distribution_stddev_floor,
             high_confidence_z_score: profile.high_confidence_z_score,
+            baseline_staleness: profile.baseline_staleness.clone(),
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
             state: Arc::default(),
@@ -307,6 +344,7 @@ impl BehavioralAnomalyDetector {
             distribution_min_observations: self.distribution_min_observations,
             distribution_stddev_floor: self.distribution_stddev_floor,
             high_confidence_z_score: self.high_confidence_z_score,
+            baseline_staleness: self.baseline_staleness.clone(),
             high_confidence_threshold: self.high_confidence_threshold,
             medium_confidence_threshold: self.medium_confidence_threshold,
         }
@@ -332,6 +370,7 @@ impl BehavioralAnomalyDetector {
         guard.hosts.clear();
         guard.identities.clear();
         guard.peer_groups.clear();
+        guard.snapshot_captured_at = snapshot.as_ref().map(|snapshot| snapshot.captured_at);
         if let Some(snapshot) = snapshot {
             for host in snapshot.hosts {
                 guard.hosts.insert(
@@ -464,9 +503,10 @@ impl BehavioralAnomalyDetector {
         })
     }
 
-    pub fn mark_persisted(&self) {
+    pub fn mark_persisted(&self, snapshot_captured_at: i64) {
         if let Ok(mut guard) = self.state.write() {
             guard.dirty = false;
+            guard.snapshot_captured_at = Some(snapshot_captured_at);
         }
     }
 
@@ -495,53 +535,61 @@ impl BehavioralAnomalyDetector {
         };
         let process_is_rare_tool = self.rare_role_tools.contains(&process_name);
 
-        let mut state = match self.state.write() {
-            Ok(guard) => guard,
-            Err(_) => return Vec::new(),
+        let (host_summary, identity_summary, peer_group_summary, snapshot_captured_at) = {
+            let mut state = match self.state.write() {
+                Ok(guard) => guard,
+                Err(_) => return Vec::new(),
+            };
+            let host_summary = observe_scope(
+                state.hosts.entry(host_id.clone()).or_default(),
+                "host",
+                self.min_host_observations,
+                now,
+                self.baseline_half_life_secs,
+                self.min_feature_weight,
+                &pair_key,
+                &executable_key,
+                &role_tool_key,
+                self.is_sensitive_pair(&parent_process, &process_name),
+                self.is_first_seen_binary_alert(&executable_key, &process_name),
+                process_is_rare_tool,
+            );
+            let identity_summary = observe_scope(
+                state.identities.entry(identity_id.clone()).or_default(),
+                "identity",
+                self.min_identity_observations,
+                now,
+                self.baseline_half_life_secs,
+                self.min_feature_weight,
+                &pair_key,
+                &executable_key,
+                &role_tool_key,
+                self.is_sensitive_pair(&parent_process, &process_name),
+                self.is_first_seen_binary_alert(&executable_key, &process_name),
+                process_is_rare_tool,
+            );
+            let peer_group_summary = observe_scope(
+                state.peer_groups.entry(peer_group_id.clone()).or_default(),
+                "peer_group",
+                self.min_peer_group_observations,
+                now,
+                self.baseline_half_life_secs,
+                self.min_feature_weight,
+                &pair_key,
+                &executable_key,
+                &role_tool_key,
+                self.is_sensitive_pair(&parent_process, &process_name),
+                self.is_first_seen_binary_alert(&executable_key, &process_name),
+                process_is_rare_tool,
+            );
+            state.dirty = true;
+            (
+                host_summary,
+                identity_summary,
+                peer_group_summary,
+                state.snapshot_captured_at,
+            )
         };
-        let host_summary = observe_scope(
-            state.hosts.entry(host_id.clone()).or_default(),
-            "host",
-            self.min_host_observations,
-            now,
-            self.baseline_half_life_secs,
-            self.min_feature_weight,
-            &pair_key,
-            &executable_key,
-            &role_tool_key,
-            self.is_sensitive_pair(&parent_process, &process_name),
-            self.is_first_seen_binary_alert(&executable_key, &process_name),
-            process_is_rare_tool,
-        );
-        let identity_summary = observe_scope(
-            state.identities.entry(identity_id.clone()).or_default(),
-            "identity",
-            self.min_identity_observations,
-            now,
-            self.baseline_half_life_secs,
-            self.min_feature_weight,
-            &pair_key,
-            &executable_key,
-            &role_tool_key,
-            self.is_sensitive_pair(&parent_process, &process_name),
-            self.is_first_seen_binary_alert(&executable_key, &process_name),
-            process_is_rare_tool,
-        );
-        let peer_group_summary = observe_scope(
-            state.peer_groups.entry(peer_group_id.clone()).or_default(),
-            "peer_group",
-            self.min_peer_group_observations,
-            now,
-            self.baseline_half_life_secs,
-            self.min_feature_weight,
-            &pair_key,
-            &executable_key,
-            &role_tool_key,
-            self.is_sensitive_pair(&parent_process, &process_name),
-            self.is_first_seen_binary_alert(&executable_key, &process_name),
-            process_is_rare_tool,
-        );
-        state.dirty = true;
 
         self.build_behavioral_finding(
             event,
@@ -557,6 +605,7 @@ impl BehavioralAnomalyDetector {
                 "process_name": process.process_name,
                 "executable_path": process.executable_path,
             }),
+            snapshot_captured_at,
             [&host_summary, &identity_summary, &peer_group_summary],
         )
     }
@@ -593,7 +642,7 @@ impl BehavioralAnomalyDetector {
                 suspicious: true,
             },
         ];
-        let (host_summary, identity_summary, peer_group_summary) = {
+        let (host_summary, identity_summary, peer_group_summary, snapshot_captured_at) = {
             let mut state = match self.state.write() {
                 Ok(guard) => guard,
                 Err(_) => return Vec::new(),
@@ -608,7 +657,12 @@ impl BehavioralAnomalyDetector {
                 &feature_inputs,
             );
             state.dirty = true;
-            summaries
+            (
+                summaries.0,
+                summaries.1,
+                summaries.2,
+                state.snapshot_captured_at,
+            )
         };
 
         self.build_behavioral_finding(
@@ -624,6 +678,7 @@ impl BehavioralAnomalyDetector {
                 "destination_port": connect.destination_port,
                 "protocol": connect.protocol,
             }),
+            snapshot_captured_at,
             [&host_summary, &identity_summary, &peer_group_summary],
         )
     }
@@ -652,7 +707,7 @@ impl BehavioralAnomalyDetector {
             anomaly_mode: "dns_novel_query",
             suspicious: true,
         }];
-        let (host_summary, identity_summary, peer_group_summary) = {
+        let (host_summary, identity_summary, peer_group_summary, snapshot_captured_at) = {
             let mut state = match self.state.write() {
                 Ok(guard) => guard,
                 Err(_) => return Vec::new(),
@@ -667,7 +722,12 @@ impl BehavioralAnomalyDetector {
                 &feature_inputs,
             );
             state.dirty = true;
-            summaries
+            (
+                summaries.0,
+                summaries.1,
+                summaries.2,
+                state.snapshot_captured_at,
+            )
         };
 
         self.build_behavioral_finding(
@@ -684,6 +744,7 @@ impl BehavioralAnomalyDetector {
                 "source_ip": dns.source_ip,
                 "response_code": dns.response_code,
             }),
+            snapshot_captured_at,
             [&host_summary, &identity_summary, &peer_group_summary],
         )
     }
@@ -748,7 +809,7 @@ impl BehavioralAnomalyDetector {
                 suspicious: true,
             },
         ];
-        let (host_summary, identity_summary, peer_group_summary) = {
+        let (host_summary, identity_summary, peer_group_summary, snapshot_captured_at) = {
             let mut state = match self.state.write() {
                 Ok(guard) => guard,
                 Err(_) => return Vec::new(),
@@ -763,7 +824,12 @@ impl BehavioralAnomalyDetector {
                 &feature_inputs,
             );
             state.dirty = true;
-            summaries
+            (
+                summaries.0,
+                summaries.1,
+                summaries.2,
+                state.snapshot_captured_at,
+            )
         };
 
         self.build_behavioral_finding(
@@ -787,6 +853,7 @@ impl BehavioralAnomalyDetector {
                 "success": auth.success,
                 "user_role": user_role,
             }),
+            snapshot_captured_at,
             [&host_summary, &identity_summary, &peer_group_summary],
         )
     }
@@ -817,7 +884,7 @@ impl BehavioralAnomalyDetector {
             anomaly_mode: "credential_novel_registry_access",
             suspicious: true,
         }];
-        let (host_summary, identity_summary, peer_group_summary) = {
+        let (host_summary, identity_summary, peer_group_summary, snapshot_captured_at) = {
             let mut state = match self.state.write() {
                 Ok(guard) => guard,
                 Err(_) => return Vec::new(),
@@ -832,7 +899,12 @@ impl BehavioralAnomalyDetector {
                 &feature_inputs,
             );
             state.dirty = true;
-            summaries
+            (
+                summaries.0,
+                summaries.1,
+                summaries.2,
+                state.snapshot_captured_at,
+            )
         };
 
         self.build_behavioral_finding(
@@ -848,6 +920,7 @@ impl BehavioralAnomalyDetector {
                 "access_type": registry.access_type,
                 "target_process": registry.target_process,
             }),
+            snapshot_captured_at,
             [&host_summary, &identity_summary, &peer_group_summary],
         )
     }
@@ -878,7 +951,7 @@ impl BehavioralAnomalyDetector {
             anomaly_mode: "persistence_novel_registry_artifact",
             suspicious: true,
         }];
-        let (host_summary, identity_summary, peer_group_summary) = {
+        let (host_summary, identity_summary, peer_group_summary, snapshot_captured_at) = {
             let mut state = match self.state.write() {
                 Ok(guard) => guard,
                 Err(_) => return Vec::new(),
@@ -893,7 +966,12 @@ impl BehavioralAnomalyDetector {
                 &feature_inputs,
             );
             state.dirty = true;
-            summaries
+            (
+                summaries.0,
+                summaries.1,
+                summaries.2,
+                state.snapshot_captured_at,
+            )
         };
 
         self.build_behavioral_finding(
@@ -910,6 +988,7 @@ impl BehavioralAnomalyDetector {
                 "value_data": registry.value_data,
                 "access_type": registry.access_type,
             }),
+            snapshot_captured_at,
             [&host_summary, &identity_summary, &peer_group_summary],
         )
     }
@@ -934,7 +1013,7 @@ impl BehavioralAnomalyDetector {
             anomaly_mode: "persistence_novel_file_artifact",
             suspicious: true,
         }];
-        let (host_summary, identity_summary, peer_group_summary) = {
+        let (host_summary, identity_summary, peer_group_summary, snapshot_captured_at) = {
             let mut state = match self.state.write() {
                 Ok(guard) => guard,
                 Err(_) => return Vec::new(),
@@ -949,7 +1028,12 @@ impl BehavioralAnomalyDetector {
                 &feature_inputs,
             );
             state.dirty = true;
-            summaries
+            (
+                summaries.0,
+                summaries.1,
+                summaries.2,
+                state.snapshot_captured_at,
+            )
         };
 
         self.build_behavioral_finding(
@@ -965,6 +1049,7 @@ impl BehavioralAnomalyDetector {
                 "operation": file.operation,
                 "content_preview": file.content_preview,
             }),
+            snapshot_captured_at,
             [&host_summary, &identity_summary, &peer_group_summary],
         )
     }
@@ -1000,7 +1085,7 @@ impl BehavioralAnomalyDetector {
                 suspicious: true,
             },
         ];
-        let (host_summary, identity_summary, peer_group_summary) = {
+        let (host_summary, identity_summary, peer_group_summary, snapshot_captured_at) = {
             let mut state = match self.state.write() {
                 Ok(guard) => guard,
                 Err(_) => return Vec::new(),
@@ -1015,7 +1100,12 @@ impl BehavioralAnomalyDetector {
                 &feature_inputs,
             );
             state.dirty = true;
-            summaries
+            (
+                summaries.0,
+                summaries.1,
+                summaries.2,
+                state.snapshot_captured_at,
+            )
         };
 
         self.build_behavioral_finding(
@@ -1033,6 +1123,7 @@ impl BehavioralAnomalyDetector {
                 "region_size": access.region_size,
                 "call_stack_hint": access.call_stack_hint,
             }),
+            snapshot_captured_at,
             [&host_summary, &identity_summary, &peer_group_summary],
         )
     }
@@ -1098,6 +1189,7 @@ impl BehavioralAnomalyDetector {
         peer_group_id: &str,
         telemetry_family: &'static str,
         extra_evidence: serde_json::Value,
+        snapshot_captured_at: Option<i64>,
         summaries: [&ScopeObservationSummary; 3],
     ) -> Vec<DetectionFinding> {
         let anomaly_modes = summaries
@@ -1162,6 +1254,13 @@ impl BehavioralAnomalyDetector {
                 self.medium_confidence_threshold,
                 self.high_confidence_threshold,
             );
+        let staleness = self.baseline_staleness_context(
+            snapshot_captured_at,
+            normalized_timestamp_secs(event.timestamp),
+        );
+        let effective_confidence = staleness.as_ref().map_or(confidence, |context| {
+            (confidence * context.confidence_multiplier).clamp(0.0, self.high_confidence_threshold)
+        });
         let severity = if signal_count >= 2 || scope_hits.len() >= 2 {
             Severity::High
         } else {
@@ -1194,9 +1293,23 @@ impl BehavioralAnomalyDetector {
                 "high_confidence_z_score": self.high_confidence_z_score,
                 "aggregate_deviation_score": aggregate_deviation_score,
                 "confidence_ratio": confidence_ratio,
+                "raw_confidence": confidence,
+                "effective_confidence": effective_confidence,
                 "scopes": confidence_scopes,
             }),
         );
+        if let Some(staleness) = &staleness {
+            evidence.insert(
+                "baseline_staleness".to_string(),
+                json!({
+                    "snapshot_captured_at": staleness.snapshot_captured_at,
+                    "snapshot_age_secs": staleness.snapshot_age_secs,
+                    "threshold_secs": staleness.threshold_secs,
+                    "windows_over_threshold": staleness.windows_over_threshold,
+                    "confidence_multiplier": staleness.confidence_multiplier,
+                }),
+            );
+        }
         if let Some(extra_object) = extra_evidence.as_object() {
             for (key, value) in extra_object {
                 evidence.insert(key.clone(), value.clone());
@@ -1208,10 +1321,40 @@ impl BehavioralAnomalyDetector {
             event_id: event.event_id.clone(),
             threat_class,
             severity,
-            confidence,
+            confidence: effective_confidence,
             evidence: serde_json::Value::Object(evidence),
             strategy_id: self.id().to_string(),
         }]
+    }
+
+    fn baseline_staleness_context(
+        &self,
+        snapshot_captured_at: Option<i64>,
+        now: i64,
+    ) -> Option<BehavioralBaselineStalenessContext> {
+        if !self.baseline_staleness.enabled {
+            return None;
+        }
+        let snapshot_captured_at = snapshot_captured_at?;
+        let snapshot_age_secs = now.saturating_sub(snapshot_captured_at);
+        if snapshot_age_secs <= self.baseline_staleness.threshold_secs {
+            return None;
+        }
+
+        let windows_over_threshold = ((snapshot_age_secs - self.baseline_staleness.threshold_secs)
+            / self.baseline_staleness.threshold_secs)
+            + 1;
+        let confidence_multiplier = (1.0
+            - windows_over_threshold as f64
+                * self.baseline_staleness.confidence_reduction_per_window)
+            .clamp(self.baseline_staleness.minimum_confidence_multiplier, 1.0);
+        Some(BehavioralBaselineStalenessContext {
+            snapshot_captured_at,
+            snapshot_age_secs,
+            threshold_secs: self.baseline_staleness.threshold_secs,
+            windows_over_threshold,
+            confidence_multiplier,
+        })
     }
 
     fn is_sensitive_pair(&self, parent_process: &str, process_name: &str) -> bool {
@@ -1265,6 +1408,7 @@ impl DetectionStrategy for BehavioralAnomalyDetector {
             TelemetryPayload::AuthenticationEvent(auth) => {
                 self.evaluate_authentication(event, auth)
             }
+            TelemetryPayload::CloudTrail(_) | TelemetryPayload::KubernetesAudit(_) => Vec::new(),
             TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
@@ -2017,12 +2161,55 @@ fn default_high_confidence_z_score() -> f64 {
     3.0
 }
 
+fn default_baseline_staleness_threshold_secs() -> i64 {
+    21_600
+}
+
+fn default_baseline_staleness_reduction_per_window() -> f64 {
+    0.15
+}
+
+fn default_baseline_staleness_minimum_multiplier() -> f64 {
+    0.5
+}
+
 fn default_high_confidence_threshold() -> f64 {
     0.9
 }
 
 fn default_medium_confidence_threshold() -> f64 {
     0.7
+}
+
+impl BehavioralBaselineStalenessProfile {
+    fn validate(&self) -> Result<(), ProfileValidationError> {
+        if self.threshold_secs <= 0 {
+            return Err(ProfileValidationError {
+                profile: "BehavioralAnomalyProfile",
+                field: "baseline_staleness.threshold_secs",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.confidence_reduction_per_window)
+            || self.confidence_reduction_per_window == 0.0
+        {
+            return Err(ProfileValidationError {
+                profile: "BehavioralAnomalyProfile",
+                field: "baseline_staleness.confidence_reduction_per_window",
+                reason: "must be greater than 0.0 and less than or equal to 1.0".to_string(),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.minimum_confidence_multiplier)
+            || self.minimum_confidence_multiplier == 0.0
+        {
+            return Err(ProfileValidationError {
+                profile: "BehavioralAnomalyProfile",
+                field: "baseline_staleness.minimum_confidence_multiplier",
+                reason: "must be greater than 0.0 and less than or equal to 1.0".to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -2069,6 +2256,25 @@ mod tests {
                 executable_path: executable_path.map(str::to_string),
                 signer: None,
                 signature_valid: None,
+            }),
+        )
+    }
+
+    fn network_event(
+        event_id: &str,
+        timestamp: i64,
+        process_name: &str,
+        destination_ip: &str,
+        destination_port: u16,
+    ) -> TelemetryEvent {
+        telemetry_event(
+            event_id,
+            timestamp,
+            TelemetryPayload::NetworkConnect(NetworkConnectEvent {
+                process_name: process_name.to_string(),
+                destination_ip: destination_ip.to_string(),
+                destination_port,
+                protocol: "tcp".to_string(),
             }),
         )
     }
@@ -2629,5 +2835,90 @@ mod tests {
                 "family {family}"
             );
         }
+    }
+
+    #[test]
+    fn behavioral_anomaly_quantifies_distinct_poisoning_observations_required_for_sigma_shifts() {
+        let profile = BehavioralAnomalyProfile {
+            min_host_observations: 4,
+            min_identity_observations: 4,
+            min_peer_group_observations: 4,
+            distribution_min_observations: 4,
+            ..BehavioralAnomalyProfile::default()
+        };
+        let detector = BehavioralAnomalyDetector::from_profile(profile.clone()).unwrap();
+
+        for index in 0..16 {
+            assert!(
+                detector
+                    .evaluate(&network_event(
+                        &format!("warm-network-{index}"),
+                        1_800_004_000 + index as i64,
+                        "svchost.exe",
+                        "10.0.0.5",
+                        443,
+                    ))
+                    .is_empty()
+            );
+        }
+
+        let mut sigma_3 = None;
+        let mut sigma_2 = None;
+        let mut sigma_1 = None;
+
+        for poison_count in 0..32 {
+            if poison_count > 0 {
+                let poison = detector.evaluate(&network_event(
+                    &format!("poison-{poison_count}"),
+                    1_800_004_100 + poison_count as i64,
+                    "svchost.exe",
+                    &format!("198.51.100.{poison_count}"),
+                    7_000 + poison_count as u16,
+                ));
+                assert_eq!(poison.len(), 1);
+            }
+
+            let snapshot = detector
+                .snapshot_if_dirty("behavioral_anomaly")
+                .expect("poisoning benchmark should snapshot detector state");
+            let probe = BehavioralAnomalyDetector::from_profile(profile.clone()).unwrap();
+            probe.hydrate_from_snapshot(Some(snapshot));
+
+            let probe_findings = probe.evaluate(&network_event(
+                &format!("probe-{poison_count}"),
+                1_800_005_000 + poison_count as i64,
+                "svchost.exe",
+                &format!("203.0.113.{}", poison_count + 1),
+                8_000 + poison_count as u16,
+            ));
+            assert_eq!(probe_findings.len(), 1);
+            let aggregate_sigma =
+                probe_findings[0].evidence["deviation_scoring"]["aggregate_deviation_score"]
+                    .as_f64()
+                    .unwrap();
+
+            if sigma_3.is_none() && aggregate_sigma <= 3.0 {
+                sigma_3 = Some(poison_count);
+            }
+            if sigma_2.is_none() && aggregate_sigma <= 2.0 {
+                sigma_2 = Some(poison_count);
+            }
+            if sigma_1.is_none() && aggregate_sigma <= 1.0 {
+                sigma_1 = Some(poison_count);
+            }
+
+            if sigma_3.is_some() && sigma_2.is_some() && sigma_1.is_some() {
+                break;
+            }
+        }
+
+        let sigma_3 = sigma_3.expect("3 sigma threshold should be crossed");
+        let sigma_2 = sigma_2.expect("2 sigma threshold should be crossed");
+        let sigma_1 = sigma_1.expect("1 sigma threshold should be crossed");
+
+        println!("sigma_3={sigma_3} sigma_2={sigma_2} sigma_1={sigma_1}");
+        assert!(sigma_3 > 0);
+        assert!(sigma_2 >= sigma_3);
+        assert!(sigma_1 >= sigma_2);
     }
 }

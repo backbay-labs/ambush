@@ -24,6 +24,9 @@ Thumbs.db
 *.log
 .ephemeral_state.json
 experiments/materialized-*.yaml
+experiments/mutation-*.yaml
+crates/swarm-runtime/data/evolution-assurance-cases/reports/
+crates/swarm-runtime/data/evolution-assurance-cases/scenarios/
 data/replay-runs/
 data/experiments/
 data/verifications/

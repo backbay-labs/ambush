@@ -1,0 +1,30 @@
+{
+  "generated_at": "2026-04-13",
+  "commands": [
+    "cargo test -p swarm-runtime recruitment_kill_chain_replay_reaches_alert_at_least_twenty_percent_faster --test recruitment_integration -- --nocapture",
+    "cargo test -p swarm-whisker behavioral_anomaly_quantifies_distinct_poisoning_observations_required_for_sigma_shifts --lib -- --nocapture"
+  ],
+  "kill_chain_replay": {
+    "scenario": "command_and_control network beacon replay",
+    "baseline": {
+      "alert_sample_count": 4,
+      "alert_elapsed_secs": 180
+    },
+    "recruited": {
+      "alert_sample_count": 3,
+      "alert_elapsed_secs": 120
+    },
+    "improvement_percent": 33.3
+  },
+  "sigma_shift_bounds": {
+    "detector": "behavioral_anomaly",
+    "telemetry_family": "network_connect",
+    "warm_observation_count": 16,
+    "metric": "minimum distinct poisoning observations before a held-out novel flow drops to or below the aggregate deviation threshold",
+    "threshold_observations": {
+      "3_sigma": 2,
+      "2_sigma": 4,
+      "1_sigma": 13
+    }
+  }
+}

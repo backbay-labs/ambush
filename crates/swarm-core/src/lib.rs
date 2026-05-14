@@ -11,6 +11,7 @@ pub mod agent;
 pub mod config;
 pub mod observability;
 pub mod pheromone;
+pub mod signed_state;
 pub mod telemetry;
 pub mod types;
 pub mod verdict;
@@ -25,19 +26,24 @@ pub use pheromone::{
     BehavioralTelemetryFamilyBaseline, EscalationRecord, Pheromone, PheromoneDeposit, ThreatClass,
     ThreatClassConfig, ThreatClassPolicy, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
+pub use signed_state::{
+    SIGNED_STATE_SCHEMA_VERSION, SignedStateEnvelope, SignedStateError, SignedStateExpectation,
+    SignedStateStatement, VerifiedSignedState,
+};
 pub use telemetry::{
-    AuthenticationEventData, BridgeHealth, DnsQueryEvent, ExhaustedResource, FilePersistenceEvent,
-    InfrastructureHealthEvent, NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent,
-    RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent, TelemetryBridge,
-    TelemetryBridgeError, TelemetryBridgeResult, TelemetryEvent, TelemetryPayload,
-    ThermalAnomalyEvent, ThermalSeverity,
+    AuthenticationEventData, BridgeHealth, CloudTrailEvent, DnsQueryEvent, ExhaustedResource,
+    FilePersistenceEvent, InfrastructureHealthEvent, KubernetesAuditEvent, NetworkConnectEvent,
+    ProcessMemoryAccessEvent, ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent,
+    ResourceExhaustionEvent, TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult,
+    TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity,
 };
 pub use types::{
     AgentId, EscalationEvent, HuntId, ProvidenceCallbackAuditEntry, ProvidenceCallbackEvent,
-    ProvidenceCreateIncidentBody, ProvidenceFeedbackEvidence, ProvidenceIncidentReconciliation,
-    ProvidenceIncidentStatus, ProvidenceReconciliationOutcome, SwarmAction,
-    SwarmProvidenceAggregateContext, SwarmProvidenceCallbackRequest, SwarmProvidenceFindingContext,
+    ProvidenceCreateIncidentBody, ProvidenceFeedbackAction, ProvidenceFeedbackEvidence,
+    ProvidenceIncidentReconciliation, ProvidenceIncidentStatus, ProvidenceReconciliationOutcome,
+    SoarSourceSystem, SoarVerdictLineage, SwarmAction, SwarmProvidenceAggregateContext,
+    SwarmProvidenceCallbackRequest, SwarmProvidenceFeedbackRequest, SwarmProvidenceFindingContext,
     SwarmProvidenceLinks, SwarmProvidenceRuntimeBridgeHealth, SwarmProvidenceRuntimeContext,
-    SwarmProvidenceWebhookContract,
+    SwarmProvidenceWebhookContract, SwarmSoarVerdictRequest,
 };
 pub use verdict::{ConsensusResult, ThreatVerdict};

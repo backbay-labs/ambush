@@ -745,6 +745,14 @@ fn extract_process_name(replay: &ReplayBundle) -> Option<String> {
         TelemetryPayload::ProcessMemoryAccess(access) => Some(access.source_process.clone()),
         TelemetryPayload::NetworkConnect(connect) => Some(connect.process_name.clone()),
         TelemetryPayload::DnsQuery(dns) => dns.process_name.clone(),
+        TelemetryPayload::CloudTrail(event) => event.principal_name.clone().or_else(|| {
+            event
+                .principal_arn
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+        }),
+        TelemetryPayload::KubernetesAudit(event) => event.username.clone(),
         TelemetryPayload::RegistryAccess(registry) => Some(registry.process_name.clone()),
         TelemetryPayload::RegistryPersistence(registry) => Some(registry.process_name.clone()),
         TelemetryPayload::FilePersistence(file) => Some(file.process_name.clone()),
@@ -772,6 +780,11 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
             .get("user")
             .and_then(|value| value.as_str())
             .map(ToString::to_string),
+        TelemetryPayload::CloudTrail(event) => event
+            .principal_name
+            .clone()
+            .or_else(|| event.principal_arn.clone()),
+        TelemetryPayload::KubernetesAudit(event) => event.username.clone(),
         TelemetryPayload::DnsQuery(_) | TelemetryPayload::RegistryAccess(_) => replay
             .audit
             .detection

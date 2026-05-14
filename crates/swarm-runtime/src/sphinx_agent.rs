@@ -16,6 +16,7 @@ use swarm_core::agent::{
 };
 use swarm_core::config::{MemoryConfig, SwarmConfig};
 use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
+use swarm_core::signed_state::{SignedStateEnvelope, SignedStateExpectation};
 use swarm_core::types::{
     AgentId, ProvidenceFeedbackAction, SPHINX_MEMORY_PHEROMONE_SCHEMA_VERSION,
     SPHINX_MEMORY_THREAT_CLASS, SWARM_PROVIDENCE_FEEDBACK_SCHEMA, Severity, SphinxMemoryAnswer,
@@ -29,6 +30,8 @@ use swarm_pheromone::{
 use crate::AgentTickBoundaryError;
 
 const KNOWLEDGE_GRAPH_SCHEMA_VERSION: u32 = 1;
+const KNOWLEDGE_GRAPH_STATE_KIND: &str = "sphinx_knowledge_graph";
+const KNOWLEDGE_GRAPH_STREAM_ID: &str = "knowledge_graph";
 
 pub struct SphinxAgent {
     id: AgentId,
@@ -92,11 +95,14 @@ impl SphinxAgent {
         let config_path = config_path.into();
         let memory_root = resolve_memory_root(&config_path, &runtime_config.memory);
         let store = FileKnowledgeGraphStore::open(memory_root)?;
-        let mut graph = store.load_snapshot()?.unwrap_or_else(|| {
-            KnowledgeGraphSnapshot::new(runtime_config.memory.temporal_window_secs)
-        });
-        graph.temporal_window_secs = runtime_config.memory.temporal_window_secs;
         let verifying_key = signing_key.verifying_key();
+        let trusted_signer_agent_id = AgentId::from_verifying_key(&verifying_key);
+        let mut graph = store
+            .load_trusted_snapshot(&trusted_signer_agent_id)?
+            .unwrap_or_else(|| {
+                KnowledgeGraphSnapshot::new(runtime_config.memory.temporal_window_secs)
+            });
+        graph.temporal_window_secs = runtime_config.memory.temporal_window_secs;
 
         Ok(Self {
             id,
@@ -709,8 +715,9 @@ impl SwarmAgent for SphinxAgent {
             .prune_stale(env.now.saturating_mul(1000), self.knowledge_retention_days);
         if changed {
             self.graph.updated_at_ms = env.now.saturating_mul(1000);
+            let signer_agent_id = AgentId::from_verifying_key(&self.verifying_key);
             self.store
-                .persist_snapshot(&self.graph)
+                .persist_snapshot(&self.graph, &signer_agent_id, &self.signing_key)
                 .map_err(internal_error)?;
         }
         self.health = AgentHealth::Healthy;
@@ -1204,6 +1211,13 @@ pub enum KnowledgeGraphStoreError {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("knowledge-graph snapshot verification failed for `{path}`: {source}")]
+    InvalidSnapshotSignature {
+        path: PathBuf,
+        #[source]
+        source: swarm_core::SignedStateError,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1232,7 +1246,21 @@ impl FileKnowledgeGraphStore {
     pub fn load_snapshot(
         &self,
     ) -> Result<Option<KnowledgeGraphSnapshot>, KnowledgeGraphStoreError> {
-        let path = self.index_path();
+        self.load_snapshot_internal(None)
+    }
+
+    pub fn load_trusted_snapshot(
+        &self,
+        expected_signer_agent_id: &AgentId,
+    ) -> Result<Option<KnowledgeGraphSnapshot>, KnowledgeGraphStoreError> {
+        self.load_snapshot_internal(Some(expected_signer_agent_id))
+    }
+
+    fn load_snapshot_internal(
+        &self,
+        expected_signer_agent_id: Option<&AgentId>,
+    ) -> Result<Option<KnowledgeGraphSnapshot>, KnowledgeGraphStoreError> {
+        let path = self.snapshot_path();
         if !path.exists() {
             return Ok(None);
         }
@@ -1240,34 +1268,36 @@ impl FileKnowledgeGraphStore {
             path: path.clone(),
             source,
         })?;
-        let index: KnowledgeGraphIndex =
-            serde_json::from_str(&raw).map_err(|source| KnowledgeGraphStoreError::Parse {
+        let envelope = serde_json::from_str::<SignedStateEnvelope<KnowledgeGraphSnapshot>>(&raw)
+            .map_err(|source| KnowledgeGraphStoreError::Parse {
                 path: path.clone(),
                 source,
             })?;
-        let mut nodes = Vec::with_capacity(index.nodes.len());
-        for record in &index.nodes {
-            let node_path = self.node_path(&record.node_id);
-            nodes.push(read_json(&node_path)?);
+        let accepted_sequence = self.load_snapshot_sequence()?;
+        let verified = envelope
+            .verify(SignedStateExpectation {
+                state_kind: KNOWLEDGE_GRAPH_STATE_KIND,
+                stream_id: KNOWLEDGE_GRAPH_STREAM_ID,
+                expected_signer_agent_id,
+                accepted_sequence,
+            })
+            .map_err(
+                |source| KnowledgeGraphStoreError::InvalidSnapshotSignature {
+                    path: path.clone(),
+                    source,
+                },
+            )?;
+        if accepted_sequence.is_none_or(|sequence| sequence < verified.sequence) {
+            self.write_snapshot_sequence(verified.sequence)?;
         }
-        let mut edges = Vec::with_capacity(index.edges.len());
-        for record in &index.edges {
-            let edge_path = self.edge_path(&record.edge_id);
-            edges.push(read_json(&edge_path)?);
-        }
-        Ok(Some(KnowledgeGraphSnapshot {
-            schema_version: index.schema_version,
-            temporal_window_secs: index.temporal_window_secs,
-            updated_at_ms: index.updated_at_ms,
-            processed_observation_ids: index.processed_observation_ids,
-            nodes,
-            edges,
-        }))
+        Ok(Some(verified.payload))
     }
 
     pub fn persist_snapshot(
         &self,
         snapshot: &KnowledgeGraphSnapshot,
+        signer_agent_id: &AgentId,
+        signing_key: &SigningKey,
     ) -> Result<(), KnowledgeGraphStoreError> {
         let mut retained_node_paths = BTreeSet::new();
         let mut node_records = Vec::with_capacity(snapshot.nodes.len());
@@ -1310,11 +1340,40 @@ impl FileKnowledgeGraphStore {
             nodes: node_records,
             edges: edge_records,
         };
-        write_json(&self.index_path(), &index)
+        write_json(&self.index_path(), &index)?;
+
+        let sequence = self
+            .load_snapshot_sequence()?
+            .unwrap_or(0)
+            .saturating_add(1);
+        let envelope = SignedStateEnvelope::sign(
+            KNOWLEDGE_GRAPH_STATE_KIND,
+            KNOWLEDGE_GRAPH_STREAM_ID,
+            signer_agent_id.clone(),
+            sequence,
+            snapshot.clone(),
+            signing_key,
+        )
+        .map_err(
+            |source| KnowledgeGraphStoreError::InvalidSnapshotSignature {
+                path: self.snapshot_path(),
+                source,
+            },
+        )?;
+        write_json(&self.snapshot_path(), &envelope)?;
+        self.write_snapshot_sequence(sequence)
     }
 
     fn index_path(&self) -> PathBuf {
         self.root.join("index.json")
+    }
+
+    fn snapshot_path(&self) -> PathBuf {
+        self.root.join("snapshot.signed.json")
+    }
+
+    fn snapshot_sequence_path(&self) -> PathBuf {
+        self.root.join("snapshot.sequence.json")
     }
 
     fn node_path(&self, node_id: &str) -> PathBuf {
@@ -1354,6 +1413,31 @@ impl FileKnowledgeGraphStore {
                 .map_err(|source| KnowledgeGraphStoreError::Write { path, source })?;
         }
         Ok(())
+    }
+
+    fn load_snapshot_sequence(&self) -> Result<Option<u64>, KnowledgeGraphStoreError> {
+        let path = self.snapshot_sequence_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| KnowledgeGraphStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_str(&raw)
+            .map(Some)
+            .map_err(|source| KnowledgeGraphStoreError::Parse { path, source })
+    }
+
+    fn write_snapshot_sequence(&self, sequence: u64) -> Result<(), KnowledgeGraphStoreError> {
+        let path = self.snapshot_sequence_path();
+        let raw = serde_json::to_string_pretty(&sequence).map_err(|source| {
+            KnowledgeGraphStoreError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        fs::write(&path, raw).map_err(|source| KnowledgeGraphStoreError::Write { path, source })
     }
 }
 
@@ -1958,20 +2042,6 @@ fn resolve_memory_root(config_path: &Path, memory: &MemoryConfig) -> PathBuf {
     }
 }
 
-fn read_json<T>(path: &Path) -> Result<T, KnowledgeGraphStoreError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let raw = fs::read_to_string(path).map_err(|source| KnowledgeGraphStoreError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    serde_json::from_str(&raw).map_err(|source| KnowledgeGraphStoreError::Parse {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
 fn write_json<T>(path: &Path, value: &T) -> Result<(), KnowledgeGraphStoreError>
 where
     T: Serialize,
@@ -2054,6 +2124,7 @@ mod tests {
         CalicoDeceptionInventoryPayload, CalicoLifecycleStage,
     };
     use crate::config::load_config;
+    use ed25519_dalek::SigningKey;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2101,6 +2172,10 @@ mod tests {
     fn substrate(config: &swarm_core::config::SwarmConfig) -> ConfiguredPheromoneSubstrate {
         ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
             .expect("test substrate should initialize")
+    }
+
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[24u8; 32])
     }
 
     fn pheromone(event_id: &str, timestamp: i64) -> PheromoneDeposit {
@@ -2306,8 +2381,9 @@ mod tests {
         let mut config = load_config(config_path()).unwrap();
         configure_memory(&mut config, &root);
 
-        let agent = SphinxAgent::new(
+        let agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),
@@ -2325,8 +2401,9 @@ mod tests {
         let mut config = load_config(config_path()).unwrap();
         configure_memory(&mut config, &root);
 
-        let mut agent = SphinxAgent::new(
+        let mut agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),
@@ -2360,8 +2437,9 @@ mod tests {
         let mut config = load_config(config_path()).unwrap();
         configure_memory(&mut config, &root);
 
-        let mut agent = SphinxAgent::new(
+        let mut agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),
@@ -2399,8 +2477,9 @@ mod tests {
         assert!(edge_kinds.contains(&KnowledgeEdgeKind::Causal));
         assert!(edge_kinds.contains(&KnowledgeEdgeKind::Semantic));
 
-        let mut restarted = SphinxAgent::new(
+        let mut restarted = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),
@@ -2423,13 +2502,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sphinx_agent_rejects_tampered_graph_snapshot_on_restart() {
+        let root = temp_root("tampered-graph");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(vec![pheromone("evt-1", 1_800_501_000)], 1_800_501_001))
+            .await
+            .expect("sphinx tick should persist graph state");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let mut envelope: swarm_core::SignedStateEnvelope<super::KnowledgeGraphSnapshot> =
+            serde_json::from_str(&fs::read_to_string(store.snapshot_path()).unwrap()).unwrap();
+        let mut payload: super::KnowledgeGraphSnapshot =
+            serde_json::from_str(&envelope.statement.payload_json).unwrap();
+        payload
+            .processed_observation_ids
+            .insert("evt-tampered".to_string());
+        envelope.statement.payload_json = serde_json::to_string(&payload).unwrap();
+        fs::write(
+            store.snapshot_path(),
+            serde_json::to_string_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+
+        let error = match SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        ) {
+            Ok(_) => panic!("tampered graph snapshot should fail closed on restart"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            super::KnowledgeGraphStoreError::InvalidSnapshotSignature { .. }
+        ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_rejects_replayed_graph_snapshot_on_restart() {
+        let root = temp_root("replayed-graph");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(vec![pheromone("evt-1", 1_800_502_000)], 1_800_502_001))
+            .await
+            .expect("first sphinx tick should persist graph state");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let original_snapshot = fs::read_to_string(store.snapshot_path()).unwrap();
+
+        agent
+            .tick(&env(vec![pheromone("evt-2", 1_800_502_010)], 1_800_502_011))
+            .await
+            .expect("second sphinx tick should advance graph sequence");
+
+        fs::write(store.snapshot_path(), original_snapshot).unwrap();
+
+        let error = match SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        ) {
+            Ok(_) => panic!("replayed graph snapshot should fail closed on restart"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            super::KnowledgeGraphStoreError::InvalidSnapshotSignature {
+                source: swarm_core::SignedStateError::ReplayDetected { .. },
+                ..
+            }
+        ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn sphinx_agent_links_related_engagements_with_temporal_edges() {
         let root = temp_root("temporal");
         let mut config = load_config(config_path()).unwrap();
         configure_memory(&mut config, &root);
 
-        let mut agent = SphinxAgent::new(
+        let mut agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),
@@ -2473,8 +2655,9 @@ mod tests {
         let mut config = load_config(config_path()).unwrap();
         configure_memory(&mut config, &root);
 
-        let mut agent = SphinxAgent::new(
+        let mut agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),
@@ -2503,8 +2686,9 @@ mod tests {
                 if asset_id == "calico:finance_canary:1" && *generation == 1
         )));
 
-        let mut restarted = SphinxAgent::new(
+        let mut restarted = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),
@@ -2542,8 +2726,9 @@ mod tests {
         let mut config = load_config(config_path()).unwrap();
         configure_memory(&mut config, &root);
 
-        let mut agent = SphinxAgent::new(
+        let mut agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),
@@ -2592,8 +2777,9 @@ mod tests {
         configure_memory(&mut config, &root);
         let substrate = substrate(&config);
 
-        let mut agent = SphinxAgent::new(
+        let mut agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate.clone(),
@@ -2688,8 +2874,9 @@ mod tests {
         configure_memory(&mut config, &root);
         let substrate = substrate(&config);
 
-        let mut agent = SphinxAgent::new(
+        let mut agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate.clone(),
@@ -2782,8 +2969,9 @@ mod tests {
         let stale_timestamp = 1_800_800_000;
         let fresh_timestamp = stale_timestamp + two_days_secs;
 
-        let mut agent = SphinxAgent::new(
+        let mut agent = SphinxAgent::new_with_signing_key(
             AgentId::new("sphinx", "primary"),
+            test_signing_key(),
             config_path(),
             config.clone(),
             substrate(&config),

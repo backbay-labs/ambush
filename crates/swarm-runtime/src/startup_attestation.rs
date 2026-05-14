@@ -13,9 +13,11 @@ use crate::evasion_coverage::resolve_repo_root;
 const REPO_RULESET_DIR: &str = "rulesets";
 const RULESET_MANIFEST_PATH: &str = "rulesets/attestation.json";
 const TRUSTED_ATTESTATION_KEY_ID: &str =
-    "1ea7877323c9e3a3e30e9daeb0dd9d48c39ec15fa34de42c3705e41840bcd023";
+    "b0c91174ef46efa915d563268750ec772b982fad7a7c8146ae7c51ea2be23609";
 const TRUSTED_ATTESTATION_PUBLIC_KEY_HEX: &str =
-    "172e740c4a651279713f27ead2f1fb15abdf52de7b7d3f6239c455edf609e164";
+    "705fc3478a95efe9973f7a8838bffb4e4baf9b77e247501c71e031e2b260d506";
+#[cfg(debug_assertions)]
+const DEBUG_TEST_ATTESTATION_SECRET: &str = "swarm-runtime-debug-startup-attestation-test-key";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AttestationTrustRoot {
@@ -30,6 +32,30 @@ impl AttestationTrustRoot {
             public_key_hex: TRUSTED_ATTESTATION_PUBLIC_KEY_HEX.to_string(),
         }
     }
+
+    #[cfg(debug_assertions)]
+    fn debug_test() -> Self {
+        let signer =
+            swarm_crypto::Ed25519Signer::from_secret_material(DEBUG_TEST_ATTESTATION_SECRET);
+        Self {
+            key_id: signer.key_id().to_string(),
+            public_key_hex: signer.public_key_hex().to_string(),
+        }
+    }
+}
+
+fn active_attestation_trust_roots() -> Vec<AttestationTrustRoot> {
+    let roots = vec![AttestationTrustRoot::repo_owned()];
+    #[cfg(debug_assertions)]
+    {
+        let mut roots = roots;
+        roots.push(AttestationTrustRoot::debug_test());
+        roots
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        roots
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,10 +68,10 @@ pub struct StartupAttestationReport {
 
 impl StartupAttestationReport {
     pub fn verify(config_path: &Path) -> Self {
-        let trust_root = AttestationTrustRoot::repo_owned();
+        let trust_roots = active_attestation_trust_roots();
         let repo_root = resolve_repo_root(config_path);
-        let binary = verify_binary_component_current_exe(&trust_root);
-        let rulesets = verify_ruleset_component(&repo_root, &trust_root);
+        let binary = verify_binary_component_current_exe(&trust_roots);
+        let rulesets = verify_ruleset_component(&repo_root, &trust_roots);
 
         Self {
             ready: binary.ready && rulesets.ready,
@@ -145,13 +171,13 @@ pub fn binary_attestation_sidecar_path(executable_path: &Path) -> PathBuf {
 }
 
 fn verify_binary_component_current_exe(
-    trust_root: &AttestationTrustRoot,
+    trust_roots: &[AttestationTrustRoot],
 ) -> StartupAttestationComponentReport {
     match std::env::current_exe() {
         Ok(executable_path) => verify_binary_component(
             &executable_path,
             &binary_attestation_sidecar_path(&executable_path),
-            trust_root,
+            trust_roots,
         ),
         Err(error) => StartupAttestationComponentReport {
             ready: false,
@@ -159,7 +185,7 @@ fn verify_binary_component_current_exe(
             statement_path: "current_executable.attestation.json".to_string(),
             status: "failed".to_string(),
             details: format!("failed to resolve running executable: {error}"),
-            key_id: Some(trust_root.key_id.clone()),
+            key_id: trust_roots.first().map(|root| root.key_id.clone()),
             expected_sha256: None,
             observed_sha256: None,
             verified_items: None,
@@ -170,11 +196,11 @@ fn verify_binary_component_current_exe(
 fn verify_binary_component(
     executable_path: &Path,
     statement_path: &Path,
-    trust_root: &AttestationTrustRoot,
+    trust_roots: &[AttestationTrustRoot],
 ) -> StartupAttestationComponentReport {
     let subject = executable_path.display().to_string();
-    match verify_binary_statement(executable_path, statement_path, trust_root) {
-        Ok(verified) => StartupAttestationComponentReport {
+    match verify_binary_statement(executable_path, statement_path, trust_roots) {
+        Ok((verified, key_id)) => StartupAttestationComponentReport {
             ready: true,
             subject,
             statement_path: statement_path.display().to_string(),
@@ -183,7 +209,7 @@ fn verify_binary_component(
                 "verified binary digest and size for `{}`",
                 verified.executable_name
             ),
-            key_id: Some(trust_root.key_id.clone()),
+            key_id: Some(key_id),
             expected_sha256: Some(verified.sha256.clone()),
             observed_sha256: Some(verified.sha256),
             verified_items: Some(1),
@@ -194,7 +220,7 @@ fn verify_binary_component(
             statement_path: statement_path.display().to_string(),
             status: "failed".to_string(),
             details: error,
-            key_id: Some(trust_root.key_id.clone()),
+            key_id: trust_roots.first().map(|root| root.key_id.clone()),
             expected_sha256: None,
             observed_sha256: None,
             verified_items: None,
@@ -205,13 +231,13 @@ fn verify_binary_component(
 fn verify_binary_statement(
     executable_path: &Path,
     statement_path: &Path,
-    trust_root: &AttestationTrustRoot,
-) -> Result<BinaryAttestationStatement, String> {
+    trust_roots: &[AttestationTrustRoot],
+) -> Result<(BinaryAttestationStatement, String), String> {
     let signed = read_json::<SignedBinaryAttestation>(statement_path)?;
-    verify_signature(
+    let key_id = verify_signature(
         &signed.statement,
         &signed.signature,
-        trust_root,
+        trust_roots,
         statement_path,
     )?;
 
@@ -252,23 +278,23 @@ fn verify_binary_statement(
         ));
     }
 
-    Ok(signed.statement)
+    Ok((signed.statement, key_id))
 }
 
 fn verify_ruleset_component(
     repo_root: &Path,
-    trust_root: &AttestationTrustRoot,
+    trust_roots: &[AttestationTrustRoot],
 ) -> StartupAttestationComponentReport {
     let statement_path = repo_root.join(RULESET_MANIFEST_PATH);
     let subject = repo_root.join(REPO_RULESET_DIR).display().to_string();
-    match verify_ruleset_statement(repo_root, &statement_path, trust_root) {
-        Ok(verified_items) => StartupAttestationComponentReport {
+    match verify_ruleset_statement(repo_root, &statement_path, trust_roots) {
+        Ok((verified_items, key_id)) => StartupAttestationComponentReport {
             ready: true,
             subject,
             statement_path: statement_path.display().to_string(),
             status: "verified".to_string(),
             details: format!("verified {} repo-owned ruleset files", verified_items),
-            key_id: Some(trust_root.key_id.clone()),
+            key_id: Some(key_id),
             expected_sha256: None,
             observed_sha256: None,
             verified_items: Some(verified_items),
@@ -279,7 +305,7 @@ fn verify_ruleset_component(
             statement_path: statement_path.display().to_string(),
             status: "failed".to_string(),
             details: error,
-            key_id: Some(trust_root.key_id.clone()),
+            key_id: trust_roots.first().map(|root| root.key_id.clone()),
             expected_sha256: None,
             observed_sha256: None,
             verified_items: None,
@@ -290,13 +316,13 @@ fn verify_ruleset_component(
 fn verify_ruleset_statement(
     repo_root: &Path,
     statement_path: &Path,
-    trust_root: &AttestationTrustRoot,
-) -> Result<usize, String> {
+    trust_roots: &[AttestationTrustRoot],
+) -> Result<(usize, String), String> {
     let signed = read_json::<SignedRulesetAttestation>(statement_path)?;
-    verify_signature(
+    let key_id = verify_signature(
         &signed.statement,
         &signed.signature,
-        trust_root,
+        trust_roots,
         statement_path,
     )?;
     if signed.statement.root != REPO_RULESET_DIR {
@@ -357,7 +383,7 @@ fn verify_ruleset_statement(
         }
     }
 
-    Ok(manifest.len())
+    Ok((manifest.len(), key_id))
 }
 
 fn collect_ruleset_files(repo_root: &Path) -> Result<Vec<String>, String> {
@@ -414,12 +440,14 @@ fn collect_ruleset_files(repo_root: &Path) -> Result<Vec<String>, String> {
 fn verify_signature<T: Serialize>(
     statement: &T,
     signature: &DetachedSignature,
-    trust_root: &AttestationTrustRoot,
+    trust_roots: &[AttestationTrustRoot],
     statement_path: &Path,
-) -> Result<(), String> {
-    if signature.key_id != trust_root.key_id
-        || signature.public_key_hex != trust_root.public_key_hex
-    {
+) -> Result<String, String> {
+    let trusted = trust_roots.iter().any(|trust_root| {
+        signature.key_id == trust_root.key_id
+            && signature.public_key_hex == trust_root.public_key_hex
+    });
+    if !trusted {
         return Err(format!(
             "attestation signature trust root mismatch for `{}`",
             statement_path.display()
@@ -437,7 +465,9 @@ fn verify_signature<T: Serialize>(
             "startup attestation signature verification failed for `{}`: {error}",
             statement_path.display()
         )
-    })
+    })?;
+
+    Ok(signature.key_id.clone())
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
@@ -460,6 +490,32 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(debug_assertions)]
+pub fn write_debug_test_binary_attestation(path: impl AsRef<Path>) -> Result<(), std::io::Error> {
+    let path = path.as_ref();
+    let raw = fs::read(path)?;
+    let signer = swarm_crypto::Ed25519Signer::from_secret_material(DEBUG_TEST_ATTESTATION_SECRET);
+    let statement = BinaryAttestationStatement {
+        version: 1,
+        issued_at_ms: 1_760_000_000_000,
+        executable_name: path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "swarm_detect".to_string()),
+        sha256: sha256_hex(&raw),
+        size_bytes: raw.len() as u64,
+    };
+    let payload = canonical_json_bytes(&statement).map_err(std::io::Error::other)?;
+    let signed = SignedBinaryAttestation {
+        statement,
+        signature: signer.sign(&payload),
+    };
+    fs::write(
+        binary_attestation_sidecar_path(path),
+        serde_json::to_vec_pretty(&signed).map_err(std::io::Error::other)?,
+    )
 }
 
 #[cfg(test)]
@@ -513,10 +569,11 @@ mod tests {
             .and_then(Path::parent)
             .unwrap()
             .to_path_buf();
-        let report = verify_ruleset_component(&repo_root, &AttestationTrustRoot::repo_owned());
+        let trust_roots = vec![AttestationTrustRoot::repo_owned()];
+        let report = verify_ruleset_component(&repo_root, &trust_roots);
 
         assert!(report.ready, "{}", report.details);
-        assert_eq!(report.verified_items, Some(3));
+        assert_eq!(report.verified_items, Some(4));
     }
 
     #[test]
@@ -542,7 +599,8 @@ mod tests {
             },
         );
 
-        let report = verify_binary_component(&executable, &sidecar, &trust_root);
+        let trust_roots = vec![trust_root];
+        let report = verify_binary_component(&executable, &sidecar, &trust_roots);
         assert!(report.ready, "{}", report.details);
     }
 
@@ -570,7 +628,8 @@ mod tests {
         );
 
         fs::write(&executable, b"tampered-binary").unwrap();
-        let report = verify_binary_component(&executable, &sidecar, &trust_root);
+        let trust_roots = vec![trust_root];
+        let report = verify_binary_component(&executable, &sidecar, &trust_roots);
         assert!(!report.ready);
         assert!(report.details.contains("binary digest mismatch"));
     }
@@ -606,9 +665,29 @@ mod tests {
             },
         );
 
-        let report = verify_ruleset_component(&dir, &trust_root);
+        let trust_roots = vec![trust_root];
+        let report = verify_ruleset_component(&dir, &trust_roots);
         assert!(!report.ready);
         assert!(report.details.contains("does not cover repo files"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_binary_attestation_helper_writes_verifiable_sidecar() {
+        let dir = temp_dir("binary-debug-helper");
+        let executable = dir.join("swarm_detect");
+        fs::write(&executable, b"debug-binary").unwrap();
+
+        super::write_debug_test_binary_attestation(&executable).unwrap();
+
+        let trust_roots = super::active_attestation_trust_roots();
+        let sidecar = binary_attestation_sidecar_path(&executable);
+        let report = verify_binary_component(&executable, &sidecar, &trust_roots);
+        assert!(report.ready, "{}", report.details);
+        assert_eq!(
+            report.key_id,
+            Some(AttestationTrustRoot::debug_test().key_id)
+        );
     }
 
     #[test]

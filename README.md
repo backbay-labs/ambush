@@ -80,6 +80,8 @@ The canonical docs for the new direction are:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+- [docs/QUICKSTART.md](docs/QUICKSTART.md)
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - [docs/DR-RUNBOOK.md](docs/DR-RUNBOOK.md)
 - [docs/ROADMAP.md](docs/ROADMAP.md)
 - [docs/decisions/0001-rust-first-runtime.md](docs/decisions/0001-rust-first-runtime.md)

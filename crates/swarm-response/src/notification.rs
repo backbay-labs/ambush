@@ -406,14 +406,14 @@ impl NotificationRouter {
             .header("content-type", "application/json")
             .body(payload_bytes.clone());
         if let Some(auth_token) = &state.config.auth_token {
-            request = request.bearer_auth(auth_token);
+            request = request.bearer_auth(auth_token.expose_secret());
         }
         if let Some(signature) = &state.config.request_signature {
             request = request.header(
                 signature.header.as_str(),
                 format!(
                     "sha256={}",
-                    hmac_sha256_hex(signature.secret.as_bytes(), &payload_bytes)
+                    hmac_sha256_hex(signature.secret.expose_secret().as_bytes(), &payload_bytes)
                 ),
             );
         }
@@ -605,7 +605,7 @@ mod tests {
             "soc".to_string(),
             NotificationChannelConfig {
                 target_url,
-                auth_token: Some("notify-secret".to_string()),
+                auth_token: Some("notify-secret".to_string().into()),
                 request_signature: None,
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig {
@@ -785,10 +785,10 @@ mod tests {
             "providence_webhook".to_string(),
             NotificationChannelConfig {
                 target_url,
-                auth_token: Some("providence-bearer".to_string()),
+                auth_token: Some("providence-bearer".to_string().into()),
                 request_signature: Some(swarm_core::config::RequestSignatureConfig {
                     header: "X-Swarm-Signature".to_string(),
-                    secret: "shared-providence-secret".to_string(),
+                    secret: "shared-providence-secret".to_string().into(),
                 }),
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig {

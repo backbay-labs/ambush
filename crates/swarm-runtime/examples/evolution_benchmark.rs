@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use ed25519_dalek::SigningKey;
 use swarm_core::config::SwarmConfig;
 use swarm_runtime::config::load_config;
 use swarm_runtime::kitten_agent::{EvolutionBenchmarkRequest, run_bounded_evolution_benchmark};
@@ -195,10 +196,12 @@ async fn main() -> Result<(), BenchError> {
         .unwrap_or_else(|_| "office_baseline_control".to_string());
     let benchmark_id = format!("evolution-benchmark-{}", Uuid::new_v4());
     let host = HostProfile::detect();
+    let signing_key = SigningKey::from_bytes(&[42u8; 32]);
 
     let run = run_bounded_evolution_benchmark(
         &config_path,
         config.clone(),
+        signing_key,
         EvolutionBenchmarkRequest {
             benchmark_id,
             label: label.clone(),

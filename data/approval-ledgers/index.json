@@ -1,6 +1,20 @@
 {
   "entries": [
     {
+      "ledger_id": "approval-ledger:1776122359216:21df91cf4051",
+      "approval_set_id": "approval-set:1776122359216:1824e5b42c88",
+      "vote_count": 1,
+      "created_at_ms": 1776122359216,
+      "bundle_path": "data/approval-ledgers/reports/approval-ledger_1776122359216_21df91cf4051.json"
+    },
+    {
+      "ledger_id": "approval-ledger:1776120333994:b27b2559bc52",
+      "approval_set_id": "approval-set:1776120333994:65566cc8656b",
+      "vote_count": 1,
+      "created_at_ms": 1776120333994,
+      "bundle_path": "data/approval-ledgers/reports/approval-ledger_1776120333994_b27b2559bc52.json"
+    },
+    {
       "ledger_id": "approval-ledger:1775999669082:b4154e22f68c",
       "approval_set_id": "approval-set:1775999669082:8115c0109f59",
       "vote_count": 1,

@@ -52,6 +52,7 @@ pub enum ThreatIntelIndicatorType {
     IpAddress,
     Domain,
     FileHash,
+    Url,
 }
 
 /// Durable operator-seeded threat-intel record stored in the substrate.
@@ -61,10 +62,20 @@ pub struct ThreatIntelEntry {
     pub indicator_type: ThreatIntelIndicatorType,
     /// Normalized indicator value.
     pub value: String,
+    /// Source system or feed label that produced the indicator.
+    #[serde(default = "default_threat_intel_source")]
+    pub source: String,
+    /// Optional upstream indicator identifier such as a STIX indicator id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indicator_id: Option<String>,
     /// Confidence contribution applied when a detector matches this indicator.
     pub confidence: f64,
     /// When the indicator expires (unix timestamp milliseconds).
     pub expires_at: i64,
+}
+
+fn default_threat_intel_source() -> String {
+    "operator".to_string()
 }
 
 /// Durable restart-safe behavioral baseline snapshot stored in the substrate.

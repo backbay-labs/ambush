@@ -228,7 +228,7 @@ impl ResponseExecutor for HttpEdrAdapter {
         let result = self
             .client
             .post(&self.config.endpoint)
-            .bearer_auth(&self.config.auth_token)
+            .bearer_auth(self.config.auth_token.expose_secret())
             .json(&payload)
             .send()
             .await;
@@ -410,7 +410,7 @@ mod tests {
     async fn dry_run_returns_simulated_receipt() {
         let adapter = HttpEdrAdapter::new(HttpEdrConfig {
             endpoint: "http://127.0.0.1:9/".to_string(),
-            auth_token: "secret".to_string(),
+            auth_token: "secret".to_string().into(),
             timeout_ms: 50,
             retry: RetryConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),
@@ -431,7 +431,7 @@ mod tests {
             spawn_server(Duration::from_millis(0), StatusCode::OK).await;
         let adapter = HttpEdrAdapter::new(HttpEdrConfig {
             endpoint,
-            auth_token: "secret".to_string(),
+            auth_token: "secret".to_string().into(),
             timeout_ms: 500,
             retry: RetryConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),
@@ -464,7 +464,7 @@ mod tests {
             spawn_server(Duration::from_millis(50), StatusCode::OK).await;
         let adapter = HttpEdrAdapter::new(HttpEdrConfig {
             endpoint,
-            auth_token: "secret".to_string(),
+            auth_token: "secret".to_string().into(),
             timeout_ms: 10,
             retry: RetryConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),

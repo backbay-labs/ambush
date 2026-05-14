@@ -713,7 +713,7 @@ impl ProvidenceIncidentAdapter {
                 signature.header.as_str(),
                 format!(
                     "sha256={}",
-                    hmac_sha256_hex(signature.secret.as_bytes(), &body_bytes)
+                    hmac_sha256_hex(signature.secret.expose_secret().as_bytes(), &body_bytes)
                 ),
             );
         }
@@ -746,7 +746,7 @@ impl ProvidenceIncidentAdapter {
 
     fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(auth_token) = &self.config.auth_token {
-            request.bearer_auth(auth_token)
+            request.bearer_auth(auth_token.expose_secret())
         } else {
             request
         }
@@ -1489,6 +1489,7 @@ pub mod tests {
                 allowed_embed_origins: Vec::new(),
                 max_list_results: 20,
                 widget_token_ttl_secs: 900,
+                rate_limit: Default::default(),
             },
             mode_state,
             agent_health: Vec::new(),
@@ -1508,7 +1509,7 @@ pub mod tests {
         let adapter = ProvidenceIncidentAdapter::new(
             NotificationChannelConfig {
                 target_url,
-                auth_token: Some("bearer".to_string()),
+                auth_token: Some("bearer".into()),
                 request_signature: None,
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig::default(),
@@ -1601,7 +1602,7 @@ pub mod tests {
         let adapter = ProvidenceIncidentAdapter::new(
             NotificationChannelConfig {
                 target_url,
-                auth_token: Some("bearer".to_string()),
+                auth_token: Some("bearer".into()),
                 request_signature: None,
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig::default(),
@@ -1636,7 +1637,7 @@ pub mod tests {
         let adapter = ProvidenceIncidentAdapter::new(
             NotificationChannelConfig {
                 target_url,
-                auth_token: Some("bearer".to_string()),
+                auth_token: Some("bearer".into()),
                 request_signature: None,
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig::default(),

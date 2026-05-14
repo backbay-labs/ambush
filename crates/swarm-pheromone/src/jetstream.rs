@@ -1,9 +1,10 @@
 use crate::substrate::{
-    AdmissionControl, DepositQuery, PheromoneSubstrate, SubstrateError, SubstrateHealth,
-    concentration_for, decode_deposit_payload, filter_deposits, filter_escalations,
-    normalize_threat_intel_value, validate_deposit_signature,
+    AdmissionControl, BEHAVIORAL_BASELINE_STATE_KIND, DepositQuery, PheromoneSubstrate,
+    SubstrateError, SubstrateHealth, concentration_for, decode_deposit_payload, filter_deposits,
+    filter_escalations, normalize_threat_intel_value, validate_deposit_signature,
 };
 use async_trait::async_trait;
+use ed25519_dalek::SigningKey;
 #[cfg(feature = "nats")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "nats")]
@@ -18,6 +19,7 @@ use swarm_core::pheromone::{
     BehavioralBaselineSnapshot, EscalationRecord, PheromoneConcentration, PheromoneDeposit,
     ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
+use swarm_core::signed_state::{SignedStateEnvelope, SignedStateExpectation};
 use swarm_core::types::AgentId;
 #[cfg(feature = "nats")]
 use tokio::sync::OnceCell;
@@ -350,7 +352,7 @@ impl JetStreamPheromoneSubstrate {
     async fn load_behavioral_baseline_snapshot(
         &self,
         strategy_id: &str,
-    ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
+    ) -> Result<Option<SignedStateEnvelope<BehavioralBaselineSnapshot>>, SubstrateError> {
         let connection = self.ensure_connected().await?;
         let key = behavioral_baseline_key(strategy_id);
         let Some(payload) = connection
@@ -363,9 +365,32 @@ impl JetStreamPheromoneSubstrate {
         };
 
         let location = format!("jetstream://{}/{}", self.bucket, key);
-        let snapshot = serde_json::from_slice::<BehavioralBaselineSnapshot>(&payload)
-            .map_err(|source| SubstrateError::Decode { location, source })?;
+        let snapshot =
+            serde_json::from_slice::<SignedStateEnvelope<BehavioralBaselineSnapshot>>(&payload)
+                .map_err(|source| SubstrateError::Decode { location, source })?;
         Ok(Some(snapshot))
+    }
+
+    #[cfg(feature = "nats")]
+    async fn load_behavioral_baseline_sequence(
+        &self,
+        strategy_id: &str,
+    ) -> Result<Option<u64>, SubstrateError> {
+        let connection = self.ensure_connected().await?;
+        let key = behavioral_baseline_sequence_key(strategy_id);
+        let Some(payload) = connection
+            .store
+            .get(&key)
+            .await
+            .map_err(|error| nats_error("get value", error))?
+        else {
+            return Ok(None);
+        };
+
+        let location = format!("jetstream://{}/{}", self.bucket, key);
+        serde_json::from_slice::<u64>(&payload)
+            .map(Some)
+            .map_err(|source| SubstrateError::Decode { location, source })
     }
 
     #[cfg(feature = "nats")]
@@ -759,16 +784,45 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     async fn store_behavioral_baseline_snapshot(
         &self,
         snapshot: BehavioralBaselineSnapshot,
+        signer_agent_id: &AgentId,
+        signing_key: &SigningKey,
     ) -> Result<(), SubstrateError> {
         let connection = self.ensure_connected().await?;
-        let payload = serde_json::to_vec(&snapshot).map_err(|source| SubstrateError::Encode {
+        let key = behavioral_baseline_key(&snapshot.strategy_id);
+        let sequence_key = behavioral_baseline_sequence_key(&snapshot.strategy_id);
+        let current_sequence = self
+            .load_behavioral_baseline_sequence(&snapshot.strategy_id)
+            .await?
+            .unwrap_or(0);
+        let envelope = SignedStateEnvelope::sign(
+            BEHAVIORAL_BASELINE_STATE_KIND,
+            snapshot.strategy_id.clone(),
+            signer_agent_id.clone(),
+            current_sequence.saturating_add(1),
+            snapshot,
+            signing_key,
+        )
+        .map_err(|source| SubstrateError::InvalidBehavioralBaseline {
+            strategy_id: key.clone(),
+            source,
+        })?;
+        let payload = serde_json::to_vec(&envelope).map_err(|source| SubstrateError::Encode {
             context: "jetstream behavioral baseline snapshot".to_string(),
             source,
         })?;
-        let key = behavioral_baseline_key(&snapshot.strategy_id);
         connection
             .store
             .put(key, payload.into())
+            .await
+            .map_err(|error| nats_error("put value", error))?;
+        let sequence_payload =
+            serde_json::to_vec(&envelope.sequence()).map_err(|source| SubstrateError::Encode {
+                context: "jetstream behavioral baseline sequence".to_string(),
+                source,
+            })?;
+        connection
+            .store
+            .put(sequence_key, sequence_payload.into())
             .await
             .map_err(|error| nats_error("put value", error))?;
         Ok(())
@@ -828,8 +882,41 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     async fn query_behavioral_baseline_snapshot(
         &self,
         strategy_id: &str,
+        expected_signer_agent_id: &AgentId,
     ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
-        self.load_behavioral_baseline_snapshot(strategy_id).await
+        let Some(envelope) = self.load_behavioral_baseline_snapshot(strategy_id).await? else {
+            return Ok(None);
+        };
+        let accepted_sequence = self.load_behavioral_baseline_sequence(strategy_id).await?;
+        let statement = envelope
+            .verify(SignedStateExpectation {
+                state_kind: BEHAVIORAL_BASELINE_STATE_KIND,
+                stream_id: strategy_id,
+                expected_signer_agent_id: Some(expected_signer_agent_id),
+                accepted_sequence,
+            })
+            .map_err(|source| SubstrateError::InvalidBehavioralBaseline {
+                strategy_id: strategy_id.to_string(),
+                source,
+            })?;
+        if accepted_sequence.is_none_or(|sequence| sequence < statement.sequence) {
+            let connection = self.ensure_connected().await?;
+            let payload = serde_json::to_vec(&statement.sequence).map_err(|source| {
+                SubstrateError::Encode {
+                    context: "jetstream behavioral baseline sequence".to_string(),
+                    source,
+                }
+            })?;
+            connection
+                .store
+                .put(
+                    behavioral_baseline_sequence_key(strategy_id),
+                    payload.into(),
+                )
+                .await
+                .map_err(|error| nats_error("put value", error))?;
+        }
+        Ok(Some(statement.payload))
     }
 
     async fn gc_evaporated(&self, now: i64) -> Result<usize, SubstrateError> {
@@ -959,6 +1046,8 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     async fn store_behavioral_baseline_snapshot(
         &self,
         _snapshot: BehavioralBaselineSnapshot,
+        _signer_agent_id: &AgentId,
+        _signing_key: &SigningKey,
     ) -> Result<(), SubstrateError> {
         Err(unsupported_backend())
     }
@@ -1008,6 +1097,7 @@ impl PheromoneSubstrate for JetStreamPheromoneSubstrate {
     async fn query_behavioral_baseline_snapshot(
         &self,
         _strategy_id: &str,
+        _expected_signer_agent_id: &AgentId,
     ) -> Result<Option<BehavioralBaselineSnapshot>, SubstrateError> {
         Err(unsupported_backend())
     }
@@ -1197,11 +1287,20 @@ fn behavioral_baseline_key(strategy_id: &str) -> String {
 }
 
 #[cfg(feature = "nats")]
+fn behavioral_baseline_sequence_key(strategy_id: &str) -> String {
+    format!(
+        "{BEHAVIORAL_BASELINE_KEY_PREFIX}.sequence.{}",
+        sanitize_segment(strategy_id)
+    )
+}
+
+#[cfg(feature = "nats")]
 fn threat_intel_indicator_segment(indicator_type: &ThreatIntelIndicatorType) -> &'static str {
     match indicator_type {
         ThreatIntelIndicatorType::IpAddress => "ip_address",
         ThreatIntelIndicatorType::Domain => "domain",
         ThreatIntelIndicatorType::FileHash => "file_hash",
+        ThreatIntelIndicatorType::Url => "url",
     }
 }
 
@@ -1343,6 +1442,8 @@ mod tests {
         ThreatIntelEntry {
             indicator_type: ThreatIntelIndicatorType::Domain,
             value: "Example.COM.".to_string(),
+            source: "operator".to_string(),
+            indicator_id: None,
             confidence: 0.91,
             expires_at: 1_700_000_000_100,
         }
@@ -1628,6 +1729,8 @@ mod tests {
             .store_threat_intel_entry(ThreatIntelEntry {
                 indicator_type: ThreatIntelIndicatorType::Domain,
                 value: "expired.example.com".to_string(),
+                source: "operator".to_string(),
+                indicator_id: None,
                 confidence: 0.9,
                 expires_at: now - 100,
             })
@@ -1637,6 +1740,8 @@ mod tests {
             .store_threat_intel_entry(ThreatIntelEntry {
                 indicator_type: ThreatIntelIndicatorType::IpAddress,
                 value: "10.0.0.1".to_string(),
+                source: "operator".to_string(),
+                indicator_id: None,
                 confidence: 0.8,
                 expires_at: now + 100_000,
             })

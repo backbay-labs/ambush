@@ -618,6 +618,8 @@ impl DetectionStrategy for InfrastructureAnomalyDetector {
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::AuthenticationEvent(_) => return Vec::new(),
         };
         let timestamp_ms = normalized_timestamp_ms(event.timestamp);
@@ -644,6 +646,8 @@ impl DetectionStrategy for InfrastructureAnomalyDetector {
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::AuthenticationEvent(_) => Vec::new(),
         }
     }

@@ -1,3 +1,4 @@
+use crate::command_line::{CommandLineNormalizationProfile, analyze_command_line};
 use crate::detector::{
     DetectionFinding, DetectionStrategy, ProcessMemoryAccessEvent, ProcessStartEvent,
     TelemetryEvent, TelemetryPayload,
@@ -25,6 +26,8 @@ pub struct FilelessExecutionProfile {
     pub syscall_gadget_indicators: Vec<String>,
     #[serde(default = "default_privileged_target_processes")]
     pub privileged_target_processes: Vec<String>,
+    #[serde(default)]
+    pub command_line_normalization: CommandLineNormalizationProfile,
     #[serde(default = "default_min_region_size_bytes")]
     pub min_region_size_bytes: u64,
     #[serde(default = "default_high_confidence_threshold")]
@@ -43,6 +46,7 @@ impl Default for FilelessExecutionProfile {
             deobfuscation_indicators: default_deobfuscation_indicators(),
             syscall_gadget_indicators: default_syscall_gadget_indicators(),
             privileged_target_processes: default_privileged_target_processes(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             min_region_size_bytes: default_min_region_size_bytes(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
@@ -59,6 +63,7 @@ pub struct FilelessExecutionDetector {
     deobfuscation_indicators: Vec<String>,
     syscall_gadget_indicators: Vec<String>,
     privileged_target_processes: Vec<String>,
+    command_line_normalization: CommandLineNormalizationProfile,
     min_region_size_bytes: u64,
     high_confidence_threshold: f64,
     medium_confidence_threshold: f64,
@@ -78,6 +83,7 @@ impl Default for FilelessExecutionDetector {
             deobfuscation_indicators: normalize_entries(profile.deobfuscation_indicators),
             syscall_gadget_indicators: normalize_entries(profile.syscall_gadget_indicators),
             privileged_target_processes: normalize_entries(profile.privileged_target_processes),
+            command_line_normalization: profile.command_line_normalization,
             min_region_size_bytes: profile.min_region_size_bytes,
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
@@ -98,6 +104,7 @@ impl FilelessExecutionDetector {
             deobfuscation_indicators: normalize_entries(profile.deobfuscation_indicators),
             syscall_gadget_indicators: normalize_entries(profile.syscall_gadget_indicators),
             privileged_target_processes: normalize_entries(profile.privileged_target_processes),
+            command_line_normalization: profile.command_line_normalization.clone(),
             min_region_size_bytes: profile.min_region_size_bytes,
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
@@ -113,6 +120,7 @@ impl FilelessExecutionDetector {
             deobfuscation_indicators: self.deobfuscation_indicators.clone(),
             syscall_gadget_indicators: self.syscall_gadget_indicators.clone(),
             privileged_target_processes: self.privileged_target_processes.clone(),
+            command_line_normalization: self.command_line_normalization.clone(),
             min_region_size_bytes: self.min_region_size_bytes,
             high_confidence_threshold: self.high_confidence_threshold,
             medium_confidence_threshold: self.medium_confidence_threshold,
@@ -129,11 +137,18 @@ impl FilelessExecutionDetector {
             return None;
         }
 
-        let command_line = process.command_line.to_ascii_lowercase();
-        let matched_encoded =
-            matched_indicators(&command_line, &self.encoded_command_indicators, false);
-        let matched_deobfuscation =
-            matched_indicators(&command_line, &self.deobfuscation_indicators, false);
+        let command_line =
+            analyze_command_line(&process.command_line, &self.command_line_normalization);
+        let matched_encoded = matched_indicators(
+            &command_line.match_text,
+            &self.encoded_command_indicators,
+            false,
+        );
+        let matched_deobfuscation = matched_indicators(
+            &command_line.match_text,
+            &self.deobfuscation_indicators,
+            false,
+        );
 
         if matched_encoded.is_empty() || matched_deobfuscation.is_empty() {
             return None;
@@ -163,6 +178,9 @@ impl FilelessExecutionDetector {
                 "parent_process": process.parent_process,
                 "process_name": process.process_name,
                 "command_line": process.command_line,
+                "normalized_command_line": command_line.normalized,
+                "decoded_command_segments": command_line.decoded_segments,
+                "command_line_transforms": command_line.transforms,
                 "user": process.user,
                 "heuristics": {
                     "techniques": ["encoded_powershell"],
@@ -312,6 +330,8 @@ impl DetectionStrategy for FilelessExecutionDetector {
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
             | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
@@ -458,6 +478,7 @@ fn default_medium_confidence_threshold() -> f64 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{FilelessExecutionDetector, FilelessExecutionProfile};
+    use crate::command_line::CommandLineNormalizationProfile;
     use crate::detector::{
         DetectionStrategy, ProcessMemoryAccessEvent, ProcessStartEvent, TelemetryEvent,
         TelemetryPayload,
@@ -514,6 +535,30 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].threat_class, ThreatClass::DefenseEvasion);
         assert_eq!(findings[0].severity, Severity::Critical);
+    }
+
+    #[test]
+    fn encoded_command_payload_can_supply_deobfuscation_hint() {
+        let detector = FilelessExecutionDetector::default();
+        let findings = detector.evaluate(&powershell_event(
+            "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ==",
+        ));
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].evidence["decoded_command_segments"][0].as_str(),
+            Some("IEX (New-Object)")
+        );
+    }
+
+    #[test]
+    fn fullwidth_flags_are_normalized_before_fileless_matching() {
+        let detector = FilelessExecutionDetector::default();
+        let findings = detector.evaluate(&powershell_event(
+            "powershell.exe －ＥＮＣ SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ==",
+        ));
+
+        assert_eq!(findings.len(), 1);
     }
 
     #[test]
@@ -581,6 +626,20 @@ mod tests {
     #[test]
     fn fileless_profile_round_trips() {
         let profile = FilelessExecutionProfile::default();
+        let detector =
+            FilelessExecutionDetector::from_profile(profile.clone()).expect("profile is valid");
+        assert_eq!(detector.profile(), profile);
+    }
+
+    #[test]
+    fn explicit_normalization_profile_round_trips() {
+        let profile = FilelessExecutionProfile {
+            command_line_normalization: CommandLineNormalizationProfile {
+                decode_encoded_arguments: false,
+                ..CommandLineNormalizationProfile::default()
+            },
+            ..FilelessExecutionProfile::default()
+        };
         let detector =
             FilelessExecutionDetector::from_profile(profile.clone()).expect("profile is valid");
         assert_eq!(detector.profile(), profile);

@@ -11,6 +11,9 @@ use swarm_runtime::bridge_runtime::BridgeStatusSnapshot;
 use swarm_runtime::config::{load_config, write_debug_test_config_signature};
 use swarm_runtime::ingest::IngestState;
 use swarm_runtime::ingest::detect_http_router;
+use swarm_runtime::startup_attestation::{
+    StartupAttestationComponentReport, StartupAttestationReport,
+};
 use tower::ServiceExt;
 
 fn default_config_path() -> PathBuf {
@@ -78,6 +81,35 @@ fn valid_dns_event(event_id: &str, query_name: &str) -> Value {
 
 fn bridge_health(entries: Vec<BridgeStatusSnapshot>) -> Arc<Mutex<Vec<BridgeStatusSnapshot>>> {
     Arc::new(Mutex::new(entries))
+}
+
+fn verified_startup_attestation_report() -> StartupAttestationReport {
+    StartupAttestationReport {
+        ready: true,
+        evaluated_at_ms: 1_710_000_000_500,
+        binary: StartupAttestationComponentReport {
+            ready: true,
+            subject: "binary".to_string(),
+            statement_path: "swarm_detect.attestation.json".to_string(),
+            status: "verified".to_string(),
+            details: "binary digest verified".to_string(),
+            key_id: Some("test-key".to_string()),
+            expected_sha256: Some("expected".to_string()),
+            observed_sha256: Some("expected".to_string()),
+            verified_items: Some(1),
+        },
+        rulesets: StartupAttestationComponentReport {
+            ready: true,
+            subject: "rulesets".to_string(),
+            statement_path: "rulesets/attestation.json".to_string(),
+            status: "verified".to_string(),
+            details: "verified 4 repo-owned ruleset files".to_string(),
+            key_id: Some("test-key".to_string()),
+            expected_sha256: None,
+            observed_sha256: None,
+            verified_items: Some(4),
+        },
+    }
 }
 
 async fn ingest(
@@ -306,24 +338,34 @@ async fn healthz_reports_ready_when_detect_stack_is_healthy()
 }
 
 #[tokio::test]
-async fn healthz_returns_service_unavailable_when_live_response_requires_durable_substrate()
+async fn healthz_reports_detect_only_when_live_response_requires_durable_substrate()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut config = config_with_strategy("suspicious_process_tree")?;
     config.runtime.mode = RuntimeMode::LiveResponse;
     config.runtime.require_durable_live_response = true;
     config.pheromone.backend = PheromoneBackendConfig::InMemory;
-    let state = IngestState::from_config(default_config_path(), config)?;
+    let state = IngestState::from_config(default_config_path(), config)?
+        .with_startup_attestation(verified_startup_attestation_report());
     let app = detect_http_router(state);
 
     let response = app
         .oneshot(Request::builder().uri("/healthz").body(Body::empty())?)
         .await?;
 
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await?;
     let json: Value = serde_json::from_slice(&body)?;
-    assert_eq!(json["status"], "degraded");
+    assert_eq!(json["status"], "ok");
     assert_eq!(json["components"]["substrate"]["effective_ready"], false);
+    assert_eq!(json["components"]["degradation"]["level"], "detect_only");
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["accepts_ingest"],
+        true
+    );
+    assert_eq!(
+        json["components"]["degradation"]["capabilities"]["allows_live_response"],
+        false
+    );
     Ok(())
 }
 

@@ -1,0 +1,1471 @@
+{
+  "components": {
+    "parameters": {
+      "ContextToken": {
+        "description": "Optional Providence-scoped read token accepted on supported GET routes.",
+        "in": "query",
+        "name": "context_token",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "CorrelationKey": {
+        "description": "Optional incident correlation-key filter.",
+        "in": "query",
+        "name": "correlation_key",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Cursor": {
+        "description": "Opaque cursor returned by a previous list response.",
+        "in": "query",
+        "name": "cursor",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "FindingId": {
+        "description": "Optional finding identifier filter.",
+        "in": "query",
+        "name": "finding_id",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "HostId": {
+        "description": "Optional host identifier filter.",
+        "in": "query",
+        "name": "host_id",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "HostIdPath": {
+        "description": "Host identifier for the posture lookup.",
+        "in": "path",
+        "name": "host_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "HuntId": {
+        "description": "Optional hunt identifier filter.",
+        "in": "query",
+        "name": "hunt_id",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IncidentId": {
+        "description": "Optional incident identifier filter.",
+        "in": "query",
+        "name": "incident_id",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PageSize": {
+        "description": "Requested page size. Values above 200 are capped.",
+        "in": "query",
+        "name": "page_size",
+        "required": false,
+        "schema": {
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "ReceiptId": {
+        "description": "Optional receipt identifier filter.",
+        "in": "query",
+        "name": "receipt_id",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SchemaVersionHeader": {
+        "description": "Optional schema-version negotiation header. The current supported value is 1.",
+        "in": "header",
+        "name": "x-swarm-schema-version",
+        "required": false,
+        "schema": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "Severity": {
+        "description": "Optional severity filter.",
+        "in": "query",
+        "name": "severity",
+        "required": false,
+        "schema": {
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL"
+          ],
+          "type": "string"
+        }
+      },
+      "StrategyId": {
+        "description": "Optional detector strategy filter.",
+        "in": "query",
+        "name": "strategy_id",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ThreatClass": {
+        "description": "Optional threat-class filter.",
+        "in": "query",
+        "name": "threat_class",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "BridgeStatusReport": {
+        "additionalProperties": false,
+        "properties": {
+          "configured": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "degraded": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/BridgeStatusSnapshot"
+            },
+            "type": "array"
+          },
+          "idle": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ok": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "configured",
+          "ok",
+          "degraded",
+          "idle",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "BridgeStatusSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "error_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "events_processed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lag_seconds": {
+            "type": "number"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "source_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source_id",
+          "ready",
+          "events_processed",
+          "error_count"
+        ],
+        "type": "object"
+      },
+      "DetectorEvasionCoverageReport": {
+        "additionalProperties": false,
+        "properties": {
+          "catch_rate": {
+            "type": "number"
+          },
+          "detected_payloads": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "detector": {
+            "type": "string"
+          },
+          "intentionally_uncovered": {
+            "items": {
+              "additionalProperties": true,
+              "description": "Repo-declared intentional evasion gap.",
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "threat_classes": {
+            "items": {
+              "$ref": "#/components/schemas/EvasionThreatClassCoverage"
+            },
+            "type": "array"
+          },
+          "total_payloads": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "detector",
+          "total_payloads",
+          "detected_payloads",
+          "catch_rate",
+          "threat_classes",
+          "intentionally_uncovered"
+        ],
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "EvasionCoverageSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "corpus_version": {
+            "type": "string"
+          },
+          "detectors": {
+            "items": {
+              "$ref": "#/components/schemas/DetectorEvasionCoverageReport"
+            },
+            "type": "array"
+          },
+          "generated_at_ms": {
+            "type": "integer"
+          },
+          "suite_name": {
+            "type": "string"
+          },
+          "suite_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "generated_at_ms",
+          "suite_name",
+          "suite_path",
+          "corpus_version",
+          "detectors"
+        ],
+        "type": "object"
+      },
+      "EvasionThreatClassCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "catch_rate": {
+            "type": "number"
+          },
+          "detected_payloads": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scenario_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "techniques": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "threat_class": {
+            "type": "string"
+          },
+          "total_payloads": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "threat_class",
+          "total_payloads",
+          "detected_payloads",
+          "catch_rate",
+          "scenario_count",
+          "techniques"
+        ],
+        "type": "object"
+      },
+      "PlatformAssetPosture": {
+        "additionalProperties": false,
+        "properties": {
+          "active_investigations": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformInvestigationSummary"
+            },
+            "type": "array"
+          },
+          "captured_at_ms": {
+            "type": "integer"
+          },
+          "escalation_level": {
+            "enum": [
+              "normal",
+              "alert",
+              "incident"
+            ],
+            "type": "string"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "recent_findings": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformFindingSummary"
+            },
+            "type": "array"
+          },
+          "threat_concentrations": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformThreatConcentrationSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "host_id",
+          "captured_at_ms",
+          "escalation_level",
+          "threat_concentrations",
+          "active_investigations",
+          "recent_findings"
+        ],
+        "type": "object"
+      },
+      "PlatformAssetPosturePage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformAssetPosture"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "data"
+        ],
+        "type": "object"
+      },
+      "PlatformDetectorStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "details": {
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "strategy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ready",
+          "strategy",
+          "details"
+        ],
+        "type": "object"
+      },
+      "PlatformFindingSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "bundle_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "integer"
+          },
+          "finding": {
+            "$ref": "#/components/schemas/SwarmFindingEnvelope"
+          },
+          "host_id": {
+            "type": "string"
+          },
+          "hunt_id": {
+            "type": "string"
+          },
+          "latest_rehearsal": {
+            "additionalProperties": true,
+            "description": "Latest rehearsal preview for the hunt.",
+            "type": "object"
+          },
+          "latest_rehearsal_bundle_id": {
+            "type": "string"
+          },
+          "related_incident_id": {
+            "type": "string"
+          },
+          "related_incident_providence_reconciliation": {
+            "additionalProperties": true,
+            "description": "Latest Providence reconciliation state for the related incident.",
+            "type": "object"
+          },
+          "related_incident_summary": {
+            "type": "string"
+          },
+          "related_receipt_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "response_kind": {
+            "type": "string"
+          },
+          "response_receipt_id": {
+            "type": "string"
+          },
+          "trail_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "hunt_id",
+          "trail_id",
+          "created_at_ms",
+          "response_kind",
+          "related_receipt_ids",
+          "finding"
+        ],
+        "type": "object"
+      },
+      "PlatformFindingsPage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformFindingSummary"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "data"
+        ],
+        "type": "object"
+      },
+      "PlatformIncidentSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "integer"
+          },
+          "incident_id": {
+            "type": "string"
+          },
+          "included_hunt_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "included_investigation_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "latest_rehearsal": {
+            "additionalProperties": true,
+            "description": "Latest rehearsal preview linked to the incident.",
+            "type": "object"
+          },
+          "latest_rehearsal_bundle_id": {
+            "type": "string"
+          },
+          "latest_rehearsal_hunt_id": {
+            "type": "string"
+          },
+          "providence_reconciliation": {
+            "additionalProperties": true,
+            "description": "Providence reconciliation state for the incident.",
+            "type": "object"
+          },
+          "related_receipt_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "summary",
+          "created_at_ms",
+          "included_hunt_ids",
+          "included_investigation_ids",
+          "related_receipt_ids",
+          "correlation_keys"
+        ],
+        "type": "object"
+      },
+      "PlatformIncidentsPage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformIncidentSummary"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "data"
+        ],
+        "type": "object"
+      },
+      "PlatformInvestigationSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "hunt_id": {
+            "type": "string"
+          },
+          "investigation_id": {
+            "type": "string"
+          },
+          "last_updated_ms": {
+            "type": "integer"
+          },
+          "queued_at_ms": {
+            "type": "integer"
+          },
+          "response_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary_preview": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "investigation_id",
+          "hunt_id",
+          "finding_id",
+          "status",
+          "queued_at_ms",
+          "last_updated_ms",
+          "response_kind",
+          "correlation_keys"
+        ],
+        "type": "object"
+      },
+      "PlatformLifecycleStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "active_requests": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "draining": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "draining",
+          "active_requests"
+        ],
+        "type": "object"
+      },
+      "PlatformRuntimeStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_health": {
+            "items": {
+              "additionalProperties": true,
+              "description": "Registered agent health summary.",
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "alert_tuning": {
+            "additionalProperties": true,
+            "description": "Aggregate alert-tuning recommendation report.",
+            "type": "object"
+          },
+          "anti_tamper": {
+            "additionalProperties": true,
+            "description": "Current anti-tamper status report.",
+            "type": "object"
+          },
+          "async_lane": {
+            "additionalProperties": true,
+            "description": "Async investigation and correlation lane status.",
+            "type": "object"
+          },
+          "bearer_tokens": {
+            "items": {
+              "additionalProperties": true,
+              "description": "Configured operator bearer-token status.",
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "bridge_health": {
+            "$ref": "#/components/schemas/BridgeStatusReport"
+          },
+          "captured_at_ms": {
+            "type": "integer"
+          },
+          "degradation": {
+            "additionalProperties": true,
+            "description": "Current runtime degradation state and capabilities.",
+            "type": "object"
+          },
+          "detector": {
+            "$ref": "#/components/schemas/PlatformDetectorStatus"
+          },
+          "false_positive_tracking": {
+            "additionalProperties": true,
+            "description": "Aggregate analyst false-positive tracking report.",
+            "type": "object"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/PlatformLifecycleStatus"
+          },
+          "mode_state": {
+            "additionalProperties": true,
+            "description": "Current swarm mode and last transition metadata.",
+            "type": "object"
+          },
+          "rate_limit": {
+            "additionalProperties": true,
+            "description": "Per-source platform API rate-limit status.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "captured_at_ms",
+          "mode_state",
+          "degradation",
+          "agent_health",
+          "detector",
+          "lifecycle",
+          "anti_tamper",
+          "async_lane",
+          "false_positive_tracking",
+          "alert_tuning",
+          "bearer_tokens",
+          "rate_limit"
+        ],
+        "type": "object"
+      },
+      "PlatformRuntimeStatusPage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformRuntimeStatus"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "data"
+        ],
+        "type": "object"
+      },
+      "PlatformThreatConcentrationSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "distinct_sources": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peak_confidence": {
+            "type": "number"
+          },
+          "threat_class": {
+            "type": "string"
+          },
+          "total_strength": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "threat_class",
+          "total_strength",
+          "distinct_sources",
+          "peak_confidence"
+        ],
+        "type": "object"
+      },
+      "SwarmFindingEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "type": "number"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "description": "Strategy-specific evidence payload.",
+            "type": "object"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH",
+              "CRITICAL"
+            ],
+            "type": "string"
+          },
+          "strategy_id": {
+            "type": "string"
+          },
+          "threat_class": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "finding_id",
+          "event_id",
+          "strategy_id",
+          "threat_class",
+          "severity",
+          "confidence",
+          "evidence"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "opaque",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "platformApiKey": {
+        "in": "header",
+        "name": "x-api-key",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "Machine-readable contract for the shipped `/v2/api/*` read surface on the detect server. Requests require both an operator bearer token and a platform API key unless a scoped Providence context token is used on the supported read routes.",
+    "summary": "Authenticated read surface for findings, incidents, runtime status, posture, and evasion coverage.",
+    "title": "Swarm Team Six Platform API",
+    "version": "v2-schema-1"
+  },
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "openapi": "3.1.0",
+  "paths": {
+    "/v2/api/assets/{host_id}/posture": {
+      "get": {
+        "description": "Returns threat concentration, active investigations, and recent findings for one host.",
+        "operationId": "get_asset_posture",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/HostIdPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformAssetPosturePage"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "Read asset posture",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/api/evasion/coverage": {
+      "get": {
+        "description": "Returns the repo-owned evasion coverage snapshot, optionally filtered to one detector family.",
+        "operationId": "get_evasion_coverage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "description": "Optional detector family to filter from the coverage snapshot.",
+            "in": "query",
+            "name": "detector",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvasionCoverageSnapshot"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "Read evasion coverage",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/api/findings": {
+      "get": {
+        "description": "Returns cursor-paginated finding summaries from the replay-backed platform surface.",
+        "operationId": "list_findings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/HuntId"
+          },
+          {
+            "$ref": "#/components/parameters/FindingId"
+          },
+          {
+            "$ref": "#/components/parameters/StrategyId"
+          },
+          {
+            "$ref": "#/components/parameters/ThreatClass"
+          },
+          {
+            "$ref": "#/components/parameters/Severity"
+          },
+          {
+            "$ref": "#/components/parameters/HostId"
+          },
+          {
+            "$ref": "#/components/parameters/ContextToken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformFindingsPage"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "List findings",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/api/incidents": {
+      "get": {
+        "description": "Returns cursor-paginated correlated incident summaries from the incident store.",
+        "operationId": "list_incidents",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/IncidentId"
+          },
+          {
+            "$ref": "#/components/parameters/HuntId"
+          },
+          {
+            "$ref": "#/components/parameters/ReceiptId"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationKey"
+          },
+          {
+            "$ref": "#/components/parameters/ContextToken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformIncidentsPage"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "List incidents",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/api/runtime/status": {
+      "get": {
+        "description": "Returns the current runtime mode, degradation, detector health, async-lane status, feedback rollups, and rate-limit state.",
+        "operationId": "get_runtime_status",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/ContextToken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformRuntimeStatusPage"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "Read runtime status",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/v2/api/stream/findings": {
+      "get": {
+        "description": "Streams live finding events as server-sent events. Generated clients should treat this as a raw text/event-stream response.",
+        "operationId": "stream_findings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/HostId"
+          },
+          {
+            "$ref": "#/components/parameters/StrategyId"
+          },
+          {
+            "$ref": "#/components/parameters/ThreatClass"
+          },
+          {
+            "$ref": "#/components/parameters/Severity"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "SSE stream of Swarm finding envelopes."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Runtime event streaming is unavailable"
+          }
+        },
+        "summary": "Stream live findings",
+        "tags": [
+          "platform"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": [],
+      "platformApiKey": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Local detect-server default",
+      "url": "http://127.0.0.1:9090"
+    }
+  ]
+}

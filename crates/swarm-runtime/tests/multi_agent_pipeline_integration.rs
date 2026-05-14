@@ -38,6 +38,7 @@ fn integration_config() -> SwarmConfig {
                 subject: "telemetry.synthetic.process".to_string(),
                 bridge: None,
             }],
+            threat_intel_feeds: vec![],
             max_in_flight_actions: 4,
             drain_timeout_ms: 30_000,
             require_durable_live_response: false,

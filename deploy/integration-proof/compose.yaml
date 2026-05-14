@@ -1,0 +1,64 @@
+services:
+  swarm-runtime-proof:
+    build:
+      context: ../..
+      dockerfile: deploy/integration-proof/Dockerfile
+    depends_on:
+      crowdstrike-rtr-mock:
+        condition: service_started
+      splunk-hec-mock:
+        condition: service_started
+    ports:
+      - "${PROOF_RUNTIME_PORT:-19090}:9090"
+    volumes:
+      - type: bind
+        source: ${PROOF_RUNTIME_DIR:-./.runtime}
+        target: /runtime-data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9090/healthz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  crowdstrike-rtr-mock:
+    image: python:3.12-alpine
+    command: ["python", "/app/deploy/integration-proof/mocks/crowdstrike_rtr_mock.py"]
+    working_dir: /app
+    environment:
+      MOCK_LOG_PATH: /runtime-data/mocks/crowdstrike-rtr.jsonl
+    volumes:
+      - type: bind
+        source: ../..
+        target: /app
+        read_only: true
+      - type: bind
+        source: ${PROOF_RUNTIME_DIR:-./.runtime}
+        target: /runtime-data
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)\nPY"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+
+  splunk-hec-mock:
+    image: python:3.12-alpine
+    command: ["python", "/app/deploy/integration-proof/mocks/splunk_hec_mock.py"]
+    working_dir: /app
+    environment:
+      MOCK_LOG_PATH: /runtime-data/mocks/splunk-hec.jsonl
+    volumes:
+      - type: bind
+        source: ../..
+        target: /app
+        read_only: true
+      - type: bind
+        source: ${PROOF_RUNTIME_DIR:-./.runtime}
+        target: /runtime-data
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8088/healthz', timeout=2)\nPY"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 2s

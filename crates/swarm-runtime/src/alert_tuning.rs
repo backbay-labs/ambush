@@ -369,6 +369,7 @@ mod tests {
             analyst_id: "analyst-test".to_string(),
             action,
             reason: Some("fixture".to_string()),
+            soar_lineage: None,
             false_positive: matches!(action, ProvidenceFeedbackAction::Dismiss),
         }
     }

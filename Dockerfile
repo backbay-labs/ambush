@@ -3,6 +3,7 @@ WORKDIR /src
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+COPY rulesets/ rulesets/
 
 RUN cargo build --locked --release -p swarm-runtime --bin swarm_detect --bin swarmctl \
     && strip target/release/swarm_detect \

@@ -53,7 +53,7 @@ use swarm_core::config::{
     PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig, PlatformApiScope,
     PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PromotionConfig,
     ResponseAdapterConfig, RetryConfig, RoutingRule, RuntimeAntiTamperConfig, RuntimeMode,
-    RuntimeSettings, SwarmConfig, TelemetrySourceConfig, WebhookConfig,
+    RuntimeSettings, SecretString, SwarmConfig, TelemetrySourceConfig, WebhookConfig,
 };
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{
@@ -99,6 +99,7 @@ fn test_config(strategy: &str) -> SwarmConfig {
                 subject: "telemetry.synthetic.process".to_string(),
                 bridge: None,
             }],
+            threat_intel_feeds: vec![],
             max_in_flight_actions: 4,
             drain_timeout_ms: 30_000,
             require_durable_live_response: false,
@@ -197,6 +198,14 @@ fn authorized_platform_api_request(
             format!("Bearer {TEST_PLATFORM_API_BEARER_TOKEN}"),
         )
         .header("x-api-key", TEST_PLATFORM_API_KEY)
+}
+
+fn authorized_platform_api_request_from_source(
+    method: &str,
+    uri: impl Into<String>,
+    source: &str,
+) -> axum::http::request::Builder {
+    authorized_platform_api_request(method, uri).header("x-forwarded-for", source)
 }
 
 fn process_event_json(event_id: &str, host_id: &str, timestamp: i64) -> Value {
@@ -394,6 +403,7 @@ fn seed_measured_incident(
                     swarm_core::types::ProvidenceFeedbackAction::Confirm
                 },
                 reason: Some("runtime status fixture".to_string()),
+                soar_lineage: None,
                 false_positive,
             }],
         })
@@ -623,11 +633,11 @@ fn failed_startup_attestation_report() -> StartupAttestationReport {
             subject: "rulesets".to_string(),
             statement_path: "rulesets/attestation.json".to_string(),
             status: "verified".to_string(),
-            details: "verified 3 repo-owned ruleset files".to_string(),
+            details: "verified 4 repo-owned ruleset files".to_string(),
             key_id: Some("test-key".to_string()),
             expected_sha256: None,
             observed_sha256: None,
-            verified_items: Some(3),
+            verified_items: Some(4),
         },
     }
 }
@@ -652,11 +662,11 @@ fn verified_startup_attestation_report() -> StartupAttestationReport {
             subject: "rulesets".to_string(),
             statement_path: "rulesets/attestation.json".to_string(),
             status: "verified".to_string(),
-            details: "verified 3 repo-owned ruleset files".to_string(),
+            details: "verified 4 repo-owned ruleset files".to_string(),
             key_id: Some("test-key".to_string()),
             expected_sha256: None,
             observed_sha256: None,
-            verified_items: Some(3),
+            verified_items: Some(4),
         },
     }
 }
@@ -756,6 +766,7 @@ async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_l
             .paths
             .evolution_mutation_validation_batch_results_dir,
         &config.evolution.paths.evolution_ranking_results_dir,
+        state.signing_key.clone(),
     )
     .unwrap();
     let proof_harness = DefaultEvolutionProofHarness::from_config(
@@ -798,6 +809,7 @@ async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_l
                 mutation: "copy_control_profile".to_string(),
                 rationale: "keep the verification-clean control profile".to_string(),
                 overrides: EvolutionMutationProfileOverrides::default(),
+                target_genome: None,
             },
         )
         .unwrap();
@@ -1559,6 +1571,173 @@ async fn platform_api_routes_require_bearer_and_api_key_but_health_and_ingest_do
 }
 
 #[tokio::test]
+async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("platform-auth-rotation"), config).unwrap(),
+    );
+
+    let initial = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/runtime/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+
+    unsafe {
+        std::env::set_var(
+            TEST_PLATFORM_API_BEARER_TOKEN_ENV,
+            "platform-bearer-rotated",
+        );
+    }
+
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/api/runtime/status")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {TEST_PLATFORM_API_BEARER_TOKEN}"),
+                )
+                .header("x-api-key", TEST_PLATFORM_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+
+    let rotated = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/api/runtime/status")
+                .header(header::AUTHORIZATION, "Bearer platform-bearer-rotated")
+                .header("x-api-key", TEST_PLATFORM_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn platform_api_routes_reject_expired_bearer_token_with_context() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    config.operator.auth.token_expires_at_ms = Some(1);
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("platform-auth-expiry"), config).unwrap(),
+    );
+
+    let response = app
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/runtime/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("expired at"),
+        "expected expiry context in platform API auth error: {json:?}"
+    );
+}
+
+#[tokio::test]
+async fn platform_api_routes_reject_sustained_rate_limit_and_report_recent_violation() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    config.platform_api.rate_limit.burst_max_requests = 10;
+    config.platform_api.rate_limit.burst_window_ms = 10;
+    config.platform_api.rate_limit.sustained_max_requests = 2;
+    config.platform_api.rate_limit.sustained_window_ms = 1_000;
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("platform-rate-limit"), config).unwrap(),
+    );
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                authorized_platform_api_request_from_source(
+                    "GET",
+                    "/v2/api/runtime/status",
+                    "203.0.113.50",
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let rejected = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request_from_source(
+                "GET",
+                "/v2/api/runtime/status",
+                "203.0.113.50",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(rejected.headers().get(header::RETRY_AFTER).unwrap(), "1");
+    let body = to_bytes(rejected.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("sustained rate limit exceeded"),
+        "expected sustained limiter rejection context: {json:?}"
+    );
+
+    let audit = app
+        .oneshot(
+            authorized_platform_api_request_from_source(
+                "GET",
+                "/v2/api/runtime/status",
+                "203.0.113.51",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit.status(), StatusCode::OK);
+    let body = to_bytes(audit.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["data"][0]["rate_limit"]["recent_violations"][0]["source"],
+        "203.0.113.50"
+    );
+    assert_eq!(
+        json["data"][0]["rate_limit"]["recent_violations"][0]["threshold"],
+        "sustained"
+    );
+}
+
+#[tokio::test]
 async fn platform_api_bearer_requires_read_scoped_operator_principal() {
     const READ_ENV: &str = "SWARM_PLATFORM_API_READER_TOKEN";
     const MAINT_ENV: &str = "SWARM_PLATFORM_API_MAINT_TOKEN";
@@ -1581,11 +1760,13 @@ async fn platform_api_bearer_requires_read_scoped_operator_principal() {
         OperatorPrincipalConfig {
             operator_id: "reader-1".to_string(),
             token_env: READ_ENV.to_string(),
+            token_expires_at_ms: None,
             scopes: vec![OperatorScope::Read],
         },
         OperatorPrincipalConfig {
             operator_id: "maintainer-1".to_string(),
             token_env: MAINT_ENV.to_string(),
+            token_expires_at_ms: None,
             scopes: vec![OperatorScope::Maintenance],
         },
     ];
@@ -2311,6 +2492,123 @@ async fn platform_asset_posture_endpoint_returns_host_filtered_posture() {
 }
 
 #[tokio::test]
+async fn generated_python_client_smoke_tests_live_platform_router() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    let state = IngestState::from_config(temp_path("platform-python-client"), config).unwrap();
+    seed_platform_replay_bundle(
+        &state,
+        "evt-platform-python",
+        "host-python",
+        1_700_210_000_000,
+    );
+    state
+        .current_incident_store()
+        .persist(&CorrelatedIncident {
+            incident_id: "incident-platform-python".to_string(),
+            summary: "platform python smoke incident".to_string(),
+            created_at_ms: 1_700_210_000_000,
+            window_start_ms: 1_700_210_000_000,
+            window_end_ms: 1_700_210_000_001,
+            correlation_keys: vec!["host:host-python".to_string()],
+            related_receipt_ids: vec!["receipt:evt-platform-python".to_string()],
+            included_members: vec![swarm_spine::IncidentMemberDecision {
+                investigation_id: "investigation:evt-platform-python".to_string(),
+                hunt_id: "evt-platform-python".to_string(),
+                finding_id: "finding-evt-platform-python".to_string(),
+                reason: "platform python smoke fixture".to_string(),
+                shared_keys: vec!["host:host-python".to_string()],
+                evidence_links: Vec::new(),
+                confidence_score: 1.0,
+            }],
+            rejected_members: Vec::new(),
+            graph_dimensions: Vec::new(),
+            confidence_score: 1.0,
+            trigger_event_id: Some("evt-platform-python".to_string()),
+            trigger_finding_id: Some("finding-evt-platform-python".to_string()),
+            trigger_strategy_id: Some("suspicious_process_tree".to_string()),
+            threat_class: Some(ThreatClass::Execution),
+            severity: Some(Severity::High),
+            external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
+            feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
+        })
+        .unwrap();
+
+    let app = detect_http_router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let script_path = repo_root.join("clients/python/smoke_platform_client.py");
+    let base_url = format!("http://{address}");
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("uv")
+            .arg("run")
+            .arg("--isolated")
+            .arg("--no-project")
+            .arg("--no-config")
+            .arg("--with")
+            .arg("httpx>=0.23.0,<0.29.0")
+            .arg("--with")
+            .arg("attrs>=22.2.0")
+            .arg("--with")
+            .arg("python-dateutil>=2.8.0,<3")
+            .arg("--python")
+            .arg("python3")
+            .arg("python")
+            .arg(script_path)
+            .arg("--base-url")
+            .arg(base_url)
+            .arg("--bearer-token")
+            .arg(TEST_PLATFORM_API_BEARER_TOKEN)
+            .arg("--api-key")
+            .arg(TEST_PLATFORM_API_KEY)
+            .arg("--schema-version")
+            .arg(CURRENT_OPERATOR_API_SCHEMA_VERSION.to_string())
+            .arg("--expected-hunt-id")
+            .arg("evt-platform-python")
+            .arg("--expected-finding-id")
+            .arg("finding-evt-platform-python")
+            .arg("--expected-incident-id")
+            .arg("incident-platform-python")
+            .arg("--expected-host-id")
+            .arg("host-python")
+            .output()
+    })
+    .await
+    .unwrap()
+    .unwrap();
+
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+
+    assert!(
+        output.status.success(),
+        "python client smoke failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["finding_id"], "finding-evt-platform-python");
+    assert_eq!(summary["incident_id"], "incident-platform-python");
+    assert_eq!(summary["host_id"], "host-python");
+}
+
+#[tokio::test]
 async fn demo_replay_endpoint_rejects_when_demo_mode_disabled() {
     let scenario_path = temp_path("demo-scenario-disabled");
     write_demo_scenario(&scenario_path);
@@ -2690,10 +2988,10 @@ async fn providence_webhook_payload_includes_runtime_context_and_links() {
         "providence_webhook".to_string(),
         NotificationChannelConfig {
             target_url: format!("{target_url}incidents"),
-            auth_token: Some("providence-api-bearer".to_string()),
+            auth_token: Some("providence-api-bearer".into()),
             request_signature: Some(swarm_core::config::RequestSignatureConfig {
                 header: "X-Swarm-Signature".to_string(),
-                secret: "shared-providence-secret".to_string(),
+                secret: "shared-providence-secret".into(),
             }),
             timeout_ms: 500,
             rate_limit: NotificationRateLimitConfig {
@@ -3016,7 +3314,7 @@ mod providence_callback {
                 auth_token: None,
                 request_signature: Some(swarm_core::config::RequestSignatureConfig {
                     header: CALLBACK_HEADER.to_string(),
-                    secret: CALLBACK_SECRET.to_string(),
+                    secret: CALLBACK_SECRET.into(),
                 }),
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig::default(),
@@ -3198,7 +3496,7 @@ mod providence_feedback {
                 auth_token: None,
                 request_signature: Some(swarm_core::config::RequestSignatureConfig {
                     header: FEEDBACK_HEADER.to_string(),
-                    secret: FEEDBACK_SECRET.to_string(),
+                    secret: FEEDBACK_SECRET.into(),
                 }),
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig::default(),
@@ -3326,8 +3624,16 @@ mod providence_feedback {
         state.current_substrate().deposit(deposit).await.unwrap();
     }
 
-    fn persist_population_candidate(root: &Path, strategy_id: &str, fitness: f64) {
-        let store = FileEvolutionPopulationStore::open(root).unwrap();
+    fn persist_population_candidate(
+        root: &Path,
+        strategy_id: &str,
+        fitness: f64,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) {
+        let signer_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+        let store =
+            FileEvolutionPopulationStore::open_signed(root, signer_agent_id, signing_key.clone())
+                .unwrap();
         store
             .persist(&EvolutionPopulationState {
                 updated_at_ms: 1_800_900_000_000,
@@ -3747,6 +4053,7 @@ mod providence_feedback {
             &applied_root.join("population"),
             "suspicious_process_tree",
             0.80,
+            &applied_state.signing_key,
         );
 
         let applied_app = detect_http_router(applied_state.clone());
@@ -3823,6 +4130,373 @@ mod providence_feedback {
         assert!(
             pending_records.iter().any(|record| record.disposition
                 == crate::kitten_agent::FeedbackSignalDisposition::Pending)
+        );
+    }
+}
+
+mod soar_verdict_sync {
+    use super::*;
+    use crate::ingest::soar_verdict_handlers::SOAR_VERDICT_CHANNEL;
+    use swarm_core::types::{ProvidenceFeedbackAction, SoarSourceSystem, SwarmSoarVerdictRequest};
+    use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
+
+    const SOAR_SECRET: &str = "soar-verdict-secret";
+    const SOAR_HEADER: &str = "X-Swarm-Signature";
+
+    fn configure_soar_channel(config: &mut SwarmConfig) {
+        config.notification_channels.insert(
+            SOAR_VERDICT_CHANNEL.to_string(),
+            NotificationChannelConfig {
+                target_url: "http://127.0.0.1:65535/verdicts".to_string(),
+                auth_token: None,
+                request_signature: Some(swarm_core::config::RequestSignatureConfig {
+                    header: SOAR_HEADER.to_string(),
+                    secret: SOAR_SECRET.into(),
+                }),
+                timeout_ms: 500,
+                rate_limit: NotificationRateLimitConfig::default(),
+                quiet_hours: None,
+                dead_letter_path: super::temp_path("soar-verdict-dead").display().to_string(),
+            },
+        );
+    }
+
+    fn soar_signature(payload: &SwarmSoarVerdictRequest) -> String {
+        let payload = serde_json::to_value(payload).unwrap();
+        format!(
+            "sha256={}",
+            hmac_sha256_hex(
+                SOAR_SECRET.as_bytes(),
+                &canonical_json_bytes(&payload).unwrap()
+            )
+        )
+    }
+
+    fn signed_soar_request(payload: &SwarmSoarVerdictRequest) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/soar/verdicts")
+            .header("content-type", "application/json")
+            .header(SOAR_HEADER, soar_signature(payload))
+            .body(Body::from(serde_json::to_vec(payload).unwrap()))
+            .unwrap()
+    }
+
+    fn seed_soar_incident(
+        state: &IngestState,
+        incident_id: &str,
+        event_id: &str,
+        host_id: &str,
+        strategy_id: &str,
+        created_at_ms: i64,
+    ) {
+        state
+            .current_incident_store()
+            .persist(&CorrelatedIncident {
+                incident_id: incident_id.to_string(),
+                summary: format!("soar incident for {event_id}"),
+                created_at_ms,
+                window_start_ms: created_at_ms,
+                window_end_ms: created_at_ms + 1,
+                correlation_keys: vec![format!("host:{host_id}")],
+                related_receipt_ids: vec![format!("receipt-{event_id}")],
+                included_members: vec![swarm_spine::IncidentMemberDecision {
+                    investigation_id: format!("investigation-{event_id}"),
+                    hunt_id: event_id.to_string(),
+                    finding_id: format!("finding-{event_id}"),
+                    reason: "soar fixture".to_string(),
+                    shared_keys: vec![format!("host:{host_id}")],
+                    evidence_links: Vec::new(),
+                    confidence_score: 1.0,
+                }],
+                rejected_members: Vec::new(),
+                graph_dimensions: Vec::new(),
+                confidence_score: 1.0,
+                trigger_event_id: Some(event_id.to_string()),
+                trigger_finding_id: Some(format!("finding-{event_id}")),
+                trigger_strategy_id: Some(strategy_id.to_string()),
+                threat_class: Some(ThreatClass::Execution),
+                severity: Some(Severity::High),
+                external_references: Vec::new(),
+                providence_reconciliation: None,
+                providence_callback_audit_entries: Vec::new(),
+                feedback_audit_entries: Vec::new(),
+                false_positive_measurements: Vec::new(),
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn inbound_soar_verdicts_apply_existing_feedback_paths_and_persist_lineage() {
+        let mut config = super::test_config("suspicious_process_tree");
+        enable_platform_api(&mut config);
+        configure_soar_channel(&mut config);
+        config.investigation.enabled = true;
+        let state =
+            IngestState::from_config(super::temp_path("soar-verdict-apply"), config).unwrap();
+        for (event_id, host_id, incident_id, created_at_ms) in [
+            (
+                "evt-soar-splunk",
+                "host-splunk",
+                "incident-soar-splunk",
+                1_700_130_000_000,
+            ),
+            (
+                "evt-soar-sentinel",
+                "host-sentinel",
+                "incident-soar-sentinel",
+                1_700_130_000_100,
+            ),
+            (
+                "evt-soar-chronicle",
+                "host-chronicle",
+                "incident-soar-chronicle",
+                1_700_130_000_200,
+            ),
+        ] {
+            super::seed_platform_replay_bundle(&state, event_id, host_id, created_at_ms);
+            seed_soar_incident(
+                &state,
+                incident_id,
+                event_id,
+                host_id,
+                "suspicious_process_tree",
+                created_at_ms,
+            );
+        }
+
+        let app = detect_http_router(state.clone());
+        for payload in [
+            SwarmSoarVerdictRequest {
+                source_system: SoarSourceSystem::SplunkSoar,
+                source_verdict_id: "splunk-verdict-1".to_string(),
+                verdict_at_ms: 1_700_130_001_000,
+                action: ProvidenceFeedbackAction::Dismiss,
+                incident_id: "incident-soar-splunk".to_string(),
+                finding_id: Some("finding-evt-soar-splunk".to_string()),
+                analyst_id: "splunk-analyst".to_string(),
+                reason: Some("known false positive".to_string()),
+                source_case_id: Some("splunk-case-42".to_string()),
+                source_case_url: Some("https://splunk.example/cases/42".to_string()),
+            },
+            SwarmSoarVerdictRequest {
+                source_system: SoarSourceSystem::SentinelSoar,
+                source_verdict_id: "sentinel-verdict-1".to_string(),
+                verdict_at_ms: 1_700_130_001_100,
+                action: ProvidenceFeedbackAction::Confirm,
+                incident_id: "incident-soar-sentinel".to_string(),
+                finding_id: Some("finding-evt-soar-sentinel".to_string()),
+                analyst_id: "sentinel-analyst".to_string(),
+                reason: Some("confirmed malicious".to_string()),
+                source_case_id: Some("sentinel-case-99".to_string()),
+                source_case_url: None,
+            },
+            SwarmSoarVerdictRequest {
+                source_system: SoarSourceSystem::ChronicleSoar,
+                source_verdict_id: "chronicle-verdict-1".to_string(),
+                verdict_at_ms: 1_700_130_001_200,
+                action: ProvidenceFeedbackAction::Investigate,
+                incident_id: "incident-soar-chronicle".to_string(),
+                finding_id: Some("finding-evt-soar-chronicle".to_string()),
+                analyst_id: "chronicle-analyst".to_string(),
+                reason: Some("need deeper triage".to_string()),
+                source_case_id: Some("chronicle-case-7".to_string()),
+                source_case_url: Some("https://chronicle.example/cases/7".to_string()),
+            },
+        ] {
+            let response = app
+                .clone()
+                .oneshot(signed_soar_request(&payload))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let splunk_lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-splunk")
+            .unwrap()
+            .unwrap();
+        assert_eq!(splunk_lookup.incident.feedback_audit_entries.len(), 1);
+        assert_eq!(splunk_lookup.incident.false_positive_measurements.len(), 1);
+        let splunk_audit = &splunk_lookup.incident.feedback_audit_entries[0];
+        let splunk_lineage = splunk_audit.soar_lineage.as_ref().unwrap();
+        assert_eq!(splunk_lineage.source_system, SoarSourceSystem::SplunkSoar);
+        assert_eq!(splunk_lineage.source_verdict_id, "splunk-verdict-1");
+        assert_eq!(
+            splunk_lookup.incident.false_positive_measurements[0]
+                .soar_lineage
+                .as_ref()
+                .unwrap()
+                .source_case_id
+                .as_deref(),
+            Some("splunk-case-42")
+        );
+        assert!(splunk_lookup.incident.false_positive_measurements[0].false_positive);
+
+        let sentinel_lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-sentinel")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sentinel_lookup.incident.feedback_audit_entries[0]
+                .soar_lineage
+                .as_ref()
+                .unwrap()
+                .source_system,
+            SoarSourceSystem::SentinelSoar
+        );
+        assert!(!sentinel_lookup.incident.false_positive_measurements[0].false_positive);
+
+        let chronicle_lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-chronicle")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            chronicle_lookup.incident.feedback_audit_entries[0]
+                .soar_lineage
+                .as_ref()
+                .unwrap()
+                .source_system,
+            SoarSourceSystem::ChronicleSoar
+        );
+        assert_eq!(
+            chronicle_lookup.incident.feedback_audit_entries[0].outcome["investigation"]["hunt_id"],
+            "evt-soar-chronicle"
+        );
+
+        let response = app
+            .oneshot(
+                authorized_platform_api_request("GET", "/v2/api/runtime/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: PlatformApiEnvelope<PlatformRuntimeStatus> = super::parse_json(response).await;
+        let tracking = &body.data[0].false_positive_tracking;
+        assert_eq!(tracking.reviewed_findings, 3);
+        assert_eq!(tracking.false_positive_findings, 1);
+    }
+
+    #[tokio::test]
+    async fn duplicate_soar_verdicts_fail_closed_and_persist_rejection_audit() {
+        let mut config = super::test_config("suspicious_process_tree");
+        configure_soar_channel(&mut config);
+        let state =
+            IngestState::from_config(super::temp_path("soar-verdict-duplicate"), config).unwrap();
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-soar-duplicate",
+            "host-duplicate",
+            1_700_130_100_000,
+        );
+        seed_soar_incident(
+            &state,
+            "incident-soar-duplicate",
+            "evt-soar-duplicate",
+            "host-duplicate",
+            "suspicious_process_tree",
+            1_700_130_100_000,
+        );
+
+        let payload = SwarmSoarVerdictRequest {
+            source_system: SoarSourceSystem::SplunkSoar,
+            source_verdict_id: "splunk-duplicate-1".to_string(),
+            verdict_at_ms: 1_700_130_101_000,
+            action: ProvidenceFeedbackAction::Dismiss,
+            incident_id: "incident-soar-duplicate".to_string(),
+            finding_id: Some("finding-evt-soar-duplicate".to_string()),
+            analyst_id: "duplicate-analyst".to_string(),
+            reason: Some("known duplicate".to_string()),
+            source_case_id: Some("splunk-case-duplicate".to_string()),
+            source_case_url: None,
+        };
+
+        let app = detect_http_router(state.clone());
+        let first = app
+            .clone()
+            .oneshot(signed_soar_request(&payload))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = app.oneshot(signed_soar_request(&payload)).await.unwrap();
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-duplicate")
+            .unwrap()
+            .unwrap();
+        assert_eq!(lookup.incident.false_positive_measurements.len(), 1);
+        assert_eq!(lookup.incident.feedback_audit_entries.len(), 2);
+        let rejected = &lookup.incident.feedback_audit_entries[1];
+        assert_eq!(rejected.outcome["status"], "rejected");
+        assert_eq!(rejected.outcome["reason"], "duplicate source verdict");
+        assert_eq!(
+            rejected.soar_lineage.as_ref().unwrap().source_verdict_id,
+            "splunk-duplicate-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn incomplete_soar_verdicts_fail_closed_and_persist_rejection_audit() {
+        let mut config = super::test_config("suspicious_process_tree");
+        configure_soar_channel(&mut config);
+        let state =
+            IngestState::from_config(super::temp_path("soar-verdict-incomplete"), config).unwrap();
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-soar-incomplete",
+            "host-incomplete",
+            1_700_130_200_000,
+        );
+        seed_soar_incident(
+            &state,
+            "incident-soar-incomplete",
+            "evt-soar-incomplete",
+            "host-incomplete",
+            "suspicious_process_tree",
+            1_700_130_200_000,
+        );
+
+        let payload = SwarmSoarVerdictRequest {
+            source_system: SoarSourceSystem::SentinelSoar,
+            source_verdict_id: "".to_string(),
+            verdict_at_ms: 1_700_130_201_000,
+            action: ProvidenceFeedbackAction::Confirm,
+            incident_id: "incident-soar-incomplete".to_string(),
+            finding_id: Some("finding-evt-soar-incomplete".to_string()),
+            analyst_id: "incomplete-analyst".to_string(),
+            reason: Some("missing upstream verdict id".to_string()),
+            source_case_id: Some("sentinel-case-incomplete".to_string()),
+            source_case_url: None,
+        };
+
+        let app = detect_http_router(state.clone());
+        let response = app.oneshot(signed_soar_request(&payload)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-incomplete")
+            .unwrap()
+            .unwrap();
+        assert!(lookup.incident.false_positive_measurements.is_empty());
+        assert_eq!(lookup.incident.feedback_audit_entries.len(), 1);
+        let rejected = &lookup.incident.feedback_audit_entries[0];
+        assert_eq!(rejected.outcome["status"], "rejected");
+        assert_eq!(
+            rejected.outcome["reason"],
+            "source_verdict_id must not be empty"
+        );
+        assert_eq!(
+            rejected.soar_lineage.as_ref().unwrap().source_system,
+            SoarSourceSystem::SentinelSoar
         );
     }
 }
@@ -4247,7 +4921,7 @@ async fn healthz_includes_providence_component_when_configured() {
         "providence_webhook".to_string(),
         NotificationChannelConfig {
             target_url,
-            auth_token: Some("providence-api-bearer".to_string()),
+            auth_token: Some("providence-api-bearer".into()),
             request_signature: None,
             timeout_ms: 500,
             rate_limit: NotificationRateLimitConfig::default(),
@@ -4289,7 +4963,7 @@ async fn readyz_reports_providence_auth_failure() {
         "providence_webhook".to_string(),
         NotificationChannelConfig {
             target_url,
-            auth_token: Some("providence-api-bearer".to_string()),
+            auth_token: Some("providence-api-bearer".into()),
             request_signature: None,
             timeout_ms: 500,
             rate_limit: NotificationRateLimitConfig::default(),
@@ -4912,7 +5586,7 @@ fn test_config_with_secret_token(secret_dir: &Path) -> SwarmConfig {
         response_adapter: ResponseAdapterConfig::HttpEdr {
             config: HttpEdrConfig {
                 endpoint: "https://edr.example".to_string(),
-                auth_token: "@secret:edr-token".to_string(),
+                auth_token: "@secret:edr-token".into(),
                 timeout_ms: 1_000,
                 retry: RetryConfig::default(),
                 circuit_breaker: CircuitBreakerConfig::default(),
@@ -4950,7 +5624,7 @@ fn reload_secrets_only_updates_auth_token() {
     let stack = state.stack.load_full();
     match &stack.service.config.response_adapter {
         ResponseAdapterConfig::HttpEdr { config: edr } => {
-            assert_eq!(edr.auth_token, "initial-value");
+            assert_eq!(edr.auth_token.expose_secret(), "initial-value");
         }
         other => panic!("expected HttpEdr, got {:?}", other),
     }
@@ -4964,7 +5638,7 @@ fn reload_secrets_only_updates_auth_token() {
     let stack = state.stack.load_full();
     match &stack.service.config.response_adapter {
         ResponseAdapterConfig::HttpEdr { config: edr } => {
-            assert_eq!(edr.auth_token, "rotated-value");
+            assert_eq!(edr.auth_token.expose_secret(), "rotated-value");
         }
         other => panic!("expected HttpEdr after reload, got {:?}", other),
     }
@@ -5034,7 +5708,7 @@ fn reload_secrets_only_does_not_read_config_yaml() {
     let stack = state.stack.load_full();
     match &stack.service.config.response_adapter {
         ResponseAdapterConfig::HttpEdr { config: edr } => {
-            assert_eq!(edr.auth_token, "fresh-token");
+            assert_eq!(edr.auth_token.expose_secret(), "fresh-token");
         }
         other => panic!("expected HttpEdr, got {:?}", other),
     }
@@ -5052,7 +5726,7 @@ fn response_adapter_kind_maps_variants() {
         response_adapter_kind(&ResponseAdapterConfig::HttpEdr {
             config: HttpEdrConfig {
                 endpoint: "https://edr.example".to_string(),
-                auth_token: "secret".to_string(),
+                auth_token: SecretString::from("secret"),
                 timeout_ms: 1_000,
                 retry: RetryConfig::default(),
                 circuit_breaker: CircuitBreakerConfig::default(),
@@ -5060,6 +5734,20 @@ fn response_adapter_kind_maps_variants() {
             },
         }),
         "http_edr"
+    );
+    assert_eq!(
+        response_adapter_kind(&ResponseAdapterConfig::CrowdStrikeRtr {
+            config: swarm_core::config::CrowdStrikeRtrConfig {
+                base_url: "https://api.crowdstrike.example".to_string(),
+                client_id: SecretString::from("client-id"),
+                client_secret: SecretString::from("client-secret"),
+                timeout_ms: 1_000,
+                retry: RetryConfig::default(),
+                circuit_breaker: CircuitBreakerConfig::default(),
+                dead_letter_path: "./dead-letter.jsonl".to_string(),
+            },
+        }),
+        "crowdstrike_rtr"
     );
     assert_eq!(
         response_adapter_kind(&ResponseAdapterConfig::Webhook {

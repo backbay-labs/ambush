@@ -1,3 +1,4 @@
+use crate::command_line::{CommandLineNormalizationProfile, analyze_command_line};
 use crate::detector::{
     AuthenticationEventData, DetectionFinding, DetectionStrategy, ProcessStartEvent,
     TelemetryEvent, TelemetryPayload,
@@ -17,6 +18,8 @@ pub struct LateralMovementProfile {
     pub remote_exec_indicators: Vec<String>,
     #[serde(default)]
     pub allowed_ssh_sources: Vec<String>,
+    #[serde(default)]
+    pub command_line_normalization: CommandLineNormalizationProfile,
     #[serde(default = "default_rdp_failure_threshold")]
     pub rdp_failure_threshold: usize,
     #[serde(default = "default_auth_window_ms")]
@@ -32,6 +35,7 @@ impl Default for LateralMovementProfile {
         Self {
             remote_exec_indicators: default_remote_exec_indicators(),
             allowed_ssh_sources: Vec::new(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             rdp_failure_threshold: default_rdp_failure_threshold(),
             auth_window_ms: default_auth_window_ms(),
             high_confidence_threshold: default_high_confidence_threshold(),
@@ -44,6 +48,7 @@ impl Default for LateralMovementProfile {
 pub struct LateralMovementDetector {
     remote_exec_indicators: Vec<String>,
     allowed_ssh_sources: Vec<String>,
+    command_line_normalization: CommandLineNormalizationProfile,
     rdp_failure_threshold: usize,
     auth_window_ms: i64,
     high_confidence_threshold: f64,
@@ -59,6 +64,7 @@ impl Default for LateralMovementDetector {
                 .map(|value| value.to_ascii_lowercase())
                 .collect(),
             allowed_ssh_sources: Vec::new(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             rdp_failure_threshold: default_rdp_failure_threshold(),
             auth_window_ms: default_auth_window_ms(),
             high_confidence_threshold: default_high_confidence_threshold(),
@@ -82,6 +88,7 @@ impl LateralMovementDetector {
                 .into_iter()
                 .map(|value| value.to_ascii_lowercase())
                 .collect(),
+            command_line_normalization: profile.command_line_normalization,
             rdp_failure_threshold: profile.rdp_failure_threshold,
             auth_window_ms: profile.auth_window_ms,
             high_confidence_threshold: profile.high_confidence_threshold,
@@ -94,6 +101,7 @@ impl LateralMovementDetector {
         LateralMovementProfile {
             remote_exec_indicators: self.remote_exec_indicators.clone(),
             allowed_ssh_sources: self.allowed_ssh_sources.clone(),
+            command_line_normalization: self.command_line_normalization.clone(),
             rdp_failure_threshold: self.rdp_failure_threshold,
             auth_window_ms: self.auth_window_ms,
             high_confidence_threshold: self.high_confidence_threshold,
@@ -107,29 +115,34 @@ impl LateralMovementDetector {
         process: &ProcessStartEvent,
     ) -> Option<DetectionFinding> {
         let process_name = process.process_name.to_ascii_lowercase();
-        let command_line = process.command_line.to_ascii_lowercase();
+        let command_line =
+            analyze_command_line(&process.command_line, &self.command_line_normalization);
         let matched_indicator = self
             .remote_exec_indicators
             .iter()
             .find(|indicator| {
                 process_name.contains(indicator.as_str())
-                    || command_line.contains(indicator.as_str())
+                    || command_line.match_text.contains(indicator.as_str())
             })
             .cloned()?;
 
         let is_remote_exec = match matched_indicator.as_str() {
             "wmic" => {
-                command_line.contains("/node:") && command_line.contains("process call create")
+                command_line.match_text.contains("/node:")
+                    && command_line.match_text.contains("process call create")
             }
             "psexec" | "winrs" | "smbexec" => true,
             "invoke-command" => {
-                command_line.contains("-computername") || command_line.contains("-session")
+                command_line.match_text.contains("-computername")
+                    || command_line.match_text.contains("-session")
             }
             "new-pssession" | "enter-pssession" => {
-                command_line.contains("-computername") || command_line.contains("-connectionuri")
+                command_line.match_text.contains("-computername")
+                    || command_line.match_text.contains("-connectionuri")
             }
             "invoke-cimmethod" => {
-                command_line.contains("-computername") || command_line.contains("-cimsession")
+                command_line.match_text.contains("-computername")
+                    || command_line.match_text.contains("-cimsession")
             }
             _ => false,
         };
@@ -146,6 +159,9 @@ impl LateralMovementDetector {
             evidence: json!({
                 "process_name": process.process_name,
                 "command_line": process.command_line,
+                "normalized_command_line": command_line.normalized,
+                "decoded_command_segments": command_line.decoded_segments,
+                "command_line_transforms": command_line.transforms,
                 "matched_indicator": matched_indicator,
                 "host_id": event.host_id,
             }),
@@ -286,6 +302,8 @@ impl DetectionStrategy for LateralMovementDetector {
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
@@ -337,6 +355,7 @@ fn normalized_timestamp_ms(timestamp: i64) -> i64 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{LateralMovementDetector, LateralMovementProfile};
+    use crate::command_line::CommandLineNormalizationProfile;
     use crate::detector::{
         AuthenticationEventData, DetectionStrategy, ProcessStartEvent, TelemetryEvent,
         TelemetryPayload,
@@ -460,6 +479,17 @@ mod tests {
     }
 
     #[test]
+    fn fullwidth_invoke_command_is_normalized_before_matching() {
+        let detector = LateralMovementDetector::default();
+        let findings = detector.evaluate(&process_event(
+            "powershell",
+            "powershell.exe Ιnvοke-Command -ComputerName srv-01 -ScriptBlock { whoami }",
+        ));
+
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
     fn repeated_failed_rdp_attempts_produce_finding_after_threshold() {
         let detector = LateralMovementDetector::default();
         assert!(
@@ -494,5 +524,19 @@ mod tests {
         ));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].threat_class, ThreatClass::LateralMovement);
+    }
+
+    #[test]
+    fn profile_round_trips() {
+        let profile = LateralMovementProfile {
+            command_line_normalization: CommandLineNormalizationProfile {
+                decode_encoded_arguments: false,
+                ..CommandLineNormalizationProfile::default()
+            },
+            ..LateralMovementProfile::default()
+        };
+        let detector = LateralMovementDetector::from_profile(profile.clone())
+            .expect("profile should be valid");
+        assert_eq!(detector.profile(), profile);
     }
 }

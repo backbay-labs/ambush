@@ -9,6 +9,7 @@ pub mod evidence;
 pub mod evolution;
 pub mod helpers;
 pub mod maintenance;
+pub mod rate_limit;
 pub mod render;
 pub mod review;
 pub mod state;

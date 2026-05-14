@@ -1,0 +1,96 @@
+name: command_line_deobfuscation_benign
+description: Benign command lines that exercise normalization inputs without introducing detector regressions
+seed_time_ms: 1702000200000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: benign
+  campaign: operator_maintenance
+  tags:
+    - benign
+    - command-line
+    - normalization
+
+input:
+  kind: events
+  events:
+    - action: { type: escalate, summary: benign caret-obfuscated URL echo, urgency: MEDIUM }
+      event:
+        source: synthetic
+        event_id: deobf-benign-1
+        timestamp: 1702000200100
+        host_id: host-deobf-benign
+        payload:
+          kind: process_start
+          parent_process: services.exe
+          process_name: cmd.exe
+          command_line: cmd.exe /c echo h^tt^ps://intranet.local/health
+          user: svc-maintenance
+    - action: { type: escalate, summary: benign environment-variable echo, urgency: MEDIUM }
+      event:
+        source: synthetic
+        event_id: deobf-benign-2
+        timestamp: 1702000200200
+        host_id: host-deobf-benign
+        payload:
+          kind: process_start
+          parent_process: services.exe
+          process_name: powershell.exe
+          command_line: powershell.exe Write-Host $env:ComSpec
+          user: svc-maintenance
+    - action: { type: escalate, summary: benign fullwidth write-host command, urgency: MEDIUM }
+      event:
+        source: synthetic
+        event_id: deobf-benign-3
+        timestamp: 1702000200300
+        host_id: host-deobf-benign
+        payload:
+          kind: process_start
+          parent_process: services.exe
+          process_name: powershell.exe
+          command_line: powershell.exe Ｗrite-Host Hello
+          user: svc-maintenance
+    - action: { type: escalate, summary: benign certutil dump command with caret insertion, urgency: MEDIUM }
+      event:
+        source: synthetic
+        event_id: deobf-benign-4
+        timestamp: 1702000200400
+        host_id: host-deobf-benign
+        payload:
+          kind: process_start
+          parent_process: services.exe
+          process_name: certutil.exe
+          command_line: certutil.exe -d^u^m^p localcert.cer
+          user: svc-maintenance
+    - action: { type: escalate, summary: benign control panel launch via rundll32, urgency: MEDIUM }
+      event:
+        source: synthetic
+        event_id: deobf-benign-5
+        timestamp: 1702000200500
+        host_id: host-deobf-benign
+        payload:
+          kind: process_start
+          parent_process: explorer.exe
+          process_name: rundll32.exe
+          command_line: rundll32.exe shell32.dll,Control_RunDLL desk.cpl
+          user: alice
+    - action: { type: escalate, summary: benign PowerShell session option setup, urgency: MEDIUM }
+      event:
+        source: synthetic
+        event_id: deobf-benign-6
+        timestamp: 1702000200600
+        host_id: host-deobf-benign
+        payload:
+          kind: process_start
+          parent_process: services.exe
+          process_name: powershell.exe
+          command_line: powershell.exe New-PSSessionOption -NoMachineProfile
+          user: svc-maintenance
+
+expectations:
+  replay_bundle_count: 0
+  investigation_count: 0
+  incident_count: 0
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

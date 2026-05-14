@@ -8,7 +8,7 @@ use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{
     ProvidenceCallbackAuditEntry, ProvidenceFeedbackAction, ProvidenceFeedbackEvidence,
-    ProvidenceIncidentReconciliation, Severity,
+    ProvidenceIncidentReconciliation, Severity, SoarVerdictLineage,
 };
 
 /// Generic outbound-system reference linked to a correlated incident.
@@ -35,6 +35,8 @@ pub struct AnalystFeedbackAuditEntry {
     pub request_signature: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<ProvidenceFeedbackEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soar_lineage: Option<SoarVerdictLineage>,
     pub payload: Value,
     pub outcome: Value,
 }
@@ -53,6 +55,8 @@ pub struct FalsePositiveMeasurement {
     pub action: ProvidenceFeedbackAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soar_lineage: Option<SoarVerdictLineage>,
     pub false_positive: bool,
 }
 
@@ -1086,6 +1090,7 @@ mod tests {
                     reason: Some("false positive".to_string()),
                     request_signature: "sha256=test".to_string(),
                     evidence: None,
+                    soar_lineage: None,
                     payload: serde_json::json!({
                         "action": "dismiss",
                         "incident_id": record.incident_id,

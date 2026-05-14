@@ -1,6 +1,7 @@
 use crate::config::SiemForwardConfig;
 use crate::dead_letter::DeadLetterJournal;
 use crate::resilience::ResilientExecutor;
+use crate::splunk_hec::{SplunkHecAdapter, SwarmFindingBatchEnvelope};
 use crate::{ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt, ResponseStatus};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -165,7 +166,10 @@ impl ResponseExecutor for SiemForwardAdapter {
                 let result = self
                     .client
                     .post(endpoint)
-                    .header("Authorization", format!("Splunk {auth_token}"))
+                    .header(
+                        "Authorization",
+                        format!("Splunk {}", auth_token.expose_secret()),
+                    )
                     .timeout(Duration::from_millis(self.timeout_ms()))
                     .json(&payload)
                     .send()
@@ -191,7 +195,7 @@ impl ResponseExecutor for SiemForwardAdapter {
                     .timeout(Duration::from_millis(self.timeout_ms()))
                     .body(ndjson);
                 if let Some(auth_token) = auth_token {
-                    request = request.bearer_auth(auth_token);
+                    request = request.bearer_auth(auth_token.expose_secret());
                 }
                 let result = request.send().await;
                 elapsed_ms = started.elapsed().as_millis() as u64;
@@ -206,7 +210,7 @@ impl ResponseExecutor for SiemForwardAdapter {
                 let result = self
                     .client
                     .post(endpoint)
-                    .bearer_auth(auth_token)
+                    .bearer_auth(auth_token.expose_secret())
                     .timeout(Duration::from_millis(self.timeout_ms()))
                     .json(&payload)
                     .send()
@@ -294,8 +298,17 @@ impl ResponseExecutor for SiemForwardAdapter {
 }
 
 #[derive(Clone)]
+enum ForwarderInner {
+    Splunk {
+        adapter: SplunkHecAdapter,
+        executor: Arc<ResilientExecutor<SplunkHecAdapter>>,
+    },
+    Generic(Arc<ResilientExecutor<SiemForwardAdapter>>),
+}
+
+#[derive(Clone)]
 pub struct SiemFindingForwarder {
-    executor: Arc<ResilientExecutor<SiemForwardAdapter>>,
+    inner: ForwarderInner,
 }
 
 impl SiemFindingForwarder {
@@ -324,42 +337,129 @@ impl SiemFindingForwarder {
                 dead_letter_path.clone(),
             ),
         };
-        let adapter = SiemForwardAdapter::new(config);
         let journal = Arc::new(DeadLetterJournal::from_path(dead_letter_path, None));
-        Self {
-            executor: Arc::new(ResilientExecutor::new(
+        let inner = if let Some(adapter) = SplunkHecAdapter::new(&config) {
+            ForwarderInner::Splunk {
+                executor: Arc::new(ResilientExecutor::new(
+                    adapter.clone(),
+                    "siem_forward",
+                    retry,
+                    circuit_breaker,
+                    Some(journal),
+                )),
+                adapter,
+            }
+        } else {
+            let adapter = SiemForwardAdapter::new(config);
+            ForwarderInner::Generic(Arc::new(ResilientExecutor::new(
                 adapter,
                 "siem_forward",
                 retry,
                 circuit_breaker,
                 Some(journal),
-            )),
-        }
+            )))
+        };
+        Self { inner }
     }
 
     pub async fn forward_finding(
         &self,
         finding: &DetectionFinding,
     ) -> Result<ResponseReceipt, ResponseError> {
-        let request = ActionRequest {
-            hunt_id: HuntId(finding.event_id.clone()),
-            requested_by: AgentId("siem-forwarder".to_string()),
-            action: ResponseAction::Escalate {
-                summary: format!("forward {}", finding.finding_id),
-                urgency: finding.severity,
-            },
-            severity: finding.severity,
-            evidence: json!(SwarmFindingEnvelope::from(finding)),
-        };
-        let lease = CapabilityLease {
-            capability_id: format!("siem-forward:{}", finding.finding_id),
-            expires_at_ms: now_ms() + 60_000,
-            action: request.action.kind().to_string(),
-            scope: Some(finding.strategy_id.clone()),
-        };
-        self.executor
-            .execute(&request, &lease, ExecutionMode::Enforced)
-            .await
+        self.forward_findings(std::slice::from_ref(finding))
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                ResponseError::unavailable(
+                    "siem_forward",
+                    ExecutionMode::Enforced,
+                    "forward_finding did not produce a receipt",
+                )
+            })
+    }
+
+    pub async fn forward_findings(
+        &self,
+        findings: &[DetectionFinding],
+    ) -> Result<Vec<ResponseReceipt>, ResponseError> {
+        if findings.is_empty() {
+            return Ok(Vec::new());
+        }
+        match &self.inner {
+            ForwarderInner::Splunk { adapter, executor } => {
+                let mut receipts = Vec::new();
+                for (batch_index, batch) in adapter.build_batches(findings).into_iter().enumerate()
+                {
+                    let first = batch
+                        .findings
+                        .first()
+                        .expect("batch contains at least one finding");
+                    let hunt_id = first.event_id.clone();
+                    let first_finding_id = first.finding_id.clone();
+                    let first_strategy_id = first.strategy_id.clone();
+                    let severity = batch
+                        .findings
+                        .iter()
+                        .map(|finding| finding.severity)
+                        .max()
+                        .unwrap_or(Severity::Low);
+                    let request = ActionRequest {
+                        hunt_id: HuntId(hunt_id),
+                        requested_by: AgentId("siem-forwarder".to_string()),
+                        action: ResponseAction::Escalate {
+                            summary: format!("forward {} findings", batch.findings.len()),
+                            urgency: severity,
+                        },
+                        severity,
+                        evidence: json!(SwarmFindingBatchEnvelope {
+                            schema: batch.schema,
+                            transport: batch.transport,
+                            findings: batch.findings,
+                        }),
+                    };
+                    let lease = CapabilityLease {
+                        capability_id: format!("siem-forward:{}:{batch_index}", first_finding_id),
+                        expires_at_ms: now_ms() + 60_000,
+                        action: request.action.kind().to_string(),
+                        scope: Some(first_strategy_id),
+                    };
+                    receipts.push(
+                        executor
+                            .execute(&request, &lease, ExecutionMode::Enforced)
+                            .await?,
+                    );
+                }
+                Ok(receipts)
+            }
+            ForwarderInner::Generic(executor) => {
+                let mut receipts = Vec::new();
+                for finding in findings {
+                    let request = ActionRequest {
+                        hunt_id: HuntId(finding.event_id.clone()),
+                        requested_by: AgentId("siem-forwarder".to_string()),
+                        action: ResponseAction::Escalate {
+                            summary: format!("forward {}", finding.finding_id),
+                            urgency: finding.severity,
+                        },
+                        severity: finding.severity,
+                        evidence: json!(SwarmFindingEnvelope::from(finding)),
+                    };
+                    let lease = CapabilityLease {
+                        capability_id: format!("siem-forward:{}", finding.finding_id),
+                        expires_at_ms: now_ms() + 60_000,
+                        action: request.action.kind().to_string(),
+                        scope: Some(finding.strategy_id.clone()),
+                    };
+                    receipts.push(
+                        executor
+                            .execute(&request, &lease, ExecutionMode::Enforced)
+                            .await?,
+                    );
+                }
+                Ok(receipts)
+            }
+        }
     }
 }
 
@@ -376,7 +476,8 @@ mod tests {
     use super::{SiemFindingForwarder, SiemForwardAdapter, SwarmFindingEnvelope};
     use crate::config::{CircuitBreakerConfig, RetryConfig, SiemForwardConfig};
     use crate::{ExecutionMode, ResponseExecutor, ResponseStatus};
-    use axum::extract::State;
+    use axum::body::to_bytes;
+    use axum::extract::{Request, State};
     use axum::http::{HeaderMap, StatusCode, header};
     use axum::routing::post;
     use axum::{Json, Router};
@@ -388,17 +489,27 @@ mod tests {
     use swarm_whisker::DetectionFinding;
     use tokio::sync::{Mutex, oneshot};
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct CaptureState {
         auth: Arc<Mutex<Option<String>>>,
         payload: Arc<Mutex<Option<Value>>>,
         status: StatusCode,
     }
 
+    impl Default for CaptureState {
+        fn default() -> Self {
+            Self {
+                auth: Arc::default(),
+                payload: Arc::default(),
+                status: StatusCode::OK,
+            }
+        }
+    }
+
     async fn handler(
         State(state): State<CaptureState>,
         headers: HeaderMap,
-        Json(payload): Json<Value>,
+        request: Request,
     ) -> (StatusCode, Json<Value>) {
         {
             let mut auth = state.auth.lock().await;
@@ -407,6 +518,18 @@ mod tests {
                 .and_then(|value| value.to_str().ok())
                 .map(ToString::to_string);
         }
+        let body = to_bytes(request.into_body(), usize::MAX).await.unwrap();
+        let rendered = String::from_utf8(body.to_vec()).unwrap();
+        let payload = if let Ok(value) = serde_json::from_str::<Value>(&rendered) {
+            value
+        } else {
+            let values = rendered
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            Value::Array(values)
+        };
         {
             let mut captured = state.payload.lock().await;
             *captured = Some(payload);
@@ -459,8 +582,10 @@ mod tests {
         let (endpoint, state, shutdown_tx, handle) = spawn_server(StatusCode::OK).await;
         let adapter = SiemForwardAdapter::new(SiemForwardConfig::SplunkHec {
             endpoint,
-            auth_token: "splunk-secret".to_string(),
+            auth_token: "splunk-secret".to_string().into(),
             timeout_ms: 500,
+            batch_max_events: 32,
+            batch_max_bytes: 131_072,
             retry: RetryConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),
             dead_letter_path: "./siem-dead-letter.jsonl".to_string(),
@@ -506,8 +631,10 @@ mod tests {
         let (endpoint, state, shutdown_tx, handle) = spawn_server(StatusCode::OK).await;
         let forwarder = SiemFindingForwarder::new(SiemForwardConfig::SplunkHec {
             endpoint,
-            auth_token: "splunk-secret".to_string(),
+            auth_token: "splunk-secret".to_string().into(),
             timeout_ms: 500,
+            batch_max_events: 32,
+            batch_max_bytes: 131_072,
             retry: RetryConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),
             dead_letter_path: "./siem-dead-letter.jsonl".to_string(),
@@ -517,7 +644,7 @@ mod tests {
 
         assert_eq!(receipt.status, ResponseStatus::Executed);
         let payload = state.payload.lock().await.clone().unwrap();
-        assert_eq!(payload["event"]["finding_id"], "finding-1");
+        assert_eq!(payload[0]["event"]["finding_id"], "finding-1");
 
         let _ = shutdown_tx.send(());
         handle.abort();

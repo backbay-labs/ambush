@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "incident_id": "incident:evt-first-run-1:1776121433676",
+      "summary": "incident seeded from evt-first-run-1 grouped 1 investigation(s) via no shared keys across seed-only evidence",
+      "created_at_ms": 1776121433676,
+      "included_hunt_ids": [
+        "evt-first-run-1"
+      ],
+      "included_investigation_ids": [
+        "investigation:evt-first-run-1:1776121433675"
+      ],
+      "related_receipt_ids": [],
+      "correlation_keys": [],
+      "bundle_path": "incidents/incident_evt-first-run-1_1776121433676.json",
+      "graph_dimensions": [],
+      "confidence_score": 0.35,
+      "trigger_event_id": "evt-first-run-1",
+      "trigger_finding_id": "suspicious_process_tree:evt-first-run-1",
+      "trigger_strategy_id": "suspicious_process_tree",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "external_references": [],
+      "providence_callback_audit_entries": [],
+      "feedback_audit_entries": [],
+      "false_positive_measurements": []
+    },
+    {
+      "incident_id": "incident:evt-first-run-1:1776121433683",
+      "summary": "incident seeded from evt-first-run-1 grouped 1 investigation(s) via no shared keys across seed-only evidence",
+      "created_at_ms": 1776121433683,
+      "included_hunt_ids": [
+        "evt-first-run-1"
+      ],
+      "included_investigation_ids": [
+        "investigation:evt-first-run-1:1776121433675"
+      ],
+      "related_receipt_ids": [],
+      "correlation_keys": [],
+      "bundle_path": "incidents/incident_evt-first-run-1_1776121433683.json",
+      "graph_dimensions": [],
+      "confidence_score": 0.35,
+      "trigger_event_id": "evt-first-run-1",
+      "trigger_finding_id": "suspicious_process_tree:evt-first-run-1",
+      "trigger_strategy_id": "suspicious_process_tree",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "external_references": [],
+      "providence_callback_audit_entries": [],
+      "feedback_audit_entries": [],
+      "false_positive_measurements": []
+    }
+  ]
+}

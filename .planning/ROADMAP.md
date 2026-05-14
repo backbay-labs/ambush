@@ -608,6 +608,9 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 
 </details>
 
+<details>
+<summary>Shipped: v1.73 Stigmergic Feedback Loops And Baseline Resistance (Phases 260-263)</summary>
+
 ### v1.73 Stigmergic Feedback Loops And Baseline Resistance
 
 **Goal:** Implement real pheromone recruitment and quantify baseline poisoning resistance.
@@ -665,6 +668,11 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 1. Baseline snapshots older than a configurable staleness threshold trigger graduated confidence reduction.
 2. The stale-state policy composes cleanly with the signed baseline persistence path from the earlier learned-state integrity work.
 3. Repo-owned tests prove the stale-baseline confidence reduction path instead of relying on documentation-only expectations.
+
+</details>
+
+<details>
+<summary>Deferred: v1.74 Structural Integrity (Phases 264-267)</summary>
 
 ### v1.74 Structural Integrity
 
@@ -728,44 +736,54 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 3. `swarm-agents` carries its own focused unit test suite and `swarm-runtime` integration tests continue to exercise the full agent pipeline through the swarm-agents dependency.
 4. `cargo build --workspace`, `cargo test --workspace`, and `cargo clippy --workspace -- -D warnings` all complete cleanly after extraction.
 
+</details>
+
+<details>
+<summary>Shipped: v1.75 Operator Packaging (Phases 268-271)</summary>
+
 ### v1.75 Operator Packaging
 
 **Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
 **Executable phases:** 268-271
 
-- [ ] **Phase 268: Curated Defaults And Operator UX** - A curated rulesets/default.yaml ships for detect_only mode, swarmctl init generates a working config, swarmctl status outputs an operator-readable runtime summary, and config/bridge error messages include actionable remediation guidance. (DEFAULTS-01, DEFAULTS-02, OPEXP-01, OPEXP-02)
-- [ ] **Phase 269: Deployment Documentation** - A getting-started guide walks operators from zero to first detection in under 15 minutes using Docker Compose; deployment documentation covers Docker single-container, Docker Compose with NATS, Helm, and bare-metal paths with prerequisites, config, and verification steps. (DEPLOY-01, DEPLOY-02)
-- [ ] **Phase 270: Adversary Emulation Corpus** - A mapped Atomic Red Team corpus of 20+ techniques ships as replay scenarios; cargo test includes an adversary emulation integration suite with a technique-to-detector mapping; a coverage report summarizes per-MITRE-technique detection status with a 60%+ coverage target. (EMULATION-01, EMULATION-02, EMULATION-03)
-- [ ] **Phase 271: Quickstart Command And End-To-End Validation** - swarmctl quickstart orchestrates first-run end-to-end: validates config, starts runtime, injects a synthetic attack, waits for detection, and reports the finding with an elapsed-time measurement. (DEPLOY-03)
+- [x] **Phase 268: Curated Defaults And Operator UX** - A curated detect-only bootstrap bundle now validates without hand edits, `swarmctl status` leads with an operator-readable one-screen summary, and config or bridge failures emit remediation-grade guidance. (DEFAULTS-01, DEFAULTS-02, OPEXP-01, OPEXP-02)
+- [x] **Phase 269: Deployment Documentation** - `docs/QUICKSTART.md` and `docs/DEPLOYMENT.md` now cover Docker Compose first-run, Docker single-container, Compose with NATS, Helm, and bare-metal packaging with verification steps. (DEPLOY-01, DEPLOY-02)
+- [x] **Phase 270: Adversary Emulation Corpus** - The repo now ships a mapped adversary-emulation corpus, integration suite, JSON report generator, CI wrapper, and a documented per-technique coverage report with a passing coverage floor. (EMULATION-01, EMULATION-02, EMULATION-03)
+- [x] **Phase 271: Quickstart Command And End-To-End Validation** - `swarmctl quickstart` now validates config, runs the built-in first-run scenario, reports elapsed time plus finding proof in one command, and is verified against the packaged Docker image path. (DEPLOY-03)
 
-### v1.76 External Signal Ingestion
-
-**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
-**Executable phases:** 272-275
-
-- [ ] **Phase 272: STIX/TAXII Consumer And Threat Intel Enrichment** - A swarm-ingest-taxii crate polls STIX/TAXII 2.1 collection feeds on a bounded interval, maps indicator objects into ThreatIntelEntry records with confidence scores and TTL, deduplicates on re-observation, and enriches behavioral detection findings with IOC context including feed source, STIX indicator ID, and confidence boost. (THREATINTEL-01, THREATINTEL-02, THREATINTEL-03)
-- [ ] **Phase 273: Cloud Telemetry Bridges** - swarm-ingest-json gains a cloudtrail bridge variant parsing AWS CloudTrail JSON into TelemetryPayload::CloudTrailEvent and a kubernetes_audit bridge variant parsing Kubernetes audit webhook JSON into TelemetryPayload::KubernetesAuditEvent; both bridges register in SwarmConfig, expose health metrics on the existing bridge surface, and are validated by integration tests. (CLOUDBR-01, CLOUDBR-02, CLOUDBR-03)
-- [ ] **Phase 274: CloudTrail Detector** - A CloudTrailDetector implements DetectionStrategy and detects IAM abuse, resource hijacking, and credential compromise patterns from CloudTrailEvent telemetry, maps findings to existing ThreatClass variants and MITRE ATT&CK cloud technique IDs, produces signed pheromone deposits through the standard pipeline, and carries cloud-specific evidence in finding payloads. (CLOUDDET-01)
-- [ ] **Phase 275: Kubernetes Audit Detector And Cross-Cloud Integration Proof** - A KubernetesAuditDetector implements DetectionStrategy and detects privilege escalation, RBAC abuse, and container escape indicators from KubernetesAuditEvent telemetry; the milestone closes with an end-to-end integration proof that both cloud detectors produce signed findings with cloud-specific evidence through the full detection pipeline. (CLOUDDET-02, CLOUDDET-03)
+</details>
 
 ### v1.77 Integration Proof
 
 **Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
 **Executable phases:** 276-279
 
-- [ ] **Phase 276: CrowdStrike RTR Adapter** - A CrowdStrikeRtrAdapter implements ResponseExecutor with OAuth2 service-to-service authentication, session management, host isolation, process kill, and file quarantine actions; it inherits ResilientExecutor retry and circuit-breaker behavior and is validated by a repo-owned mock RTR API integration test suite. (EDRINT-01, EDRINT-02, EDRINT-03)
-- [ ] **Phase 277: Splunk HEC Adapter** - A SplunkHecAdapter implements ResponseExecutor delivering DetectionFinding payloads to Splunk HEC with CIM-compliant field mapping, configurable batching, secret-resolved HEC token auth, and delivery metrics; it inherits ResilientExecutor retry and circuit-breaker behavior and is validated by a repo-owned mock HEC integration test suite. (SIEMINT-01, SIEMINT-02, SIEMINT-03)
-- [ ] **Phase 278: E2E Deployment Proof Compose Stack** - A repo-owned Docker Compose stack provisions the runtime with mocked CrowdStrike RTR and Splunk HEC adapters plus one telemetry source bridge; a scripted scenario injects attack telemetry and proves the full detect -> respond -> deliver loop with observable finding delivery, response receipts, and correct CIM field mapping. (E2EPROOF-01, E2EPROOF-02)
-- [ ] **Phase 279: Integration Architecture Validation** - The deployment proof is completed with a repo-owned integration architecture diagram documenting the telemetry-to-finding-to-response-to-SIEM flow, and all adapter metrics, health endpoints, and audit receipts are validated as correctly populated in the running Compose stack. (E2EPROOF-03)
+- [x] **Phase 276: CrowdStrike RTR Adapter** - A CrowdStrikeRtrAdapter implements ResponseExecutor with OAuth2 service-to-service authentication, session management, host isolation, process kill, and file quarantine actions; it inherits ResilientExecutor retry and circuit-breaker behavior and is validated by a repo-owned mock RTR API integration test suite. (EDRINT-01, EDRINT-02, EDRINT-03)
+- [x] **Phase 277: Splunk HEC Adapter** - A SplunkHecAdapter implements ResponseExecutor delivering DetectionFinding payloads to Splunk HEC with CIM-compliant field mapping, configurable batching, secret-resolved HEC token auth, and delivery metrics; it inherits ResilientExecutor retry and circuit-breaker behavior and is validated by a repo-owned mock HEC integration test suite. (SIEMINT-01, SIEMINT-02, SIEMINT-03)
+- [x] **Phase 278: E2E Deployment Proof Compose Stack** - A repo-owned Docker Compose stack provisions the runtime with mocked CrowdStrike RTR and Splunk HEC adapters plus one telemetry source bridge; a scripted scenario injects attack telemetry and proves the full detect -> respond -> deliver loop with observable finding delivery, response receipts, and correct CIM field mapping. (E2EPROOF-01, E2EPROOF-02)
+- [x] **Phase 279: Integration Architecture Validation** - The deployment proof is completed with a repo-owned integration architecture diagram documenting the telemetry-to-finding-to-response-to-SIEM flow, and all adapter metrics, health endpoints, and audit receipts are validated as correctly populated in the running Compose stack. (E2EPROOF-03)
 
+<details>
+<summary>Completed milestone summary: v1.76 External Signal Ingestion (Phases 272-275)</summary>
+
+- [x] **Phase 272: STIX/TAXII Consumer And Threat Intel Enrichment** - A swarm-ingest-taxii crate polls STIX/TAXII 2.1 collection feeds on a bounded interval, maps indicator objects into ThreatIntelEntry records with confidence scores and TTL, deduplicates on re-observation, and enriches behavioral detection findings with IOC context including feed source, STIX indicator ID, and confidence boost. (THREATINTEL-01, THREATINTEL-02, THREATINTEL-03)
+- [x] **Phase 273: Cloud Telemetry Bridges** - swarm-ingest-json gains a cloudtrail bridge variant parsing AWS CloudTrail JSON into TelemetryPayload::CloudTrailEvent and a kubernetes_audit bridge variant parsing Kubernetes audit webhook JSON into TelemetryPayload::KubernetesAuditEvent; both bridges register in SwarmConfig, expose health metrics on the existing bridge surface, and are validated by integration tests. (CLOUDBR-01, CLOUDBR-02, CLOUDBR-03)
+- [x] **Phase 274: CloudTrail Detector** - A CloudTrailDetector implements DetectionStrategy and detects IAM abuse, resource hijacking, and credential compromise patterns from CloudTrailEvent telemetry, maps findings to existing ThreatClass variants and MITRE ATT&CK cloud technique IDs, produces signed pheromone deposits through the standard pipeline, and carries cloud-specific evidence in finding payloads. (CLOUDDET-01)
+- [x] **Phase 275: Kubernetes Audit Detector And Cross-Cloud Integration Proof** - A KubernetesAuditDetector implements DetectionStrategy and detects privilege escalation, RBAC abuse, and container escape indicators from KubernetesAuditEvent telemetry; the milestone closes with an end-to-end integration proof that both cloud detectors produce signed findings with cloud-specific evidence through the full detection pipeline. (CLOUDDET-02, CLOUDDET-03)
+
+</details>
+
+
+<details>
+<summary>Shipped detail sections: v1.75 Operator Packaging (Phases 268-271)</summary>
 
 ### Phase 268: Curated Defaults And Operator UX
 
 **Goal:** Operators can reach a working detect_only runtime on first run using curated defaults, and the operator status surface and error messages are clear enough to self-serve.
 **Requirements:** DEFAULTS-01, DEFAULTS-02, OPEXP-01, OPEXP-02
 **Depends on:** v1.73 milestone complete; v1.74 deferred by operator request
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 268-01-PLAN.md
 **Success Criteria**:
 1. `rulesets/default.yaml` ships with documented detection profiles for all 12 shipped detector strategies; an operator can run `swarmctl init` and `swarmctl validate` without modification.
 2. The runtime boots to a ready state on first run using the generated config without manual config editing.
@@ -777,8 +795,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** An operator who has never run Swarm can follow a getting-started guide and reach first detection in under 15 minutes, and the deployment reference covers all supported paths.
 **Requirements:** DEPLOY-01, DEPLOY-02
 **Depends on:** Phase 268
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 269-01-PLAN.md
 **Success Criteria**:
 1. `docs/QUICKSTART.md` walks an operator from zero to first detection using Docker Compose including telemetry injection, detection observation, and finding inspection via `swarmctl`.
 2. A hands-on path through the guide from a clean state produces a visible detection finding within the 15-minute time target.
@@ -789,8 +807,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** Operators and CI can verify detection coverage against public adversary emulation scenarios and read a per-technique coverage report.
 **Requirements:** EMULATION-01, EMULATION-02, EMULATION-03
 **Depends on:** Phase 269
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 270-01-PLAN.md
 **Success Criteria**:
 1. The repo includes at least 20 Atomic Red Team techniques adapted as replay scenarios spanning execution, persistence, credential access, lateral movement, and defense evasion tactics.
 2. `cargo test` runs an adversary emulation integration suite that replays the corpus through the full detection pipeline and passes with a documented technique-to-detector mapping.
@@ -801,20 +819,25 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** A new operator can run one command and get to first detection with a measured time-to-detect proof, validating the full operator packaging end-to-end.
 **Requirements:** DEPLOY-03
 **Depends on:** Phase 270
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 271-01-PLAN.md
 **Success Criteria**:
 1. `swarmctl quickstart` validates the config, starts the runtime, injects a built-in synthetic attack scenario, waits for detection, and prints the finding with elapsed time in one command.
 2. The quickstart command completes successfully on a clean install without requiring manual runtime management steps.
 3. The end-to-end flow from `swarmctl quickstart` through reported finding serves as the integration-level proof that curated defaults, deployment docs, and corpus validation are all coherent.
+
+</details>
+
+<details>
+<summary>Archived detail sections: v1.76 External Signal Ingestion (Phases 272-275)</summary>
 
 ### Phase 272: STIX/TAXII Consumer And Threat Intel Enrichment
 
 **Goal:** The runtime can consume external STIX/TAXII 2.1 threat intelligence feeds and enrich behavioral detection findings with matched IOC context.
 **Requirements:** THREATINTEL-01, THREATINTEL-02, THREATINTEL-03
 **Depends on:** v1.75 milestone complete
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 272-01-PLAN.md
 **Success Criteria**:
 1. `swarm-ingest-taxii` polls a configured STIX/TAXII 2.1 collection URL on a bounded interval and writes IPv4, domain, file hash, and URL indicator objects into the existing pheromone substrate as ThreatIntelEntry records with confidence scores, TTL derived from STIX `valid_until`, and source attribution.
 2. Re-observed indicators update confidence and TTL in place rather than creating duplicate entries; the deduplication key is type+value.
@@ -826,8 +849,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** The runtime can ingest AWS CloudTrail and Kubernetes audit log telemetry through two new bridge variants that participate in the existing bridge health and metrics surface.
 **Requirements:** CLOUDBR-01, CLOUDBR-02, CLOUDBR-03
 **Depends on:** Phase 272
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 273-01-PLAN.md
 **Success Criteria**:
 1. `swarm-ingest-json` ships a `cloudtrail` bridge variant that parses AWS CloudTrail JSON records into `TelemetryPayload::CloudTrailEvent` with field mapping for `eventName`, `userIdentity`, `sourceIPAddress`, `requestParameters`, and `responseElements`.
 2. `swarm-ingest-json` ships a `kubernetes_audit` bridge variant that parses Kubernetes audit log JSON (webhook backend format) into `TelemetryPayload::KubernetesAuditEvent` with field mapping for `verb`, `user`, `objectRef`, `responseStatus`, and `annotations`.
@@ -839,8 +862,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** The runtime can detect IAM abuse, resource hijacking, and credential compromise patterns from AWS CloudTrail telemetry and produce signed findings with cloud-specific evidence.
 **Requirements:** CLOUDDET-01
 **Depends on:** Phase 273
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 274-01-PLAN.md
 **Success Criteria**:
 1. `CloudTrailDetector` implements `DetectionStrategy` and fires on at least three IAM abuse patterns (CreateAccessKey from unusual principal, ConsoleLogin without MFA from new geography, AssumeRole to privilege-escalation-capable roles), two resource hijacking patterns (RunInstances with crypto-mining AMI patterns, large instance type from unusual principal), and two credential compromise patterns (GetSecretValue/GetParameter from unusual callers).
 2. Detected findings include cloud-specific evidence fields: AWS account ID, principal ARN, and the triggering event name.
@@ -852,21 +875,23 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** The runtime can detect privilege escalation, RBAC abuse, and container escape from Kubernetes audit telemetry, and both cloud detectors are proven end-to-end through the full detection pipeline.
 **Requirements:** CLOUDDET-02, CLOUDDET-03
 **Depends on:** Phase 274
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 275-01-PLAN.md
 **Success Criteria**:
 1. `KubernetesAuditDetector` implements `DetectionStrategy` and fires on at least two privilege escalation patterns (create/update ClusterRoleBinding, exec into privileged pod), two RBAC abuse patterns (impersonation, wildcard permissions), and two container escape indicators (privileged container creation, hostPID or hostNetwork).
 2. Detected findings include cloud-specific evidence fields: Kubernetes namespace, requesting user or ServiceAccount, and the triggering audit verb plus object reference.
 3. Both `CloudTrailDetector` and `KubernetesAuditDetector` findings map to existing `ThreatClass` variants, carry MITRE ATT&CK cloud technique IDs, and produce signed pheromone deposits through the standard pipeline.
 4. An integration test proves the full path: cloud bridge JSON ingestion -> `TelemetryPayload` normalization -> detector evaluation -> signed finding with cloud-specific evidence -> `swarmctl` finding inspection for both cloud detectors.
 
+</details>
+
 ### Phase 276: CrowdStrike RTR Adapter
 
 **Goal:** The runtime can execute host isolation, process kill, and file quarantine against CrowdStrike-managed hosts through a tested, resilient RTR adapter backed by a repo-owned mock server.
 **Requirements:** EDRINT-01, EDRINT-02, EDRINT-03
 **Depends on:** Phase 275
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 276-01-PLAN.md
 **Success Criteria**:
 1. `CrowdStrikeRtrAdapter` implements `ResponseExecutor` and translates `ResponseAction::IsolateHost`, `ResponseAction::KillProcess`, and `ResponseAction::QuarantineFile` into CrowdStrike RTR API calls with OAuth2 service-to-service authentication, session creation, command dispatch, and result retrieval.
 2. The adapter uses the existing `ResilientExecutor` retry loop and `CircuitBreakerState` circuit-breaker without duplicating resilience logic, and failed actions land in the dead-letter journal.
@@ -878,8 +903,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** The runtime can deliver detection findings to Splunk HTTP Event Collector with CIM-compliant field mapping, configurable batching, and a tested resilience contract backed by a repo-owned mock endpoint.
 **Requirements:** SIEMINT-01, SIEMINT-02, SIEMINT-03
 **Depends on:** Phase 276
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 277-01-PLAN.md
 **Success Criteria**:
 1. `SplunkHecAdapter` implements `ResponseExecutor` and delivers `DetectionFinding` payloads to Splunk HEC with configurable index, source, and sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication resolved via `@secret:` references.
 2. The adapter batches findings within a configurable flush interval and max batch size; it inherits the existing `ResilientExecutor` retry and `CircuitBreakerState` circuit-breaker without duplicating resilience logic.
@@ -891,8 +916,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** A repo-owned Docker Compose stack proves the full detect-to-respond-to-deliver loop with mocked EDR and SIEM endpoints and a scripted attack scenario, observable without live vendor credentials.
 **Requirements:** E2EPROOF-01, E2EPROOF-02
 **Depends on:** Phase 277
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 278-01-PLAN.md
 **Success Criteria**:
 1. A repo-owned `docker-compose.yml` starts the runtime with the CrowdStrike RTR adapter pointed at a mocked RTR server, the Splunk HEC adapter pointed at a mocked HEC endpoint, and at least one telemetry source bridge active — all from a single `docker compose up` without manual config editing.
 2. A scripted scenario injects attack telemetry into the running stack, and an operator can observe a detection finding generated, a policy-gated response action dispatched through the CrowdStrike adapter (with a receipt), and the finding delivered to the Splunk adapter with correct CIM field mapping.
@@ -903,8 +928,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** The detect-to-respond-to-SIEM flow is documented in a repo-owned integration architecture diagram, and the Compose stack proves all adapter metrics, health endpoints, and audit receipts are correctly populated.
 **Requirements:** E2EPROOF-03
 **Depends on:** Phase 278
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 279-01-PLAN.md
 **Success Criteria**:
 1. A repo-owned integration architecture diagram (Mermaid or equivalent, checked into `docs/`) depicts the telemetry source bridge -> detection -> policy gate -> CrowdStrike RTR adapter -> Splunk HEC adapter flow with named crate boundaries, data types crossing each boundary, and health/metrics surfaces.
 2. After running the scripted Compose scenario, all adapter metrics (events sent, errors, circuit-breaker state), all health endpoint fields for both adapters, and all audit receipts for the dispatched response action are confirmed populated with non-zero/non-null values.
@@ -1149,21 +1174,21 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 265. kitten_agent.rs Decomposition | v1.74 | 0/TBD | Not started | - |
 | 266. drafting.rs And ingest/tests.rs Decomposition | v1.74 | 0/TBD | Not started | - |
 | 267. Agent Crate Extraction | v1.74 | 0/TBD | Not started | - |
-| 268. Curated Defaults And Operator UX | v1.75 | 0/TBD | Not started | - |
-| 269. Deployment Documentation | v1.75 | 0/TBD | Not started | - |
-| 270. Adversary Emulation Corpus | v1.75 | 0/TBD | Not started | - |
-| 271. Quickstart Command And End-To-End Validation | v1.75 | 0/TBD | Not started | - |
-| 272. STIX/TAXII Consumer And Threat Intel Enrichment | v1.76 | 0/TBD | Not started | - |
-| 273. Cloud Telemetry Bridges | v1.76 | 0/TBD | Not started | - |
-| 274. CloudTrail Detector | v1.76 | 0/TBD | Not started | - |
-| 275. Kubernetes Audit Detector And Cross-Cloud Integration Proof | v1.76 | 0/TBD | Not started | - |
-| 276. CrowdStrike RTR Adapter | v1.77 | 0/TBD | Not started | - |
-| 277. Splunk HEC Adapter | v1.77 | 0/TBD | Not started | - |
-| 278. E2E Deployment Proof Compose Stack | v1.77 | 0/TBD | Not started | - |
-| 279. Integration Architecture Validation | v1.77 | 0/TBD | Not started | - |
+| 268. Curated Defaults And Operator UX | v1.75 | 1/1 | Complete | 2026-04-13 |
+| 269. Deployment Documentation | v1.75 | 1/1 | Complete | 2026-04-13 |
+| 270. Adversary Emulation Corpus | v1.75 | 1/1 | Complete | 2026-04-13 |
+| 271. Quickstart Command And End-To-End Validation | v1.75 | 1/1 | Complete | 2026-04-13 |
+| 272. STIX/TAXII Consumer And Threat Intel Enrichment | v1.76 | 1/1 | Complete | 2026-04-13 |
+| 273. Cloud Telemetry Bridges | v1.76 | 1/1 | Complete | 2026-04-13 |
+| 274. CloudTrail Detector | v1.76 | 1/1 | Complete | 2026-04-13 |
+| 275. Kubernetes Audit Detector And Cross-Cloud Integration Proof | v1.76 | 1/1 | Complete | 2026-04-13 |
+| 276. CrowdStrike RTR Adapter | v1.77 | 1/1 | Complete | 2026-04-13 |
+| 277. Splunk HEC Adapter | v1.77 | 1/1 | Complete | 2026-04-13 |
+| 278. E2E Deployment Proof Compose Stack | v1.77 | 1/1 | Complete | 2026-04-13 |
+| 279. Integration Architecture Validation | v1.77 | 1/1 | Complete | 2026-04-13 |
 
 ---
-*Active milestone: v1.75 Operator Packaging*
-*v1.77 queued: Run `/gsd:plan-phase 276` after v1.76 completes.*
-*v1.76 queued: Run `/gsd:plan-phase 272` after v1.75 completes.*
+*Active milestone: v1.77 Integration Proof*
+*v1.77 status: All phases complete. Define `v1.78` or archive/promote when ready.*
+*v1.76 complete: Archived after finishing phases 272-275 on 2026-04-13.*
 *v1.74 deferred: Run `/gsd:plan-phase 264` when structural-integrity work is reactivated.*

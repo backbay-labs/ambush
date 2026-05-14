@@ -30,6 +30,7 @@ use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
 use swarm_runtime::sphinx_agent::SphinxAgent;
 use swarm_runtime::stalker_agent::StalkerAgent;
 use swarm_runtime::startup_attestation::{StartupAttestationFailure, StartupAttestationReport};
+use swarm_runtime::threat_intel_runtime::ThreatIntelFeedRuntimeRegistry;
 use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
 use swarm_runtime::weaver_agent::WeaverAgent;
 use swarm_runtime::whisker_agent::WhiskerAgent;
@@ -698,20 +699,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if cli.serve {
-        let state = IngestState::from_config(cli.config.clone(), config.clone())?
-            .with_startup_attestation(startup_attestation.clone())
-            .with_anti_tamper_report(anti_tamper.clone());
         let approval_harness = DefaultApprovalHarness::from_paths(
             &cli.approval_set_results_dir,
             &cli.approval_ledger_results_dir,
         )?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::channel(10_000);
+        let (bridge_ingest_tx, mut bridge_ingest_rx) =
+            tokio::sync::mpsc::channel::<swarm_core::telemetry::TelemetryEvent>(10_000);
         let telemetry_rx = WhiskerAgent::shared_receiver(telemetry_rx);
         let agent_health = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
         let mode_state = Arc::new(arc_swap::ArcSwap::from_pointee(SwarmModeState::new()));
         let bridge_registry = BridgeRuntimeRegistry::from_config(&config)?;
         let bridge_health = bridge_registry.shared_health();
+        let threat_intel_registry = ThreatIntelFeedRuntimeRegistry::from_config(&config);
+        let threat_intel_feed_health = threat_intel_registry.shared_health();
         let governance_policy = Arc::new(GovernancePolicy::with_persistence(
             GovernancePolicyConfig {
                 contingency_lease_ttl_ms: config.runtime.partition_contingency_lease_ttl_ms,
@@ -723,17 +725,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let identity_store =
             FileAgentKeyStore::open(resolve_agent_key_dir(&cli.config, &config.identity))
                 .map_err(std::io::Error::other)?;
+        let ingest_identity =
+            load_persisted_agent_identity(&identity_store, AgentRole::Whisker, "primary")?;
         let identity_registry = FileAgentIdentityRegistry::open(resolve_identity_registry_dir(
             &cli.config,
             &config.identity,
         ))
         .map_err(std::io::Error::other)?;
         let now_ms = swarm_runtime::runtime_events::now_ms();
+        let state = IngestState::from_config_with_signing_key(
+            cli.config.clone(),
+            config.clone(),
+            ingest_identity.signing_key.clone(),
+        )?
+        .with_startup_attestation(startup_attestation.clone())
+        .with_anti_tamper_report(anti_tamper.clone());
         let state = state
             .with_telemetry_channel(telemetry_tx.clone())
             .with_agent_health(Arc::clone(&agent_health))
             .with_mode_state(Arc::clone(&mode_state))
             .with_bridge_health(bridge_health)
+            .with_threat_intel_feed_health(threat_intel_feed_health)
             .with_shutdown_channel(shutdown_tx.clone())
             .with_runtime_events(runtime_events.clone())
             .with_governance_policy(Arc::clone(&governance_policy))
@@ -943,6 +955,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut dispatcher_handle = Some(tokio::spawn(async move {
             dispatcher.run().await;
         }));
+        let bridge_processing_state = state.clone();
+        let mut bridge_processing_shutdown = shutdown_rx.clone();
+        let mut bridge_processor_handle = Some(tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    changed = bridge_processing_shutdown.changed() => {
+                        if changed.is_err() || *bridge_processing_shutdown.borrow() {
+                            break;
+                        }
+                    }
+                    maybe_event = bridge_ingest_rx.recv() => {
+                        let Some(event) = maybe_event else {
+                            break;
+                        };
+                        let event_id = event.event_id.clone();
+                        let source = event.source.clone();
+                        if let Err(error) = bridge_processing_state.process_bridge_event(event).await {
+                            tracing::warn!(
+                                event_id = %event_id,
+                                source = %source,
+                                reason = %error,
+                                module = module_path!(),
+                                "bridge event processing failed"
+                            );
+                        }
+                    }
+                }
+            }
+        }));
         let mut concentration_monitor = ConcentrationMonitor::new(
             state.current_pheromone_config(),
             Arc::new(state.current_substrate()),
@@ -956,7 +997,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
         let bridge_metrics = state.current_prometheus_metrics();
         let mut bridge_handles =
-            Some(bridge_registry.spawn(telemetry_tx, shutdown_rx.clone(), bridge_metrics));
+            Some(bridge_registry.spawn(bridge_ingest_tx, shutdown_rx.clone(), bridge_metrics));
+        let mut threat_intel_handles =
+            Some(threat_intel_registry.spawn(state.current_substrate(), shutdown_rx.clone()));
         let mut reload_handles = Some(spawn_reload_tasks(state.clone(), shutdown_tx.clone()));
         let anti_tamper_state = state.clone();
         let anti_tamper_shutdown = shutdown_rx.clone();
@@ -981,11 +1024,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(handle) = dispatcher_handle.take() {
                     await_background_task("dispatcher", handle).await;
                 }
+                if let Some(handle) = bridge_processor_handle.take() {
+                    await_background_task("bridge_processor", handle).await;
+                }
                 if let Some(handle) = monitor_handle.take() {
                     await_background_task("concentration_monitor", handle).await;
                 }
                 if let Some(handles) = bridge_handles.take() {
                     await_background_tasks("bridge", handles).await;
+                }
+                if let Some(handles) = threat_intel_handles.take() {
+                    await_background_tasks("threat_intel_feed", handles).await;
                 }
                 if let Some(handles) = reload_handles.take() {
                     await_reload_tasks(handles).await;
@@ -1030,11 +1079,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(handle) = dispatcher_handle.take() {
                     await_background_task("dispatcher", handle).await;
                 }
+                if let Some(handle) = bridge_processor_handle.take() {
+                    await_background_task("bridge_processor", handle).await;
+                }
                 if let Some(handle) = monitor_handle.take() {
                     await_background_task("concentration_monitor", handle).await;
                 }
                 if let Some(handles) = bridge_handles.take() {
                     await_background_tasks("bridge", handles).await;
+                }
+                if let Some(handles) = threat_intel_handles.take() {
+                    await_background_tasks("threat_intel_feed", handles).await;
                 }
                 if let Some(handles) = reload_handles.take() {
                     await_reload_tasks(handles).await;

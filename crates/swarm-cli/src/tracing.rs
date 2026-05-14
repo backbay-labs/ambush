@@ -28,7 +28,13 @@ pub fn init_tracing(
     service_name: &str,
     otlp_endpoint: Option<&str>,
 ) -> Result<TracingGuard, Box<dyn std::error::Error>> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let default_filter = if service_name == "swarmctl" {
+        "warn"
+    } else {
+        "info"
+    };
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     let fmt_layer = fmt::layer()
         .json()
         .flatten_event(true)

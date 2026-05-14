@@ -2,6 +2,7 @@ mod demo;
 mod health;
 mod platform_api;
 mod providence_handlers;
+mod soar_verdict_handlers;
 
 // Re-export the public API that was previously accessible as `crate::ingest::*`
 pub use demo::{
@@ -39,6 +40,7 @@ use crate::evolution::{
     StrategyGenome,
 };
 use crate::evolution_status::DefaultEvolutionStatusHarness;
+use crate::http::rate_limit::HttpRateLimiter;
 use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use crate::mutation::DefaultEvolutionMutationHarness;
 use crate::providence::{
@@ -55,8 +57,9 @@ use crate::service::{
     derive_runtime_degradation_status,
 };
 use crate::startup_attestation::StartupAttestationReport;
+use crate::threat_intel_runtime::SharedThreatIntelFeedHealth;
 use crate::tom_agent::GovernancePolicy;
-use crate::{RuntimeError, StrategyProposalRouteError};
+use crate::{RuntimeError, StrategyProposalRouteError, SwarmRuntime};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use axum::extract::{Json, State, rejection::JsonRejection};
@@ -102,11 +105,17 @@ use providence_handlers::{build_providence_notification_payload, publish_runtime
 
 type IngestRuntimeStack =
     ConfiguredRuntimeStack<ConfigurableApprovalGate, DispatchingExecutor, SummaryInvestigator>;
+type IngestRequestRuntime = SwarmRuntime<ConfigurableApprovalGate, DispatchingExecutor>;
+type IngestBuiltRuntime = (
+    Arc<IngestRuntimeStack>,
+    Arc<IngestRequestRuntime>,
+    Arc<CompositeDetector>,
+);
 
 type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send + Sync>;
 
 struct IngestRuntimeRequestResponseRouter {
-    stack: Arc<ArcSwap<IngestRuntimeStack>>,
+    runtime: Arc<ArcSwap<IngestRequestRuntime>>,
 }
 
 #[async_trait]
@@ -115,13 +124,10 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
         &self,
         request: ActionRequest,
     ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
-        let stack = self.stack.load_full();
-        let context =
-            approval_context_now(stack.service.runtime.mode() == RuntimeMode::LiveResponse);
+        let runtime = self.runtime.load_full();
+        let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
         let detection = routed_detection_from_request(&request);
-        stack
-            .service
-            .runtime
+        runtime
             .audit_authorize_and_execute(&detection, &request, &context)
             .await
     }
@@ -130,11 +136,10 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
         &self,
         veto: GovernanceVetoRoute,
     ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
-        let stack = self.stack.load_full();
-        let context =
-            approval_context_now(stack.service.runtime.mode() == RuntimeMode::LiveResponse);
+        let runtime = self.runtime.load_full();
+        let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
         let detection = routed_detection_from_request(&veto.request);
-        Ok(stack.service.runtime.audit_governance_veto(
+        Ok(runtime.audit_governance_veto(
             &detection,
             &veto.request,
             &context,
@@ -147,6 +152,7 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
 struct IngestRuntimeStrategyProposalRouter {
     stack: Arc<ArcSwap<IngestRuntimeStack>>,
     config_path: Arc<PathBuf>,
+    signing_key: ed25519_dalek::SigningKey,
     runtime_events: Option<RuntimeEventBroadcaster>,
 }
 
@@ -236,6 +242,7 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            self.signing_key.clone(),
         )?;
         let ranking = mutation.load_ranking(&payload.ranking_id)?.ok_or_else(|| {
             StrategyProposalRouteError::MissingArtifact {
@@ -1009,8 +1016,9 @@ async fn process_runtime_event(
     swarm_core::observability::with_trace_id(
         trace_id,
         async {
+            let live_mode = state.stack.load_full().service.mode() == RuntimeMode::LiveResponse;
             let approval = ApprovalContext {
-                live_mode: false,
+                live_mode,
                 receipt_chain: Vec::new(),
                 correlation_id: Some(correlation_id.to_string()),
                 now_ms: event.timestamp,
@@ -1018,6 +1026,7 @@ async fn process_runtime_event(
             let signing_agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
             let stack = state.stack.load_full();
             let detector = state.detector.load_full();
+            let swarm_mode = state.current_mode_state().current;
             match stack
                 .process_event_with_finding_observer(
                     detector.as_ref(),
@@ -1027,7 +1036,15 @@ async fn process_runtime_event(
                         approval: &approval,
                         signing_key: &state.signing_key,
                     },
-                    |_| None,
+                    |finding| {
+                        if live_mode {
+                            stack
+                                .service
+                                .playbook_action_for_finding(finding, swarm_mode)
+                        } else {
+                            None
+                        }
+                    },
                     |event, findings| publish_runtime_findings(state, event, findings),
                 )
                 .await
@@ -1105,15 +1122,15 @@ async fn process_demo_replay_step(
     step_index: usize,
     step: crate::replay::ReplayScenarioStep,
 ) -> Result<(), IngestProcessingError> {
+    let stack = state.stack.load_full();
     let approval = ApprovalContext {
-        live_mode: state.stack.load_full().service.runtime.mode() == RuntimeMode::LiveResponse,
+        live_mode: stack.service.mode() == RuntimeMode::LiveResponse,
         receipt_chain: Vec::new(),
         correlation_id: Some(run_id.to_string()),
         now_ms: step.event.timestamp,
     };
     let replay_action = step.action.clone();
     let signing_agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
-    let stack = state.stack.load_full();
     let detector = state.detector.load_full();
     let outcome = stack
         .process_event_with_finding_observer(
@@ -1283,6 +1300,8 @@ enum IngestProcessingError {
 #[derive(Clone)]
 pub struct IngestState {
     stack: Arc<ArcSwap<IngestRuntimeStack>>,
+    platform_api_rate_limiter: HttpRateLimiter,
+    request_runtime: Arc<ArcSwap<IngestRequestRuntime>>,
     detector: Arc<ArcSwap<CompositeDetector>>,
     detector_status: Arc<ArcSwap<DetectorRuntimeStatus>>,
     config_path: Arc<PathBuf>,
@@ -1292,6 +1311,7 @@ pub struct IngestState {
     agent_dispatcher_health: Option<Arc<ArcSwap<Vec<AgentHealthEntry>>>>,
     mode_state: Option<Arc<ArcSwap<SwarmModeState>>>,
     bridge_health: Option<SharedBridgeHealth>,
+    threat_intel_feed_health: Option<SharedThreatIntelFeedHealth>,
     shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
     heap_snapshot_provider: HeapSnapshotProvider,
     signing_key: ed25519_dalek::SigningKey,
@@ -1307,20 +1327,31 @@ pub struct IngestState {
 }
 
 impl IngestState {
-    fn build_runtime(
-        config: SwarmConfig,
-    ) -> Result<(Arc<IngestRuntimeStack>, Arc<CompositeDetector>), IngestBuildError> {
+    fn build_runtime(config: SwarmConfig) -> Result<IngestBuiltRuntime, IngestBuildError> {
         let detector = Arc::new(build_composite_detector(&config.detection)?);
         let stack = Arc::new(ConfiguredRuntimeStack::from_config(
             config,
             SummaryInvestigator,
         )?);
-        Ok((stack, detector))
+        let request_runtime = stack.service.shared_runtime();
+        Ok((stack, request_runtime, detector))
     }
 
     pub fn from_config(
         config_path: impl Into<PathBuf>,
         config: SwarmConfig,
+    ) -> Result<Self, IngestBuildError> {
+        Self::from_config_with_signing_key(
+            config_path,
+            config,
+            ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng),
+        )
+    }
+
+    pub fn from_config_with_signing_key(
+        config_path: impl Into<PathBuf>,
+        config: SwarmConfig,
+        signing_key: ed25519_dalek::SigningKey,
     ) -> Result<Self, IngestBuildError> {
         let config_path = config_path.into();
         let template = config.clone();
@@ -1341,12 +1372,17 @@ impl IngestState {
             .transpose()?
             .map(Arc::new);
         let strategy = strategy_status_label(&resolved);
-        let (stack, detector) = Self::build_runtime(resolved)?;
+        let (stack, request_runtime, detector) = Self::build_runtime(resolved)?;
         let detector_status = Arc::new(ArcSwap::from(Arc::new(DetectorRuntimeStatus::loaded(
             strategy,
         ))));
         let state = Self {
             stack: Arc::new(ArcSwap::from(stack)),
+            platform_api_rate_limiter: HttpRateLimiter::new(
+                "platform_api",
+                template.platform_api.rate_limit.clone(),
+            ),
+            request_runtime: Arc::new(ArcSwap::from(request_runtime)),
             detector: Arc::new(ArcSwap::from(detector)),
             detector_status,
             config_path: Arc::new(config_path),
@@ -1356,9 +1392,10 @@ impl IngestState {
             agent_dispatcher_health: None,
             mode_state: None,
             bridge_health: None,
+            threat_intel_feed_health: None,
             shutdown_tx: None,
             heap_snapshot_provider: Arc::new(sample_heap_pressure),
-            signing_key: ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng),
+            signing_key,
             runtime_events: None,
             approval_harness: None,
             demo_runs: Arc::new(Mutex::new(DemoRunRegistry::default())),
@@ -1396,8 +1433,9 @@ impl IngestState {
     pub fn reload(&self, config: SwarmConfig) -> Result<(), IngestBuildError> {
         let strategy = strategy_status_label(&config);
         match Self::build_runtime(config) {
-            Ok((stack, detector)) => {
+            Ok((stack, request_runtime, detector)) => {
                 self.detector.store(detector);
+                self.request_runtime.store(request_runtime);
                 self.stack.store(stack);
                 self.detector_status
                     .store(Arc::new(DetectorRuntimeStatus::loaded(strategy)));
@@ -1566,6 +1604,11 @@ impl IngestState {
         self
     }
 
+    pub fn with_threat_intel_feed_health(mut self, health: SharedThreatIntelFeedHealth) -> Self {
+        self.threat_intel_feed_health = Some(health);
+        self
+    }
+
     pub fn with_shutdown_channel(mut self, tx: tokio::sync::watch::Sender<bool>) -> Self {
         self.shutdown_tx = Some(tx);
         self.maybe_start_providence_sync_task();
@@ -1629,7 +1672,7 @@ impl IngestState {
 
     pub fn current_request_response_router(&self) -> Arc<dyn RequestResponseRouter> {
         Arc::new(IngestRuntimeRequestResponseRouter {
-            stack: Arc::clone(&self.stack),
+            runtime: Arc::clone(&self.request_runtime),
         })
     }
 
@@ -1637,6 +1680,7 @@ impl IngestState {
         Arc::new(IngestRuntimeStrategyProposalRouter {
             stack: Arc::clone(&self.stack),
             config_path: Arc::clone(&self.config_path),
+            signing_key: self.signing_key.clone(),
             runtime_events: self.runtime_events.clone(),
         })
     }
@@ -1691,6 +1735,14 @@ impl IngestState {
             .map(RuntimeEventBroadcaster::subscribe)
     }
 
+    pub async fn process_bridge_event(&self, event: TelemetryEvent) -> Result<(), String> {
+        let requested_by = AgentId::from_verifying_key(&self.signing_key.verifying_key());
+        let correlation_id = format!("bridge:{}:{}", event.source, event.event_id);
+        process_runtime_event(self, &requested_by, &correlation_id, event)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     pub fn publish_runtime_event(&self, event: RuntimeEvent) {
         if let Some(runtime_events) = &self.runtime_events {
             runtime_events.publish(event);
@@ -1706,7 +1758,7 @@ impl IngestState {
     }
 
     pub fn current_runtime_mode(&self) -> RuntimeMode {
-        self.stack.load_full().service.mode()
+        self.request_runtime.load_full().mode()
     }
 
     pub fn current_anti_tamper_config(&self) -> RuntimeAntiTamperConfig {
@@ -2335,6 +2387,10 @@ pub fn detect_http_router(state: IngestState) -> Router {
         .route(
             "/v1/providence/feedback",
             post(providence_handlers::providence_feedback_handler),
+        )
+        .route(
+            "/v1/soar/verdicts",
+            post(soar_verdict_handlers::soar_verdict_handler),
         )
         .route("/v1/events/stream", get(demo::runtime_events_handler))
         .nest("/api/v1", platform_api::legacy_evasion_api_router(&state))

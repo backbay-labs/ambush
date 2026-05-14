@@ -11,11 +11,12 @@ use swarm_crypto::{
     DetachedSignature, canonical_json_bytes, sha256_hex, verify_detached_signature,
 };
 use swarm_whisker::{
-    BehavioralAnomalyProfile, CredentialAccessProfile, DnsExfiltrationProfile,
-    FilelessExecutionProfile, InfrastructureAnomalyProfile, LateralMovementProfile,
-    NetworkConnectProfile, PersistenceProfile, ProfileValidationError, SupplyChainProfile,
-    SuspiciousProcessTreeProfile, SuspiciousScriptingProfile,
+    BehavioralAnomalyProfile, CloudTrailProfile, CredentialAccessProfile, DnsExfiltrationProfile,
+    FilelessExecutionProfile, InfrastructureAnomalyProfile, KubernetesAuditProfile,
+    LateralMovementProfile, NetworkConnectProfile, PersistenceProfile, ProfileValidationError,
+    SupplyChainProfile, SuspiciousProcessTreeProfile, SuspiciousScriptingProfile,
 };
+use zeroize::{Zeroize, Zeroizing};
 
 pub use swarm_core::config::{
     CanaryConfig, CircuitBreakerConfig, CloudTrailBridgeConfig, ConfigValidationError,
@@ -25,7 +26,7 @@ pub use swarm_core::config::{
     IdentityConfig, InvestigationConfig, JsonFileSourceConfig, NotificationChannelConfig,
     NotificationRateLimitConfig, NotificationRoutingConfig, OperatorAuthConfig,
     OperatorSurfaceConfig, PheromoneConfig, PolicyConfig, PromotionConfig, ResponseAdapterConfig,
-    RetryConfig, RoutingRule, RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings,
+    RetryConfig, RoutingRule, RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings, SecretString,
     SentinelBridgeConfig, SiemForwardConfig, SwarmConfig, TelemetryBridgeConfig,
     TelemetrySourceConfig, TemporalEventWindowConfig, TetragonBridgeConfig, WebhookConfig,
 };
@@ -63,7 +64,7 @@ pub enum SecretResolutionError {
 }
 
 pub trait SwarmSecretProvider: Send + Sync {
-    fn resolve(&self, reference: &str) -> Result<String, SecretResolutionError>;
+    fn resolve(&self, reference: &str) -> Result<SecretString, SecretResolutionError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -78,7 +79,7 @@ impl FileEnvSecretProvider {
 }
 
 impl SwarmSecretProvider for FileEnvSecretProvider {
-    fn resolve(&self, reference: &str) -> Result<String, SecretResolutionError> {
+    fn resolve(&self, reference: &str) -> Result<SecretString, SecretResolutionError> {
         const PREFIX: &str = "@secret:";
         let Some(reference) = reference.strip_prefix(PREFIX) else {
             return Err(SecretResolutionError::InvalidReference {
@@ -95,17 +96,19 @@ impl SwarmSecretProvider for FileEnvSecretProvider {
                     reason: "environment secret name must not be empty".to_string(),
                 });
             }
-            let value = env::var(env_var).map_err(|_| SecretResolutionError::MissingEnvVar {
-                env_var: env_var.to_string(),
-            })?;
-            let trimmed = value.trim_end_matches(['\r', '\n']);
-            if trimmed.is_empty() {
+            let mut value = Zeroizing::new(env::var(env_var).map_err(|_| {
+                SecretResolutionError::MissingEnvVar {
+                    env_var: env_var.to_string(),
+                }
+            })?);
+            trim_secret_buffer(&mut value);
+            if value.is_empty() {
                 return Err(SecretResolutionError::InvalidReference {
                     reference: format!("{PREFIX}{reference}"),
                     reason: "resolved environment secret must not be empty".to_string(),
                 });
             }
-            return Ok(trimmed.to_string());
+            return Ok(take_secret_string(&mut value));
         }
 
         let secret_name = reference.trim();
@@ -124,20 +127,33 @@ impl SwarmSecretProvider for FileEnvSecretProvider {
         };
         let path =
             canonical_secret_file_path(secret_dir, secret_name, &format!("{PREFIX}{reference}"))?;
-        let value =
-            fs::read_to_string(&path).map_err(|source| SecretResolutionError::ReadFile {
+        let mut value = Zeroizing::new(fs::read_to_string(&path).map_err(|source| {
+            SecretResolutionError::ReadFile {
                 path: path.clone(),
                 source,
-            })?;
-        let trimmed = value.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
+            }
+        })?);
+        trim_secret_buffer(&mut value);
+        if value.is_empty() {
             return Err(SecretResolutionError::InvalidReference {
                 reference: format!("{PREFIX}{reference}"),
                 reason: format!("resolved secret file `{}` is empty", path.display()),
             });
         }
-        Ok(trimmed.to_string())
+        Ok(take_secret_string(&mut value))
     }
+}
+
+fn trim_secret_buffer(buffer: &mut String) {
+    while matches!(buffer.as_bytes().last(), Some(b'\n' | b'\r')) {
+        buffer.pop();
+    }
+}
+
+fn take_secret_string(buffer: &mut Zeroizing<String>) -> SecretString {
+    let secret = SecretString::from(buffer.as_str());
+    buffer.zeroize();
+    secret
 }
 
 fn validate_secret_name(secret_name: &str, reference: &str) -> Result<(), SecretResolutionError> {
@@ -504,10 +520,17 @@ fn read_config_signature_sidecar(
 }
 
 fn active_config_signature_trust_roots() -> Vec<ConfigSignatureTrustRoot> {
-    let mut roots = vec![ConfigSignatureTrustRoot::production()];
+    let roots = vec![ConfigSignatureTrustRoot::production()];
     #[cfg(debug_assertions)]
-    roots.push(ConfigSignatureTrustRoot::debug_test());
-    roots
+    {
+        let mut roots = roots;
+        roots.push(ConfigSignatureTrustRoot::debug_test());
+        roots
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        roots
+    }
 }
 
 /// Parse and validate a runtime config from raw YAML.
@@ -690,6 +713,25 @@ pub fn resolve_outbound_secrets(
                         reason: error.to_string(),
                     }
                 })?;
+            }
+        }
+        ResponseAdapterConfig::CrowdStrikeRtr { config: response } => {
+            if is_secret_reference(&response.client_id) {
+                response.client_id = provider.resolve(&response.client_id).map_err(|error| {
+                    ConfigValidationError::InvalidField {
+                        field: "response_adapter.client_id",
+                        reason: error.to_string(),
+                    }
+                })?;
+            }
+            if is_secret_reference(&response.client_secret) {
+                response.client_secret =
+                    provider.resolve(&response.client_secret).map_err(|error| {
+                        ConfigValidationError::InvalidField {
+                            field: "response_adapter.client_secret",
+                            reason: error.to_string(),
+                        }
+                    })?;
             }
         }
         ResponseAdapterConfig::Webhook { config: response } => {
@@ -955,6 +997,36 @@ pub(crate) fn infrastructure_anomaly_profile(
     )
 }
 
+pub(crate) fn cloudtrail_profile(
+    config: &DetectionConfig,
+) -> Result<CloudTrailProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "cloudtrail",
+        CloudTrailProfile {
+            high_confidence_threshold: config.high_confidence_threshold,
+            medium_confidence_threshold: config.medium_confidence_threshold,
+            ..CloudTrailProfile::default()
+        },
+        config.profiles.cloudtrail.as_ref(),
+        CloudTrailProfile::validate,
+    )
+}
+
+pub(crate) fn kubernetes_audit_profile(
+    config: &DetectionConfig,
+) -> Result<KubernetesAuditProfile, DetectorProfileError> {
+    resolve_detector_profile(
+        "kubernetes_audit",
+        KubernetesAuditProfile {
+            high_confidence_threshold: config.high_confidence_threshold,
+            medium_confidence_threshold: config.medium_confidence_threshold,
+            ..KubernetesAuditProfile::default()
+        },
+        config.profiles.kubernetes_audit.as_ref(),
+        KubernetesAuditProfile::validate,
+    )
+}
+
 pub(crate) fn validate_detector_profiles(
     config: &DetectionConfig,
 ) -> Result<(), DetectorProfileError> {
@@ -993,6 +1065,12 @@ pub(crate) fn validate_detector_profiles(
     }
     if config.profiles.infrastructure_anomaly.is_some() {
         infrastructure_anomaly_profile(config)?;
+    }
+    if config.profiles.cloudtrail.is_some() {
+        cloudtrail_profile(config)?;
+    }
+    if config.profiles.kubernetes_audit.is_some() {
+        kubernetes_audit_profile(config)?;
     }
     Ok(())
 }
@@ -1037,6 +1115,12 @@ pub(crate) fn validate_all_detector_profiles(
             }
             "infrastructure_anomaly" => {
                 infrastructure_anomaly_profile(config)?;
+            }
+            "cloudtrail" => {
+                cloudtrail_profile(config)?;
+            }
+            "kubernetes_audit" => {
+                kubernetes_audit_profile(config)?;
             }
             _ => {}
         }
@@ -2273,7 +2357,7 @@ response_adapter:
         let config = load_config(&config_path).unwrap();
         match config.response_adapter {
             swarm_core::config::ResponseAdapterConfig::HttpEdr { config } => {
-                assert_eq!(config.auth_token, "file-secret");
+                assert_eq!(config.auth_token.expose_secret(), "file-secret");
             }
             other => panic!("expected http edr config, got {other:?}"),
         }
@@ -2596,7 +2680,7 @@ notification_channels:
             channel
                 .request_signature
                 .as_ref()
-                .map(|signature| signature.secret.as_str()),
+                .map(|signature| signature.secret.expose_secret()),
             Some("resolved-providence-hmac")
         );
 
