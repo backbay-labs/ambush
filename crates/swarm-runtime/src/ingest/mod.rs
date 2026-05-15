@@ -1013,10 +1013,13 @@ async fn process_runtime_event(
         requested_by = %requested_by.0
     );
 
+    let degradation = state.current_runtime_degradation().await;
     swarm_core::observability::with_trace_id(
         trace_id,
         async {
-            let live_mode = state.stack.load_full().service.mode() == RuntimeMode::LiveResponse;
+            let configured_live_mode =
+                state.stack.load_full().service.mode() == RuntimeMode::LiveResponse;
+            let live_mode = configured_live_mode && degradation.capabilities.allows_live_response;
             let approval = ApprovalContext {
                 live_mode,
                 receipt_chain: Vec::new(),
@@ -1432,11 +1435,14 @@ impl IngestState {
 
     pub fn reload(&self, config: SwarmConfig) -> Result<(), IngestBuildError> {
         let strategy = strategy_status_label(&config);
+        let platform_rate_limit = config.platform_api.rate_limit.clone();
         match Self::build_runtime(config) {
             Ok((stack, request_runtime, detector)) => {
                 self.detector.store(detector);
                 self.request_runtime.store(request_runtime);
                 self.stack.store(stack);
+                self.platform_api_rate_limiter
+                    .update_config(platform_rate_limit);
                 self.detector_status
                     .store(Arc::new(DetectorRuntimeStatus::loaded(strategy)));
                 self.install_notification_payload_builder();
@@ -1736,6 +1742,22 @@ impl IngestState {
     }
 
     pub async fn process_bridge_event(&self, event: TelemetryEvent) -> Result<(), String> {
+        let degradation = self.current_runtime_degradation().await;
+        if !degradation.capabilities.accepts_ingest {
+            tracing::warn!(
+                module = module_path!(),
+                source = %event.source,
+                event_id = %event.event_id,
+                level = degradation.level.as_str(),
+                summary = %degradation.summary,
+                "bridge event rejected by runtime degradation gate"
+            );
+            return Err(format!(
+                "runtime degradation level `{}` is not accepting ingest: {}",
+                degradation.level.as_str(),
+                degradation.summary
+            ));
+        }
         let requested_by = AgentId::from_verifying_key(&self.signing_key.verifying_key());
         let correlation_id = format!("bridge:{}:{}", event.source, event.event_id);
         process_runtime_event(self, &requested_by, &correlation_id, event)

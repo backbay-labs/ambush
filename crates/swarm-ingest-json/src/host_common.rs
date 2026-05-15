@@ -12,15 +12,27 @@ pub(crate) fn first_value<'a>(record: &'a Value, pointers: &[&str]) -> Option<&'
 }
 
 pub(crate) fn first_string(record: &Value, pointers: &[&str]) -> Option<String> {
-    first_value(record, pointers).and_then(value_to_string)
+    pointers
+        .iter()
+        .filter_map(|pointer| record.pointer(pointer).and_then(value_to_string))
+        .find(|value| !is_placeholder_string(value))
 }
 
 pub(crate) fn first_bool(record: &Value, pointers: &[&str]) -> Option<bool> {
-    first_value(record, pointers).and_then(value_to_bool)
+    pointers
+        .iter()
+        .find_map(|pointer| record.pointer(pointer).and_then(value_to_bool))
 }
 
 pub(crate) fn first_u16(record: &Value, pointers: &[&str]) -> Option<u16> {
-    first_value(record, pointers).and_then(value_to_u16)
+    pointers
+        .iter()
+        .find_map(|pointer| record.pointer(pointer).and_then(value_to_u16))
+}
+
+fn is_placeholder_string(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.is_empty() || trimmed == "-"
 }
 
 pub(crate) fn required_string(

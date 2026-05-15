@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use arc_swap::ArcSwap;
 use axum::http::HeaderMap;
 use swarm_core::config::HttpRateLimitConfig;
 
@@ -13,7 +14,7 @@ const MAX_RECENT_VIOLATIONS: usize = 64;
 #[derive(Debug, Clone)]
 pub struct HttpRateLimiter {
     surface: &'static str,
-    config: HttpRateLimitConfig,
+    config: Arc<ArcSwap<HttpRateLimitConfig>>,
     state: Arc<Mutex<HttpRateLimiterState>>,
 }
 
@@ -42,9 +43,13 @@ impl HttpRateLimiter {
     pub fn new(surface: &'static str, config: HttpRateLimitConfig) -> Self {
         Self {
             surface,
-            config,
+            config: Arc::new(ArcSwap::from_pointee(config)),
             state: Arc::new(Mutex::new(HttpRateLimiterState::default())),
         }
+    }
+
+    pub fn update_config(&self, config: HttpRateLimitConfig) {
+        self.config.store(Arc::new(config));
     }
 
     pub fn check_request(
@@ -54,15 +59,16 @@ impl HttpRateLimiter {
         path: &str,
         now_ms: i64,
     ) -> Result<(), HttpRateLimitRejection> {
-        let source = request_source(headers, peer_addr, self.config.trust_forwarded_headers);
-        self.check_source(source, path.to_string(), now_ms)
+        let config = self.config.load_full();
+        let source = request_source(headers, peer_addr, config.trust_forwarded_headers);
+        self.check_source(source, path.to_string(), now_ms, &config)
     }
 
     pub fn status(&self) -> HttpRateLimitStatus {
         let state = self.lock_state();
         HttpRateLimitStatus {
             surface: self.surface.to_string(),
-            config: self.config.clone(),
+            config: self.config.load_full().as_ref().clone(),
             recent_violations: state.recent_violations.iter().cloned().collect(),
         }
     }
@@ -72,18 +78,19 @@ impl HttpRateLimiter {
         source: String,
         path: String,
         now_ms: i64,
+        config: &HttpRateLimitConfig,
     ) -> Result<(), HttpRateLimitRejection> {
         let mut state = self.lock_state();
         let rejection = {
             let source_state = state.sources.entry(source.clone()).or_default();
-            prune_window(&mut source_state.burst, now_ms, self.config.burst_window_ms);
+            prune_window(&mut source_state.burst, now_ms, config.burst_window_ms);
             prune_window(
                 &mut source_state.sustained,
                 now_ms,
-                self.config.sustained_window_ms,
+                config.sustained_window_ms,
             );
 
-            if source_state.burst.len() >= self.config.burst_max_requests {
+            if source_state.burst.len() >= config.burst_max_requests {
                 Some(HttpRateLimitRejection {
                     source,
                     path,
@@ -91,10 +98,10 @@ impl HttpRateLimiter {
                     retry_after_ms: retry_after_ms(
                         &source_state.burst,
                         now_ms,
-                        self.config.burst_window_ms,
+                        config.burst_window_ms,
                     ),
                 })
-            } else if source_state.sustained.len() >= self.config.sustained_max_requests {
+            } else if source_state.sustained.len() >= config.sustained_max_requests {
                 Some(HttpRateLimitRejection {
                     source,
                     path,
@@ -102,7 +109,7 @@ impl HttpRateLimiter {
                     retry_after_ms: retry_after_ms(
                         &source_state.sustained,
                         now_ms,
-                        self.config.sustained_window_ms,
+                        config.sustained_window_ms,
                     ),
                 })
             } else {
@@ -115,7 +122,7 @@ impl HttpRateLimiter {
 
         if let Some(rejection) = rejection {
             push_violation(&mut state.recent_violations, &rejection, now_ms);
-            compact_sources(&mut state.sources, now_ms, &self.config);
+            compact_sources(&mut state.sources, now_ms, config);
             tracing::warn!(
                 surface = self.surface,
                 source = %rejection.source,
@@ -127,7 +134,7 @@ impl HttpRateLimiter {
             return Err(rejection);
         }
 
-        compact_sources(&mut state.sources, now_ms, &self.config);
+        compact_sources(&mut state.sources, now_ms, config);
         Ok(())
     }
 
