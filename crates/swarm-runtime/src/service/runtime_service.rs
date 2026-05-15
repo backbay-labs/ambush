@@ -352,7 +352,7 @@ where
                     }
                 }
 
-                let Some(primary_finding) = findings.first().cloned() else {
+                if findings.is_empty() {
                     tracing::info!(
                         correlation_id = %approval_correlation_id(execution.approval),
                         event_id = %event.event_id,
@@ -360,14 +360,18 @@ where
                         "no findings emitted for event"
                     );
                     return Ok(None);
-                };
+                }
 
-                let Some(action) = request_builder(&primary_finding) else {
+                let Some((primary_finding, action)) = findings
+                    .iter()
+                    .find_map(|finding| request_builder(finding).map(|action| (finding.clone(), action)))
+                else {
                     tracing::info!(
                         correlation_id = %approval_correlation_id(execution.approval),
-                        event_id = %primary_finding.event_id,
+                        event_id = %event.event_id,
                         module = module_path!(),
-                        "no action proposed for finding"
+                        finding_count = findings.len(),
+                        "no playbook action proposed for any finding on event"
                     );
                     return Ok(None);
                 };

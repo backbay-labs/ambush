@@ -152,7 +152,7 @@ assert "swarm_adapter_outcomes_total{outcome=\"success\"} 1" in metrics
 assert any(entry["path"] == "/oauth2/token" for entry in crowdstrike)
 assert any(
     entry["path"] == "/devices/entities/devices-actions/v2"
-    and entry["query"].get("action_name") == ["isolate"]
+    and entry["query"].get("action_name") == ["contain"]
     and entry["body"]["ids"] == ["host-1"]
     for entry in crowdstrike
 )

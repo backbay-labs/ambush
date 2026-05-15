@@ -1129,7 +1129,10 @@ async fn process_demo_replay_step(
         live_mode: stack.service.mode() == RuntimeMode::LiveResponse,
         receipt_chain: Vec::new(),
         correlation_id: Some(run_id.to_string()),
-        now_ms: now_ms(),
+        // Demo replay re-evaluates historical scenarios at the recorded event
+        // time so approval correlation stays deterministic across re-runs.
+        // Live ingest uses wall-clock `now_ms()` in `process_runtime_event`.
+        now_ms: step.event.timestamp,
     };
     let replay_action = step.action.clone();
     let signing_agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
@@ -1554,9 +1557,6 @@ impl IngestState {
     }
 
     fn maybe_start_providence_sync_task(&self) {
-        let Some(adapter) = self.providence_adapter.load_full().as_ref().clone() else {
-            return;
-        };
         let Some(mode_state) = self.mode_state.clone() else {
             return;
         };
@@ -1571,6 +1571,7 @@ impl IngestState {
             return;
         }
         let stack = Arc::clone(&self.stack);
+        let providence_adapter = Arc::clone(&self.providence_adapter);
         let agent_health = self.agent_dispatcher_health.clone();
         let bridge_health = self.bridge_health.clone();
         tokio::spawn(async move {
@@ -1585,6 +1586,15 @@ impl IngestState {
                         }
                     }
                     _ = interval.tick() => {
+                        // Load the adapter from the live ArcSwap each tick so reload
+                        // additions/rotations of `providence_webhook` propagate without
+                        // restarting the task; skip the tick when Providence is not
+                        // currently configured.
+                        let Some(adapter) =
+                            providence_adapter.load_full().as_ref().clone()
+                        else {
+                            continue;
+                        };
                         let stack = stack.load_full();
                         let runtime = ProvidenceRuntimeContext {
                             operator: stack.service.config.operator.clone(),
