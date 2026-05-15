@@ -187,7 +187,7 @@ impl CloudTrailDetector {
                 "Resource Hijacking",
                 "impact",
                 json!({
-                    "instance_type": json_string_pointer(&cloudtrail.request_parameters, "/instanceType"),
+                    "instance_type": run_instances_instance_type(cloudtrail),
                     "image_id": json_string_pointer(&cloudtrail.request_parameters, "/imageId"),
                 }),
             ));
@@ -207,7 +207,7 @@ impl CloudTrailDetector {
                 "Resource Hijacking",
                 "impact",
                 json!({
-                    "instance_type": json_string_pointer(&cloudtrail.request_parameters, "/instanceType"),
+                    "instance_type": run_instances_instance_type(cloudtrail),
                 }),
             ));
         }
@@ -388,14 +388,13 @@ impl CloudTrailDetector {
         principal: &str,
         cloudtrail: &CloudTrailEvent,
     ) -> bool {
-        let Some(instance_type) =
-            json_string_pointer(&cloudtrail.request_parameters, "/instanceType")
-                .map(normalize)
-                .filter(|value| {
-                    self.large_instance_prefixes
-                        .iter()
-                        .any(|prefix| value.starts_with(prefix))
-                })
+        let Some(instance_type) = run_instances_instance_type(cloudtrail)
+            .map(|value| normalize(&value))
+            .filter(|value| {
+                self.large_instance_prefixes
+                    .iter()
+                    .any(|prefix| value.starts_with(prefix))
+            })
         else {
             return false;
         };
@@ -446,8 +445,7 @@ impl CloudTrailDetector {
                 .insert(normalize(source_ip));
         }
         if event_name == "runinstances"
-            && let Some(instance_type) =
-                json_string_pointer(&cloudtrail.request_parameters, "/instanceType")
+            && let Some(instance_type) = run_instances_instance_type(cloudtrail)
         {
             guard
                 .instance_types_by_principal
@@ -554,6 +552,25 @@ fn principal_key(cloudtrail: &CloudTrailEvent) -> String {
         .map(normalize)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn run_instances_instance_type(cloudtrail: &CloudTrailEvent) -> Option<String> {
+    if let Some(value) = json_string_pointer(&cloudtrail.request_parameters, "/instanceType") {
+        return Some(value);
+    }
+    cloudtrail
+        .request_parameters
+        .pointer("/instancesSet/items")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find_map(|item| {
+                item.get("instanceType").and_then(|value| match value {
+                    Value::String(value) => Some(value.to_string()),
+                    Value::Number(value) => Some(value.to_string()),
+                    _ => None,
+                })
+            })
+        })
 }
 
 fn json_string_pointer(root: &Value, pointer: &str) -> Option<String> {

@@ -283,8 +283,20 @@ fn is_auth_record(record_type: &str) -> bool {
 }
 
 fn auth_success(record: &Value) -> bool {
-    if first_string(record, &["/success"]).is_some_and(|value| value == "0") {
-        return false;
+    if let Some(value) = first_string(record, &["/success"]) {
+        let trimmed = value.trim();
+        if trimmed == "0"
+            || trimmed.eq_ignore_ascii_case("no")
+            || trimmed.eq_ignore_ascii_case("false")
+        {
+            return false;
+        }
+        if trimmed == "1"
+            || trimmed.eq_ignore_ascii_case("yes")
+            || trimmed.eq_ignore_ascii_case("true")
+        {
+            return true;
+        }
     }
 
     sanitize_optional_string(first_string(record, &["/res", "/result"])).is_none_or(|value| {

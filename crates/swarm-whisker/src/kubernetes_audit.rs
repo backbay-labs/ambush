@@ -89,6 +89,12 @@ impl KubernetesAuditDetector {
         event: &TelemetryEvent,
         audit: &KubernetesAuditEvent,
     ) -> Vec<DetectionFinding> {
+        let stage = audit.stage.as_deref().unwrap_or_default();
+        let response_code = audit.response_code.unwrap_or_default();
+        if !stage.eq_ignore_ascii_case("ResponseComplete") || !(200..300).contains(&response_code) {
+            return Vec::new();
+        }
+
         let mut findings = Vec::new();
 
         if self.role_binding_to_privileged_role(audit) {
@@ -201,7 +207,7 @@ impl KubernetesAuditDetector {
         }
 
         DetectionFinding {
-            finding_id: format!("{}:{}", self.id(), event.event_id),
+            finding_id: format!("{}:{}:{}", self.id(), mode, event.event_id),
             event_id: event.event_id.clone(),
             threat_class: ThreatClass::PrivilegeEscalation,
             severity,
