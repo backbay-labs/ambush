@@ -509,6 +509,18 @@ fn json_patch_target_escalates(
     if normalized.contains("/securityContext") && privileged_container_value(value) {
         return true;
     }
+    // Direct retarget of an existing volume's hostPath to an escape prefix:
+    // `replace /spec/template/spec/volumes/0/hostPath/path` with `"/"`. The
+    // value is a scalar string, so host_path_escape_value (which walks
+    // arrays/objects looking for `/hostPath/path` pointers) can't see it.
+    if normalized.ends_with("/hostPath/path")
+        && let Some(scalar) = value.as_str()
+        && host_path_prefixes
+            .iter()
+            .any(|prefix| scalar.starts_with(prefix.as_str()))
+    {
+        return true;
+    }
     if normalized.contains("/volumes") && host_path_escape_value(value, host_path_prefixes) {
         return true;
     }
@@ -803,6 +815,26 @@ mod tests {
 
         let findings = detector.evaluate(&event);
         assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].evidence["mode"], "privileged_pod_spec");
+    }
+
+    #[test]
+    fn json_patch_retargeting_volume_hostpath_to_root_is_detected() {
+        // Regression: a successful JSONPatch that directly retargets an
+        // existing volume's hostPath to an escape prefix used to evade the
+        // /volumes walk because the patched value was a scalar string.
+        let detector = KubernetesAuditDetector::default();
+        let mut event = event("evt-jsonpatch-volume");
+        let payload = payload_mut(&mut event);
+        payload.request_object = json!([
+            {
+                "op": "replace",
+                "path": "/spec/template/spec/volumes/0/hostPath/path",
+                "value": "/"
+            }
+        ]);
+        let findings = detector.evaluate(&event);
+        assert_eq!(findings.len(), 1, "scalar hostPath retarget must trigger");
         assert_eq!(findings[0].evidence["mode"], "privileged_pod_spec");
     }
 

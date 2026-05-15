@@ -156,10 +156,9 @@ fn build_platform_openapi_spec() -> Value {
                     "tags": ["platform"],
                     "summary": "Read runtime status",
                     "operationId": "get_runtime_status",
-                    "description": "Returns the current runtime mode, degradation, detector health, async-lane status, feedback rollups, and rate-limit state.",
+                    "description": "Returns the current runtime mode, degradation, detector health, async-lane status, feedback rollups, and rate-limit state. Requires the bearer token plus x-api-key — Providence-scoped context tokens cannot read runtime status because the response includes bearer-token metadata.",
                     "parameters": [
-                        { "$ref": "#/components/parameters/SchemaVersionHeader" },
-                        { "$ref": "#/components/parameters/ContextToken" }
+                        { "$ref": "#/components/parameters/SchemaVersionHeader" }
                     ],
                     "responses": standard_platform_responses("#/components/schemas/PlatformRuntimeStatusPage")
                 }
