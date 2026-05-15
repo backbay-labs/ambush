@@ -54,7 +54,7 @@ impl CloudTrailBridge {
                 record,
                 "/userIdentity/sessionContext/attributes/mfaAuthenticated",
             )
-            .or_else(|| optional_yes_no(record, "/additionalEventData/MFAUsed")),
+            .or_else(|| optional_bool(record, "/additionalEventData/MFAUsed")),
             request_parameters: object_or_default(record.pointer("/requestParameters")),
             response_elements: object_or_default(record.pointer("/responseElements")),
             error_code: optional_string(record, "/errorCode"),
@@ -130,22 +130,13 @@ fn optional_string(record: &Value, pointer: &str) -> Option<String> {
 }
 
 fn optional_bool(record: &Value, pointer: &str) -> Option<bool> {
-    match record.pointer(pointer) {
-        Some(Value::Bool(value)) => Some(*value),
-        Some(Value::String(value)) if value.eq_ignore_ascii_case("true") => Some(true),
-        Some(Value::String(value)) if value.eq_ignore_ascii_case("false") => Some(false),
-        _ => None,
-    }
-}
-
-fn optional_yes_no(record: &Value, pointer: &str) -> Option<bool> {
     record.pointer(pointer).and_then(|value| match value {
         Value::Bool(value) => Some(*value),
         Value::String(value) => {
             let trimmed = value.trim();
-            if trimmed.eq_ignore_ascii_case("yes") || trimmed.eq_ignore_ascii_case("true") {
+            if trimmed.eq_ignore_ascii_case("true") || trimmed.eq_ignore_ascii_case("yes") {
                 Some(true)
-            } else if trimmed.eq_ignore_ascii_case("no") || trimmed.eq_ignore_ascii_case("false") {
+            } else if trimmed.eq_ignore_ascii_case("false") || trimmed.eq_ignore_ascii_case("no") {
                 Some(false)
             } else {
                 None

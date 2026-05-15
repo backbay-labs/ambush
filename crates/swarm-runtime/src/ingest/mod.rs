@@ -1447,12 +1447,17 @@ impl IngestState {
         );
         match Self::build_runtime(config) {
             Ok((stack, request_runtime, detector)) => {
-                self.detector.store(detector);
-                self.request_runtime.store(request_runtime);
-                self.stack.store(stack);
+                // Swap auth + rate-limit thresholds first so revoked credentials and
+                // tightened limits take effect before the new detector/stack become
+                // visible. Reload is not strictly atomic; ordering it this way means
+                // an inflight request can never authenticate against the OLD auth and
+                // then dispatch against the NEW stack.
                 self.platform_api_auth.store(Arc::new(new_platform_auth));
                 self.platform_api_rate_limiter
                     .update_config(platform_rate_limit);
+                self.detector.store(detector);
+                self.request_runtime.store(request_runtime);
+                self.stack.store(stack);
                 self.detector_status
                     .store(Arc::new(DetectorRuntimeStatus::loaded(strategy)));
                 self.install_notification_payload_builder();

@@ -1634,6 +1634,72 @@ async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
 }
 
 #[tokio::test]
+async fn platform_api_routes_reload_rotated_api_key_without_restart() {
+    const ROTATED_KEY: &str = "platform-read-rotated";
+
+    let mut config_a = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config_a);
+    let state =
+        IngestState::from_config(temp_path("platform-key-rotation"), config_a.clone()).unwrap();
+    let app = detect_http_router(state.clone());
+
+    let initial = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/runtime/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+
+    let mut config_b = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config_b);
+    config_b.platform_api.keys = vec![PlatformApiKeyConfig {
+        name: "test-reader-rotated".to_string(),
+        key_hash: super::platform_api::platform_api_key_hash_hex(ROTATED_KEY),
+        scopes: vec![PlatformApiScope::Read],
+    }];
+    state.reload(config_b).unwrap();
+
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/api/runtime/status")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {TEST_PLATFORM_API_BEARER_TOKEN}"),
+                )
+                .header("x-api-key", TEST_PLATFORM_API_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+
+    let rotated = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/api/runtime/status")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {TEST_PLATFORM_API_BEARER_TOKEN}"),
+                )
+                .header("x-api-key", ROTATED_KEY)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn platform_api_routes_reject_expired_bearer_token_with_context() {
     let mut config = test_config("suspicious_process_tree");
     enable_platform_api(&mut config);
