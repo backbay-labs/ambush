@@ -515,8 +515,13 @@ fn json_patch_target_escalates(
         || normalized.contains("/containers/")
         || normalized.ends_with("/initContainers")
         || normalized.contains("/initContainers/")
+        || normalized.ends_with("/ephemeralContainers")
+        || normalized.contains("/ephemeralContainers/")
         || normalized.ends_with("/spec")
+        || normalized.ends_with("/template")
         || normalized.contains("/template/spec")
+        || normalized.ends_with("/jobTemplate")
+        || normalized.contains("/jobTemplate/spec")
     {
         return value_contains_pod_escalation(value, host_path_prefixes);
     }
