@@ -115,7 +115,12 @@ impl CloudTrailDetector {
         event: &TelemetryEvent,
         cloudtrail: &CloudTrailEvent,
     ) -> Vec<DetectionFinding> {
-        if cloudtrail.error_code.is_some() {
+        if cloudtrail.error_code.is_some()
+            || cloudtrail
+                .error_message
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        {
             return Vec::new();
         }
 

@@ -466,7 +466,10 @@ fn auth_success(record: &Value) -> bool {
         }
     }
 
-    sanitize_optional_string(first_string(record, &["/res", "/result"])).is_none_or(|value| {
+    // Fail closed when no result field is present at all: a partially enriched
+    // USER_AUTH/USER_LOGIN record is not evidence of success and would otherwise
+    // poison successful-login baselines and hide failed-login signal.
+    sanitize_optional_string(first_string(record, &["/res", "/result"])).is_some_and(|value| {
         value.eq_ignore_ascii_case("success") || value.eq_ignore_ascii_case("yes")
     })
 }

@@ -185,10 +185,16 @@
             "type": "integer"
           },
           "lag_seconds": {
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "last_error": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
@@ -435,7 +441,10 @@
             "$ref": "#/components/schemas/SwarmFindingEnvelope"
           },
           "host_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "hunt_id": {
             "type": "string"
@@ -446,10 +455,16 @@
             "type": "object"
           },
           "latest_rehearsal_bundle_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "related_incident_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "related_incident_providence_reconciliation": {
             "additionalProperties": true,
@@ -457,7 +472,10 @@
             "type": "object"
           },
           "related_incident_summary": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "related_receipt_ids": {
             "items": {
@@ -469,7 +487,10 @@
             "type": "string"
           },
           "response_receipt_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "trail_id": {
             "type": "string"

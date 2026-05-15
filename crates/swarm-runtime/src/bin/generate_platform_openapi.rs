@@ -275,14 +275,14 @@ fn build_platform_openapi_spec() -> Value {
                         "hunt_id": { "type": "string" },
                         "trail_id": { "type": "string" },
                         "created_at_ms": { "type": "integer" },
-                        "host_id": { "type": "string" },
+                        "host_id": { "type": ["string", "null"] },
                         "response_kind": { "type": "string" },
-                        "response_receipt_id": { "type": "string" },
+                        "response_receipt_id": { "type": ["string", "null"] },
                         "related_receipt_ids": { "type": "array", "items": { "type": "string" } },
-                        "latest_rehearsal_bundle_id": { "type": "string" },
+                        "latest_rehearsal_bundle_id": { "type": ["string", "null"] },
                         "latest_rehearsal": generic_object("Latest rehearsal preview for the hunt."),
-                        "related_incident_id": { "type": "string" },
-                        "related_incident_summary": { "type": "string" },
+                        "related_incident_id": { "type": ["string", "null"] },
+                        "related_incident_summary": { "type": ["string", "null"] },
                         "related_incident_providence_reconciliation": generic_object("Latest Providence reconciliation state for the related incident."),
                         "finding": { "$ref": "#/components/schemas/SwarmFindingEnvelope" }
                     },
@@ -460,8 +460,8 @@ fn build_platform_openapi_spec() -> Value {
                         "ready": { "type": "boolean" },
                         "events_processed": { "type": "integer", "minimum": 0 },
                         "error_count": { "type": "integer", "minimum": 0 },
-                        "lag_seconds": { "type": "number" },
-                        "last_error": { "type": "string" }
+                        "lag_seconds": { "type": ["number", "null"] },
+                        "last_error": { "type": ["string", "null"] }
                     },
                     "additionalProperties": false
                 },
