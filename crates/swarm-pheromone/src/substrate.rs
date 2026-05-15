@@ -1723,9 +1723,10 @@ pub(crate) fn normalize_threat_intel_value(
     let trimmed = value.trim();
     match indicator_type {
         ThreatIntelIndicatorType::Domain => trimmed.trim_end_matches('.').to_ascii_lowercase(),
-        ThreatIntelIndicatorType::IpAddress
-        | ThreatIntelIndicatorType::FileHash
-        | ThreatIntelIndicatorType::Url => trimmed.to_ascii_lowercase(),
+        ThreatIntelIndicatorType::Url => trimmed.trim_end_matches('/').to_ascii_lowercase(),
+        ThreatIntelIndicatorType::IpAddress | ThreatIntelIndicatorType::FileHash => {
+            trimmed.to_ascii_lowercase()
+        }
     }
 }
 

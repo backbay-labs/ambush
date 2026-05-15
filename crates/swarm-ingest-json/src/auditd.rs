@@ -1,6 +1,6 @@
 use crate::host_common::{
-    first_string, process_name_from_path, required_string, required_timestamp, required_u16,
-    sanitize_optional_string, telemetry_event_id,
+    first_command_line, first_string, process_name_from_path, required_string, required_timestamp,
+    required_u16, sanitize_optional_string, telemetry_event_id,
 };
 use crate::{JsonBridgeConfigError, validate_event_schema};
 use async_trait::async_trait;
@@ -159,9 +159,11 @@ impl AuditdBridge {
             &mut self.health,
             SOURCE_ID,
         )?;
-        let command_line =
-            sanitize_optional_string(first_string(record, &["/cmdline", "/proctitle", "/argv"]))
-                .unwrap_or_else(|| exe.clone());
+        let command_line = sanitize_optional_string(first_command_line(
+            record,
+            &["/cmdline", "/proctitle", "/argv"],
+        ))
+        .unwrap_or_else(|| exe.clone());
 
         Ok(TelemetryPayload::ProcessStart(ProcessStartEvent {
             parent_process: process_name_from_path(&parent),

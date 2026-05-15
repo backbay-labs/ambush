@@ -7,14 +7,17 @@ pub(crate) fn event_root(record: &Value) -> &Value {
     record.pointer("/Event").unwrap_or(record)
 }
 
-pub(crate) fn first_value<'a>(record: &'a Value, pointers: &[&str]) -> Option<&'a Value> {
-    pointers.iter().find_map(|pointer| record.pointer(pointer))
-}
-
 pub(crate) fn first_string(record: &Value, pointers: &[&str]) -> Option<String> {
     pointers
         .iter()
         .filter_map(|pointer| record.pointer(pointer).and_then(value_to_string))
+        .find(|value| !is_placeholder_string(value))
+}
+
+pub(crate) fn first_command_line(record: &Value, pointers: &[&str]) -> Option<String> {
+    pointers
+        .iter()
+        .filter_map(|pointer| record.pointer(pointer).and_then(value_to_command_line))
         .find(|value| !is_placeholder_string(value))
 }
 
@@ -57,8 +60,10 @@ pub(crate) fn required_timestamp(
     health: &mut BridgeHealth,
     source_id: &str,
 ) -> TelemetryBridgeResult<i64> {
-    first_value(record, pointers)
-        .and_then(parse_timestamp_value)
+    pointers
+        .iter()
+        .filter_map(|pointer| record.pointer(pointer).and_then(parse_timestamp_value))
+        .next()
         .ok_or_else(|| {
             record_error(
                 health,
@@ -122,6 +127,20 @@ pub(crate) fn sanitize_optional_string(value: Option<String>) -> Option<String> 
             Some(trimmed.to_string())
         }
     })
+}
+
+fn value_to_command_line(value: &Value) -> Option<String> {
+    match value {
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().filter_map(value_to_string).collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(" "))
+            }
+        }
+        _ => value_to_string(value),
+    }
 }
 
 fn value_to_string(value: &Value) -> Option<String> {

@@ -414,10 +414,11 @@ fn candidate_url_values(command_line: &str) -> Vec<String> {
                     '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
                 )
             });
-            if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+            let lower = trimmed.to_ascii_lowercase();
+            if !(lower.starts_with("http://") || lower.starts_with("https://")) {
                 return None;
             }
-            Some(trimmed.trim_end_matches('/').to_ascii_lowercase())
+            Some(lower.trim_end_matches('/').to_string())
         })
         .filter(|value| !value.is_empty())
         .collect()

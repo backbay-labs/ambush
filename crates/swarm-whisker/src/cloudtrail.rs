@@ -142,6 +142,7 @@ impl CloudTrailDetector {
 
         if event_name == "consolelogin"
             && cloudtrail.mfa_authenticated == Some(false)
+            && console_login_succeeded(cloudtrail)
             && self.console_login_from_new_ip(&principal, cloudtrail.source_ip_address.as_deref())
         {
             findings.push(self.finding(
@@ -436,6 +437,7 @@ impl CloudTrailDetector {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         if event_name == "consolelogin"
+            && console_login_succeeded(cloudtrail)
             && let Some(source_ip) = cloudtrail.source_ip_address.as_deref()
         {
             guard
@@ -552,6 +554,20 @@ fn principal_key(cloudtrail: &CloudTrailEvent) -> String {
         .map(normalize)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn console_login_succeeded(cloudtrail: &CloudTrailEvent) -> bool {
+    if cloudtrail.error_code.is_some()
+        || cloudtrail
+            .error_message
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return false;
+    }
+    json_string_pointer(&cloudtrail.response_elements, "/ConsoleLogin")
+        .map(|value| value.eq_ignore_ascii_case("Success"))
+        .unwrap_or(true)
 }
 
 fn run_instances_instance_type(cloudtrail: &CloudTrailEvent) -> Option<String> {

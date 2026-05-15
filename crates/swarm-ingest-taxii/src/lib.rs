@@ -117,6 +117,9 @@ fn parse_indicator_object(
     if object.get("type").and_then(Value::as_str) != Some("indicator") {
         return Vec::new();
     }
+    if object.get("revoked").and_then(Value::as_bool) == Some(true) {
+        return Vec::new();
+    }
     let Some(pattern) = object.get("pattern").and_then(Value::as_str) else {
         return Vec::new();
     };
