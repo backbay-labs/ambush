@@ -414,11 +414,22 @@ fn candidate_url_values(command_line: &str) -> Vec<String> {
                     '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
                 )
             });
-            let lower = trimmed.to_ascii_lowercase();
-            if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            let lower_prefix = trimmed.to_ascii_lowercase();
+            if !(lower_prefix.starts_with("http://") || lower_prefix.starts_with("https://")) {
                 return None;
             }
-            Some(lower.trim_end_matches('/').to_string())
+            // Lowercase only the scheme + authority; URL path/query are
+            // case-sensitive on most servers so preserve them verbatim. Mirrors
+            // the substrate's URL-IOC normalization.
+            let stripped = trimmed.trim_end_matches('/');
+            let scheme_end = stripped.find("://").map(|i| i + 3).unwrap_or(0);
+            let path_start = stripped[scheme_end..]
+                .find('/')
+                .map(|rel| scheme_end + rel)
+                .unwrap_or(stripped.len());
+            let mut out = stripped[..path_start].to_ascii_lowercase();
+            out.push_str(&stripped[path_start..]);
+            Some(out)
         })
         .filter(|value| !value.is_empty())
         .collect()

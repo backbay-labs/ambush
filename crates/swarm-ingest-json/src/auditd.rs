@@ -171,11 +171,16 @@ impl AuditdBridge {
             ],
         )
         .unwrap_or_else(|| "unknown".to_string());
-        let command_line = sanitize_optional_string(first_command_line(
-            record,
-            &["/cmdline", "/proctitle", "/argv"],
-        ))
-        .unwrap_or_else(|| exe.clone());
+        // Try `/cmdline` and `/argv` first (already decoded); `/proctitle` in
+        // raw auditd is a hex-encoded, NUL-separated argv buffer that downstream
+        // command-line detectors can't parse without decoding it back to a
+        // human-readable command line.
+        let command_line =
+            sanitize_optional_string(first_command_line(record, &["/cmdline", "/argv"]))
+                .or_else(|| {
+                    first_string(record, &["/proctitle"]).and_then(|raw| decode_proctitle(&raw))
+                })
+                .unwrap_or_else(|| exe.clone());
 
         Ok(TelemetryPayload::ProcessStart(ProcessStartEvent {
             parent_process: process_name_from_path(&parent),
@@ -300,6 +305,38 @@ impl TelemetryBridge for AuditdBridge {
     fn health(&self) -> BridgeHealth {
         self.health.clone()
     }
+}
+
+/// Decode auditd's hex-encoded `proctitle` field back to a human-readable
+/// command line. The buffer is the kernel's argv with `\0` separators between
+/// arguments and no trailing NUL; replace separators with spaces and reject
+/// the value when the bytes aren't valid UTF-8 so downstream detectors can
+/// match flags/URLs/encoded payloads instead of an opaque hex blob.
+fn decode_proctitle(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.bytes().all(|b| b.is_ascii_hexdigit()) || !trimmed.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(trimmed.len() / 2);
+    for chunk in trimmed.as_bytes().chunks(2) {
+        let hi = (chunk[0] as char).to_digit(16)?;
+        let lo = (chunk[1] as char).to_digit(16)?;
+        bytes.push(((hi << 4) | lo) as u8);
+    }
+    while matches!(bytes.last(), Some(0)) {
+        bytes.pop();
+    }
+    for byte in bytes.iter_mut() {
+        if *byte == 0 {
+            *byte = b' ';
+        }
+    }
+    let decoded = String::from_utf8(bytes).ok()?;
+    let trimmed = decoded.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// Test whether an auditd `open`/`openat` record carries write/create/truncate

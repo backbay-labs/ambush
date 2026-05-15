@@ -103,36 +103,6 @@ where
             .and_then(|rule| rule.actions.first().cloned())
     }
 
-    fn observe_siem_forward_receipt(&self, receipt: &swarm_response::ResponseReceipt) {
-        let Some(prometheus) = &self.prometheus else {
-            return;
-        };
-        let Some(transport) = receipt
-            .details
-            .get("transport")
-            .and_then(serde_json::Value::as_str)
-        else {
-            return;
-        };
-        let event_count = receipt
-            .details
-            .get("event_count")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let payload_bytes = receipt
-            .details
-            .get("payload_bytes")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let outcome = match receipt.status {
-            swarm_response::ResponseStatus::Executed => "success",
-            swarm_response::ResponseStatus::Simulated => "simulated",
-            swarm_response::ResponseStatus::Timeout => "timeout",
-            swarm_response::ResponseStatus::Failed => "failure",
-        };
-        prometheus.observe_delivery_batch(transport, outcome, event_count, payload_bytes);
-    }
-
     pub async fn ensure_substrate_ready<S>(
         &self,
         substrate: &S,
@@ -319,37 +289,50 @@ where
                     }
                 }
                 if let Some(forwarder) = &self.siem_forwarder {
-                    match forwarder.forward_findings(&findings).await {
-                        Ok(receipts) => {
-                            for receipt in receipts {
-                                self.observe_siem_forward_receipt(&receipt);
-                                if receipt.status.indicates_success() {
-                                    tracing::info!(
-                                        event_id = %event.event_id,
-                                        transport = "siem_forward",
-                                        status = ?receipt.status,
-                                        event_count = receipt.details.get("event_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
-                                        "forwarded finding batch to SIEM"
-                                    );
-                                } else {
-                                    tracing::warn!(
-                                        event_id = %event.event_id,
-                                        status = ?receipt.status,
-                                        summary = %receipt.summary,
-                                        event_count = receipt.details.get("event_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
-                                        "siem finding forward degraded"
-                                    );
+                    // Spawn the SIEM forward as fire-and-forget so a slow or
+                    // retrying Splunk/ELK/Chronicle endpoint cannot delay the
+                    // live-response action selected just below. Receipts are
+                    // observed in the spawned task; failures degrade reporting,
+                    // not isolation/quarantine timing.
+                    let forwarder = forwarder.clone();
+                    let prometheus = self.prometheus.clone();
+                    let event_id = event.event_id.clone();
+                    let findings_for_siem = findings.clone();
+                    tokio::spawn(async move {
+                        match forwarder.forward_findings(&findings_for_siem).await {
+                            Ok(receipts) => {
+                                for receipt in receipts {
+                                    if let Some(prometheus) = prometheus.as_ref() {
+                                        observe_siem_forward_receipt_with(prometheus, &receipt);
+                                    }
+                                    if receipt.status.indicates_success() {
+                                        tracing::info!(
+                                            event_id = %event_id,
+                                            transport = "siem_forward",
+                                            status = ?receipt.status,
+                                            event_count = receipt.details.get("event_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                                            "forwarded finding batch to SIEM"
+                                        );
+                                    } else {
+                                        tracing::warn!(
+                                            event_id = %event_id,
+                                            status = ?receipt.status,
+                                            summary = %receipt.summary,
+                                            event_count = receipt.details.get("event_count").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                                            "siem finding forward degraded"
+                                        );
+                                    }
                                 }
                             }
+                            Err(error) => {
+                                tracing::error!(
+                                    event_id = %event_id,
+                                    reason = %error,
+                                    "siem finding forward failed"
+                                );
+                            }
                         }
-                        Err(error) => {
-                            tracing::error!(
-                                event_id = %event.event_id,
-                                reason = %error,
-                                "siem finding forward failed"
-                            );
-                        }
-                    }
+                    });
                 }
                 if let Some(router) = &self.notification_router {
                     for finding in &findings {
@@ -1231,6 +1214,36 @@ where
         })?;
         Ok(serde_json::from_str(&raw)?)
     }
+}
+
+fn observe_siem_forward_receipt_with(
+    prometheus: &CriticalPathMetrics,
+    receipt: &swarm_response::ResponseReceipt,
+) {
+    let Some(transport) = receipt
+        .details
+        .get("transport")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return;
+    };
+    let event_count = receipt
+        .details
+        .get("event_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let payload_bytes = receipt
+        .details
+        .get("payload_bytes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let outcome = match receipt.status {
+        swarm_response::ResponseStatus::Executed => "success",
+        swarm_response::ResponseStatus::Simulated => "simulated",
+        swarm_response::ResponseStatus::Timeout => "timeout",
+        swarm_response::ResponseStatus::Failed => "failure",
+    };
+    prometheus.observe_delivery_batch(transport, outcome, event_count, payload_bytes);
 }
 
 fn operator_bearer_token_statuses(

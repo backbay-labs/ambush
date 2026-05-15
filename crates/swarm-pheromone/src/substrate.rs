@@ -1723,11 +1723,38 @@ pub(crate) fn normalize_threat_intel_value(
     let trimmed = value.trim();
     match indicator_type {
         ThreatIntelIndicatorType::Domain => trimmed.trim_end_matches('.').to_ascii_lowercase(),
-        ThreatIntelIndicatorType::Url => trimmed.trim_end_matches('/').to_ascii_lowercase(),
+        ThreatIntelIndicatorType::Url => normalize_url_value(trimmed),
         ThreatIntelIndicatorType::IpAddress | ThreatIntelIndicatorType::FileHash => {
             trimmed.to_ascii_lowercase()
         }
     }
+}
+
+fn normalize_url_value(value: &str) -> String {
+    // URL paths and query strings are case-sensitive on most servers, so
+    // lowercasing the whole URL collapses distinct resources to the same key.
+    // Lowercase only the scheme and authority (host[:port]); preserve path
+    // and query case verbatim. Strip a single trailing `/` from the path so
+    // `https://x/p/` and `https://x/p` still match.
+    let stripped = value.trim_end_matches('/');
+    let (authority_end, path_start) = match stripped.find("://") {
+        Some(scheme_end) => {
+            let after_scheme = scheme_end + 3;
+            match stripped[after_scheme..].find('/') {
+                Some(rel) => (after_scheme + rel, after_scheme + rel),
+                None => (stripped.len(), stripped.len()),
+            }
+        }
+        // No scheme — lowercase a leading host fragment up to the first `/`,
+        // preserve the rest.
+        None => match stripped.find('/') {
+            Some(rel) => (rel, rel),
+            None => (stripped.len(), stripped.len()),
+        },
+    };
+    let mut out = stripped[..authority_end].to_ascii_lowercase();
+    out.push_str(&stripped[path_start..]);
+    out
 }
 
 fn normalize_threat_intel_entry(mut entry: ThreatIntelEntry) -> ThreatIntelEntry {
