@@ -551,7 +551,10 @@ fn platform_page_schema(item_schema: &str) -> Value {
                     "$ref": format!("#/components/schemas/{item_schema}")
                 }
             },
-            "cursor": { "type": "string" }
+            "cursor": {
+                "type": ["string", "null"],
+                "description": "Opaque cursor for the next page; null on the final page."
+            }
         },
         "additionalProperties": false
     })

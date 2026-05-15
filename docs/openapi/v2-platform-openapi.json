@@ -388,7 +388,11 @@
         "additionalProperties": false,
         "properties": {
           "cursor": {
-            "type": "string"
+            "description": "Opaque cursor for the next page; null on the final page.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "data": {
             "items": {
@@ -511,7 +515,11 @@
         "additionalProperties": false,
         "properties": {
           "cursor": {
-            "type": "string"
+            "description": "Opaque cursor for the next page; null on the final page.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "data": {
             "items": {
@@ -599,7 +607,11 @@
         "additionalProperties": false,
         "properties": {
           "cursor": {
-            "type": "string"
+            "description": "Opaque cursor for the next page; null on the final page.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "data": {
             "items": {
@@ -769,7 +781,11 @@
         "additionalProperties": false,
         "properties": {
           "cursor": {
-            "type": "string"
+            "description": "Opaque cursor for the next page; null on the final page.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "data": {
             "items": {

@@ -1734,17 +1734,25 @@ fn normalize_url_value(value: &str) -> String {
     // URL paths and query strings are case-sensitive on most servers, so
     // lowercasing the whole URL collapses distinct resources to the same key.
     // Lowercase only the scheme and authority (host[:port]); preserve path,
-    // query, and fragment case verbatim. Strip a single trailing `/` from the
-    // path so `https://x/p/` and `https://x/p` still match.
-    let stripped = value.trim_end_matches('/');
-    // Authority ends at the first '/', '?' or '#'.
-    let after_scheme = stripped.find("://").map(|i| i + 3).unwrap_or(0);
-    let authority_end = stripped[after_scheme..]
+    // query, and fragment case verbatim. Strip exactly one trailing `/` from
+    // the path component (so `https://x/p/` and `https://x/p` collapse to the
+    // same key) but never touch trailing slashes inside the query or fragment
+    // — `?next=/admin/` and `?next=/admin` are distinct values.
+    let after_scheme = value.find("://").map(|i| i + 3).unwrap_or(0);
+    let authority_end = value[after_scheme..]
         .find(['/', '?', '#'])
         .map(|rel| after_scheme + rel)
-        .unwrap_or(stripped.len());
-    let mut out = stripped[..authority_end].to_ascii_lowercase();
-    out.push_str(&stripped[authority_end..]);
+        .unwrap_or(value.len());
+    let scheme_authority = value[..authority_end].to_ascii_lowercase();
+    let remainder = &value[authority_end..];
+    let (path, query_frag) = match remainder.find(['?', '#']) {
+        Some(i) => (&remainder[..i], &remainder[i..]),
+        None => (remainder, ""),
+    };
+    let path_normalized = path.strip_suffix('/').unwrap_or(path);
+    let mut out = scheme_authority;
+    out.push_str(path_normalized);
+    out.push_str(query_frag);
     out
 }
 
@@ -1781,6 +1789,39 @@ mod tests {
 
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[42u8; 32])
+    }
+
+    #[test]
+    fn normalize_url_value_lowercases_scheme_authority_only() {
+        let out = super::normalize_url_value("HTTPS://Evil.Example/Path/Mixed?Q=Keep&Slash=/Admin/#Frag/");
+        assert_eq!(
+            out,
+            "https://evil.example/Path/Mixed?Q=Keep&Slash=/Admin/#Frag/"
+        );
+    }
+
+    #[test]
+    fn normalize_url_value_strips_one_path_slash_only() {
+        assert_eq!(
+            super::normalize_url_value("https://x/p/"),
+            "https://x/p"
+        );
+        assert_eq!(
+            super::normalize_url_value("https://x/p//"),
+            "https://x/p/"
+        );
+    }
+
+    #[test]
+    fn normalize_url_value_preserves_query_trailing_slash() {
+        let out = super::normalize_url_value("https://evil.example/cb?next=/admin/");
+        assert_eq!(out, "https://evil.example/cb?next=/admin/");
+    }
+
+    #[test]
+    fn normalize_url_value_preserves_fragment_trailing_slash() {
+        let out = super::normalize_url_value("https://x/p#section/");
+        assert_eq!(out, "https://x/p#section/");
     }
 
     fn signing_key_for_label(label: &str) -> SigningKey {

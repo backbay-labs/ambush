@@ -436,14 +436,24 @@ fn candidate_url_values(command_line: &str) -> Vec<String> {
                 .map(|rel| abs + rel)
                 .unwrap_or(command_line.len());
             let raw = &command_line[abs..end];
-            let stripped = raw.trim_end_matches('/');
-            let scheme_end = stripped.find("://").map(|i| i + 3).unwrap_or(0);
-            let authority_end = stripped[scheme_end..]
+            // Lowercase scheme+authority only. Strip exactly one trailing `/`
+            // from the path; preserve query/fragment slashes (matches
+            // substrate::normalize_url_value semantics).
+            let scheme_end = raw.find("://").map(|i| i + 3).unwrap_or(0);
+            let authority_end = raw[scheme_end..]
                 .find(['/', '?', '#'])
                 .map(|rel| scheme_end + rel)
-                .unwrap_or(stripped.len());
-            let mut normalized = stripped[..authority_end].to_ascii_lowercase();
-            normalized.push_str(&stripped[authority_end..]);
+                .unwrap_or(raw.len());
+            let scheme_authority = raw[..authority_end].to_ascii_lowercase();
+            let remainder = &raw[authority_end..];
+            let (path, query_frag) = match remainder.find(['?', '#']) {
+                Some(i) => (&remainder[..i], &remainder[i..]),
+                None => (remainder, ""),
+            };
+            let path_normalized = path.strip_suffix('/').unwrap_or(path);
+            let mut normalized = scheme_authority;
+            normalized.push_str(path_normalized);
+            normalized.push_str(query_frag);
             if !normalized.is_empty() {
                 candidates.push(normalized);
             }
