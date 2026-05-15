@@ -1914,6 +1914,7 @@ async fn platform_api_read_routes_accept_context_token_for_scoped_queries() {
     );
 
     let forbidden = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("GET")
@@ -1926,6 +1927,28 @@ async fn platform_api_read_routes_accept_context_token_for_scoped_queries() {
             .await
             .unwrap();
     assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    // Context tokens MUST NOT grant access to /runtime/status — that would
+    // expose runtime health, bridge state, and bearer-token metadata to any
+    // operator following a scoped Providence finding link.
+    let runtime_status_blocked = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v2/api/runtime/status?context_token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            runtime_status_blocked.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ),
+        "context token must not authorize /runtime/status; got {}",
+        runtime_status_blocked.status()
+    );
 }
 
 #[tokio::test]

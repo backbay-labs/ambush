@@ -534,8 +534,11 @@ pub(super) fn context_token_matches_platform_request(
     request: &axum::extract::Request,
     scope: &crate::providence::ProvidenceContextScope,
 ) -> bool {
+    // Context tokens are scoped to the finding/incident the operator was
+    // shown — they MUST NOT grant access to runtime health, bridge state, or
+    // configured bearer-token metadata exposed by /runtime/status. That route
+    // requires the bearer token + x-api-key path.
     match request.uri().path() {
-        "/v2/api/runtime/status" | "/runtime/status" => true,
         "/v2/api/findings" | "/findings" => {
             !scope.finding_id.as_deref().is_some_and(|value| {
                 request_query_param(request, "finding_id").as_deref() != Some(value)

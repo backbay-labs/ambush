@@ -91,16 +91,30 @@ where
         finding: &DetectionFinding,
         mode: swarm_core::agent::SwarmMode,
     ) -> Option<ResponseAction> {
-        self.config
-            .pheromone
-            .response_playbook
-            .resolve(
-                &finding.threat_class,
-                finding.severity,
-                finding.confidence,
-                mode,
-            )
-            .and_then(|rule| rule.actions.first().cloned())
+        let rule = self.config.pheromone.response_playbook.resolve(
+            &finding.threat_class,
+            finding.severity,
+            finding.confidence,
+            mode,
+        )?;
+        // The live executor is single-action: ActionRequest carries one
+        // ResponseAction. Silently dropping the tail of a multi-action rule
+        // would skip configured isolate-then-scan-then-escalate sequences.
+        // Until the executor supports ordered action sequences, fail closed
+        // so operators see the misconfiguration rather than partial response.
+        if rule.actions.len() > 1 {
+            tracing::warn!(
+                rule_index = rule.rule_index,
+                action_count = rule.actions.len(),
+                threat_class = ?finding.threat_class,
+                severity = ?finding.severity,
+                confidence = finding.confidence,
+                "playbook rule has multiple actions but the live executor only \
+                 supports one — refusing to execute partial sequence"
+            );
+            return None;
+        }
+        rule.actions.into_iter().next()
     }
 
     pub async fn ensure_substrate_ready<S>(

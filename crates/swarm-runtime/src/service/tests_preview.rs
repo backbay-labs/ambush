@@ -320,3 +320,40 @@
         ));
     }
 
+    #[test]
+    fn playbook_action_for_finding_rejects_multi_action_rule() {
+        // Regression: live executor is single-action; silently dropping the
+        // tail of an isolate->scan->escalate sequence would skip configured
+        // containment steps. Fail closed instead.
+        let service = runtime_service_with_branching_playbook();
+        let multi_action_finding = DetectionFinding {
+            finding_id: "f1".to_string(),
+            event_id: "evt-1".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.98,
+            evidence: serde_json::json!({}),
+            strategy_id: "test".to_string(),
+        };
+        let action =
+            service.playbook_action_for_finding(&multi_action_finding, SwarmMode::Incident);
+        assert!(
+            action.is_none(),
+            "multi-action playbook rule must not produce a single ActionRequest; got {action:?}"
+        );
+
+        // Single-action fallback rule still resolves normally.
+        let single_action_finding = DetectionFinding {
+            finding_id: "f2".to_string(),
+            event_id: "evt-2".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.93,
+            evidence: serde_json::json!({}),
+            strategy_id: "test".to_string(),
+        };
+        let fallback =
+            service.playbook_action_for_finding(&single_action_finding, SwarmMode::Alert);
+        assert!(matches!(fallback, Some(ResponseAction::Escalate { .. })));
+    }
+
