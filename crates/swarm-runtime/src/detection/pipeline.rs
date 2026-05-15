@@ -654,6 +654,20 @@ mod tests {
         assert_eq!(got, vec!["https://x/p#section/".to_string()]);
     }
 
+    #[test]
+    fn candidate_url_values_extracts_multiple_urls_from_one_command_line() {
+        // Locks the prefix-loop / search_start advancement so two distinct
+        // URLs in one command line both surface, normalized independently.
+        let got = candidate_url_values("curl https://A/p1/ https://B/p2?x=/y/");
+        assert_eq!(
+            got,
+            vec![
+                "https://a/p1".to_string(),
+                "https://b/p2?x=/y/".to_string(),
+            ]
+        );
+    }
+
     use crate::config::parse_config;
     use crate::detector_factory::build_detector_from_strategy;
     use ed25519_dalek::SigningKey;
