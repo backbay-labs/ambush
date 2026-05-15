@@ -41,10 +41,15 @@ pub enum TaxiiPollError {
 
 impl TaxiiPoller {
     pub fn new(config: TaxiiThreatIntelFeedConfig) -> Self {
-        Self {
-            config,
-            client: Client::new(),
-        }
+        // Bound every request so a half-open or stalled TAXII endpoint cannot
+        // pin a worker indefinitely and block runtime shutdown.
+        let timeout = std::time::Duration::from_millis(config.poll_interval_ms.max(1_000));
+        let client = Client::builder()
+            .timeout(timeout)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+        Self { config, client }
     }
 
     pub fn from_config(config: &TaxiiThreatIntelFeedConfig) -> Self {

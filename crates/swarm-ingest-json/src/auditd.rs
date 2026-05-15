@@ -55,7 +55,7 @@ impl AuditdBridge {
             &["/host", "/hostname", "/node", "/agent/hostname"],
         ));
         let record_id = first_string(record, &["/serial", "/sequence", "/id"]);
-        let syscall = first_string(record, &["/syscall"]);
+        let syscall = normalize_syscall_name(record);
 
         let payload = if is_auth_record(&record_type) {
             Some(self.map_authentication(record, host_id.as_deref())?)
@@ -275,6 +275,54 @@ impl TelemetryBridge for AuditdBridge {
     fn health(&self) -> BridgeHealth {
         self.health.clone()
     }
+}
+
+/// Resolve `/syscall` to a syscall name when auditd emits a numeric identifier.
+///
+/// auditd records SYSCALL events with the kernel's numeric syscall number,
+/// which is architecture-specific. The bridge dispatch matches by name; without
+/// this normalization, real audit streams (where `syscall=59` means execve on
+/// x86_64 or `syscall=221` on aarch64) skip the detector entirely. Architecture
+/// is read from `/arch` when present and defaults to x86_64 — the mapping
+/// covers only syscalls the bridge currently dispatches on.
+fn normalize_syscall_name(record: &Value) -> Option<String> {
+    let raw = first_string(record, &["/syscall"])?;
+    if !raw.chars().all(|ch| ch.is_ascii_digit()) {
+        return Some(raw);
+    }
+    let id: u32 = raw.parse().ok()?;
+    let arch = first_string(record, &["/arch"]).unwrap_or_default();
+    let aarch64 = matches!(
+        arch.to_ascii_lowercase().as_str(),
+        "c00000b7" | "0xc00000b7" | "aarch64"
+    );
+    let name = if aarch64 {
+        match id {
+            221 => "execve",
+            281 => "execveat",
+            203 => "connect",
+            206 => "sendto",
+            56 => "openat",
+            38 => "renameat",
+            276 => "renameat2",
+            _ => return None,
+        }
+    } else {
+        match id {
+            59 => "execve",
+            322 => "execveat",
+            42 => "connect",
+            44 => "sendto",
+            2 => "open",
+            257 => "openat",
+            85 => "creat",
+            82 => "rename",
+            264 => "renameat",
+            316 => "renameat2",
+            _ => return None,
+        }
+    };
+    Some(name.to_string())
 }
 
 fn is_auth_record(record_type: &str) -> bool {

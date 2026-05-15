@@ -373,7 +373,6 @@ pub(crate) async fn apply_providence_feedback(
                     .iter()
                     .any(|entry| entry.role == AgentRole::Kitten),
                 &signal,
-                &state.signing_key,
             )
             .map_err(ProvidenceFeedbackError::internal)?;
             Ok(ProvidenceFeedbackApplicationResult {

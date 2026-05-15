@@ -1,3 +1,4 @@
+use crate::agent_identity::{FileAgentKeyStore, resolve_agent_key_dir};
 use crate::calico_agent::parse_calico_deception_interaction;
 use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
 use crate::evasion_coverage::{
@@ -311,7 +312,6 @@ pub fn route_feedback_signal(
     runtime_config: &SwarmConfig,
     kitten_deployed: bool,
     signal: &SwarmFeedbackSignal,
-    signing_key: &SigningKey,
 ) -> Result<KittenFeedbackRoutingResult, String> {
     let paths = resolve_evolution_paths(config_path, &runtime_config.evolution.paths);
     let store = FileKittenFeedbackStore::open(&paths.evolution_population_results_dir)?;
@@ -378,11 +378,24 @@ pub fn route_feedback_signal(
         });
     };
 
-    let signer_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+    // The Kitten population is signed by Kitten's persisted identity, not by
+    // the ingest signing_key passed in here. Load Kitten's identity from the
+    // configured agent_key_dir so `load_trusted` verifies against the actual
+    // persisting signer; otherwise a Providence dismiss can fail signature
+    // verification after the suppression deposit is already written.
+    let kitten_identity = {
+        let agent_key_dir = resolve_agent_key_dir(config_path, &runtime_config.identity);
+        let store = FileAgentKeyStore::open(&agent_key_dir)
+            .map_err(|error: crate::agent_identity::AgentIdentityError| error.to_string())?;
+        store
+            .load_or_create(AgentRole::Kitten, "primary")
+            .map_err(|error: crate::agent_identity::AgentIdentityError| error.to_string())?
+    };
+    let signer_agent_id = kitten_identity.id.clone();
     let population_store = FileEvolutionPopulationStore::open_signed(
         &paths.evolution_population_results_dir,
         signer_agent_id.clone(),
-        signing_key.clone(),
+        kitten_identity.signing_key.clone(),
     )
     .map_err(|error| error.to_string())?;
     let Some(mut state) = population_store

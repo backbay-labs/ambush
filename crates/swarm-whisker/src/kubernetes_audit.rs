@@ -93,9 +93,14 @@ impl KubernetesAuditDetector {
         if !stage.eq_ignore_ascii_case("ResponseComplete") {
             return Vec::new();
         }
-        if let Some(code) = audit.response_code
-            && !(200..300).contains(&code)
-        {
+        // Fail closed when `responseStatus.code` is missing or unmapped at
+        // ResponseComplete: malformed/partial audit records must not drive
+        // privileged-pod or wildcard-RBAC findings without an explicit
+        // success code. Detection requires the cluster to emit a 2xx response.
+        let Some(code) = audit.response_code else {
+            return Vec::new();
+        };
+        if !(200..300).contains(&code) {
             return Vec::new();
         }
 
@@ -637,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_response_code_at_response_complete_still_runs() {
+    fn missing_response_code_at_response_complete_fails_closed() {
         let detector = KubernetesAuditDetector::default();
         let mut event = event("evt-meta");
         let payload = payload_mut(&mut event);
@@ -647,7 +652,13 @@ mod tests {
             "subjects": [{ "kind": "ServiceAccount", "name": "builder" }]
         });
         payload.response_code = None;
-        let findings = detector.evaluate(&event);
-        assert_eq!(findings.len(), 1);
+        assert!(
+            detector.evaluate(&event).is_empty(),
+            "missing response_code at ResponseComplete must fail closed"
+        );
+
+        // Restoring an explicit 2xx code lets the predicate fire.
+        payload_mut(&mut event).response_code = Some(201);
+        assert_eq!(detector.evaluate(&event).len(), 1);
     }
 }

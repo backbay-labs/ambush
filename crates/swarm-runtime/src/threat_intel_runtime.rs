@@ -216,7 +216,19 @@ async fn run_feed_worker<S>(
         first_poll = false;
 
         let polled_at_ms = now_ms();
-        match worker.poller.poll_once().await {
+        // Race the poll against the shutdown receiver so a stalled TAXII
+        // endpoint cannot block the runtime drain even when the poll itself
+        // honors the per-request timeout.
+        let poll_outcome = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+                continue;
+            }
+            outcome = worker.poller.poll_once() => outcome,
+        };
+        match poll_outcome {
             Ok(outcome) => {
                 let mut stored = 0u64;
                 let mut store_error = None;
