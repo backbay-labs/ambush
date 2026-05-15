@@ -1824,6 +1824,12 @@ mod tests {
         assert_eq!(out, "https://x/p#section/");
     }
 
+    #[test]
+    fn normalize_url_value_strips_path_slash_before_query() {
+        let out = super::normalize_url_value("https://x/p/?a=b");
+        assert_eq!(out, "https://x/p?a=b");
+    }
+
     fn signing_key_for_label(label: &str) -> SigningKey {
         let digest = Sha256::digest(label.as_bytes());
         let mut seed = [0u8; 32];
