@@ -3,6 +3,7 @@ import * as React from "react";
 import { EditorContent } from "@tiptap/react";
 import { X } from "lucide-react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
+import { useComposerAutofocus } from "@/features/messages/lib/useComposerAutofocus";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
 import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomplete";
@@ -221,6 +222,9 @@ export function MessageComposer({
     if (!replyTarget || disabled) return;
     richText.focus();
   }, [disabled, replyTarget, richText.focus]);
+
+  // ── Autofocus on mount / channel switch ─────────────────────────────
+  useComposerAutofocus(richText.focus, effectiveDraftKey, disabled);
 
   // ── Mention / channel autocomplete insertion ────────────────────────
   const applyMentionInsert = React.useCallback(
