@@ -6105,6 +6105,7 @@ mod tests {
         config.operator.rate_limit.burst_window_ms = 1_000;
         config.operator.rate_limit.sustained_max_requests = 10;
         config.operator.rate_limit.sustained_window_ms = 60_000;
+        config.operator.rate_limit.trust_forwarded_headers = true;
         let surface = LocalOperatorSurface::from_config("inline", config).unwrap();
         let app = surface.router();
 
@@ -6159,6 +6160,7 @@ mod tests {
         config.operator.rate_limit.burst_window_ms = 20;
         config.operator.rate_limit.sustained_max_requests = 10;
         config.operator.rate_limit.sustained_window_ms = 1_000;
+        config.operator.rate_limit.trust_forwarded_headers = true;
         let surface = LocalOperatorSurface::from_config("inline", config).unwrap();
         let app = surface.router();
 

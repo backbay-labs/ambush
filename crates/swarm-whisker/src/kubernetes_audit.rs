@@ -90,8 +90,12 @@ impl KubernetesAuditDetector {
         audit: &KubernetesAuditEvent,
     ) -> Vec<DetectionFinding> {
         let stage = audit.stage.as_deref().unwrap_or_default();
-        let response_code = audit.response_code.unwrap_or_default();
-        if !stage.eq_ignore_ascii_case("ResponseComplete") || !(200..300).contains(&response_code) {
+        if !stage.eq_ignore_ascii_case("ResponseComplete") {
+            return Vec::new();
+        }
+        if let Some(code) = audit.response_code
+            && !(200..300).contains(&code)
+        {
             return Vec::new();
         }
 
@@ -561,5 +565,38 @@ mod tests {
         let findings = detector.evaluate(&event);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].evidence["mode"], "privileged_pod_spec");
+    }
+
+    #[test]
+    fn denied_response_is_not_treated_as_privilege_escalation() {
+        let detector = KubernetesAuditDetector::default();
+        let mut event = event("evt-deny");
+        let payload = payload_mut(&mut event);
+        payload.resource = "clusterrolebindings".to_string();
+        payload.request_object = json!({
+            "roleRef": { "name": "cluster-admin" },
+            "subjects": [{ "kind": "ServiceAccount", "name": "builder" }]
+        });
+        payload.response_code = Some(403);
+        assert!(detector.evaluate(&event).is_empty());
+
+        payload_mut(&mut event).stage = Some("RequestReceived".to_string());
+        payload_mut(&mut event).response_code = Some(201);
+        assert!(detector.evaluate(&event).is_empty());
+    }
+
+    #[test]
+    fn missing_response_code_at_response_complete_still_runs() {
+        let detector = KubernetesAuditDetector::default();
+        let mut event = event("evt-meta");
+        let payload = payload_mut(&mut event);
+        payload.resource = "clusterrolebindings".to_string();
+        payload.request_object = json!({
+            "roleRef": { "name": "cluster-admin" },
+            "subjects": [{ "kind": "ServiceAccount", "name": "builder" }]
+        });
+        payload.response_code = None;
+        let findings = detector.evaluate(&event);
+        assert_eq!(findings.len(), 1);
     }
 }

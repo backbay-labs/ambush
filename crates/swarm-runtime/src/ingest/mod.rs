@@ -1129,7 +1129,7 @@ async fn process_demo_replay_step(
         live_mode: stack.service.mode() == RuntimeMode::LiveResponse,
         receipt_chain: Vec::new(),
         correlation_id: Some(run_id.to_string()),
-        now_ms: step.event.timestamp,
+        now_ms: now_ms(),
     };
     let replay_action = step.action.clone();
     let signing_agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
@@ -1302,6 +1302,7 @@ enum IngestProcessingError {
 #[derive(Clone)]
 pub struct IngestState {
     stack: Arc<ArcSwap<IngestRuntimeStack>>,
+    platform_api_auth: Arc<ArcSwap<crate::ingest::platform_api::PlatformApiAuthState>>,
     platform_api_rate_limiter: HttpRateLimiter,
     request_runtime: Arc<ArcSwap<IngestRequestRuntime>>,
     detector: Arc<ArcSwap<CompositeDetector>>,
@@ -1378,8 +1379,13 @@ impl IngestState {
         let detector_status = Arc::new(ArcSwap::from(Arc::new(DetectorRuntimeStatus::loaded(
             strategy,
         ))));
+        let initial_platform_auth = crate::ingest::platform_api::PlatformApiAuthState::from_config(
+            &template.platform_api,
+            &template.operator,
+        );
         let state = Self {
             stack: Arc::new(ArcSwap::from(stack)),
+            platform_api_auth: Arc::new(ArcSwap::from_pointee(initial_platform_auth)),
             platform_api_rate_limiter: HttpRateLimiter::new(
                 "platform_api",
                 template.platform_api.rate_limit.clone(),
@@ -1435,11 +1441,16 @@ impl IngestState {
     pub fn reload(&self, config: SwarmConfig) -> Result<(), IngestBuildError> {
         let strategy = strategy_status_label(&config);
         let platform_rate_limit = config.platform_api.rate_limit.clone();
+        let new_platform_auth = crate::ingest::platform_api::PlatformApiAuthState::from_config(
+            &config.platform_api,
+            &config.operator,
+        );
         match Self::build_runtime(config) {
             Ok((stack, request_runtime, detector)) => {
                 self.detector.store(detector);
                 self.request_runtime.store(request_runtime);
                 self.stack.store(stack);
+                self.platform_api_auth.store(Arc::new(new_platform_auth));
                 self.platform_api_rate_limiter
                     .update_config(platform_rate_limit);
                 self.detector_status
@@ -1776,6 +1787,16 @@ impl IngestState {
 
     pub fn current_prometheus_metrics(&self) -> Option<CriticalPathMetrics> {
         self.stack.load_full().service.prometheus_metrics().cloned()
+    }
+
+    pub(in crate::ingest) fn platform_api_auth(
+        &self,
+    ) -> Arc<crate::ingest::platform_api::PlatformApiAuthState> {
+        self.platform_api_auth.load_full()
+    }
+
+    pub(in crate::ingest) fn platform_api_rate_limiter(&self) -> &HttpRateLimiter {
+        &self.platform_api_rate_limiter
     }
 
     pub fn current_runtime_mode(&self) -> RuntimeMode {

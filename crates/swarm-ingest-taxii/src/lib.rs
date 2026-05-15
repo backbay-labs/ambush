@@ -333,4 +333,27 @@ mod tests {
 
         server.abort();
     }
+
+    #[test]
+    fn revoked_indicator_objects_are_skipped() {
+        let bundle = json!({
+            "objects": [
+                {
+                    "type": "indicator",
+                    "id": "indicator--live",
+                    "pattern": "[domain-name:value = 'live.example']"
+                },
+                {
+                    "type": "indicator",
+                    "id": "indicator--gone",
+                    "pattern": "[domain-name:value = 'withdrawn.example']",
+                    "revoked": true
+                }
+            ]
+        });
+
+        let entries = parse_taxii_bundle(&bundle, "taxii-primary", 3600, 1_760_000_000_000);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].value, "live.example");
+    }
 }

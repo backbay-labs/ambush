@@ -53,7 +53,8 @@ impl CloudTrailBridge {
             mfa_authenticated: optional_bool(
                 record,
                 "/userIdentity/sessionContext/attributes/mfaAuthenticated",
-            ),
+            )
+            .or_else(|| optional_yes_no(record, "/additionalEventData/MFAUsed")),
             request_parameters: object_or_default(record.pointer("/requestParameters")),
             response_elements: object_or_default(record.pointer("/responseElements")),
             error_code: optional_string(record, "/errorCode"),
@@ -135,6 +136,23 @@ fn optional_bool(record: &Value, pointer: &str) -> Option<bool> {
         Some(Value::String(value)) if value.eq_ignore_ascii_case("false") => Some(false),
         _ => None,
     }
+}
+
+fn optional_yes_no(record: &Value, pointer: &str) -> Option<bool> {
+    record.pointer(pointer).and_then(|value| match value {
+        Value::Bool(value) => Some(*value),
+        Value::String(value) => {
+            let trimmed = value.trim();
+            if trimmed.eq_ignore_ascii_case("yes") || trimmed.eq_ignore_ascii_case("true") {
+                Some(true)
+            } else if trimmed.eq_ignore_ascii_case("no") || trimmed.eq_ignore_ascii_case("false") {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    })
 }
 
 fn object_or_default(value: Option<&Value>) -> Value {
@@ -264,6 +282,41 @@ mod tests {
                     cloudtrail.response_elements["instancesSet"]["items"][0]["instanceId"],
                     "i-123"
                 );
+            }
+            _ => panic!("expected cloudtrail payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn console_login_falls_back_to_additional_event_data_mfa() {
+        let mut bridge = CloudTrailBridge::new(JsonRecordSource::new([json!({
+            "eventID": "evt-mfa-aed",
+            "eventName": "ConsoleLogin",
+            "eventSource": "signin.amazonaws.com",
+            "eventTime": "2026-04-06T12:00:00Z",
+            "recipientAccountId": "123456789012",
+            "sourceIPAddress": "198.51.100.10",
+            "userAgent": "signin.amazonaws.com",
+            "awsRegion": "us-east-1",
+            "responseElements": { "ConsoleLogin": "Success" },
+            "additionalEventData": { "MFAUsed": "No" },
+            "userIdentity": {
+                "type": "IAMUser",
+                "userName": "alice",
+                "arn": "arn:aws:iam::123456789012:user/alice",
+                "principalId": "AIDAEXAMPLE"
+            }
+        })]));
+
+        let event = bridge
+            .poll()
+            .await
+            .expect("cloudtrail event should map")
+            .pop()
+            .expect("one event");
+        match event.payload {
+            TelemetryPayload::CloudTrail(cloudtrail) => {
+                assert_eq!(cloudtrail.mfa_authenticated, Some(false));
             }
             _ => panic!("expected cloudtrail payload"),
         }

@@ -389,9 +389,10 @@ impl CloudTrailDetector {
         principal: &str,
         cloudtrail: &CloudTrailEvent,
     ) -> bool {
-        let Some(instance_type) = run_instances_instance_type(cloudtrail)
+        let Some(instance_type) = run_instances_instance_types(cloudtrail)
+            .into_iter()
             .map(|value| normalize(&value))
-            .filter(|value| {
+            .find(|value| {
                 self.large_instance_prefixes
                     .iter()
                     .any(|prefix| value.starts_with(prefix))
@@ -446,14 +447,14 @@ impl CloudTrailDetector {
                 .or_default()
                 .insert(normalize(source_ip));
         }
-        if event_name == "runinstances"
-            && let Some(instance_type) = run_instances_instance_type(cloudtrail)
-        {
-            guard
-                .instance_types_by_principal
-                .entry(principal.clone())
-                .or_default()
-                .insert(normalize(&instance_type));
+        if event_name == "runinstances" {
+            for instance_type in run_instances_instance_types(cloudtrail) {
+                guard
+                    .instance_types_by_principal
+                    .entry(principal.clone())
+                    .or_default()
+                    .insert(normalize(&instance_type));
+            }
         }
         if event_name == "getsecretvalue"
             && let Some(resource) = json_string_pointer(&cloudtrail.request_parameters, "/secretId")
@@ -570,23 +571,31 @@ fn console_login_succeeded(cloudtrail: &CloudTrailEvent) -> bool {
         .unwrap_or(true)
 }
 
-fn run_instances_instance_type(cloudtrail: &CloudTrailEvent) -> Option<String> {
+fn run_instances_instance_types(cloudtrail: &CloudTrailEvent) -> Vec<String> {
+    let mut types = Vec::new();
     if let Some(value) = json_string_pointer(&cloudtrail.request_parameters, "/instanceType") {
-        return Some(value);
+        types.push(value);
     }
-    cloudtrail
+    if let Some(items) = cloudtrail
         .request_parameters
         .pointer("/instancesSet/items")
         .and_then(Value::as_array)
-        .and_then(|items| {
-            items.iter().find_map(|item| {
-                item.get("instanceType").and_then(|value| match value {
-                    Value::String(value) => Some(value.to_string()),
-                    Value::Number(value) => Some(value.to_string()),
-                    _ => None,
-                })
-            })
-        })
+    {
+        for item in items {
+            if let Some(value) = item.get("instanceType").and_then(|value| match value {
+                Value::String(value) => Some(value.to_string()),
+                Value::Number(value) => Some(value.to_string()),
+                _ => None,
+            }) {
+                types.push(value);
+            }
+        }
+    }
+    types
+}
+
+fn run_instances_instance_type(cloudtrail: &CloudTrailEvent) -> Option<String> {
+    run_instances_instance_types(cloudtrail).into_iter().next()
 }
 
 fn json_string_pointer(root: &Value, pointer: &str) -> Option<String> {
@@ -834,6 +843,79 @@ mod tests {
         let findings = detector.evaluate(&param_second);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].threat_class, ThreatClass::CredentialAccess);
+    }
+
+    #[test]
+    fn console_login_failure_response_does_not_seed_baseline() {
+        let detector = CloudTrailDetector::default();
+        let mut failed = event(
+            "evt-fail",
+            "arn:aws:iam::123456789012:user/alice",
+            "ConsoleLogin",
+        );
+        payload_mut(&mut failed).mfa_authenticated = Some(false);
+        payload_mut(&mut failed).response_elements = json!({ "ConsoleLogin": "Failure" });
+        assert!(detector.evaluate(&failed).is_empty());
+
+        let mut later = event(
+            "evt-after-fail",
+            "arn:aws:iam::123456789012:user/alice",
+            "ConsoleLogin",
+        );
+        payload_mut(&mut later).mfa_authenticated = Some(false);
+        payload_mut(&mut later).source_ip_address = Some("198.51.100.55".to_string());
+        assert!(
+            detector.evaluate(&later).is_empty(),
+            "first successful no-MFA login establishes baseline; failed prior must not poison it"
+        );
+
+        let mut roaming = event(
+            "evt-roam",
+            "arn:aws:iam::123456789012:user/alice",
+            "ConsoleLogin",
+        );
+        payload_mut(&mut roaming).mfa_authenticated = Some(false);
+        payload_mut(&mut roaming).source_ip_address = Some("198.51.100.99".to_string());
+        let findings = detector.evaluate(&roaming);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].evidence["mode"],
+            "console_login_without_mfa_from_new_ip"
+        );
+    }
+
+    #[test]
+    fn run_instances_nested_items_baseline_and_detect_largest() {
+        let detector = CloudTrailDetector::default();
+        let mut baseline = event(
+            "evt-nest-1",
+            "arn:aws:iam::123456789012:user/alice",
+            "RunInstances",
+        );
+        payload_mut(&mut baseline).request_parameters = json!({
+            "instancesSet": { "items": [{ "instanceType": "t3.small" }] }
+        });
+        assert!(detector.evaluate(&baseline).is_empty());
+
+        let mut multi = event(
+            "evt-nest-2",
+            "arn:aws:iam::123456789012:user/alice",
+            "RunInstances",
+        );
+        payload_mut(&mut multi).request_parameters = json!({
+            "instancesSet": {
+                "items": [
+                    { "instanceType": "t3.micro" },
+                    { "instanceType": "p4d.24xlarge" },
+                ]
+            }
+        });
+        let findings = detector.evaluate(&multi);
+        let large = findings
+            .iter()
+            .find(|f| f.evidence["mode"] == "run_instances_large_instance_unusual_principal")
+            .expect("large instance from unusual principal must fire on nested items");
+        assert_eq!(large.threat_class, ThreatClass::Impact);
     }
 
     fn payload_mut(event: &mut TelemetryEvent) -> &mut CloudTrailEvent {

@@ -7,7 +7,7 @@ use crate::control::{
 };
 use crate::escalation::standard_threat_classes;
 use crate::evasion_coverage::EvasionCoverageSnapshot;
-use crate::http::rate_limit::{HttpRateLimitRejection, HttpRateLimiter};
+use crate::http::rate_limit::HttpRateLimitRejection;
 use crate::providence::verify_providence_context_token;
 use crate::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
 use crate::serve::TlsClientIdentity;
@@ -62,12 +62,6 @@ pub(super) struct PlatformApiAuthState {
     pub(super) keys: Arc<Vec<PlatformApiKeyRecord>>,
     pub(super) bearer_principals: Arc<Vec<ConfiguredPlatformApiBearerPrincipal>>,
     pub(super) context_token_env: Arc<str>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PlatformApiGuardState {
-    pub(super) auth: PlatformApiAuthState,
-    pub(super) rate_limiter: HttpRateLimiter,
 }
 
 #[derive(Debug, Clone)]
@@ -773,13 +767,6 @@ pub(super) fn is_active_investigation_status(status: InvestigationStatus) -> boo
 // --- Router builders ---
 
 pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
-    let config = state.stack.load_full().service.config.clone();
-    let auth_state = PlatformApiAuthState::from_config(&config.platform_api, &config.operator);
-    let guard_state = PlatformApiGuardState {
-        auth: PlatformApiAuthState::from_config(&config.platform_api, &config.operator),
-        rate_limiter: state.platform_api_rate_limiter.clone(),
-    };
-
     Router::new()
         .route("/findings", get(platform_findings_handler))
         .route("/incidents", get(platform_incidents_handler))
@@ -791,12 +778,12 @@ pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
         .route("/stream/findings", get(platform_findings_stream_handler))
         .route("/runtime/status", get(platform_runtime_status_handler))
         .layer(middleware::from_fn_with_state(
-            auth_state,
-            require_platform_api_key_auth,
+            state.clone(),
+            require_platform_api_key_auth_resolved,
         ))
         .layer(middleware::from_fn_with_state(
-            guard_state,
-            require_platform_api_bearer_auth,
+            state.clone(),
+            require_platform_api_bearer_auth_resolved,
         ))
         .layer(middleware::from_fn(
             require_supported_platform_api_schema_version,
@@ -804,22 +791,15 @@ pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
 }
 
 pub(super) fn legacy_evasion_api_router(state: &IngestState) -> Router<IngestState> {
-    let config = state.stack.load_full().service.config.clone();
-    let auth_state = PlatformApiAuthState::from_config(&config.platform_api, &config.operator);
-    let guard_state = PlatformApiGuardState {
-        auth: PlatformApiAuthState::from_config(&config.platform_api, &config.operator),
-        rate_limiter: state.platform_api_rate_limiter.clone(),
-    };
-
     Router::new()
         .route("/evasion/coverage", get(platform_evasion_coverage_handler))
         .layer(middleware::from_fn_with_state(
-            auth_state,
-            require_platform_api_key_auth,
+            state.clone(),
+            require_platform_api_key_auth_resolved,
         ))
         .layer(middleware::from_fn_with_state(
-            guard_state,
-            require_platform_api_bearer_auth,
+            state.clone(),
+            require_platform_api_bearer_auth_resolved,
         ))
         .layer(middleware::from_fn(
             require_supported_platform_api_schema_version,
@@ -838,12 +818,13 @@ async fn require_supported_platform_api_schema_version(
     Ok(next.run(request).await)
 }
 
-async fn require_platform_api_key_auth(
-    State(auth): State<PlatformApiAuthState>,
+async fn require_platform_api_key_auth_resolved(
+    State(state): State<IngestState>,
     headers: axum::http::HeaderMap,
     mut request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, PlatformApiError> {
+    let auth = state.platform_api_auth();
     if request
         .extensions()
         .get::<PlatformApiContextTokenPrincipal>()
@@ -891,27 +872,28 @@ async fn require_platform_api_key_auth(
     Ok(next.run(request).await)
 }
 
-async fn require_platform_api_bearer_auth(
-    State(state): State<PlatformApiGuardState>,
+async fn require_platform_api_bearer_auth_resolved(
+    State(state): State<IngestState>,
     headers: axum::http::HeaderMap,
     mut request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, PlatformApiError> {
+    let auth = state.platform_api_auth();
     let peer_addr = request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|info| info.0);
     state
-        .rate_limiter
+        .platform_api_rate_limiter()
         .check_request(&headers, peer_addr, request.uri().path(), now_ms())
         .map_err(map_platform_rate_limit_rejection)?;
     if request.method() == axum::http::Method::GET
         && let Some(raw_token) = request_query_param(&request, "context_token")
     {
-        let secret_material = state.auth.context_token_secret().ok_or_else(|| {
+        let secret_material = auth.context_token_secret().ok_or_else(|| {
             PlatformApiError::service_unavailable(format!(
                 "platform API Providence context token env `{}` is missing or empty",
-                state.auth.context_token_env
+                auth.context_token_env
             ))
         })?;
         let claims =
@@ -934,21 +916,19 @@ async fn require_platform_api_bearer_auth(
     let token = value
         .strip_prefix("Bearer ")
         .ok_or_else(|| PlatformApiError::unauthorized("expected Authorization: Bearer <token>"))?;
-    let principal =
-        state
-            .auth
-            .authenticate_bearer(token, now_ms())
-            .map_err(|error| match error {
-                PlatformApiBearerAuthFailure::Invalid => {
-                    PlatformApiError::unauthorized("invalid bearer token")
-                }
-                PlatformApiBearerAuthFailure::Expired {
-                    operator_id,
-                    expires_at_ms,
-                } => PlatformApiError::unauthorized(format!(
-                    "bearer token for operator `{operator_id}` expired at {expires_at_ms}"
-                )),
-            })?;
+    let principal = auth
+        .authenticate_bearer(token, now_ms())
+        .map_err(|error| match error {
+            PlatformApiBearerAuthFailure::Invalid => {
+                PlatformApiError::unauthorized("invalid bearer token")
+            }
+            PlatformApiBearerAuthFailure::Expired {
+                operator_id,
+                expires_at_ms,
+            } => PlatformApiError::unauthorized(format!(
+                "bearer token for operator `{operator_id}` expired at {expires_at_ms}"
+            )),
+        })?;
     if !principal.has_scope(OperatorScope::Read) {
         return Err(PlatformApiError::forbidden(
             "operator bearer token does not grant read scope",

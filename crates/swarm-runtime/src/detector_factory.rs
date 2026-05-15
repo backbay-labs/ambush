@@ -293,11 +293,10 @@ impl RuntimeDetector {
             .into_iter()
             .map(|mut finding| {
                 finding.strategy_id = strategy_id.to_string();
-                let suffix = finding
-                    .finding_id
-                    .split_once(':')
-                    .map(|(_, rest)| rest.to_string())
-                    .unwrap_or_else(|| finding.event_id.clone());
+                let suffix = match finding.finding_id.split_once(':') {
+                    Some((_, rest)) => rest.to_string(),
+                    None => finding.finding_id.clone(),
+                };
                 finding.finding_id = format!("{strategy_id}:{suffix}");
                 finding
             })
