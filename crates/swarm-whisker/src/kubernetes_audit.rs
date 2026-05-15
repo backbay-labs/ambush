@@ -258,17 +258,41 @@ impl KubernetesAuditDetector {
         ) {
             return false;
         }
-        audit
+        if audit
             .request_object
             .pointer("/rules")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .any(|rule| {
-                ["/verbs", "/resources", "/apiGroups"]
-                    .into_iter()
-                    .all(|pointer| rule_field_contains_wildcard(rule, pointer))
-            })
+            .any(rule_is_wildcard)
+        {
+            return true;
+        }
+        // JSON Patch updates ship as `[{op, path, value}, ...]`. A patch like
+        // `add /rules/-` with `{verbs:["*"], resources:["*"], apiGroups:["*"]}`
+        // would otherwise miss the object walk above.
+        if let Some(operations) = audit.request_object.as_array() {
+            for op in operations {
+                let kind = op.get("op").and_then(Value::as_str).unwrap_or_default();
+                if !matches!(kind, "add" | "replace") {
+                    continue;
+                }
+                let Some(value) = op.get("value") else {
+                    continue;
+                };
+                let path = op.get("path").and_then(Value::as_str).unwrap_or_default();
+                if path.contains("/rules") {
+                    if let Some(rule_array) = value.as_array() {
+                        if rule_array.iter().any(rule_is_wildcard) {
+                            return true;
+                        }
+                    } else if rule_is_wildcard(value) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn container_escape_indicator(&self, audit: &KubernetesAuditEvent) -> bool {
@@ -361,6 +385,12 @@ impl DetectionStrategy for KubernetesAuditDetector {
     }
 }
 
+fn rule_is_wildcard(rule: &Value) -> bool {
+    ["/verbs", "/resources", "/apiGroups"]
+        .into_iter()
+        .all(|pointer| rule_field_contains_wildcard(rule, pointer))
+}
+
 fn rule_field_contains_wildcard(rule: &Value, pointer: &str) -> bool {
     let entries: Vec<&str> = rule
         .pointer(pointer)
@@ -436,16 +466,48 @@ fn json_patch_target_escalates(
     if normalized.contains("/volumes") && host_path_escape_value(value, host_path_prefixes) {
         return true;
     }
-    // Whole-spec replacement under a controller template still walks via the
-    // normal spec inspector once the value is read.
-    if normalized.ends_with("/spec") || normalized.ends_with("/spec/template/spec") {
-        return bool_pointer(value, "/hostPID")
-            || bool_pointer(value, "/hostIPC")
-            || bool_pointer(value, "/hostNetwork")
-            || privileged_container(value)
-            || host_path_escape(value, host_path_prefixes);
+    // Patches that add/replace a whole container, container array, pod spec, or
+    // pod template need a deep walk of the value because the escalation may be
+    // any number of levels nested inside the patched subtree (e.g. add
+    // `/spec/template/spec/containers/-` with a full container that includes
+    // `securityContext.privileged: true`).
+    if normalized.ends_with("/containers")
+        || normalized.contains("/containers/")
+        || normalized.ends_with("/initContainers")
+        || normalized.contains("/initContainers/")
+        || normalized.ends_with("/spec")
+        || normalized.contains("/template/spec")
+    {
+        return value_contains_pod_escalation(value, host_path_prefixes);
     }
     false
+}
+
+fn value_contains_pod_escalation(value: &Value, host_path_prefixes: &[String]) -> bool {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .any(|item| value_contains_pod_escalation(item, host_path_prefixes)),
+        Value::Object(_) => {
+            if bool_pointer(value, "/hostPID")
+                || bool_pointer(value, "/hostIPC")
+                || bool_pointer(value, "/hostNetwork")
+                || privileged_container(value)
+                || host_path_escape(value, host_path_prefixes)
+                || privileged_container_value(value)
+            {
+                return true;
+            }
+            // Recurse one level to catch a single container value (no `/containers`
+            // wrapper) whose `securityContext.privileged` lives at the root.
+            value
+                .as_object()
+                .into_iter()
+                .flat_map(|map| map.values())
+                .any(|child| value_contains_pod_escalation(child, host_path_prefixes))
+        }
+        _ => false,
+    }
 }
 
 fn privileged_container_value(value: &Value) -> bool {

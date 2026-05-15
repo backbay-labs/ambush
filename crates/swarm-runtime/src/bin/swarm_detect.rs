@@ -998,6 +998,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await;
         }));
         let bridge_metrics = state.current_prometheus_metrics();
+        // KNOWN LIMITATION: telemetry bridge workers are also spawned once from
+        // the initial `runtime.telemetry_sources` config. `reload_from_disk()`
+        // does not rebuild them, so adding/removing/rotating a bridge endpoint
+        // only takes effect after a process restart. Same per-worker shutdown
+        // refactor needed as for the threat-intel registry; tracked as follow-up.
         let mut bridge_handles =
             Some(bridge_registry.spawn(bridge_ingest_tx, shutdown_rx.clone(), bridge_metrics));
         // KNOWN LIMITATION: these worker handles are spawned once from the initial

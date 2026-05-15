@@ -73,7 +73,7 @@ impl AuditdBridge {
         } else if let Some(syscall_name) = syscall.as_deref().filter(|value| {
             matches!(
                 *value,
-                "open" | "openat" | "creat" | "rename" | "renameat" | "renameat2"
+                "open" | "openat" | "openat2" | "creat" | "rename" | "renameat" | "renameat2"
             )
         }) {
             let Some(payload) = self.map_file_persistence(record, syscall_name)? else {
@@ -155,18 +155,22 @@ impl AuditdBridge {
             &mut self.health,
             SOURCE_ID,
         )?;
-        let parent = required_string(
+        // Raw auditd commonly emits only `ppid` (numeric) on SYSCALL/EXECVE
+        // records — `parent_comm`/`ppcomm`/`parent_exe` are populated by
+        // user-space enrichers like ausearch/auditbeat. Fall back to ppid and
+        // finally to "unknown" so unenriched events still reach the
+        // process-start detectors.
+        let parent = first_string(
             record,
             &[
                 "/parent_comm",
                 "/ppcomm",
                 "/process/parent_comm",
                 "/parent_exe",
+                "/ppid",
             ],
-            "parent_comm",
-            &mut self.health,
-            SOURCE_ID,
-        )?;
+        )
+        .unwrap_or_else(|| "unknown".to_string());
         let command_line = sanitize_optional_string(first_command_line(
             record,
             &["/cmdline", "/proctitle", "/argv"],
@@ -232,7 +236,7 @@ impl AuditdBridge {
         let operation = match syscall {
             "rename" | "renameat" | "renameat2" => "rename",
             "creat" => "create",
-            "open" | "openat" => {
+            "open" | "openat" | "openat2" => {
                 // open(2) flags double as rwx mode bits — only emit a file-persistence
                 // event when the open is for write/create/truncate. Read-only opens
                 // (`O_RDONLY`, no creation flags) under watched directories are normal
@@ -320,25 +324,45 @@ fn open_is_write(record: &Value, syscall: &str) -> bool {
         "open" => "/a1",
         _ => "/a2",
     };
-    let Some(raw) = first_string(record, &["/flags", positional]) else {
+    // Prefer normalized `/flags` (decimal/octal/symbolic, parsed permissively).
+    // Raw auditd `/a1`/`/a2` syscall args are documented as PREFIXLESS HEX, so
+    // a value of `40` means O_CREAT (0x40) — not decimal 64. Parse positional
+    // args as hex first.
+    if let Some(raw) = first_string(record, &["/flags"]) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty()
+            && let Some(numeric) = parse_open_flags(trimmed)
+        {
+            let access = numeric & O_ACCMODE;
+            return access == O_WRONLY
+                || access == O_RDWR
+                || (access == O_RDONLY && (numeric & (O_CREAT | O_TRUNC | O_APPEND)) != 0);
+        }
+        let upper = trimmed.to_ascii_uppercase();
+        if upper.contains("O_WRONLY")
+            || upper.contains("O_RDWR")
+            || upper.contains("O_CREAT")
+            || upper.contains("O_TRUNC")
+            || upper.contains("O_APPEND")
+        {
+            return true;
+        }
+    }
+    let Some(raw) = first_string(record, &[positional]) else {
         return false;
     };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return false;
     }
-    if let Some(numeric) = parse_open_flags(trimmed) {
+    let numeric = parse_auditd_arg_hex(trimmed).or_else(|| parse_open_flags(trimmed));
+    if let Some(numeric) = numeric {
         let access = numeric & O_ACCMODE;
         return access == O_WRONLY
             || access == O_RDWR
             || (access == O_RDONLY && (numeric & (O_CREAT | O_TRUNC | O_APPEND)) != 0);
     }
-    let upper = trimmed.to_ascii_uppercase();
-    upper.contains("O_WRONLY")
-        || upper.contains("O_RDWR")
-        || upper.contains("O_CREAT")
-        || upper.contains("O_TRUNC")
-        || upper.contains("O_APPEND")
+    false
 }
 
 fn parse_open_flags(raw: &str) -> Option<u64> {
@@ -349,6 +373,17 @@ fn parse_open_flags(raw: &str) -> Option<u64> {
         return u64::from_str_radix(raw, 8).ok();
     }
     raw.parse::<u64>().ok()
+}
+
+fn parse_auditd_arg_hex(raw: &str) -> Option<u64> {
+    let stripped = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .unwrap_or(raw);
+    if stripped.is_empty() || !stripped.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(stripped, 16).ok()
 }
 
 /// Resolve `/syscall` to a syscall name when auditd emits a numeric identifier.
@@ -377,6 +412,7 @@ fn normalize_syscall_name(record: &Value) -> Option<String> {
             203 => "connect",
             206 => "sendto",
             56 => "openat",
+            437 => "openat2",
             38 => "renameat",
             276 => "renameat2",
             _ => return None,
@@ -389,6 +425,7 @@ fn normalize_syscall_name(record: &Value) -> Option<String> {
             44 => "sendto",
             2 => "open",
             257 => "openat",
+            437 => "openat2",
             85 => "creat",
             82 => "rename",
             264 => "renameat",
@@ -615,9 +652,10 @@ mod tests {
 
     #[tokio::test]
     async fn openat_reads_flags_from_a2_not_a1_dirfd() {
-        // Raw auditd shape: a1 is the directory fd (AT_FDCWD = -100), a2 is the
-        // open flags (O_WRONLY|O_CREAT|O_TRUNC = 0o1101 = 577). The dispatch
-        // must look at a2 for openat, not stop at a1's -100.
+        // Raw auditd shape: a1 is the directory fd (AT_FDCWD = ffffffffffffff9c),
+        // a2 is the open flags as PREFIXLESS HEX (auditd convention).
+        // 0x241 = O_WRONLY|O_CREAT|O_TRUNC. The dispatch must look at a2 for
+        // openat, not stop at a1's dirfd.
         let mut bridge = AuditdBridge::new(JsonRecordSource::new([json!({
             "type": "SYSCALL",
             "serial": 504,
@@ -627,8 +665,8 @@ mod tests {
             "exe": "/bin/bash",
             "comm": "bash",
             "path": "/etc/cron.d/escalation",
-            "a1": "-100",
-            "a2": "577"
+            "a1": "ffffffffffffff9c",
+            "a2": "241"
         })]));
         let event = bridge
             .poll()
