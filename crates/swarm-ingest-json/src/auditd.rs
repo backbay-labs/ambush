@@ -233,6 +233,11 @@ impl AuditdBridge {
         }))
     }
 
+    // KNOWN LIMITATION: raw auditd emits SYSCALL and PATH as separate records
+    // sharing a serial; correlating them requires a stateful per-serial buffer
+    // in the bridge. Until that lands, file-persistence events for raw audit
+    // streams need an enricher (ausearch/auditbeat) to merge `/path` into the
+    // SYSCALL record. Tracked as follow-up.
     fn map_file_persistence(
         &mut self,
         record: &Value,

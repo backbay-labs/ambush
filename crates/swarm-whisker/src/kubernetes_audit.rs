@@ -288,6 +288,12 @@ impl KubernetesAuditDetector {
         false
     }
 
+    // KNOWN LIMITATION: a single audit event can build a wildcard rule via
+    // multiple field-level patches (`add /rules/0/verbs ["*"]`,
+    // `add /rules/0/resources ["*"]`, `add /rules/0/apiGroups ["*"]`). The
+    // current detector only fires when a patch value is itself a complete rule
+    // object/array. Combining sibling field patches into a synthetic rule
+    // before evaluating wildcard membership is tracked as a follow-up.
     fn role_with_wildcard_permissions(&self, audit: &KubernetesAuditEvent) -> bool {
         if !matches!(audit.resource.as_str(), "roles" | "clusterroles") {
             return false;
@@ -588,6 +594,16 @@ fn spec_roots(request_object: &Value) -> Vec<&Value> {
     // CronJob nests its pod template one level deeper.
     if let Some(spec) = request_object.pointer("/spec/jobTemplate/spec/template/spec") {
         specs.push(spec);
+    }
+    // The `pods/ephemeralcontainers` subresource update can carry the debug
+    // containers at the top level (no `/spec` wrapper). Treat the request body
+    // itself as a spec-equivalent root so `privileged_container` finds them.
+    if request_object
+        .pointer("/ephemeralContainers")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+    {
+        specs.push(request_object);
     }
     specs
 }

@@ -405,34 +405,52 @@ fn candidate_threat_intel_queries(
 }
 
 fn candidate_url_values(command_line: &str) -> Vec<String> {
-    command_line
-        .split_whitespace()
-        .filter_map(|token| {
-            let trimmed = token.trim_matches(|ch: char| {
-                matches!(
-                    ch,
-                    '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
-                )
-            });
-            let lower_prefix = trimmed.to_ascii_lowercase();
-            if !(lower_prefix.starts_with("http://") || lower_prefix.starts_with("https://")) {
-                return None;
-            }
-            // Lowercase only the scheme + authority; URL path/query are
-            // case-sensitive on most servers so preserve them verbatim. Mirrors
-            // the substrate's URL-IOC normalization.
-            let stripped = trimmed.trim_end_matches('/');
+    let lower = command_line.to_ascii_lowercase();
+    let mut candidates = Vec::new();
+    // Scan the command line for embedded `http://` / `https://` substrings so
+    // tokens like `DownloadString('https://evil/x')` still surface the URL.
+    for prefix in ["http://", "https://"] {
+        let mut search_start = 0;
+        while let Some(found) = lower[search_start..].find(prefix) {
+            let abs = search_start + found;
+            // Walk forward until a delimiter that can't appear inside a URL.
+            let end = command_line[abs..]
+                .find(|ch: char| {
+                    ch.is_whitespace()
+                        || matches!(
+                            ch,
+                            '"' | '\''
+                                | '('
+                                | ')'
+                                | '['
+                                | ']'
+                                | '{'
+                                | '}'
+                                | ','
+                                | ';'
+                                | '<'
+                                | '>'
+                                | '`'
+                        )
+                })
+                .map(|rel| abs + rel)
+                .unwrap_or(command_line.len());
+            let raw = &command_line[abs..end];
+            let stripped = raw.trim_end_matches('/');
             let scheme_end = stripped.find("://").map(|i| i + 3).unwrap_or(0);
-            let path_start = stripped[scheme_end..]
-                .find('/')
+            let authority_end = stripped[scheme_end..]
+                .find(['/', '?', '#'])
                 .map(|rel| scheme_end + rel)
                 .unwrap_or(stripped.len());
-            let mut out = stripped[..path_start].to_ascii_lowercase();
-            out.push_str(&stripped[path_start..]);
-            Some(out)
-        })
-        .filter(|value| !value.is_empty())
-        .collect()
+            let mut normalized = stripped[..authority_end].to_ascii_lowercase();
+            normalized.push_str(&stripped[authority_end..]);
+            if !normalized.is_empty() {
+                candidates.push(normalized);
+            }
+            search_start = end.max(abs + prefix.len());
+        }
+    }
+    candidates
 }
 
 fn candidate_domain_values(query_name: &str) -> Vec<String> {

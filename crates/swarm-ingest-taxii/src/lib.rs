@@ -61,39 +61,60 @@ impl TaxiiPoller {
     }
 
     pub async fn poll_once(&self) -> Result<TaxiiPollOutcome, TaxiiPollError> {
+        const MAX_PAGES: usize = 64;
         let polled_at_ms = now_ms();
-        let response = self
-            .client
-            .get(&self.config.collection_url)
-            .header("accept", "application/taxii+json, application/json")
-            .send()
-            .await
-            .map_err(|source| TaxiiPollError::Fetch {
-                url: self.config.collection_url.clone(),
-                source,
-            })?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(TaxiiPollError::HttpStatus {
-                url: self.config.collection_url.clone(),
-                status,
-            });
-        }
-        let body = response
-            .json::<Value>()
-            .await
-            .map_err(|source| TaxiiPollError::Decode {
-                url: self.config.collection_url.clone(),
-                source,
-            })?;
-        Ok(TaxiiPollOutcome {
-            polled_at_ms,
-            entries: parse_taxii_bundle(
+        let mut entries = Vec::new();
+        let mut next: Option<String> = None;
+        for _ in 0..MAX_PAGES {
+            let mut request = self
+                .client
+                .get(&self.config.collection_url)
+                .header("accept", "application/taxii+json, application/json");
+            if let Some(cursor) = next.as_deref() {
+                request = request.query(&[("next", cursor)]);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|source| TaxiiPollError::Fetch {
+                    url: self.config.collection_url.clone(),
+                    source,
+                })?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(TaxiiPollError::HttpStatus {
+                    url: self.config.collection_url.clone(),
+                    status,
+                });
+            }
+            let body = response
+                .json::<Value>()
+                .await
+                .map_err(|source| TaxiiPollError::Decode {
+                    url: self.config.collection_url.clone(),
+                    source,
+                })?;
+            entries.extend(parse_taxii_bundle(
                 &body,
                 &self.config.name,
                 self.config.default_ttl_secs,
                 polled_at_ms,
-            ),
+            ));
+            // TAXII 2.1: keep paging while `more: true` and a `next` cursor is set.
+            let has_more = body.get("more").and_then(Value::as_bool).unwrap_or(false);
+            let next_cursor = body
+                .get("next")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            match (has_more, next_cursor) {
+                (true, Some(cursor)) => next = Some(cursor),
+                _ => break,
+            }
+        }
+        Ok(TaxiiPollOutcome {
+            polled_at_ms,
+            entries,
         })
     }
 }

@@ -18,6 +18,32 @@ from swarm_platform_client import AuthenticatedClient
 client = AuthenticatedClient(base_url="https://api.example.com", token="SuperSecretToken")
 ```
 
+> **Swarm Team Six platform routes (`/v2/api/*`) require BOTH a bearer token
+> AND an `x-api-key` header.** The generated `AuthenticatedClient` only sets
+> the bearer header, so calls go through `make_platform_client` which wires
+> both credentials in:
+>
+> ```python
+> from swarm_platform_client import make_platform_client
+>
+> client = make_platform_client(
+>     base_url="https://api.example.com",
+>     bearer_token="OPERATOR_BEARER",
+>     platform_api_key="PLATFORM_API_KEY",
+> )
+> ```
+>
+> For `/v2/api/stream/findings` (Server-Sent Events), use the streaming
+> iterator instead of the generated `stream_findings` helper — the latter
+> buffers the whole response and never returns against the live endpoint:
+>
+> ```python
+> from swarm_platform_client import iter_findings_sse
+>
+> for finding in iter_findings_sse(client, severity="high"):
+>     print(finding)
+> ```
+
 Now call your endpoint and use your models:
 
 ```python
