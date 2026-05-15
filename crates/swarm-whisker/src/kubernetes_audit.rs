@@ -272,7 +272,21 @@ impl KubernetesAuditDetector {
     }
 
     fn container_escape_indicator(&self, audit: &KubernetesAuditEvent) -> bool {
-        if audit.resource != "pods" {
+        // Pods carry the spec inline; controller resources (Deployment, DaemonSet,
+        // StatefulSet, ReplicaSet, Job, CronJob) wrap the same spec under
+        // `spec.template.spec` (and CronJobs under `spec.jobTemplate.spec.template.spec`).
+        // `spec_roots` walks both shapes — the outer-resource gate just needs to
+        // accept the shapes that can carry a templated pod spec.
+        if !matches!(
+            audit.resource.as_str(),
+            "pods"
+                | "deployments"
+                | "daemonsets"
+                | "statefulsets"
+                | "replicasets"
+                | "jobs"
+                | "cronjobs"
+        ) {
             return false;
         }
         if !matches!(
@@ -379,6 +393,10 @@ fn spec_roots(request_object: &Value) -> Vec<&Value> {
         specs.push(spec);
     }
     if let Some(spec) = request_object.pointer("/spec/template/spec") {
+        specs.push(spec);
+    }
+    // CronJob nests its pod template one level deeper.
+    if let Some(spec) = request_object.pointer("/spec/jobTemplate/spec/template/spec") {
         specs.push(spec);
     }
     specs

