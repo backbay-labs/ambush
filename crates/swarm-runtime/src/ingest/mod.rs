@@ -1017,9 +1017,8 @@ async fn process_runtime_event(
     swarm_core::observability::with_trace_id(
         trace_id,
         async {
-            let configured_live_mode =
-                state.stack.load_full().service.mode() == RuntimeMode::LiveResponse;
-            let live_mode = configured_live_mode && degradation.capabilities.allows_live_response;
+            let live_mode = state.stack.load_full().service.mode() == RuntimeMode::LiveResponse
+                && degradation.capabilities.allows_live_response;
             let approval = ApprovalContext {
                 live_mode,
                 receipt_chain: Vec::new(),

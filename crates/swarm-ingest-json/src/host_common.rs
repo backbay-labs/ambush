@@ -62,8 +62,7 @@ pub(crate) fn required_timestamp(
 ) -> TelemetryBridgeResult<i64> {
     pointers
         .iter()
-        .filter_map(|pointer| record.pointer(pointer).and_then(parse_timestamp_value))
-        .next()
+        .find_map(|pointer| record.pointer(pointer).and_then(parse_timestamp_value))
         .ok_or_else(|| {
             record_error(
                 health,

@@ -103,10 +103,10 @@ pub struct HttpRateLimitConfig {
     /// Sliding window for sustained protection.
     #[serde(default = "default_http_rate_limit_sustained_window_ms")]
     pub sustained_window_ms: u64,
-    /// When true, honor `X-Forwarded-For` / `X-Real-IP` / `Forwarded` headers as the
-    /// rate-limit source key. Only enable this when the detect server is reachable
-    /// exclusively through a trusted proxy that overwrites client-supplied values;
-    /// otherwise clients can rotate header values to bypass the limiter. Defaults to false.
+    /// Honor `X-Forwarded-For` / `X-Real-IP` / `Forwarded` headers as the rate-limit
+    /// source key. Only safe when the detect server sits behind a trusted proxy that
+    /// overwrites client-supplied values; otherwise clients can rotate header values
+    /// to bypass the limiter.
     #[serde(default)]
     pub trust_forwarded_headers: bool,
 }
