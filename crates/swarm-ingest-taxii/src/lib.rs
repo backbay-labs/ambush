@@ -117,23 +117,32 @@ fn parse_indicator_object(
     if object.get("type").and_then(Value::as_str) != Some("indicator") {
         return Vec::new();
     }
-    if object.get("revoked").and_then(Value::as_bool) == Some(true) {
-        return Vec::new();
-    }
     let Some(pattern) = object.get("pattern").and_then(Value::as_str) else {
         return Vec::new();
     };
+    let revoked = object.get("revoked").and_then(Value::as_bool) == Some(true);
     let indicator_id = object.get("id").and_then(Value::as_str).map(str::to_string);
-    let confidence = object
-        .get("confidence")
-        .and_then(Value::as_f64)
-        .map(|value| (value / 100.0).clamp(0.0, 1.0))
-        .unwrap_or(0.20);
-    let expires_at = object
-        .get("valid_until")
-        .and_then(Value::as_str)
-        .and_then(parse_timestamp_ms)
-        .unwrap_or_else(|| now_ms.saturating_add(default_ttl_secs.saturating_mul(1_000)));
+    let confidence = if revoked {
+        0.0
+    } else {
+        object
+            .get("confidence")
+            .and_then(Value::as_f64)
+            .map(|value| (value / 100.0).clamp(0.0, 1.0))
+            .unwrap_or(0.20)
+    };
+    // Revoked indicators are written as immediately-expired tombstones so the
+    // substrate's keyed insert overwrites the previously-stored live entry and
+    // the regular `expires_at > now` query filter (and TTL GC) drop them.
+    let expires_at = if revoked {
+        now_ms.saturating_sub(1)
+    } else {
+        object
+            .get("valid_until")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp_ms)
+            .unwrap_or_else(|| now_ms.saturating_add(default_ttl_secs.saturating_mul(1_000)))
+    };
 
     split_pattern_clauses(pattern)
         .into_iter()
@@ -335,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn revoked_indicator_objects_are_skipped() {
+    fn revoked_indicator_objects_become_immediately_expired_tombstones() {
         let bundle = json!({
             "objects": [
                 {
@@ -352,8 +361,20 @@ mod tests {
             ]
         });
 
-        let entries = parse_taxii_bundle(&bundle, "taxii-primary", 3600, 1_760_000_000_000);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].value, "live.example");
+        let now_ms = 1_760_000_000_000;
+        let entries = parse_taxii_bundle(&bundle, "taxii-primary", 3600, now_ms);
+        assert_eq!(entries.len(), 2);
+        let live = entries
+            .iter()
+            .find(|entry| entry.value == "live.example")
+            .expect("live entry must be present");
+        assert!(live.expires_at > now_ms);
+
+        let revoked = entries
+            .iter()
+            .find(|entry| entry.value == "withdrawn.example")
+            .expect("revoked entry must be emitted as tombstone");
+        assert!(revoked.expires_at < now_ms);
+        assert_eq!(revoked.confidence, 0.0);
     }
 }

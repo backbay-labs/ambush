@@ -336,12 +336,21 @@ impl DetectionStrategy for KubernetesAuditDetector {
 }
 
 fn rule_field_contains_wildcard(rule: &Value, pointer: &str) -> bool {
-    rule.pointer(pointer)
+    let entries: Vec<&str> = rule
+        .pointer(pointer)
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .any(|value| value.trim() == "*")
+        .map(str::trim)
+        .collect();
+    if entries.contains(&"*") {
+        return true;
+    }
+    // For apiGroups, an empty string is the Kubernetes core API group
+    // (pods, secrets, configmaps, ...) — wildcarding verbs+resources within
+    // it is still wildcard RBAC over the most sensitive surface.
+    pointer == "/apiGroups" && entries.contains(&"")
 }
 
 fn validate_entries(
@@ -607,6 +616,19 @@ mod tests {
                 "verbs": ["*"],
                 "resources": ["*"],
                 "apiGroups": ["*"]
+            }]
+        });
+        let findings = detector.evaluate(&event);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].evidence["mode"], "wildcard_rbac_permissions");
+
+        // Core API group is signalled by `apiGroups: [""]` — verbs+resources
+        // wildcarded over the core group is still wildcard RBAC.
+        payload_mut(&mut event).request_object = json!({
+            "rules": [{
+                "verbs": ["*"],
+                "resources": ["*"],
+                "apiGroups": [""]
             }]
         });
         let findings = detector.evaluate(&event);

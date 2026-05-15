@@ -1000,6 +1000,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bridge_metrics = state.current_prometheus_metrics();
         let mut bridge_handles =
             Some(bridge_registry.spawn(bridge_ingest_tx, shutdown_rx.clone(), bridge_metrics));
+        // KNOWN LIMITATION: these worker handles are spawned once from the initial
+        // config and bound to the process-wide `shutdown_rx`. `reload_from_disk()`
+        // does not rebuild them, so changes to `runtime.threat_intel_feeds` (added,
+        // removed, rotated endpoints, swapped pheromone substrate) only take effect
+        // after a process restart. Restarting workers in-place needs a per-worker
+        // shutdown signal in `ThreatIntelFeedRuntimeRegistry`; tracked as follow-up.
         let mut threat_intel_handles =
             Some(threat_intel_registry.spawn(state.current_substrate(), shutdown_rx.clone()));
         let mut reload_handles = Some(spawn_reload_tasks(state.clone(), shutdown_tx.clone()));

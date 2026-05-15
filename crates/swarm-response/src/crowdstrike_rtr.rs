@@ -502,7 +502,7 @@ impl ResponseExecutor for CrowdStrikeRtrAdapter {
                     &token,
                     operation,
                     format!(
-                        "{}?action_name=isolate",
+                        "{}?action_name=contain",
                         self.endpoint("/devices/entities/devices-actions/v2")
                     ),
                     payload,
@@ -783,7 +783,7 @@ mod tests {
         assert_eq!(state.token_requests.lock().await.len(), 1);
         assert_eq!(
             state.isolate_query.lock().await.clone(),
-            Some("isolate".to_string())
+            Some("contain".to_string())
         );
         assert_eq!(
             state.command_auth.lock().await.clone(),
