@@ -195,7 +195,8 @@ impl CloudTrailDetector {
         }
 
         if event_name == "runinstances"
-            && self.run_instances_large_instance_from_unusual_principal(&principal, cloudtrail)
+            && let Some(matched) =
+                self.run_instances_large_instance_from_unusual_principal(&principal, cloudtrail)
         {
             findings.push(self.finding(
                 event,
@@ -208,7 +209,7 @@ impl CloudTrailDetector {
                 "Resource Hijacking",
                 "impact",
                 json!({
-                    "instance_type": run_instances_instance_type(cloudtrail),
+                    "instance_type": matched,
                 }),
             ));
         }
@@ -388,18 +389,15 @@ impl CloudTrailDetector {
         &self,
         principal: &str,
         cloudtrail: &CloudTrailEvent,
-    ) -> bool {
-        let Some(instance_type) = run_instances_instance_types(cloudtrail)
+    ) -> Option<String> {
+        let instance_type = run_instances_instance_types(cloudtrail)
             .into_iter()
             .map(|value| normalize(&value))
             .find(|value| {
                 self.large_instance_prefixes
                     .iter()
                     .any(|prefix| value.starts_with(prefix))
-            })
-        else {
-            return false;
-        };
+            })?;
         let mut guard = self
             .state
             .lock()
@@ -409,8 +407,8 @@ impl CloudTrailDetector {
             .entry(principal.to_string())
             .or_default();
         let prior_non_empty = !seen.is_empty();
-        let inserted = seen.insert(instance_type);
-        prior_non_empty && inserted
+        let inserted = seen.insert(instance_type.clone());
+        (prior_non_empty && inserted).then_some(instance_type)
     }
 
     fn unusual_secret_caller(&self, principal: &str, resource: Option<&str>) -> bool {
@@ -916,6 +914,10 @@ mod tests {
             .find(|f| f.evidence["mode"] == "run_instances_large_instance_unusual_principal")
             .expect("large instance from unusual principal must fire on nested items");
         assert_eq!(large.threat_class, ThreatClass::Impact);
+        assert_eq!(
+            large.evidence["instance_type"], "p4d.24xlarge",
+            "evidence must report the matched large type, not the first benign item"
+        );
     }
 
     fn payload_mut(event: &mut TelemetryEvent) -> &mut CloudTrailEvent {

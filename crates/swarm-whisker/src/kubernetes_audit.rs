@@ -262,15 +262,7 @@ impl KubernetesAuditDetector {
             .any(|rule| {
                 ["/verbs", "/resources", "/apiGroups"]
                     .into_iter()
-                    .any(|pointer| {
-                        rule.pointer(pointer)
-                            .and_then(Value::as_array)
-                            .into_iter()
-                            .flatten()
-                            .filter_map(Value::as_str)
-                            .map(normalize)
-                            .any(|value| value == "*" || value == "secrets")
-                    })
+                    .all(|pointer| rule_field_contains_wildcard(rule, pointer))
             })
     }
 
@@ -341,6 +333,15 @@ impl DetectionStrategy for KubernetesAuditDetector {
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
         }
     }
+}
+
+fn rule_field_contains_wildcard(rule: &Value, pointer: &str) -> bool {
+    rule.pointer(pointer)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|value| value.trim() == "*")
 }
 
 fn validate_entries(
@@ -583,6 +584,34 @@ mod tests {
         payload_mut(&mut event).stage = Some("RequestReceived".to_string());
         payload_mut(&mut event).response_code = Some(201);
         assert!(detector.evaluate(&event).is_empty());
+    }
+
+    #[test]
+    fn narrow_secrets_reader_role_is_not_wildcard_rbac() {
+        let detector = KubernetesAuditDetector::default();
+        let mut event = event("evt-narrow");
+        let payload = payload_mut(&mut event);
+        payload.resource = "roles".to_string();
+        payload.request_object = json!({
+            "rules": [{
+                "verbs": ["get"],
+                "resources": ["secrets"],
+                "apiGroups": [""]
+            }]
+        });
+        assert!(detector.evaluate(&event).is_empty());
+
+        // Genuine wildcard requires ALL three fields to contain "*".
+        payload_mut(&mut event).request_object = json!({
+            "rules": [{
+                "verbs": ["*"],
+                "resources": ["*"],
+                "apiGroups": ["*"]
+            }]
+        });
+        let findings = detector.evaluate(&event);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].evidence["mode"], "wildcard_rbac_permissions");
     }
 
     #[test]

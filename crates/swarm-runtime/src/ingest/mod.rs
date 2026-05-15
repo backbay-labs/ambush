@@ -1321,7 +1321,7 @@ pub struct IngestState {
     runtime_events: Option<RuntimeEventBroadcaster>,
     approval_harness: Option<Arc<DefaultApprovalHarness>>,
     demo_runs: Arc<Mutex<DemoRunRegistry>>,
-    providence_adapter: Option<Arc<ProvidenceIncidentAdapter>>,
+    providence_adapter: Arc<ArcSwap<Option<Arc<ProvidenceIncidentAdapter>>>>,
     providence_task_started: Arc<AtomicBool>,
     governance_policy: Option<Arc<GovernancePolicy>>,
     startup_attestation: Option<Arc<StartupAttestationReport>>,
@@ -1407,7 +1407,7 @@ impl IngestState {
             runtime_events: None,
             approval_harness: None,
             demo_runs: Arc::new(Mutex::new(DemoRunRegistry::default())),
-            providence_adapter,
+            providence_adapter: Arc::new(ArcSwap::from_pointee(providence_adapter)),
             providence_task_started: Arc::new(AtomicBool::new(false)),
             governance_policy: None,
             startup_attestation: None,
@@ -1445,16 +1445,29 @@ impl IngestState {
             &config.platform_api,
             &config.operator,
         );
+        let new_providence_adapter = config
+            .notification_channels
+            .get(PROVIDENCE_CHANNEL)
+            .cloned()
+            .map(|channel| {
+                ProvidenceIncidentAdapter::new(channel, config.runtime.max_dead_letter_bytes)
+            })
+            .transpose()?
+            .map(Arc::new);
         match Self::build_runtime(config) {
             Ok((stack, request_runtime, detector)) => {
-                // Swap auth + rate-limit thresholds first so revoked credentials and
-                // tightened limits take effect before the new detector/stack become
-                // visible. Reload is not strictly atomic; ordering it this way means
-                // an inflight request can never authenticate against the OLD auth and
-                // then dispatch against the NEW stack.
+                // Reload is not atomic across the ArcSwap stores. Storing auth and
+                // rate-limit thresholds first prioritizes revocation: a request
+                // arriving after this point cannot authenticate against revoked keys
+                // even if it would still be served by the OLD detector. The remaining
+                // race (a request that read OLD auth before the swap and then sees
+                // NEW stack on dispatch) is accepted; both halves are valid snapshots
+                // and the platform API is read-only.
                 self.platform_api_auth.store(Arc::new(new_platform_auth));
                 self.platform_api_rate_limiter
                     .update_config(platform_rate_limit);
+                self.providence_adapter
+                    .store(Arc::new(new_providence_adapter));
                 self.detector.store(detector);
                 self.request_runtime.store(request_runtime);
                 self.stack.store(stack);
@@ -1541,7 +1554,7 @@ impl IngestState {
     }
 
     fn maybe_start_providence_sync_task(&self) {
-        let Some(adapter) = self.providence_adapter.clone() else {
+        let Some(adapter) = self.providence_adapter.load_full().as_ref().clone() else {
             return;
         };
         let Some(mode_state) = self.mode_state.clone() else {
@@ -1738,7 +1751,7 @@ impl IngestState {
     }
 
     pub async fn current_providence_health(&self) -> Option<ProvidenceHealthStatus> {
-        match &self.providence_adapter {
+        match self.providence_adapter.load_full().as_ref().clone() {
             Some(adapter) => Some(adapter.probe_health().await),
             None => None,
         }
@@ -1773,6 +1786,12 @@ impl IngestState {
                 degradation.summary
             ));
         }
+        // Hold an IngestRequestGuard for the duration so /prestop's wait_for_drain
+        // sees this bridge event in active_requests; without it the runtime can
+        // report drained while bridge processing is still mid-flight.
+        let _guard = self
+            .try_begin_ingest_request()
+            .map_err(|_| "runtime is draining and cannot accept bridge events".to_string())?;
         let requested_by = AgentId::from_verifying_key(&self.signing_key.verifying_key());
         let correlation_id = format!("bridge:{}:{}", event.source, event.event_id);
         process_runtime_event(self, &requested_by, &correlation_id, event)
