@@ -242,10 +242,50 @@ impl KubernetesAuditDetector {
         let role_ref = json_string_pointer(&audit.request_object, "/roleRef/name")
             .map(|value| normalize(&value))
             .unwrap_or_default();
-        self.privileged_role_fragments
+        if self
+            .privileged_role_fragments
             .iter()
             .any(|fragment| role_ref.contains(fragment))
             || json_tree_contains_string(&audit.request_object, "system:masters")
+        {
+            return true;
+        }
+        // JSON Patch: a `replace /roleRef/name` op (or any add/replace whose
+        // path or value mentions a privileged role name) updates an existing
+        // binding to point at cluster-admin/admin. The walk in
+        // `role_with_wildcard_permissions` doesn't apply here; check directly.
+        if let Some(operations) = audit.request_object.as_array() {
+            for op in operations {
+                let kind = op.get("op").and_then(Value::as_str).unwrap_or_default();
+                if !matches!(kind, "add" | "replace") {
+                    continue;
+                }
+                let path = op.get("path").and_then(Value::as_str).unwrap_or_default();
+                let Some(value) = op.get("value") else {
+                    continue;
+                };
+                if path.contains("/roleRef") {
+                    let candidate = match value {
+                        Value::String(s) => normalize(s),
+                        _ => json_string_pointer(value, "/name")
+                            .map(|s| normalize(&s))
+                            .unwrap_or_default(),
+                    };
+                    if !candidate.is_empty()
+                        && self
+                            .privileged_role_fragments
+                            .iter()
+                            .any(|fragment| candidate.contains(fragment))
+                    {
+                        return true;
+                    }
+                    if json_tree_contains_string(value, "system:masters") {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn role_with_wildcard_permissions(&self, audit: &KubernetesAuditEvent) -> bool {
@@ -515,6 +555,13 @@ fn privileged_container_value(value: &Value) -> bool {
 }
 
 fn host_path_escape_value(value: &Value, prefixes: &[String]) -> bool {
+    if let Some(items) = value.as_array() {
+        // Whole-array patches: walk each element so a `replace /spec/template/spec/volumes`
+        // with an inline hostPath volume still matches.
+        return items
+            .iter()
+            .any(|item| host_path_escape_value(item, prefixes));
+    }
     let path = value
         .pointer("/hostPath/path")
         .and_then(Value::as_str)

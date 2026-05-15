@@ -587,9 +587,13 @@ fn console_login_succeeded(cloudtrail: &CloudTrailEvent) -> bool {
     {
         return false;
     }
+    // Fail closed: only treat the login as successful when `responseElements`
+    // explicitly says so. A partially-mapped CloudTrail record (no error,
+    // missing/unmapped `ConsoleLogin` field) must not seed the new-IP baseline
+    // or drive a high-severity finding on the next event.
     json_string_pointer(&cloudtrail.response_elements, "/ConsoleLogin")
         .map(|value| value.eq_ignore_ascii_case("Success"))
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 fn run_instances_instance_types(cloudtrail: &CloudTrailEvent) -> Vec<String> {
@@ -740,11 +744,12 @@ mod tests {
     #[test]
     fn console_login_without_mfa_from_new_ip_is_detected_after_baseline() {
         let detector = CloudTrailDetector::default();
-        let baseline = event(
+        let mut baseline = event(
             "evt-baseline",
             "arn:aws:iam::123456789012:user/alice",
             "ConsoleLogin",
         );
+        payload_mut(&mut baseline).response_elements = json!({ "ConsoleLogin": "Success" });
         assert!(detector.evaluate(&baseline).is_empty());
 
         let mut second = event(
@@ -754,6 +759,7 @@ mod tests {
         );
         payload_mut(&mut second).source_ip_address = Some("198.51.100.44".to_string());
         payload_mut(&mut second).mfa_authenticated = Some(false);
+        payload_mut(&mut second).response_elements = json!({ "ConsoleLogin": "Success" });
 
         let findings = detector.evaluate(&second);
         assert_eq!(findings.len(), 1);
@@ -929,6 +935,7 @@ mod tests {
         );
         payload_mut(&mut later).mfa_authenticated = Some(false);
         payload_mut(&mut later).source_ip_address = Some("198.51.100.55".to_string());
+        payload_mut(&mut later).response_elements = json!({ "ConsoleLogin": "Success" });
         assert!(
             detector.evaluate(&later).is_empty(),
             "first successful no-MFA login establishes baseline; failed prior must not poison it"
@@ -941,6 +948,7 @@ mod tests {
         );
         payload_mut(&mut roaming).mfa_authenticated = Some(false);
         payload_mut(&mut roaming).source_ip_address = Some("198.51.100.99".to_string());
+        payload_mut(&mut roaming).response_elements = json!({ "ConsoleLogin": "Success" });
         let findings = detector.evaluate(&roaming);
         assert_eq!(findings.len(), 1);
         assert_eq!(

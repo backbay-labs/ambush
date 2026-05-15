@@ -144,7 +144,7 @@ fn extract_encoded_argument(command_line: &str) -> Option<String> {
         let token_lower = token.to_ascii_lowercase();
         let candidate = if matches!(
             token_lower.as_str(),
-            "-enc" | "/enc" | "-ec" | "/ec" | "-encodedcommand" | "/encodedcommand"
+            "-enc" | "/enc" | "-ec" | "/ec" | "-e" | "/e" | "-encodedcommand" | "/encodedcommand"
         ) {
             tokens.get(index + 1).copied()
         } else if has_encoded_prefix(&token_lower) {
@@ -172,6 +172,10 @@ fn has_encoded_prefix(token_lower: &str) -> bool {
         "-ec=",
         "/ec:",
         "/ec=",
+        "-e:",
+        "-e=",
+        "/e:",
+        "/e=",
         "-encodedcommand:",
         "-encodedcommand=",
         "/encodedcommand:",

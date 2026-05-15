@@ -324,11 +324,10 @@ fn open_is_write(record: &Value, syscall: &str) -> bool {
         "open" => "/a1",
         _ => "/a2",
     };
-    // Prefer normalized `/flags` (decimal/octal/symbolic, parsed permissively).
-    // Raw auditd `/a1`/`/a2` syscall args are documented as PREFIXLESS HEX, so
-    // a value of `40` means O_CREAT (0x40) — not decimal 64. Parse positional
-    // args as hex first.
-    if let Some(raw) = first_string(record, &["/flags"]) {
+    // Prefer normalized `/flags` (decimal/octal/symbolic, parsed permissively),
+    // plus openat2-specific `/open_how/flags` because openat2's `a2` is a
+    // pointer to `struct open_how`, not the flag bits themselves.
+    if let Some(raw) = first_string(record, &["/flags", "/open_how/flags"]) {
         let trimmed = raw.trim();
         if !trimmed.is_empty()
             && let Some(numeric) = parse_open_flags(trimmed)
@@ -348,6 +347,13 @@ fn open_is_write(record: &Value, syscall: &str) -> bool {
             return true;
         }
     }
+    // For openat2, no positional fallback is safe: a2 is a `struct open_how*`,
+    // not the flag bits. Fail closed when only raw syscall args are present.
+    if syscall == "openat2" {
+        return false;
+    }
+    // Raw auditd `/a1`/`/a2` syscall args are documented as PREFIXLESS HEX, so
+    // a value of `40` means O_CREAT (0x40) — not decimal 64.
     let Some(raw) = first_string(record, &[positional]) else {
         return false;
     };
