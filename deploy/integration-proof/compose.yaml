@@ -5,9 +5,9 @@ services:
       dockerfile: deploy/integration-proof/Dockerfile
     depends_on:
       crowdstrike-rtr-mock:
-        condition: service_started
+        condition: service_healthy
       splunk-hec-mock:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "${PROOF_RUNTIME_PORT:-19090}:9090"
     volumes:

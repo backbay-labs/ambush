@@ -313,6 +313,13 @@ pub struct SiemFindingForwarder {
 
 impl SiemFindingForwarder {
     pub fn new(config: SiemForwardConfig) -> Self {
+        Self::with_max_dead_letter_bytes(config, None)
+    }
+
+    pub fn with_max_dead_letter_bytes(
+        config: SiemForwardConfig,
+        max_dead_letter_bytes: Option<u64>,
+    ) -> Self {
         let (retry, circuit_breaker, dead_letter_path) = match &config {
             SiemForwardConfig::SplunkHec {
                 retry,
@@ -337,7 +344,10 @@ impl SiemFindingForwarder {
                 dead_letter_path.clone(),
             ),
         };
-        let journal = Arc::new(DeadLetterJournal::from_path(dead_letter_path, None));
+        let journal = Arc::new(DeadLetterJournal::from_path(
+            dead_letter_path,
+            max_dead_letter_bytes,
+        ));
         let inner = if let Some(adapter) = SplunkHecAdapter::new(&config) {
             ForwarderInner::Splunk {
                 executor: Arc::new(ResilientExecutor::new(

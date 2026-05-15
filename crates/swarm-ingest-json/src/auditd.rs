@@ -237,7 +237,7 @@ impl AuditdBridge {
                 // event when the open is for write/create/truncate. Read-only opens
                 // (`O_RDONLY`, no creation flags) under watched directories are normal
                 // file reads and would otherwise turn into spurious persistence findings.
-                if open_is_write(record) {
+                if open_is_write(record, syscall) {
                     "write"
                 } else {
                     return Ok(None);
@@ -302,7 +302,7 @@ impl TelemetryBridge for AuditdBridge {
 /// intent. auditd surfaces `flags` either as a hex/decimal integer (the kernel
 /// open flags) or as a symbolic string like `O_WRONLY|O_CREAT|O_TRUNC`. Without
 /// either signal, fail closed and treat the call as read-only.
-fn open_is_write(record: &Value) -> bool {
+fn open_is_write(record: &Value, syscall: &str) -> bool {
     // Linux `<fcntl.h>` constants. Lower two bits encode access mode.
     const O_RDONLY: u64 = 0;
     const O_WRONLY: u64 = 1;
@@ -312,7 +312,15 @@ fn open_is_write(record: &Value) -> bool {
     const O_TRUNC: u64 = 0o1000;
     const O_APPEND: u64 = 0o2000;
 
-    let Some(raw) = first_string(record, &["/flags", "/a1", "/a2"]) else {
+    // Prefer a normalized `/flags` field. Fall back to the raw syscall args:
+    // `open(path, flags, ...)` has flags at `a1`; `openat(dirfd, path, flags, ...)`
+    // has flags at `a2`. Reading the wrong arg yields the dirfd (typically -100
+    // / AT_FDCWD) which fails to parse and would otherwise drop the event.
+    let positional = match syscall {
+        "open" => "/a1",
+        _ => "/a2",
+    };
+    let Some(raw) = first_string(record, &["/flags", positional]) else {
         return false;
     };
     let trimmed = raw.trim();
@@ -601,6 +609,38 @@ mod tests {
             .expect("one event");
         match event.payload {
             TelemetryPayload::FilePersistence(file) => assert_eq!(file.operation, "write"),
+            _ => panic!("expected file_persistence payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn openat_reads_flags_from_a2_not_a1_dirfd() {
+        // Raw auditd shape: a1 is the directory fd (AT_FDCWD = -100), a2 is the
+        // open flags (O_WRONLY|O_CREAT|O_TRUNC = 0o1101 = 577). The dispatch
+        // must look at a2 for openat, not stop at a1's -100.
+        let mut bridge = AuditdBridge::new(JsonRecordSource::new([json!({
+            "type": "SYSCALL",
+            "serial": 504,
+            "timestamp": "2026-04-13T15:23:02Z",
+            "host": "linux-a",
+            "syscall": "openat",
+            "exe": "/bin/bash",
+            "comm": "bash",
+            "path": "/etc/cron.d/escalation",
+            "a1": "-100",
+            "a2": "577"
+        })]));
+        let event = bridge
+            .poll()
+            .await
+            .expect("write open via /a2 should map")
+            .pop()
+            .expect("one event");
+        match event.payload {
+            TelemetryPayload::FilePersistence(file) => {
+                assert_eq!(file.operation, "write");
+                assert_eq!(file.file_path, "/etc/cron.d/escalation");
+            }
             _ => panic!("expected file_persistence payload"),
         }
     }

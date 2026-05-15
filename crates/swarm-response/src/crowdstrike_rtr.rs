@@ -527,17 +527,19 @@ impl ResponseExecutor for CrowdStrikeRtrAdapter {
         #[allow(clippy::expect_used)]
         let (command_name, argument_value) =
             command.expect("command set for command-backed actions");
-        let argument_key = if command_name == "kill_process" {
-            "process_name"
+        // Falcon's RTR Admin API takes a flat command_string, not an arguments object.
+        // Map our internal kill_process/quarantine_file actions to the Falcon command
+        // shape: `kill <pid_or_name>` and `cs.fil quarantine <path>` are accepted
+        // base commands; the mock-server proof exercises the same shape.
+        let (base_command, command_string) = if command_name == "kill_process" {
+            ("kill", format!("kill {argument_value}"))
         } else {
-            "file_path"
+            ("cs.fil", format!("cs.fil quarantine {argument_value}"))
         };
-        let mut arguments = serde_json::Map::new();
-        arguments.insert(argument_key.to_string(), json!(argument_value));
         let command_payload = json!({
             "session_id": session_id,
-            "command": command_name,
-            "arguments": Value::Object(arguments),
+            "base_command": base_command,
+            "command_string": command_string,
         });
         match self
             .execute_json_call(
@@ -545,7 +547,7 @@ impl ResponseExecutor for CrowdStrikeRtrAdapter {
                 lease,
                 &token,
                 operation,
-                self.endpoint("/real-time-response/entities/execute-admin-command/v1"),
+                self.endpoint("/real-time-response/entities/admin-command/v1"),
                 command_payload,
                 mode,
             )
@@ -699,7 +701,7 @@ mod tests {
                 post(session_handler),
             )
             .route(
-                "/real-time-response/entities/execute-admin-command/v1",
+                "/real-time-response/entities/admin-command/v1",
                 post(command_handler),
             )
             .with_state(state.clone());
@@ -827,11 +829,8 @@ mod tests {
         );
         let command_payload = state.command_payload.lock().await.clone().unwrap();
         assert_eq!(command_payload["session_id"], "session-1");
-        assert_eq!(command_payload["command"], "kill_process");
-        assert_eq!(
-            command_payload["arguments"]["process_name"],
-            "powershell.exe"
-        );
+        assert_eq!(command_payload["base_command"], "kill");
+        assert_eq!(command_payload["command_string"], "kill powershell.exe");
 
         let _ = shutdown_tx.send(());
         handle.abort();
@@ -861,8 +860,11 @@ mod tests {
 
         assert_eq!(receipt.status, ResponseStatus::Executed);
         let command_payload = state.command_payload.lock().await.clone().unwrap();
-        assert_eq!(command_payload["command"], "quarantine_file");
-        assert_eq!(command_payload["arguments"]["file_path"], "C:\\malware.exe");
+        assert_eq!(command_payload["base_command"], "cs.fil");
+        assert_eq!(
+            command_payload["command_string"],
+            "cs.fil quarantine C:\\malware.exe"
+        );
 
         let _ = shutdown_tx.send(());
         handle.abort();
