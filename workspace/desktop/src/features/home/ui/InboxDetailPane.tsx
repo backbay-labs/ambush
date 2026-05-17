@@ -277,7 +277,7 @@ export function InboxDetailPane({
                 <div className="px-6 py-2">
                   <article
                     className={cn(
-                      "group/message flex items-start gap-2.5 px-2 py-1 transition-colors duration-1000",
+                      "group/message relative flex items-start gap-2.5 px-2 py-1 transition-colors duration-1000",
                       message.isSelected
                         ? cn(
                             isFocusHighlightVisible
@@ -292,6 +292,39 @@ export function InboxDetailPane({
                         : "home-inbox-context-message"
                     }
                   >
+                    {canReply || onToggleReaction ? (
+                      <div className="absolute right-2 top-1 z-10">
+                        <MessageActionBar
+                          activeReplyTargetId={replyTargetId}
+                          message={toActionBarMessage(message)}
+                          onReactionSelect={
+                            onToggleReaction
+                              ? (emoji) => {
+                                  const actionBarMessage =
+                                    toActionBarMessage(message);
+                                  const remove =
+                                    actionBarMessage.reactions?.some(
+                                      (reaction) =>
+                                        reaction.emoji === emoji &&
+                                        reaction.reactedByCurrentUser,
+                                    ) ?? false;
+                                  return onToggleReaction(
+                                    actionBarMessage,
+                                    emoji,
+                                    remove,
+                                  );
+                                }
+                              : undefined
+                          }
+                          onReply={
+                            canReply
+                              ? () => handleSelectReplyTarget(message)
+                              : undefined
+                          }
+                          reactions={message.reactions ?? []}
+                        />
+                      </div>
+                    ) : null}
                     <UserAvatar
                       avatarUrl={message.avatarUrl}
                       className="h-8 w-8 shrink-0 rounded-xl"
@@ -299,52 +332,17 @@ export function InboxDetailPane({
                       size="md"
                     />
                     <div className="-mt-1 min-w-0 flex-1">
-                      <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0">
+                      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0">
                         <p className="truncate text-sm font-semibold leading-none tracking-tight text-foreground">
                           {message.authorLabel}
+                        </p>
+                        <p className="shrink-0 text-xs font-normal leading-none tabular-nums text-muted-foreground/55">
+                          {message.fullTimestampLabel}
                         </p>
                         {message.isSelected ? (
                           <span className="text-[10px] font-semibold uppercase leading-none tracking-[0.14em] text-muted-foreground/70">
                             Inbox item
                           </span>
-                        ) : null}
-                        <p className="ml-auto text-xs text-muted-foreground">
-                          {message.fullTimestampLabel}
-                        </p>
-                        {canReply || onToggleReaction ? (
-                          <div className="relative ml-1">
-                            <div className="absolute right-0 top-1/2 -translate-y-1/2">
-                              <MessageActionBar
-                                activeReplyTargetId={replyTargetId}
-                                message={toActionBarMessage(message)}
-                                onReactionSelect={
-                                  onToggleReaction
-                                    ? (emoji) => {
-                                        const actionBarMessage =
-                                          toActionBarMessage(message);
-                                        const remove =
-                                          actionBarMessage.reactions?.some(
-                                            (reaction) =>
-                                              reaction.emoji === emoji &&
-                                              reaction.reactedByCurrentUser,
-                                          ) ?? false;
-                                        return onToggleReaction(
-                                          actionBarMessage,
-                                          emoji,
-                                          remove,
-                                        );
-                                      }
-                                    : undefined
-                                }
-                                onReply={
-                                  canReply
-                                    ? () => handleSelectReplyTarget(message)
-                                    : undefined
-                                }
-                                reactions={message.reactions ?? []}
-                              />
-                            </div>
-                          </div>
                         ) : null}
                       </div>
                       <div className="mt-1">
