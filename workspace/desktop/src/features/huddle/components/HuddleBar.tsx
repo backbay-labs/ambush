@@ -66,7 +66,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
   const [agentAddError, setAgentAddError] = React.useState<string | null>(null);
   const [modelStatus, setModelStatus] = React.useState<{
     stt: string;
-    kokoro: string;
+    tts: string;
   } | null>(null);
   // Huddle state: event-driven + 10s fallback poll.
   React.useEffect(() => {
@@ -133,13 +133,13 @@ export function HuddleBar({ className }: HuddleBarProps) {
       try {
         const status = await invoke<{
           stt: unknown;
-          kokoro: unknown;
+          tts: unknown;
         }>("get_model_status");
         if (cancelled) return;
 
         setModelStatus({
           stt: fmt(status.stt),
-          kokoro: fmt(status.kokoro),
+          tts: fmt(status.tts),
         });
       } catch {
         // best-effort
@@ -228,14 +228,14 @@ export function HuddleBar({ className }: HuddleBarProps) {
 
       {/* Model download progress */}
       {modelStatus &&
-        (modelStatus.stt !== "ready" || modelStatus.kokoro !== "ready") && (
+        (modelStatus.stt !== "ready" || modelStatus.tts !== "ready") && (
           <output className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="animate-pulse">
-              {modelStatus.stt !== "ready" && modelStatus.kokoro !== "ready"
-                ? `Voice models: STT ${modelStatus.stt}, TTS ${modelStatus.kokoro}`
+              {modelStatus.stt !== "ready" && modelStatus.tts !== "ready"
+                ? `Voice models: STT ${modelStatus.stt}, TTS ${modelStatus.tts}`
                 : modelStatus.stt !== "ready"
                   ? `STT model: ${modelStatus.stt}`
-                  : `TTS model: ${modelStatus.kokoro}`}
+                  : `TTS model: ${modelStatus.tts}`}
             </span>
           </output>
         )}
@@ -464,8 +464,8 @@ export function HuddleBar({ className }: HuddleBarProps) {
           modelStatus.stt !== "ready" &&
           `, STT model ${modelStatus.stt}`}
         {modelStatus &&
-          modelStatus.kokoro !== "ready" &&
-          `, TTS model ${modelStatus.kokoro}`}
+          modelStatus.tts !== "ready" &&
+          `, TTS model ${modelStatus.tts}`}
       </output>
     </div>
   );
