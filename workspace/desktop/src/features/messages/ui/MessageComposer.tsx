@@ -24,6 +24,7 @@ import {
   useRichTextEditor,
 } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
+import { getSproutCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
@@ -137,6 +138,15 @@ export function MessageComposer({
     emojiAutocomplete.isEmojiAutocompleteOpen;
 
   const submitMessageRef = React.useRef<() => void>(() => {});
+  const composerScrollRef = React.useRef<HTMLDivElement>(null);
+
+  const scrollComposerToBottom = React.useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const scrollElement = composerScrollRef.current;
+      if (!scrollElement) return;
+      scrollElement.scrollTop = scrollElement.scrollHeight;
+    });
+  }, []);
 
   const computedPlaceholder = editTarget
     ? "Edit your message"
@@ -505,6 +515,33 @@ export function MessageComposer({
             return true;
           }
 
+          // --- Sprout code-block paste ---
+          // The code block copy button writes a small Sprout marker alongside
+          // plain text. Use it to paste back as a literal code block so Markdown
+          // parsing cannot reshape indentation, fence markers, or headings.
+          const codeBlockText = getSproutCodeBlockClipboardText(
+            event.clipboardData,
+          );
+          if (codeBlockText !== null) {
+            event.preventDefault();
+            richText.editor
+              ?.chain()
+              .focus()
+              .insertContent([
+                {
+                  type: "codeBlock",
+                  content:
+                    codeBlockText.length > 0
+                      ? [{ type: "text", text: codeBlockText }]
+                      : [],
+                },
+                { type: "paragraph" },
+              ])
+              .run();
+            scrollComposerToBottom();
+            return true;
+          }
+
           // --- Mention / channel-link normalization ---
           // When copying from the chat area the browser puts styled HTML
           // on the clipboard. TipTap's DOMParser doesn't understand our
@@ -531,11 +568,16 @@ export function MessageComposer({
             return true;
           }
 
+          const plainText = event.clipboardData?.getData("text/plain") ?? "";
+          if (plainText.includes("\n")) {
+            scrollComposerToBottom();
+          }
+
           return false;
         },
       },
     });
-  }, [richText.editor]);
+  }, [richText.editor, scrollComposerToBottom]);
 
   // ── Send button state ───────────────────────────────────────────────
   const sendDisabled = React.useMemo(
@@ -680,6 +722,8 @@ export function MessageComposer({
           {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
           <div
             className="rich-text-composer max-h-32 overflow-y-auto"
+            data-testid="message-input-scroll"
+            ref={composerScrollRef}
             onKeyDown={handleEditorKeyDown}
           >
             <EditorContent editor={richText.editor} />
