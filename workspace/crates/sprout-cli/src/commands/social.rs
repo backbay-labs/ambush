@@ -5,7 +5,7 @@ use sprout_sdk::kind::{
     KIND_NIP65_RELAY_LIST_METADATA, KIND_PIN_LIST,
 };
 
-use crate::client::SproutClient;
+use crate::client::{normalize_write_response, SproutClient};
 use crate::error::CliError;
 use crate::validate::{parse_event_id, validate_hex64};
 
@@ -36,7 +36,7 @@ pub async fn cmd_publish_note(
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    println!("{}", normalize_write_response(&resp));
     Ok(())
 }
 
@@ -64,7 +64,7 @@ pub async fn cmd_set_contact_list(
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    println!("{}", normalize_write_response(&resp));
     Ok(())
 }
 

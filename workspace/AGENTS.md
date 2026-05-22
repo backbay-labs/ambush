@@ -52,8 +52,8 @@ See CONTRIBUTING.md for full setup details and dependency requirements.
 
 ## Quality Gates
 
-Run `just ci` before every PR. It runs: Rust `fmt` + `clippy`, desktop lint
-(Biome), unit tests, desktop build, and Tauri check. All must pass.
+Run `just ci` before every PR — it runs `fmt` + `clippy` + desktop lint +
+unit tests + builds. Clippy passing does not mean fmt passes; run both.
 
 Run `just test` for integration tests if you touched `sprout-relay`,
 `sprout-db`, or `sprout-auth` — these require a running Postgres and Redis.
@@ -113,6 +113,19 @@ check existing reply handlers for the pattern.
 
 ---
 
+## Agent CLI (`sprout-cli`)
+
+`sprout` is the agent-first CLI replacing `sprout-mcp`. Auth env vars
+(`SPROUT_RELAY_URL`, `SPROUT_PRIVATE_KEY`) are auto-injected by the ACP
+harness into managed agent subprocesses.
+
+All reads return sig-stripped JSON arrays; all writes return
+`{event_id, accepted, message}`; creates add the entity ID. Exit codes:
+0=ok, 1=input error, 3=auth missing. See `crates/sprout-cli/TESTING.md`
+for the full live-testing runbook.
+
+---
+
 ## Testing
 
 ```bash
@@ -133,6 +146,15 @@ E2E tests live in `crates/sprout-test-client/tests/`:
 Desktop E2E: `cd desktop && pnpm exec playwright test`
 
 See [TESTING.md](TESTING.md) for the full multi-agent E2E guide.
+
+---
+
+## Common Gotchas
+
+1. **Kind `39000` for channel metadata, not `41`** — kind 41 is NIP-01 (unused). All kinds defined in `sprout-core/src/kind.rs`.
+2. **Relay queries must specify `kinds`** — omitting `kinds` triggers the p-gate (403). Always include explicit kind filters.
+3. **Worktrees: `cd` in the same command** — shell CWD doesn't persist between tool calls. Use `cd /path && cargo build` as one command.
+4. **Desktop fmt check fails in worktrees** — run `just desktop-tauri-fmt-check` from the main checkout. CI is unaffected.
 
 ---
 
