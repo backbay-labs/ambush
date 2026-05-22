@@ -42,11 +42,12 @@ fn build_long_form_event(
     extra_tags: Vec<Tag>,
 ) -> nostr::Event {
     let mut tags = vec![
-        Tag::parse(&["d", d_tag]).unwrap(),
-        Tag::parse(&["title", title]).unwrap(),
+        Tag::parse(["d", d_tag]).unwrap(),
+        Tag::parse(["title", title]).unwrap(),
     ];
     tags.extend(extra_tags);
-    EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content, tags)
+    EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content)
+        .tags(tags)
         .sign_with_keys(keys)
         .unwrap()
 }
@@ -147,7 +148,7 @@ async fn test_long_form_stray_h_tag_ignored() {
         &d_tag,
         "Stray H-Tag Article",
         "Should be stored globally despite h-tag.",
-        vec![Tag::parse(&["h", &fake_channel]).unwrap()],
+        vec![Tag::parse(["h", &fake_channel]).unwrap()],
     );
     let event_id = event.id;
 
@@ -222,7 +223,7 @@ async fn test_long_form_nip33_replacement() {
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_LONG_FORM))
         .author(keys.public_key())
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
     client
         .subscribe(&sid, vec![filter])
         .await
@@ -262,11 +263,12 @@ async fn test_long_form_stale_write_rejected() {
     // Publish the "newer" event first (with a future-ish timestamp)
     let newer = {
         let tags = vec![
-            Tag::parse(&["d", &d_tag]).unwrap(),
-            Tag::parse(&["title", "Newer Article"]).unwrap(),
+            Tag::parse(["d", &d_tag]).unwrap(),
+            Tag::parse(["title", "Newer Article"]).unwrap(),
         ];
-        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Newer content.", tags)
-            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_u64() + 100))
+        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Newer content.")
+            .tags(tags)
+            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_secs() + 100))
             .sign_with_keys(&keys)
             .unwrap()
     };
@@ -277,11 +279,12 @@ async fn test_long_form_stale_write_rejected() {
     // Now try to publish an "older" event with the same d-tag but earlier timestamp
     let older = {
         let tags = vec![
-            Tag::parse(&["d", &d_tag]).unwrap(),
-            Tag::parse(&["title", "Older Article"]).unwrap(),
+            Tag::parse(["d", &d_tag]).unwrap(),
+            Tag::parse(["title", "Older Article"]).unwrap(),
         ];
-        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Older content.", tags)
-            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_u64() - 100))
+        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Older content.")
+            .tags(tags)
+            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_secs() - 100))
             .sign_with_keys(&keys)
             .unwrap()
     };
@@ -294,7 +297,7 @@ async fn test_long_form_stale_write_rejected() {
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_LONG_FORM))
         .author(keys.public_key())
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
     client
         .subscribe(&sid, vec![filter])
         .await
@@ -346,7 +349,7 @@ async fn test_long_form_a_tag_deletion() {
     let filter_pre = Filter::new()
         .kind(Kind::Custom(KIND_LONG_FORM))
         .author(keys.public_key())
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), d_tag.as_str());
     client
         .subscribe(&sid_pre, vec![filter_pre])
         .await
@@ -367,13 +370,10 @@ async fn test_long_form_a_tag_deletion() {
         keys.public_key().to_hex(),
         d_tag
     );
-    let del = EventBuilder::new(
-        Kind::EventDeletion,
-        "",
-        vec![Tag::parse(&["a", &a_coord]).unwrap()],
-    )
-    .sign_with_keys(&keys)
-    .unwrap();
+    let del = EventBuilder::new(Kind::EventDeletion, "")
+        .tags(vec![Tag::parse(["a", &a_coord]).unwrap()])
+        .sign_with_keys(&keys)
+        .unwrap();
     let ok_del = client.send_event(del).await.expect("send deletion");
     assert!(
         ok_del.accepted,
@@ -386,7 +386,7 @@ async fn test_long_form_a_tag_deletion() {
     let filter_post = Filter::new()
         .kind(Kind::Custom(KIND_LONG_FORM))
         .author(keys.public_key())
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), d_tag.as_str());
     client
         .subscribe(&sid_post, vec![filter_post])
         .await
@@ -431,16 +431,13 @@ async fn test_long_form_malformed_e_plus_a_does_not_delete() {
         keys.public_key().to_hex(),
         d_tag
     );
-    let del = EventBuilder::new(
-        Kind::EventDeletion,
-        "",
-        vec![
-            Tag::parse(&["e", "not-a-valid-event-id"]).unwrap(),
-            Tag::parse(&["a", &a_coord]).unwrap(),
-        ],
-    )
-    .sign_with_keys(&keys)
-    .unwrap();
+    let del = EventBuilder::new(Kind::EventDeletion, "")
+        .tags(vec![
+            Tag::parse(["e", "not-a-valid-event-id"]).unwrap(),
+            Tag::parse(["a", &a_coord]).unwrap(),
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
     // Relay may accept-and-noop or reject; either is fine. The contract under
     // test is that the coordinate is NOT soft-deleted.
     let _ = client.send_event(del).await.expect("send mixed deletion");
@@ -449,7 +446,7 @@ async fn test_long_form_malformed_e_plus_a_does_not_delete() {
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_LONG_FORM))
         .author(keys.public_key())
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), d_tag.as_str());
     client
         .subscribe(&sid, vec![filter])
         .await
@@ -493,7 +490,7 @@ async fn test_long_form_set_twice_preserves_published_at() {
         &d_tag,
         "First",
         "v1 body",
-        vec![Tag::parse(&["published_at", &original_published_at.to_string()]).unwrap()],
+        vec![Tag::parse(["published_at", &original_published_at.to_string()]).unwrap()],
     );
     let ok1 = client.send_event(v1).await.expect("send v1");
     assert!(ok1.accepted, "v1 should be accepted: {}", ok1.message);
@@ -503,20 +500,17 @@ async fn test_long_form_set_twice_preserves_published_at() {
 
     // Re-publish carrying the original `published_at` forward — what
     // `notes set` does on update when `--title` (or nothing) changes.
-    let v2 = EventBuilder::new(
-        Kind::Custom(KIND_LONG_FORM),
-        "v2 body",
-        vec![
-            Tag::parse(&["d", &d_tag]).unwrap(),
-            Tag::parse(&["title", "First"]).unwrap(),
-            Tag::parse(&["published_at", &original_published_at.to_string()]).unwrap(),
-        ],
-    )
-    .custom_created_at(Timestamp::now())
-    .sign_with_keys(&keys)
-    .unwrap();
+    let v2 = EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "v2 body")
+        .tags(vec![
+            Tag::parse(["d", &d_tag]).unwrap(),
+            Tag::parse(["title", "First"]).unwrap(),
+            Tag::parse(["published_at", &original_published_at.to_string()]).unwrap(),
+        ])
+        .custom_created_at(Timestamp::now())
+        .sign_with_keys(&keys)
+        .unwrap();
     let v2_id = v2.id;
-    let v2_created_at = v2.created_at.as_u64();
+    let v2_created_at = v2.created_at.as_secs();
     let ok2 = client.send_event(v2).await.expect("send v2");
     assert!(ok2.accepted, "v2 should be accepted: {}", ok2.message);
 
@@ -527,7 +521,7 @@ async fn test_long_form_set_twice_preserves_published_at() {
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_LONG_FORM))
         .author(keys.public_key())
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), d_tag.as_str());
     client
         .subscribe(&sid, vec![filter])
         .await
@@ -542,7 +536,7 @@ async fn test_long_form_set_twice_preserves_published_at() {
     let live = &events[0];
     assert_eq!(live.id, v2_id, "surviving event is v2");
     assert_eq!(
-        live.created_at.as_u64(),
+        live.created_at.as_secs(),
         v2_created_at,
         "created_at advanced to v2's timestamp"
     );
