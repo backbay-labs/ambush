@@ -1,5 +1,7 @@
+import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useIdentityQuery } from "@/shared/api/hooks";
 import {
   archiveIdentity,
   listArchivedIdentities,
@@ -32,6 +34,39 @@ export function useIsIdentityArchived(pubkey: string): boolean | undefined {
   if (!query.data) return undefined;
   const lower = pubkey.toLowerCase();
   return query.data.archived.includes(lower);
+}
+
+/**
+ * Predicate for hiding archived identities from forward-looking discovery
+ * surfaces (mention autocomplete, DM picker, member-adder, search,
+ * panel-fold). Distinct from `useIsIdentityArchived` because callers here
+ * need a synchronous boolean: while the `kind:13535` snapshot is loading the
+ * predicate returns `false` (no-op — show everyone), never `true` — fail-open
+ * so a cold-start can't briefly hide everyone.
+ *
+ * Self-exempt by construction: the current user is **never** filtered or
+ * folded from their own client, even when archived on the relay. NIP-IA §Self
+ * Requests makes archival deliberately non-silent — the anti-shadowban
+ * property requires the archived user to see they're archived and be able to
+ * self-unarchive. The profile pane's "Archived" flair is the honest
+ * disclosure; removing self from member lists / autocomplete / search would
+ * build the exact shadowban the NIP is designed to prevent. Self-exemption
+ * lives here, in the predicate, so no caller can forget it.
+ */
+export function useIsArchivedPredicate(): (pubkey: string) => boolean {
+  const query = useArchivedIdentitiesQuery();
+  const identityQuery = useIdentityQuery();
+  const selfPubkey = identityQuery.data?.pubkey;
+  return React.useMemo(() => {
+    const self = selfPubkey?.toLowerCase() ?? null;
+    const set = new Set(
+      (query.data?.archived ?? []).map((p) => p.toLowerCase()),
+    );
+    return (pubkey: string) => {
+      const lower = pubkey.toLowerCase();
+      return lower !== self && set.has(lower);
+    };
+  }, [query.data, selfPubkey]);
 }
 
 /**
