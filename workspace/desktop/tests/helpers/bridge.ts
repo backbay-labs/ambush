@@ -35,14 +35,6 @@ export const TEST_IDENTITIES = {
 
 type BridgeMode = "mock" | "relay";
 
-type MockAcpProvider = {
-  id: string;
-  label: string;
-  command: string;
-  binaryPath: string;
-  defaultArgs: string[];
-};
-
 type MockCommandAvailability = {
   available?: boolean;
   command?: string;
@@ -50,7 +42,7 @@ type MockCommandAvailability = {
 };
 
 type MockBridgeOptions = {
-  acpProviders?: MockAcpProvider[];
+  acpProvidersCatalog?: Record<string, unknown>[];
   managedAgentPrereqs?: {
     acp?: MockCommandAvailability;
     mcp?: MockCommandAvailability;

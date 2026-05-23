@@ -11,7 +11,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import {
-  useAcpProvidersQuery,
+  useAvailableAcpProviders,
   usePersonasQuery,
   useTeamsQuery,
 } from "@/features/agents/hooks";
@@ -295,7 +295,7 @@ function TemplateFormDialog({
   const updateMutation = useUpdateChannelTemplateMutation();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
-  const providersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpProviders();
   const providers = providersQuery.data ?? [];
 
   const [name, setName] = React.useState("");

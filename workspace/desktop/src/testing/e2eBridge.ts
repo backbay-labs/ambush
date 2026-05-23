@@ -4,20 +4,15 @@ import { finalizeEvent } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
 
 import type { RelayEvent } from "@/shared/api/types";
+import type {
+  RawAcpProviderCatalogEntry,
+  RawInstallRuntimeResult,
+} from "@/shared/api/tauri";
 
 type TestIdentity = {
   privateKey: string;
   pubkey: string;
   username: string;
-};
-
-type MockAcpProvider = {
-  id: string;
-  label: string;
-  command: string;
-  binaryPath: string;
-  defaultArgs: string[];
-  mcpCommand?: string | null;
 };
 
 type MockCommandAvailability = {
@@ -29,7 +24,8 @@ type MockCommandAvailability = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
-    acpProviders?: MockAcpProvider[];
+    acpProvidersCatalog?: RawAcpProviderCatalogEntry[];
+    installAcpRuntimeResult?: RawInstallRuntimeResult;
     managedAgentPrereqs?: {
       acp?: MockCommandAvailability;
       mcp?: MockCommandAvailability;
@@ -316,15 +312,6 @@ type RawCreateManagedAgentResponse = {
 type RawManagedAgentLog = {
   content: string;
   log_path: string;
-};
-
-type RawAcpProvider = {
-  id: string;
-  label: string;
-  command: string;
-  binary_path: string;
-  default_args: string[];
-  mcp_command: string | null;
 };
 
 type RawCommandAvailability = {
@@ -3468,37 +3455,96 @@ async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
 
 async function handleDiscoverAcpProviders(
   config: E2eConfig | undefined,
-): Promise<RawAcpProvider[]> {
-  const configuredProviders = config?.mock?.acpProviders;
-  if (configuredProviders) {
-    return configuredProviders.map((provider) => ({
-      id: provider.id,
-      label: provider.label,
-      command: provider.command,
-      binary_path: provider.binaryPath,
-      default_args: [...provider.defaultArgs],
-      mcp_command: provider.mcpCommand ?? null,
-    }));
+): Promise<RawAcpProviderCatalogEntry[]> {
+  const configured = config?.mock?.acpProvidersCatalog;
+  if (configured) {
+    return configured;
   }
-
   return [
     {
       id: "goose",
       label: "Goose",
+      avatar_url: "",
+      availability: "available",
       command: "goose",
       binary_path: "/usr/local/bin/goose",
       default_args: ["acp"],
       mcp_command: null,
+      install_hint: "Install Goose via the official install script.",
+      install_instructions_url: "https://block.github.io/goose/",
+      can_auto_install: true,
+      underlying_cli_path: null,
+    },
+    {
+      id: "claude",
+      label: "Claude Code",
+      avatar_url: "",
+      availability: "adapter_missing",
+      command: null,
+      binary_path: null,
+      default_args: [],
+      mcp_command: null,
+      install_hint: "Install the Claude Code ACP adapter via npm.",
+      install_instructions_url:
+        "https://www.npmjs.com/package/@anthropic-ai/claude-agent-acp",
+      can_auto_install: true,
+      underlying_cli_path: "/usr/local/bin/claude",
     },
     {
       id: "codex",
       label: "Codex",
-      command: "codex-acp",
-      binary_path: "/usr/local/bin/codex-acp",
+      avatar_url: "",
+      availability: "not_installed",
+      command: null,
+      binary_path: null,
       default_args: [],
       mcp_command: null,
+      install_hint:
+        "The codex-acp adapter must be built from source. See the GitHub repo.",
+      install_instructions_url: "https://github.com/openai/codex",
+      can_auto_install: false,
+      underlying_cli_path: null,
+    },
+    {
+      id: "sprout-agent",
+      label: "Sprout Agent",
+      avatar_url: "",
+      availability: "available",
+      command: "sprout-agent",
+      binary_path: "/usr/local/bin/sprout-agent",
+      default_args: [],
+      mcp_command: "sprout-dev-mcp",
+      install_hint: "Ships with the Sprout desktop app.",
+      install_instructions_url: "https://github.com/block/sprout",
+      can_auto_install: false,
+      underlying_cli_path: null,
     },
   ];
+}
+
+async function handleInstallAcpRuntime(
+  args: {
+    providerId?: string;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawInstallRuntimeResult> {
+  const configured = config?.mock?.installAcpRuntimeResult;
+  if (configured) {
+    return configured;
+  }
+  return {
+    success: true,
+    steps: [
+      {
+        step: "adapter",
+        command: `mock install ${args.providerId ?? "unknown"}`,
+        success: true,
+        stdout: "mock: installed successfully",
+        stderr: "",
+        exit_code: 0,
+      },
+    ],
+  };
 }
 
 async function handleDiscoverManagedAgentPrereqs(
@@ -4673,6 +4719,11 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayHttpUrl(activeConfig);
       case "discover_acp_providers":
         return handleDiscoverAcpProviders(activeConfig);
+      case "install_acp_runtime":
+        return handleInstallAcpRuntime(
+          payload as { providerId?: string },
+          activeConfig,
+        );
       case "discover_backend_providers":
         return [];
       case "probe_backend_provider":
