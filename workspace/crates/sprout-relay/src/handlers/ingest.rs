@@ -12,17 +12,18 @@ use uuid::Uuid;
 use nostr::Event;
 use sprout_auth::Scope;
 use sprout_core::kind::{
-    event_kind_u32, is_parameterized_replaceable, is_relay_admin_kind, KIND_AGENT_ENGRAM,
-    KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET,
-    KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN,
-    KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP,
-    KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
-    KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
-    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
-    KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_RECORDING_AVAILABLE,
-    KIND_HUDDLE_STARTED, KIND_HUDDLE_TRACK_PUBLISHED, KIND_LONG_FORM,
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MUTE_LIST,
-    KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
+    event_kind_u32, is_identity_archive_request_kind, is_parameterized_replaceable,
+    is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH,
+    KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_FOLLOW_SET, KIND_FORUM_COMMENT,
+    KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH,
+    KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE,
+    KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
+    KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED,
+    KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_RECORDING_AVAILABLE, KIND_HUDDLE_STARTED,
+    KIND_HUDDLE_TRACK_PUBLISHED, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST,
+    KIND_LONG_FORM, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
     KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
     KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
     KIND_NIP65_RELAY_LIST_METADATA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PROFILE,
@@ -187,6 +188,15 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         {
             Ok(Scope::AdminUsers)
         }
+        // NIP-IA: identity archive/unarchive requests (9035/9036).
+        // Scope is intentionally UsersWrite, not AdminUsers: NIP-IA's self and
+        // owner-of-agent paths are open to ordinary users (a user retiring their
+        // own key, or an owner archiving their agent). Real authorization is the
+        // consent-path check inside handle_identity_archive_event — the relay
+        // verifies self / admin-role / owner-via-live-kind:0 there. This gate
+        // only ensures the actor can write user-scoped state, which any
+        // profile-publishing user already holds.
+        KIND_IA_ARCHIVE_REQUEST | KIND_IA_UNARCHIVE_REQUEST => Ok(Scope::UsersWrite),
         KIND_NIP29_EDIT_METADATA => {
             // kind:9002 scope split: archived tag → AdminChannels, else ChannelsWrite
             let has_archived = event
@@ -340,6 +350,11 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | RELAY_ADMIN_REMOVE_MEMBER
             | RELAY_ADMIN_CHANGE_ROLE
             | KIND_NIP43_LEAVE_REQUEST
+            // NIP-IA: identity archive/unarchive requests drive relay-global
+            // archive state (8002/8003/13535) and are audited as global request
+            // events. A stray `h` tag must not channel-scope them.
+            | KIND_IA_ARCHIVE_REQUEST
+            | KIND_IA_UNARCHIVE_REQUEST
     )
 }
 
@@ -1262,6 +1277,17 @@ pub async fn ingest_event(
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
 
+    // ── 9c. NIP-IA identity archive requests (kinds 9035/9036) ───────────
+    // Processed here (verify consent, mutate archived_identities, emit the
+    // relay-signed 8002/8003 delta + 13535 snapshot), then — unlike the
+    // NIP-43 admin commands above — the request itself falls through to normal
+    // storage so the delta's `["e", request_id]` audit reference resolves.
+    if is_identity_archive_request_kind(kind_u32) {
+        crate::handlers::identity_archive::handle_identity_archive_event(state, &event)
+            .await
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
     // ── 10. Standard deletion validation (kind:5) ────────────────────────
     if kind_u32 == KIND_DELETION {
         crate::handlers::side_effects::validate_standard_deletion_event(&event, state)
@@ -1715,6 +1741,19 @@ mod tests {
         KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_LONG_FORM,
         KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF, KIND_USER_STATUS,
     };
+
+    #[test]
+    fn nip_ia_requests_are_global_only() {
+        // NIP-IA requests drive relay-global archive state; a stray `h` tag
+        // must not channel-scope them, or the global audit trail breaks.
+        for kind in [KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST] {
+            assert!(is_global_only_kind(kind), "kind {kind} must be global-only");
+            assert!(
+                !requires_h_channel_scope(kind),
+                "kind {kind} must not require an h tag"
+            );
+        }
+    }
 
     #[test]
     fn channel_scoped_content_kinds_require_h_tags() {
