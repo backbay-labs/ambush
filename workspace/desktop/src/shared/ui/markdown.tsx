@@ -1,5 +1,8 @@
 import * as React from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, {
+  type Components,
+  defaultUrlTransform,
+} from "react-markdown";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Copy } from "lucide-react";
 import remarkBreaks from "remark-breaks";
@@ -7,6 +10,11 @@ import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import {
+  isMessageLink,
+  parseMessageLink,
+  type ParsedMessageLink,
+} from "@/features/messages/lib/messageLink";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { invokeTauri } from "@/shared/api/tauri";
 import type { Channel } from "@/shared/api/types";
@@ -18,6 +26,7 @@ import rehypeImageGallery from "@/shared/lib/rehypeImageGallery";
 import rehypeSearchHighlight from "@/shared/lib/rehypeSearchHighlight";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
+import remarkMessageLinks from "@/features/messages/lib/remarkMessageLinks";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
@@ -30,6 +39,19 @@ import {
 import { VideoPlayer } from "./VideoPlayer";
 
 type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
+
+/**
+ * `urlTransform` for `<ReactMarkdown>` that preserves `sprout://message?…`
+ * links. The default transform strips unknown schemes (returns `""`) before
+ * the `a` component override can see them, which would break copy → paste →
+ * click end-to-end. Everything else delegates to `defaultUrlTransform`.
+ */
+function messageLinkUrlTransform(value: string, key: string): string {
+  if (key === "href" && isMessageLink(value)) {
+    return value;
+  }
+  return defaultUrlTransform(value);
+}
 
 type MarkdownProps = {
   channelNames?: string[];
@@ -179,6 +201,7 @@ function createMarkdownComponents(
   variant: MarkdownVariant,
   channels: Channel[],
   onOpenChannel: (channelId: string) => void,
+  onOpenMessageLink: (link: ParsedMessageLink) => void,
   imetaByUrl?: ImetaLookup,
   mentionPubkeysByName?: Record<string, string>,
 ): Components {
@@ -196,17 +219,43 @@ function createMarkdownComponents(
       : "space-y-1 pl-6 marker:text-muted-foreground";
 
   return {
-    a: ({ children, href, ...props }) => (
-      <a
-        {...props}
-        className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
-        href={href}
-        rel="noreferrer"
-        target="_blank"
-      >
-        {children}
-      </a>
-    ),
+    a: ({ children, href, ...props }) => {
+      // Intercept `sprout://message?channel=…&id=…` links so a click navigates
+      // in-app instead of opening the URL in the OS browser. http(s) links
+      // continue to use the existing target="_blank" behavior.
+      if (isMessageLink(href)) {
+        const parsed = parseMessageLink(href ?? "");
+        if (parsed.ok) {
+          const target = parsed.value;
+          return (
+            <a
+              {...props}
+              className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80 cursor-pointer"
+              href={href}
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenMessageLink(target);
+              }}
+            >
+              {children}
+            </a>
+          );
+        }
+        // Malformed sprout://message link — fall through to the default
+        // anchor (renders as a normal external link).
+      }
+      return (
+        <a
+          {...props}
+          className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
+          href={href}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {children}
+        </a>
+      );
+    },
     blockquote: ({ children }) => (
       <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground">
         {children}
@@ -442,6 +491,35 @@ function createMarkdownComponents(
         </span>
       );
     },
+    "message-link": ({ children }: { children?: React.ReactNode }) => {
+      const href = String(children ?? "");
+      const parsed = parseMessageLink(href);
+      if (!parsed.ok) {
+        // Malformed `sprout://message?…` — render the raw URL as plain text
+        // rather than a misleading clickable pill.
+        return <span data-message-link="">{href}</span>;
+      }
+
+      const { channelId, messageId } = parsed.value;
+      const channel = channels.find((c) => c.id === channelId);
+      const channelLabel = channel?.name ?? "channel";
+      const shortId = messageId.slice(0, 6);
+
+      return (
+        <button
+          type="button"
+          data-message-link=""
+          aria-label={`Open message in ${channelLabel}`}
+          title={href}
+          className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary cursor-pointer hover:bg-primary/25 transition-colors"
+          onClick={() => {
+            onOpenMessageLink(parsed.value);
+          }}
+        >
+          #{channelLabel} · {shortId}
+        </button>
+      );
+    },
   } as Components;
 }
 
@@ -472,6 +550,16 @@ function MarkdownInner({
         (channelId) => {
           void goChannel(channelId);
         },
+        (link) => {
+          // Always route through `goChannel` with `messageId` set: the
+          // channel route already handles scroll-into-view + highlight via
+          // `useTimelineScrollManager` + `getEventById` backfill, and works
+          // for both stream-message replies and forum threads. Detecting
+          // "the thread root is a forum post" up front would require an
+          // event lookup we don't currently have synchronously; the brief
+          // explicitly allows skipping that detection and falling through.
+          void goChannel(link.channelId, { messageId: link.messageId });
+        },
         imetaByUrl,
         mentionPubkeysByName,
       ),
@@ -483,6 +571,7 @@ function MarkdownInner({
     () => [
       remarkGfm,
       remarkBreaks,
+      remarkMessageLinks,
       [remarkMentions, { mentionNames }],
       [remarkChannelLinks, { channelNames }],
     ],
@@ -514,6 +603,7 @@ function MarkdownInner({
       components={components}
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
+      urlTransform={messageLinkUrlTransform}
     >
       {processedContent}
     </ReactMarkdown>
