@@ -184,7 +184,10 @@ jobs:
           DMG_PATH: ${{ steps.artifacts.outputs.dmg }}
         run: |
           RELEASE_SHA=$(git rev-parse HEAD)
-          NOTES=$(awk "/^## v${VERSION}$/,/^## v/" CHANGELOG.md | head -n -1)
+          NOTES=""
+          if [[ -f CHANGELOG.md ]]; then
+            NOTES=$(awk "/^## v${VERSION}$/,/^## v/" CHANGELOG.md | sed '$d')
+          fi
           if [[ -z "$NOTES" ]]; then
             NOTES="Sprout Desktop v${VERSION}"
           fi
