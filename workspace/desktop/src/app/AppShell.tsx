@@ -11,6 +11,7 @@ import {
 } from "@/app/AppShellOverlays";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
+import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import {
   channelsQueryKey,
@@ -26,6 +27,7 @@ import {
 } from "@/features/notifications/hooks";
 import {
   listenForDesktopNotificationActions,
+  requestDockBounce,
   revealDesktopAppWindow,
   sendDesktopNotification,
   setDesktopAppBadgeCount,
@@ -209,6 +211,10 @@ export function AppShell() {
   const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
+  const handleChannelNotification = React.useEffectEvent(() => {
+    if (!notificationSettings.settings.desktopEnabled) return;
+    void requestDockBounce();
+  });
 
   const handleDmNotification = React.useEffectEvent(
     (event: RelayEvent, channel: Channel) => {
@@ -238,9 +244,9 @@ export function AppShell() {
           pubkey: event.pubkey,
         },
       }).then((didSend) => {
-        if (didSend && notificationSettings.settings.soundEnabled) {
-          playNotificationSound();
-        }
+        if (!didSend) return;
+        if (notificationSettings.settings.soundEnabled) playNotificationSound();
+        void requestDockBounce();
       });
     },
   );
@@ -265,13 +271,14 @@ export function AppShell() {
   );
 
   const {
+    markAllChannelsRead,
     markChannelRead,
     markChannelUnread,
     unreadChannelIds,
     getEffectiveTimestamp: getChannelReadAt,
     readStateVersion,
   } = useUnreadChannels(
-    channels,
+    sidebarChannels,
     activeChannel,
     // Wait for ChannelScreen to report the latest loaded message before
     // advancing unread state for the active channel.
@@ -280,6 +287,7 @@ export function AppShell() {
       pubkey: identityQuery.data?.pubkey,
       relayClient,
       currentPubkey: identityQuery.data?.pubkey,
+      onChannelMessage: handleChannelNotification,
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
     },
@@ -439,8 +447,8 @@ export function AppShell() {
   }, []);
 
   React.useEffect(() => {
-    void setDesktopAppBadgeCount(homeBadgeCount);
-  }, [homeBadgeCount]);
+    void setDesktopAppBadgeCount(unreadChannelIds.size + homeBadgeCount);
+  }, [homeBadgeCount, unreadChannelIds.size]);
 
   React.useEffect(() => {
     let isCancelled = false;
@@ -546,6 +554,14 @@ export function AppShell() {
     };
   }, [handleCloseSettings, handleOpenSettings, settingsOpen]);
 
+  useMarkAsReadShortcuts({
+    activeChannelId: activeChannel?.id ?? null,
+    activeChannelLastMessageAt: activeChannel?.lastMessageAt,
+    markAllChannelsRead,
+    markChannelRead,
+    selectedView,
+  });
+
   React.useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
       if (event.button !== 0 || event.detail > 1) {
@@ -581,6 +597,7 @@ export function AppShell() {
       <ChannelNavigationProvider channels={channels}>
         <AppShellProvider
           value={{
+            markAllChannelsRead,
             markChannelRead,
             markChannelUnread,
             openChannelManagement: () => {
@@ -693,6 +710,8 @@ export function AppShell() {
                     void applyAgents(templateId, createdForum.id);
                   }}
                   onHideDm={handleHideDm}
+                  onMarkAllChannelsRead={markAllChannelsRead}
+                  onMarkChannelRead={markChannelRead}
                   onMarkChannelUnread={markChannelUnread}
                   onOpenBrowseChannels={handleOpenBrowseChannels}
                   onOpenBrowseForums={handleOpenBrowseForums}
