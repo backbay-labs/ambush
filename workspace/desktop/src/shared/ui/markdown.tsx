@@ -172,7 +172,7 @@ function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
   );
 
   return (
-    <div className="group relative">
+    <div className="group relative" data-code-block="">
       <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
         {children}
       </pre>
@@ -257,7 +257,7 @@ function createMarkdownComponents(
       );
     },
     blockquote: ({ children }) => (
-      <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground">
+      <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground [&>*:first-child]:mt-0 [&>*+*]:mt-2">
         {children}
       </blockquote>
     ),
@@ -294,13 +294,19 @@ function createMarkdownComponents(
       );
     },
     h1: ({ children }) => (
-      <h1 className="text-lg font-semibold tracking-tight">{children}</h1>
+      <h1 className="text-xl font-semibold leading-8 tracking-tight">
+        {children}
+      </h1>
     ),
     h2: ({ children }) => (
-      <h2 className="text-base font-semibold tracking-tight">{children}</h2>
+      <h2 className="text-lg font-semibold leading-7 tracking-tight">
+        {children}
+      </h2>
     ),
     h3: ({ children }) => (
-      <h3 className="font-semibold tracking-tight">{children}</h3>
+      <h3 className="text-base font-semibold leading-6 tracking-tight">
+        {children}
+      </h3>
     ),
     hr: () => <hr className="border-border/80" />,
     img: ({ alt, src }) => {
@@ -421,7 +427,10 @@ function createMarkdownComponents(
       <strong className="font-semibold">{children}</strong>
     ),
     table: ({ children }) => (
-      <div className="overflow-x-auto rounded-2xl border border-border/70">
+      <div
+        className="overflow-x-auto rounded-2xl border border-border/70"
+        data-table-block=""
+      >
         <table className="w-full border-collapse text-left text-sm">
           {children}
         </table>
@@ -617,10 +626,51 @@ function MarkdownInner({
     <div
       className={cn(
         tight
-          ? "max-w-none break-words text-sm leading-5 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-0.5"
+          ? [
+              "max-w-none break-words text-sm leading-5 text-foreground/90",
+              // Reset first/last
+              "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+              // Base owl: p+p, list+p, etc.
+              "[&>*+*]:mt-2",
+              // Headings: flat push/pull — size does the hierarchy work
+              "[&>*+h1]:mt-2.5 [&>*+h2]:mt-2.5 [&>*+h3]:mt-2.5",
+              "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
+              // Blockquotes: breathe above and below
+              "[&>*+blockquote]:mt-3 [&>blockquote+*]:mt-3",
+              // Code blocks: breathe above and below
+              "[&>*+[data-code-block]]:mt-3 [&>[data-code-block]+*]:mt-3",
+              // Tables: breathe above and below
+              "[&>*+[data-table-block]]:mt-3 [&>[data-table-block]+*]:mt-3",
+              // hr: clear section divider
+              "[&>*+hr]:mt-3.5 [&>hr+*]:mt-3.5",
+              // Lists after paragraphs: tighter to feel related
+              "[&>p+ul]:mt-1 [&>p+ol]:mt-1 [&>div+ul]:mt-1 [&>div+ol]:mt-1",
+            ].join(" ")
           : compact
-            ? "max-w-none break-words text-[15px] leading-6 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-1.5"
-            : "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-3",
+            ? [
+                "max-w-none break-words text-[15px] leading-6 text-foreground/90",
+                "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                "[&>*+*]:mt-2",
+                "[&>*+h1]:mt-3 [&>*+h2]:mt-3 [&>*+h3]:mt-3",
+                "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
+                "[&>*+blockquote]:mt-3 [&>blockquote+*]:mt-3",
+                "[&>*+[data-code-block]]:mt-3 [&>[data-code-block]+*]:mt-3",
+                "[&>*+[data-table-block]]:mt-3 [&>[data-table-block]+*]:mt-3",
+                "[&>*+hr]:mt-3.5 [&>hr+*]:mt-3.5",
+                "[&>p+ul]:mt-1 [&>p+ol]:mt-1 [&>div+ul]:mt-1 [&>div+ol]:mt-1",
+              ].join(" ")
+            : [
+                "max-w-none break-words text-sm leading-7 text-foreground/90",
+                "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                "[&>*+*]:mt-3",
+                "[&>*+h1]:mt-3.5 [&>*+h2]:mt-3.5 [&>*+h3]:mt-3.5",
+                "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
+                "[&>*+blockquote]:mt-3.5 [&>blockquote+*]:mt-3.5",
+                "[&>*+[data-code-block]]:mt-3.5 [&>[data-code-block]+*]:mt-3.5",
+                "[&>*+[data-table-block]]:mt-3.5 [&>[data-table-block]+*]:mt-3.5",
+                "[&>*+hr]:mt-4 [&>hr+*]:mt-4",
+                "[&>p+ul]:mt-1.5 [&>p+ol]:mt-1.5 [&>div+ul]:mt-1.5 [&>div+ol]:mt-1.5",
+              ].join(" "),
         className,
       )}
     >
