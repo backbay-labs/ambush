@@ -244,7 +244,7 @@ organized under `desktop/src/features/`. Biome handles linting and formatting.
 
 ```bash
 just desktop-dev   # web-only dev server (faster iteration)
-just desktop-app   # full Tauri app with native shell
+just dev           # full Tauri app with native shell
 ```
 
 ### Workspace Switching
@@ -315,6 +315,12 @@ flutter test
 ```
 
 Or from repo root: `just mobile-fmt` (auto-fix), `just mobile-check` (lint + fmt check), `just mobile-test` (tests).
+
+To run the app locally (starts Docker, relay, iOS simulator automatically):
+
+```bash
+just mobile-dev
+```
 
 ### Testing Conventions
 
