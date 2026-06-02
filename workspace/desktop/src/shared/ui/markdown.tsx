@@ -9,6 +9,15 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
+import {
+  getSingletonHighlighter,
+  type HighlighterGeneric,
+  type BundledLanguage,
+  type BundledTheme,
+  type ThemedToken,
+} from "shiki";
+
+import { useTheme } from "@/shared/theme/ThemeProvider";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
   isMessageLink,
@@ -51,6 +60,59 @@ type ImetaEntry = {
 };
 
 type ImetaLookup = Map<string, ImetaEntry>;
+
+let shikiHighlighter: HighlighterGeneric<BundledLanguage, BundledTheme> | null =
+  null;
+let shikiInitPromise: Promise<void> | null = null;
+const loadedLangs = new Set<string>();
+const loadedThemes = new Set<string>();
+const tokenCache = new Map<string, ThemedToken[][]>();
+const MAX_CACHE_ENTRIES = 100;
+const MAX_LOADED_LANGUAGES = 30;
+const MAX_HIGHLIGHT_LINES = 150;
+const CODE_BLOCK_CLASS =
+  "code-block-lines block min-w-full whitespace-pre font-mono text-[13px] leading-6 text-foreground";
+const DIFF_ADD_RE = /\s*\/\/\s*\[!code\s*\+\+\]\s*$/;
+const DIFF_REMOVE_RE = /\s*\/\/\s*\[!code\s*--\]\s*$/;
+
+function ensureHighlighter(): Promise<void> {
+  if (shikiHighlighter) return Promise.resolve();
+  if (!shikiInitPromise) {
+    shikiInitPromise = getSingletonHighlighter({
+      themes: [],
+      langs: [],
+    }).then((h) => {
+      shikiHighlighter = h;
+    });
+  }
+  return shikiInitPromise;
+}
+
+function extractLanguage(className?: string): string {
+  if (typeof className !== "string") return "";
+  const match = className.match(/language-(\S+)/);
+  return match ? match[1] : "";
+}
+
+function stripDiffMarker(tokens: ThemedToken[], marker: RegExp): ThemedToken[] {
+  const last = tokens[tokens.length - 1];
+  if (!last) return tokens;
+  const stripped = last.content.replace(marker, "");
+  if (stripped === last.content) return tokens;
+  if (stripped === "") return tokens.slice(0, -1);
+  return [...tokens.slice(0, -1), { ...last, content: stripped }];
+}
+
+function useStableArray<T>(arr: T[]): T[] {
+  const ref = React.useRef(arr);
+  if (
+    arr.length !== ref.current.length ||
+    arr.some((item, i) => item !== ref.current[i])
+  ) {
+    ref.current = arr;
+  }
+  return ref.current;
+}
 
 /**
  * `urlTransform` for `<ReactMarkdown>` that preserves `sprout://message?…`
@@ -162,7 +224,13 @@ function getCodeBlockText(children: React.ReactNode) {
   return getReactNodeText(children).replace(/\n$/, "");
 }
 
-function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
+function MarkdownCodeBlock({
+  children,
+  language,
+}: {
+  children?: React.ReactNode;
+  language?: string;
+}) {
   const [isCopying, setIsCopying] = React.useState(false);
   const code = React.useMemo(() => getCodeBlockText(children), [children]);
 
@@ -187,7 +255,12 @@ function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
 
   return (
     <div className="group relative" data-code-block="">
-      <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
+      <pre className="max-h-[400px] overflow-x-auto overflow-y-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
+        {language && (
+          <div className="mb-1 text-xs text-muted-foreground/70">
+            {language}
+          </div>
+        )}
         {children}
       </pre>
       <Tooltip>
@@ -265,6 +338,139 @@ function FileCard({
   );
 }
 
+function SyntaxHighlightedCode({
+  code,
+  language,
+  ...props
+}: {
+  code: string;
+  language: string;
+} & React.ComponentProps<"code">) {
+  const { themeName } = useTheme();
+  const [loadedKey, setLoadedKey] = React.useState(0);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    async function loadAssets() {
+      try {
+        await ensureHighlighter();
+        if (!shikiHighlighter || cancelled) return;
+        let loaded = false;
+        if (!loadedLangs.has(language)) {
+          if (loadedLangs.size >= MAX_LOADED_LANGUAGES) return;
+          try {
+            await shikiHighlighter.loadLanguage(language as BundledLanguage);
+            loadedLangs.add(language);
+            loaded = true;
+          } catch {
+            return;
+          }
+        }
+        if (!loadedThemes.has(themeName as string)) {
+          try {
+            await shikiHighlighter.loadTheme(themeName as BundledTheme);
+            loadedThemes.add(themeName as string);
+            loaded = true;
+          } catch {
+            return;
+          }
+        }
+        if (loaded && !cancelled) setLoadedKey((k) => k + 1);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!loadedLangs.has(language) || !loadedThemes.has(themeName as string)) {
+      loadAssets();
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [language, themeName]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadedKey intentionally triggers re-memoization after async asset loading
+  const tokens = React.useMemo(() => {
+    if (
+      !shikiHighlighter ||
+      !loadedLangs.has(language) ||
+      !loadedThemes.has(themeName as string)
+    )
+      return null;
+    if ((code.match(/\n/g) || []).length > MAX_HIGHLIGHT_LINES) return null;
+    const cacheKey = `${language}:${themeName}:${code}`;
+    const cached = tokenCache.get(cacheKey);
+    if (cached) return cached;
+    try {
+      const result = shikiHighlighter.codeToTokens(code, {
+        lang: language as BundledLanguage,
+        theme: themeName as BundledTheme,
+      });
+      if (tokenCache.size >= MAX_CACHE_ENTRIES) {
+        const firstKey = tokenCache.keys().next().value;
+        if (firstKey !== undefined) tokenCache.delete(firstKey);
+      }
+      tokenCache.set(cacheKey, result.tokens);
+      return result.tokens;
+    } catch {
+      return null;
+    }
+  }, [code, language, themeName, loadedKey]);
+
+  const codeClassName = CODE_BLOCK_CLASS;
+
+  if (!tokens) {
+    const lines = code.split("\n");
+    return (
+      <code {...props} className={codeClassName}>
+        {lines.map((line, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: lines are positional
+          <span key={i} data-line="">
+            {line}
+          </span>
+        ))}
+      </code>
+    );
+  }
+
+  return (
+    <code {...props} className={codeClassName}>
+      {tokens.map((line, lineIdx) => {
+        const lineText = line.map((t) => t.content).join("");
+        const isAdd = DIFF_ADD_RE.test(lineText);
+        const isRemove = DIFF_REMOVE_RE.test(lineText);
+        const diffClass = isAdd
+          ? "code-line-diff-add"
+          : isRemove
+            ? "code-line-diff-remove"
+            : undefined;
+
+        const renderedTokens =
+          isAdd || isRemove
+            ? stripDiffMarker(line, isAdd ? DIFF_ADD_RE : DIFF_REMOVE_RE)
+            : line;
+
+        return (
+          <span
+            // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reordered
+            key={lineIdx}
+            data-line=""
+            className={diffClass}
+          >
+            {renderedTokens.map((token, tokenIdx) => (
+              <span
+                // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reordered
+                key={tokenIdx}
+                style={token.color ? { color: token.color } : undefined}
+              >
+                {token.content}
+              </span>
+            ))}
+          </span>
+        );
+      })}
+    </code>
+  );
+}
 function createMarkdownComponents(
   variant: MarkdownVariant,
   channels: Channel[],
@@ -360,15 +566,23 @@ function createMarkdownComponents(
         typeof className === "string" && className.includes("language-");
 
       if (isFencedCodeBlock || rawCode.endsWith("\n") || code.includes("\n")) {
+        const language = extractLanguage(className);
+
+        if (language) {
+          return (
+            <SyntaxHighlightedCode code={code} language={language} {...props} />
+          );
+        }
+
+        const lines = code.split("\n");
         return (
-          <code
-            {...props}
-            className={cn(
-              "block min-w-full whitespace-pre font-mono text-[13px] leading-6 text-foreground",
-              className,
-            )}
-          >
-            {code}
+          <code {...props} className={CODE_BLOCK_CLASS}>
+            {lines.map((line, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: lines are positional
+              <span key={i} data-line="">
+                {line}
+              </span>
+            ))}
           </code>
         );
       }
@@ -521,12 +735,21 @@ function createMarkdownComponents(
 
       return <p className={paragraphClassName}>{children}</p>;
     },
-    pre: ({ children }) =>
-      interactive ? (
-        <MarkdownCodeBlock>{children}</MarkdownCodeBlock>
-      ) : (
-        <span>{children}</span>
-      ),
+    pre: ({ children }) => {
+      if (!interactive) return <span>{children}</span>;
+      let language = "";
+      React.Children.forEach(children, (child) => {
+        if (
+          React.isValidElement<Record<string, unknown>>(child) &&
+          typeof child.props?.className === "string"
+        ) {
+          language = extractLanguage(child.props.className);
+        }
+      });
+      return (
+        <MarkdownCodeBlock language={language}>{children}</MarkdownCodeBlock>
+      );
+    },
     strong: ({ children }) => (
       <strong className="font-semibold">{children}</strong>
     ),
@@ -687,7 +910,8 @@ function MarkdownInner({
     : compact
       ? "compact"
       : "default";
-  const { channels } = useChannelNavigation();
+  const { channels: rawChannels } = useChannelNavigation();
+  const channels = useStableArray(rawChannels);
   const { goChannel } = useAppNavigation();
 
   const components = React.useMemo(
