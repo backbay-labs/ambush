@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowDown, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, X } from "lucide-react";
 
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
@@ -8,12 +8,14 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
+import { THREAD_PANEL_MIN_WIDTH_PX } from "@/shared/hooks/useThreadPanelWidth";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import {
   OverlayPanelBackdrop,
   PANEL_BASE_CLASS,
   PANEL_OVERLAY_CLASS,
+  PANEL_SINGLE_COLUMN_HEADER_LAYER_CLASS,
 } from "@/shared/ui/OverlayPanelBackdrop";
 import { MessageComposer } from "./MessageComposer";
 import { MessageRow } from "./MessageRow";
@@ -36,6 +38,7 @@ type MessageThreadPanelProps = {
     imetaMedia?: ImetaMedia[];
   } | null;
   isSending: boolean;
+  isSinglePanelView?: boolean;
   onCancelEdit?: () => void;
   onCancelReply: () => void;
   onClose: () => void;
@@ -93,6 +96,7 @@ export function MessageThreadPanel({
   disabled = false,
   editTarget,
   isSending,
+  isSinglePanelView = false,
   isFollowingThread,
   onCancelEdit,
   onCancelReply,
@@ -124,8 +128,13 @@ export function MessageThreadPanel({
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
   const threadComposerWrapperRef = React.useRef<HTMLDivElement>(null);
   const isOverlay = useIsThreadPanelOverlay();
-  useEscapeKey(onClose, isOverlay);
-  useComposerHeightPadding(threadBodyRef, threadComposerWrapperRef);
+  const isFloatingOverlay = isOverlay && !isSinglePanelView;
+  useEscapeKey(onClose, isOverlay || isSinglePanelView);
+  useComposerHeightPadding(
+    threadBodyRef,
+    threadComposerWrapperRef,
+    isSinglePanelView,
+  );
 
   const threadHeadId = threadHead?.id ?? null;
 
@@ -165,16 +174,24 @@ export function MessageThreadPanel({
 
   return (
     <>
-      {isOverlay && <OverlayPanelBackdrop onClose={onClose} />}
+      {isFloatingOverlay && <OverlayPanelBackdrop onClose={onClose} />}
       <aside
-        className={cn(PANEL_BASE_CLASS, isOverlay && PANEL_OVERLAY_CLASS)}
+        className={cn(
+          PANEL_BASE_CLASS,
+          isSinglePanelView && "border-l-0",
+          isFloatingOverlay && PANEL_OVERLAY_CLASS,
+        )}
         data-testid="message-thread-panel"
-        style={{ width: `${widthPx}px` }}
+        style={{
+          width: isSinglePanelView
+            ? "100%"
+            : `min(${widthPx}px, calc(100% - ${THREAD_PANEL_MIN_WIDTH_PX}px))`,
+        }}
       >
-        {!isOverlay && (
+        {!isOverlay && !isSinglePanelView && (
           <button
             aria-label="Resize thread panel"
-            className="peer/thread-resize group/thread-resize absolute inset-y-0 left-0 z-[60] w-3 -translate-x-1/2 cursor-col-resize"
+            className="peer/thread-resize group/thread-resize absolute inset-y-0 left-0 z-40 w-3 -translate-x-1/2 cursor-col-resize"
             data-testid="message-thread-resize-handle"
             onDoubleClick={canResetWidth ? onResetWidth : undefined}
             onPointerDown={onResizeStart}
@@ -198,19 +215,43 @@ export function MessageThreadPanel({
 
         <div
           className={cn(
-            "z-50 flex cursor-default select-none items-center gap-3 px-3",
-            isOverlay
-              ? "relative min-h-[44px] shrink-0 bg-background/80 py-[6px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
-              : "absolute inset-x-0 top-11 min-h-[32px] py-[4px]",
+            "flex cursor-default select-none items-center",
+            isSinglePanelView
+              ? `relative ${PANEL_SINGLE_COLUMN_HEADER_LAYER_CLASS} -mb-[76px] min-h-[76px] shrink-0 gap-[10px] bg-background/80 pb-[3px] pl-[16px] pr-[8px] pt-[43px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 sm:pl-[24px] sm:pr-[12px] dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55`
+              : isOverlay
+                ? "relative z-50 min-h-[44px] shrink-0 gap-3 bg-background/80 px-3 py-[6px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
+                : "absolute inset-x-0 top-[42px] z-50 min-h-[32px] gap-3 px-3 py-[4px]",
           )}
           data-tauri-drag-region
         >
-          <div className="flex min-w-0 items-center gap-1.5">
-            <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
+          <div
+            className={cn(
+              "flex min-w-0 items-center",
+              isSinglePanelView ? "gap-[4px]" : "gap-1.5",
+            )}
+          >
+            {isSinglePanelView ? (
+              <div className="relative h-[14px] w-[14px] shrink-0">
+                <Button
+                  aria-label="Back to conversation"
+                  className="absolute left-1/2 top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  data-testid="message-thread-back"
+                  onClick={onClose}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : null}
+            <h2 className="translate-y-px text-sm font-semibold leading-5 tracking-tight">
+              Thread
+            </h2>
           </div>
           <Button
             aria-label="Close thread"
-            className="ml-auto h-4 w-4 rounded-full text-muted-foreground/45 opacity-70 hover:bg-muted/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
+            className="ml-auto h-4 w-4 rounded-full text-foreground hover:bg-muted/60 hover:text-foreground"
             data-testid="message-thread-close"
             onClick={onClose}
             size="icon"
@@ -223,8 +264,8 @@ export function MessageThreadPanel({
 
         <div
           className={cn(
-            "min-h-0 flex-1 overflow-y-auto pb-24",
-            isOverlay ? "" : "pt-[76px]",
+            "min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain pb-24 [overflow-anchor:none]",
+            isSinglePanelView ? "pt-[76px]" : isOverlay ? "" : "pt-[76px]",
           )}
           data-testid="message-thread-body"
           onScroll={syncScrollState}

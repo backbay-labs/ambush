@@ -50,11 +50,11 @@ export function InboxListPane({
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
       />
-      <div className="absolute inset-x-0 top-[42px] z-50 min-h-[32px] px-5 py-[4px]">
+      <div className="absolute inset-x-0 top-[42px] z-40 min-h-[32px] px-5 py-[4px]">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-[6px]">
             <Inbox className="h-[14px] w-[14px] shrink-0 text-muted-foreground" />
-            <h2 className="truncate text-sm font-semibold leading-5 tracking-tight">
+            <h2 className="translate-y-px truncate text-sm font-semibold leading-5 tracking-tight">
               Inbox
             </h2>
           </div>
@@ -116,7 +116,7 @@ export function InboxListPane({
                   className={cn(
                     "flex w-full items-start gap-2.5 border-l px-5 py-2 text-left transition-colors",
                     isSelected
-                      ? "border-l-primary bg-muted/30"
+                      ? "border-l-transparent bg-muted/30"
                       : "border-l-transparent hover:bg-muted/25 active:bg-muted/40",
                   )}
                   data-testid={`home-inbox-item-${item.id}`}
