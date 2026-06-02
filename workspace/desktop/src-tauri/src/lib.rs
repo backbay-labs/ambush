@@ -4,6 +4,7 @@ mod events;
 mod huddle;
 mod managed_agents;
 mod media_proxy;
+mod mesh_llm;
 mod migration;
 mod models;
 pub mod nostr_convert;
@@ -491,9 +492,9 @@ pub fn run() {
 
             // Keep launch-time agent restoration off the synchronous setup path
             // so the frontend can mount and reveal the window promptly.
-            tauri::async_runtime::spawn_blocking(move || {
+            tauri::async_runtime::spawn(async move {
                 if let Err(error) =
-                    restore_managed_agents_on_launch(&app_handle, shutdown_started.as_ref())
+                    restore_managed_agents_on_launch(&app_handle, shutdown_started.as_ref()).await
                 {
                     eprintln!("sprout-desktop: failed to restore managed agents: {error}");
                 }
@@ -579,6 +580,13 @@ pub fn run() {
             delete_managed_agent,
             get_managed_agent_log,
             get_agent_models,
+            mesh_availability,
+            mesh_start_node,
+            mesh_ensure_client_node,
+            mesh_stop_node,
+            mesh_node_status,
+            mesh_installed_models,
+            mesh_agent_preset,
             update_managed_agent,
             discover_backend_providers,
             probe_backend_provider,
