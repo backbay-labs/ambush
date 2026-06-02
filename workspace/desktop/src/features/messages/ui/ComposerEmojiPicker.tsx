@@ -3,11 +3,14 @@ import Picker from "@emoji-mart/react";
 import data from "@emoji-mart/data";
 import { SmilePlus } from "lucide-react";
 
+import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
+import { buildCustomEmojiCategory } from "@/features/custom-emoji/emojiMartCategory";
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type ComposerEmojiPickerProps = {
+  customEmoji?: CustomEmoji[];
   disabled?: boolean;
   onEmojiSelect: (emoji: string) => void;
   onOpenChange: (open: boolean) => void;
@@ -16,12 +19,17 @@ type ComposerEmojiPickerProps = {
 };
 
 export const ComposerEmojiPicker = React.memo(function ComposerEmojiPicker({
+  customEmoji = [],
   disabled = false,
   onEmojiSelect,
   onOpenChange,
   onTriggerMouseDown,
   open,
 }: ComposerEmojiPickerProps) {
+  const custom = React.useMemo(
+    () => buildCustomEmojiCategory(customEmoji),
+    [customEmoji],
+  );
   return (
     <Popover onOpenChange={onOpenChange} open={open}>
       <Tooltip>
@@ -50,9 +58,16 @@ export const ComposerEmojiPicker = React.memo(function ComposerEmojiPicker({
       >
         <Picker
           data={data}
-          onEmojiSelect={(emoji: { native: string }) =>
-            onEmojiSelect(emoji.native)
-          }
+          custom={custom}
+          onEmojiSelect={(emoji: { native?: string; id?: string }) => {
+            // Custom emoji have no `native`; insert their `:shortcode:` (the
+            // emoji-mart id is the shortcode). Standard emoji insert `native`.
+            if (emoji.native) {
+              onEmojiSelect(emoji.native);
+            } else if (emoji.id) {
+              onEmojiSelect(`:${emoji.id}:`);
+            }
+          }}
           theme="auto"
           previewPosition="none"
           skinTonePosition="search"

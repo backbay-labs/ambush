@@ -30,6 +30,8 @@ pub const KIND_NIP65_RELAY_LIST_METADATA: u32 = 10002;
 /// User-owned global state, keyed by `(pubkey, kind)`. References content but is not itself
 /// channel-scoped content.
 pub const KIND_BOOKMARK_LIST: u32 = 10003;
+/// NIP-51: Emoji list (replaceable) — user preferred emojis and pointers to emoji sets.
+pub const KIND_EMOJI_LIST: u32 = 10030;
 /// NIP-51: Follow set (parameterized replaceable, 30000–39999 range) — named curated lists of pubkeys.
 ///
 /// User-owned, keyed by `(pubkey, kind, d_tag)`. Allows multiple named follow lists on top of
@@ -39,6 +41,15 @@ pub const KIND_FOLLOW_SET: u32 = 30000;
 ///
 /// User-owned, keyed by `(pubkey, kind, d_tag)`.
 pub const KIND_BOOKMARK_SET: u32 = 30003;
+/// NIP-51 / NIP-30: Emoji set (parameterized replaceable).
+///
+/// User-owned, keyed by `(pubkey, kind, d_tag)`. Each member publishes their own
+/// kind:30030 set (signed as themselves); the workspace emoji "palette" is the
+/// client-side union of everyone's sets — a view computed on read, not stored
+/// state. Ingest allowlists member-authored kind:30030/10030 (see
+/// `required_scope_for_kind`), and the generic NIP-33 replace path keeps only the
+/// latest per `(pubkey, d_tag)`.
+pub const KIND_EMOJI_SET: u32 = 30030;
 /// NIP-01: Channel metadata (replaceable). Not used by Sprout today.
 pub const KIND_CHANNEL_METADATA: u32 = 41;
 /// NIP-09: Event deletion request.
@@ -107,7 +118,6 @@ pub const RELAY_ADMIN_ADD_MEMBER: u32 = 9030;
 pub const RELAY_ADMIN_REMOVE_MEMBER: u32 = 9031;
 /// NIP-43: Change the role of an existing relay member.
 pub const RELAY_ADMIN_CHANGE_ROLE: u32 = 9032;
-
 // NIP-43 relay membership announcement events (relay-signed)
 /// NIP-43: Relay membership list snapshot (relay-signed, replaceable by convention).
 pub const KIND_NIP43_MEMBERSHIP_LIST: u32 = 13534;
@@ -324,8 +334,10 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PIN_LIST,
     KIND_NIP65_RELAY_LIST_METADATA,
     KIND_BOOKMARK_LIST,
+    KIND_EMOJI_LIST,
     KIND_FOLLOW_SET,
     KIND_BOOKMARK_SET,
+    KIND_EMOJI_SET,
     KIND_CHANNEL_METADATA,
     KIND_DELETION,
     KIND_REACTION,

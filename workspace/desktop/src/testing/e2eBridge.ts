@@ -4,6 +4,10 @@ import { finalizeEvent } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
 
 import type { RelayEvent } from "@/shared/api/types";
+import {
+  CUSTOM_EMOJI_SET_D_TAG,
+  KIND_EMOJI_SET,
+} from "@/shared/api/customEmoji";
 import type {
   RawAcpProviderCatalogEntry,
   RawInstallRuntimeResult,
@@ -396,6 +400,44 @@ function createMockRelayMembershipEvent(): RelayEvent {
     mockRelayMembers.map((member) => ["member", member.pubkey, member.role]),
     "f".repeat(64),
   );
+}
+
+/**
+ * Per-user custom emoji sets (kind:30030) the mock WS serves for
+ * `listCustomEmoji` REQs. The workspace palette is the client-side UNION of
+ * every member's own set (d=`sprout:custom-emoji`). We serve TWO member-authored
+ * sets from distinct pubkeys so the e2e exercises the union/collapse path, not
+ * a single relay-owned set. `:sprout:` is the stable shortcode exercised by
+ * custom-emoji.spec.ts (claimed by BOTH members with different URLs, so the
+ * palette must collapse it to one deterministic winner); `:narf:` proves a
+ * second member's distinct emoji unions in.
+ */
+function createMockCustomEmojiSetEvents(): RelayEvent[] {
+  return [
+    createMockEvent(
+      KIND_EMOJI_SET,
+      "",
+      [
+        ["d", CUSTOM_EMOJI_SET_D_TAG],
+        ["emoji", "sprout", "https://example.com/e2e/sprout.png"],
+      ],
+      // The current mock identity owns this set, so the settings card's
+      // "My emoji" section is non-empty and removable.
+      MOCK_IDENTITY_PUBKEY,
+    ),
+    createMockEvent(
+      KIND_EMOJI_SET,
+      "",
+      [
+        ["d", CUSTOM_EMOJI_SET_D_TAG],
+        ["emoji", "narf", "https://example.com/e2e/narf.png"],
+        // member B claims :sprout: with a DIFFERENT url — unionCustomEmoji must
+        // collapse it to one deterministic winner, never expose two URLs.
+        ["emoji", "sprout", "https://example.com/e2e/sprout-b.png"],
+      ],
+      "b".repeat(64),
+    ),
+  ];
 }
 
 function updateMockRelayMembershipFromAdminEvent(event: RelayEvent): boolean {
@@ -4381,6 +4423,7 @@ async function handleSendChannelMessage(
     kind?: number | null;
     mentionPubkeys?: string[];
     mediaTags?: string[][] | null;
+    emojiTags?: string[][] | null;
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
@@ -4389,6 +4432,12 @@ async function handleSendChannelMessage(
   // event; mirror that here so attachment renderers (FileCard, images, video)
   // have the imeta tags they key on. `null`/empty → no extra tags.
   const mediaTags = args.mediaTags ?? [];
+  // NIP-30 custom-emoji tags ride their own validated arg server-side; the
+  // relay echoes them back on the stored event too, so mirror that here so the
+  // emoji renderer keeps resolving `:shortcode:` after the round-trip.
+  const emojiTags = args.emojiTags ?? [];
+  // Both kinds end up on the stored event's tag set, just like the real relay.
+  const extraTags = [...mediaTags, ...emojiTags];
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);
@@ -4401,7 +4450,7 @@ async function handleSendChannelMessage(
           args.mentionPubkeys,
           mockPubkey,
         ),
-        ...mediaTags,
+        ...extraTags,
       ]);
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
@@ -4460,7 +4509,7 @@ async function handleSendChannelMessage(
           rootEventId,
           args.mentionPubkeys,
         ),
-        ...mediaTags,
+        ...extraTags,
       ],
       content: args.content.trim(),
       sig: "mocksig".repeat(20).slice(0, 128),
@@ -4496,7 +4545,7 @@ async function handleSendChannelMessage(
   const result = await submitSignedEvent(config, {
     kind,
     content: args.content.trim(),
-    tags: [...tags, ...mediaTags],
+    tags: [...tags, ...extraTags],
   });
 
   return {
@@ -4718,13 +4767,32 @@ function sendToMockSocket(args: {
       return;
     }
 
-    const filter = rest[1] as { "#h"?: string[]; kinds?: number[] };
+    const filter = rest[1] as {
+      "#h"?: string[];
+      kinds?: number[];
+      authors?: string[];
+    };
     if (filter.kinds?.includes(13534)) {
       sendWsText(socket.handler, [
         "EVENT",
         subId,
         createMockRelayMembershipEvent(),
       ]);
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+
+    if (filter.kinds?.includes(KIND_EMOJI_SET)) {
+      // Honor `authors` so `fetchOwnEmoji` (authors:[me]) sees only the
+      // caller's set, while the union fetch (no authors) sees every member's —
+      // matching the real relay and the own-vs-workspace split in the UI.
+      const authors = filter.authors?.map((a) => a.toLowerCase());
+      for (const emojiEvent of createMockCustomEmojiSetEvents()) {
+        if (authors && !authors.includes(emojiEvent.pubkey.toLowerCase())) {
+          continue;
+        }
+        sendWsText(socket.handler, ["EVENT", subId, emojiEvent]);
+      }
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
