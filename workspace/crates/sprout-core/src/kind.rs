@@ -180,6 +180,22 @@ pub const KIND_PAIRING: u32 = 24134;
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
 /// Ephemeral: owner-scoped encrypted agent observer telemetry and control frame.
 pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
+/// Ephemeral: mesh status report (desktop → relay). A relay member reports its
+/// current mesh serve availability + EndpointAddr(s) so the relay can project a
+/// sanitized, relay-signed kind:30621 discovery note keyed per reporter. Tagged
+/// `["p", <self>]` optional; never stored — the durable record is the relay's
+/// 30621, not this transient input.
+pub const KIND_MESH_STATUS_REPORT: u32 = 24620;
+/// Ephemeral: mesh connect request (desktop → relay). A relay member asks the
+/// relay to coordinate a direct iroh hole-punch to a peer it discovered via
+/// kind:30621. Tagged `["p", <target_pubkey>]`. Never stored; the relay
+/// validates membership of both ends, then emits paired KIND_MESH_CALL_ME_NOW.
+pub const KIND_MESH_CONNECT_REQUEST: u32 = 24621;
+/// Ephemeral: mesh call-me-now signal (relay → desktop, relay-signed). The live
+/// dial trigger for a direct iroh hole-punch — carries the peer's EndpointAddr
+/// so both ends dial near-simultaneously. Tagged `["p", <recipient_pubkey>]`.
+/// Never stored; seconds expiry.
+pub const KIND_MESH_CALL_ME_NOW: u32 = 24622;
 
 // Stream messaging
 /// NIP-29 group chat message kind. V1 used kind:10001 (replaceable range — wrong), then 40001.
@@ -372,6 +388,9 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_GROUP_ROLES,
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
+    KIND_MESH_STATUS_REPORT,
+    KIND_MESH_CONNECT_REQUEST,
+    KIND_MESH_CALL_ME_NOW,
     KIND_BLOSSOM_AUTH,
     KIND_PAIRING,
     KIND_AGENT_OBSERVER_FRAME,
