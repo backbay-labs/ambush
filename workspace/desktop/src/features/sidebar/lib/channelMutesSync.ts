@@ -5,28 +5,26 @@ import {
   signRelayEvent,
 } from "@/shared/api/tauri";
 import type { RelayEvent } from "@/shared/api/types";
-import { KIND_CHANNEL_SECTIONS } from "@/shared/constants/kinds";
+import { KIND_CHANNEL_MUTES } from "@/shared/constants/kinds";
 import {
-  parseChannelSectionPayload,
-  type ChannelSection,
-  type ChannelSectionStore,
-} from "./channelSectionsStorage";
+  mergeStores,
+  parseMutePayload,
+  type ChannelMuteStore,
+} from "./channelMutesStorage";
 
-const D_TAG = "channel-sections";
+const D_TAG = "channel-mutes";
 const DEBOUNCE_MS = 2_000;
 
-export type RemoteSections = {
-  store: ChannelSectionStore;
+export type RemoteMutes = {
+  store: ChannelMuteStore;
   createdAt: number;
   eventId: string;
 };
 
-async function decryptAndParse(
-  event: RelayEvent,
-): Promise<RemoteSections | null> {
+async function decryptAndParse(event: RelayEvent): Promise<RemoteMutes | null> {
   try {
     const plaintext = await nip44DecryptFromSelf(event.content);
-    const store = parseChannelSectionPayload(JSON.parse(plaintext));
+    const store = parseMutePayload(JSON.parse(plaintext));
     if (!store) return null;
     return { store, createdAt: event.created_at, eventId: event.id };
   } catch {
@@ -34,21 +32,21 @@ async function decryptAndParse(
   }
 }
 
-export class ChannelSectionSyncManager {
+export class ChannelMuteSyncManager {
   private pubkey: string;
   private debounceTimer: number | null = null;
   private lastRemoteCreatedAt = 0;
-  private pendingStore: ChannelSectionStore | null = null;
-  private lastPublishedStore: ChannelSectionStore | null = null;
+  private pendingStore: ChannelMuteStore | null = null;
+  private lastPublishedStore: ChannelMuteStore | null = null;
 
   constructor(pubkey: string) {
     this.pubkey = pubkey;
   }
 
-  async fetchRemoteSections(): Promise<RemoteSections | null> {
+  async fetchRemoteMutes(): Promise<RemoteMutes | null> {
     try {
       const events = await relayClient.fetchEvents({
-        kinds: [KIND_CHANNEL_SECTIONS],
+        kinds: [KIND_CHANNEL_MUTES],
         authors: [this.pubkey],
         "#d": [D_TAG],
         limit: 1,
@@ -68,18 +66,18 @@ export class ChannelSectionSyncManager {
     }
   }
 
-  cancelPendingPublish(): void {
+  cancelPendingMutePublish(): void {
     if (this.debounceTimer !== null) {
       window.clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
   }
 
-  getPendingStore(): ChannelSectionStore | null {
+  getPendingMuteStore(): ChannelMuteStore | null {
     return this.pendingStore;
   }
 
-  publishSections(store: ChannelSectionStore): void {
+  publishMutes(store: ChannelMuteStore): void {
     this.pendingStore = store;
     if (this.debounceTimer !== null) {
       window.clearTimeout(this.debounceTimer);
@@ -91,11 +89,11 @@ export class ChannelSectionSyncManager {
   }
 
   private async fetchOwnBlobBeforePublish(
-    store: ChannelSectionStore,
-  ): Promise<ChannelSectionStore> {
+    store: ChannelMuteStore,
+  ): Promise<ChannelMuteStore> {
     try {
       const events = await relayClient.fetchEvents({
-        kinds: [KIND_CHANNEL_SECTIONS],
+        kinds: [KIND_CHANNEL_MUTES],
         authors: [this.pubkey],
         "#d": [D_TAG],
         limit: 1,
@@ -103,44 +101,35 @@ export class ChannelSectionSyncManager {
       if (events.length === 0 || events[0].pubkey !== this.pubkey) return store;
       const remote = await decryptAndParse(events[0]);
       if (!remote) return store;
-      // Sections use whole-blob LWW: take whichever is newer
-      if (remote.createdAt > this.lastRemoteCreatedAt) {
-        this.lastRemoteCreatedAt = remote.createdAt;
-        return remote.store;
-      }
-      return store;
+      this.lastRemoteCreatedAt = Math.max(
+        this.lastRemoteCreatedAt,
+        remote.createdAt,
+      );
+      return mergeStores(store, remote.store);
     } catch {
       return store;
     }
   }
 
-  private isIdenticalToLastPublished(store: ChannelSectionStore): boolean {
+  private isIdenticalToLastPublished(store: ChannelMuteStore): boolean {
     if (!this.lastPublishedStore) return false;
-    const lastSections = this.lastPublishedStore.sections;
-    const currentSections = store.sections;
-    if (lastSections.length !== currentSections.length) return false;
-    for (let i = 0; i < currentSections.length; i++) {
-      const last = lastSections[i] as ChannelSection | undefined;
-      const current = currentSections[i] as ChannelSection;
+    const lastKeys = Object.keys(this.lastPublishedStore.channels);
+    const currentKeys = Object.keys(store.channels);
+    if (lastKeys.length !== currentKeys.length) return false;
+    for (const key of currentKeys) {
+      const last = this.lastPublishedStore.channels[key];
+      const current = store.channels[key];
       if (
         !last ||
-        last.id !== current.id ||
-        last.name !== current.name ||
-        last.order !== current.order
+        last.muted !== current.muted ||
+        last.updatedAt !== current.updatedAt
       )
-        return false;
-    }
-    const lastAssignKeys = Object.keys(this.lastPublishedStore.assignments);
-    const currentAssignKeys = Object.keys(store.assignments);
-    if (lastAssignKeys.length !== currentAssignKeys.length) return false;
-    for (const key of currentAssignKeys) {
-      if (this.lastPublishedStore.assignments[key] !== store.assignments[key])
         return false;
     }
     return true;
   }
 
-  private async doPublish(store: ChannelSectionStore): Promise<void> {
+  private async doPublish(store: ChannelMuteStore): Promise<void> {
     try {
       const merged = await this.fetchOwnBlobBeforePublish(store);
       if (this.isIdenticalToLastPublished(merged)) {
@@ -149,8 +138,7 @@ export class ChannelSectionSyncManager {
       }
       const payload = {
         version: 1,
-        sections: merged.sections,
-        assignments: merged.assignments,
+        channels: merged.channels,
       };
       const ciphertext = await nip44EncryptToSelf(JSON.stringify(payload));
       const createdAt = Math.max(
@@ -158,7 +146,7 @@ export class ChannelSectionSyncManager {
         this.lastRemoteCreatedAt + 1,
       );
       const event = await signRelayEvent({
-        kind: KIND_CHANNEL_SECTIONS,
+        kind: KIND_CHANNEL_MUTES,
         content: ciphertext,
         createdAt,
         tags: [
@@ -168,8 +156,8 @@ export class ChannelSectionSyncManager {
       });
       await relayClient.publishEvent(
         event,
-        "Timed out publishing channel sections.",
-        "Failed to publish channel sections.",
+        "Timed out publishing channel mutes.",
+        "Failed to publish channel mutes.",
       );
       this.lastRemoteCreatedAt = Math.max(
         this.lastRemoteCreatedAt,
@@ -178,16 +166,16 @@ export class ChannelSectionSyncManager {
       this.lastPublishedStore = merged;
       this.pendingStore = null;
     } catch (error) {
-      console.warn("[channelSectionsSync] publish failed:", error);
+      console.warn("[channelMutesSync] publish failed:", error);
     }
   }
 
-  async subscribeToSections(
-    onUpdate: (remote: RemoteSections) => void,
+  async subscribeToMutes(
+    onUpdate: (remote: RemoteMutes) => void,
   ): Promise<() => Promise<void>> {
     return relayClient.subscribeLive(
       {
-        kinds: [KIND_CHANNEL_SECTIONS],
+        kinds: [KIND_CHANNEL_MUTES],
         authors: [this.pubkey],
         "#d": [D_TAG],
         limit: 0,

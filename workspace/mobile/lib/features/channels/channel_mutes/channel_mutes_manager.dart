@@ -5,19 +5,16 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:nostr/nostr.dart' as nostr;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../shared/crypto/nip44.dart';
 import '../../../shared/relay/relay.dart';
 import '../read_state/read_state_time.dart';
-import 'channel_sections_storage.dart';
+import 'channel_mutes_storage.dart';
 
-const _uuid = Uuid();
-
-class ChannelSectionsCrypto {
+class ChannelMutesCrypto {
   final Uint8List _conversationKey;
 
-  ChannelSectionsCrypto(String nsec, String pubkey)
+  ChannelMutesCrypto(String nsec, String pubkey)
     : _conversationKey = _deriveKey(nsec, pubkey);
 
   static Uint8List _deriveKey(String nsec, String pubkey) {
@@ -31,40 +28,40 @@ class ChannelSectionsCrypto {
       nip44Decrypt(_conversationKey, ciphertext);
 }
 
-class ChannelSectionsManager {
+class ChannelMutesManager {
   final String pubkey;
-  final ChannelSectionsStorage _storage;
-  final ChannelSectionsCrypto _crypto;
+  final ChannelMutesStorage _storage;
+  final ChannelMutesCrypto _crypto;
   final RelaySessionNotifier? _relaySession;
   final SignedEventRelay? _signedEventRelay;
   final bool _remoteEnabled;
   final VoidCallback _onChanged;
 
-  ChannelSectionStore _store;
-  ChannelSectionStore? _lastPublishedStore;
+  ChannelMuteStore _store;
+  ChannelMuteStore? _lastPublishedStore;
   Timer? _publishDebounce;
   int _lastRemoteCreatedAt = 0;
   String? _lastRemoteEventId;
   void Function()? _unsubscribe;
   bool _disposed = false;
 
-  ChannelSectionsManager({
+  ChannelMutesManager({
     required this.pubkey,
     required SharedPreferences prefs,
-    required ChannelSectionsCrypto crypto,
+    required ChannelMutesCrypto crypto,
     required RelaySessionNotifier? relaySession,
     required SignedEventRelay? signedEventRelay,
     required bool remoteEnabled,
     required VoidCallback onChanged,
-  }) : _storage = ChannelSectionsStorage(prefs),
+  }) : _storage = ChannelMutesStorage(prefs),
        _crypto = crypto,
        _relaySession = relaySession,
        _signedEventRelay = signedEventRelay,
        _remoteEnabled = remoteEnabled,
        _onChanged = onChanged,
-       _store = ChannelSectionsStorage(prefs).read(pubkey);
+       _store = ChannelMutesStorage(prefs).read(pubkey);
 
-  ChannelSectionStore get store => _store;
+  ChannelMuteStore get store => _store;
 
   Future<void> initialize() async {
     if (_disposed) return;
@@ -99,94 +96,24 @@ class ChannelSectionsManager {
   // CRUD
   // -------------------------------------------------------------------------
 
-  void createSection(String name) {
+  void muteChannel(String channelId) {
     if (_disposed) return;
-    final maxOrder = _store.sections.fold<int>(
-      -1,
-      (max, s) => s.order > max ? s.order : max,
+    final entry = ChannelMuteEntry(
+      muted: true,
+      updatedAt: currentUnixSeconds(),
     );
-    final section = ChannelSection(
-      id: _uuid.v4(),
-      name: name.trim(),
-      order: maxOrder + 1,
-    );
-    _store = ChannelSectionStore(
-      sections: [..._store.sections, section],
-      assignments: _store.assignments,
-    );
+    _store = ChannelMuteStore(channels: {..._store.channels, channelId: entry});
     _persist();
     markDirty();
   }
 
-  void renameSection(String sectionId, String newName) {
+  void unmuteChannel(String channelId) {
     if (_disposed) return;
-    _store = ChannelSectionStore(
-      sections: [
-        for (final s in _store.sections)
-          if (s.id == sectionId)
-            ChannelSection(id: s.id, name: newName.trim(), order: s.order)
-          else
-            s,
-      ],
-      assignments: _store.assignments,
+    final entry = ChannelMuteEntry(
+      muted: false,
+      updatedAt: currentUnixSeconds(),
     );
-    _persist();
-    markDirty();
-  }
-
-  void deleteSection(String sectionId) {
-    if (_disposed) return;
-    final updatedAssignments = Map<String, String>.from(_store.assignments)
-      ..removeWhere((_, sid) => sid == sectionId);
-    _store = ChannelSectionStore(
-      sections: [
-        for (final s in _store.sections)
-          if (s.id != sectionId) s,
-      ],
-      assignments: updatedAssignments,
-    );
-    _persist();
-    markDirty();
-  }
-
-  void moveSectionUp(String sectionId) {
-    if (_disposed) return;
-    final sorted = _sortedSections();
-    final idx = sorted.indexWhere((s) => s.id == sectionId);
-    if (idx <= 0) return;
-    _swapOrders(sorted, idx, idx - 1);
-    markDirty();
-  }
-
-  void moveSectionDown(String sectionId) {
-    if (_disposed) return;
-    final sorted = _sortedSections();
-    final idx = sorted.indexWhere((s) => s.id == sectionId);
-    if (idx < 0 || idx >= sorted.length - 1) return;
-    _swapOrders(sorted, idx, idx + 1);
-    markDirty();
-  }
-
-  void assignChannel(String channelId, String sectionId) {
-    if (_disposed) return;
-    final updated = Map<String, String>.from(_store.assignments)
-      ..[channelId] = sectionId;
-    _store = ChannelSectionStore(
-      sections: _store.sections,
-      assignments: updated,
-    );
-    _persist();
-    markDirty();
-  }
-
-  void unassignChannel(String channelId) {
-    if (_disposed) return;
-    final updated = Map<String, String>.from(_store.assignments)
-      ..remove(channelId);
-    _store = ChannelSectionStore(
-      sections: _store.sections,
-      assignments: updated,
-    );
+    _store = ChannelMuteStore(channels: {..._store.channels, channelId: entry});
     _persist();
     markDirty();
   }
@@ -212,7 +139,7 @@ class ChannelSectionsManager {
           kinds: const [EventKind.readState],
           authors: [pubkey],
           tags: const {
-            '#d': ['channel-sections'],
+            '#d': ['channel-mutes'],
           },
           limit: 1,
         ),
@@ -233,7 +160,7 @@ class ChannelSectionsManager {
           kinds: const [EventKind.readState],
           authors: [pubkey],
           tags: const {
-            '#d': ['channel-sections'],
+            '#d': ['channel-mutes'],
           },
           limit: 1,
         ),
@@ -252,18 +179,18 @@ class ChannelSectionsManager {
   }
 
   void _mergeEvent(NostrEvent event) {
-    // Only process channel-sections d-tag events.
+    // Only process channel-mutes d-tag events.
     final dTag = event.getTagValue('d');
-    if (dTag != 'channel-sections') return;
+    if (dTag != 'channel-mutes') return;
 
     try {
       final plaintext = _crypto.decrypt(event.content);
       final parsed = jsonDecode(plaintext);
       if (parsed is! Map<String, dynamic>) return;
 
-      final incoming = ChannelSectionStore.fromJson(parsed);
+      final incoming = ChannelMuteStore.fromJson(parsed);
 
-      // Last-write-wins: newer createdAt wins; tie-break by event ID.
+      // Gate on createdAt: ignore events older than what we've already seen.
       final isNewer =
           event.createdAt > _lastRemoteCreatedAt ||
           (event.createdAt == _lastRemoteCreatedAt &&
@@ -272,7 +199,8 @@ class ChannelSectionsManager {
       if (isNewer) {
         _lastRemoteCreatedAt = event.createdAt;
         _lastRemoteEventId = event.id;
-        _store = incoming;
+        // Per-channel merge: keep the entry with the highest updatedAt for each channel.
+        _store = mergeStores(_store, incoming);
         _persist();
       }
     } catch (_) {
@@ -289,15 +217,15 @@ class ChannelSectionsManager {
   bool _isIdenticalToLastPublished() {
     final last = _lastPublishedStore;
     if (last == null) return false;
-    if (last.sections.length != _store.sections.length) return false;
-    if (last.assignments.length != _store.assignments.length) return false;
-    for (var i = 0; i < _store.sections.length; i++) {
-      final a = last.sections[i];
-      final b = _store.sections[i];
-      if (a.id != b.id || a.name != b.name || a.order != b.order) return false;
-    }
-    for (final key in _store.assignments.keys) {
-      if (last.assignments[key] != _store.assignments[key]) return false;
+    if (last.channels.length != _store.channels.length) return false;
+    for (final key in _store.channels.keys) {
+      final lastEntry = last.channels[key];
+      final currentEntry = _store.channels[key];
+      if (lastEntry == null ||
+          lastEntry.muted != currentEntry!.muted ||
+          lastEntry.updatedAt != currentEntry.updatedAt) {
+        return false;
+      }
     }
     return true;
   }
@@ -324,50 +252,20 @@ class ChannelSectionsManager {
         kind: EventKind.readState,
         content: ciphertext,
         tags: [
-          ['d', 'channel-sections'],
-          ['t', 'channel-sections'],
+          ['d', 'channel-mutes'],
+          ['t', 'channel-mutes'],
         ],
         createdAt: createdAt,
       );
 
       _lastRemoteCreatedAt = max(_lastRemoteCreatedAt, createdAt);
-      _lastPublishedStore = ChannelSectionStore(
-        sections: List.of(_store.sections),
-        assignments: Map.of(_store.assignments),
-      );
+      _lastPublishedStore = ChannelMuteStore(channels: Map.of(_store.channels));
     } catch (error) {
-      debugPrint('[ChannelSectionsManager] publish failed: $error');
+      debugPrint('[ChannelMutesManager] publish failed: $error');
     }
   }
 
   void _persist() {
     _storage.write(pubkey, _store);
-  }
-
-  List<ChannelSection> _sortedSections() {
-    final sorted = _store.sections.toList()
-      ..sort((a, b) => a.order.compareTo(b.order));
-    return sorted;
-  }
-
-  void _swapOrders(List<ChannelSection> sorted, int indexA, int indexB) {
-    final orderA = sorted[indexA].order;
-    final orderB = sorted[indexB].order;
-    final idA = sorted[indexA].id;
-    final idB = sorted[indexB].id;
-
-    _store = ChannelSectionStore(
-      sections: [
-        for (final s in _store.sections)
-          if (s.id == idA)
-            ChannelSection(id: s.id, name: s.name, order: orderB)
-          else if (s.id == idB)
-            ChannelSection(id: s.id, name: s.name, order: orderA)
-          else
-            s,
-      ],
-      assignments: _store.assignments,
-    );
-    _persist();
   }
 }

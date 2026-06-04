@@ -56,6 +56,7 @@ import {
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
 import { useMeshRelayOrchestrator } from "@/features/mesh-compute/hooks/useMeshRelayOrchestrator";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
+import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
@@ -204,6 +205,9 @@ export function AppShell() {
 
   const identityQuery = useIdentityQuery();
   useMeshRelayOrchestrator(identityQuery.data?.pubkey);
+  const { mutedChannelIds, muteChannel, unmuteChannel } = useChannelMutes(
+    identityQuery.data?.pubkey,
+  );
   const profileQuery = useProfileQuery();
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
   usePresenceSubscription();
@@ -219,10 +223,12 @@ export function AppShell() {
   const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
-  const handleChannelNotification = React.useEffectEvent(() => {
-    if (!notificationSettings.settings.desktopEnabled) return;
-    void requestDockBounce();
-  });
+  const handleChannelNotification = React.useEffectEvent(
+    (_channelId: string, _event: RelayEvent) => {
+      if (!notificationSettings.settings.desktopEnabled) return;
+      void requestDockBounce();
+    },
+  );
 
   const handleDmNotification = React.useEffectEvent(
     (event: RelayEvent, channel: Channel) => {
@@ -312,6 +318,7 @@ export function AppShell() {
       pubkey: identityQuery.data?.pubkey,
       relayClient,
       currentPubkey: identityQuery.data?.pubkey,
+      mutedChannelIds,
       onChannelMessage: handleChannelNotification,
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
@@ -335,6 +342,7 @@ export function AppShell() {
       readStateVersion,
       highPriorityUnreadChannelIds,
       feedProfilesQuery.data?.profiles,
+      mutedChannelIds,
     );
 
   const isNotifiedForThread = React.useCallback(
@@ -807,6 +815,9 @@ export function AppShell() {
                   selectedChannelId={selectedChannelId}
                   selectedView={selectedView}
                   unreadChannelIds={unreadChannelIds}
+                  mutedChannelIds={mutedChannelIds}
+                  onMuteChannel={muteChannel}
+                  onUnmuteChannel={unmuteChannel}
                 />
 
                 <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
