@@ -27,7 +27,8 @@ class ReadStateCrypto {
         return null;
       }
       return ReadStateCrypto._(getConversationKey(privkeyHex, pubkey));
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[ReadStateManager] crypto init failed: $e');
       return null;
     }
   }
@@ -64,6 +65,8 @@ class ReadStateManager {
   int _maxFetchedCreatedAt = 0;
   final Set<String> _forcedContextIds = {};
   final Map<String, int> _contextSourceCreatedAt = {};
+  final Set<String> _pendingSyncedRollbacks = {};
+  final Set<String> _pendingSyncedAdvances = {};
 
   ReadStateManager({
     required this.pubkey,
@@ -91,6 +94,9 @@ class ReadStateManager {
   Future<void> initialize() async {
     if (_initialized || _disposed) return;
     _initialized = true;
+    debugPrint(
+      '[ReadStateManager] initialize pubkey=${pubkey.substring(0, 8)}… clientId=${_clientId.substring(0, 8)}… slotId=$_slotId',
+    );
 
     if (!_remoteEnabled || _relaySession == null) {
       _onChanged();
@@ -104,6 +110,9 @@ class ReadStateManager {
     }
 
     _onChanged();
+    debugPrint(
+      '[ReadStateManager] initialize complete maxFetchedCreatedAt=$_maxFetchedCreatedAt contexts=${_effectiveState.length}',
+    );
   }
 
   void markContextRead(String contextId, int unixTimestamp) {
@@ -138,7 +147,8 @@ class ReadStateManager {
   }
 
   Future<void> reinitializeRemote() async {
-    if (_disposed || !_remoteEnabled) return;
+    if (_disposed || !_remoteEnabled || !_initialized) return;
+    debugPrint('[ReadStateManager] reinitializeRemote');
     if (_isPublishing) {
       await _publishCompleter?.future;
     }
@@ -218,8 +228,8 @@ class ReadStateManager {
       _mergeEvents(events);
       _persistLocalState();
       _onChanged();
-    } catch (_) {
-      // Local state remains usable when relay history is unavailable.
+    } catch (e) {
+      debugPrint('[ReadStateManager] fetchAndMerge failed: $e');
     }
   }
 
@@ -233,9 +243,7 @@ class ReadStateManager {
         pubkey: pubkey,
         decrypt: _crypto.decrypt,
       );
-      if (decoded == null) {
-        continue;
-      }
+      if (decoded == null) continue;
 
       if (_isPlausibleCreatedAt(event.createdAt)) {
         _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
@@ -275,7 +283,7 @@ class ReadStateManager {
 
   Future<void> _startLiveSubscription() async {
     try {
-      _unsubscribeLive = await _relaySession!.subscribe(
+      final unsub = await _relaySession!.subscribe(
         NostrFilter(
           kinds: const [EventKind.readState],
           authors: [pubkey],
@@ -286,22 +294,29 @@ class ReadStateManager {
         ),
         _handleIncomingEvent,
       );
-    } catch (_) {
-      // Non-fatal; history and local writes still work.
+      if (_disposed) {
+        unsub.call();
+        return;
+      }
+      _unsubscribeLive = unsub;
+      debugPrint('[ReadStateManager] live subscription established');
+    } catch (e) {
+      debugPrint('[ReadStateManager] live subscription FAILED: $e');
     }
   }
 
   void _handleIncomingEvent(NostrEvent event) {
     if (_disposed) return;
+    debugPrint(
+      '[ReadStateManager] incoming event=${event.id.substring(0, 8)}… created_at=${event.createdAt}',
+    );
 
     final decoded = decodeReadStateEvent(
       event,
       pubkey: pubkey,
       decrypt: _crypto.decrypt,
     );
-    if (decoded == null) {
-      return;
-    }
+    if (decoded == null) return;
 
     if (_isPlausibleCreatedAt(event.createdAt)) {
       _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
@@ -319,6 +334,16 @@ class ReadStateManager {
       final current = _effectiveState[entry.key] ?? 0;
       if (event.createdAt > sourceCreatedAt) {
         if (_effectiveState[entry.key] != entry.value) {
+          if (entry.value < current && current > 0) {
+            _pendingSyncedRollbacks.add(entry.key);
+            _pendingSyncedAdvances.remove(entry.key);
+            debugPrint(
+              '[ReadStateManager] synced rollback ctx=${entry.key.substring(0, min(12, entry.key.length))}… from=$current to=${entry.value}',
+            );
+          } else if (entry.value > current) {
+            _pendingSyncedAdvances.add(entry.key);
+            _pendingSyncedRollbacks.remove(entry.key);
+          }
           _effectiveState[entry.key] = entry.value;
           changed = true;
         }
@@ -331,6 +356,9 @@ class ReadStateManager {
         changed = true;
       }
     }
+    debugPrint(
+      '[ReadStateManager] incoming result changed=$changed clientId=${decoded.blob.clientId.substring(0, min(8, decoded.blob.clientId.length))}…',
+    );
 
     if (decoded.blob.clientId == _clientId) {
       _lastPublishedContexts = Map<String, int>.from(decoded.blob.contexts);
@@ -369,6 +397,7 @@ class ReadStateManager {
     final completer = Completer<void>();
     _publishCompleter = completer;
     _isPublishing = true;
+    debugPrint('[ReadStateManager] publish starting slotId=$_slotId');
     try {
       await _fetchOwnBlobBeforePublish();
 
@@ -390,12 +419,15 @@ class ReadStateManager {
         ],
         createdAt: createdAt,
       );
+      debugPrint('[ReadStateManager] publish accepted createdAt=$createdAt');
 
+      for (final key in contexts.keys) {
+        if (_lastPublishedContexts[key] != contexts[key]) {
+          _contextSourceCreatedAt[key] = createdAt;
+        }
+      }
       _lastPublishedContexts = contexts;
       _forcedContextIds.clear();
-      for (final key in contexts.keys) {
-        _contextSourceCreatedAt[key] = createdAt;
-      }
       _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, createdAt);
       _persistLocalState();
     } catch (error) {
@@ -438,8 +470,8 @@ class ReadStateManager {
       if (!_disposed) {
         _onChanged();
       }
-    } catch (_) {
-      // Per NIP-RS, proceed with reachable data and merge later.
+    } catch (e) {
+      debugPrint('[ReadStateManager] fetchOwnBlobBeforePublish failed: $e');
     }
   }
 
@@ -453,6 +485,18 @@ class ReadStateManager {
       }
     }
     return true;
+  }
+
+  Set<String> drainSyncedRollbacks() {
+    final drained = Set<String>.from(_pendingSyncedRollbacks);
+    _pendingSyncedRollbacks.clear();
+    return drained;
+  }
+
+  Set<String> drainSyncedAdvances() {
+    final drained = Set<String>.from(_pendingSyncedAdvances);
+    _pendingSyncedAdvances.clear();
+    return drained;
   }
 
   Map<String, int> _currentContexts() {

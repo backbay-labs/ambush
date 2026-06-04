@@ -62,6 +62,9 @@ export class ReadStateManager {
   private maxFetchedCreatedAt = 0;
   private forcedContexts = new Set<string>();
   private contextSourceCreatedAt = new Map<string, number>();
+  private pendingSyncedRollbacks = new Set<string>();
+  private pendingSyncedAdvances = new Set<string>();
+  private destroyed = false;
 
   constructor(pubkey: string, relayClient: RelayClient) {
     this.pubkey = pubkey;
@@ -75,17 +78,25 @@ export class ReadStateManager {
   }
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    if (this.initialized || this.destroyed) return;
+    console.debug(
+      `[ReadStateManager] initialize pubkey=${this.pubkey.substring(0, 8)}… clientId=${this.clientId.substring(0, 8)}… slotId=${this.slotId}`,
+    );
 
     this.hydrateFromLocalStorage();
 
     await this.fetchAndMerge();
+    if (this.destroyed) return;
     await this.startLiveSubscription();
+    if (this.destroyed) return;
     if (!this.isIdenticalToLastPublished(this.currentContexts())) {
       this.schedulePublish();
     }
 
     this.initialized = true;
+    console.debug(
+      `[ReadStateManager] initialize complete maxFetchedCreatedAt=${this.maxFetchedCreatedAt} contexts=${this.effectiveState.size}`,
+    );
     this.notifyListeners();
   }
 
@@ -152,6 +163,7 @@ export class ReadStateManager {
   }
 
   destroy(): void {
+    this.destroyed = true;
     // Flush any pending writes immediately
     if (this.debounceTimer !== null) {
       window.clearTimeout(this.debounceTimer);
@@ -177,7 +189,8 @@ export class ReadStateManager {
         since: Math.floor(Date.now() / 1_000) - READ_STATE_HORIZON_SECONDS,
         limit: READ_STATE_FETCH_LIMIT,
       });
-    } catch {
+    } catch (error) {
+      console.debug("[ReadStateManager] fetchAndMerge failed:", error);
       // If fetch fails, proceed with local state only
       return;
     }
@@ -219,7 +232,11 @@ export class ReadStateManager {
           client_id: parsed.client_id,
           contexts: sanitizeContexts(parsed.contexts),
         };
-      } catch {
+      } catch (error) {
+        console.debug(
+          `[ReadStateManager] mergeEvents decrypt failed event=${event.id.substring(0, 8)}…:`,
+          error,
+        );
         continue;
       }
 
@@ -260,7 +277,11 @@ export class ReadStateManager {
           localStorage.setItem(slotIdKey(this.pubkey), this.slotId);
           break;
         }
-      } catch {
+      } catch (error) {
+        console.debug(
+          `[ReadStateManager] conflict check decrypt failed event=${event.id.substring(0, 8)}…:`,
+          error,
+        );
         // Decrypt failure — skip this event
       }
     }
@@ -286,14 +307,24 @@ export class ReadStateManager {
           void this.handleIncomingEvent(event);
         },
       );
+      if (this.destroyed) {
+        unsub();
+        return;
+      }
       this.unsubscribeLive = unsub;
-    } catch {
+      console.debug("[ReadStateManager] live subscription established");
+    } catch (error) {
+      console.debug("[ReadStateManager] live subscription FAILED:", error);
       // Non-fatal: we can still work with local state
     }
   }
 
   private async handleIncomingEvent(event: RelayEvent): Promise<void> {
     if (event.pubkey !== this.pubkey) return;
+    if (this.destroyed) return;
+    console.debug(
+      `[ReadStateManager] incoming event=${event.id.substring(0, 8)}… created_at=${event.created_at}`,
+    );
 
     const dTags = event.tags.filter((t) => t[0] === "d");
     if (dTags.length !== 1) return;
@@ -320,7 +351,11 @@ export class ReadStateManager {
         client_id: parsed.client_id,
         contexts: sanitizeContexts(parsed.contexts),
       };
-    } catch {
+    } catch (error) {
+      console.debug(
+        `[ReadStateManager] incoming event decrypt/parse failed event=${event.id.substring(0, 8)}…:`,
+        error,
+      );
       return;
     }
 
@@ -331,6 +366,16 @@ export class ReadStateManager {
       const current = this.effectiveState.get(ctx) ?? 0;
       if (event.created_at > sourceCreatedAt) {
         if (this.effectiveState.get(ctx) !== ts) {
+          if (ts < current && current > 0) {
+            this.pendingSyncedRollbacks.add(ctx);
+            this.pendingSyncedAdvances.delete(ctx);
+            console.debug(
+              `[ReadStateManager] synced rollback ctx=${ctx.substring(0, 12)}… from=${current} to=${ts}`,
+            );
+          } else if (ts > current) {
+            this.pendingSyncedAdvances.add(ctx);
+            this.pendingSyncedRollbacks.delete(ctx);
+          }
           this.effectiveState.set(ctx, ts);
           anyAdvanced = true;
         }
@@ -344,6 +389,9 @@ export class ReadStateManager {
         anyAdvanced = true;
       }
     }
+    console.debug(
+      `[ReadStateManager] incoming result anyAdvanced=${anyAdvanced} clientId=${blob.client_id.substring(0, 8)}…`,
+    );
 
     if (anyAdvanced) {
       this.persistLocalState();
@@ -368,6 +416,7 @@ export class ReadStateManager {
   }
 
   private async publish(): Promise<void> {
+    console.debug(`[ReadStateManager] publish starting slotId=${this.slotId}`);
     await this.fetchOwnBlobBeforePublish();
 
     // Build blob from contexts this client is allowed to publish.
@@ -408,12 +457,17 @@ export class ReadStateManager {
         "Timed out publishing read state.",
         "Failed to publish read state.",
       );
+      console.debug(
+        `[ReadStateManager] publish accepted createdAt=${createdAt}`,
+      );
 
+      for (const key of Object.keys(contexts)) {
+        if (this.lastPublishedContexts[key] !== contexts[key]) {
+          this.contextSourceCreatedAt.set(key, createdAt);
+        }
+      }
       this.lastPublishedContexts = contexts;
       this.forcedContexts.clear();
-      for (const key of Object.keys(contexts)) {
-        this.contextSourceCreatedAt.set(key, createdAt);
-      }
       this.maxFetchedCreatedAt = Math.max(
         this.maxFetchedCreatedAt,
         event.created_at,
@@ -435,7 +489,11 @@ export class ReadStateManager {
 
       await this.mergeEvents(events);
       this.persistLocalState();
-    } catch {
+    } catch (error) {
+      console.debug(
+        "[ReadStateManager] fetchOwnBlobBeforePublish failed:",
+        error,
+      );
       // Per NIP-RS, proceed with reachable data and merge on a later fetch.
     }
   }
@@ -486,11 +544,24 @@ export class ReadStateManager {
     );
   }
 
+  drainSyncedRollbacks(): ReadonlySet<string> {
+    const drained = this.pendingSyncedRollbacks;
+    this.pendingSyncedRollbacks = new Set<string>();
+    return drained;
+  }
+
+  drainSyncedAdvances(): ReadonlySet<string> {
+    const drained = this.pendingSyncedAdvances;
+    this.pendingSyncedAdvances = new Set<string>();
+    return drained;
+  }
+
   private notifyListeners(): void {
     for (const listener of this.listeners) {
       try {
         listener();
-      } catch {
+      } catch (error) {
+        console.debug("[ReadStateManager] listener threw:", error);
         // Don't let a broken listener break the manager
       }
     }

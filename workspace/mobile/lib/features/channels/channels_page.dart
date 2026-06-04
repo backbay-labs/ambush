@@ -37,6 +37,10 @@ enum _QuickAction { createChannel, createForum, newDm }
 const double _kBannerHeight = 24.0;
 
 bool _isUnread(Channel channel, ReadStateState readState) {
+  if (readState.syncedForcedChannelIds.contains(channel.id)) {
+    return true;
+  }
+
   final lastMessageAt = dateTimeToUnixSeconds(channel.lastMessageAt);
   if (lastMessageAt == null) {
     return false;
