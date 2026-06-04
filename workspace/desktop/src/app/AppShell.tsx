@@ -12,6 +12,7 @@ import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
+import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import {
   channelsQueryKey,
@@ -170,6 +171,9 @@ export function AppShell() {
   const [settingsSection, setSettingsSection] = React.useState<SettingsSection>(
     DEFAULT_SETTINGS_SECTION,
   );
+  const [settingsMode, setSettingsMode] = React.useState<
+    "profile" | "preferences"
+  >("preferences");
 
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
@@ -407,8 +411,9 @@ export function AppShell() {
   );
 
   const handleOpenSettings = React.useCallback(
-    (section: SettingsSection = DEFAULT_SETTINGS_SECTION) => {
+    (section: SettingsSection = "appearance") => {
       setIsChannelManagementOpen(false);
+      setSettingsMode(section === "profile" ? "profile" : "preferences");
       setSettingsSection(section);
       setSettingsOpen(true);
     },
@@ -601,32 +606,11 @@ export function AppShell() {
     settingsOpen,
   ]);
 
-  React.useLayoutEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      const isSettingsShortcut =
-        (event.key === "," || event.code === "Comma") &&
-        hasPrimaryShortcutModifier(event) &&
-        !event.altKey &&
-        !event.shiftKey;
-
-      if (!isSettingsShortcut) {
-        return;
-      }
-
-      event.preventDefault();
-      if (settingsOpen) {
-        handleCloseSettings();
-        return;
-      }
-
-      handleOpenSettings();
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleCloseSettings, handleOpenSettings, settingsOpen]);
+  useSettingsShortcuts({
+    onClose: handleCloseSettings,
+    onOpenSettings: handleOpenSettings,
+    open: settingsOpen,
+  });
 
   useMarkAsReadShortcuts({
     activeChannelId: activeChannel?.id ?? null,
@@ -862,6 +846,7 @@ export function AppShell() {
                       notificationSettings={notificationSettings.settings}
                       onClose={handleCloseSettings}
                       onSectionChange={setSettingsSection}
+                      mode={settingsMode}
                       onSetDesktopNotificationsEnabled={
                         notificationSettings.setDesktopEnabled
                       }

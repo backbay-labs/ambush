@@ -79,6 +79,11 @@ export type SettingsPanelProps = {
 
 export const settingsSections: SettingsSectionDescriptor[] = [
   {
+    value: "appearance",
+    label: "Appearance",
+    icon: MonitorCog,
+  },
+  {
     value: "profile",
     label: "Profile",
     icon: UserRound,
@@ -102,11 +107,6 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "compute",
     label: "Compute",
     icon: Cpu,
-  },
-  {
-    value: "appearance",
-    label: "Appearance",
-    icon: MonitorCog,
   },
   {
     value: "shortcuts",
