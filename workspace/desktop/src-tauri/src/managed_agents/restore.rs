@@ -108,11 +108,14 @@ pub async fn restore_managed_agents_on_launch(
     let agents_to_start = {
         let mut mesh_preflight_failures = std::collections::HashSet::new();
         for record in &agents_to_start {
-            let Some(model_id) = relay_mesh_model_id(record) else {
+            if relay_mesh_model_id(record).is_none() {
                 continue;
-            };
+            }
+            // Auto-start after relaunch: re-resolve a live bootstrap target and
+            // dial it. Skip (with an actionable error) only when no live target
+            // serves this model right now.
             if let Err(error) =
-                crate::commands::ensure_client_node_for_model(&state, model_id, None).await
+                crate::commands::ensure_relay_mesh_for_record(&state, record, false).await
             {
                 persist_restore_error(app, &state, &record.pubkey, error)?;
                 mesh_preflight_failures.insert(record.pubkey.clone());

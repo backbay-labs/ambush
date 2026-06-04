@@ -1,8 +1,6 @@
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, State};
 
-#[cfg(feature = "mesh-llm")]
-use crate::managed_agents::relay_mesh_model_id;
 use crate::{
     app_state::AppState,
     managed_agents::{
@@ -33,18 +31,16 @@ fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
 async fn ensure_relay_mesh_for_record(
     state: &AppState,
     record: &ManagedAgentRecord,
+    allow_fresh_create_start: bool,
 ) -> Result<(), String> {
-    let Some(model_id) = relay_mesh_model_id(record) else {
-        return Ok(());
-    };
-    crate::commands::mesh_llm::ensure_client_node_for_model(state, model_id, None).await?;
-    Ok(())
+    crate::commands::ensure_relay_mesh_for_record(state, record, allow_fresh_create_start).await
 }
 
 #[cfg(not(feature = "mesh-llm"))]
 async fn ensure_relay_mesh_for_record(
     _state: &AppState,
     _record: &ManagedAgentRecord,
+    _allow_fresh_create_start: bool,
 ) -> Result<(), String> {
     Ok(())
 }
@@ -54,6 +50,7 @@ async fn start_local_agent_with_preflight(
     state: &AppState,
     pubkey: &str,
     owner_hex: &str,
+    allow_fresh_create_start: bool,
 ) -> Result<ManagedAgentSummary, String> {
     let record_snapshot = {
         let _store_guard = state
@@ -72,7 +69,7 @@ async fn start_local_agent_with_preflight(
         return Err(format!("agent {pubkey} is not a local agent"));
     }
 
-    ensure_relay_mesh_for_record(state, &record_snapshot).await?;
+    ensure_relay_mesh_for_record(state, &record_snapshot, allow_fresh_create_start).await?;
 
     let _store_guard = state
         .managed_agents_store_lock
@@ -519,7 +516,7 @@ pub async fn create_managed_agent(
     // ── Phase 3b: local spawn (async preflight outside store lock) ───────────
     let mut spawn_error = None;
     let agent = if input.spawn_after_create && input.backend == BackendKind::Local {
-        match start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex).await {
+        match start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex, true).await {
             Ok(agent) => agent,
             Err(error) => {
                 let _store_guard = state
@@ -693,7 +690,7 @@ pub async fn start_managed_agent(
 
     match target {
         StartTarget::Local => {
-            start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex).await
+            start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex, false).await
         }
         StartTarget::Provider {
             backend: BackendKind::Provider { id, config },
