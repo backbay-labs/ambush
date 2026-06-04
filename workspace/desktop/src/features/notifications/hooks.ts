@@ -268,6 +268,7 @@ export function useHomeFeedNotificationState(
   // Invalidation signal for the channel-marker projection; bump triggers
   // recompute. Pass 0 to opt out.
   readStateVersion: number,
+  highPriorityChannelIds: ReadonlySet<string>,
   profiles?: UserProfileLookup,
 ) {
   useFeedDesktopNotifications(
@@ -313,31 +314,43 @@ export function useHomeFeedNotificationState(
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion invalidates getChannelReadAt
   return React.useMemo(() => {
+    const zero = { homeBadgeCount: 0, homeBadgeCountExcludingHighPriority: 0 };
     if (!settings.homeBadgeEnabled || isHomeActive) {
-      return 0;
+      return zero;
     }
 
     if (currentFeedItems.length === 0) {
-      return 0;
+      return zero;
     }
 
     const seenFeedIdSet = new Set(seenFeedIds);
-    return currentFeedItems.filter((item) => {
+    let total = 0;
+    let excludingHighPriority = 0;
+    for (const item of currentFeedItems) {
+      let isUnread: boolean;
       if (item.channelId) {
-        // Channel-backed items: trust the NIP-RS marker when we have one.
-        // If the channel has no marker yet (cold start, mock mode without a
-        // relay client), fall back to the local seen-set so a freshly-seen
-        // feed item doesn't keep tripping the badge forever.
         const readAt = getChannelReadAt(item.channelId);
-        if (readAt !== null) {
-          return item.createdAt > readAt;
-        }
+        isUnread =
+          readAt !== null
+            ? item.createdAt > readAt
+            : !seenFeedIdSet.has(item.id);
+      } else {
+        isUnread = !seenFeedIdSet.has(item.id);
       }
-      return !seenFeedIdSet.has(item.id);
-    }).length;
+      if (!isUnread) continue;
+      total++;
+      if (!(item.channelId && highPriorityChannelIds.has(item.channelId))) {
+        excludingHighPriority++;
+      }
+    }
+    return {
+      homeBadgeCount: total,
+      homeBadgeCountExcludingHighPriority: excludingHighPriority,
+    };
   }, [
     currentFeedItems,
     getChannelReadAt,
+    highPriorityChannelIds,
     isHomeActive,
     readStateVersion,
     seenFeedIds,

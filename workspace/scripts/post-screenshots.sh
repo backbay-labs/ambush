@@ -35,6 +35,10 @@ NEW_ENTRIES=""
 IMAGE_URLS=()
 for PNG in "${PNGS[@]}"; do
   FILENAME=$(basename "$PNG")
+  if ! [[ "$FILENAME" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+    echo "error: invalid PNG filename (must be alphanumeric, dots, hyphens, underscores): $FILENAME" >&2
+    exit 1
+  fi
   BLOB=$(git hash-object -w "$PNG")
   TREE_PATH="pr-${PR}--${FILENAME}"
   NEW_ENTRIES+="$(printf '100644 blob %s\t%s' "$BLOB" "$TREE_PATH")"$'\n'
@@ -47,17 +51,37 @@ TREE=$(echo "$COMBINED" | git mktree)
 COMMIT=$(git commit-tree "$TREE" -m "screenshots: PR #${PR}")
 git push --force-with-lease origin "${COMMIT}:refs/heads/${BRANCH}"
 
-IMAGES_SECTION=""
-for URL in "${IMAGE_URLS[@]}"; do
-  FILENAME=$(basename "$URL")
-  NAME="${FILENAME%.png}"
-  IMAGES_SECTION+="![${NAME}](${URL})"$'\n\n'
+declare -A IMAGE_URL_MAP
+for i in "${!PNGS[@]}"; do
+  ORIG_NAME="$(basename "${PNGS[$i]}" .png)"
+  IMAGE_URL_MAP["$ORIG_NAME"]="${IMAGE_URLS[$i]}"
 done
 
 if [[ -n "$BODY_FILE" ]]; then
-  COMMENT_BODY="$(cat "$BODY_FILE")"$'\n\n'"${IMAGES_SECTION}"
+  COMMENT_BODY="$(cat "$BODY_FILE")"
+  UNREFERENCED=()
+  for NAME in "${!IMAGE_URL_MAP[@]}"; do
+    URL="${IMAGE_URL_MAP[$NAME]}"
+    PLACEHOLDER="{{${NAME}}}"
+    if [[ "$COMMENT_BODY" == *"$PLACEHOLDER"* ]]; then
+      COMMENT_BODY="${COMMENT_BODY//"$PLACEHOLDER"/![$NAME]($URL)}"
+    else
+      UNREFERENCED+=("$NAME")
+    fi
+  done
+  if [[ ${#UNREFERENCED[@]} -gt 0 ]]; then
+    IFS=$'\n' SORTED=($(printf '%s\n' "${UNREFERENCED[@]}" | sort)); unset IFS
+    for NAME in "${SORTED[@]}"; do
+      COMMENT_BODY+=$'\n\n'"![${NAME}](${IMAGE_URL_MAP[$NAME]})"
+    done
+  fi
 else
-  COMMENT_BODY="## Screenshots"$'\n\n'"${IMAGES_SECTION}"
+  COMMENT_BODY="## Screenshots"$'\n\n'
+  for URL in "${IMAGE_URLS[@]}"; do
+    FILENAME=$(basename "$URL")
+    NAME="${FILENAME%.png}"
+    COMMENT_BODY+="![${NAME}](${URL})"$'\n\n'
+  done
 fi
 
 gh pr comment "$PR" --repo "$REPO" --body "$COMMENT_BODY"

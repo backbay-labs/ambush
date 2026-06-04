@@ -235,24 +235,58 @@ just desktop-screenshot --name search --click open-search
 just desktop-screenshot --name settings --click open-settings
 ```
 
-Options: `--name` (filename), `--route` (client route), `--click` (data-testid
-or CSS selector), `--wait` (ms, default 2000), `--viewport` (WxH, default
-1280x720), `--outdir` (default `test-results/screenshots`),
-`--messages` (JSON file path). Output is a PNG path on stdout.
+Options: `--name` (filename), `--route` (client route), `--active-channel`
+(channel to view), `--click` (left-click data-testid or CSS selector),
+`--right-click` (right-click for context menus), `--hover` (hover before
+capture), `--clip` (crop region as `x,y,w,h` — e.g. `0,0,256,720` for sidebar
+only), `--wait` (ms, default 2000), `--viewport` (WxH, default 1280x720),
+`--outdir` (default `test-results/screenshots`), `--messages` (JSON file path).
+Output is a PNG path on stdout.
 
 Use `--messages` to inject content into a channel before capture. The JSON file
-is an array of `{ channelName, content, pubkey?, kind? }` objects — all must
-target the same channel (`[a-z0-9-]+`). When provided, `--route` is ignored.
-
-```bash
-just desktop-screenshot --name code-blocks --messages /tmp/msgs.json
-```
+is an array of objects — `channelName` and `content` are required, all other
+fields are optional and passed through to `__SPROUT_E2E_EMIT_MOCK_MESSAGE__`:
 
 ```json
 [
-  { "channelName": "general", "content": "```typescript\nconst x = 42;\n```" },
-  { "channelName": "general", "content": "plain text message" }
+  {
+    "channelName": "random",
+    "content": "Hey @tyler check this out",
+    "pubkey": "953d...",
+    "kind": 40002,
+    "mentionPubkeys": ["deadbeef..."],
+    "extraTags": [["broadcast", "1"], ["e", "some-root-id"]],
+    "parentEventId": "abc123"
+  }
 ]
+```
+
+Without `--active-channel`, all messages must target the same channel and the
+helper navigates to that channel (useful for showing message content). With
+`--active-channel`, messages can target multiple channels while the "camera"
+stays on the specified channel (useful for unread indicators, badges, etc.).
+
+```bash
+# Messages in the channel you're viewing (code blocks, formatting, etc.)
+just desktop-screenshot --name code-blocks --messages /tmp/msgs.json
+
+# Messages in OTHER channels to trigger unread state
+just desktop-screenshot --name unread-dot \
+  --active-channel general --messages /tmp/badge-msgs.json
+
+# Cropped to sidebar only (256px wide)
+just desktop-screenshot --name sidebar-unread \
+  --active-channel general --messages /tmp/badge-msgs.json \
+  --clip 0,0,256,720
+
+# Context menu on an unread channel (wider crop to include popup)
+just desktop-screenshot --name ctx-mark-read \
+  --active-channel general --messages /tmp/badge-msgs.json \
+  --right-click channel-random --clip 0,200,320,300
+
+# Hover state (e.g. copy button reveal)
+just desktop-screenshot --name copy-hover \
+  --messages /tmp/code-msgs.json --hover "[data-testid='copy-code']"
 ```
 
 Available mock channels: `general`, `random`, `design`, `sales`, `engineering`,
@@ -264,6 +298,23 @@ Available mock channels: `general`, `random`, `design`, `sales`, `engineering`,
 ```bash
 ./scripts/post-screenshots.sh 803 test-results/screenshots
 ./scripts/post-screenshots.sh 803 test-results/screenshots body.md  # custom body prepended
+```
+
+The body file supports `{{filename}}` placeholders (without `.png`) to inline
+images at specific positions. Images not referenced by any placeholder are
+appended at the end. Without placeholders, all images are appended (backward
+compatible).
+
+```markdown
+### Unread dot
+A message arrives in `#random`.
+
+{{01-unread-dot}}
+
+### Context menu
+Right-click shows "Mark as read".
+
+{{02-context-menu}}
 ```
 
 Re-runs for the same PR overwrite previous images. Cleanup:

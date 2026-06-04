@@ -17,6 +17,9 @@ String localReadStateKey(String pubkey) =>
 String localPublishableContextKey(String pubkey) =>
     'sprout.channel-read-state.publishable.v1:$pubkey';
 
+String localSourceCreatedAtKey(String pubkey) =>
+    'sprout.channel-read-state.source-created-at.v1:$pubkey';
+
 String clientIdKey(String pubkey) => '$_clientIdKeyPrefix:$pubkey';
 
 String slotIdKey(String pubkey) => '$_slotIdKeyPrefix:$pubkey';
@@ -24,12 +27,15 @@ String slotIdKey(String pubkey) => '$_slotIdKeyPrefix:$pubkey';
 class StoredReadState {
   final Map<String, int> contexts;
   final Set<String> publishableContextIds;
+  final Map<String, int> sourceCreatedAt;
 
   StoredReadState({
     required Map<String, int> contexts,
     required Set<String> publishableContextIds,
+    required Map<String, int> sourceCreatedAt,
   }) : contexts = Map.unmodifiable(contexts),
-       publishableContextIds = Set.unmodifiable(publishableContextIds);
+       publishableContextIds = Set.unmodifiable(publishableContextIds),
+       sourceCreatedAt = Map.unmodifiable(sourceCreatedAt);
 }
 
 class ReadStateStorage {
@@ -69,6 +75,7 @@ class ReadStateStorage {
     return StoredReadState(
       contexts: _readContexts(pubkey),
       publishableContextIds: _readPublishableContextIds(pubkey),
+      sourceCreatedAt: _readSourceCreatedAt(pubkey),
     );
   }
 
@@ -76,6 +83,7 @@ class ReadStateStorage {
     String pubkey,
     Map<String, int> contexts,
     Set<String> publishableContextIds,
+    Map<String, int> sourceCreatedAt,
   ) {
     final state = <String, String>{};
     for (final entry in contexts.entries) {
@@ -86,6 +94,10 @@ class ReadStateStorage {
     _prefs.setString(
       localPublishableContextKey(pubkey),
       jsonEncode(publishableContextIds.toList()),
+    );
+    _prefs.setString(
+      localSourceCreatedAtKey(pubkey),
+      jsonEncode(sourceCreatedAt.map((k, v) => MapEntry(k, v.toString()))),
     );
   }
 
@@ -141,6 +153,33 @@ class ReadStateStorage {
       for (final value in parsed)
         if (value is String) value,
     };
+  }
+
+  Map<String, int> _readSourceCreatedAt(String pubkey) {
+    final raw = _prefs.getString(localSourceCreatedAtKey(pubkey));
+    if (raw == null || raw.isEmpty) return {};
+
+    final Object? parsed;
+    try {
+      parsed = jsonDecode(raw);
+    } catch (_) {
+      return {};
+    }
+
+    final record = asStringObjectMap(parsed);
+    if (record == null) return {};
+
+    final result = <String, int>{};
+    for (final entry in record.entries) {
+      final value = entry.value;
+      if (value is int) {
+        result[entry.key] = value;
+      } else if (value is String) {
+        final parsed = int.tryParse(value);
+        if (parsed != null) result[entry.key] = parsed;
+      }
+    }
+    return result;
   }
 }
 

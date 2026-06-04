@@ -59,8 +59,11 @@ class ReadStateManager {
   bool _initialized = false;
   bool _disposed = false;
   bool _isPublishing = false;
+  Completer<void>? _publishCompleter;
   bool _remoteUnsupported = false;
   int _maxFetchedCreatedAt = 0;
+  final Set<String> _forcedContextIds = {};
+  final Map<String, int> _contextSourceCreatedAt = {};
 
   ReadStateManager({
     required this.pubkey,
@@ -104,7 +107,12 @@ class ReadStateManager {
   }
 
   void markContextRead(String contextId, int unixTimestamp) {
+    _forcedContextIds.remove(contextId);
     _advanceContext(contextId, unixTimestamp, publishable: true);
+    _contextSourceCreatedAt[contextId] = max(
+      currentUnixSeconds(),
+      _maxFetchedCreatedAt + 1,
+    );
   }
 
   void markContextUnread(String contextId, int lastMessageTimestamp) {
@@ -112,6 +120,7 @@ class ReadStateManager {
     final rollbackTo = lastMessageTimestamp - 1;
     _effectiveState[contextId] = rollbackTo;
     _publishableContextIds.add(contextId);
+    _forcedContextIds.add(contextId);
     _persistLocalState();
     _onChanged();
     _schedulePublish();
@@ -126,6 +135,21 @@ class ReadStateManager {
     _debounceTimer = null;
     if (!_remoteEnabled || _remoteUnsupported || _disposed) return;
     await _publish();
+  }
+
+  Future<void> reinitializeRemote() async {
+    if (_disposed || !_remoteEnabled) return;
+    if (_isPublishing) {
+      await _publishCompleter?.future;
+    }
+    _unsubscribeLive?.call();
+    _unsubscribeLive = null;
+    await _fetchAndMerge();
+    await _startLiveSubscription();
+    if (!_isIdenticalToLastPublished(_currentContexts())) {
+      _schedulePublish();
+    }
+    _onChanged();
   }
 
   void dispose({bool flushPending = true}) {
@@ -213,7 +237,9 @@ class ReadStateManager {
         continue;
       }
 
-      _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
+      if (_isPlausibleCreatedAt(event.createdAt)) {
+        _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
+      }
 
       if (decoded.dTag == '$readStateDTagPrefix$_slotId' &&
           decoded.blob.clientId != _clientId) {
@@ -221,8 +247,14 @@ class ReadStateManager {
       }
 
       for (final entry in decoded.blob.contexts.entries) {
+        if (_forcedContextIds.contains(entry.key)) continue;
+        final sourceCreatedAt = _contextSourceCreatedAt[entry.key] ?? 0;
         final current = _effectiveState[entry.key] ?? 0;
-        if (entry.value > current) {
+        if (event.createdAt > sourceCreatedAt) {
+          _effectiveState[entry.key] = entry.value;
+          _contextSourceCreatedAt[entry.key] = event.createdAt;
+        } else if (event.createdAt == sourceCreatedAt &&
+            entry.value != current) {
           _effectiveState[entry.key] = entry.value;
         }
         _publishableContextIds.add(entry.key);
@@ -271,7 +303,9 @@ class ReadStateManager {
       return;
     }
 
-    _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
+    if (_isPlausibleCreatedAt(event.createdAt)) {
+      _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
+    }
 
     if (decoded.dTag == '$readStateDTagPrefix$_slotId' &&
         decoded.blob.clientId != _clientId) {
@@ -280,8 +314,16 @@ class ReadStateManager {
 
     var changed = false;
     for (final entry in decoded.blob.contexts.entries) {
+      if (_forcedContextIds.contains(entry.key)) continue;
+      final sourceCreatedAt = _contextSourceCreatedAt[entry.key] ?? 0;
       final current = _effectiveState[entry.key] ?? 0;
-      if (entry.value > current) {
+      if (event.createdAt > sourceCreatedAt) {
+        if (_effectiveState[entry.key] != entry.value) {
+          _effectiveState[entry.key] = entry.value;
+          changed = true;
+        }
+        _contextSourceCreatedAt[entry.key] = event.createdAt;
+      } else if (event.createdAt == sourceCreatedAt && entry.value != current) {
         _effectiveState[entry.key] = entry.value;
         changed = true;
       }
@@ -300,7 +342,7 @@ class ReadStateManager {
     }
 
     if (decoded.blob.clientId != _clientId &&
-        _contextsExceedLastPublished(decoded.blob.contexts)) {
+        !_isIdenticalToLastPublished(_currentContexts())) {
       _schedulePublish();
     }
   }
@@ -324,6 +366,8 @@ class ReadStateManager {
     }
     if (_isPublishing) return;
 
+    final completer = Completer<void>();
+    _publishCompleter = completer;
     _isPublishing = true;
     try {
       await _fetchOwnBlobBeforePublish();
@@ -348,7 +392,12 @@ class ReadStateManager {
       );
 
       _lastPublishedContexts = contexts;
+      _forcedContextIds.clear();
+      for (final key in contexts.keys) {
+        _contextSourceCreatedAt[key] = createdAt;
+      }
       _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, createdAt);
+      _persistLocalState();
     } catch (error) {
       if (_isPermanentReadStateRemoteError(error)) {
         _remoteUnsupported = true;
@@ -363,6 +412,10 @@ class ReadStateManager {
       debugPrint('[ReadStateManager] publish failed: $error');
     } finally {
       _isPublishing = false;
+      completer.complete();
+      if (_publishCompleter == completer) {
+        _publishCompleter = null;
+      }
     }
   }
 
@@ -388,16 +441,6 @@ class ReadStateManager {
     } catch (_) {
       // Per NIP-RS, proceed with reachable data and merge later.
     }
-  }
-
-  bool _contextsExceedLastPublished(Map<String, int> contexts) {
-    for (final entry in contexts.entries) {
-      final last = _lastPublishedContexts[entry.key];
-      if (last == null || entry.value > last) {
-        return true;
-      }
-    }
-    return false;
   }
 
   bool _isIdenticalToLastPublished(Map<String, int> contexts) {
@@ -430,17 +473,29 @@ class ReadStateManager {
     _publishableContextIds
       ..clear()
       ..addAll(stored.publishableContextIds);
+    _forcedContextIds.clear();
+    _contextSourceCreatedAt
+      ..clear()
+      ..addAll(stored.sourceCreatedAt);
     _persistLocalState();
   }
 
   void _persistLocalState() {
-    _storage.write(pubkey, _effectiveState, _publishableContextIds);
+    _storage.write(
+      pubkey,
+      _effectiveState,
+      _publishableContextIds,
+      _contextSourceCreatedAt,
+    );
   }
 
   void _rotateSlotId() {
     _slotId = generateReadStateSlotId();
     _storage.writeSlotId(pubkey, _slotId);
   }
+
+  bool _isPlausibleCreatedAt(int createdAt) =>
+      createdAt <= currentUnixSeconds() + readStateMaxClockDriftSeconds;
 
   bool _isPermanentReadStateRemoteError(Object error) {
     // Relay rejections come back as `Exception("<message>")` from the

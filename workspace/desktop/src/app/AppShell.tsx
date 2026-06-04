@@ -32,7 +32,7 @@ import {
   requestDockBounce,
   revealDesktopAppWindow,
   sendDesktopNotification,
-  setDesktopAppBadgeCount,
+  setDesktopAppBadge,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
 import { playNotificationSound } from "@/features/notifications/lib/sound";
@@ -289,6 +289,7 @@ export function AppShell() {
     markChannelRead,
     markChannelUnread,
     unreadChannelIds,
+    highPriorityUnreadChannelIds,
     getEffectiveTimestamp: getChannelReadAt,
     readStateVersion,
     participatedRootIds,
@@ -319,16 +320,18 @@ export function AppShell() {
   // ReadStateManager mounted via useUnreadChannels above. Channel-backed
   // feed items contribute to the badge iff strictly newer than that
   // channel's read marker; non-channel items keep their seen-set fallback.
-  const homeBadgeCount = useHomeFeedNotificationState(
-    homeFeedQuery.data,
-    identityQuery.data?.pubkey,
-    notificationSettings.settings,
-    notificationSettings.setDesktopEnabled,
-    selectedView === "home",
-    getChannelReadAt,
-    readStateVersion,
-    feedProfilesQuery.data?.profiles,
-  );
+  const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
+    useHomeFeedNotificationState(
+      homeFeedQuery.data,
+      identityQuery.data?.pubkey,
+      notificationSettings.settings,
+      notificationSettings.setDesktopEnabled,
+      selectedView === "home",
+      getChannelReadAt,
+      readStateVersion,
+      highPriorityUnreadChannelIds,
+      feedProfilesQuery.data?.profiles,
+    );
 
   const isNotifiedForThread = React.useCallback(
     (rootId: string) =>
@@ -492,8 +495,20 @@ export function AppShell() {
   }, []);
 
   React.useEffect(() => {
-    void setDesktopAppBadgeCount(unreadChannelIds.size + homeBadgeCount);
-  }, [homeBadgeCount, unreadChannelIds.size]);
+    const numericCount =
+      highPriorityUnreadChannelIds.size + homeBadgeCountExcludingHighPriority;
+    if (numericCount > 0) {
+      void setDesktopAppBadge({ kind: "count", count: numericCount });
+    } else if (unreadChannelIds.size > 0) {
+      void setDesktopAppBadge({ kind: "dot" });
+    } else {
+      void setDesktopAppBadge({ kind: "none" });
+    }
+  }, [
+    homeBadgeCountExcludingHighPriority,
+    highPriorityUnreadChannelIds.size,
+    unreadChannelIds.size,
+  ]);
 
   // Dispatch `sprout://message` deep links into the router.
   useMessageDeepLinks();
