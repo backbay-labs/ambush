@@ -62,7 +62,11 @@ import {
   SidebarMenuSkeleton,
 } from "@/shared/ui/sidebar";
 
-type CollapsibleSidebarGroup = "channels" | "forums" | "directMessages";
+type CollapsibleSidebarGroup =
+  | "starred"
+  | "channels"
+  | "forums"
+  | "directMessages";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -149,6 +153,9 @@ type AppSidebarProps = {
   mutedChannelIds?: ReadonlySet<string>;
   onMuteChannel?: (channelId: string) => void;
   onUnmuteChannel?: (channelId: string) => void;
+  starredChannelIds?: ReadonlySet<string>;
+  onStarChannel?: (channelId: string) => void;
+  onUnstarChannel?: (channelId: string) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -207,6 +214,9 @@ export function AppSidebar({
   mutedChannelIds,
   onMuteChannel,
   onUnmuteChannel,
+  starredChannelIds,
+  onStarChannel,
+  onUnstarChannel,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isNewDmOpenInternal, setIsNewDmOpenInternal] = React.useState(false);
@@ -230,6 +240,7 @@ export function AppSidebar({
   const [collapsedGroups, setCollapsedGroups] = React.useState<
     Record<CollapsibleSidebarGroup, boolean>
   >({
+    starred: false,
     channels: false,
     forums: false,
     directMessages: false,
@@ -293,6 +304,7 @@ export function AppSidebar({
     const sectionIds = new Set(channelSections.map((s) => s.id));
 
     for (const channel of streamChannels) {
+      if (starredChannelIds?.has(channel.id)) continue;
       const sectionId = channelAssignments[channel.id];
       if (sectionId && sectionIds.has(sectionId)) {
         if (!bySection[sectionId]) {
@@ -304,7 +316,14 @@ export function AppSidebar({
       }
     }
     return { bySection, unassigned };
-  }, [streamChannels, channelSections, channelAssignments]);
+  }, [streamChannels, channelSections, channelAssignments, starredChannelIds]);
+
+  const starredChannels = React.useMemo(() => {
+    if (!starredChannelIds || starredChannelIds.size === 0) return [];
+    return streamChannels.filter((channel) =>
+      starredChannelIds.has(channel.id),
+    );
+  }, [streamChannels, starredChannelIds]);
 
   const handleCreateSectionForChannel = React.useCallback(
     (channelId: string) => {
@@ -511,6 +530,37 @@ export function AppSidebar({
 
           {!isLoading ? (
             <>
+              {starredChannels.length > 0 ? (
+                <ChannelGroupSection
+                  browseAriaLabel="Starred channels"
+                  createAriaLabel="Starred channels"
+                  hasUnread={starredChannels.some((c) =>
+                    unreadChannelIds.has(c.id),
+                  )}
+                  isCollapsed={collapsedGroups.starred}
+                  isActiveChannel={selectedView === "channel"}
+                  items={starredChannels}
+                  listTestId="starred-list"
+                  onMarkAllRead={() => {
+                    for (const channel of starredChannels) {
+                      onMarkChannelRead(channel.id, channel.lastMessageAt);
+                    }
+                  }}
+                  onMarkChannelRead={onMarkChannelRead}
+                  onMarkChannelUnread={onMarkChannelUnread}
+                  onSelectChannel={onSelectChannel}
+                  onToggleCollapsed={() => toggleCollapsedGroup("starred")}
+                  selectedChannelId={selectedChannelId}
+                  title="Starred"
+                  unreadChannelIds={unreadChannelIds}
+                  mutedChannelIds={mutedChannelIds}
+                  onMuteChannel={onMuteChannel}
+                  onUnmuteChannel={onUnmuteChannel}
+                  starredChannelIds={starredChannelIds}
+                  onStarChannel={onStarChannel}
+                  onUnstarChannel={onUnstarChannel}
+                />
+              ) : null}
               <SidebarDndContext
                 channels={channels}
                 sections={channelSections}
@@ -558,6 +608,9 @@ export function AppSidebar({
                     mutedChannelIds={mutedChannelIds}
                     onMuteChannel={onMuteChannel}
                     onUnmuteChannel={onUnmuteChannel}
+                    starredChannelIds={starredChannelIds}
+                    onStarChannel={onStarChannel}
+                    onUnstarChannel={onUnstarChannel}
                   />
                 ))}
                 <ChannelGroupSection
@@ -591,6 +644,9 @@ export function AppSidebar({
                   mutedChannelIds={mutedChannelIds}
                   onMuteChannel={onMuteChannel}
                   onUnmuteChannel={onUnmuteChannel}
+                  starredChannelIds={starredChannelIds}
+                  onStarChannel={onStarChannel}
+                  onUnstarChannel={onUnstarChannel}
                 />
               </SidebarDndContext>
               <ChannelGroupSection
