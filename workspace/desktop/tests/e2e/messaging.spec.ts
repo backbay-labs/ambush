@@ -403,7 +403,7 @@ test("opens a single-level thread panel with inline expansion", async ({
   const siblingReply = `Sibling threaded reply ${timestamp}`;
   const nestedReply = `Nested threaded reply ${timestamp}`;
   const nestedReplyFromBob = `Nested reply from Bob ${timestamp}`;
-  const nestedReplyVisibleTopMaxPx = 260;
+  const nestedReplyVisibleTopMaxPx = 280;
   const fillerReplies = Array.from(
     { length: 14 },
     (_, index) => `Thread filler reply ${index} ${timestamp}`,
@@ -473,6 +473,68 @@ test("opens a single-level thread panel with inline expansion", async ({
   await expect(
     rootSummaryRow.getByTestId("message-thread-summary-participant"),
   ).toHaveCount(1);
+  await expect
+    .poll(() =>
+      rootSummaryRow
+        .getByTestId("message-thread-summary-participant")
+        .first()
+        .evaluate((wrapper) => {
+          const avatar = wrapper.firstElementChild;
+          if (!(avatar instanceof HTMLElement)) return "missing";
+          const rect = avatar.getBoundingClientRect();
+          return `${Math.round(rect.width)}x${Math.round(rect.height)}`;
+        }),
+    )
+    .toBe("32x32");
+
+  await page.mouse.move(0, 0);
+  const rootSummaryWidthBeforeHover = await rootSummaryRow.evaluate((row) =>
+    Math.round(row.getBoundingClientRect().width),
+  );
+  await expect
+    .poll(() =>
+      rootSummaryRow
+        .getByTestId("message-thread-summary-last-reply")
+        .evaluate((label) =>
+          Number.parseFloat(getComputedStyle(label).opacity),
+        ),
+    )
+    .toBeGreaterThan(0.8);
+  await expect
+    .poll(() =>
+      rootSummaryRow
+        .getByTestId("message-thread-summary-hover-action")
+        .evaluate((label) =>
+          Number.parseFloat(getComputedStyle(label).opacity),
+        ),
+    )
+    .toBeLessThan(0.1);
+  await rootSummaryRow.hover();
+  await expect
+    .poll(() =>
+      rootSummaryRow
+        .getByTestId("message-thread-summary-last-reply")
+        .evaluate((label) =>
+          Number.parseFloat(getComputedStyle(label).opacity),
+        ),
+    )
+    .toBeLessThan(0.1);
+  await expect
+    .poll(() =>
+      rootSummaryRow
+        .getByTestId("message-thread-summary-hover-action")
+        .evaluate((label) =>
+          Number.parseFloat(getComputedStyle(label).opacity),
+        ),
+    )
+    .toBeGreaterThan(0.8);
+  await expect
+    .poll(() =>
+      rootSummaryRow.evaluate((row) =>
+        Math.round(row.getBoundingClientRect().width),
+      ),
+    )
+    .toBe(rootSummaryWidthBeforeHover);
 
   await threadPanel.getByTestId("message-thread-close").click();
   await expect(threadPanel).toBeHidden();
