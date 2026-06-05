@@ -58,8 +58,7 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
 /// - Direct reply (parent is top-level): `root == parent`.
 /// - Nested reply: `root` is the parent's own root marker; `parent` is unchanged.
 ///
-/// This matches the behavior of `sprout-mcp`'s `resolve_thread_ref` so that
-/// CLI-sent replies thread identically to MCP-sent replies.
+/// Ensures CLI-sent replies thread correctly using the same NIP-10 logic.
 async fn resolve_thread_ref(
     client: &SproutClient,
     parent_event_id: &str,
@@ -289,6 +288,7 @@ pub async fn cmd_get_thread(
     channel_id: &str,
     event_id: &str,
     limit: Option<u32>,
+    depth_limit: Option<u32>,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
@@ -298,12 +298,15 @@ pub async fn cmd_get_thread(
     // Two filters ORed in a single HTTP call:
     // 1. Replies referencing this event via e-tag (no kind restriction)
     // 2. The root event itself by ID
-    let reply_filter = serde_json::json!({
+    let mut reply_filter = serde_json::json!({
         "kinds": [9, 40002, 40003, 40008, 45003],
         "#h": [channel_id],
         "#e": [event_id],
         "limit": limit
     });
+    if let Some(d) = depth_limit {
+        reply_filter["depth_limit"] = serde_json::json!(d);
+    }
     let root_filter = serde_json::json!({
         "ids": [event_id],
         "limit": 1
@@ -701,7 +704,8 @@ pub async fn dispatch(
             channel,
             event,
             limit,
-        } => cmd_get_thread(client, &channel, &event, limit, format).await,
+            depth_limit,
+        } => cmd_get_thread(client, &channel, &event, limit, depth_limit, format).await,
         MessagesCmd::Search { query, limit } => cmd_search(client, &query, limit, format).await,
         MessagesCmd::Vote { event, direction } => {
             cmd_vote_on_post(client, &event, &direction).await
