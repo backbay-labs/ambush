@@ -10,12 +10,12 @@ import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { isPositiveEmojiParticle } from "@/shared/ui/EmojiBurstProvider";
 import {
   MENTION_CHIP_BASE_CLASSES,
   MENTION_CHIP_HOVER_CLASSES,
 } from "@/shared/ui/mentionChip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
-import { Spinner } from "@/shared/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { MessageTimestamp } from "./MessageTimestamp";
@@ -287,6 +287,9 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
     remove: boolean,
   ) => Promise<void>;
 }) {
+  const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
+    null,
+  );
   const [isReactionPickerOpen, setIsReactionPickerOpen] = React.useState(false);
   const {
     reactions,
@@ -312,6 +315,11 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
   if (!description) {
     return null;
   }
+
+  const wouldAddReaction = (emoji: string) =>
+    !reactions.some(
+      (reaction) => reaction.emoji === emoji && reaction.reactedByCurrentUser,
+    );
 
   return (
     <div
@@ -345,6 +353,12 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
               canToggle={canToggleReactions}
               pending={reactionPending}
               className="mt-0.5 pt-0.5"
+              burstEmojiOnRender={badgeBurstEmoji}
+              onBurstEmojiRendered={(emoji) => {
+                setBadgeBurstEmoji((current) =>
+                  current === emoji ? null : current,
+                );
+              }}
               onSelect={(emoji) => {
                 void handleReactionSelect(emoji);
               }}
@@ -380,16 +394,11 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
                         <Button
                           aria-label="Open reactions"
                           className="h-6 w-6 rounded-full p-0"
-                          disabled={reactionPending}
                           size="sm"
                           type="button"
                           variant={isReactionPickerOpen ? "secondary" : "ghost"}
                         >
-                          {reactionPending ? (
-                            <Spinner className="h-3 w-3" />
-                          ) : (
-                            <SmilePlus className="h-3 w-3" />
-                          )}
+                          <SmilePlus className="h-3 w-3" />
                         </Button>
                       </PopoverTrigger>
                     </TooltipTrigger>
@@ -410,6 +419,13 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
                     ) : null}
                     <EmojiPicker
                       onSelect={(value) => {
+                        if (
+                          !reactionPending &&
+                          wouldAddReaction(value) &&
+                          isPositiveEmojiParticle(value)
+                        ) {
+                          setBadgeBurstEmoji(value);
+                        }
                         void handleReactionSelect(value).finally(() => {
                           setIsReactionPickerOpen(false);
                         });
