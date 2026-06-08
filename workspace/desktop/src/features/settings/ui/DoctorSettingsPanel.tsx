@@ -6,7 +6,6 @@ import {
   Download,
   ExternalLink,
   RefreshCw,
-  Stethoscope,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -18,6 +17,7 @@ import { describeResolvedCommand } from "@/features/agents/ui/agentUi";
 import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { SettingsOptionGroup } from "./SettingsOptionGroup";
 
 function StatusIcon({
   availability,
@@ -91,13 +91,13 @@ function RuntimeRow({
   return (
     <div
       className={cn(
-        "flex items-start gap-3 rounded-xl border px-4 py-3",
+        "flex min-h-16 items-start gap-3 px-4 py-3 text-sm",
         runtime.availability === "available"
-          ? "border-border/70 bg-background/80"
+          ? "bg-background/60"
           : runtime.availability === "adapter_missing" ||
               runtime.availability === "cli_missing"
-            ? "border-amber-500/30 bg-amber-500/5"
-            : "border-border/50 bg-muted/30",
+            ? "bg-amber-500/5"
+            : "bg-muted/20",
       )}
       data-testid={`doctor-runtime-${runtime.id}`}
     >
@@ -107,9 +107,7 @@ function RuntimeRow({
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm font-semibold tracking-tight">
-            {runtime.label}
-          </p>
+          <p className="text-sm font-medium">{runtime.label}</p>
           {runtime.command ? (
             <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
               {runtime.command}
@@ -121,7 +119,7 @@ function RuntimeRow({
         runtime.command &&
         runtime.binaryPath ? (
           <>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-1 text-sm font-normal text-muted-foreground">
               Available via{" "}
               {describeResolvedCommand(runtime.command, runtime.binaryPath)}.
             </p>
@@ -158,14 +156,14 @@ function RuntimeRow({
           </>
         ) : runtime.availability === "adapter_missing" ? (
           <>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-1 text-sm font-normal text-muted-foreground">
               CLI detected at{" "}
               <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
                 {runtime.underlyingCliPath ?? "unknown path"}
               </code>{" "}
               but ACP adapter not found.
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-sm font-normal text-muted-foreground">
               {runtime.installHint}
             </p>
             <InstallActions
@@ -176,14 +174,14 @@ function RuntimeRow({
           </>
         ) : runtime.availability === "cli_missing" ? (
           <>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-1 text-sm font-normal text-muted-foreground">
               ACP adapter found at{" "}
               <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
                 {runtime.binaryPath ?? "unknown path"}
               </code>{" "}
               but the {runtime.label} CLI is not installed.
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-sm font-normal text-muted-foreground">
               {runtime.installHint}
             </p>
             <InstallActions
@@ -194,8 +192,10 @@ function RuntimeRow({
           </>
         ) : (
           <>
-            <p className="mt-1 text-sm text-muted-foreground">Not installed</p>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-sm font-normal text-muted-foreground">
+              Not installed
+            </p>
+            <p className="mt-1 text-sm font-normal text-muted-foreground">
               {runtime.installHint}
             </p>
             <InstallActions
@@ -207,12 +207,12 @@ function RuntimeRow({
         )}
 
         {installSuccess && runtime.availability !== "available" ? (
-          <p className="mt-2 rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs text-green-700 dark:text-green-400">
+          <p className="mt-2 rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-sm text-green-700 dark:text-green-400">
             Installed successfully!
           </p>
         ) : null}
         {installError ? (
-          <p className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <p className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-sm text-destructive">
             {installError}
           </p>
         ) : null}
@@ -268,14 +268,11 @@ export function DoctorSettingsPanel() {
   }
 
   return (
-    <section className="space-y-5" data-testid="settings-doctor">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <section data-testid="settings-doctor">
+      <div className="mb-12 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Stethoscope className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold tracking-tight">Doctor</h2>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <h2 className="text-2xl font-semibold tracking-tight">Doctor</h2>
+          <p className="mt-1 text-base font-normal text-muted-foreground">
             Verify the ACP runtime commands available to the desktop app.
           </p>
         </div>
@@ -298,47 +295,46 @@ export function DoctorSettingsPanel() {
         </Button>
       </div>
 
-      <div className="mt-5 space-y-4">
-        <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-          <h3 className="text-sm font-semibold tracking-tight">
-            Agent CLIs and ACP runtimes
-          </h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Installation status of supported agent CLIs and their ACP runtimes.
-          </p>
-
-          <div className="mt-4 space-y-2">
-            {runtimesQuery.isLoading ? (
-              <p className="text-sm text-muted-foreground">
-                Looking for ACP runtimes...
-              </p>
-            ) : runtimes.length > 0 ? (
-              runtimes.map((runtime) => (
-                <RuntimeRow
-                  installError={installResults[runtime.id]?.error ?? null}
-                  installSuccess={installResults[runtime.id]?.success ?? false}
-                  isInstalling={
-                    installMutation.isPending &&
-                    installMutation.variables === runtime.id
-                  }
-                  key={runtime.id}
-                  onInstall={() => handleInstall(runtime.id)}
-                  runtime={runtime}
-                />
-              ))
-            ) : (
-              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">
-                No known ACP runtimes found.
-              </div>
-            )}
+      <div className="space-y-5">
+        <SettingsOptionGroup>
+          <div className="px-4 py-3 text-sm">
+            <h3 className="text-sm font-medium">Agent CLIs and ACP runtimes</h3>
+            <p className="mt-1 text-sm font-normal text-muted-foreground">
+              Installation status of supported agent CLIs and their ACP
+              runtimes.
+            </p>
           </div>
 
+          {runtimesQuery.isLoading ? (
+            <div className="px-4 py-3 text-sm font-normal text-muted-foreground">
+              Looking for ACP runtimes...
+            </div>
+          ) : runtimes.length > 0 ? (
+            runtimes.map((runtime) => (
+              <RuntimeRow
+                installError={installResults[runtime.id]?.error ?? null}
+                installSuccess={installResults[runtime.id]?.success ?? false}
+                isInstalling={
+                  installMutation.isPending &&
+                  installMutation.variables === runtime.id
+                }
+                key={runtime.id}
+                onInstall={() => handleInstall(runtime.id)}
+                runtime={runtime}
+              />
+            ))
+          ) : (
+            <div className="bg-amber-500/10 px-4 py-3 text-sm text-warning">
+              No known ACP runtimes found.
+            </div>
+          )}
+
           {runtimesQuery.error instanceof Error ? (
-            <p className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            <p className="bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {runtimesQuery.error.message}
             </p>
           ) : null}
-        </div>
+        </SettingsOptionGroup>
       </div>
     </section>
   );
