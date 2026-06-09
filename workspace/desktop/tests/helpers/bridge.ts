@@ -98,6 +98,7 @@ type BridgeOptions = {
   relayHttpUrl?: string;
   relayWsUrl?: string;
   skipOnboardingSeed?: boolean;
+  skipWorkspaceSeed?: boolean;
   /**
    * When true (default), seed every preview feature in preview-features.json as
    * enabled in localStorage so E2E tests can interact with gated UI without
@@ -165,9 +166,11 @@ export async function installBridge(page: Page, options: BridgeOptions) {
       ? TEST_IDENTITIES[options.user ?? "tyler"]
       : undefined;
 
-  // Always seed a workspace so useWorkspaceInit doesn't show WelcomeSetup.
+  // Most specs seed a workspace so useWorkspaceInit doesn't show WelcomeSetup.
   // skipOnboardingSeed only controls the onboarding-completion flag.
-  await seedDefaultWorkspace(page, options.relayWsUrl);
+  if (!options.skipWorkspaceSeed) {
+    await seedDefaultWorkspace(page, options.relayWsUrl);
+  }
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page);
   }
@@ -264,12 +267,17 @@ export async function installBridge(page: Page, options: BridgeOptions) {
 export async function installMockBridge(
   page: Page,
   mock?: MockBridgeOptions,
-  options?: { skipOnboardingSeed?: boolean; seedPreviewFeatures?: boolean },
+  options?: {
+    skipOnboardingSeed?: boolean;
+    skipWorkspaceSeed?: boolean;
+    seedPreviewFeatures?: boolean;
+  },
 ) {
   await installBridge(page, {
     mode: "mock",
     mock,
     skipOnboardingSeed: options?.skipOnboardingSeed,
+    skipWorkspaceSeed: options?.skipWorkspaceSeed,
     seedPreviewFeatures: options?.seedPreviewFeatures,
   });
 }
