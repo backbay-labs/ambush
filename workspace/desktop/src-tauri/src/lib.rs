@@ -45,7 +45,19 @@ mod mesh_llm_stubs {
     }
 
     #[tauri::command]
-    pub async fn mesh_stop_node(_state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+    pub async fn mesh_prepare_relay_mesh_client(
+        _app: tauri::AppHandle,
+        _state: State<'_, AppState>,
+        _request: serde_json::Value,
+    ) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_stop_node(
+        _app: tauri::AppHandle,
+        _state: State<'_, AppState>,
+    ) -> CmdResult<serde_json::Value> {
         Err("mesh-llm feature not enabled".to_string())
     }
 
@@ -518,6 +530,18 @@ pub fn run() {
             resolve_persisted_identity(&app_handle, &state)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
+            // Bring up the runtime-owned relay-mesh call-me-now listener now,
+            // before any saved agent restore can request a connection. Its
+            // lifetime is tied to the runtime, not a UI mount — this is what
+            // closes the cold-launch hole-punch race.
+            #[cfg(feature = "mesh-llm")]
+            {
+                let mesh_app = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::mesh_llm::spawn_listener(mesh_app).await;
+                });
+            }
+
             // Start the localhost media streaming proxy. Uses the shared HTTP
             // client so WARP tunnelling applies. The port is stored in AppState
             // and exposed to the frontend via the `get_media_proxy_port` command.
@@ -672,6 +696,7 @@ pub fn run() {
             mesh_availability,
             mesh_start_node,
             mesh_ensure_client_node,
+            mesh_prepare_relay_mesh_client,
             mesh_dial_endpoint_addr,
             mesh_status_report_payload,
             mesh_stop_node,
