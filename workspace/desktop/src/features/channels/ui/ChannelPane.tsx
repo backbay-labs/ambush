@@ -29,6 +29,7 @@ import type { Channel } from "@/shared/api/types";
 type ChannelPaneProps = {
   activeChannel: Channel | null;
   activityAgents?: BotActivityAgent[];
+  agentPubkeys?: ReadonlySet<string>;
   agentSessionAgents: ChannelAgentSessionAgent[];
   botTypingEntries: TypingIndicatorEntry[];
   channelFind: ReturnType<typeof useChannelFind>;
@@ -109,6 +110,7 @@ type ChannelPaneProps = {
 
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
+  agentPubkeys,
   agentSessionAgents,
   activityAgents = agentSessionAgents,
   botTypingEntries,
@@ -346,6 +348,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             />
           ) : null}
           <MessageTimeline
+            agentPubkeys={agentPubkeys}
             channelId={activeChannel?.id}
             directMessageIntro={directMessageIntro}
             scrollContainerRef={timelineScrollRef}
@@ -419,6 +422,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 <MessageComposer
                   channelId={activeChannel?.id ?? null}
                   channelName={activeChannel?.name ?? "channel"}
+                  channelType={activeChannel?.channelType ?? null}
                   disabled={isComposerDisabled}
                   editTarget={mainEditTarget}
                   isSending={isSending}
@@ -472,6 +476,7 @@ export const ChannelPane = React.memo(function ChannelPane({
 
       {threadHeadMessage ? (
         <MessageThreadPanel
+          agentPubkeys={agentPubkeys}
           channel={activeChannel}
           channelId={activeChannel?.id ?? null}
           channelName={activeChannel?.name ?? "channel"}

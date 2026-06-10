@@ -30,6 +30,28 @@ async function openMembersSidebar(
   await expect(page.getByTestId("members-sidebar")).toBeVisible();
 }
 
+async function readMembersTriggerCount(page: import("@playwright/test").Page) {
+  const label =
+    (await page
+      .getByTestId("channel-members-trigger")
+      .getAttribute("aria-label")) ?? "";
+  const match = label.match(/\((\d+)\)$/);
+  if (!match) {
+    throw new Error(`Could not read member count from label: ${label}`);
+  }
+  return Number(match[1]);
+}
+
+async function expectMembersTriggerCount(
+  page: import("@playwright/test").Page,
+  count: number,
+) {
+  await expect(page.getByTestId("channel-members-trigger")).toHaveAttribute(
+    "aria-label",
+    `View channel members (${count})`,
+  );
+}
+
 async function waitForMockLiveSubscription(
   page: import("@playwright/test").Page,
   channelName: string,
@@ -886,7 +908,7 @@ test("manage channel keeps canvas near the top of the sheet", async ({
 test("members sidebar can invite and remove members", async ({ page }) => {
   await page.goto("/");
   await openMembersSidebar(page, "general");
-  await expect(page.getByTestId("channel-members-trigger")).toContainText("3");
+  const initialMemberCount = await readMembersTriggerCount(page);
   await expect(page.getByTestId("channel-management-add-pubkeys")).toHaveCount(
     0,
   );
@@ -916,7 +938,7 @@ test("members sidebar can invite and remove members", async ({ page }) => {
   await expect(
     page.getByTestId(`sidebar-member-${TEST_IDENTITIES.charlie.pubkey}`),
   ).toContainText("charlie");
-  await expect(page.getByTestId("channel-members-trigger")).toContainText("4");
+  await expectMembersTriggerCount(page, initialMemberCount + 1);
 
   await openMemberMenu(page, TEST_IDENTITIES.charlie.pubkey);
   await page
@@ -926,7 +948,7 @@ test("members sidebar can invite and remove members", async ({ page }) => {
   await expect(
     page.getByTestId(`sidebar-member-${TEST_IDENTITIES.charlie.pubkey}`),
   ).toHaveCount(0);
-  await expect(page.getByTestId("channel-members-trigger")).toContainText("3");
+  await expectMembersTriggerCount(page, initialMemberCount);
 });
 
 test("members sidebar keeps direct pubkey entry behind a toggle", async ({
@@ -934,6 +956,7 @@ test("members sidebar keeps direct pubkey entry behind a toggle", async ({
 }) => {
   await page.goto("/");
   await openMembersSidebar(page, "general");
+  const initialMemberCount = await readMembersTriggerCount(page);
 
   await expect(page.getByTestId("channel-management-add-pubkeys")).toHaveCount(
     0,
@@ -952,7 +975,7 @@ test("members sidebar keeps direct pubkey entry behind a toggle", async ({
   await expect(
     page.getByTestId(`sidebar-member-${TEST_IDENTITIES.outsider.pubkey}`),
   ).toContainText("outsider");
-  await expect(page.getByTestId("channel-members-trigger")).toContainText("4");
+  await expectMembersTriggerCount(page, initialMemberCount + 1);
 });
 
 test("open-channel members can add agents from the header", async ({

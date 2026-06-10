@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   attachManagedAgentToChannel,
-  createChannelManagedAgent,
   createChannelManagedAgents,
   ensureChannelAgentPresetInChannel,
 } from "@/features/agents/channelAgents";
@@ -98,6 +97,32 @@ async function invalidateAgentQueries(
         ]
       : []),
   ]);
+}
+
+function refreshAgentQueriesInBackground(task: () => Promise<unknown>) {
+  void task().catch((error) => {
+    console.error("Failed to refresh agent queries", error);
+  });
+}
+
+function invalidateAgentQueriesInBackground(
+  queryClient: ReturnType<typeof useQueryClient>,
+  channelId: string | null,
+) {
+  refreshAgentQueriesInBackground(() =>
+    invalidateAgentQueries(queryClient, channelId),
+  );
+}
+
+function invalidateManagedAgentQueriesInBackground(
+  queryClient: ReturnType<typeof useQueryClient>,
+) {
+  refreshAgentQueriesInBackground(() =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+      queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey }),
+    ]),
+  );
 }
 
 export function useAcpRuntimesQuery() {
@@ -332,9 +357,8 @@ export function useStartManagedAgentMutation() {
 
   return useMutation({
     mutationFn: (pubkey: string) => startManagedAgent(pubkey),
-    onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
-      await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+    onSettled: () => {
+      invalidateManagedAgentQueriesInBackground(queryClient);
     },
   });
 }
@@ -344,9 +368,8 @@ export function useStopManagedAgentMutation() {
 
   return useMutation({
     mutationFn: (pubkey: string) => stopManagedAgent(pubkey),
-    onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
-      await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+    onSettled: () => {
+      invalidateManagedAgentQueriesInBackground(queryClient);
     },
   });
 }
@@ -400,8 +423,8 @@ export function useAttachManagedAgentToChannelMutation(
 
       return attachManagedAgentToChannel(channelId, input);
     },
-    onSettled: async () => {
-      await invalidateAgentQueries(queryClient, channelId);
+    onSettled: () => {
+      invalidateAgentQueriesInBackground(queryClient, channelId);
     },
   });
 }
@@ -419,8 +442,8 @@ export function useEnsureChannelAgentPresetMutation(channelId: string | null) {
 
       return ensureChannelAgentPresetInChannel(channelId, input);
     },
-    onSettled: async () => {
-      await invalidateAgentQueries(queryClient, channelId);
+    onSettled: () => {
+      invalidateAgentQueriesInBackground(queryClient, channelId);
     },
   });
 }
@@ -436,10 +459,17 @@ export function useCreateChannelManagedAgentMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      return createChannelManagedAgent(channelId, input);
+      const result = await createChannelManagedAgents(channelId, [input]);
+      const success = result.successes[0];
+      if (success) {
+        return success;
+      }
+
+      const failure = result.failures[0];
+      throw new Error(failure?.error ?? "Could not create agent.");
     },
-    onSettled: async () => {
-      await invalidateAgentQueries(queryClient, channelId);
+    onSettled: () => {
+      invalidateAgentQueriesInBackground(queryClient, channelId);
     },
   });
 }
@@ -459,8 +489,8 @@ export function useCreateChannelManagedAgentsMutation(
 
       return createChannelManagedAgents(channelId, inputs);
     },
-    onSettled: async () => {
-      await invalidateAgentQueries(queryClient, channelId);
+    onSettled: () => {
+      invalidateAgentQueriesInBackground(queryClient, channelId);
     },
   });
 }
@@ -493,8 +523,8 @@ export function useEnsureGooseInChannelMutation(channelId: string | null) {
         created: attached.created,
       };
     },
-    onSettled: async () => {
-      await invalidateAgentQueries(queryClient, channelId);
+    onSettled: () => {
+      invalidateAgentQueriesInBackground(queryClient, channelId);
     },
   });
 }
