@@ -785,8 +785,11 @@ export async function editMessage(
   });
 }
 
-export async function deleteMessage(eventId: string): Promise<void> {
-  await invokeTauri("delete_message", { eventId });
+export async function deleteMessage(
+  channelId: string,
+  eventId: string,
+): Promise<void> {
+  await invokeTauri("delete_message", { channelId, eventId });
 }
 
 export async function addReaction(
