@@ -40,7 +40,6 @@ const overrides = new Map([
   ["src-tauri/src/nostr_convert.rs", 1126],
   ["src/shared/api/relayClientSession.ts", 1022],
   ["src-tauri/src/migration.rs", 1295],
-  ["src-tauri/src/managed_agents/teams.rs", 1020],
 ]);
 
 await runFileSizeCheck({
