@@ -739,7 +739,7 @@ impl AcpClient {
             if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
                 match method {
                     "session/update" => {
-                        self.handle_session_update(&msg);
+                        let _ = self.handle_session_update(&msg);
                     }
                     "session/request_permission" => {
                         self.handle_permission_request(&msg).await?;
@@ -852,7 +852,15 @@ impl AcpClient {
                     // Dispatch notifications and agent-initiated requests.
                     if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
                         match method {
-                            "session/update" => self.handle_session_update(&msg),
+                            "session/update" => {
+                                if self.handle_session_update(&msg) {
+                                    // Belt-and-suspenders — general reset already fired
+                                    // above, this is defense-in-depth in case the general
+                                    // reset is later narrowed.
+                                    tracing::debug!("idle clock reset: tool call started");
+                                    idle_deadline = Instant::now() + idle_timeout;
+                                }
+                            }
                             "session/request_permission" => {
                                 self.handle_permission_request(&msg).await?;
                             }
@@ -893,7 +901,10 @@ impl AcpClient {
     /// Log a `session/update` notification via tracing.
     ///
     /// The discriminator field is `sessionUpdate` (not `type`) per the ACP schema.
-    fn handle_session_update(&self, msg: &serde_json::Value) {
+    /// Returns `true` if the update indicates a tool call started, signaling that
+    /// the idle clock should be explicitly reset (the agent will be silent while
+    /// the tool executes).
+    fn handle_session_update(&self, msg: &serde_json::Value) -> bool {
         let update = &msg["params"]["update"];
         let update_type = update
             .get("sessionUpdate")
@@ -905,6 +916,7 @@ impl AcpClient {
                 if let Some(text) = update["content"]["text"].as_str() {
                     tracing::info!(target: "acp::stream", "{text}");
                 }
+                false
             }
             "tool_call" => {
                 let title = update
@@ -916,6 +928,7 @@ impl AcpClient {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 tracing::info!(target: "acp::tool", "tool_call: {title} ({kind})");
+                true
             }
             "tool_call_update" => {
                 let tool_id = update
@@ -924,14 +937,17 @@ impl AcpClient {
                     .unwrap_or("?");
                 let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("?");
                 tracing::info!(target: "acp::tool", "tool_call_update: {tool_id} → {status}");
+                false
             }
             "plan" => {
                 tracing::info!(target: "acp::plan", "plan update received");
+                false
             }
             "agent_thought_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
                     tracing::debug!(target: "acp::thought", "{text}");
                 }
+                false
             }
             "available_commands_update" => {
                 // Advertised slash commands (ACP slash-commands extension).
@@ -946,9 +962,12 @@ impl AcpClient {
                     names.len(),
                     names.join(", ")
                 );
+                false
             }
+            "keepalive" => false,
             other => {
                 tracing::debug!(target: "acp::update", "session/update: {other}");
+                false
             }
         }
     }
@@ -1934,5 +1953,72 @@ mod tests {
             .await;
         assert!(result.is_ok(), "expected Ok, got {result:?}");
         assert_eq!(result.unwrap()["worked"], serde_json::json!(true));
+    }
+
+    // ── Keepalive / tool-call idle reset tests (PR #935 fix) ─────────────
+
+    #[tokio::test]
+    async fn keepalive_resets_idle_past_deadline() {
+        // Keepalive session/update lines every 50ms against a 100ms idle deadline.
+        // The turn should survive well past the 100ms deadline (proves the fix).
+        let mut client = spawn_script(
+            r#"for i in $(seq 1 20); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"keepalive"}}}'; sleep 0.05; done; sleep 10"#,
+        )
+        .await;
+        let hard_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+        let result = client
+            .read_until_response_with_idle_timeout(
+                999,
+                std::time::Duration::from_millis(100),
+                hard_deadline,
+            )
+            .await;
+        let elapsed = start.elapsed();
+        // 20 keepalives × 50ms = ~1000ms of activity, then idle fires after 100ms more.
+        // Must survive well past the 100ms deadline.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(500),
+            "keepalive should reset idle past the deadline; elapsed only {elapsed:?}"
+        );
+        assert!(elapsed < std::time::Duration::from_secs(5));
+        assert!(matches!(result, Err(AcpError::IdleTimeout(_))));
+    }
+
+    #[tokio::test]
+    async fn tool_call_resets_idle_then_silence_times_out() {
+        // A tool_call session/update resets the idle timer (belt-and-suspenders path),
+        // then silence causes idle timeout. This proves the reset works for tool_call
+        // specifically — not just via the general valid-JSON reset at line 839.
+        //
+        // The script emits a tool_call, waits 80ms (under the 200ms idle), then goes
+        // silent. If the tool_call reset didn't fire, idle would fire at 200ms from
+        // start. With the reset, idle fires at 80ms + 200ms = ~280ms from start.
+        let mut client = spawn_script(
+            r#"echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","title":"long_running","kind":"shell"}}}'; sleep 0.08; sleep 10"#,
+        )
+        .await;
+        let hard_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+        let result = client
+            .read_until_response_with_idle_timeout(
+                999,
+                std::time::Duration::from_millis(200),
+                hard_deadline,
+            )
+            .await;
+        let elapsed = start.elapsed();
+        // The tool_call arrives near-instantly and resets idle.
+        // Then 80ms of silence, then idle fires at ~280ms from start.
+        // Must be > 200ms (proves the reset happened after the tool_call).
+        assert!(
+            elapsed >= std::time::Duration::from_millis(200),
+            "tool_call should reset idle; elapsed only {elapsed:?}"
+        );
+        assert!(elapsed < std::time::Duration::from_secs(2));
+        assert!(
+            matches!(result, Err(AcpError::IdleTimeout(_))),
+            "expected IdleTimeout after silence, got {result:?}"
+        );
     }
 }

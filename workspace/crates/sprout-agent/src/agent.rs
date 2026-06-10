@@ -95,6 +95,27 @@ impl RunCtx<'_> {
                 biased;
                 _ = self.cancel.changed() => return Ok(StopReason::Cancelled),
                 r = self.llm.complete(self.cfg, self.system_prompt, self.history, &tools) => r?,
+                _ = async {
+                    // Keepalive ticker: emit a lightweight session update every 30s
+                    // while waiting on the LLM provider. This resets the ACP harness
+                    // idle clock so long provider responses don't trigger timeout.
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                    interval.tick().await; // first tick fires immediately — skip it
+                    loop {
+                        interval.tick().await;
+                        tracing::debug!("llm keepalive tick");
+                        wire::send(
+                            self.wire,
+                            wire::session_update(
+                                self.session_id,
+                                json!({
+                                    "sessionUpdate": "keepalive",
+                                }),
+                            ),
+                        )
+                        .await;
+                    }
+                } => unreachable!(),
             };
 
             // Record provider-reported input usage so the next loop iteration's
