@@ -239,6 +239,10 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     // known agent binaries that are still running.
     managed_agents::sweep_system_agent_processes(&managed_agents::current_instance_id(app), &[]);
 
+    // Dead-instance reaping: find agents belonging to Sprout instances
+    // whose desktop process is no longer running and reap them.
+    managed_agents::reap_dead_instance_agents(&managed_agents::current_instance_id(app), &[]);
+
     if changed {
         save_managed_agents(app, &records)?;
     }
@@ -625,6 +629,45 @@ pub fn run() {
                     restore_managed_agents_on_launch(&app_handle, shutdown_started.as_ref()).await
                 {
                     eprintln!("sprout-desktop: failed to restore managed agents: {error}");
+                }
+            });
+
+            // Periodic sweep: reap orphaned agents from dead instances every 60s.
+            // Catches agents that escaped both the Justfile trap and boot-time
+            // reaping (e.g. a `just staging` Ctrl+C leak that only gets collected
+            // by a different instance's periodic sweep).
+            let sweep_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use std::collections::HashSet;
+                use std::time::Duration;
+                use tauri::Manager;
+                let instance_id = managed_agents::current_instance_id(&sweep_handle);
+                let state = sweep_handle.state::<AppState>();
+                // Two-tick grace: only reap same-instance orphans seen on two
+                // consecutive sweeps. Prevents killing a legitimately-starting
+                // agent that spawned between the skip-list snapshot and the scan.
+                let mut prev_orphans: HashSet<u32> = HashSet::new();
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    // Collect PIDs of our own live agents to avoid killing them.
+                    let skip_pids: Vec<u32> = state
+                        .managed_agent_processes
+                        .lock()
+                        .map(|runtimes| runtimes.values().map(|rt| rt.child.id()).collect())
+                        .unwrap_or_default();
+                    let prev = prev_orphans.clone();
+                    let inst = instance_id.clone();
+                    // Run the blocking syscall work off the async executor.
+                    let new_orphans = tauri::async_runtime::spawn_blocking(move || {
+                        let orphans = managed_agents::sweep_system_agent_processes_with_grace(
+                            &inst, &skip_pids, &prev,
+                        );
+                        managed_agents::reap_dead_instance_agents(&inst, &skip_pids);
+                        orphans
+                    })
+                    .await
+                    .unwrap_or_default();
+                    prev_orphans = new_orphans;
                 }
             });
 
