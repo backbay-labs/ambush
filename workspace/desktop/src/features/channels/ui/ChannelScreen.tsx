@@ -79,6 +79,7 @@ export function ChannelScreen({
   const {
     markChannelRead,
     markChannelUnread,
+    openCreateChannel,
     openChannelManagement,
     followThread,
     unfollowThread,
@@ -96,6 +97,7 @@ export function ChannelScreen({
     widthPx: threadPanelWidthPx,
   } = useThreadPanelWidth();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
+  const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [channelContentRef, channelContentWidthPx] =
     useElementWidth<HTMLDivElement>();
   const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
@@ -508,7 +510,9 @@ export function ChannelScreen({
       activeDmPresenceStatus={activeDmPresenceStatus}
       chromeWrapperRef={channelHeaderChromeRef}
       currentPubkey={currentPubkey}
+      isAddBotOpen={isAddBotOpen}
       isJoining={joinChannelMutation.isPending}
+      onAddBotOpenChange={setIsAddBotOpen}
       onJoinChannel={joinChannelMutation.mutateAsync}
       onManageChannel={openChannelManagement}
       onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
@@ -551,6 +555,9 @@ export function ChannelScreen({
                   fetchOlder={fetchOlder}
                   header={channelHeader}
                   hasOlderMessages={hasOlderMessages}
+                  onAddAgent={() => setIsAddBotOpen(true)}
+                  onCreateChannel={openCreateChannel}
+                  onOpenMembers={() => setIsMembersSidebarOpen(true)}
                   isFetchingOlder={isFetchingOlder}
                   editTarget={
                     editTargetMessage
