@@ -24,6 +24,7 @@ import {
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
 import { useMembershipNotifications } from "@/features/channels/useMembershipNotifications";
 import { getThreadReference } from "@/features/messages/lib/threading";
+import { hasMentionForEvent } from "@/features/notifications/lib/shouldNotify";
 import { useThreadFollows } from "@/features/messages/lib/useThreadFollows";
 import {
   useHomeFeedNotifications,
@@ -37,7 +38,10 @@ import {
   setDesktopAppBadge,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
-import { playNotificationSound } from "@/features/notifications/lib/sound";
+import {
+  playNotificationSound,
+  resolveSlotSound,
+} from "@/features/notifications/lib/sound";
 import { PreventSleepProvider } from "@/features/agents/usePreventSleep";
 import {
   usePresenceSession,
@@ -237,7 +241,10 @@ export function AppShell() {
 
   const handleDmNotification = React.useEffectEvent(
     (event: RelayEvent, channel: Channel) => {
-      if (!notificationSettings.settings.desktopEnabled) {
+      if (
+        !notificationSettings.settings.desktopEnabled ||
+        !notificationSettings.settings.slotAlertsEnabled.dm
+      ) {
         return;
       }
 
@@ -267,7 +274,9 @@ export function AppShell() {
         },
       }).then((didSend) => {
         if (!didSend) return;
-        if (notificationSettings.settings.soundEnabled) playNotificationSound();
+        playNotificationSound(
+          resolveSlotSound(notificationSettings.settings, "dm"),
+        );
         void requestDockBounce();
       });
     },
@@ -290,6 +299,57 @@ export function AppShell() {
         ? (channels.find((channel) => channel.id === selectedChannelId) ?? null)
         : null,
     [channels, selectedChannelId],
+  );
+
+  const handleThreadReplyDesktopNotification = React.useEffectEvent(
+    (channelId: string, event: RelayEvent) => {
+      if (
+        !notificationSettings.settings.desktopEnabled ||
+        !notificationSettings.settings.slotAlertsEnabled.thread_reply
+      ) {
+        return;
+      }
+
+      // Replies that @-mention the user are owned by the home-feed mention
+      // path — skip them here so they don't notify (and sound) twice.
+      const pubkey = identityQuery.data?.pubkey?.trim().toLowerCase() ?? "";
+      if (hasMentionForEvent(event, pubkey)) {
+        return;
+      }
+
+      const channel = channels.find((entry) => entry.id === channelId);
+      const channelName = channel?.name?.trim() || "Thread";
+      const content = event.content.trim();
+      const body =
+        content.length > 0
+          ? content.length > 140
+            ? `${content.slice(0, 137).trimEnd()}...`
+            : content
+          : "New reply";
+
+      const threadRootId = getThreadReference(event.tags).rootId ?? null;
+
+      void sendDesktopNotification({
+        title: `Reply in ${channelName}`,
+        body,
+        target: {
+          channelId,
+          channelName,
+          content: event.content,
+          createdAt: event.created_at,
+          eventId: event.id,
+          kind: event.kind,
+          pubkey: event.pubkey,
+          threadRootId,
+        },
+      }).then((didSend) => {
+        if (!didSend) return;
+        playNotificationSound(
+          resolveSlotSound(notificationSettings.settings, "thread_reply"),
+        );
+        void requestDockBounce();
+      });
+    },
   );
 
   const {
@@ -324,9 +384,11 @@ export function AppShell() {
       relayClient,
       currentPubkey: identityQuery.data?.pubkey,
       mutedChannelIds,
+      notifyForActiveChannel: notificationSettings.settings.notifyWhileViewing,
       onChannelMessage: handleChannelNotification,
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
+      onThreadReplyDesktopNotification: handleThreadReplyDesktopNotification,
       followedRootIds,
     },
   );
@@ -723,13 +785,16 @@ export function AppShell() {
                       onSetHomeBadgeEnabled={
                         notificationSettings.setHomeBadgeEnabled
                       }
-                      onSetMentionNotificationsEnabled={
-                        notificationSettings.setMentionsEnabled
+                      onSetSlotAlertsEnabled={
+                        notificationSettings.setSlotAlertsEnabled
                       }
-                      onSetNeedsActionNotificationsEnabled={
-                        notificationSettings.setNeedsActionEnabled
+                      onSetNotifyWhileViewing={
+                        notificationSettings.setNotifyWhileViewing
                       }
-                      onSetSoundEnabled={notificationSettings.setSoundEnabled}
+                      onSetAllSlotAlertsEnabled={
+                        notificationSettings.setAllSlotAlertsEnabled
+                      }
+                      onSetSoundForSlot={notificationSettings.setSoundForSlot}
                       section={settingsSection}
                     />
                   </React.Suspense>
