@@ -178,7 +178,10 @@ test("completed users skip the loading gate while profile is still settling", as
 test("first-run default workspace handoff gives immediate stepper feedback", async ({
   page,
 }) => {
-  await seedActiveIdentity(page, FIRST_RUN_KENNY);
+  // Use a blank-username identity so the profile has no display name and
+  // the auto-skip logic does not fire — we need to stay in onboarding to
+  // verify the stepper UX.
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
     {
@@ -212,7 +215,7 @@ test("first-run default workspace handoff gives immediate stepper feedback", asy
   );
 
   const nameInput = page.getByTestId("onboarding-display-name");
-  await expect(nameInput).toHaveValue("Kenny QA");
+  await expect(nameInput).toHaveValue("");
   await expect(page.getByRole("progressbar")).toHaveAttribute(
     "aria-valuenow",
     "2",
@@ -230,17 +233,16 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
 
   await page.getByTestId("welcome-continue-nostr").click();
   await expect(
-    page.getByRole("heading", { name: "Continue using Nostr" }),
+    page.getByRole("heading", { name: "Use your existing key" }),
   ).toBeVisible();
 
   const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
-  await page.getByTestId("welcome-nostr-nsec-input").fill(importedNsec);
-  await expect(page.getByTestId("welcome-nostr-npub-preview")).toBeVisible();
-  await page.getByTestId("welcome-nostr-submit").click();
+  await page.getByTestId("nostr-import-nsec-input").fill(importedNsec);
+  await expect(page.getByTestId("nostr-import-npub-preview")).toBeVisible();
+  await page.getByTestId("nostr-import-submit").click();
 
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
+  // Alice already has a relay profile with a display name, so onboarding
+  // auto-completes after the identity swap.
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -252,17 +254,8 @@ test("welcome can continue using an existing Nostr key", async ({ page }) => {
       }),
     )
     .toBe(TEST_IDENTITIES.alice.pubkey);
-  await expect
-    .poll(() =>
-      page.evaluate((storageKey) => {
-        const rawIdentity = window.localStorage.getItem(storageKey);
-        const identity = rawIdentity
-          ? (JSON.parse(rawIdentity) as { pubkey?: string })
-          : null;
-        return identity?.pubkey ?? null;
-      }, E2E_IDENTITY_OVERRIDE_STORAGE_KEY),
-    )
-    .toBe(TEST_IDENTITIES.alice.pubkey);
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("welcome presents custom workspace setup as joining a workspace", async ({
@@ -287,6 +280,7 @@ test("welcome presents custom workspace setup as joining a workspace", async ({
 test("identity fallback text does not count as a real onboarding name", async ({
   page,
 }) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
@@ -562,20 +556,44 @@ test("first-run onboarding keeps the shell hidden through setup and only marks H
   await expectHomeSeenCount(page, 2);
 });
 
-test("existing relay profile prefills the name step without localStorage completion", async ({
+test("existing relay profile with display name auto-skips onboarding without localStorage", async ({
   page,
 }) => {
+  // A user whose relay profile already has a display name should skip
+  // onboarding even without the localStorage completion flag.
   await seedActiveIdentity(page, TEST_IDENTITIES.alice);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
-  await expect(page.getByTestId("onboarding-gate")).toBeVisible();
-  await expectShellHidden(page);
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
-  await expect(page.getByTestId("onboarding-next")).toBeEnabled();
-  await expect(page.getByTestId("onboarding-back")).toHaveCount(0);
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
+});
+
+test("onboarding can import an existing key when the workspace is already set up", async ({
+  page,
+}) => {
+  // Workspace exists (default seed), but this identity has no profile yet,
+  // so the app lands on the onboarding name step — Tyler's moved-laptop /
+  // fresh-dev-instance case.
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  await page.goto("/");
+
+  await expect(page.getByTestId("onboarding-display-name")).toHaveValue("");
+  await page.getByTestId("onboarding-import-key").click();
+  await expect(
+    page.getByRole("heading", { name: "Use your existing key" }),
+  ).toBeVisible();
+
+  const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
+  await page.getByTestId("nostr-import-nsec-input").fill(importedNsec);
+  await expect(page.getByTestId("nostr-import-npub-preview")).toBeVisible();
+  await page.getByTestId("nostr-import-submit").click();
+
+  // Identity swap remounts the flow; alice already has a relay profile with
+  // a display name, so onboarding auto-completes and lands in the app.
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("finishing onboarding auto-joins the #general channel for a new member", async ({
@@ -656,38 +674,18 @@ test("failed first profile saves can be skipped for the current session", async 
   await expectHomeView(page);
 });
 
-test("failed saved profile saves can continue without retrying the display name", async ({
+test("existing relay profile with display name auto-completes onboarding", async ({
   page,
 }) => {
+  // A user whose relay profile already has a display name should skip
+  // onboarding entirely — they've already set up their identity previously
+  // (possibly on another machine or app data directory).
   await seedActiveIdentity(page, TEST_IDENTITIES.alice);
-  await installMockBridge(
-    page,
-    {
-      profileUpdateError: "Temporary profile sync failure.",
-    },
-    { skipOnboardingSeed: true },
-  );
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
 
-  await expect(page.getByTestId("onboarding-display-name")).toHaveValue(
-    "alice",
-  );
-  await page.getByTestId("onboarding-display-name").fill("Alice Draft");
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByText("Temporary profile sync failure.")).toBeVisible();
-  await page.getByTestId("onboarding-next-without-saving").click();
-
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
-  const avatarUrl = "https://example.com/alice-onboarding-avatar.png";
-  await page.getByTestId("onboarding-avatar-url").fill(avatarUrl);
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByTestId("onboarding-page-theme")).toBeVisible();
-  await expect(await getMockProfile(page)).toMatchObject({
-    avatar_url: avatarUrl,
-    display_name: "alice",
-  });
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
 
 test("membership denial can import a different invited key", async ({
@@ -716,6 +714,8 @@ test("membership denial can import a different invited key", async ({
   ).toBeVisible();
   await page.getByTestId("membership-denied-import-key").click();
 
+  // Alice already has a relay profile with a display name, so after the
+  // identity swap the onboarding gate auto-completes.
   await expect
     .poll(() =>
       page.evaluate(
@@ -725,7 +725,6 @@ test("membership denial can import a different invited key", async ({
       ),
     )
     .toEqual(expect.arrayContaining(["plugin:websocket|disconnect"]));
-  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate((storageKey) => {
@@ -737,7 +736,6 @@ test("membership denial can import a different invited key", async ({
       }, E2E_IDENTITY_OVERRIDE_STORAGE_KEY),
     )
     .toBe(TEST_IDENTITIES.alice.pubkey);
-  await page.getByTestId("onboarding-next").click();
-
-  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
+  await expectHomeView(page);
 });
