@@ -1,7 +1,9 @@
 import * as React from "react";
 import { Bot, Hash, LogIn, Plus, Sparkles, UserPlus } from "lucide-react";
 
+import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
+import { DropZoneOverlay } from "@/features/messages/ui/ComposerAttachments";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
@@ -90,6 +92,13 @@ type ChannelPaneProps = {
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
+  ) => Promise<void>;
+  onSendVideoReviewComment?: (
+    message: TimelineMessage,
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+    parentEventId?: string,
   ) => Promise<void>;
   onSendThreadReply: (
     content: string,
@@ -221,6 +230,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onResetThreadPanelWidth,
   onSelectThreadReplyTarget,
   onSendMessage,
+  onSendVideoReviewComment,
   onSendThreadReply,
   onThreadScrollTargetResolved,
   onThreadPanelResizeStart,
@@ -249,6 +259,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   const welcomeComposerHideTimerRef = React.useRef<number | null>(null);
   const [welcomeComposerBannerState, setWelcomeComposerBannerState] =
     React.useState<WelcomeComposerBannerState>("prompt");
+  const mainComposerMedia = useMediaUpload();
   const isNonMemberView =
     activeChannel !== null &&
     !activeChannel.isMember &&
@@ -430,6 +441,8 @@ export const ChannelPane = React.memo(function ChannelPane({
       onSendMessage,
     ],
   );
+  const canDropInMainColumn =
+    hasMainComposerOverlay && !isComposerDisabled && !isSinglePanelView;
   const hasTypingActivity = typingPubkeys.length > 0;
   const composerBotTypingPubkeys = React.useMemo(() => {
     const pubkeys: string[] = [];
@@ -597,7 +610,27 @@ export const ChannelPane = React.memo(function ChannelPane({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
       {!isSinglePanelView ? (
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <section
+          aria-label="Channel messages and composer"
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          data-testid="channel-drop-zone"
+          onDragEnter={
+            canDropInMainColumn ? mainComposerMedia.handleDragEnter : undefined
+          }
+          onDragLeave={
+            canDropInMainColumn ? mainComposerMedia.handleDragLeave : undefined
+          }
+          onDragOver={
+            canDropInMainColumn ? mainComposerMedia.handleDragOver : undefined
+          }
+          onDrop={
+            canDropInMainColumn
+              ? (event) => {
+                  void mainComposerMedia.handleDrop(event);
+                }
+              : undefined
+          }
+        >
           {header}
           {channelFind.isOpen ? (
             <div className={cn("absolute inset-x-0 z-40", channelChrome.top)}>
@@ -646,6 +679,12 @@ export const ChannelPane = React.memo(function ChannelPane({
             onEdit={onEdit}
             onMarkUnread={onMarkUnread}
             onReply={activeChannel?.archivedAt ? undefined : onOpenThread}
+            channelName={activeChannel?.name}
+            channelType={activeChannel?.channelType ?? null}
+            isSendingVideoReviewComment={isSending}
+            onSendVideoReviewComment={
+              activeChannel?.archivedAt ? undefined : onSendVideoReviewComment
+            }
             onTargetReached={onTargetReached}
             onToggleReaction={onToggleReaction}
             searchActiveMessageId={channelFind.activeMatch?.messageId ?? null}
@@ -695,6 +734,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                   disabled={isComposerDisabled}
                   editTarget={mainEditTarget}
                   isSending={isSending}
+                  mediaController={mainComposerMedia}
                   onCancelEdit={onCancelEdit}
                   onEditLastOwnMessage={handleEditLastOwnMainMessage}
                   onEditSave={onEditSave}
@@ -740,7 +780,10 @@ export const ChannelPane = React.memo(function ChannelPane({
               </div>
             </div>
           )}
-        </div>
+          {canDropInMainColumn && mainComposerMedia.isDragOver ? (
+            <DropZoneOverlay className="z-30 rounded-none" />
+          ) : null}
+        </section>
       ) : null}
 
       {threadHeadMessage
