@@ -174,11 +174,11 @@ desktop-release-build target="aarch64-apple-darwin":
     set -euo pipefail
     TARGET={{target}}
     mkdir -p desktop/src-tauri/binaries
-    touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
-    touch "desktop/src-tauri/binaries/sprout-agent-$TARGET"
-    touch "desktop/src-tauri/binaries/sprout-dev-mcp-$TARGET"
+    touch "desktop/src-tauri/binaries/buzz-acp-$TARGET"
+    touch "desktop/src-tauri/binaries/buzz-agent-$TARGET"
+    touch "desktop/src-tauri/binaries/buzz-dev-mcp-$TARGET"
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
-    touch "desktop/src-tauri/binaries/sprout-$TARGET"
+    touch "desktop/src-tauri/binaries/buzz-$TARGET"
     pnpm install
     cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
 
@@ -279,10 +279,10 @@ dev *ARGS: _ensure-sidecar-stubs
     source ../scripts/instance-env.sh
     # Ctrl+C kills the Tauri app before its in-process sweep finishes, leaking
     # agent workers. Reap this instance's agents on exit as a backstop.
-    INSTANCE_ID=$(node -e "console.log(JSON.parse(process.env.SPROUT_TAURI_CONFIG).identifier)")
+    INSTANCE_ID=$(node -e "console.log(JSON.parse(process.env.BUZZ_TAURI_CONFIG).identifier)")
     trap '../scripts/cleanup-instance-agents.sh "$INSTANCE_ID"' EXIT
-    echo "Starting on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
-    pnpm exec tauri dev --features mesh-llm --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
+    echo "Starting on Vite port ${BUZZ_VITE_PORT}, relay ${BUZZ_RELAY_URL}"
+    pnpm exec tauri dev --features mesh-llm --config "$BUZZ_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
 staging *ARGS: _ensure-sidecar-stubs
@@ -293,17 +293,17 @@ staging *ARGS: _ensure-sidecar-stubs
     export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$(./scripts/ensure-mesh-native-runtime.sh)"
     # Replace the 0-byte sidecar stub with the real CLI binary so tauri dev picks it up.
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
-    cp target/release/buzz "desktop/src-tauri/binaries/sprout-${TARGET}"
-    chmod +x "desktop/src-tauri/binaries/sprout-${TARGET}"
+    cp target/release/buzz "desktop/src-tauri/binaries/buzz-${TARGET}"
+    chmod +x "desktop/src-tauri/binaries/buzz-${TARGET}"
     cd {{desktop_dir}}
     source ../scripts/instance-env.sh
-    export SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
+    export BUZZ_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
     # Ctrl+C kills the Tauri app before its in-process sweep finishes, leaking
     # agent workers. Reap this instance's agents on exit as a backstop.
-    INSTANCE_ID=$(node -e "console.log(JSON.parse(process.env.SPROUT_TAURI_CONFIG).identifier)")
+    INSTANCE_ID=$(node -e "console.log(JSON.parse(process.env.BUZZ_TAURI_CONFIG).identifier)")
     trap '../scripts/cleanup-instance-agents.sh "$INSTANCE_ID"' EXIT
-    echo "Starting staging on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
-    pnpm exec tauri dev --features mesh-llm --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
+    echo "Starting staging on Vite port ${BUZZ_VITE_PORT}, relay ${BUZZ_RELAY_URL}"
+    pnpm exec tauri dev --features mesh-llm --config "$BUZZ_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop frontend dev server (port derived from worktree)
 desktop-dev:
