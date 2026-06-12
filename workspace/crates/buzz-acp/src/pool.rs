@@ -35,8 +35,8 @@ use crate::acp::{
 use crate::config::{DedupMode, PermissionMode};
 use crate::observer;
 use crate::queue::{
-    prepend_base_prompt, ContextMessage, ConversationContext, FlushBatch, PromptChannelInfo,
-    PromptProfile, PromptProfileLookup,
+    ContextMessage, ConversationContext, FlushBatch, PromptChannelInfo, PromptProfile,
+    PromptProfileLookup,
 };
 use crate::relay::{ChannelInfo, RestClient};
 
@@ -135,6 +135,9 @@ pub struct OwnedAgent {
     pub model_capabilities: Option<AgentModelCapabilities>,
     /// Desired model ID (from `Config.model`). Applied after every `session_new_full()`.
     pub desired_model: Option<String>,
+    /// Protocol version reported by the agent in its initialize response.
+    /// Agents declaring >= 2 support `systemPrompt` in session/new.
+    pub protocol_version: u32,
 }
 
 /// Pool of agents with take-and-return ownership semantics.
@@ -424,9 +427,27 @@ async fn create_session_and_apply_model(
     agent: &mut OwnedAgent,
     ctx: &PromptContext,
 ) -> Result<String, AcpError> {
+    // Combine base_prompt + system_prompt into a single systemPrompt value
+    // for the session/new request. Only sent when the agent declares protocol
+    // version >= 2 (supports systemPrompt); legacy agents ignore it.
+    let combined_system_prompt: Option<String> = if agent.protocol_version >= 2 {
+        match (ctx.base_prompt, ctx.system_prompt.as_deref()) {
+            (Some(bp), Some(sp)) => Some(format!("{}\n\n{sp}", bp.trim_end())),
+            (Some(bp), None) => Some(bp.trim_end().to_string()),
+            (None, Some(sp)) => Some(sp.to_string()),
+            (None, None) => None,
+        }
+    } else {
+        None
+    };
+
     let resp = agent
         .acp
-        .session_new_full(&ctx.cwd, ctx.mcp_servers.clone())
+        .session_new_full(
+            &ctx.cwd,
+            ctx.mcp_servers.clone(),
+            combined_system_prompt.as_deref(),
+        )
         .await?;
 
     // Populate model capabilities on first session creation.
@@ -613,6 +634,26 @@ async fn apply_permission_mode(
         }
     }
     Ok(())
+}
+
+/// Prepend the `[Base]` section to a user-message body for legacy agents.
+///
+/// Legacy agents (`protocol_version < 2`) don't receive `base_prompt` via the
+/// system role in `session/new`, so it must ride along in the user message.
+/// Agents with `protocol_version >= 2`, or any agent without a `base_prompt`,
+/// get `body` unchanged. The gate lives here so the heartbeat and
+/// initial-message dispatch paths can't drift apart again.
+pub(crate) fn prepend_base_for_legacy(
+    protocol_version: u32,
+    base_prompt: Option<&str>,
+    body: &str,
+) -> String {
+    match base_prompt {
+        Some(bp) if protocol_version < 2 => {
+            format!("{}\n\n{body}", crate::queue::base_section(bp))
+        }
+        _ => body.to_string(),
+    }
 }
 
 /// Core async function spawned for each prompt.
@@ -845,11 +886,11 @@ pub async fn run_prompt_task(
                 target: "pool::session",
                 "sending initial_message to session {session_id} for channel {cid}"
             );
-            // Prepend base prompt to initial_message for platform orientation.
-            let init_msg = match ctx.base_prompt {
-                Some(bp) => prepend_base_prompt(bp, initial_msg),
-                None => initial_msg.to_string(),
-            };
+            // For agents with systemPrompt support (protocol_version >= 2),
+            // base_prompt is delivered via the system role in session/new.
+            // Legacy agents receive it via [Base] in the user message instead.
+            let init_msg =
+                prepend_base_for_legacy(agent.protocol_version, ctx.base_prompt, initial_msg);
             let init_result = agent
                 .acp
                 .session_prompt_with_idle_timeout(
@@ -1001,12 +1042,13 @@ pub async fn run_prompt_task(
         crate::queue::format_prompt(
             b,
             &crate::queue::FormatPromptArgs {
-                base_prompt: ctx.base_prompt,
-                system_prompt: ctx.system_prompt.as_deref(),
                 agent_core: agent_core_section.as_deref(),
                 channel_info: channel_info.as_ref(),
                 conversation_context: conversation_context.as_ref(),
                 profile_lookup: profile_lookup.as_ref(),
+                has_system_prompt_support: agent.protocol_version >= 2,
+                base_prompt: ctx.base_prompt,
+                system_prompt: ctx.system_prompt.as_deref(),
             },
         )
     } else {
@@ -2198,6 +2240,35 @@ mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use serde_json::json;
+
+    // ── prepend_base_for_legacy regression tests ─────────────────────────────
+    // These pin the initial_message dispatch path (run_prompt_task, ~line 855):
+    // a legacy agent WITH a base_prompt must get [Base] prepended to the user
+    // message. This is the exact regression that shipped in the round-2 bug.
+
+    #[test]
+    fn test_initial_message_legacy_agent_gets_base_prepended() {
+        // protocol_version 1 + Some(base_prompt): [Base] rides along in the
+        // user message, composed as `[Base]\n{bp}\n\n{initial_msg}`.
+        let composed = prepend_base_for_legacy(1, Some("you are a helpful agent"), "hello channel");
+        assert_eq!(composed, "[Base]\nyou are a helpful agent\n\nhello channel");
+        assert!(composed.starts_with("[Base]\nyou are a helpful agent\n\n"));
+    }
+
+    #[test]
+    fn test_initial_message_modern_agent_omits_base() {
+        // protocol_version 2 receives base_prompt via session/new, so the user
+        // message is left untouched even when a base_prompt is present.
+        let composed = prepend_base_for_legacy(2, Some("you are a helpful agent"), "hello channel");
+        assert_eq!(composed, "hello channel");
+    }
+
+    #[test]
+    fn test_initial_message_legacy_agent_without_base_is_unchanged() {
+        // No base_prompt configured: nothing to prepend regardless of version.
+        let composed = prepend_base_for_legacy(1, None, "hello channel");
+        assert_eq!(composed, "hello channel");
+    }
 
     // ── parse_thread_response tests ──────────────────────────────────────────
 

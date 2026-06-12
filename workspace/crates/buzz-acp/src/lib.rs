@@ -31,7 +31,7 @@ use pool::{
     AgentPool, ControlSignal, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource,
     SessionState,
 };
-use queue::{prepend_base_prompt, EventQueue, QueuedEvent, ThreadTags};
+use queue::{EventQueue, QueuedEvent, ThreadTags};
 use relay::{HarnessRelay, RelayEventPublisher};
 use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
@@ -695,7 +695,7 @@ fn any_respawn_in_flight(crash_history: &[SlotCircuit]) -> bool {
 /// Result of a background respawn task.
 struct RespawnResult {
     index: usize,
-    result: Result<AcpClient>,
+    result: Result<(AcpClient, u32)>,
 }
 
 /// RAII guard that ensures a `RespawnResult` is sent even if the task panics.
@@ -719,7 +719,7 @@ impl RespawnGuard {
     /// Send the result and disarm the guard. Uses `try_send` (sync) so there
     /// is no await boundary between marking `sent` and actually enqueueing —
     /// cancellation cannot slip between the two.
-    fn send(mut self, result: Result<AcpClient>) {
+    fn send(mut self, result: Result<(AcpClient, u32)>) {
         // Invariant: try_send succeeds because the channel capacity equals the
         // slot count, and respawn_in_flight guarantees at most one outstanding
         // result per slot. If this ever fails, the channel sizing or the
@@ -839,6 +839,8 @@ async fn tokio_main() -> Result<()> {
                 match tokio::time::timeout(Duration::from_secs(60), acp.initialize()).await {
                     Ok(Ok(init_result)) => {
                         tracing::info!(agent = i, "agent initialized: {init_result}");
+                        let protocol_version =
+                            init_result["protocolVersion"].as_u64().unwrap_or(1) as u32;
                         acp.observe(
                             "agent_initialized",
                             serde_json::json!({
@@ -852,6 +854,7 @@ async fn tokio_main() -> Result<()> {
                             state: SessionState::default(),
                             model_capabilities: None,
                             desired_model: config.model.clone(),
+                            protocol_version,
                         }));
                     }
                     Ok(Err(e)) => {
@@ -1279,13 +1282,14 @@ async fn tokio_main() -> Result<()> {
         while let Ok(rr) = respawn_rx.try_recv() {
             crash_history[rr.index].respawn_in_flight = false;
             match rr.result {
-                Ok(acp) => {
+                Ok((acp, protocol_version)) => {
                     let agent = OwnedAgent {
                         index: rr.index,
                         acp,
                         state: SessionState::default(),
                         model_capabilities: None,
                         desired_model: config.model.clone(),
+                        protocol_version,
                     };
                     pool.return_agent(agent);
                     tracing::info!(agent = rr.index, "respawn complete");
@@ -1887,7 +1891,7 @@ async fn tokio_main() -> Result<()> {
     // Drain any respawn results that completed before the abort. Explicitly
     // shut down returned agents instead of relying on AcpClient::Drop.
     while let Ok(rr) = respawn_rx.try_recv() {
-        if let Ok(mut acp) = rr.result {
+        if let Ok((mut acp, _)) = rr.result {
             acp.shutdown().await;
             tracing::debug!(agent = rr.index, "reaped respawned agent on shutdown");
         }
@@ -2429,10 +2433,10 @@ fn dispatch_heartbeat(
         .heartbeat_prompt
         .clone()
         .unwrap_or_else(default_heartbeat_prompt);
-    let prompt_text = match ctx.base_prompt {
-        Some(bp) => prepend_base_prompt(bp, &prompt_text),
-        None => prompt_text,
-    };
+    // For legacy agents (protocol_version < 2), prepend base_prompt to the
+    // heartbeat user message since they don't receive it via session/new.
+    let prompt_text =
+        pool::prepend_base_for_legacy(agent.protocol_version, ctx.base_prompt, &prompt_text);
     let result_tx = pool.result_tx();
     let ctx_clone = Arc::clone(ctx);
     let agent_index = agent.index;
@@ -2546,7 +2550,7 @@ async fn spawn_and_init(
     extra_env: &[(String, String)],
     agent_index: usize,
     observer: Option<observer::ObserverHandle>,
-) -> Result<AcpClient> {
+) -> Result<(AcpClient, u32)> {
     let mut acp = AcpClient::spawn(command, args, extra_env)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
@@ -2555,6 +2559,7 @@ async fn spawn_and_init(
     match acp.initialize().await {
         Ok(init_result) => {
             tracing::info!("agent initialized: {init_result}");
+            let protocol_version = init_result["protocolVersion"].as_u64().unwrap_or(1) as u32;
             acp.observe(
                 "agent_initialized",
                 serde_json::json!({
@@ -2562,7 +2567,7 @@ async fn spawn_and_init(
                     "initializeResult": init_result,
                 }),
             );
-            Ok(acp)
+            Ok((acp, protocol_version))
         }
         Err(e) => {
             // Explicitly shut down the spawned child to prevent zombie/leak.
@@ -2605,7 +2610,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     // so shutdown() runs on all paths (success, error, timeout).
     let protocol_result = tokio::time::timeout(MODELS_TIMEOUT, async {
         let init = client.initialize().await?;
-        let session = client.session_new_full(&cwd, vec![]).await?;
+        let session = client.session_new_full(&cwd, vec![], None).await?;
         Ok::<_, acp::AcpError>((init, session))
     })
     .await;
@@ -2763,6 +2768,38 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod heartbeat_base_prompt_tests {
+    use super::*;
+
+    // Pins the heartbeat dispatch path (dispatch_heartbeat, ~line 2359): a
+    // legacy agent WITH a base_prompt must get [Base] prepended to the
+    // heartbeat user message, composed as `[Base]\n{bp}\n\n{prompt}`. This is
+    // the second half of the round-2 regression (the first being initial_message).
+
+    #[test]
+    fn test_heartbeat_legacy_agent_gets_base_prepended() {
+        // protocol_version 1 + Some(base_prompt): heartbeat prompt is prefixed
+        // with the [Base] section exactly as the legacy session/new path would.
+        let prompt = "[System: Heartbeat]\nrun feed get";
+        let composed = pool::prepend_base_for_legacy(1, Some("you are a helpful agent"), prompt);
+        assert_eq!(
+            composed,
+            "[Base]\nyou are a helpful agent\n\n[System: Heartbeat]\nrun feed get"
+        );
+        assert!(composed.starts_with("[Base]\nyou are a helpful agent\n\n"));
+    }
+
+    #[test]
+    fn test_heartbeat_modern_agent_omits_base() {
+        // protocol_version 2 gets base_prompt via session/new; the heartbeat
+        // prompt is sent verbatim.
+        let prompt = "[System: Heartbeat]\nrun feed get";
+        let composed = pool::prepend_base_for_legacy(2, Some("you are a helpful agent"), prompt);
+        assert_eq!(composed, prompt);
+    }
+}
 
 #[cfg(test)]
 mod owner_control_command_tests {
