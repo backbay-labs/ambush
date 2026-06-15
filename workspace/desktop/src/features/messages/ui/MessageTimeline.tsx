@@ -90,6 +90,11 @@ type ChannelIntro = {
   icon?: React.ReactNode;
 };
 
+/** Stable empty reference used as the `useDeferredValue` initial value so the
+ *  first render on channel entry stays light instead of blocking on the full
+ *  message list. Must be module-level so its identity never changes. */
+const EMPTY_MESSAGES: TimelineMessage[] = [];
+
 type DirectMessageIntroParticipant = {
   avatarUrl: string | null;
   displayName: string;
@@ -135,6 +140,20 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   const internalScrollRef = React.useRef<HTMLDivElement>(null);
   const scrollContainerRef = externalScrollRef ?? internalScrollRef;
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
+
+  // Gate the heavy timeline render (each row runs a synchronous
+  // react-markdown parse) behind React concurrency. `useDeferredValue` lets the
+  // commit that rebuilds the message list yield to higher-priority work, so the
+  // main thread stops freezing and the OS no longer shows the busy cursor when
+  // entering a channel. We pass `initialValue: []` so even the FIRST render on
+  // channel entry stays light — the heavy list streams in on a deferred commit
+  // rather than blocking the initial paint. We deliberately drive BOTH the
+  // scroll manager and the rendered list off the same deferred value —
+  // scroll/autoscroll/deep-link logic reads the DOM (`scrollIntoView`,
+  // ResizeObserver on the content), so it must stay consistent with what's
+  // actually painted. You can't scroll to a row that hasn't committed yet.
+  const deferredMessages = React.useDeferredValue(messages, EMPTY_MESSAGES);
+  const isRenderPending = deferredMessages !== messages;
   const scrollRestorationId = targetMessageId
     ? `message-timeline:${channelId ?? "none"}:target:${targetMessageId}`
     : `message-timeline:${channelId ?? "none"}`;
@@ -151,7 +170,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   } = useTimelineScrollManager({
     channelId,
     isLoading,
-    messages,
+    messages: deferredMessages,
     onTargetReached,
     scrollContainerRef,
     targetMessageId,
@@ -196,10 +215,10 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   const showIntro = showDirectMessageIntro || showChannelIntro;
   const showGenericEmpty =
     !isLoading &&
-    messages.length === 0 &&
+    deferredMessages.length === 0 &&
     directMessageIntro === null &&
     channelIntro === null;
-  const showMessageList = !isLoading && messages.length > 0;
+  const showMessageList = !isLoading && deferredMessages.length > 0;
   const timelineSkeletonRows = useTimelineSkeletonRows({
     channelId,
     isLoading,
@@ -378,7 +397,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
               {showMessageList ? (
                 <div
-                  className={cn("flex flex-col gap-2", !showIntro && "mt-auto")}
+                  className={cn(
+                    "flex flex-col gap-2",
+                    !showIntro && "mt-auto",
+                    // While a deferred render is in flight the painted
+                    // list lags the latest `messages`. Dim it slightly so the
+                    // streaming-in feels intentional instead of frozen.
+                    isRenderPending && "opacity-60 transition-opacity",
+                  )}
+                  data-render-pending={isRenderPending ? "true" : undefined}
                 >
                   <TimelineMessageList
                     agentPubkeys={agentPubkeys}
@@ -390,7 +417,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                     highlightedMessageId={highlightedMessageId}
                     isFollowingThreadById={isFollowingThreadById}
                     messageFooters={messageFooters}
-                    messages={messages}
+                    messages={deferredMessages}
                     onDelete={onDelete}
                     onEdit={onEdit}
                     onMarkUnread={onMarkUnread}
