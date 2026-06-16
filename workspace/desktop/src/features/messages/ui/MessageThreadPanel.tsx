@@ -29,6 +29,7 @@ import { MessageComposer } from "./MessageComposer";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
+import { UnreadDivider } from "./UnreadDivider";
 import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 import { selectDeferredListRenderState } from "@/features/messages/lib/timelineSnapshot";
@@ -40,6 +41,8 @@ type MessageThreadPanelProps = {
   channelName: string;
   currentPubkey?: string;
   disabled?: boolean;
+  /** Event id of the first unread reply, or null/undefined if all read. */
+  firstUnreadReplyId?: string | null;
   layout?: "standalone" | "split";
   editTarget?: {
     author: string;
@@ -75,6 +78,8 @@ type MessageThreadPanelProps = {
   scrollTargetId: string | null;
   threadHead: TimelineMessage | null;
   threadReplies: MainTimelineEntry[];
+  /** Subtree unread counts for collapsed summary rows, keyed by reply id. */
+  threadReplyUnreadCounts?: ReadonlyMap<string, number>;
   threadTypingPubkeys: string[];
   threadHeadVideoReviewContext?: VideoReviewContext;
   toolbarExtraActions?: React.ReactNode;
@@ -268,6 +273,7 @@ export function MessageThreadPanel({
   channelName,
   currentPubkey,
   disabled = false,
+  firstUnreadReplyId,
   layout = "standalone",
   editTarget,
   isSending,
@@ -294,6 +300,7 @@ export function MessageThreadPanel({
   threadHead,
   threadHeadVideoReviewContext,
   threadReplies,
+  threadReplyUnreadCounts,
   threadTypingPubkeys,
   toolbarExtraActions,
   widthPx,
@@ -430,7 +437,9 @@ export function MessageThreadPanel({
               )}
               data-render-pending={isRepliesPending ? "true" : undefined}
             >
-              {deferredThreadReplies.map((entry) => {
+              {deferredThreadReplies.map((entry, index) => {
+                const showUnreadDivider =
+                  index > 0 && entry.message.id === firstUnreadReplyId;
                 return (
                   <div
                     className={cn(
@@ -440,6 +449,7 @@ export function MessageThreadPanel({
                     )}
                     key={entry.message.renderKey ?? entry.message.id}
                   >
+                    {showUnreadDivider ? <UnreadDivider /> : null}
                     <MessageRow
                       agentPubkeys={agentPubkeys}
                       channelId={channelId}
@@ -468,6 +478,9 @@ export function MessageThreadPanel({
                         message={entry.message}
                         onOpenThread={onExpandReplies}
                         summary={entry.summary}
+                        unreadCount={threadReplyUnreadCounts?.get(
+                          entry.message.id,
+                        )}
                       />
                     ) : null}
                   </div>

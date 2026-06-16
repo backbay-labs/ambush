@@ -1,7 +1,10 @@
 import * as React from "react";
 
 import { formatDayHeading } from "@/features/messages/lib/dateFormatters";
-import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
+import {
+  buildMainTimelineEntries,
+  shouldRenderUnreadDivider,
+} from "@/features/messages/lib/threadPanel";
 import {
   buildVideoReviewCommentsByRootId,
   buildVideoReviewContextForMessage,
@@ -16,6 +19,7 @@ import { DayDivider } from "./DayDivider";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { SystemMessageRow } from "./SystemMessageRow";
+import { UnreadDivider } from "./UnreadDivider";
 
 type TimelineMessageListProps = {
   agentPubkeys?: ReadonlySet<string>;
@@ -23,6 +27,8 @@ type TimelineMessageListProps = {
   channelName?: string;
   channelType?: ChannelType | null;
   currentPubkey?: string;
+  /** Event id of the oldest unread top-level message; renders a "New" divider above it. */
+  firstUnreadMessageId?: string | null;
   followThreadById?: (rootId: string) => void;
   highlightedMessageId?: string | null;
   isFollowingThreadById?: (rootId: string) => boolean;
@@ -55,6 +61,8 @@ type TimelineMessageListProps = {
   searchMatchingMessageIds?: Set<string>;
   /** The current find-in-channel query string. */
   searchQuery?: string;
+  /** Per-thread unread counts keyed by thread root id. */
+  threadUnreadCounts?: ReadonlyMap<string, number>;
 };
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
@@ -63,6 +71,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   channelName,
   channelType,
   currentPubkey,
+  firstUnreadMessageId = null,
   followThreadById,
   highlightedMessageId = null,
   isFollowingThreadById,
@@ -80,6 +89,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   searchActiveMessageId = null,
   searchMatchingMessageIds,
   searchQuery,
+  threadUnreadCounts,
   unfollowThreadById,
 }: TimelineMessageListProps) {
   const entries = React.useMemo(
@@ -158,6 +168,16 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       dayGroups.push(currentDayGroup);
     }
 
+    // The unread "New" divider only marks a read/unread boundary when there is
+    // a message above the first unread. When the first unread is the first
+    // rendered top-level entry (fresh/never-read channel), there is nothing
+    // above to separate from, so it is suppressed.
+    if (shouldRenderUnreadDivider(i, message.id, firstUnreadMessageId)) {
+      currentDayGroup?.elements.push(
+        <UnreadDivider key={`unread-${messageRenderKey}`} />,
+      );
+    }
+
     if (message.kind === KIND_SYSTEM_MESSAGE) {
       const footer = messageFooters?.[message.id] ?? null;
       currentDayGroup?.elements.push(
@@ -227,6 +247,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
             onOpenThread={onReply}
             showDepthGuides={false}
             summary={summary}
+            unreadCount={threadUnreadCounts?.get(message.id)}
           />
           {footer}
         </div>,

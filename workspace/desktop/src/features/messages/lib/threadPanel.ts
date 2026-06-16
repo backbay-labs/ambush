@@ -26,8 +26,9 @@ export type MainTimelineEntry = {
   summary: TimelineThreadSummary | null;
 };
 
-type ThreadDescendantStats = {
+export type ThreadDescendantStats = {
   descendantCount: number;
+  unreadDescendantCount: number;
   lastReplyAt: number | null;
   recentParticipantsNewestFirst: TimelineThreadSummaryParticipant[];
 };
@@ -106,15 +107,19 @@ function buildDirectChildrenByParentId(messages: TimelineMessage[]) {
   return childrenByParentId;
 }
 
-function buildDescendantStatsByMessageId(
+export function buildDescendantStatsByMessageId(
   messages: TimelineMessage[],
-  messageById: Map<string, TimelineMessage>,
+  unreadReplyIds: ReadonlySet<string> = new Set(),
+  messageById: Map<string, TimelineMessage> = new Map(
+    messages.map((message) => [message.id, message]),
+  ),
 ): Map<string, ThreadDescendantStats> {
   const descendantStatsByMessageId = new Map<string, ThreadDescendantStats>(
     messages.map((message) => [
       message.id,
       {
         descendantCount: 0,
+        unreadDescendantCount: 0,
         lastReplyAt: null,
         recentParticipantsNewestFirst: [],
       },
@@ -143,6 +148,7 @@ function buildDescendantStatsByMessageId(
     let ancestorId = message.parentId ?? null;
     let hops = 0;
     const maxHops = messages.length + 1;
+    const isUnread = unreadReplyIds.has(message.id);
 
     while (ancestorId && hops < maxHops) {
       const ancestorStats = descendantStatsByMessageId.get(ancestorId);
@@ -151,6 +157,9 @@ function buildDescendantStatsByMessageId(
       }
 
       ancestorStats.descendantCount += 1;
+      if (isUnread) {
+        ancestorStats.unreadDescendantCount += 1;
+      }
       ancestorStats.lastReplyAt = Math.max(
         ancestorStats.lastReplyAt ?? 0,
         message.createdAt,
@@ -176,6 +185,7 @@ function buildDescendantStatsByMessageId(
 
 export function buildThreadPanelIndex(
   messages: TimelineMessage[],
+  unreadReplyIds: ReadonlySet<string> = new Set(),
 ): ThreadPanelIndex {
   const messageById = new Map(messages.map((message) => [message.id, message]));
 
@@ -183,6 +193,7 @@ export function buildThreadPanelIndex(
     directChildrenByParentId: buildDirectChildrenByParentId(messages),
     descendantStatsByMessageId: buildDescendantStatsByMessageId(
       messages,
+      unreadReplyIds,
       messageById,
     ),
     messageById,
@@ -274,8 +285,12 @@ function buildVisibleThreadReplies(params: {
 
 export function buildMainTimelineEntries(
   messages: TimelineMessage[],
+  unreadReplyIds: ReadonlySet<string> = new Set(),
 ): MainTimelineEntry[] {
-  const { descendantStatsByMessageId } = buildThreadPanelIndex(messages);
+  const { descendantStatsByMessageId } = buildThreadPanelIndex(
+    messages,
+    unreadReplyIds,
+  );
 
   return messages
     .filter(
@@ -291,6 +306,21 @@ export function buildMainTimelineEntries(
         ),
       };
     });
+}
+
+/**
+ * Whether the unread "New" divider should render above the entry at `index`.
+ * The divider marks a read/unread boundary, so it only makes sense when there
+ * is a rendered message above the first unread. When the first unread is the
+ * first rendered top-level entry (index 0) — the fresh/never-read channel case
+ * — there is nothing above it to separate from, so the divider is suppressed.
+ */
+export function shouldRenderUnreadDivider(
+  index: number,
+  messageId: string,
+  firstUnreadMessageId: string | null,
+): boolean {
+  return index > 0 && messageId === firstUnreadMessageId;
 }
 
 export function buildThreadPanelDataFromIndex(
