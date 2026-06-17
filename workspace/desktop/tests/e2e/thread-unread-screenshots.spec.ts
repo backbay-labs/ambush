@@ -783,4 +783,148 @@ test.describe("thread unread indicator screenshots", () => {
       path: `${SHOTS}/12-sidebar-dot-all-replies.png`,
     });
   });
+
+  // Regression guard for BUG-2 (clear-on-read): opening an unread thread marks
+  // its visible direct replies read, and the depth-0 badge must clear to zero
+  // IN PLACE — without leaving and re-entering the channel. Every other test
+  // re-enters the channel to refresh the badge; none asserts that reading the
+  // thread alone clears it. The mechanism: the mark-read effect advances the
+  // thread frontier over the head + direct replies on open, bumping
+  // readStateVersion, which recomputes computeThreadBadgeCounts against the
+  // now-advanced snapshot. Before the fix the badge read a frozen open-time
+  // snapshot that mark-read never invalidated, so it persisted until channel
+  // re-entry. This walks badge=3 -> open thread -> close -> badge gone, all
+  // while staying in general.
+  test("13-thread-badge-clears-on-read-without-reentry", async ({ page }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await waitForMockLiveSubscription(page, "general");
+
+    // Read frontier over an initial reply, then close the thread (same setup as
+    // test 01) so the subsequent replies land strictly past the frontier.
+    await emitMockMessage(page, "general", "First reply to welcome", {
+      parentEventId: "mock-general-welcome",
+      pubkey: TEST_IDENTITIES.alice.pubkey,
+      createdAt: Math.floor(Date.now() / 1000) - 10,
+    });
+    const threadSummary = page.getByTestId("message-thread-summary").first();
+    await expect(threadSummary).toBeVisible();
+    await threadSummary.click();
+    await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+    await page.getByTestId("message-thread-close").click();
+    await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
+
+    // Leave, emit unread replies, return — badge appears (same as test 01).
+    await page.getByTestId("channel-random").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    const base = unreadTimestamp();
+    for (let i = 0; i < 3; i++) {
+      await emitMockMessage(page, "general", `Unread reply ${i + 1}`, {
+        parentEventId: "mock-general-welcome",
+        pubkey: TEST_IDENTITIES.alice.pubkey,
+        createdAt: base + i,
+      });
+    }
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    const badge = page.getByTestId("thread-unread-badge");
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText("3");
+
+    await page.screenshot({
+      path: `${SHOTS}/13-thread-badge-before-read.png`,
+    });
+
+    // The crux: open the thread (mark-read advances the frontier past all three
+    // direct replies), then close it. Stay in general the entire time — no
+    // channel switch. The badge must clear to zero off the readStateVersion
+    // recompute alone. Before the BUG-2 fix it would persist at 3 here.
+    await page.getByTestId("message-thread-summary").first().click();
+    await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+    await page.getByTestId("message-thread-close").click();
+    await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
+
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await expect(badge).toHaveCount(0);
+
+    await page.screenshot({
+      path: `${SHOTS}/13-thread-badge-clears-on-read.png`,
+    });
+  });
+
+  // Regression guard for the mention-gate + subtree-count fixes. The viewer is
+  // a pure MENTION RECIPIENT of a nested reply in a thread they never authored,
+  // participated in, or followed: root `mock-general-alice` (Alice-authored) ->
+  // reply A (Alice) -> reply B (Alice, @-mentions self). This fails pre-fix on
+  // TWO independent defects:
+  //   1. The badge gate `isNotifiedForThread` had no mention term, so a
+  //      recipient who never participated/authored/followed gated false and the
+  //      badge never appeared at all.
+  //   2. `computeThreadBadgeCounts` counted only the root's DIRECT children, so
+  //      the nested mention reply B (under A) was never tallied toward the root.
+  // After the gate fix the badge appears but undercounts (1, missing B); only
+  // after the subtree-count fix does it reach 2. Asserting `2` gates both.
+  test("14-mention-only-nested-thread-badge", async ({ page }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await waitForMockLiveSubscription(page, "general");
+
+    // The viewer never replies, authors, or follows Alice's thread — they are a
+    // pure mention recipient. Leave general so it goes inactive, then emit the
+    // unread chain on a thread that was never read: reply A (direct child of
+    // the root) and reply B (nested under A) that @-mentions the viewer. With
+    // no prior read the root's frontier seeds to null, so the whole subtree
+    // counts unread — A + B = 2. The emitter derives B's true rootId from A's
+    // stored thread reference, so B lands in Alice's thread at depth 2.
+    const aliceSummary = page.locator(
+      '[data-thread-head-id="mock-general-alice"]',
+    );
+    await page.getByTestId("channel-random").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("random");
+    const base = unreadTimestamp();
+    const replyA = await emitMockMessage(page, "general", "Reply A (depth 1)", {
+      parentEventId: "mock-general-alice",
+      pubkey: TEST_IDENTITIES.alice.pubkey,
+      createdAt: base,
+    });
+    await emitMockMessage(page, "general", "Reply B mentioning you (depth 2)", {
+      parentEventId: replyA?.id,
+      pubkey: TEST_IDENTITIES.alice.pubkey,
+      mentionPubkeys: [SELF_PUBKEY],
+      createdAt: base + 1,
+    });
+
+    // Return to general. The mention on the nested reply must surface a badge on
+    // Alice's root — proving the gate now honors mentions — and the count must
+    // span the subtree (A + B = 2), proving the count walks past direct
+    // children. Pre-fix: no badge; post-gate-only: badge "1"; both fixes: "2".
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+    const badge = aliceSummary.getByTestId("thread-unread-badge");
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText("2");
+
+    // Clearing a NESTED unread mirrors the channel-open read model: opening the
+    // thread consumes only the visible direct replies (A), so the badge drops
+    // to "1" — the mention reply B stays unread inside A's collapsed branch.
+    await aliceSummary.click();
+    await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+    await expect(badge).toContainText("1");
+
+    // Drilling into A's branch advances the frontier over B, the deepest reply,
+    // and the badge clears in place. Stays in general — no channel switch.
+    await expandReply(page, replyA?.id ?? "");
+    await page.getByTestId("message-thread-close").click();
+    await expect(page.getByTestId("message-thread-panel")).not.toBeVisible();
+
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await expect(badge).toHaveCount(0);
+  });
 });
