@@ -20,6 +20,7 @@ import {
 import { Markdown } from "@/shared/ui/markdown";
 import type { VideoReviewContext } from "@/shared/ui/VideoPlayer";
 import { MessageActionBar } from "./MessageActionBar";
+import { MessageAuthorText, MessageHeaderRow } from "./MessageHeader";
 import { MessageTimestamp } from "./MessageTimestamp";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
@@ -193,7 +194,7 @@ export const MessageRow = React.memo(
             <Markdown
               channelNames={channelNames}
               className={cn(
-                "max-w-full text-[15px] leading-6",
+                "max-w-full text-sm",
                 emojiOnly &&
                   "text-4xl leading-tight [&_p]:leading-tight [&_img[data-custom-emoji]]:h-[1.45em] [&_img[data-custom-emoji]]:align-middle [&_button:has(img[data-custom-emoji])]:align-middle",
               )}
@@ -204,7 +205,6 @@ export const MessageRow = React.memo(
               mentionNames={mentionNames}
               mentionPubkeysByName={mentionPubkeysByName}
               searchQuery={searchQuery}
-              tight
               videoReviewContext={videoReviewContext}
             />
           );
@@ -213,7 +213,7 @@ export const MessageRow = React.memo(
 
     const isThreadReplyLayout = layoutVariant === "thread-reply";
     const guideBleedPx = isThreadReplyLayout ? 4 : 0;
-    const avatarSizeClass = "!h-9 !w-9";
+    const avatarSizeClass = "!h-10 !w-10";
     const avatarButtonRadiusClass = "rounded-full";
 
     const respondToDotColor =
@@ -250,13 +250,9 @@ export const MessageRow = React.memo(
     );
 
     const authorNode = message.pubkey ? (
-      <span className="truncate text-[15px] font-semibold leading-none tracking-tight hover:underline">
-        {message.author}
-      </span>
+      <MessageAuthorText hoverUnderline>{message.author}</MessageAuthorText>
     ) : (
-      <h3 className="truncate text-[15px] font-semibold leading-none tracking-tight">
-        {message.author}
-      </h3>
+      <MessageAuthorText as="h3">{message.author}</MessageAuthorText>
     );
 
     const actionBarNode = (
@@ -414,8 +410,8 @@ export const MessageRow = React.memo(
               ) : (
                 <div className="flex shrink-0 items-start">{avatarNode}</div>
               )}
-              <div className="-mt-1 min-w-0 flex-1 space-y-0">
-                <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0">
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <MessageHeaderRow>
                   {message.pubkey ? (
                     <UserProfilePopover
                       pubkey={message.pubkey}
@@ -423,7 +419,7 @@ export const MessageRow = React.memo(
                       botIdenticonValue={message.author}
                     >
                       <button
-                        className="truncate rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                        className="truncate rounded leading-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                         type="button"
                       >
                         {authorNode}
@@ -439,7 +435,7 @@ export const MessageRow = React.memo(
                       {message.personaDisplayName}
                     </span>
                   ) : null}
-                </div>
+                </MessageHeaderRow>
                 <div className={bodyOffsetClass}>{messageBodyNode}</div>
               </div>
             </>
@@ -464,8 +460,8 @@ export const MessageRow = React.memo(
               ) : (
                 <div className="flex shrink-0 items-start">{avatarNode}</div>
               )}
-              <div className="-mt-1 min-w-0 flex-1 space-y-0">
-                <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0">
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <MessageHeaderRow>
                   {message.pubkey ? (
                     <UserProfilePopover
                       pubkey={message.pubkey}
@@ -473,7 +469,7 @@ export const MessageRow = React.memo(
                       botIdenticonValue={message.author}
                     >
                       <button
-                        className="truncate rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                        className="truncate rounded leading-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                         type="button"
                       >
                         {authorNode}
@@ -489,7 +485,7 @@ export const MessageRow = React.memo(
                       {message.personaDisplayName}
                     </span>
                   ) : null}
-                </div>
+                </MessageHeaderRow>
                 <div className={bodyOffsetClass}>{messageBodyNode}</div>
               </div>
             </>

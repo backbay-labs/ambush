@@ -42,8 +42,10 @@ import remarkSpoilers from "@/shared/lib/remarkSpoilers";
 import remarkMessageLinks from "@/features/messages/lib/remarkMessageLinks";
 import { Button } from "@/shared/ui/button";
 import {
+  INLINE_CODE_CHIP_CLASS,
   MENTION_CHIP_BASE_CLASSES,
   MENTION_CHIP_HOVER_CLASSES,
+  MESSAGE_MARKDOWN_CLASS,
 } from "@/shared/ui/mentionChip";
 import { MODAL_BACKDROP_BLUR_CLASS } from "@/shared/ui/modalBackdrop";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
@@ -86,7 +88,7 @@ const MAX_CACHE_ENTRIES = 100;
 const MAX_LOADED_LANGUAGES = 30;
 const MAX_HIGHLIGHT_LINES = 150;
 const CODE_BLOCK_CLASS =
-  "code-block-lines block min-w-full whitespace-pre font-mono text-[13px] leading-6 text-foreground";
+  "code-block-lines block min-w-full whitespace-pre font-mono text-sm font-medium text-foreground";
 const DIFF_ADD_RE = /\s*\/\/\s*\[!code\s*\+\+\]\s*$/;
 const DIFF_REMOVE_RE = /\s*\/\/\s*\[!code\s*--\]\s*$/;
 
@@ -231,7 +233,6 @@ function messageLinkUrlTransform(value: string, key: string): string {
 type MarkdownProps = {
   channelNames?: string[];
   className?: string;
-  compact?: boolean;
   content: string;
   customEmoji?: CustomEmoji[];
   imetaByUrl?: ImetaLookup;
@@ -240,11 +241,8 @@ type MarkdownProps = {
   mentionNames?: string[];
   mentionPubkeysByName?: Record<string, string>;
   searchQuery?: string;
-  tight?: boolean;
   videoReviewContext?: VideoReviewContext;
 };
-
-type MarkdownVariant = "default" | "compact" | "tight";
 
 /**
  * Inline image embed with click-to-zoom lightbox and right-click download.
@@ -953,22 +951,12 @@ function SpoilerInline({
 }
 
 function createMarkdownComponents(
-  variant: MarkdownVariant,
   runtimeRef: React.RefObject<MarkdownRuntime>,
   interactive = true,
 ): Components {
-  const paragraphClassName =
-    variant === "tight"
-      ? "leading-5"
-      : variant === "compact"
-        ? "leading-6"
-        : "leading-7";
-  const listItemClassName =
-    variant === "tight" ? "my-0.5 [&_p]:inline" : "my-1 [&_p]:inline";
-  const listClassName =
-    variant === "tight"
-      ? "space-y-0.5 pl-6 marker:text-muted-foreground"
-      : "space-y-1 pl-6 marker:text-muted-foreground";
+  const paragraphClassName = "leading-relaxed";
+  const listItemClassName = "my-1 [&_p]:inline";
+  const listClassName = "space-y-1 pl-6 marker:text-muted-foreground";
 
   return {
     spoiler: ({
@@ -1080,13 +1068,7 @@ function createMarkdownComponents(
       }
 
       return (
-        <code
-          {...props}
-          className={cn(
-            "rounded-md bg-muted px-1.5 py-0.5 font-mono text-[13px] text-foreground",
-            className,
-          )}
-        >
+        <code {...props} className={cn(INLINE_CODE_CHIP_CLASS, className)}>
           {children}
         </code>
       );
@@ -1105,6 +1087,21 @@ function createMarkdownComponents(
       <h3 className="text-base font-semibold leading-6 tracking-tight">
         {children}
       </h3>
+    ),
+    h4: ({ children }) => (
+      <h4 className="text-sm font-semibold leading-5 tracking-tight">
+        {children}
+      </h4>
+    ),
+    h5: ({ children }) => (
+      <h5 className="text-sm font-semibold leading-5 tracking-tight">
+        {children}
+      </h5>
+    ),
+    h6: ({ children }) => (
+      <h6 className="text-sm font-medium leading-5 tracking-tight text-muted-foreground">
+        {children}
+      </h6>
     ),
     hr: () => <hr className="border-border/80" />,
     img: ({ alt, src }) => {
@@ -1268,7 +1265,11 @@ function createMarkdownComponents(
             type="button"
             data-channel-link=""
             aria-label={`Open channel ${channelName}`}
-            className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary cursor-pointer hover:bg-primary/25 transition-colors"
+            className={cn(
+              "cursor-pointer",
+              MENTION_CHIP_BASE_CLASSES,
+              MENTION_CHIP_HOVER_CLASSES,
+            )}
             onClick={() => {
               onOpenChannel(channel.id);
             }}
@@ -1279,10 +1280,7 @@ function createMarkdownComponents(
       }
 
       return (
-        <span
-          data-channel-link=""
-          className="rounded-md bg-primary/15 px-1 py-0.5 text-sm text-primary"
-        >
+        <span data-channel-link="" className={MENTION_CHIP_BASE_CLASSES}>
           {children}
         </span>
       );
@@ -1316,7 +1314,11 @@ function createMarkdownComponents(
           data-message-link=""
           aria-label={`Open message in ${channelLabel}`}
           title={href}
-          className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary cursor-pointer hover:bg-primary/25 transition-colors"
+          className={cn(
+            "cursor-pointer",
+            MENTION_CHIP_BASE_CLASSES,
+            MENTION_CHIP_HOVER_CLASSES,
+          )}
           onClick={() => {
             onOpenMessageLink(parsed.value);
           }}
@@ -1331,7 +1333,6 @@ function createMarkdownComponents(
 function MarkdownInner({
   channelNames,
   className,
-  compact = false,
   content,
   customEmoji,
   imetaByUrl,
@@ -1340,14 +1341,8 @@ function MarkdownInner({
   mentionNames,
   mentionPubkeysByName,
   searchQuery,
-  tight = false,
   videoReviewContext,
 }: MarkdownProps) {
-  const variant: MarkdownVariant = tight
-    ? "tight"
-    : compact
-      ? "compact"
-      : "default";
   const { channels: rawChannels } = useChannelNavigation();
   const channels = useStableArray(rawChannels);
   const { goChannel } = useAppNavigation();
@@ -1383,8 +1378,8 @@ function MarkdownInner({
   });
 
   const components = React.useMemo(
-    () => createMarkdownComponents(variant, runtimeRef, interactive),
-    [variant, runtimeRef, interactive],
+    () => createMarkdownComponents(runtimeRef, interactive),
+    [runtimeRef, interactive],
   );
 
   // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
@@ -1435,52 +1430,21 @@ function MarkdownInner({
   return (
     <div
       className={cn(
-        tight
-          ? [
-              "max-w-none break-words text-sm leading-5 text-foreground/90",
-              // Reset first/last
-              "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-              // Base owl: p+p, list+p, etc.
-              "[&>*+*]:mt-2",
-              // Headings: flat push/pull — size does the hierarchy work
-              "[&>*+h1]:mt-2.5 [&>*+h2]:mt-2.5 [&>*+h3]:mt-2.5",
-              "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
-              // Blockquotes: breathe above and below
-              "[&>*+blockquote]:mt-3 [&>blockquote+*]:mt-3",
-              // Code blocks: breathe above and below
-              "[&>*+[data-code-block]]:mt-3 [&>[data-code-block]+*]:mt-3",
-              // Tables: breathe above and below
-              "[&>*+[data-table-block]]:mt-3 [&>[data-table-block]+*]:mt-3",
-              // hr: clear section divider
-              "[&>*+hr]:mt-3.5 [&>hr+*]:mt-3.5",
-              // Lists after paragraphs: tighter to feel related
-              "[&>p+ul]:mt-1 [&>p+ol]:mt-1 [&>div+ul]:mt-1 [&>div+ol]:mt-1",
-            ].join(" ")
-          : compact
-            ? [
-                "max-w-none break-words text-[15px] leading-6 text-foreground/90",
-                "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-                "[&>*+*]:mt-2",
-                "[&>*+h1]:mt-3 [&>*+h2]:mt-3 [&>*+h3]:mt-3",
-                "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
-                "[&>*+blockquote]:mt-3 [&>blockquote+*]:mt-3",
-                "[&>*+[data-code-block]]:mt-3 [&>[data-code-block]+*]:mt-3",
-                "[&>*+[data-table-block]]:mt-3 [&>[data-table-block]+*]:mt-3",
-                "[&>*+hr]:mt-3.5 [&>hr+*]:mt-3.5",
-                "[&>p+ul]:mt-1 [&>p+ol]:mt-1 [&>div+ul]:mt-1 [&>div+ol]:mt-1",
-              ].join(" ")
-            : [
-                "max-w-none break-words text-sm leading-7 text-foreground/90",
-                "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-                "[&>*+*]:mt-3",
-                "[&>*+h1]:mt-3.5 [&>*+h2]:mt-3.5 [&>*+h3]:mt-3.5",
-                "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
-                "[&>*+blockquote]:mt-3.5 [&>blockquote+*]:mt-3.5",
-                "[&>*+[data-code-block]]:mt-3.5 [&>[data-code-block]+*]:mt-3.5",
-                "[&>*+[data-table-block]]:mt-3.5 [&>[data-table-block]+*]:mt-3.5",
-                "[&>*+hr]:mt-4 [&>hr+*]:mt-4",
-                "[&>p+ul]:mt-1.5 [&>p+ol]:mt-1.5 [&>div+ul]:mt-1.5 [&>div+ol]:mt-1.5",
-              ].join(" "),
+        MESSAGE_MARKDOWN_CLASS,
+        [
+          "max-w-none break-words text-sm leading-relaxed text-foreground",
+          "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          "[&>*+*]:mt-3",
+          "[&>p+p]:mt-1.5",
+          "[&>*+h1]:mt-3.5 [&>*+h2]:mt-3.5 [&>*+h3]:mt-3.5 [&>*+h4]:mt-3.5 [&>*+h5]:mt-3.5 [&>*+h6]:mt-3.5",
+          "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5 [&>h4+*]:mt-0.5 [&>h5+*]:mt-0.5 [&>h6+*]:mt-0.5",
+          "[&>h1+h2]:mt-1.5! [&>h2+h3]:mt-1.5! [&>h3+h4]:mt-1.5! [&>h4+h5]:mt-1.5! [&>h5+h6]:mt-1.5!",
+          "[&>*+blockquote]:mt-3.5 [&>blockquote+*]:mt-3.5",
+          "[&>*+[data-code-block]]:mt-3.5 [&>[data-code-block]+*]:mt-3.5",
+          "[&>*+[data-table-block]]:mt-3.5 [&>[data-table-block]+*]:mt-3.5",
+          "[&>*+hr]:mt-4 [&>hr+*]:mt-4",
+          "[&>p+ul]:mt-1.5 [&>p+ol]:mt-1.5 [&>div+ul]:mt-1.5 [&>div+ol]:mt-1.5",
+        ].join(" "),
         className,
       )}
     >
@@ -1496,10 +1460,8 @@ export const Markdown = React.memo(
   (prev, next) =>
     prev.content === next.content &&
     prev.className === next.className &&
-    prev.compact === next.compact &&
     prev.customEmoji === next.customEmoji &&
     prev.interactive === next.interactive &&
-    prev.tight === next.tight &&
     prev.agentMentionPubkeysByName === next.agentMentionPubkeysByName &&
     prev.mentionPubkeysByName === next.mentionPubkeysByName &&
     shallowArrayEqual(prev.mentionNames, next.mentionNames) &&

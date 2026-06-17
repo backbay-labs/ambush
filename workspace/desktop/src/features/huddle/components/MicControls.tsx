@@ -217,7 +217,7 @@ export function MicControls({
                 className={cn("h-3 w-3 shrink-0", !isPttMode && "invisible")}
               />
               <span className="font-medium">Push to Talk</span>
-              <kbd className="ml-auto rounded border border-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/60">
+              <kbd className="ml-auto rounded border border-foreground/10 px-1.5 py-0.5 text-2xs font-medium text-foreground/60">
                 {pushToTalkShortcut}
               </kbd>
             </button>
@@ -465,7 +465,7 @@ export function DeviceList({
         })}
       </ul>
       {showChangeHint && (
-        <p className="mt-1 text-[10px] text-muted-foreground">
+        <p className="mt-1 text-2xs text-muted-foreground">
           Change takes effect on next huddle
         </p>
       )}
