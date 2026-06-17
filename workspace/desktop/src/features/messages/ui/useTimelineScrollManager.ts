@@ -395,7 +395,6 @@ export function useTimelineScrollManager({
     [onTargetReached, unpinFromBottom],
   );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: timelineRef is a stable React ref — its identity never changes
   React.useEffect(() => {
     if (!targetMessageId) {
       handledTargetMessageIdRef.current = null;
