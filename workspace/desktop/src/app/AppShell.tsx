@@ -306,6 +306,7 @@ export function AppShell() {
     markChannelRead,
     markChannelUnread,
     unreadChannelIds,
+    unreadChannelCounts,
     highPriorityUnreadChannelIds,
     getEffectiveTimestamp: getChannelReadAt,
     readStateVersion,
@@ -404,10 +405,6 @@ export function AppShell() {
   const hideDmMutation = useHideDmMutation();
   const handleOpenBrowseChannels = React.useCallback(() => {
     setBrowseDialogType("stream");
-    void refetchChannels();
-  }, [refetchChannels]);
-  const handleOpenBrowseForums = React.useCallback(() => {
-    setBrowseDialogType("forum");
     void refetchChannels();
   }, [refetchChannels]);
   const handleOpenSearch = React.useCallback(() => {
@@ -867,8 +864,6 @@ export function AppShell() {
                           onMarkAllChannelsRead={markAllChannelsRead}
                           onMarkChannelRead={markChannelRead}
                           onMarkChannelUnread={markChannelUnread}
-                          onOpenBrowseChannels={handleOpenBrowseChannels}
-                          onOpenBrowseForums={handleOpenBrowseForums}
                           onOpenDm={async ({ pubkeys }) => {
                             const directMessage =
                               await openDmMutation.mutateAsync({
@@ -908,6 +903,7 @@ export function AppShell() {
                           selectedChannelId={selectedChannelId}
                           selectedView={selectedView}
                           unreadChannelIds={unreadChannelIds}
+                          unreadChannelCounts={unreadChannelCounts}
                           mutedChannelIds={mutedChannelIds}
                           onMuteChannel={muteChannel}
                           onUnmuteChannel={unmuteChannel}
