@@ -35,6 +35,10 @@ import {
 } from "@/features/messages/lib/formatTimelineMessages";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
+import {
+  resolveTimelineLoadingLatch,
+  selectTimelineLoadingState,
+} from "@/features/messages/lib/timelineLoadingState";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
@@ -474,13 +478,27 @@ export function ChannelScreen({
       setThreadReplyTargetId,
       setThreadScrollTargetId,
     });
-  const hasTimelineData = messagesQuery.data !== undefined;
-  const isTimelineLoading =
+  // `data !== undefined` is not "loaded": the cache is seeded early by stale
+  // placeholders and the live subscription. Wait for the history fetch to settle.
+  const timelineLoadingNow =
     activeChannel !== null &&
     activeChannel.channelType !== "forum" &&
-    !hasTimelineData &&
-    messagesQuery.isPending;
-  const shouldShowInitialChannelLoading = isTimelineLoading;
+    selectTimelineLoadingState({
+      isPending: messagesQuery.isPending,
+      isFetching: messagesQuery.isFetching,
+      isPlaceholderData: messagesQuery.isPlaceholderData,
+      dataLength: messagesQuery.data?.length ?? null,
+    });
+  // Latch loaded per channel so a later background refetch can't flip back to
+  // the skeleton — that re-flip is the "skeleton bouncing up and down" on entry.
+  const settledChannelIdRef = React.useRef<string | null>(null);
+  const { settledChannelId, isLoading: isTimelineLoading } =
+    resolveTimelineLoadingLatch(
+      settledChannelIdRef.current,
+      activeChannelId,
+      timelineLoadingNow,
+    );
+  settledChannelIdRef.current = settledChannelId;
   // Panel identity (thread/profile/agent session) lives in the URL search
   // params, so channel changes and back/forward traversals carry it per
   // history entry — only the local ephemeral targets need resetting here.
@@ -607,9 +625,7 @@ export function ChannelScreen({
           ref={channelContentRef}
         >
           {activeChannel ? (
-            shouldShowInitialChannelLoading ? (
-              <ViewLoadingFallback includeHeader kind="channel" />
-            ) : activeChannel.channelType === "forum" ? (
+            activeChannel.channelType === "forum" ? (
               <>
                 {channelHeader}
                 <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
