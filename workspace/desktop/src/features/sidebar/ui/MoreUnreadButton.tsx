@@ -14,9 +14,12 @@ export function MoreUnreadButton({
   position: "top" | "bottom";
   testId: string;
 }) {
+  const positionClassName =
+    position === "top" ? topChromeInset.top : bottomClassName;
+
   return (
     <div
-      className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center py-1 ${position === "top" ? topChromeInset.top : bottomClassName}`}
+      className={`pointer-events-none absolute inset-x-0 z-10 flex justify-center py-1 ${positionClassName}`}
     >
       <UnreadPill
         direction={position === "top" ? "up" : "down"}
