@@ -540,7 +540,7 @@ release *ARGS:
         local range="$1"
         git log "$range" --format="%h %H %s" --no-merges | while IFS=' ' read -r short full rest; do
             local pr subject
-            pr=$(printf '%s' "$rest" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+')
+            pr=$(printf '%s' "$rest" | grep -oE '\(#[0-9]+\)$' | grep -oE '[0-9]+' || true)
             if [[ -n "$pr" ]]; then
                 subject=$(printf '%s' "$rest" | sed -E 's/ \(#[0-9]+\)$//')
                 printf -- '- %s ([#%s](https://github.com/%s/pull/%s)) ([`%s`](https://github.com/%s/commit/%s))\n' \
