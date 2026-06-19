@@ -17,8 +17,7 @@ import { UnreadPill, unreadCountLabel } from "@/shared/ui/UnreadPill";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { TimelineSkeleton, useTimelineSkeletonRows } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
-import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
-import { useTimelineScrollManager } from "./useTimelineScrollManager";
+import { useAnchoredScroll } from "./useAnchoredScroll";
 
 export type MessageTimelineHandle = {
   scrollToBottomOnNextUpdate: () => void;
@@ -161,6 +160,7 @@ const MessageTimelineBase = React.forwardRef<
 ) {
   const internalScrollRef = React.useRef<HTMLDivElement>(null);
   const scrollContainerRef = externalScrollRef ?? internalScrollRef;
+  const contentRef = React.useRef<HTMLDivElement>(null);
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
 
   // Gate the heavy timeline render (each row runs a synchronous
@@ -203,22 +203,24 @@ const MessageTimelineBase = React.forwardRef<
   const showMessageList = timelineBodySurface === "list";
 
   const {
-    bottomAnchorRef,
-    contentRef,
     highlightedMessageId,
     isAtBottom,
     newMessageCount,
-    restoreScrollPosition,
+    onScroll,
     scrollToBottom,
     scrollToBottomOnNextUpdate,
     scrollToMessage,
-    syncScrollState,
-  } = useTimelineScrollManager({
+  } = useAnchoredScroll({
     channelId,
+    contentRef,
+    fetchOlder,
+    hasOlderMessages,
+    isFetchingOlder,
     isLoading: showTimelineSkeleton,
     messages: deferredMessages,
     onTargetReached,
     scrollContainerRef,
+    sentinelRef: topSentinelRef,
     targetMessageId,
   });
 
@@ -263,9 +265,10 @@ const MessageTimelineBase = React.forwardRef<
     }
   }, [firstUnreadMessageId, scrollToMessage]);
 
-  // Scroll to the active search match when it changes.
+  // Scroll to the active search match when it changes. `scrollToMessage`
+  // updates the scroll anchor, so the post-commit restore won't yank the
+  // view back off the match.
   const prevSearchActiveRef = React.useRef<string | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scrollContainerRef is a stable React ref
   React.useEffect(() => {
     if (showTimelineSkeleton) return;
     if (
@@ -276,26 +279,8 @@ const MessageTimelineBase = React.forwardRef<
       return;
     }
     prevSearchActiveRef.current = searchActiveMessageId;
-
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    const el = container.querySelector<HTMLElement>(
-      `[data-message-id="${searchActiveMessageId}"]`,
-    );
-    if (el) {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
-  }, [searchActiveMessageId, showTimelineSkeleton]);
-
-  useLoadOlderOnScroll({
-    fetchOlder,
-    hasOlderMessages,
-    isLoading: showTimelineSkeleton,
-    restoreScrollPosition,
-    scrollContainerRef,
-    sentinelRef: topSentinelRef,
-  });
+    scrollToMessage(searchActiveMessageId, { behavior: "smooth" });
+  }, [scrollToMessage, searchActiveMessageId, showTimelineSkeleton]);
 
   const timelineSkeletonRows = useTimelineSkeletonRows({
     channelId,
@@ -328,7 +313,7 @@ const MessageTimelineBase = React.forwardRef<
           )}
           data-scroll-restoration-id={scrollRestorationId}
           data-testid="message-timeline"
-          onScroll={syncScrollState}
+          onScroll={onScroll}
           ref={scrollContainerRef}
         >
           <div
@@ -359,7 +344,7 @@ const MessageTimelineBase = React.forwardRef<
               ) : null}
               {activeDirectMessageIntro ? (
                 <div
-                  className="mb-0.5 mt-auto flex w-full flex-col items-start px-3 py-2 text-left"
+                  className="mt-auto flex w-full flex-col items-start px-3 py-2 text-left"
                   data-testid="message-dm-intro"
                 >
                   <DirectMessageIntroAvatarStack
@@ -380,7 +365,7 @@ const MessageTimelineBase = React.forwardRef<
 
               {activeChannelIntro ? (
                 <div
-                  className="mb-0.5 mt-auto flex w-full max-w-2xl flex-col items-start px-3 py-2 text-left"
+                  className="mt-auto flex w-full max-w-2xl flex-col items-start px-3 py-2 text-left"
                   data-testid="message-channel-intro"
                 >
                   <div
@@ -520,8 +505,6 @@ const MessageTimelineBase = React.forwardRef<
                 </div>
               ) : null}
             </div>
-
-            <div aria-hidden className="h-px" ref={bottomAnchorRef} />
           </div>
         </div>
 

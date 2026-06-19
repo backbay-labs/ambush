@@ -72,6 +72,9 @@ type E2eConfig = {
     feedReadError?: string;
     canvasReadError?: string;
     openDmDelayMs?: number;
+    /** Delay (ms) applied to older-history (`history-` subId) fetches so e2e
+     *  tests can observe the in-flight prepend window. 0/undefined = instant. */
+    historyDelayMs?: number;
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
@@ -593,6 +596,17 @@ declare global {
       extraTags?: string[][];
       createdAt?: number;
     }) => RelayEvent;
+    /** Prepend `count` synthetic older messages to a channel's mock store so
+     *  an older-history fetch has something to paginate. Mirrors how the real
+     *  relay backfills history. Returns the created events. */
+    __BUZZ_E2E_PREPEND_MOCK_HISTORY__?: (input: {
+      channelName: string;
+      count: number;
+      startIndex?: number;
+      lineCount?: number;
+      createdAtStart?: number;
+      emit?: boolean;
+    }) => RelayEvent[];
     __BUZZ_E2E_EMIT_MOCK_TYPING__?: (input: {
       channelName: string;
       pubkey?: string;
@@ -2267,6 +2281,60 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
   return seeded;
 }
 
+function prependMockHistory(input: {
+  channelName: string;
+  count: number;
+  startIndex?: number;
+  lineCount?: number;
+  createdAtStart?: number;
+  emit?: boolean;
+}) {
+  const channel = mockChannels.find(
+    (candidate) => candidate.name === input.channelName,
+  );
+  if (!channel) {
+    throw new Error(`Unknown mock channel: ${input.channelName}`);
+  }
+
+  const store = getMockMessageStore(channel.id);
+  const earliestCreatedAt = store.reduce(
+    (earliest, event) => Math.min(earliest, event.created_at),
+    Math.floor(Date.now() / 1000),
+  );
+  const createdAtStart =
+    input.createdAtStart ?? earliestCreatedAt - input.count - 1;
+  const startIndex = input.startIndex ?? 0;
+  const lineCount = input.lineCount ?? 1;
+
+  const events = Array.from({ length: input.count }, (_, offset) => {
+    const index = startIndex + offset;
+    const body = Array.from(
+      { length: lineCount },
+      (_unused, lineIndex) => `mock older ${index} line ${lineIndex + 1}`,
+    ).join("\n");
+
+    return createMockEvent(
+      9,
+      body,
+      [["h", channel.id]],
+      ALICE_PUBKEY,
+      createdAtStart + offset,
+      `mock-older-${channel.name}-${index}`.replace(/[^a-zA-Z0-9]/g, ""),
+    );
+  });
+
+  store.unshift(...events);
+  store.sort((left, right) => left.created_at - right.created_at);
+
+  if (input.emit) {
+    for (const event of events) {
+      emitMockLiveEvent(channel.id, event);
+    }
+  }
+
+  return events;
+}
+
 function emitMockHistory(
   socket: MockSocket,
   subId: string,
@@ -2290,10 +2358,24 @@ function emitMockHistory(
     .slice(0, filter.limit ?? 50)
     .sort((left, right) => left.created_at - right.created_at);
 
-  for (const event of events) {
-    sendWsText(socket.handler, ["EVENT", subId, event]);
+  const emit = () => {
+    for (const event of events) {
+      sendWsText(socket.handler, ["EVENT", subId, event]);
+    }
+    sendWsText(socket.handler, ["EOSE", subId]);
+  };
+
+  // Optionally pace older-history fetches so e2e tests can observe the
+  // in-flight prepend window (scroll up, abandon, etc.). Scoped to
+  // `history-` subscriptions — the prefix `relayClientSession` uses for
+  // older-message pagination — so live/initial subscriptions stay instant.
+  const delayMs = getConfig()?.mock?.historyDelayMs ?? 0;
+  if (delayMs > 0 && subId.startsWith("history-")) {
+    window.setTimeout(emit, delayMs);
+    return;
   }
-  sendWsText(socket.handler, ["EOSE", subId]);
+
+  emit();
 }
 
 function emitMockLiveEvent(channelId: string, event: RelayEvent) {
@@ -5628,7 +5710,7 @@ async function handleGetEvent(
           "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
         created_at: Math.floor(Date.now() / 1000) - 42 * 60,
         kind: 9,
-        tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
+        tags: [["h", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
         content: "Engineering shipped the desktop build.",
         sig: "mocksig".repeat(20).slice(0, 128),
       },
@@ -6049,6 +6131,7 @@ export function maybeInstallE2eTauriMocks() {
       createdAt,
     );
   };
+  window.__BUZZ_E2E_PREPEND_MOCK_HISTORY__ = prependMockHistory;
   window.__BUZZ_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
     const channel = mockChannels.find(
       (candidate) => candidate.name === channelName,
