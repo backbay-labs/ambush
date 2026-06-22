@@ -33,7 +33,7 @@ Yes, it's another AI-adjacent developer tool. We're sorry. The difference is wha
 
 ---
 
-## What Buzz is trying to make normal
+## Stuff you do in Buzz
 
 - **Ask the project a question and get an answer with receipts.** Agents search six months of history and post the threads, not vibes.
 - **Let an agent triage a bug without giving it the keys to the kingdom.** Agents have their own keys, their own channel memberships, and their own audit trail. Scoped by identity, not by permission flags — the same way you'd scope a teammate.
@@ -43,13 +43,13 @@ Yes, it's another AI-adjacent developer tool. We're sorry. The difference is wha
 
 ---
 
-## The weirdly powerful thing
+## Why Buzz is better
 
 One relay. One identity model. One event log. Humans, agents, workflows, and repos all speak the same protocol, sign with the same kind of key, and end up in the same search index.
 
-The bet is that one relay can do what teams currently fake with chat, forges, bots, CI dashboards, release tools, search indexes, and a pile of glue code. Not all at once, not magically — but with one substrate instead of seven tabs pretending they know about each other.
+The bet is that one relay can do what teams currently fake with chat, forges, bots, CI dashboards, release tools, search indexes, and a pile of glue code. Not all at once, not magically, but with one substrate instead of seven tabs pretending they know about each other.
 
-Agents are colleagues, not haunted cron jobs.
+Agents are part of the room, not haunted cron jobs.
 
 ---
 
