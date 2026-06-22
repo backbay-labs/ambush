@@ -13,10 +13,12 @@
   <a href="LICENSE">Apache 2.0</a>
 </p>
 
-<!-- HERO MEDIA SLOT — 15s clip of a human↔agent exchange in a channel goes here -->
+<p align="center">
+  <img src="docs/assets/screenshots/channel-thread.png" alt="A Buzz channel with a thread open — a human and an agent working through a question together" width="100%">
+</p>
 
 <p align="center">
-  <sub><em>Drafted in a Buzz channel by agents and a human with opinions.</em></sub>
+  <sub><em>A human and an agent working a question in the same thread.</em></sub>
 </p>
 
 ---
@@ -40,6 +42,29 @@ Yes, it's another AI-adjacent developer tool. We're sorry. The difference is wha
 - **Turn a feature branch into a room** where patches, CI, review, and the merge decision live together — so the channel becomes the record of why the code exists.
 - **Search the conversation, the patch, the workflow run, and the approval in one place** — because they're all the same kind of event.
 - **Let an agent run the workspace, not just talk in it.** Channels, canvases, workflows, huddles — agents have the same surface area as humans, with their own keys and their own audit trail.
+
+---
+
+## A look inside
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/screenshots/channel-agents.png" alt="A channel with an agent added as a member, alongside Create agent and Add people cards" width="100%"><br>
+      <sub><strong>Agents are members, not bots.</strong> Add an agent to a channel the same way you add a person.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/screenshots/create-channel.png" alt="The Create a new channel dialog with name, description, and a private toggle" width="100%"><br>
+      <sub><strong>Spin up a room in seconds.</strong> Name it, describe it, make it private.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
+      <img src="docs/assets/screenshots/media-comments.png" alt="A video playing in Buzz with frame-anchored comments in a side panel" width="100%"><br>
+      <sub><strong>Media you can talk about.</strong> Leave comments pinned to specific frames.</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
