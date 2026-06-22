@@ -4,6 +4,10 @@ import { installMockBridge } from "../helpers/bridge";
 
 const VIDEO_SHA = "b".repeat(64);
 const VIDEO_URL = `http://localhost:3000/media/${VIDEO_SHA}.mp4`;
+const PORTRAIT_VIDEO_SHA = "c".repeat(64);
+const PORTRAIT_VIDEO_URL = `http://localhost:3000/media/${PORTRAIT_VIDEO_SHA}.mp4`;
+const CONSTRAINED_LANDSCAPE_VIDEO_SHA = "d".repeat(64);
+const CONSTRAINED_LANDSCAPE_VIDEO_URL = `http://localhost:3000/media/${CONSTRAINED_LANDSCAPE_VIDEO_SHA}.mp4`;
 const POSTER_DATA_URL =
   "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNjAgODAiPjxyZWN0IHdpZHRoPSIxNjAiIGhlaWdodD0iODAiIGZpbGw9IiMyNjQ2NTMiLz48Y2lyY2xlIGN4PSI1NCIgY3k9IjQwIiByPSIyMiIgZmlsbD0iI2YyYzE0ZSIvPjxwYXRoIGQ9Ik05MiAyNGg0NHYzMkg5MnoiIGZpbGw9IiNmNzgxNTQiLz48L3N2Zz4=";
 
@@ -25,23 +29,29 @@ async function waitForMockLiveSubscription(page: Page, channelName: string) {
     .toBe(true);
 }
 
-function emitMockMessage(page: Page, channelName: string, content: string) {
+function emitMockMessage(
+  page: Page,
+  channelName: string,
+  content: string,
+  options: { extraTags?: string[][] } = {},
+) {
   return page.evaluate(
-    ({ channelName, content }) => {
+    ({ channelName, content, extraTags }) => {
       const emit = (
         window as Window & {
           __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
             channelName: string;
             content: string;
+            extraTags?: string[][];
           }) => unknown;
         }
       ).__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
       if (!emit) {
         throw new Error("Mock message emitter is unavailable.");
       }
-      emit({ channelName, content });
+      emit({ channelName, content, extraTags });
     },
-    { channelName, content },
+    { channelName, content, extraTags: options.extraTags },
   );
 }
 
@@ -232,6 +242,33 @@ test("video upload previews use poster frames and inline videos open review mode
     restoredInlinePlayer.getByRole("button", { name: "Pause video" }),
   ).toBeVisible();
 
+  const inlineSpeedButton =
+    restoredInlinePlayer.getByTestId("video-inline-speed");
+  await expect(inlineSpeedButton).toHaveText("1x");
+  await inlineSpeedButton.click();
+  const inlineSpeedMenu = page.getByTestId("video-inline-speed-menu");
+  await expect(inlineSpeedMenu.getByRole("button")).toHaveText([
+    "2x",
+    "1.75x",
+    "1.5x",
+    "1.25x",
+    "1x",
+    "0.75x",
+    "0.5x",
+    "0.25x",
+  ]);
+  await inlineSpeedMenu
+    .getByRole("button", { name: "1.5x", exact: true })
+    .click();
+  await expect(inlineSpeedButton).toHaveText("1.5x");
+  await expect
+    .poll(() =>
+      restoredInlineVideo.evaluate(
+        (video) => (video as HTMLVideoElement).playbackRate,
+      ),
+    )
+    .toBe(1.5);
+
   // Inline volume controls.
   await inlinePlayer.getByRole("button", { name: "Mute" }).click();
   await expect
@@ -272,6 +309,24 @@ test("video upload previews use poster frames and inline videos open review mode
 
   const reviewVideo = reviewDialog.locator("video");
   await expect(reviewVideo).not.toHaveAttribute("controls", "");
+  const reviewSpeedButton = reviewDialog.getByTestId("video-review-speed");
+  await expect(reviewSpeedButton).toHaveText("1.5x");
+  await expect
+    .poll(() =>
+      reviewVideo.evaluate((video) => (video as HTMLVideoElement).playbackRate),
+    )
+    .toBe(1.5);
+  await reviewSpeedButton.click();
+  await page
+    .getByTestId("video-review-speed-menu")
+    .getByRole("button", { name: "0.25x", exact: true })
+    .click();
+  await expect(reviewSpeedButton).toHaveText("0.25x");
+  await expect
+    .poll(() =>
+      reviewVideo.evaluate((video) => (video as HTMLVideoElement).playbackRate),
+    )
+    .toBe(0.25);
   await reviewDialog.getByRole("button", { name: "Play review video" }).click();
   await expect(
     reviewDialog.getByRole("button", { name: "Pause review video" }),
@@ -569,6 +624,16 @@ test("video upload previews use poster frames and inline videos open review mode
     .getByRole("button", { name: "Close video review" })
     .click();
   await expect(page.getByTestId("video-review-dialog")).toHaveCount(0);
+  await expect(
+    restoredInlinePlayer.getByTestId("video-inline-speed"),
+  ).toHaveText("0.25x");
+  await expect
+    .poll(() =>
+      restoredInlineVideo.evaluate(
+        (video) => (video as HTMLVideoElement).playbackRate,
+      ),
+    )
+    .toBe(0.25);
 
   await reviewButton.evaluate((button) =>
     (button as HTMLButtonElement).click(),
@@ -602,4 +667,99 @@ test("video upload previews use poster frames and inline videos open review mode
   await expect(
     threadReviewDialog.getByTestId("video-review-comments"),
   ).toContainText("Color pass looks right");
+});
+
+test("narrow inline videos hide playback speed control", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "general");
+
+  await emitMockMessage(page, "general", `![video](${PORTRAIT_VIDEO_URL})`, {
+    extraTags: [
+      [
+        "imeta",
+        `url ${PORTRAIT_VIDEO_URL}`,
+        "m video/mp4",
+        `x ${PORTRAIT_VIDEO_SHA}`,
+        "size 987654",
+        "dim 80x160",
+        "duration 12.5",
+        `image ${POSTER_DATA_URL}`,
+        "filename portrait-demo.mp4",
+      ],
+    ],
+  });
+
+  const portraitPlayer = page.getByTestId("video-player").last();
+  await expect(portraitPlayer).toBeVisible();
+  const portraitBox = await portraitPlayer.boundingBox();
+  expect(portraitBox?.width).toBeLessThan(220);
+
+  await portraitPlayer.getByRole("button", { name: "Play video" }).click();
+  await expect(
+    portraitPlayer.getByTestId("video-inline-controls"),
+  ).toBeVisible();
+  await expect(portraitPlayer.getByTestId("video-inline-speed")).toHaveCount(0);
+
+  await portraitPlayer
+    .getByRole("button", { name: "Open video review" })
+    .click();
+  const reviewDialog = page.getByTestId("video-review-dialog");
+  await expect(reviewDialog).toBeVisible();
+  await expect(reviewDialog.getByTestId("video-review-speed")).toHaveText("1x");
+});
+
+test("constrained landscape inline videos measure rendered width before showing speed", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "general");
+
+  await emitMockMessage(
+    page,
+    "general",
+    `![video](${CONSTRAINED_LANDSCAPE_VIDEO_URL})`,
+    {
+      extraTags: [
+        [
+          "imeta",
+          `url ${CONSTRAINED_LANDSCAPE_VIDEO_URL}`,
+          "m video/mp4",
+          `x ${CONSTRAINED_LANDSCAPE_VIDEO_SHA}`,
+          "size 987654",
+          "dim 160x80",
+          "duration 12.5",
+          `image ${POSTER_DATA_URL}`,
+          "filename constrained-landscape-demo.mp4",
+        ],
+      ],
+    },
+  );
+
+  const landscapePlayer = page.getByTestId("video-player").last();
+  await expect(landscapePlayer).toBeVisible();
+  const fullWidthBox = await landscapePlayer.boundingBox();
+  expect(fullWidthBox?.width).toBeGreaterThan(220);
+
+  await landscapePlayer.getByRole("button", { name: "Play video" }).click();
+  await expect(
+    landscapePlayer.getByTestId("video-inline-controls"),
+  ).toBeVisible();
+  await expect(landscapePlayer.getByTestId("video-inline-speed")).toBeVisible();
+
+  await landscapePlayer.evaluate((element) => {
+    (element as HTMLElement).style.width = "180px";
+  });
+  await expect
+    .poll(async () => {
+      const box = await landscapePlayer.boundingBox();
+      return box?.width ?? 0;
+    })
+    .toBeLessThan(220);
+  await expect(landscapePlayer.getByTestId("video-inline-speed")).toHaveCount(
+    0,
+  );
 });

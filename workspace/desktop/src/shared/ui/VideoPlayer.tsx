@@ -22,6 +22,7 @@ import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import { MODAL_BACKDROP_BLUR_CLASS } from "@/shared/ui/modalBackdrop";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
@@ -102,6 +103,9 @@ type TimecodedComment = {
 const TIMECODE_RE =
   /^\s*\[((?:(?:\d{1,2}:)?\d{1,2}:)?\d{2}(?:\.\d{1,3})?)\]\s*/;
 const QUICK_REACTIONS = ["😂", "😍", "😮", "🙌", "👍", "👎"];
+const DEFAULT_PLAYBACK_SPEED = 1;
+const INLINE_SPEED_CONTROL_MIN_WIDTH = 220;
+const PLAYBACK_SPEEDS = [2, 1.75, 1.5, 1.25, 1, 0.75, 0.5, 0.25];
 
 /**
  * Frosted-glass backing layer for floating media controls. The parent must
@@ -161,6 +165,14 @@ function formatCommentTimecode(seconds: number): string {
     fractionalDigits: 1,
     trimZeroFraction: true,
   });
+}
+
+function formatPlaybackSpeed(speed: number): string {
+  return `${speed}x`;
+}
+
+function isPlaybackSpeedOption(speed: number): boolean {
+  return PLAYBACK_SPEEDS.some((option) => option === speed);
 }
 
 function parseTimecode(value: string): number | null {
@@ -603,6 +615,82 @@ function VolumeControl({
   );
 }
 
+function PlaybackSpeedControl({
+  playbackSpeed,
+  onPlaybackSpeedChange,
+  size = "inline",
+  testId,
+}: {
+  playbackSpeed: number;
+  onPlaybackSpeedChange: (speed: number) => void;
+  size?: "inline" | "review";
+  testId: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const label = formatPlaybackSpeed(playbackSpeed);
+  const triggerSizeClass =
+    size === "review"
+      ? "h-8 min-w-11 rounded-lg px-2 text-xs"
+      : "h-7 min-w-10 rounded-md px-1.5 text-2xs";
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          aria-label={`Playback speed: ${label}`}
+          className={cn(
+            "flex shrink-0 items-center justify-center font-semibold tabular-nums text-white transition-colors hover:bg-white/15 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-white/60",
+            triggerSizeClass,
+            open && "bg-white/15",
+          )}
+          data-testid={testId}
+          type="button"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {label}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-28 border-white/10 bg-black/85 p-1 text-white backdrop-blur-xl"
+        data-testid={`${testId}-menu`}
+        side="top"
+        sideOffset={8}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="px-2 pb-1 pt-1 text-2xs font-medium text-white/55">
+          Speed
+        </div>
+        <div className="grid gap-0.5">
+          {PLAYBACK_SPEEDS.map((speed) => {
+            const speedLabel = formatPlaybackSpeed(speed);
+            const selected = speed === playbackSpeed;
+            return (
+              <button
+                aria-pressed={selected}
+                className={cn(
+                  "flex h-8 w-full items-center justify-between rounded-lg px-2 text-left text-xs font-medium tabular-nums text-white transition-colors hover:bg-white/15 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-white/60",
+                  selected && "bg-white/15",
+                )}
+                key={speed}
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onPlaybackSpeedChange(speed);
+                  setOpen(false);
+                }}
+              >
+                <span>{speedLabel}</span>
+                {selected ? <Check className="h-3.5 w-3.5" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function VideoPlayer({
   src,
   poster,
@@ -613,6 +701,7 @@ export function VideoPlayer({
 }: VideoPlayerProps) {
   const persistedReviewKey = reviewKey ?? src;
   const videoRef = React.useRef<HTMLVideoElement>(null);
+  const inlineSurfaceRef = React.useRef<HTMLDivElement | null>(null);
   const reviewVideoRef = React.useRef<HTMLVideoElement>(null);
   const [started, setStarted] = React.useState(false);
   const [isPlaying, setIsPlaying] = React.useState(false);
@@ -625,6 +714,9 @@ export function VideoPlayer({
   const [duration, setDuration] = React.useState(durationSeconds ?? 0);
   const [volume, setVolume] = React.useState(1);
   const [muted, setMuted] = React.useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = React.useState(
+    DEFAULT_PLAYBACK_SPEED,
+  );
   const [naturalAspectRatio, setNaturalAspectRatio] = React.useState<
     number | null
   >(null);
@@ -635,6 +727,9 @@ export function VideoPlayer({
     () => getReviewPlaybackPosition(persistedReviewKey) ?? 0,
   );
   const [pendingSeekSeconds, setPendingSeekSeconds] = React.useState<
+    number | null
+  >(null);
+  const [inlineRenderedWidth, setInlineRenderedWidth] = React.useState<
     number | null
   >(null);
 
@@ -656,6 +751,7 @@ export function VideoPlayer({
     setIsPlaying(false);
     setIsBuffering(false);
     setHasError(false);
+    setPlaybackSpeed(DEFAULT_PLAYBACK_SPEED);
     setReviewOpenState(isVideoReviewOpen(persistedReviewKey));
     setReviewCurrentTimeState(
       getReviewPlaybackPosition(persistedReviewKey) ?? 0,
@@ -704,6 +800,53 @@ export function VideoPlayer({
     },
     [persistedReviewKey],
   );
+
+  const applyPlaybackSpeed = React.useCallback(
+    (video: HTMLVideoElement | null) => {
+      if (!video) return;
+      video.playbackRate = playbackSpeed;
+    },
+    [playbackSpeed],
+  );
+
+  React.useEffect(() => {
+    applyPlaybackSpeed(videoRef.current);
+    applyPlaybackSpeed(reviewVideoRef.current);
+  }, [applyPlaybackSpeed]);
+
+  React.useLayoutEffect(() => {
+    const element = inlineSurfaceRef.current;
+    if (!element) {
+      setInlineRenderedWidth(null);
+      return;
+    }
+
+    const updateWidth = () => {
+      const width = element.getBoundingClientRect().width;
+      setInlineRenderedWidth((currentWidth) =>
+        currentWidth !== null && Math.abs(currentWidth - width) < 0.5
+          ? currentWidth
+          : width,
+      );
+    };
+
+    updateWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const handlePlaybackSpeedChange = React.useCallback((speed: number) => {
+    if (isPlaybackSpeedOption(speed)) {
+      setPlaybackSpeed(speed);
+    }
+  }, []);
 
   useSmoothPlaybackTime(videoRef, isPlaying && !reviewOpen, setCurrentTime);
   const inlineSeek = useThrottledVideoSeek(videoRef);
@@ -818,10 +961,14 @@ export function VideoPlayer({
     [reviewContext?.comments],
   );
   const inlineAspectRatio = aspectRatio ?? naturalAspectRatio ?? 16 / 9;
+  const inlineSurfaceWidth = getInlineSurfaceWidth(inlineAspectRatio);
+  const showInlineSpeedControl =
+    inlineRenderedWidth !== null &&
+    inlineRenderedWidth >= INLINE_SPEED_CONTROL_MIN_WIDTH;
   const inlineSurfaceStyle: React.CSSProperties = {
     aspectRatio: String(inlineAspectRatio),
     maxHeight: 256,
-    width: getInlineSurfaceWidth(inlineAspectRatio),
+    width: inlineSurfaceWidth,
   };
   const showControls = started && !hasError;
 
@@ -832,6 +979,7 @@ export function VideoPlayer({
         data-testid="video-player"
       >
         <div
+          ref={inlineSurfaceRef}
           className="group/video relative isolate max-w-full overflow-hidden rounded-2xl border border-border/70 bg-black"
           style={inlineSurfaceStyle}
         >
@@ -865,6 +1013,7 @@ export function VideoPlayer({
                 videoHeight,
                 videoWidth,
               } = event.currentTarget;
+              applyPlaybackSpeed(event.currentTarget);
               handleMediaDuration(mediaDuration);
               const savedSeconds =
                 getInlinePlaybackPosition(persistedReviewKey);
@@ -989,6 +1138,13 @@ export function VideoPlayer({
                 >
                   {formatTimecode(duration)}
                 </span>
+                {showInlineSpeedControl ? (
+                  <PlaybackSpeedControl
+                    playbackSpeed={playbackSpeed}
+                    testId="video-inline-speed"
+                    onPlaybackSpeedChange={handlePlaybackSpeedChange}
+                  />
+                ) : null}
                 <VolumeControl
                   muted={muted}
                   volume={volume}
@@ -1023,8 +1179,10 @@ export function VideoPlayer({
         onDurationChange={handleMediaDuration}
         onOpenChange={handleReviewOpenChange}
         onPendingSeekConsumed={handlePendingSeekConsumed}
+        onPlaybackSpeedChange={handlePlaybackSpeedChange}
         open={reviewOpen}
         pendingSeekSeconds={pendingSeekSeconds}
+        playbackSpeed={playbackSpeed}
         poster={poster}
         reviewContext={reviewContext}
         src={src}
@@ -1043,8 +1201,10 @@ function VideoReviewDialog({
   onDurationChange,
   onOpenChange,
   onPendingSeekConsumed,
+  onPlaybackSpeedChange,
   open,
   pendingSeekSeconds,
+  playbackSpeed,
   poster,
   reviewContext,
   src,
@@ -1058,8 +1218,10 @@ function VideoReviewDialog({
   onDurationChange: (seconds: number) => void;
   onOpenChange: (open: boolean) => void;
   onPendingSeekConsumed: () => void;
+  onPlaybackSpeedChange: (speed: number) => void;
   open: boolean;
   pendingSeekSeconds: number | null;
+  playbackSpeed: number;
   poster?: string;
   reviewContext?: VideoReviewContext;
   src: string;
@@ -1300,6 +1462,13 @@ function VideoReviewDialog({
     [videoRef],
   );
 
+  React.useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    if (!video) return;
+    video.playbackRate = playbackSpeed;
+  }, [open, playbackSpeed, videoRef]);
+
   const postContent = React.useCallback(
     async (
       content: string,
@@ -1538,6 +1707,7 @@ function VideoReviewDialog({
                       setIsPlaying(false);
                     }}
                     onLoadedMetadata={(event) => {
+                      event.currentTarget.playbackRate = playbackSpeed;
                       onDurationChange(event.currentTarget.duration);
                       const { videoHeight, videoWidth } = event.currentTarget;
                       if (videoWidth > 0 && videoHeight > 0) {
@@ -1635,6 +1805,12 @@ function VideoReviewDialog({
                     >
                       {formatTimecode(visibleDuration)}
                     </span>
+                    <PlaybackSpeedControl
+                      playbackSpeed={playbackSpeed}
+                      size="review"
+                      testId="video-review-speed"
+                      onPlaybackSpeedChange={onPlaybackSpeedChange}
+                    />
                     <VolumeControl
                       expanded
                       muted={muted}
