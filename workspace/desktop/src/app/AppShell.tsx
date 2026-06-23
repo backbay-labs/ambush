@@ -53,6 +53,7 @@ import {
   resolveSlotSound,
 } from "@/features/notifications/lib/sound";
 import { PreventSleepProvider } from "@/features/agents/usePreventSleep";
+import { requestOpenCreateAgent } from "@/features/agents/openCreateAgentEvent";
 import {
   usePresenceSession,
   usePresenceSubscription,
@@ -100,10 +101,8 @@ const LazySettingsScreen = React.lazy(async () => {
 
 export function AppShell() {
   useWebviewZoomShortcuts();
-
   const workspacesHook = useWorkspaces();
   const [isAddWorkspaceOpen, setIsAddWorkspaceOpen] = React.useState(false);
-
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
   const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
@@ -143,7 +142,6 @@ export function AppShell() {
   )
     ? locationSearchSection
     : DEFAULT_SETTINGS_SECTION;
-
   const startupReady = useDeferredStartup();
 
   const identityQuery = useIdentityQuery();
@@ -629,12 +627,10 @@ export function AppShell() {
   }, []);
 
   const handleOpenNewDm = React.useCallback(() => setIsNewDmOpen(true), []);
-
   const handleOpenCreateChannel = React.useCallback(
     () => setIsCreateChannelOpen(true),
     [],
   );
-
   React.useLayoutEffect(() => {
     if (settingsOpen) {
       return;
@@ -689,13 +685,11 @@ export function AppShell() {
     goHome,
     settingsOpen,
   ]);
-
   useSettingsShortcuts({
     onClose: handleCloseSettings,
     onOpenSettings: handleOpenSettings,
     open: settingsOpen,
   });
-
   useMarkAsReadShortcuts({
     activeChannelId: activeChannel?.id ?? null,
     activeChannelLastMessageAt: activeChannel?.lastMessageAt,
@@ -848,6 +842,9 @@ export function AppShell() {
                           onUpdateWorkspace={workspacesHook.updateWorkspace}
                           onRemoveWorkspace={workspacesHook.removeWorkspace}
                           onSwitchWorkspace={workspacesHook.switchWorkspace}
+                          onCreateAgent={() =>
+                            void goAgents().then(requestOpenCreateAgent)
+                          }
                           selfPresenceStatus={presenceSession.currentStatus}
                           workspaces={workspacesHook.workspaces}
                           onCreateChannel={async ({
