@@ -331,16 +331,16 @@ export function InboxListPane({
       <TopChromeInsetHeader flush>
         <div
           className={cn(
-            "px-3 py-1 transition-[padding] duration-200 ease-linear",
-            clearCollapsedTopChromeControls && "pl-[168px]",
+            "px-5 py-2 transition-[padding] duration-200 ease-linear",
+            clearCollapsedTopChromeControls && "pl-[184px]",
           )}
         >
-          <div className="flex w-full min-w-0 items-center justify-between gap-3">
+          <div className="flex min-h-10 w-full min-w-0 items-center justify-between gap-3">
             <Popover>
               <PopoverTrigger asChild>
                 <button
                   aria-label="Inbox options"
-                  className={INBOX_HEADER_ICON_BUTTON_CLASS}
+                  className={cn(INBOX_HEADER_ICON_BUTTON_CLASS, "-ml-4")}
                   data-testid="inbox-options-trigger"
                   type="button"
                 >
@@ -390,7 +390,10 @@ export function InboxListPane({
                 <DropdownMenuTrigger asChild>
                   <button
                     aria-label={`Filter inbox: ${activeFilter?.label ?? "All"}`}
-                    className={cn(INBOX_HEADER_ICON_BUTTON_CLASS, "relative")}
+                    className={cn(
+                      INBOX_HEADER_ICON_BUTTON_CLASS,
+                      "relative -mr-4",
+                    )}
                     data-testid="inbox-filter-trigger"
                     type="button"
                   >
