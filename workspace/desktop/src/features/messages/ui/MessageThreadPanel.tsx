@@ -63,6 +63,7 @@ type MessageThreadPanelProps = {
   onEditLastOwnMessage?: () => boolean;
   onEditSave?: (content: string, mediaTags?: string[][]) => Promise<void>;
   onMarkUnread?: (message: TimelineMessage) => void;
+  onMarkRead?: (message: TimelineMessage) => void;
   onExpandReplies: (message: TimelineMessage) => void;
   onScrollTargetResolved: () => void;
   onSelectReplyTarget: (message: TimelineMessage) => void;
@@ -356,6 +357,7 @@ export function MessageThreadPanel({
   onEditSave,
   onFollowThread,
   onMarkUnread,
+  onMarkRead,
   onExpandReplies,
   onScrollTargetResolved,
   onSelectReplyTarget,
@@ -664,6 +666,7 @@ export function MessageThreadPanel({
                 onFollowThread ? (_msg) => onFollowThread() : undefined
               }
               onMarkUnread={onMarkUnread}
+              onMarkRead={onMarkRead}
               onToggleReaction={onToggleReaction}
               onUnfollowThread={
                 onUnfollowThread ? (_msg) => onUnfollowThread() : undefined
@@ -790,6 +793,7 @@ export function MessageThreadPanel({
                             : undefined
                         }
                         onMarkUnread={onMarkUnread}
+                        onMarkRead={onMarkRead}
                         onReply={onSelectReplyTarget}
                         onToggleReaction={onToggleReaction}
                         profiles={profiles}

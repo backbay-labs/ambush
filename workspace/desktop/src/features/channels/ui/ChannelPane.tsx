@@ -99,6 +99,7 @@ type ChannelPaneProps = {
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string, mediaTags?: string[][]) => Promise<void>;
   onMarkUnread?: (message: TimelineMessage) => void;
+  onMarkRead?: (message: TimelineMessage) => void;
   onExpandThreadReplies: (message: TimelineMessage) => void;
   onJoinChannel?: () => Promise<void>;
   onOpenAgentSession: (pubkey: string) => void;
@@ -205,6 +206,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onEditSave,
   onFollowThread,
   onMarkUnread,
+  onMarkRead,
   onExpandThreadReplies,
   onJoinChannel,
   onOpenAgentSession,
@@ -678,6 +680,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             onDelete={onDelete}
             onEdit={onEdit}
             onMarkUnread={onMarkUnread}
+            onMarkRead={onMarkRead}
             onReply={activeChannel?.archivedAt ? undefined : onOpenThread}
             channelName={activeChannel?.name}
             channelType={activeChannel?.channelType ?? null}
@@ -818,6 +821,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 onEditSave={onEditSave}
                 onFollowThread={onFollowThread}
                 onMarkUnread={onMarkUnread}
+                onMarkRead={onMarkRead}
                 onExpandReplies={onExpandThreadReplies}
                 onSelectReplyTarget={onSelectThreadReplyTarget}
                 onSend={onSendThreadReply}

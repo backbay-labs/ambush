@@ -29,6 +29,7 @@ import {
   useOpenDmMutation,
 } from "@/features/channels/hooks";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
+import { msgContextKey } from "@/features/channels/readState/readStateFormat";
 import { useMembershipNotifications } from "@/features/channels/useMembershipNotifications";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { getThreadReference } from "@/features/messages/lib/threading";
@@ -367,6 +368,21 @@ export function AppShell() {
     },
     [markChannelRead],
   );
+
+  // Per-message read frontier (LP4 v3): effective(msg:<id>) folds through the
+  // channel, so a channel-read clears messages older than the top-level frontier.
+  const getMessageReadAt = React.useCallback(
+    (messageId: string) => getChannelReadAt(msgContextKey(messageId)),
+    [getChannelReadAt],
+  );
+  const markMessageRead = React.useCallback(
+    (messageId: string, timestamp: number) =>
+      markChannelRead(
+        msgContextKey(messageId),
+        new Date(timestamp * 1_000).toISOString(),
+      ),
+    [markChannelRead],
+  );
   const threadActivityFeedItems = useThreadActivityFeedItems(
     threadActivityItems,
     mutedRootIds,
@@ -479,9 +495,10 @@ export function AppShell() {
     [goSettings],
   );
 
-  const handleCloseSettings = React.useCallback(() => {
-    closeSettings();
-  }, [closeSettings]);
+  const handleCloseSettings = React.useCallback(
+    () => closeSettings(),
+    [closeSettings],
+  );
 
   // Section switches rewrite the settings entry rather than stacking one
   // history entry per section, so back always exits settings in one step.
@@ -605,13 +622,12 @@ export function AppShell() {
     };
   }, []);
 
-  const handleOpenNewDm = React.useCallback(() => {
-    setIsNewDmOpen(true);
-  }, []);
+  const handleOpenNewDm = React.useCallback(() => setIsNewDmOpen(true), []);
 
-  const handleOpenCreateChannel = React.useCallback(() => {
-    setIsCreateChannelOpen(true);
-  }, []);
+  const handleOpenCreateChannel = React.useCallback(
+    () => setIsCreateChannelOpen(true),
+    [],
+  );
 
   React.useLayoutEffect(() => {
     if (settingsOpen) {
@@ -721,12 +737,12 @@ export function AppShell() {
             markChannelRead,
             markChannelUnread,
             openCreateChannel: handleOpenCreateChannel,
-            openChannelManagement: () => {
-              setIsChannelManagementOpen(true);
-            },
+            openChannelManagement: () => setIsChannelManagementOpen(true),
             getChannelReadAt,
             getThreadReadAt,
             markThreadRead,
+            getMessageReadAt,
+            markMessageRead,
             readStateVersion,
             setContextParentResolver,
             followThread: handleFollowThread,

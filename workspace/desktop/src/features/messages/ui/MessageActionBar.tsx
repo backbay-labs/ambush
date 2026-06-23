@@ -6,6 +6,7 @@ import {
   CornerUpLeft,
   EllipsisVertical,
   Link2,
+  MailCheck,
   MailOpen,
   Pencil,
   SmilePlus,
@@ -77,6 +78,7 @@ function MoreActionsMenu({
   onEdit,
   onFollowThread,
   onMarkUnread,
+  onMarkRead,
   onOpenChange,
   onRemindLater,
   onUnfollowThread,
@@ -91,6 +93,7 @@ function MoreActionsMenu({
   onEdit?: (message: TimelineMessage) => void;
   onFollowThread?: (message: TimelineMessage) => void;
   onMarkUnread?: (message: TimelineMessage) => void;
+  onMarkRead?: (message: TimelineMessage) => void;
   onOpenChange: (open: boolean) => void;
   onRemindLater?: (message: TimelineMessage) => void;
   onUnfollowThread?: (message: TimelineMessage) => void;
@@ -162,6 +165,17 @@ function MoreActionsMenu({
             >
               <MailOpen className="h-4 w-4" />
               Mark unread
+            </DropdownMenuItem>
+          ) : null}
+
+          {onMarkRead ? (
+            <DropdownMenuItem
+              onClick={() => {
+                onMarkRead(message);
+              }}
+            >
+              <MailCheck className="h-4 w-4" />
+              Mark read
             </DropdownMenuItem>
           ) : null}
 
@@ -333,6 +347,7 @@ export function MessageActionBar({
   onEdit,
   onFollowThread,
   onMarkUnread,
+  onMarkRead,
   onReactionBadgeBurstRequest,
   onReactionSelect,
   onRemindLater,
@@ -350,6 +365,7 @@ export function MessageActionBar({
   onEdit?: (message: TimelineMessage) => void;
   onFollowThread?: (message: TimelineMessage) => void;
   onMarkUnread?: (message: TimelineMessage) => void;
+  onMarkRead?: (message: TimelineMessage) => void;
   onReactionBadgeBurstRequest?: (emoji: string) => void;
   onReactionSelect?: (emoji: string) => Promise<void>;
   onRemindLater?: (message: TimelineMessage) => void;
@@ -382,6 +398,7 @@ export function MessageActionBar({
     Boolean(onEdit) ||
     Boolean(onDelete) ||
     Boolean(onMarkUnread) ||
+    Boolean(onMarkRead) ||
     Boolean(onFollowThread) ||
     Boolean(onUnfollowThread) ||
     Boolean(onRemindLater) ||
@@ -529,6 +546,7 @@ export function MessageActionBar({
               onEdit={onEdit}
               onFollowThread={onFollowThread}
               onMarkUnread={onMarkUnread}
+              onMarkRead={onMarkRead}
               onOpenChange={setIsDropdownOpen}
               onRemindLater={onRemindLater}
               onUnfollowThread={onUnfollowThread}

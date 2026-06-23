@@ -514,14 +514,23 @@ test.describe("thread unread indicator screenshots", () => {
       path: `${SHOTS}/05-thread-in-panel-subtree-badge.png`,
     });
 
-    // Expanding p marks its whole subtree read; the descendant-inclusive gate
-    // (Phase 2.5) drops the badge from p and every revealed row beneath it.
+    // v3 contract: expanding a branch marks only its REVEALED direct children
+    // read, never the whole subtree. The unread replies sit two levels under p
+    // (p -> c -> c2 -> c2-child), so a single expand of p only reveals c — the
+    // deeper unread stays collapsed and the badge survives. The badge clears
+    // only as each level is individually revealed: expand p (reveals c, badge
+    // still counts c2 + c2-child), expand c (reveals c2, read), expand c2
+    // (reveals c2-child, read) -> badge clears to 0.
     await expandReply(page, p.id);
-    await expect(inPanelBadge).toHaveCount(0);
+    await expect(inPanelBadge).toBeVisible();
 
     await page.screenshot({
       path: `${SHOTS}/06-thread-expand-clears-subtree-badge.png`,
     });
+
+    await expandReply(page, c.id);
+    await expandReply(page, c2.id);
+    await expect(inPanelBadge).toHaveCount(0);
   });
 
   test("06-in-panel-badge-bumps-on-live-reply", async ({ page }) => {
@@ -635,11 +644,13 @@ test.describe("thread unread indicator screenshots", () => {
     await page.getByTestId("channel-random").click();
     await expect(page.getByTestId("chat-title")).toHaveText("random");
 
-    // Each branch gains its own unread reply. Badges are computed against the
-    // open-time frozen frontier snapshot, and expand-clear is driven by the
-    // per-branch `expandedSubtreeReplyIds` gate — NOT a cross-branch live
-    // marker sweep. So expanding one branch clears only its OWN badge; the
-    // sibling's badge survives until that branch is expanded too.
+    // Each branch gains its own unread reply, nested one level under the
+    // branch's child (branchNew -> newChild -> unread; branchOld -> oldChild ->
+    // unread). Under the v3 per-message contract, expanding a branch marks only
+    // its REVEALED direct children read — so revealing newChild does NOT reach
+    // the unread reply beneath it. Clearing a branch's badge requires expanding
+    // down to the level the unread actually sits at; the sibling branch is
+    // never touched, so its badge survives independently.
     const base = unreadTimestamp();
     await emitMockMessage(page, "general", "Unread in older branch", {
       parentEventId: oldChild.id,
@@ -667,19 +678,23 @@ test.describe("thread unread indicator screenshots", () => {
       path: `${SHOTS}/08-two-sibling-badges-before-expand.png`,
     });
 
-    // Expand the LATER branch. Only its OWN badge clears, via the
-    // `expandedSubtreeReplyIds` gate against the frozen open-time frontier.
-    // The older sibling's badge SURVIVES — the design does not sweep across
-    // branches off a live marker.
+    // Expand the LATER branch down to where its unread sits: revealing
+    // branchNew shows newChild (still collapsed over the unread reply, so the
+    // badge survives), then revealing newChild marks the unread reply read and
+    // clears branchNew's badge. The older sibling is never expanded, so its
+    // badge survives — per-message markers isolate each branch.
     await expandReply(page, branchNew.id);
+    await expect(inPanelBadges).toHaveCount(2);
+    await expandReply(page, newChild.id);
     await expect(inPanelBadges).toHaveCount(1);
 
     await page.screenshot({
       path: `${SHOTS}/09-expand-clears-own-branch-sibling-survives.png`,
     });
 
-    // Expanding the older branch clears the last remaining badge.
+    // Expanding the older branch to its unread depth clears the last badge.
     await expandReply(page, branchOld.id);
+    await expandReply(page, oldChild.id);
     await expect(inPanelBadges).toHaveCount(0);
 
     await page.screenshot({
@@ -966,11 +981,17 @@ test.describe("thread unread indicator screenshots", () => {
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("2");
 
-    // Opening a notified thread advances the frontier to the full subtree max,
-    // so it consumes the direct reply A AND the nested mention B at once — the
-    // badge clears to 0 in place without drilling into A's collapsed branch.
+    // v3 contract: opening a thread marks only its REVEALED direct children
+    // read, never the whole subtree. Opening Alice's thread reveals direct
+    // child A (read), but nested mention B stays collapsed under A — so the
+    // root badge drops to 1, not 0. Expanding A reveals B, marks it read, and
+    // clears the badge. The badge predicate reads the live per-message marker,
+    // not a subtree-max open ceiling.
     await aliceSummary.click();
     await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+    await expect(badge).toContainText("1");
+
+    await expandReply(page, replyA?.id ?? "");
     await expect(badge).toHaveCount(0);
 
     await page.getByTestId("message-thread-close").click();

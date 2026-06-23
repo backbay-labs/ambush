@@ -57,6 +57,7 @@ type MessageTimelineProps = {
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onMarkUnread?: (message: TimelineMessage) => void;
+  onMarkRead?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   isSendingVideoReviewComment?: boolean;
   onSendVideoReviewComment?: (
@@ -151,6 +152,7 @@ const MessageTimelineBase = React.forwardRef<
     onDelete,
     onEdit,
     onMarkUnread,
+    onMarkRead,
     onReply,
     channelName,
     channelType,
@@ -538,6 +540,7 @@ const MessageTimelineBase = React.forwardRef<
                     onDelete={onDelete}
                     onEdit={onEdit}
                     onMarkUnread={onMarkUnread}
+                    onMarkRead={onMarkRead}
                     onReply={onReply}
                     isSendingVideoReviewComment={isSendingVideoReviewComment}
                     onSendVideoReviewComment={onSendVideoReviewComment}

@@ -66,6 +66,7 @@ export const MessageRow = React.memo(
     onEdit,
     onFollowThread,
     onMarkUnread,
+    onMarkRead,
     onToggleReaction,
     onReply,
     onUnfollowThread,
@@ -104,6 +105,7 @@ export const MessageRow = React.memo(
     onEdit?: (message: TimelineMessage) => void;
     onFollowThread?: (message: TimelineMessage) => void;
     onMarkUnread?: (message: TimelineMessage) => void;
+    onMarkRead?: (message: TimelineMessage) => void;
     onToggleReaction?: (
       message: TimelineMessage,
       emoji: string,
@@ -349,6 +351,7 @@ export const MessageRow = React.memo(
           onEdit={onEdit}
           onFollowThread={onFollowThread}
           onMarkUnread={onMarkUnread}
+          onMarkRead={onMarkRead}
           onReactionBadgeBurstRequest={
             reactionPending ? undefined : setBadgeBurstEmoji
           }
