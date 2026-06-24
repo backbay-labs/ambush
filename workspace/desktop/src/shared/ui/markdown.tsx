@@ -1118,9 +1118,10 @@ function ImageBlock({
 
   const spoilerMediaStyle = hiddenSpoilerMediaSize
     ? ({
-        "--buzz-spoiler-media-height": `${hiddenSpoilerMediaSize.height}px`,
+        "--buzz-spoiler-media-aspect-ratio": `${hiddenSpoilerMediaSize.width} / ${hiddenSpoilerMediaSize.height}`,
         "--buzz-spoiler-media-width": `${hiddenSpoilerMediaSize.width}px`,
-        height: `${hiddenSpoilerMediaSize.height}px`,
+        aspectRatio: `${hiddenSpoilerMediaSize.width} / ${hiddenSpoilerMediaSize.height}`,
+        height: "auto",
         width: `${hiddenSpoilerMediaSize.width}px`,
       } as React.CSSProperties)
     : undefined;
@@ -1202,7 +1203,7 @@ function ImageBlock({
         aria-hidden={isHiddenInSpoiler ? true : undefined}
         aria-label={alt?.trim() ? `Zoom image: ${alt}` : "Zoom image"}
         className={cn(
-          "mt-1 inline-block max-w-full cursor-zoom-in rounded-xl border-0 bg-transparent p-0 text-left align-top focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/50",
+          "mt-1 inline-block min-w-0 max-w-full cursor-zoom-in rounded-xl border-0 bg-transparent p-0 text-left align-top focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/50",
           lightboxBox && "opacity-0",
         )}
         data-testid="message-image-lightbox-trigger"
@@ -1214,7 +1215,7 @@ function ImageBlock({
       >
         <img
           alt={alt}
-          className="block max-h-64 max-w-sm rounded-xl object-contain"
+          className="block h-auto max-h-64 max-w-[min(24rem,100%)] rounded-xl object-contain"
           data-spoiler-media-size={hiddenSpoilerMediaSize ? "" : undefined}
           height={intrinsicDimensions?.height}
           ref={imageRef}
@@ -1981,7 +1982,7 @@ function createMarkdownComponents(
       }
       const entry = src ? imetaByUrl?.get(src) : undefined;
       return (
-        <span data-block-media="" className="block">
+        <span data-block-media="" className="block min-w-0 max-w-full">
           <ImageBlock
             alt={alt}
             dim={entry?.dim}
@@ -2005,7 +2006,7 @@ function createMarkdownComponents(
 
       if (isImageOnlyParagraph(childArray)) {
         return (
-          <div className="mt-1 grid max-w-lg grid-cols-2 gap-1.5 [&_br]:hidden [&_[data-block-media]]:mt-0 [&_[data-block-media]]:max-w-none [&_img]:mt-0 [&_img]:w-full [&_img]:max-w-full">
+          <div className="mt-1 grid w-full min-w-0 max-w-lg grid-cols-2 gap-1.5 [&_br]:hidden [&_[data-block-media]]:mt-0 [&_[data-block-media]]:max-w-none [&_img]:mt-0 [&_img]:w-full [&_img]:max-w-full">
             {imageChildren}
           </div>
         );
