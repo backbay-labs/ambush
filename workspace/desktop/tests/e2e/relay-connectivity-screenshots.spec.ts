@@ -101,8 +101,10 @@ test.describe("relay connectivity screenshots", () => {
     await expect(page.getByTestId("chat-title")).toHaveText("general");
     await page.getByTestId("channel-management-trigger").click();
     await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
+    await page.getByTestId("channel-canvas-ingress").click();
 
-    // ChannelCanvas shows the destructive error paragraph when the query fails.
+    // ChannelCanvas shows the destructive error paragraph in the drill-in view
+    // when the query fails.
     const canvasSection = page.getByTestId("channel-canvas-section");
     await canvasSection.scrollIntoViewIfNeeded();
     await expect(

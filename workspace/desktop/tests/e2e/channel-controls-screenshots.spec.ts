@@ -14,6 +14,13 @@ async function openManagementSheet(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
 }
 
+async function openEditDialog(page: import("@playwright/test").Page) {
+  await page.getByTestId("channel-management-edit").click();
+  await expect(
+    page.getByRole("dialog", { name: "Edit channel" }),
+  ).toBeVisible();
+}
+
 async function settle(page: import("@playwright/test").Page) {
   await page.evaluate(() =>
     Promise.all(document.getAnimations().map((a) => a.finished)),
@@ -26,6 +33,7 @@ test.describe("channel controls screenshots", () => {
   }) => {
     await installMockBridge(page);
     await openManagementSheet(page);
+    await openEditDialog(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
@@ -43,6 +51,7 @@ test.describe("channel controls screenshots", () => {
   test("02 — Private toggled on", async ({ page }) => {
     await installMockBridge(page);
     await openManagementSheet(page);
+    await openEditDialog(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
@@ -52,7 +61,7 @@ test.describe("channel controls screenshots", () => {
     ).toBeChecked();
     // Save button enables once the visibility actually changed.
     await expect(
-      page.getByTestId("channel-management-save-lifecycle"),
+      page.getByTestId("channel-management-save-changes"),
     ).toBeEnabled();
     await settle(page);
 
@@ -62,6 +71,7 @@ test.describe("channel controls screenshots", () => {
   test("03 — Ephemeral on with friendly timeout field", async ({ page }) => {
     await installMockBridge(page);
     await openManagementSheet(page);
+    await openEditDialog(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
@@ -71,7 +81,7 @@ test.describe("channel controls screenshots", () => {
     await expect(ttl).toBeVisible();
     await ttl.fill("1d12h");
     await expect(
-      page.getByTestId("channel-management-save-lifecycle"),
+      page.getByTestId("channel-management-save-changes"),
     ).toBeEnabled();
     await settle(page);
 
@@ -83,6 +93,7 @@ test.describe("channel controls screenshots", () => {
   }) => {
     await installMockBridge(page);
     await openManagementSheet(page);
+    await openEditDialog(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
@@ -92,7 +103,7 @@ test.describe("channel controls screenshots", () => {
     await ttl.fill("soon");
     await expect(ttl).toHaveAttribute("aria-invalid", "true");
     await expect(
-      page.getByTestId("channel-management-save-lifecycle"),
+      page.getByTestId("channel-management-save-changes"),
     ).toBeDisabled();
     await settle(page);
 
@@ -122,30 +133,28 @@ test.describe("channel controls screenshots", () => {
     await sheet.screenshot({ path: `${SHOTS}/06-management-sheet.png` });
   });
 
-  test("07 — saving lifecycle leaves details save idle", async ({ page }) => {
+  test("07 — saving lifecycle uses unified save", async ({ page }) => {
     await installMockBridge(page, { updateChannelDelayMs: 500 });
     await openManagementSheet(page);
+    await openEditDialog(page);
 
     const sheet = page.getByTestId("channel-management-sheet");
     await page.getByTestId("channel-management-ephemeral-toggle").click();
     await expect(
-      page.getByTestId("channel-management-save-lifecycle"),
+      page.getByTestId("channel-management-save-changes"),
     ).toBeEnabled();
 
-    await page.getByTestId("channel-management-save-lifecycle").click();
+    await page.getByTestId("channel-management-save-changes").click();
     await expect(
-      page.getByTestId("channel-management-save-lifecycle"),
+      page.getByTestId("channel-management-save-changes"),
     ).toHaveText("Saving...");
-    await expect(
-      page.getByTestId("channel-management-save-details"),
-    ).toHaveText("Save details");
     await sheet.screenshot({
-      path: `${SHOTS}/07-lifecycle-saving-details-idle.png`,
+      path: `${SHOTS}/07-lifecycle-saving-unified-save.png`,
     });
 
     await expect(
-      page.getByTestId("channel-management-save-lifecycle"),
-    ).toHaveText("Save visibility");
+      page.getByRole("dialog", { name: "Edit channel" }),
+    ).toHaveCount(0);
   });
 
   test("08 — saved ephemeral lifecycle is reflected after reopen", async ({
@@ -153,19 +162,21 @@ test.describe("channel controls screenshots", () => {
   }) => {
     await installMockBridge(page);
     await openManagementSheet(page);
+    await openEditDialog(page);
 
     await page.getByTestId("channel-management-private-toggle").click();
     await page.getByTestId("channel-management-ephemeral-toggle").click();
-    await page.getByTestId("channel-management-save-lifecycle").click();
+    await page.getByTestId("channel-management-save-changes").click();
     await expect(
-      page.getByTestId("channel-management-save-lifecycle"),
-    ).toHaveText("Save visibility");
+      page.getByRole("dialog", { name: "Edit channel" }),
+    ).toHaveCount(0);
 
-    await page.keyboard.press("Escape");
+    await page.getByTestId("channel-management-close").click();
     await expect(
       page.getByTestId("channel-management-sheet"),
     ).not.toBeVisible();
     await page.getByTestId("channel-management-trigger").click();
+    await openEditDialog(page);
 
     const lifecycle = page.getByTestId("channel-management-lifecycle");
     await lifecycle.scrollIntoViewIfNeeded();
