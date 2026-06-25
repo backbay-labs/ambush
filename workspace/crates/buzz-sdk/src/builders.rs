@@ -23,8 +23,6 @@ use crate::{
     ChannelKind, CustomEmoji, DiffMeta, MemberRole, SdkError, ThreadRef, Visibility, VoteDirection,
 };
 
-// ── Internal helpers ─────────────────────────────────────────────────────────
-
 /// Parse a tag slice, mapping errors to `SdkError::InvalidTag`.
 fn tag(parts: &[&str]) -> Result<Tag, SdkError> {
     Tag::parse(parts.iter().copied()).map_err(|e| SdkError::InvalidTag(e.to_string()))
@@ -207,8 +205,6 @@ fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), Sdk
     Ok(())
 }
 
-// ── Builder 1: build_message ─────────────────────────────────────────────────
-
 /// Build a stream message (kind 9).
 ///
 /// - `channel_id`: target channel UUID
@@ -237,8 +233,6 @@ pub fn build_message(
     imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
 }
-
-// ── Builder: build_agent_observer_frame ─────────────────────────────────────
 
 /// Build an encrypted agent observer frame (kind 24200).
 ///
@@ -277,8 +271,6 @@ pub fn build_agent_observer_frame(
     .tags(tags))
 }
 
-// ── Builder 2: build_forum_post ───────────────────────────────────────────────
-
 /// Build a forum post thread root (kind 45001).
 pub fn build_forum_post(
     channel_id: Uuid,
@@ -292,8 +284,6 @@ pub fn build_forum_post(
     imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(45001), content).tags(tags))
 }
-
-// ── Builder 3: build_forum_comment ───────────────────────────────────────────
 
 /// Build a forum comment reply (kind 45003).
 pub fn build_forum_comment(
@@ -310,8 +300,6 @@ pub fn build_forum_comment(
     imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(45003), content).tags(tags))
 }
-
-// ── Builder 4: build_diff_message ────────────────────────────────────────────
 
 /// Build a diff/patch message (kind 40008).
 pub fn build_diff_message(
@@ -383,8 +371,6 @@ pub fn build_diff_message(
     Ok(EventBuilder::new(Kind::Custom(40008), content).tags(tags))
 }
 
-// ── Builder 5: build_edit ────────────────────────────────────────────────────
-
 /// Build an edit event targeting an existing message (kind 40003).
 pub fn build_edit(
     channel_id: Uuid,
@@ -399,8 +385,6 @@ pub fn build_edit(
     Ok(EventBuilder::new(Kind::Custom(40003), new_content).tags(tags))
 }
 
-// ── Builder 6: build_delete_message ──────────────────────────────────────────
-
 /// Build a Buzz-native delete event (kind 9005).
 pub fn build_delete_message(
     channel_id: Uuid,
@@ -412,8 +396,6 @@ pub fn build_delete_message(
     ];
     Ok(EventBuilder::new(Kind::Custom(9005), "").tags(tags))
 }
-
-// ── Builder 7: build_delete_compat ───────────────────────────────────────────
 
 /// Build a NIP-09 deletion event (kind 5). The `h` tag is non-standard for
 /// NIP-09 but is required so channel-scoped subscriptions observe the delete.
@@ -427,8 +409,6 @@ pub fn build_delete_compat(
     ];
     Ok(EventBuilder::new(Kind::Custom(5), "").tags(tags))
 }
-
-// ── Builder 8: build_vote ────────────────────────────────────────────────────
 
 /// Build a forum vote event (kind 45002). Content is `"+"` or `"-"`.
 pub fn build_vote(
@@ -446,8 +426,6 @@ pub fn build_vote(
     ];
     Ok(EventBuilder::new(Kind::Custom(45002), content).tags(tags))
 }
-
-// ── Builder 9: build_reaction ────────────────────────────────────────────────
 
 /// Build a NIP-25 reaction event (kind 7). Emoji max 64 chars.
 pub fn build_reaction(
@@ -481,15 +459,11 @@ pub fn build_custom_emoji_reaction(
     Ok(EventBuilder::new(Kind::Custom(7), content).tags(tags))
 }
 
-// ── Builder 10: build_remove_reaction ────────────────────────────────────────
-
 /// Build a deletion event targeting a reaction (kind 5).
 pub fn build_remove_reaction(reaction_event_id: nostr::EventId) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["e", &reaction_event_id.to_hex()])?];
     Ok(EventBuilder::new(Kind::Custom(5), "").tags(tags))
 }
-
-// ── Builder: per-user custom emoji set ───────────────────────────────────────
 
 /// d-tag for a member's own custom emoji set. Each member publishes one
 /// user-signed kind:30030 under this d-tag; the workspace palette is the
@@ -519,15 +493,11 @@ pub fn build_custom_emoji_set(emojis: &[CustomEmoji]) -> Result<EventBuilder, Sd
     Ok(EventBuilder::new(Kind::Custom(KIND_EMOJI_SET as u16), "").tags(tags))
 }
 
-// ── Builder 11: build_set_canvas ─────────────────────────────────────────────
-
 /// Build a canvas update event (kind 40100).
 pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
     Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
 }
-
-// ── Builder 12: build_profile ────────────────────────────────────────────────
 
 /// Build a NIP-01 profile metadata event (kind 0).
 ///
@@ -559,8 +529,6 @@ pub fn build_profile(
     Ok(EventBuilder::new(Kind::Custom(0), content).tags([]))
 }
 
-// ── Builder 13: build_add_member ─────────────────────────────────────────────
-
 /// Build a NIP-29 add-member event (kind 9000).
 pub fn build_add_member(
     channel_id: Uuid,
@@ -578,8 +546,6 @@ pub fn build_add_member(
     Ok(EventBuilder::new(Kind::Custom(9000), "").tags(tags))
 }
 
-// ── Builder 14: build_remove_member ──────────────────────────────────────────
-
 /// Build a NIP-29 remove-member event (kind 9001).
 pub fn build_remove_member(
     channel_id: Uuid,
@@ -593,15 +559,11 @@ pub fn build_remove_member(
     Ok(EventBuilder::new(Kind::Custom(9001), "").tags(tags))
 }
 
-// ── Builder 15: build_leave ──────────────────────────────────────────────────
-
 /// Build a NIP-29 leave-request event (kind 9022).
 pub fn build_leave(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
     Ok(EventBuilder::new(Kind::Custom(9022), "").tags(tags))
 }
-
-// ── Builder 16: build_update_channel ─────────────────────────────────────────
 
 /// Build a NIP-29 edit-metadata event for name/about/visibility/ttl (kind 9002).
 ///
@@ -645,8 +607,6 @@ pub fn build_update_channel(
     Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
 }
 
-// ── Builder 17: build_set_topic ──────────────────────────────────────────────
-
 /// Build a NIP-29 edit-metadata event for topic (kind 9002).
 pub fn build_set_topic(channel_id: Uuid, topic: &str) -> Result<EventBuilder, SdkError> {
     let tags = vec![
@@ -656,8 +616,6 @@ pub fn build_set_topic(channel_id: Uuid, topic: &str) -> Result<EventBuilder, Sd
     Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
 }
 
-// ── Builder 18: build_set_purpose ────────────────────────────────────────────
-
 /// Build a NIP-29 edit-metadata event for purpose (kind 9002).
 pub fn build_set_purpose(channel_id: Uuid, purpose: &str) -> Result<EventBuilder, SdkError> {
     let tags = vec![
@@ -666,8 +624,6 @@ pub fn build_set_purpose(channel_id: Uuid, purpose: &str) -> Result<EventBuilder
     ];
     Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
 }
-
-// ── Builder 19: build_create_channel ─────────────────────────────────────────
 
 /// Build a NIP-29 create-group event (kind 9007).
 ///
@@ -698,15 +654,11 @@ pub fn build_create_channel(
     Ok(EventBuilder::new(Kind::Custom(9007), "").tags(tags))
 }
 
-// ── Builder 20: build_join ───────────────────────────────────────────────────
-
 /// Build a NIP-29 join-request event (kind 9021).
 pub fn build_join(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
     Ok(EventBuilder::new(Kind::Custom(9021), "").tags(tags))
 }
-
-// ── Builder 21: build_archive ────────────────────────────────────────────────
 
 /// Build a NIP-29 archive event (kind 9002, `["archived", "true"]`).
 pub fn build_archive(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
@@ -717,8 +669,6 @@ pub fn build_archive(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
 }
 
-// ── Builder 22: build_unarchive ──────────────────────────────────────────────
-
 /// Build a NIP-29 unarchive event (kind 9002, `["archived", "false"]`).
 pub fn build_unarchive(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![
@@ -728,15 +678,11 @@ pub fn build_unarchive(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     Ok(EventBuilder::new(Kind::Custom(9002), "").tags(tags))
 }
 
-// ── Builder 23: build_delete_channel ─────────────────────────────────────────
-
 /// Build a NIP-29 delete-group event (kind 9008).
 pub fn build_delete_channel(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
     Ok(EventBuilder::new(Kind::Custom(9008), "").tags(tags))
 }
-
-// ── Builder 24: build_note ───────────────────────────────────────────────────
 
 /// Build a global text note (kind:1, NIP-01).
 ///
@@ -755,8 +701,6 @@ pub fn build_note(
     }
     Ok(EventBuilder::new(Kind::Custom(1), content).tags(tags))
 }
-
-// ── Builder 25: build_contact_list ───────────────────────────────────────────
 
 /// Maximum number of contacts allowed in a single contact list event.
 const MAX_CONTACTS: usize = 10_000;
@@ -821,8 +765,6 @@ pub fn build_contact_list(
     Ok(EventBuilder::new(Kind::Custom(3), "").tags(tags))
 }
 
-// ── Helper: extract_channel_id ───────────────────────────────────────────────
-
 /// Extract the channel UUID from an event's `h` tag.
 ///
 /// Returns `None` if no `h` tag is present or the value is not a valid UUID.
@@ -836,8 +778,6 @@ pub fn extract_channel_id(event: &nostr::Event) -> Option<Uuid> {
         }
     })
 }
-
-// ── Builder 30: build_repo_announcement ──────────────────────────────────────
 
 /// Build a git repository announcement event (kind:30617, NIP-34).
 ///
@@ -958,8 +898,6 @@ pub fn build_repo_announcement(
 
     Ok(EventBuilder::new(Kind::Custom(KIND_GIT_REPO_ANNOUNCEMENT as u16), "").tags(tags))
 }
-
-// ── Git collaboration: patches, issues, status (NIP-34) ─────────────────────
 
 /// Repository coordinate — owner pubkey + `d`-tag identifier.
 ///
@@ -1290,8 +1228,6 @@ pub fn build_git_status(
     Ok(EventBuilder::new(Kind::Custom(status.kind()), content).tags(tags))
 }
 
-// ── Builder 31: build_workflow_def ────────────────────────────────────────────
-
 /// Build a workflow definition event (kind 30620).
 ///
 /// - `channel_id`: the channel this workflow belongs to (h-tag)
@@ -1309,8 +1245,6 @@ pub fn build_workflow_def(
     ];
     Ok(EventBuilder::new(Kind::Custom(KIND_WORKFLOW_DEF as u16), yaml).tags(tags))
 }
-
-// ── Builder 32: build_workflow_update ─────────────────────────────────────────
 
 /// Build a workflow update event (kind 30620) for an existing workflow.
 ///
@@ -1330,8 +1264,6 @@ pub fn build_workflow_update(
     Ok(EventBuilder::new(Kind::Custom(KIND_WORKFLOW_DEF as u16), yaml).tags(tags))
 }
 
-// ── Builder 33: build_workflow_delete ─────────────────────────────────────────
-
 /// Build a NIP-09 deletion event targeting a workflow definition (kind 5).
 ///
 /// The `a`-tag addresses the parameterized replaceable event
@@ -1348,15 +1280,11 @@ pub fn build_workflow_delete(
     Ok(EventBuilder::new(Kind::Custom(KIND_DELETION as u16), "").tags(tags))
 }
 
-// ── Builder 34: build_workflow_trigger ────────────────────────────────────────
-
 /// Build a workflow trigger event (kind 46020).
 pub fn build_workflow_trigger(workflow_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["d", &workflow_id.to_string()])?];
     Ok(EventBuilder::new(Kind::Custom(KIND_WORKFLOW_TRIGGER as u16), "").tags(tags))
 }
-
-// ── Builder 35: build_workflow_approval ───────────────────────────────────────
 
 /// Build a workflow approval event — kind 46030 (grant) or 46031 (deny).
 ///
@@ -1383,8 +1311,6 @@ pub fn build_workflow_approval(
     Ok(EventBuilder::new(Kind::Custom(kind as u16), note).tags(tags))
 }
 
-// ── Builder 36: build_dm_open ────────────────────────────────────────────────
-
 /// Build a DM open event (kind 41010).
 ///
 /// `pubkeys` must be 1–8 hex-encoded pubkeys to include in the DM conversation.
@@ -1402,16 +1328,12 @@ pub fn build_dm_open(pubkeys: &[&str]) -> Result<EventBuilder, SdkError> {
     Ok(EventBuilder::new(Kind::Custom(KIND_DM_OPEN as u16), "").tags(tags))
 }
 
-// ── Builder 37: build_dm_add_member ──────────────────────────────────────────
-
 /// Build a DM add-member event (kind 41011).
 pub fn build_dm_add_member(channel_id: Uuid, pubkey: &str) -> Result<EventBuilder, SdkError> {
     let pk = check_pubkey_hex(pubkey, "pubkey")?;
     let tags = vec![tag(&["h", &channel_id.to_string()])?, tag(&["p", &pk])?];
     Ok(EventBuilder::new(Kind::Custom(KIND_DM_ADD_MEMBER as u16), "").tags(tags))
 }
-
-// ── Builder 38: build_presence_update ────────────────────────────────────────
 
 /// Build a presence update event (kind 20001).
 ///
@@ -1430,8 +1352,6 @@ pub fn build_presence_update(status: &str) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["status", status])?];
     Ok(EventBuilder::new(Kind::Custom(KIND_PRESENCE_UPDATE as u16), status).tags(tags))
 }
-
-// ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -1480,8 +1400,6 @@ mod tests {
             s.first().map(|v| v.as_str()) == Some(key) && s.get(1).map(|v| v.as_str()) == Some(val)
         })
     }
-
-    // ── build_message ────────────────────────────────────────────────────────
 
     #[test]
     fn message_happy_path() {
@@ -1633,8 +1551,6 @@ mod tests {
         assert!(build_message(cid, &max, None, &[], false, &[]).is_ok());
     }
 
-    // ── build_forum_post ─────────────────────────────────────────────────────
-
     #[test]
     fn forum_post_happy_path() {
         let cid = uuid();
@@ -1653,8 +1569,6 @@ mod tests {
         ));
     }
 
-    // ── build_forum_comment ──────────────────────────────────────────────────
-
     #[test]
     fn forum_comment_happy_path() {
         let cid = uuid();
@@ -1667,8 +1581,6 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 45003);
         assert!(has_tag(&ev, "h", &cid.to_string()));
     }
-
-    // ── build_diff_message ───────────────────────────────────────────────────
 
     fn good_diff_meta() -> DiffMeta {
         DiffMeta {
@@ -1783,8 +1695,6 @@ mod tests {
         assert!(has_tag(&ev, "alt", "patch for bug fix"));
     }
 
-    // ── build_edit ───────────────────────────────────────────────────────────
-
     #[test]
     fn edit_happy_path() {
         let cid = uuid();
@@ -1805,8 +1715,6 @@ mod tests {
         ));
     }
 
-    // ── build_delete_message ─────────────────────────────────────────────────
-
     #[test]
     fn delete_message_happy_path() {
         let cid = uuid();
@@ -1818,8 +1726,6 @@ mod tests {
         assert_eq!(ev.content, "");
     }
 
-    // ── build_delete_compat ──────────────────────────────────────────────────
-
     #[test]
     fn delete_compat_happy_path() {
         let cid = uuid();
@@ -1830,8 +1736,6 @@ mod tests {
         assert!(has_tag(&ev, "e", &eid.to_hex()));
         assert_eq!(ev.content, "");
     }
-
-    // ── build_vote ───────────────────────────────────────────────────────────
 
     #[test]
     fn vote_up() {
@@ -1849,8 +1753,6 @@ mod tests {
         let ev = sign(build_vote(cid, eid, VoteDirection::Down).unwrap());
         assert_eq!(ev.content, "-");
     }
-
-    // ── build_reaction ───────────────────────────────────────────────────────
 
     #[test]
     fn reaction_happy_path() {
@@ -1903,8 +1805,6 @@ mod tests {
         assert!(has_tag(&ev, "emoji", "party"));
     }
 
-    // ── build_remove_reaction ────────────────────────────────────────────────
-
     #[test]
     fn remove_reaction_happy_path() {
         let eid = event_id();
@@ -1912,8 +1812,6 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 5);
         assert!(has_tag(&ev, "e", &eid.to_hex()));
     }
-
-    // ── build_set_canvas ─────────────────────────────────────────────────────
 
     #[test]
     fn set_canvas_happy_path() {
@@ -1923,8 +1821,6 @@ mod tests {
         assert!(has_tag(&ev, "h", &cid.to_string()));
         assert_eq!(ev.content, "# Canvas\nHello");
     }
-
-    // ── build_profile ────────────────────────────────────────────────────────
 
     #[test]
     fn profile_all_fields() {
@@ -1964,8 +1860,6 @@ mod tests {
         assert!(v.as_object().unwrap().is_empty());
     }
 
-    // ── build_add_member ─────────────────────────────────────────────────────
-
     #[test]
     fn add_member_with_role() {
         let cid = uuid();
@@ -1985,8 +1879,6 @@ mod tests {
         assert!(tag_values(&ev, "role").is_empty());
     }
 
-    // ── build_remove_member ──────────────────────────────────────────────────
-
     #[test]
     fn remove_member_happy_path() {
         let cid = uuid();
@@ -1996,8 +1888,6 @@ mod tests {
         assert!(has_tag(&ev, "p", pubkey));
     }
 
-    // ── build_leave ──────────────────────────────────────────────────────────
-
     #[test]
     fn leave_happy_path() {
         let cid = uuid();
@@ -2005,8 +1895,6 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 9022);
         assert!(has_tag(&ev, "h", &cid.to_string()));
     }
-
-    // ── build_update_channel ─────────────────────────────────────────────────
 
     #[test]
     fn update_channel_name_and_about() {
@@ -2054,8 +1942,6 @@ mod tests {
         ));
     }
 
-    // ── build_set_topic ──────────────────────────────────────────────────────
-
     #[test]
     fn set_topic_happy_path() {
         let cid = uuid();
@@ -2064,8 +1950,6 @@ mod tests {
         assert!(has_tag(&ev, "topic", "Rust async patterns"));
     }
 
-    // ── build_set_purpose ────────────────────────────────────────────────────
-
     #[test]
     fn set_purpose_happy_path() {
         let cid = uuid();
@@ -2073,8 +1957,6 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 9002);
         assert!(has_tag(&ev, "purpose", "Team coordination"));
     }
-
-    // ── build_create_channel ─────────────────────────────────────────────────
 
     #[test]
     fn create_channel_all_fields() {
@@ -2133,8 +2015,6 @@ mod tests {
         assert!(has_tag(&ev, "ttl", "3600"));
     }
 
-    // ── build_join ───────────────────────────────────────────────────────────
-
     #[test]
     fn join_happy_path() {
         let cid = uuid();
@@ -2142,8 +2022,6 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 9021);
         assert!(has_tag(&ev, "h", &cid.to_string()));
     }
-
-    // ── build_archive / build_unarchive ──────────────────────────────────────
 
     #[test]
     fn archive_happy_path() {
@@ -2161,8 +2039,6 @@ mod tests {
         assert!(has_tag(&ev, "archived", "false"));
     }
 
-    // ── build_delete_channel ─────────────────────────────────────────────────
-
     #[test]
     fn delete_channel_happy_path() {
         let cid = uuid();
@@ -2170,8 +2046,6 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 9008);
         assert!(has_tag(&ev, "h", &cid.to_string()));
     }
-
-    // ── extract_channel_id ───────────────────────────────────────────────────
 
     #[test]
     fn extract_channel_id_present() {
@@ -2197,8 +2071,6 @@ mod tests {
             .unwrap();
         assert_eq!(extract_channel_id(&ev), None);
     }
-
-    // ── Builder 24: build_note ───────────────────────────────────────────────
 
     #[test]
     fn build_note_happy_path() {
@@ -2246,8 +2118,6 @@ mod tests {
         assert_eq!(event.content, "");
         assert!(event.tags.is_empty());
     }
-
-    // ── Builder 25: build_contact_list ───────────────────────────────────────
 
     #[test]
     fn build_contact_list_happy_path() {
@@ -2375,8 +2245,6 @@ mod tests {
         assert!(matches!(err, SdkError::InvalidInput(_)));
     }
 
-    // ── build_repo_announcement ───────────────────────────────────────────────
-
     #[test]
     fn repo_announcement_happy_path_all_fields() {
         let ev = sign(
@@ -2489,8 +2357,6 @@ mod tests {
         assert_eq!(vals[0], "https://relay.example.com/git/abc/multi-clone");
         assert_eq!(vals[1], "ssh://git@github.com/org/multi-clone.git");
     }
-
-    // ── build_git_patch / build_git_issue / build_git_status (NIP-34) ───────
 
     #[test]
     fn git_patch_happy_path_minimal() {
@@ -2797,8 +2663,6 @@ mod tests {
         assert_eq!(parts.get(3).map(|v| v.as_str()), Some(pubkey.as_str()));
     }
 
-    // ── Builder 31: build_workflow_def ───────────────────────────────────────
-
     #[test]
     fn workflow_def_happy_path() {
         let cid = uuid();
@@ -2817,8 +2681,6 @@ mod tests {
         assert!(matches!(err, SdkError::ContentTooLarge { .. }));
     }
 
-    // ── Builder 32: build_workflow_update ────────────────────────────────────
-
     #[test]
     fn workflow_update_includes_h_tag() {
         let cid = uuid();
@@ -2835,8 +2697,6 @@ mod tests {
         let err = build_workflow_update(uuid(), uuid(), &big).unwrap_err();
         assert!(matches!(err, SdkError::ContentTooLarge { .. }));
     }
-
-    // ── Builder 33: build_workflow_delete ────────────────────────────────────
 
     #[test]
     fn workflow_delete_happy_path() {
@@ -2856,8 +2716,6 @@ mod tests {
         assert!(matches!(err, SdkError::InvalidInput(_)));
     }
 
-    // ── Builder 34: build_workflow_trigger ───────────────────────────────────
-
     #[test]
     fn workflow_trigger_happy_path() {
         let wid = uuid();
@@ -2865,8 +2723,6 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 46020);
         assert!(has_tag(&ev, "d", &wid.to_string()));
     }
-
-    // ── Builder 35: build_workflow_approval ──────────────────────────────────
 
     #[test]
     fn workflow_approval_grant() {
@@ -2897,8 +2753,6 @@ mod tests {
         assert!(matches!(err, SdkError::InvalidInput(_)));
     }
 
-    // ── Builder 36: build_dm_open ───────────────────────────────────────────
-
     #[test]
     fn dm_open_happy_path() {
         let pk = "a".repeat(64);
@@ -2927,8 +2781,6 @@ mod tests {
         assert!(matches!(err, SdkError::InvalidInput(_)));
     }
 
-    // ── Builder 37: build_dm_add_member ─────────────────────────────────────
-
     #[test]
     fn dm_add_member_happy_path() {
         let cid = uuid();
@@ -2944,8 +2796,6 @@ mod tests {
         let err = build_dm_add_member(uuid(), "short").unwrap_err();
         assert!(matches!(err, SdkError::InvalidInput(_)));
     }
-
-    // ── Builder 38: build_presence_update ────────────────────────────────────
 
     #[test]
     fn presence_update_content_is_status() {

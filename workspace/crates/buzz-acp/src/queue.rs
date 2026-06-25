@@ -20,8 +20,6 @@ use uuid::Uuid;
 
 use crate::config::DedupMode;
 
-// ── Reliability constants ─────────────────────────────────────────────────────
-
 /// Maximum events queued per channel before oldest events are dropped.
 const MAX_PENDING_PER_CHANNEL: usize = 500;
 
@@ -39,8 +37,6 @@ const MAX_RETRY_DELAY_SECS: u64 = 300;
 
 /// In-flight deadline: max_turn (3600s) + 100s buffer.
 const IN_FLIGHT_DEADLINE_SECS: u64 = 3700;
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 /// An event waiting in the queue.
 #[derive(Debug, Clone)]
@@ -70,8 +66,6 @@ pub struct FlushBatch {
     /// produces a merged prompt with annotated sections.
     pub cancelled_events: Vec<BatchEvent>,
 }
-
-// ── EventQueue ────────────────────────────────────────────────────────────────
 
 /// Per-channel event queue with per-channel in-flight enforcement.
 ///
@@ -564,8 +558,6 @@ impl Default for EventQueue {
     }
 }
 
-// ── NIP-10 tag parsing ────────────────────────────────────────────────────────
-
 /// Parsed thread relationship from NIP-10 `e` tags.
 #[derive(Debug, Clone, Default)]
 pub struct ThreadTags {
@@ -627,8 +619,6 @@ pub fn parse_thread_tags(event: &Event) -> ThreadTags {
         mentioned_pubkeys: mentions,
     }
 }
-
-// ── Slash command detection ───────────────────────────────────────────────────
 
 /// Extract a leading slash command from message content.
 ///
@@ -708,8 +698,6 @@ pub fn slash_command_for_batch(batch: &FlushBatch, known_names: &[&str]) -> Opti
     }
     extract_slash_command(&batch.events[0].event.content, known_names)
 }
-
-// ── Prompt formatting ─────────────────────────────────────────────────────────
 
 /// Conversation context fetched by the harness before prompting.
 #[derive(Debug, Clone)]
@@ -1183,8 +1171,6 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
     sections
 }
 
-// ─── Unit Tests ──────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1238,8 +1224,6 @@ mod tests {
         assert_eq!(base_section("  line1\nline2 "), "[Base]\n  line1\nline2");
     }
 
-    // ── Test 1: push + flush_next basic ──────────────────────────────────────
-
     #[test]
     fn test_push_flush_basic() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -1257,8 +1241,6 @@ mod tests {
         assert_eq!(q.queues.len(), 0);
     }
 
-    // ── Test 2: same channel cannot be flushed twice ─────────────────────────
-
     #[test]
     fn test_in_flight_blocks_same_channel() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -1275,8 +1257,6 @@ mod tests {
         // No other channels exist, so result is None.
         assert!(q.flush_next().is_none());
     }
-
-    // ── Test 3: mark_complete enables flush ──────────────────────────────────
 
     #[test]
     fn test_mark_complete_enables_flush() {
@@ -1301,8 +1281,6 @@ mod tests {
         assert_eq!(batch.events[0].event.content, "second");
     }
 
-    // ── Test 4: batch drain ───────────────────────────────────────────────────
-
     #[test]
     fn test_batch_drain_all_events() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -1326,8 +1304,6 @@ mod tests {
         assert_eq!(q.queues.len(), 0);
     }
 
-    // ── Test 5: FIFO fairness ─────────────────────────────────────────────────
-
     #[test]
     fn test_fifo_fairness_picks_oldest_channel() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -1343,8 +1319,6 @@ mod tests {
         assert_eq!(batch.channel_id, ch_a);
         assert_eq!(batch.events[0].event.content, "from A");
     }
-
-    // ── Test 6: multi-channel interleave ─────────────────────────────────────
 
     #[test]
     fn test_multi_channel_interleave() {
@@ -1375,15 +1349,11 @@ mod tests {
         assert_eq!(pending_count(&q), 0);
     }
 
-    // ── Test 7: empty queue returns None ─────────────────────────────────────
-
     #[test]
     fn test_empty_queue_returns_none() {
         let mut q = EventQueue::new(DedupMode::Queue);
         assert!(q.flush_next().is_none());
     }
-
-    // ── Test 9: format_prompt single event ───────────────────────────────────
 
     #[test]
     fn test_format_prompt_single() {
@@ -1418,8 +1388,6 @@ mod tests {
         // Should NOT contain "--- Event 1 ---" (that's the multi-event format).
         assert!(!prompt.contains("--- Event 1 ---"));
     }
-
-    // ── Test 9b: requeue preserves events ────────────────────────────────────
 
     #[test]
     fn test_requeue_preserves_events() {
@@ -1469,8 +1437,6 @@ mod tests {
         assert_eq!(next_batch.channel_id, ch_b);
     }
 
-    // ── Test 10: format_prompt batch ─────────────────────────────────────────
-
     #[test]
     fn test_format_prompt_batch() {
         let ch = Uuid::new_v4();
@@ -1512,8 +1478,6 @@ mod tests {
         assert!(prompt.contains("Content: third message"));
     }
 
-    // ── Test 11: system prompt NOT in user message (delivered via system role) ──
-
     #[test]
     fn test_format_prompt_no_system_prompt_in_user_message() {
         let ch = Uuid::new_v4();
@@ -1536,8 +1500,6 @@ mod tests {
         assert!(!prompt.contains("[Base]"));
         assert!(prompt.starts_with("[Context]"));
     }
-
-    // ── Test 11b: agent_core section is first in user message ──────────────
 
     #[test]
     fn test_format_prompt_with_agent_core() {
@@ -1624,8 +1586,6 @@ mod tests {
         assert!(prompt.starts_with("[Agent Memory — core]\nbe helpful\n\n[Context]"));
     }
 
-    // ── Test 11c: base_prompt and system_prompt NOT in user message ────────────
-
     #[test]
     fn test_format_prompt_no_base_or_system_sections() {
         let ch = Uuid::new_v4();
@@ -1648,8 +1608,6 @@ mod tests {
         assert!(!prompt.contains("[System]"));
         assert!(prompt.starts_with("[Context]"));
     }
-
-    // ── Test 11d: legacy agents receive [Base]/[System] in user message ───────
 
     #[test]
     fn test_format_prompt_legacy_agent_emits_base_and_system() {
@@ -1705,8 +1663,6 @@ mod tests {
             "[Agent Memory] should come before [Context]"
         );
     }
-
-    // ── Test 11e: modern agents suppress [Base]/[System] from user message ────
 
     #[test]
     fn test_format_prompt_modern_agent_suppresses_base_and_system() {
@@ -1803,8 +1759,6 @@ mod tests {
         assert!(!prompt.contains("[System]"));
     }
 
-    // ── Test 12: drop mode discards in-flight channel events ─────────────────
-
     #[test]
     fn test_drop_mode_discards_in_flight_events() {
         let mut q = EventQueue::new(DedupMode::Drop);
@@ -1822,8 +1776,6 @@ mod tests {
         // Nothing to flush.
         assert!(q.flush_next().is_none());
     }
-
-    // ── Test 13: drop mode still queues other channels ────────────────────────
 
     #[test]
     fn test_drop_mode_queues_other_channels() {
@@ -1843,8 +1795,6 @@ mod tests {
         let batch_b = q.flush_next().expect("flush B");
         assert_eq!(batch_b.channel_id, ch_b);
     }
-
-    // ── Test 14: multiple channels can be in-flight simultaneously ────────────
 
     #[test]
     fn test_multiple_channels_in_flight_simultaneously() {
@@ -1876,8 +1826,6 @@ mod tests {
         assert!(!any_in_flight(&q));
     }
 
-    // ── Test 15: same channel cannot be flushed twice ─────────────────────────
-
     #[test]
     fn test_same_channel_not_flushed_twice() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -1900,8 +1848,6 @@ mod tests {
         assert!(q.flush_next().is_none());
     }
 
-    // ── Test 16: drop mode drops events for any in-flight channel ─────────────
-
     #[test]
     fn test_drop_mode_drops_for_any_in_flight_channel() {
         let mut q = EventQueue::new(DedupMode::Drop);
@@ -1923,8 +1869,6 @@ mod tests {
         q.mark_complete(ch_a);
         q.mark_complete(ch_b);
     }
-
-    // ── Test 17: flush_next picks oldest non-in-flight, non-throttled channel ─
 
     #[test]
     fn test_flush_next_picks_oldest_non_throttled() {
@@ -1958,8 +1902,6 @@ mod tests {
         q.mark_complete(ch_c);
     }
 
-    // ── Test 18: mark_complete(channel_id) clears only that channel ───────────
-
     #[test]
     fn test_mark_complete_clears_only_specified_channel() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -1987,8 +1929,6 @@ mod tests {
         assert!(!any_in_flight(&q));
     }
 
-    // ── Test 19: requeue_preserve_timestamps preserves received_at ───────────
-
     #[test]
     fn test_requeue_preserve_timestamps() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -2014,8 +1954,6 @@ mod tests {
         assert_eq!(batch2.events[0].received_at, original_received_at);
     }
 
-    // ── Test 20: requeue_preserve_timestamps does not set retry_after ─────────
-
     #[test]
     fn test_requeue_preserve_timestamps_no_retry_after() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -2031,8 +1969,6 @@ mod tests {
         assert!(!q.retry_after.contains_key(&ch));
         assert!(q.flush_next().is_some());
     }
-
-    // ── Test 20b: requeue_preserve_timestamps enforces per-channel cap ────────
 
     #[test]
     fn test_requeue_preserve_timestamps_enforces_cap() {
@@ -2070,8 +2006,6 @@ mod tests {
         );
     }
 
-    // ── Test 20c: requeue_preserve overflow trims newest, keeps requeued ─────
-
     #[test]
     fn test_requeue_preserve_timestamps_overflow_keeps_requeued_events() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -2106,8 +2040,6 @@ mod tests {
             "requeued events should be at the front (oldest), not trimmed"
         );
     }
-
-    // ── Test 21: has_flushable_work returns correct results ───────────────────
 
     #[test]
     fn test_has_flushable_work() {
@@ -2147,8 +2079,6 @@ mod tests {
         );
     }
 
-    // ── Test 22: retry throttle blocks re-flush for 5 seconds ─────────────────
-
     #[test]
     fn test_retry_throttle_blocks_requeue_channel() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -2179,8 +2109,6 @@ mod tests {
             .expect("ch should be flushable after throttle expires");
         assert_eq!(batch3.channel_id, ch);
     }
-
-    // ── NIP-10 tag parsing tests ─────────────────────────────────────────────
 
     /// Build an event with specific tags for thread testing.
     fn make_event_with_tags(content: &str, tags: Vec<Vec<String>>) -> Event {
@@ -2259,8 +2187,6 @@ mod tests {
         assert_eq!(tags.root_event_id.as_deref(), Some("root123"));
         assert_eq!(tags.parent_event_id.as_deref(), Some("root123"));
     }
-
-    // ── Context formatting tests ─────────────────────────────────────────────
 
     #[test]
     fn test_format_prompt_with_channel_info() {
@@ -2722,8 +2648,6 @@ mod tests {
         );
     }
 
-    // ── drain_channel tests ──────────────────────────────────────────────────
-
     #[test]
     fn test_drain_channel_removes_pending_events() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -2793,8 +2717,6 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert!(any_in_flight(&q)); // in-flight unaffected
     }
-
-    // ── compact_expired_state ─────────────────────────────────────────────
 
     #[test]
     fn test_compact_cleans_orphaned_retry_counts() {
@@ -2874,8 +2796,6 @@ mod tests {
         );
     }
 
-    // ── Test: requeue_as_cancelled merges into flush_next ────────────────────
-
     #[test]
     fn test_requeue_as_cancelled_merges_in_flush_next() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -2904,8 +2824,6 @@ mod tests {
         );
     }
 
-    // ── Test: requeue_as_cancelled fallback (no new events) ──────────────────
-
     #[test]
     fn test_requeue_as_cancelled_no_new_events_fallback() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -2932,8 +2850,6 @@ mod tests {
         );
     }
 
-    // ── Test: has_flushable_work accounts for cancelled_batches ──────────────
-
     #[test]
     fn test_has_flushable_work_with_cancelled_only() {
         let mut q = EventQueue::new(DedupMode::Queue);
@@ -2951,8 +2867,6 @@ mod tests {
             "cancelled-only channel should be flushable"
         );
     }
-
-    // ── Test: drain_channel clears cancelled_batches ──────────────────────────
 
     #[test]
     fn test_drain_channel_clears_cancelled_batches() {
@@ -2974,8 +2888,6 @@ mod tests {
             "flush_next should return None after drain"
         );
     }
-
-    // ── Test: double-cancel accumulates all events ────────────────────────────
 
     #[test]
     fn test_double_cancel_preserves_all_events() {
@@ -3017,8 +2929,6 @@ mod tests {
             "should accumulate all 3 cancelled events"
         );
     }
-
-    // ── reply instruction tests ──────────────────────────────────────────
 
     #[test]
     fn test_reply_instruction_present_for_channel_thread_reply() {
@@ -3287,8 +3197,6 @@ mod tests {
             "batched prompt where last event is top-level should NOT include reply instruction"
         );
     }
-
-    // ── Slash command extraction ──────────────────────────────────────────────
 
     /// Build a single-event FlushBatch with the given content.
     fn make_single_batch(content: &str) -> FlushBatch {
