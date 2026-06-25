@@ -323,7 +323,7 @@ export function SidebarSection({
   const canToggle = Boolean(onToggleCollapsed);
 
   return (
-    <SidebarGroup className="group/sidebar-section">
+    <SidebarGroup className="group/sidebar-section select-none">
       <div className="relative">
         <SidebarGroupLabel asChild={canToggle}>
           {canToggle ? (
@@ -410,12 +410,9 @@ export function SidebarSection({
                   </SidebarMenuItem>
                 );
 
-                const hasContextAction =
-                  (unreadChannelIds.has(channel.id) && onMarkChannelRead) ||
-                  (!unreadChannelIds.has(channel.id) && onMarkChannelUnread) ||
-                  (onMuteChannel && onUnmuteChannel);
-
-                return hasContextAction ? (
+                // The shared menu always renders copy actions, so every row
+                // gets a context menu regardless of read/mute availability.
+                return (
                   <ContextMenu key={channel.id}>
                     <ContextMenuTrigger asChild>{menuItem}</ContextMenuTrigger>
                     <ContextMenuContent>
@@ -430,8 +427,6 @@ export function SidebarSection({
                       />
                     </ContextMenuContent>
                   </ContextMenu>
-                ) : (
-                  menuItem
                 );
               })}
             </SidebarMenu>
