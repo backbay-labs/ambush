@@ -1432,14 +1432,39 @@ test("channel intro stays hidden while paginating past the timeline cap", async 
       );
     });
 
+  // Poll for real progress instead of a fixed sleep: a slow CI shard's fetch
+  // round-trip outlasts a hard delay and reads as a false stall.
+  const waitForOlderHistoryProgress = async (previousDeepest: number) => {
+    try {
+      await expect
+        .poll(async () => (await oldestRenderedIndex()) ?? previousDeepest, {
+          timeout: 10_000,
+        })
+        .toBeLessThan(previousDeepest);
+    } catch {
+      // No advancement within the window: treat as a stall, not a failure.
+    }
+    return oldestRenderedIndex();
+  };
+
+  // Drive scrollTop to 0 each pass instead of `mouse.wheel`: the older-history
+  // sentinel disconnects while a prepend's index-restore owns scroll and only
+  // re-arms once it settles, so a wheel issued during that window is swallowed
+  // and reads as a false stall. Forcing the top guarantees the re-armed
+  // sentinel re-fires and the next older page fetches.
+  const scrollToTop = async () =>
+    timeline.evaluate((element) => {
+      const container = element as HTMLDivElement;
+      container.scrollTop = 0;
+      container.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+
   await timeline.hover();
   let deepest = Number.POSITIVE_INFINITY;
   let stallStreak = 0;
   for (let attempt = 0; attempt < 200 && deepest > 0; attempt += 1) {
-    await page.mouse.wheel(0, -4000);
-    await page.waitForTimeout(80);
-
-    const current = await oldestRenderedIndex();
+    await scrollToTop();
+    const current = await waitForOlderHistoryProgress(deepest);
     if ((current ?? Number.POSITIVE_INFINITY) > 50) {
       expect(await isIntroHeaderInViewport()).toBe(false);
     }
@@ -1448,11 +1473,13 @@ test("channel intro stays hidden while paginating past the timeline cap", async 
       deepest = current;
       stallStreak = 0;
     } else {
+      // No advance within the 10s settle window. `waitForOlderHistoryProgress`
+      // already absorbs a slow fetch round-trip, so each no-advance pass is a
+      // genuine miss (sentinel still owned, or true end-of-history). Allow a
+      // generous streak before bailing so a few owned-window passes near the
+      // start can't end the loop short of index 0.
       stallStreak += 1;
-      // Already at the top of the rendered window and not advancing: give the
-      // in-flight fetch a beat to prepend, then bail if it never progresses.
-      await page.waitForTimeout(200);
-      if (stallStreak > 25) break;
+      if (stallStreak > 15) break;
     }
   }
 
