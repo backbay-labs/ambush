@@ -1,0 +1,15 @@
+{
+  "statement": {
+    "version": 1,
+    "issued_at_ms": 1760000000000,
+    "config_file_name": "default.yaml",
+    "sha256": "bc63f0e53780325317f638b6e22f4d6f638048fc7ba177485c18592f6104c324",
+    "size_bytes": 10599
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "key_id": "854cb2ac6a51da46daf5bdbb0d5b34d9831e5aa60290b94ea2f810f5999f2521",
+    "public_key_hex": "25e6e1874dbaedbf86dd50afcadeb0067d973c35e88dbf6ea3c3dc30281753f5",
+    "signature_hex": "9c9da6f77ef4f947645dc72fce25d58630efbbf0d0ff1d05fe377a2670f2911f4516d7f60ad1fb5461074f094d4770aa1358f7140f53bcd4ffcc66df28002f01"
+  }
+}

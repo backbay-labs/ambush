@@ -1,0 +1,76 @@
+name: outlook_mshta_transfer_chain
+description: Outlook spawns a benign-looking installer chain that only becomes suspicious once mshta reaches out.
+seed_time_ms: 1700000200000
+requested_by: replay-whisker
+receipt_chain:
+  - seed-receipt
+metadata:
+  class: adversarial
+  threat_class: command_and_control
+  campaign: multi_event.kill_chain
+  techniques:
+    - T1218.007
+    - T1218.005
+    - T1105
+  tags:
+    - sequence
+    - kill_chain
+    - outlook
+    - mshta
+
+input:
+  kind: events
+  events:
+    - action:
+        type: escalate
+        summary: sequence detector partial chain
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: chain-1-step-1
+        timestamp: 1700000200000
+        host_id: host-seq-1
+        payload:
+          kind: process_start
+          parent_process: OUTLOOK
+          process_name: msiexec
+          command_line: msiexec.exe /i C:\Users\alice\AppData\Local\Temp\calendar-sync.msi
+          user: alice
+    - action:
+        type: escalate
+        summary: sequence detector partial chain
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: chain-1-step-2
+        timestamp: 1700000203000
+        host_id: host-seq-1
+        payload:
+          kind: process_start
+          parent_process: msiexec
+          process_name: mshta
+          command_line: mshta.exe C:\ProgramData\CalendarSync\update.hta
+          user: alice
+    - action:
+        type: escalate
+        summary: sequence detector full chain
+        urgency: CRITICAL
+      event:
+        source: synthetic
+        event_id: chain-1-step-3
+        timestamp: 1700000209000
+        host_id: host-seq-1
+        payload:
+          kind: network_connect
+          process_name: mshta
+          destination_ip: 198.51.100.42
+          destination_port: 443
+          protocol: TCP
+
+expectations:
+  replay_bundle_count: 2
+  investigation_count: 2
+  incident_count: 1
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

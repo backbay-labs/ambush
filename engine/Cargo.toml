@@ -1,0 +1,93 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/swarm-core",
+    "crates/swarm-whisker",
+    "crates/swarm-ingest-tetragon",
+    "crates/swarm-ingest-json",
+    "crates/swarm-ingest-sentinel",
+    "crates/swarm-pheromone",
+    "crates/swarm-policy",
+    "crates/swarm-response",
+    "crates/swarm-runtime",
+    "crates/swarm-evolution",
+    "crates/swarm-cli",
+    "crates/swarm-consensus",
+    "crates/swarm-spine",
+    "crates/swarm-guard",
+    "crates/swarm-crypto",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/backbay-labs/swarm-team-six"
+
+[workspace.dependencies]
+# Internal crates
+swarm-core = { version = "0.1.0", path = "crates/swarm-core" }
+swarm-whisker = { version = "0.1.0", path = "crates/swarm-whisker" }
+swarm-ingest-tetragon = { version = "0.1.0", path = "crates/swarm-ingest-tetragon" }
+swarm-ingest-json = { version = "0.1.0", path = "crates/swarm-ingest-json" }
+swarm-ingest-sentinel = { version = "0.1.0", path = "crates/swarm-ingest-sentinel" }
+swarm-pheromone = { version = "0.1.0", path = "crates/swarm-pheromone" }
+swarm-policy = { version = "0.1.0", path = "crates/swarm-policy" }
+swarm-response = { version = "0.1.0", path = "crates/swarm-response" }
+swarm-runtime = { version = "0.1.0", path = "crates/swarm-runtime" }
+swarm-evolution = { version = "0.1.0", path = "crates/swarm-evolution" }
+swarm-cli = { version = "0.1.0", path = "crates/swarm-cli" }
+swarm-consensus = { version = "0.1.0", path = "crates/swarm-consensus" }
+swarm-spine = { version = "0.1.0", path = "crates/swarm-spine" }
+swarm-guard = { version = "0.1.0", path = "crates/swarm-guard" }
+swarm-crypto = { version = "0.1.0", path = "crates/swarm-crypto" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+futures-util = "0.3"
+async-nats = "0.47"
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+prometheus-client = "0.23"
+tonic = "0.13"
+prost = "0.13"
+prost-types = "0.13"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+notify = "7"
+arc-swap = "1"
+sysinfo = "0.33"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Crypto
+ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
+sha2 = "0.10"
+hex = "0.4"
+ryu = "1"
+rand_core = { version = "0.6", features = ["getrandom"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+uuid = { version = "1", features = ["v4"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+opentelemetry = "0.31"
+opentelemetry_sdk = "0.31"
+opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-rustls"] }
+tracing-opentelemetry = "0.32.1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Testing
+proptest = "1"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

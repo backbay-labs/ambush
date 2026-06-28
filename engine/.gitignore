@@ -1,0 +1,54 @@
+# Rust
+target/
+Cargo.lock
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime
+*.log
+.ephemeral_state.json
+experiments/materialized-*.yaml
+data/replay-runs/
+data/experiments/
+data/verifications/
+data/shadows/
+data/promotion-reviews/
+data/canaries/
+data/promotions/
+data/strategy-memory/
+data/strategy-scorecards/
+data/evolution-proofs/
+data/evolution-queue/
+data/evolution-handoffs/
+data/evolution-pressures/
+data/evolution-drafts/
+data/evolution-draft-promotions/
+data/evolution-materializations/
+data/evolution-validation-bundles/
+data/evolution-reconciliations/
+data/evolution-mutations/
+data/evolution-mutation-materialization-batches/
+data/evolution-mutation-validation-batches/
+data/evolution-rankings/
+data/evolution-selections/
+data/evolution-selection-bridges/
+data/evolution-portfolios/
+data/evolution-governance-review-packets/
+data/evolution-packet-sets/
+data/evolution-portfolio-history/

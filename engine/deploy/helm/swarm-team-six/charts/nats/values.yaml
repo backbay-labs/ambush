@@ -1,0 +1,28 @@
+enabled: false
+
+image:
+  repository: nats
+  tag: 2.11-alpine
+  pullPolicy: IfNotPresent
+
+service:
+  port: 4222
+  monitoringPort: 8222
+
+jetstream:
+  storeDir: /data
+
+persistence:
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 8Gi
+  storageClassName: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

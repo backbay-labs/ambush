@@ -1,0 +1,23 @@
+[package]
+name = "swarm-spine"
+description = "Signed envelopes, checkpoints, and Merkle audit trail (from ClawdStrike spine)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+swarm-policy.workspace = true
+swarm-response.workspace = true
+swarm-whisker.workspace = true
+swarm-crypto.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

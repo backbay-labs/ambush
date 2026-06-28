@@ -1,0 +1,23 @@
+name: kill_chain_sequences_v1
+description: Chain-only replay corpus for bounded multi-event kill-chain detection.
+corpus_version: 2026-04-12
+metadata:
+  campaign: multi_event.kill_chain
+  techniques:
+    - T1021.002
+    - T1105
+    - T1127.001
+    - T1218.004
+    - T1218.005
+    - T1218.007
+    - T1569.002
+    - T1570
+  tags:
+    - sequence
+    - kill_chain
+    - adversarial
+
+scenarios:
+  - ../scenarios/outlook-mshta-transfer-chain.yaml
+  - ../scenarios/remote-service-stager-chain.yaml
+  - ../scenarios/msbuild-installutil-transfer-chain.yaml

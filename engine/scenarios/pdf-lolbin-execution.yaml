@@ -1,0 +1,50 @@
+name: pdf_lolbin_execution
+description: A PDF reader spawning cmd and powershell should be treated as an adversarial execution chain
+seed_time_ms: 1700000300000
+requested_by: replay-whisker
+receipt_chain:
+  - seed-receipt
+metadata:
+  class: adversarial
+  campaign: hellcat.office_loader
+  techniques:
+    - T1204.002
+    - T1059.003
+    - T1059.001
+  tags:
+    - pdf
+    - lolbin
+    - execution
+
+input:
+  kind: events
+  events:
+    - action:
+        type: isolate_host
+        host_id: host-pdf-1
+      event:
+        source: synthetic
+        event_id: hunt-pdf-1
+        timestamp: 1700000003000
+        host_id: host-pdf-1
+        payload:
+          kind: process_start
+          parent_process: ACRORD32
+          process_name: cmd
+          command_line: cmd.exe /c powershell.exe -enc BBB=
+          user: alice
+
+expectations:
+  replay_bundle_count: 1
+  investigation_count: 1
+  incident_count: 1
+  hunts:
+    - hunt_id: hunt-pdf-1
+      action_kind: isolate_host
+      policy_verdict: require_human
+      response_kind: success
+  incident_hunt_groups:
+    - [hunt-pdf-1]
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

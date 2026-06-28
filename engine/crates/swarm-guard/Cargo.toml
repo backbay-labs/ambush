@@ -1,0 +1,17 @@
+[package]
+name = "swarm-guard"
+description = "Guard pipeline and Spider Sense detection (from ClawdStrike)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+glob = "0.3"
+regex = "1"
+
+[lints]
+workspace = true

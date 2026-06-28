@@ -1,0 +1,44 @@
+//! Error types for swarm-crypto operations.
+
+use thiserror::Error;
+
+/// Errors that can occur during cryptographic operations.
+#[non_exhaustive]
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Invalid signature")]
+    InvalidSignature,
+
+    #[error("Invalid public key: {0}")]
+    InvalidPublicKey(String),
+
+    #[error("Invalid private key")]
+    InvalidPrivateKey,
+
+    #[error("Invalid hex encoding: {0}")]
+    InvalidHex(String),
+
+    #[error("Invalid hash length: expected {expected}, got {actual}")]
+    InvalidHashLength { expected: usize, actual: usize },
+
+    #[error("Merkle proof verification failed")]
+    MerkleProofFailed,
+
+    #[error("Empty tree: cannot compute root")]
+    EmptyTree,
+
+    #[error("Invalid proof: leaf index {index} out of bounds for tree with {leaves} leaves")]
+    InvalidProofIndex { index: usize, leaves: usize },
+
+    #[error("JSON serialization error: {0}")]
+    JsonError(String),
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self::JsonError(error.to_string())
+    }
+}
+
+/// Result type for swarm-crypto operations.
+pub type Result<T> = std::result::Result<T, Error>;

@@ -1,0 +1,76 @@
+name: msbuild_installutil_transfer_chain
+description: Office-launched msbuild followed by installutil and outbound transfer should stay invisible to single-event detectors.
+seed_time_ms: 1700000400000
+requested_by: replay-whisker
+receipt_chain:
+  - seed-receipt
+metadata:
+  class: adversarial
+  threat_class: command_and_control
+  campaign: multi_event.kill_chain
+  techniques:
+    - T1127.001
+    - T1218.004
+    - T1105
+  tags:
+    - sequence
+    - kill_chain
+    - msbuild
+    - installutil
+
+input:
+  kind: events
+  events:
+    - action:
+        type: escalate
+        summary: sequence detector partial chain
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: chain-3-step-1
+        timestamp: 1700000400000
+        host_id: host-seq-3
+        payload:
+          kind: process_start
+          parent_process: EXCEL
+          process_name: msbuild
+          command_line: msbuild.exe C:\Users\alice\AppData\Local\Temp\reporting.xml
+          user: alice
+    - action:
+        type: escalate
+        summary: sequence detector partial chain
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: chain-3-step-2
+        timestamp: 1700000403000
+        host_id: host-seq-3
+        payload:
+          kind: process_start
+          parent_process: msbuild
+          process_name: installutil
+          command_line: InstallUtil.exe /LogToConsole=false C:\ProgramData\Updater\reporting.dll
+          user: alice
+    - action:
+        type: escalate
+        summary: sequence detector full chain
+        urgency: HIGH
+      event:
+        source: synthetic
+        event_id: chain-3-step-3
+        timestamp: 1700000409000
+        host_id: host-seq-3
+        payload:
+          kind: network_connect
+          process_name: installutil
+          destination_ip: 198.51.100.63
+          destination_port: 443
+          protocol: TCP
+
+expectations:
+  replay_bundle_count: 2
+  investigation_count: 2
+  incident_count: 1
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

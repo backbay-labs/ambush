@@ -1,0 +1,29 @@
+{
+  "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1775927866302:coverage_gap:evasion_persistence_autostart:5",
+  "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1775927866302",
+  "created_at_ms": 1775927866302,
+  "strategy_id": "office_baseline_control",
+  "detector": "suspicious_process_tree",
+  "kind": "coverage_gap",
+  "scenario_name": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1775927866302:coverage_gap:evasion_persistence_autostart:5-harvest",
+  "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1775927866302_coverage_gap_evasion_persistence_autostart_5.yaml",
+  "suite_name": "evasion_breadth_v1",
+  "corpus_version": "2026-04-10",
+  "verification_id": "verification:office_baseline_control:office_baseline_control:office_detector_safety_v1",
+  "proof_id": "evolution_proof:office_baseline_control:office_baseline_control:1775927866300",
+  "reason_name": "coverage_gap",
+  "reason_details": "scenario `evasion_persistence_autostart` covers detector `suspicious_process_tree` gap for Persistence",
+  "threat_class": "persistence",
+  "techniques": [
+    "T1547.001",
+    "T1053.005",
+    "T1053.003",
+    "T1053.006"
+  ],
+  "source_references": [
+    "/Users/connor/Medica/backbay/standalone/swarm-team-six/scenarios/evasion-persistence-autostart.yaml",
+    "evolution_proposal:office_baseline_control:office_baseline_control:1775927866302",
+    "verification:office_baseline_control:office_baseline_control:office_detector_safety_v1",
+    "evolution_proof:office_baseline_control:office_baseline_control:1775927866300"
+  ]
+}

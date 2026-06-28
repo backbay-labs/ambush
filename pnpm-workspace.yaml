@@ -1,0 +1,13 @@
+# pnpm 11 reads build-script approvals from here (no longer from package.json).
+# esbuild + electron are approved so `pnpm dev`/build work out of the box.
+# node-pty's native build is optional: if skipped, the PTY layer falls back to
+# piped child processes. Run `pnpm run rebuild` to enable real TTYs.
+onlyBuiltDependencies:
+  - esbuild
+  - electron
+ignoredBuiltDependencies:
+  - node-pty
+allowBuilds:
+  electron: set this to true or false
+  esbuild: set this to true or false
+  node-pty: set this to true or false

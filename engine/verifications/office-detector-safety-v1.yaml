@@ -1,0 +1,26 @@
+name: office_detector_safety_v1
+description: Canonical verification corpus for the suspicious process-tree detector over the tracked office replay suite
+known_bad:
+  suite: ../scenario-suites/hellcat-office-v1.yaml
+benign_controls:
+  scenarios:
+    - ../scenarios/benign-baseline.yaml
+    - ../scenarios/python-maintenance-benign.yaml
+canonical_templates:
+  - name: office_encoded_powershell_execution
+    threat_class: execution
+    event:
+      source: verification-template
+      event_id: tpl-execution-1
+      timestamp: 1700000300000
+      host_id: template-host-1
+      payload:
+        kind: process_start
+        parent_process: WINWORD
+        process_name: powershell
+        command_line: powershell -enc SQBFAFgA
+        user: alice
+resource_budgets:
+  max_false_positive_rate: 0.05
+  max_detect_latency_us: 10000
+  max_total_detections: 8

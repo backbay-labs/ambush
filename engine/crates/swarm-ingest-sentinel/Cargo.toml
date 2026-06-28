@@ -1,0 +1,19 @@
+[package]
+name = "swarm-ingest-sentinel"
+description = "Sentinel Prometheus scrape bridge for infrastructure telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true

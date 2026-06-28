@@ -1,0 +1,25 @@
+[package]
+name = "swarm-response"
+description = "Live-response execution traits, adapters, and receipts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+swarm-crypto.workspace = true
+swarm-policy.workspace = true
+swarm-whisker.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true

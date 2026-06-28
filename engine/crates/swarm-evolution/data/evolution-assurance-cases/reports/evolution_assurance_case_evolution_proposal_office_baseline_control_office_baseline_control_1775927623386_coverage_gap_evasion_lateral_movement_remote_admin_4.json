@@ -1,0 +1,29 @@
+{
+  "case_id": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1775927623386:coverage_gap:evasion_lateral_movement_remote_admin:4",
+  "proposal_id": "evolution_proposal:office_baseline_control:office_baseline_control:1775927623386",
+  "created_at_ms": 1775927623386,
+  "strategy_id": "office_baseline_control",
+  "detector": "suspicious_process_tree",
+  "kind": "coverage_gap",
+  "scenario_name": "evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1775927623386:coverage_gap:evasion_lateral_movement_remote_admin:4-harvest",
+  "scenario_path": "data/evolution-assurance-cases/scenarios/evolution_assurance_case_evolution_proposal_office_baseline_control_office_baseline_control_1775927623386_coverage_gap_evasion_lateral_movement_remote_admin_4.yaml",
+  "suite_name": "evasion_breadth_v1",
+  "corpus_version": "2026-04-10",
+  "verification_id": "verification:office_baseline_control:office_baseline_control:office_detector_safety_v1",
+  "proof_id": "evolution_proof:office_baseline_control:office_baseline_control:1775927623384",
+  "reason_name": "coverage_gap",
+  "reason_details": "scenario `evasion_lateral_movement_remote_admin` covers detector `suspicious_process_tree` gap for LateralMovement",
+  "threat_class": "lateral_movement",
+  "techniques": [
+    "T1047",
+    "T1021.001",
+    "T1021.006",
+    "T1021.003"
+  ],
+  "source_references": [
+    "/Users/connor/Medica/backbay/standalone/swarm-team-six/scenarios/evasion-lateral-movement-remote-admin.yaml",
+    "evolution_proposal:office_baseline_control:office_baseline_control:1775927623386",
+    "verification:office_baseline_control:office_baseline_control:office_detector_safety_v1",
+    "evolution_proof:office_baseline_control:office_baseline_control:1775927623384"
+  ]
+}

@@ -1,0 +1,208 @@
+name: evolution_assurance_case:evolution_proposal:office_baseline_control:office_baseline_control:1775927291847:coverage_gap:evasion_lateral_movement_remote_admin:4-harvest
+description: Harvested assurance coverage-gap replay derived from `evasion_lateral_movement_remote_admin`
+seed_time_ms: 1775927291847
+requested_by: evolution-assurance-harvest
+receipt_chain:
+- seed-receipt
+- evolution_proposal:office_baseline_control:office_baseline_control:1775927291847
+- verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
+- evolution_proof:office_baseline_control:office_baseline_control:1775927291846
+metadata:
+  class: adversarial
+  threat_class: lateral_movement
+  campaign: adversarial.robustness
+  techniques:
+  - T1047
+  - T1021.001
+  - T1021.006
+  - T1021.003
+  tags:
+  - lateral-movement
+  - remote-admin
+  - auth
+  - assurance_case
+  - coverage_gap
+  - suspicious_process_tree
+  - evolution_proposal:office_baseline_control:office_baseline_control:1775927291847
+input:
+  kind: events
+  events:
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-1
+      timestamp: 1701000400100
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: process_start
+        parent_process: cmd.exe
+        process_name: wmic
+        command_line: wmic /node:db-01 process call create cmd.exe /c whoami
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-2
+      timestamp: 1701000400200
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: process_start
+        parent_process: cmd.exe
+        process_name: psexec
+        command_line: psexec \\\\file-01 cmd.exe /c ipconfig
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-3
+      timestamp: 1701000400300
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: process_start
+        parent_process: cmd.exe
+        process_name: winrs
+        command_line: winrs -r:app-01 powershell.exe whoami
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-4
+      timestamp: 1701000400400
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: process_start
+        parent_process: powershell.exe
+        process_name: powershell.exe
+        command_line: Invoke-Command -ComputerName dc01 -ScriptBlock { whoami }
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-5
+      timestamp: 1701000400500
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: process_start
+        parent_process: powershell.exe
+        process_name: powershell.exe
+        command_line: New-PSSession -ComputerName sql01
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-6
+      timestamp: 1701000400600
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: process_start
+        parent_process: powershell.exe
+        process_name: powershell.exe
+        command_line: Invoke-CimMethod -ComputerName hr01 -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='cmd /c whoami'}
+        user: alice
+        executable_path: null
+        signer: null
+        signature_valid: null
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-7
+      timestamp: 1701000400700
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: authentication_event
+        auth_type: ssh
+        source_host: wkstn-22
+        target_host: db-01
+        target_service: ssh
+        process_name: ssh.exe
+        success: true
+        user: alice
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-8
+      timestamp: 1701000400800
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: authentication_event
+        auth_type: rdp
+        source_host: wkstn-22
+        target_host: dc-01
+        target_service: rdp
+        process_name: mstsc.exe
+        success: false
+        user: alice
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-9
+      timestamp: 1701000400900
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: authentication_event
+        auth_type: rdp
+        source_host: wkstn-22
+        target_host: dc-01
+        target_service: rdp
+        process_name: mstsc.exe
+        success: false
+        user: alice
+  - action:
+      type: isolate_host
+      host_id: host-evasion-lateral-1
+    event:
+      source: synthetic
+      event_id: evasion-lat-10
+      timestamp: 1701000401000
+      host_id: host-evasion-lateral-1
+      payload:
+        kind: authentication_event
+        auth_type: rdp
+        source_host: wkstn-22
+        target_host: dc-01
+        target_service: rdp
+        process_name: mstsc.exe
+        success: false
+        user: alice
+expectations:
+  replay_bundle_count: null
+  investigation_count: null
+  incident_count: null
+  hunts: []
+  incident_hunt_groups: []
+  max_detect_latency_us: null
+  max_policy_latency_us: null
+  max_response_latency_us: null

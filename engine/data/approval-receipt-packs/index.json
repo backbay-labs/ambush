@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "pack_id": "approval-receipt-pack:1775999669109:a641dacc5440",
+      "verdict_id": "approval-verdict:1775999669108:ddaf2fede53b",
+      "approval_set_id": "approval-set:1775999669082:8115c0109f59",
+      "ledger_id": "approval-ledger:1775999669082:b4154e22f68c",
+      "created_at_ms": 1775999669109,
+      "bundle_path": "data/approval-receipt-packs/reports/approval-receipt-pack_1775999669109_a641dacc5440.json"
+    },
+    {
+      "pack_id": "approval-receipt-pack:1775999389017:653e5fa1dbc5",
+      "verdict_id": "approval-verdict:1775999389015:1b6903d82da2",
+      "approval_set_id": "approval-set:1775999389010:78f831a60ffb",
+      "ledger_id": "approval-ledger:1775999389010:af0e7ffe9869",
+      "created_at_ms": 1775999389017,
+      "bundle_path": "data/approval-receipt-packs/reports/approval-receipt-pack_1775999389017_653e5fa1dbc5.json"
+    },
+    {
+      "pack_id": "approval-receipt-pack:1775999320346:a6ca6571417f",
+      "verdict_id": "approval-verdict:1775999320345:defd1f49d3f4",
+      "approval_set_id": "approval-set:1775999320340:f9616609ea12",
+      "ledger_id": "approval-ledger:1775999320340:182fce43b8b8",
+      "created_at_ms": 1775999320346,
+      "bundle_path": "data/approval-receipt-packs/reports/approval-receipt-pack_1775999320346_a6ca6571417f.json"
+    }
+  ]
+}

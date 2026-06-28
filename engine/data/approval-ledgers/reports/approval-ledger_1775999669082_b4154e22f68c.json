@@ -1,0 +1,20 @@
+{
+  "ledger_id": "approval-ledger:1775999669082:b4154e22f68c",
+  "approval_set_id": "approval-set:1775999669082:8115c0109f59",
+  "entries": [
+    {
+      "entry_id": "approval-ledger-entry:approval-ledger_1775999669082_b4154e22f68c:1",
+      "voter_id": "swarm:ed25519:540dcaf002221dd1e8afecd4fa6169d3512682b92268935abcecfb3ee6ec6a6d",
+      "vote": "approve",
+      "signature": {
+        "algorithm": "ed25519",
+        "key_id": "d0b6fb3dd363202ae97278d1217e390bacb316b50abcc359c89a26b594acfdd0",
+        "public_key_hex": "540dcaf002221dd1e8afecd4fa6169d3512682b92268935abcecfb3ee6ec6a6d",
+        "signature_hex": "0a7961dfa0c9113706c4a8ca00217baecece535321a428da4998726072a991e8a073f155c0a6765a59a31d35bc13ff87e528047d8b42e69a57d82a5594afa507"
+      },
+      "timestamp_ms": 1775999669106,
+      "envelope_hash": "0x17b2d4762e5c148e113e18c2e047efea9416a3c39a9dcf497da2af870dac31df"
+    }
+  ],
+  "created_at_ms": 1775999669082
+}

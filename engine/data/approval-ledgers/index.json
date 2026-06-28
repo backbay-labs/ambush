@@ -1,0 +1,32 @@
+{
+  "entries": [
+    {
+      "ledger_id": "approval-ledger:1775999669082:b4154e22f68c",
+      "approval_set_id": "approval-set:1775999669082:8115c0109f59",
+      "vote_count": 1,
+      "created_at_ms": 1775999669082,
+      "bundle_path": "data/approval-ledgers/reports/approval-ledger_1775999669082_b4154e22f68c.json"
+    },
+    {
+      "ledger_id": "approval-ledger:1775999389010:af0e7ffe9869",
+      "approval_set_id": "approval-set:1775999389010:78f831a60ffb",
+      "vote_count": 1,
+      "created_at_ms": 1775999389010,
+      "bundle_path": "data/approval-ledgers/reports/approval-ledger_1775999389010_af0e7ffe9869.json"
+    },
+    {
+      "ledger_id": "approval-ledger:1775999320340:182fce43b8b8",
+      "approval_set_id": "approval-set:1775999320340:f9616609ea12",
+      "vote_count": 1,
+      "created_at_ms": 1775999320340,
+      "bundle_path": "data/approval-ledgers/reports/approval-ledger_1775999320340_182fce43b8b8.json"
+    },
+    {
+      "ledger_id": "approval-ledger:1775999234089:e1dce29aae3f",
+      "approval_set_id": "approval-set:1775999234089:01a6b25e01cc",
+      "vote_count": 0,
+      "created_at_ms": 1775999234089,
+      "bundle_path": "data/approval-ledgers/reports/approval-ledger_1775999234089_e1dce29aae3f.json"
+    }
+  ]
+}

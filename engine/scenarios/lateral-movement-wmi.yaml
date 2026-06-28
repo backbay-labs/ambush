@@ -1,0 +1,34 @@
+name: lateral_movement_wmi
+description: WMI remote execution should trigger the lateral movement detector
+seed_time_ms: 1700000200000
+requested_by: replay-whisker
+metadata:
+  class: adversarial
+  techniques:
+    - T1047
+  tags:
+    - lateral-movement
+    - wmi
+    - remote-exec
+
+input:
+  kind: events
+  events:
+    - action:
+        type: isolate_host
+        host_id: host-wmi-1
+      event:
+        source: synthetic
+        event_id: hunt-wmi-1
+        timestamp: 1700000200100
+        host_id: host-wmi-1
+        payload:
+          kind: process_start
+          parent_process: cmd
+          process_name: wmic
+          command_line: wmic /node:db-01 process call create cmd.exe /c whoami
+          user: alice
+
+expectations:
+  replay_bundle_count: 1
+  max_detect_latency_us: 50000

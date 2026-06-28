@@ -1,0 +1,222 @@
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+image:
+  repository: swarm-team-six
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 9090
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+podAnnotations: {}
+automountServiceAccountToken: false
+podSecurityContext: {}
+containerSecurityContext: {}
+imagePullSecrets: []
+nodeSelector: {}
+affinity: {}
+tolerations: []
+
+runtimePaths:
+  stateRoot: /var/lib/swarm
+
+scratchVolume:
+  enabled: false
+  mountPath: /tmp
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+probes:
+  startup:
+    failureThreshold: 30
+    periodSeconds: 5
+  readiness:
+    timeoutSeconds: 2
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    timeoutSeconds: 2
+    periodSeconds: 20
+    failureThreshold: 3
+
+persistence:
+  enabled: true
+  mountPath: /var/lib/swarm
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  storageClassName: ""
+
+secrets:
+  enabled: true
+  existingSecret: ""
+  mountPath: /var/run/swarm-secrets
+  files: {}
+
+tls:
+  enabled: false
+  existingSecret: ""
+  mountPath: /var/run/swarm-tls
+  certFile: server-cert.pem
+  keyFile: server-key.pem
+  clientCaFile: ""
+
+swarmConfig:
+  schema_version: 1
+  name: helm-deployment
+  description: Swarm Team Six deployment rendered by Helm
+  runtime:
+    mode: detect_only
+    telemetry_sources:
+      - name: synthetic-process
+        subject: telemetry.synthetic.process
+    max_in_flight_actions: 4
+    drain_timeout_ms: 30000
+    require_durable_live_response: true
+    max_heap_pressure: 0.9
+    governance_degraded_tick_threshold: 3
+    secret_dir: /var/run/swarm-secrets
+  detection:
+    strategy: suspicious_process_tree
+    strategies: []
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+    profiles: {}
+  pheromone:
+    default_half_life_secs: 3600.0
+    evaporation_threshold: 0.01
+    min_sources_for_escalation: 2
+    alert_threshold: 2.0
+    incident_threshold: 5.0
+    deescalation_cooldown_secs: 300
+    response_playbook:
+      rules:
+        - threat_class: execution
+          severity: HIGH
+          min_confidence: 0.9
+          max_confidence: 1.0
+          actions:
+            - type: deploy_decoy
+              decoy_type: honeypot
+              target_zone: dmz
+            - type: escalate
+              summary: execution spike crossed the high-confidence autonomous threshold
+              urgency: HIGH
+    backend:
+      kind: local_journal
+      path: /var/lib/swarm/pheromones.jsonl
+  policy:
+    human_gate_severity: HIGH
+    lease_ttl_ms: 60000
+    max_actions_per_scope_per_minute: 5
+    rules:
+      - name: execution-after-hours-autorespond
+        decision: allow
+        threat_class: execution
+        actions:
+          - deploy_decoy
+          - escalate
+        min_severity: HIGH
+        max_severity: CRITICAL
+        time_window_utc:
+          start_hour_utc: 0
+          end_hour_utc: 24
+        max_actions_per_agent_per_minute: 4
+        reason: execution playbook actions are allowed for elevated execution findings
+  response_adapter:
+    kind: sandbox
+  siem_forward: null
+  notification_channels: {}
+  notification_routing:
+    dedup_window_ms: 1000
+    rules: []
+  audit:
+    bundle_store:
+      kind: local_files
+      directory: /var/lib/swarm/replay
+    recent_decisions_limit: 20
+  investigation:
+    enabled: false
+    worker_count: 1
+    max_pending_jobs: 16
+    time_budget_ms: 250
+    bundle_store:
+      kind: local_files
+      directory: /var/lib/swarm/investigations
+  correlation:
+    enabled: false
+    time_window_ms: 300000
+    min_shared_keys: 1
+    candidate_limit: 32
+    incident_store:
+      kind: local_files
+      directory: /var/lib/swarm/incidents
+  canary:
+    enabled: true
+    slot_id: canary-primary
+    strategy_id: null
+    observation_window_events: 2
+    max_candidate_only_rate: 0.25
+    max_baseline_miss_rate: 0.25
+    max_detect_latency_us: 10000
+    max_total_detections: 8
+  promotion:
+    enabled: true
+    window_id: production-primary
+    strategy_id: null
+    observation_window_events: 2
+    max_promoted_only_rate: 0.2
+    max_fallback_recovery_rate: 0.2
+    max_detect_latency_us: 10000
+    max_total_detections: 12
+  platform_api:
+    keys: []
+  operator_surface:
+    enabled: false
+    bind_addr: 127.0.0.1:7766
+    runtime_base_url: http://127.0.0.1:9090
+    public_base_url: http://127.0.0.1:7766
+    max_list_results: 50
+    auth:
+      operator_id: local-operator
+      token_env: SWARM_OPERATOR_TOKEN
+
+nats:
+  enabled: false
+  image:
+    repository: nats
+    tag: 2.11-alpine
+    pullPolicy: IfNotPresent
+  service:
+    port: 4222
+    monitoringPort: 8222
+  jetstream:
+    storeDir: /data
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

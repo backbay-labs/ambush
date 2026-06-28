@@ -1,0 +1,37 @@
+name: benign_baseline
+description: Benign process activity should not emit replay bundles or incidents
+seed_time_ms: 1700000200000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: benign
+  tags:
+    - baseline
+    - control
+
+input:
+  kind: events
+  events:
+    - action:
+        type: escalate
+        summary: operator review
+        urgency: MEDIUM
+      event:
+        source: synthetic
+        event_id: hunt-benign-1
+        timestamp: 1700000002000
+        host_id: host-benign
+        payload:
+          kind: process_start
+          parent_process: launchd
+          process_name: ls
+          command_line: ls -la
+          user: alice
+
+expectations:
+  replay_bundle_count: 0
+  investigation_count: 0
+  incident_count: 0
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

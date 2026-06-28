@@ -1,0 +1,69 @@
+[package]
+name = "swarm-runtime"
+description = "Rust-first runtime wiring detection, substrate, policy, and response"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+z3 = ["dep:z3"]
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+anyhow.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+ed25519-dalek.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+swarm-core.workspace = true
+swarm-consensus.workspace = true
+swarm-ingest-json.workspace = true
+swarm-ingest-sentinel.workspace = true
+swarm-ingest-tetragon.workspace = true
+swarm-policy.workspace = true
+swarm-response.workspace = true
+swarm-whisker.workspace = true
+swarm-pheromone.workspace = true
+swarm-spine.workspace = true
+swarm-crypto.workspace = true
+swarm-guard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream = { workspace = true, features = ["sync"] }
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+prometheus-client.workspace = true
+notify.workspace = true
+arc-swap.workspace = true
+rand_core.workspace = true
+uuid.workspace = true
+sysinfo.workspace = true
+reqwest.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+tracing-opentelemetry.workspace = true
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "http1", "tokio"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+x509-parser = "0.16"
+z3 = { version = "0.20", optional = true, features = ["gh-release"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+rcgen = "0.13"
+
+[[bench]]
+name = "hot_path"
+harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,71 @@
+@import 'tailwindcss';
+@import '@xterm/xterm/css/xterm.css';
+
+@theme {
+  --color-surface: #0a0b0e;
+  --color-panel: #111318;
+  --color-panel-2: #161922;
+  --color-edge: #232733;
+  --color-accent: #36f1a3;
+  --color-accent-dim: #1b8a5e;
+  --color-vector: #5ad7ff;
+  --color-danger: #ff5d6c;
+  --color-warn: #ffb454;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-surface);
+  color: #e6e8ee;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #262a36;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(54, 241, 163, 0.35);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(54, 241, 163, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(54, 241, 163, 0);
+  }
+}
+.live-ring {
+  animation: pulse-ring 1.8s infinite;
+}

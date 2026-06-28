@@ -1,0 +1,27 @@
+name: evasion_breadth_v1
+description: Curated adversarial robustness corpus spanning execution, fileless evasion, C2, exfiltration, lateral movement, credential access, and persistence with benign controls
+corpus_version: 2026-04-10
+metadata:
+  campaign: adversarial.robustness
+  techniques:
+    - T1204.002
+    - T1055
+    - T1071.004
+    - T1021.001
+    - T1003.001
+    - T1547.001
+  tags:
+    - adversarial
+    - evasion
+    - coverage
+
+scenarios:
+  - ../scenarios/evasion-execution-office-chains.yaml
+  - ../scenarios/evasion-defense-evasion-fileless.yaml
+  - ../scenarios/evasion-command-and-control-network.yaml
+  - ../scenarios/evasion-data-exfiltration-dns.yaml
+  - ../scenarios/evasion-lateral-movement-remote-admin.yaml
+  - ../scenarios/evasion-credential-access-harvest.yaml
+  - ../scenarios/evasion-persistence-autostart.yaml
+  - ../scenarios/benign-baseline.yaml
+  - ../scenarios/python-maintenance-benign.yaml

@@ -1,0 +1,334 @@
+# Default repository-owned configuration for the Rust-first runtime.
+schema_version: 1
+name: default
+description: Default configuration for the v1 detect-and-respond slice
+
+runtime:
+  mode: detect_only
+  telemetry_sources:
+    - name: synthetic-process
+      subject: telemetry.synthetic.process
+    # - name: sentinel-infra
+    #   bridge:
+    #     kind: sentinel
+    #     endpoint: http://127.0.0.1:9100/metrics
+  max_in_flight_actions: 4
+  drain_timeout_ms: 30000
+  require_durable_live_response: true
+  max_heap_pressure: 0.90
+  governance_degraded_tick_threshold: 3
+  partition_contingency_lease_ttl_ms: 300000
+  partition_contingency_blast_radius_cap: 1
+  # Set secret_dir when using @secret:file-name adapter references.
+  secret_dir:
+
+detection:
+  # Supported strategies: suspicious_process_tree, dns_exfiltration,
+  # lateral_movement, credential_access, suspicious_scripting,
+  # persistence, supply_chain, network_connect, infrastructure_anomaly,
+  # fileless_execution, behavioral_anomaly
+  strategy: suspicious_process_tree
+  # Multi-strategy mode (takes precedence over `strategy` when present):
+  # strategies:
+  #   - suspicious_process_tree
+  #   - infrastructure_anomaly
+  high_confidence_threshold: 0.90
+  medium_confidence_threshold: 0.70
+  # Optional per-strategy profile overrides:
+  # profiles:
+  #   network_connect:
+  #     suspicious_ports: [4444, 5555]
+  #     process_port_allowlist:
+  #       curl: [80, 443]
+  #   infrastructure_anomaly:
+  #     min_sustained_high_cpu_samples: 2
+  #     correlation_window_secs: 120
+  #   fileless_execution:
+  #     min_region_size_bytes: 8192
+  #     privileged_target_processes: [lsass, winlogon]
+  #   behavioral_anomaly:
+  #     min_host_observations: 6
+  #     baseline_half_life_secs: 7200
+  #     rare_role_tools: [powershell.exe, wmic.exe]
+
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+  deescalation_cooldown_secs: 300
+  response_playbook:
+    rules:
+      - threat_class: execution
+        severity: HIGH
+        min_confidence: 0.90
+        max_confidence: 1.00
+        actions:
+          - type: deploy_decoy
+            decoy_type: honeypot
+            target_zone: dmz
+          - type: escalate
+            summary: execution spike crossed the high-confidence autonomous threshold
+            urgency: HIGH
+      - threat_class: command_and_control
+        severity: CRITICAL
+        min_confidence: 0.95
+        max_confidence: 1.00
+        actions:
+          - type: block_egress
+            target: 203.0.113.10
+          - type: escalate
+            summary: critical C2 activity matched the emergency response playbook
+            urgency: CRITICAL
+  # For a durable shared substrate, switch backend.kind to jet_stream
+  # and add:
+  #   url: nats://127.0.0.1:4222
+  #   connect_timeout_ms: 5000
+  #   gc_page_size: 512
+  backend:
+    kind: in_memory
+
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+  max_actions_per_scope_per_minute: 5
+  rules:
+    - name: execution-after-hours-autorespond
+      decision: allow
+      threat_class: execution
+      actions: [deploy_decoy, escalate]
+      min_severity: HIGH
+      max_severity: CRITICAL
+      time_window_utc:
+        start_hour_utc: 0
+        end_hour_utc: 24
+      max_actions_per_agent_per_minute: 4
+      reason: execution playbook actions are allowed for elevated execution findings
+    - name: command-and-control-emergency-block
+      decision: allow
+      threat_class: command_and_control
+      actions: [block_egress, escalate]
+      min_severity: CRITICAL
+      max_severity: CRITICAL
+      time_window_utc:
+        start_hour_utc: 0
+        end_hour_utc: 24
+      max_actions_per_agent_per_minute: 2
+      reason: critical C2 traffic can trigger immediate containment and escalation
+    - name: credential-access-destructive-deny
+      decision: deny
+      threat_class: credential_access
+      actions: [revoke_credential]
+      min_severity: LOW
+      max_severity: HIGH
+      reason: low-confidence credential access findings stay operator-driven by default
+
+response_adapter:
+  kind: sandbox
+
+# Optional canonical finding forwarding for external SIEM sinks.
+# siem_forward:
+#   kind: splunk_hec
+#   endpoint: https://splunk.example/services/collector/event
+#   auth_token: "@secret:env:SWARM_SPLUNK_TOKEN"
+#   timeout_ms: 5000
+#   dead_letter_path: ./siem-dead-letter.jsonl
+
+# Optional routed notification channels for operator-facing alerts.
+# notification_channels:
+#   pager:
+#     target_url: https://hooks.example/swarm/pager
+#     auth_token: "@secret:env:SWARM_NOTIFY_TOKEN"
+#     request_signature:
+#       header: X-Swarm-Signature
+#       secret: "@secret:env:SWARM_NOTIFY_HMAC"
+#     timeout_ms: 5000
+#     rate_limit:
+#       max_notifications: 5
+#       window_ms: 60000
+#     quiet_hours:
+#       start_hour_utc: 0
+#       end_hour_utc: 6
+#     dead_letter_path: ./notification-pager.jsonl
+#
+# notification_routing:
+#   dedup_window_ms: 1000
+#   rules:
+#     - min_severity: HIGH
+#       threat_class: execution
+#       channels: [pager]
+#
+# Providence-native incident lifecycle uses the reserved channel name
+# `providence_webhook`. Set `target_url` to the Providence incidents
+# collection endpoint (for example `https://providence.example/incidents`).
+# Swarm will create, update, and resolve incidents through that endpoint and
+# expose Providence reachability/auth state on `/healthz` and `/readyz`.
+
+audit:
+  bundle_store:
+    kind: memory
+  recent_decisions_limit: 20
+
+investigation:
+  enabled: false
+  worker_count: 1
+  max_pending_jobs: 16
+  time_budget_ms: 250
+  bundle_store:
+    kind: memory
+
+correlation:
+  enabled: false
+  time_window_ms: 300000
+  min_shared_keys: 1
+  candidate_limit: 32
+  incident_store:
+    kind: memory
+
+canary:
+  enabled: true
+  slot_id: canary-primary
+  # Optional rollout baseline scope. This becomes required when
+  # detection.strategies enables more than one active strategy.
+  strategy_id:
+  observation_window_events: 2
+  max_candidate_only_rate: 0.25
+  max_baseline_miss_rate: 0.25
+  max_detect_latency_us: 10000
+  max_total_detections: 8
+
+promotion:
+  enabled: true
+  window_id: production-primary
+  # Optional production fallback scope. When omitted, promotion inherits
+  # the completed canary baseline strategy after validating it is still active.
+  strategy_id:
+  observation_window_events: 2
+  max_promoted_only_rate: 0.20
+  max_fallback_recovery_rate: 0.20
+  max_detect_latency_us: 10000
+  max_total_detections: 12
+
+evolution:
+  enabled: false
+  observation_window_secs: 3600
+  drift_threshold_pct: 0.40
+  minimum_observations: 3
+  cooldown_secs: 900
+  max_variants_per_cycle: 2
+  shortlist_count: 1
+  population_size: 16
+  pareto_tournament_size: 4
+  max_proposals_per_hour: 4
+  fitness_weights:
+    detection_rate: 0.40
+    false_positive_cost: 0.30
+    speed: 0.15
+    threat_class_coverage: 0.15
+  safety_gate:
+    invariant_bundle_paths:
+      - safety/office-detector-admission.yaml
+    enable_z3: false
+  assurance:
+    require_solver_summary: false
+    min_detector_catch_rate: 0.25
+    allowed_solver_statuses:
+      - proved
+      - disabled
+    coverage_overrides: []
+    harvest:
+      results_dir: data/evolution-assurance-cases
+      max_cases_per_proposal: 8
+      max_events_per_case: 16
+    waiver:
+      allowed_operator_ids: []
+      max_ttl_secs: 3600
+      max_actionable_gap_count: 4
+  paths:
+    replay_results_dir: data/replay-runs
+    experiment_results_dir: data/experiments
+    verification_results_dir: data/verifications
+    shadow_results_dir: data/shadows
+    strategy_memory_results_dir: data/strategy-memory
+    strategy_scorecard_results_dir: data/strategy-scorecards
+    evolution_proof_results_dir: data/evolution-proofs
+    evolution_queue_results_dir: data/evolution-queue
+    evolution_selection_results_dir: data/evolution-selections
+    evolution_bridge_results_dir: data/evolution-selection-bridges
+    evolution_handoff_results_dir: data/evolution-handoffs
+    evolution_pressure_results_dir: data/evolution-pressures
+    evolution_draft_results_dir: data/evolution-drafts
+    evolution_draft_promotion_results_dir: data/evolution-draft-promotions
+    evolution_materialization_results_dir: data/evolution-materializations
+    evolution_validation_results_dir: data/evolution-validation-bundles
+    evolution_reconciliation_results_dir: data/evolution-reconciliations
+    evolution_mutation_results_dir: data/evolution-mutations
+    evolution_mutation_materialization_batch_results_dir: data/evolution-mutation-materialization-batches
+    evolution_mutation_validation_batch_results_dir: data/evolution-mutation-validation-batches
+    evolution_ranking_results_dir: data/evolution-rankings
+    evolution_population_results_dir: data/evolution-population
+    canary_results_dir: data/canaries
+
+deception:
+  enabled: false
+  lifecycle_results_dir: data/deception-lifecycle
+  rotation_interval_secs: 86400
+  cleanup_grace_secs: 3600
+  interaction_fitness_weight: 0.15
+  playbook:
+    entries:
+      - name: finance-canary-file
+        decoy_type: canary_token
+        target_zone: finance
+        host_profile: linux-app
+        placement_strategy: high_value_path
+        monitoring:
+          file_paths:
+            - /srv/data/finance/payroll.xlsx
+          threat_class: initial_access
+          severity: HIGH
+          confidence: 0.99
+      - name: dmz-ssh-honeypot
+        decoy_type: honeypot
+        target_zone: dmz
+        host_profile: ssh-bastion
+        placement_strategy: network_segment
+        monitoring:
+          honeypot_ports: [2222]
+          threat_class: lateral_movement
+          severity: HIGH
+          confidence: 0.99
+      - name: ops-canary-credential
+        decoy_type: canary_token
+        target_zone: core
+        host_profile: domain-admin
+        placement_strategy: baseline
+        monitoring:
+          canary_credentials:
+            - svc-backup-canary
+          threat_class: initial_access
+          severity: HIGH
+          confidence: 0.99
+
+memory:
+  enabled: false
+  knowledge_graph_results_dir: data/knowledge-graph
+  temporal_window_secs: 3600
+  knowledge_retention_days: 90
+
+identity:
+  agent_key_dir: data/agent-keys
+  registry_dir: data/agent-identity
+
+operator_surface:
+  enabled: false
+  bind_addr: "127.0.0.1:7766"
+  runtime_base_url: "http://127.0.0.1:9090"
+  public_base_url: "http://127.0.0.1:7766"
+  allowed_embed_origins: []
+  max_list_results: 50
+  widget_token_ttl_secs: 900
+  auth:
+    operator_id: local-operator
+    token_env: SWARM_OPERATOR_TOKEN

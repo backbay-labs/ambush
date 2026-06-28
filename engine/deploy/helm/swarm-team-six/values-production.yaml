@@ -1,0 +1,123 @@
+replicaCount: 1
+
+automountServiceAccountToken: false
+
+podSecurityContext:
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+runtimePaths:
+  # Primary backup boundary for runtime-local durable state.
+  stateRoot: /var/lib/swarm
+
+scratchVolume:
+  enabled: true
+  mountPath: /tmp
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+persistence:
+  enabled: true
+  # Covers replay, investigations, incidents, runtime identities, and any
+  # local_journal pheromone state when NATS is disabled.
+  mountPath: /var/lib/swarm
+  accessModes:
+    - ReadWriteOnce
+  size: 50Gi
+
+secrets:
+  enabled: true
+  existingSecret: swarm-team-six-runtime-secrets
+  mountPath: /var/run/swarm-secrets
+  files: {}
+
+tls:
+  enabled: true
+  existingSecret: swarm-team-six-runtime-tls
+  mountPath: /var/run/swarm-tls
+  certFile: server-cert.pem
+  keyFile: server-key.pem
+  clientCaFile: ""
+
+nats:
+  enabled: true
+  persistence:
+    enabled: true
+    # Separate durability boundary for JetStream-backed pheromone state.
+    size: 50Gi
+
+swarmConfig:
+  name: production-jetstream
+  description: Supported secure production profile rendered by Helm
+  runtime:
+    mode: detect_only
+    telemetry_sources:
+      - name: synthetic-process
+        subject: telemetry.synthetic.process
+    max_in_flight_actions: 8
+    drain_timeout_ms: 30000
+    require_durable_live_response: true
+    max_heap_pressure: 0.9
+    governance_degraded_tick_threshold: 3
+  pheromone:
+    backend:
+      kind: jet_stream
+      url: ""
+      connect_timeout_ms: 5000
+      gc_page_size: 512
+  investigation:
+    enabled: true
+    worker_count: 2
+    max_pending_jobs: 64
+    time_budget_ms: 500
+    bundle_store:
+      kind: local_files
+      directory: /var/lib/swarm/investigations
+  correlation:
+    enabled: true
+    time_window_ms: 300000
+    min_shared_keys: 1
+    candidate_limit: 32
+    incident_store:
+      kind: local_files
+      directory: /var/lib/swarm/incidents
+  operator_surface:
+    enabled: false
+    # Deploy `swarmctl serve` as a separate operator workload before enabling this.
+    # The operator workload should mount the shared state root and secret bundle, then
+    # expose the surface behind a private network boundary or mTLS-enabled ingress.
+    bind_addr: 0.0.0.0:7766
+    runtime_base_url: https://detect.example
+    public_base_url: https://operator.example
+    auth:
+      context_token_env: SWARM_OPERATOR_CONTEXT_TOKEN
+      principals:
+        - operator_id: operator-readonly
+          token_env: SWARM_OPERATOR_READ_TOKEN
+          scopes: ["read"]
+        - operator_id: operator-rehearse
+          token_env: SWARM_OPERATOR_REHEARSE_TOKEN
+          scopes: ["read", "rehearse"]
+        - operator_id: swarm:ed25519:replace-with-approval-operator-id
+          token_env: SWARM_OPERATOR_APPROVE_TOKEN
+          scopes: ["read", "approve"]
+        - operator_id: operator-maintenance
+          token_env: SWARM_OPERATOR_MAINT_TOKEN
+          scopes: ["read", "maintenance"]

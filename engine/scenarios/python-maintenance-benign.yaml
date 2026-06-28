@@ -1,0 +1,41 @@
+name: python_maintenance_benign
+description: A benign python maintenance job using curl should remain a clean control unless a candidate broadens parent matching too far
+seed_time_ms: 1700000400000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: benign
+  campaign: operator_maintenance
+  techniques:
+    - T1105
+  tags:
+    - control
+    - python
+    - maintenance
+
+input:
+  kind: events
+  events:
+    - action:
+        type: escalate
+        summary: operator review
+        urgency: MEDIUM
+      event:
+        source: synthetic
+        event_id: hunt-python-benign-1
+        timestamp: 1700000004000
+        host_id: host-python
+        payload:
+          kind: process_start
+          parent_process: python
+          process_name: curl
+          command_line: curl https://intranet.local/health
+          user: svc-maintenance
+
+expectations:
+  replay_bundle_count: 0
+  investigation_count: 0
+  incident_count: 0
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

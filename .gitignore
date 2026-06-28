@@ -1,0 +1,13 @@
+node_modules/
+out/
+dist/
+.DS_Store
+*.log
+.ambush-data/
+.vite/
+tsconfig.*.tsbuildinfo
+
+# Rust engine build artifacts
+target/
+**/target/
+engine/**/*.rs.bk
