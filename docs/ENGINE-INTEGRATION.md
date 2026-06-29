@@ -9,8 +9,7 @@ other**:
 1. A **TypeScript/Electron control plane** (`src/`) that fans one mission out into parallel
    agent "Vectors" running in git worktrees, embeds an OpenKnowledge intel vault, and governs
    tool calls with Chio.
-2. A **Rust detection + live-response engine** (`engine/`, codenamed *Swarm Team Six /
-   ClawdStrike Ambush*) that ingests telemetry, fires detections, deposits pheromones,
+2. A **Rust detection + live-response engine** (`engine/`, codenamed *Ambush Engine*) that ingests telemetry, fires detections, deposits pheromones,
    authorizes response through a deterministic policy gate, and emits signed receipts.
 
 This document maps what each half provides, the gap between them, the integration-surface
@@ -59,7 +58,7 @@ in-process `bus` (`src/main/util/bus.ts`); the IPC layer forwards bus events to 
 git-worktree isolation, terminal multiplexing, an embedded intel wiki, Chio-signed receipts for
 agent tool calls, and a desktop UI (Operations, Vectors, Receipts tabs).
 
-### 1b. Engine (Rust / Swarm Team Six)
+### 1b. Engine (Rust / Ambush Engine)
 
 The engine is a Rust workspace ([`engine/Cargo.toml`](../engine/Cargo.toml)) of focused crates.
 Its README and [`engine/docs/ARCHITECTURE.md`](../engine/docs/ARCHITECTURE.md) describe a

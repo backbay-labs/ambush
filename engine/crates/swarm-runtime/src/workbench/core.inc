@@ -2928,7 +2928,7 @@ impl DefaultReviewWorkbenchHarness {
 
 pub fn render_review_session_list(list: &ReviewSessionList) -> String {
     let mut lines = vec![
-        "Swarm Team Six Review Sessions".to_string(),
+        "Ambush Engine Review Sessions".to_string(),
         format!("Total: {}", list.total_count),
     ];
     for session in &list.sessions {
@@ -2947,7 +2947,7 @@ pub fn render_review_session_list(list: &ReviewSessionList) -> String {
 
 pub fn render_review_session(resolved: &ReviewSessionResolved) -> String {
     let mut lines = vec![
-        "Swarm Team Six Review Session".to_string(),
+        "Ambush Engine Review Session".to_string(),
         format!("Session ID: {}", resolved.session.report.session_id),
         format!(
             "Title: {}",
@@ -3001,7 +3001,7 @@ pub fn render_review_session(resolved: &ReviewSessionResolved) -> String {
 
 pub fn render_review_session_export(export: &ReviewSessionExport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Review Session Export".to_string(),
+        "Ambush Engine Review Session Export".to_string(),
         format!("Export ID: {}", export.export_id),
         format!("Session ID: {}", export.session_id),
         format!("Artifacts: {}", export.artifact_refs.len()),
@@ -3029,7 +3029,7 @@ pub fn render_review_session_export(export: &ReviewSessionExport) -> String {
 
 pub fn render_review_capsule(capsule: &ReviewCapsule) -> String {
     let mut lines = vec![
-        "Swarm Team Six Portable Review Capsule".to_string(),
+        "Ambush Engine Portable Review Capsule".to_string(),
         format!("Capsule ID: {}", capsule.capsule_id),
         format!("Session ID: {}", capsule.session_id),
         format!(
@@ -3068,7 +3068,7 @@ pub fn render_review_capsule(capsule: &ReviewCapsule) -> String {
 
 pub fn render_review_capsule_import(import: &ReviewCapsuleImport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Review Capsule Import".to_string(),
+        "Ambush Engine Review Capsule Import".to_string(),
         format!("Import ID: {}", import.import_id),
         format!("Source path: {}", import.source_path),
         format!("Trust status: {}", import.trust_status.as_str()),
@@ -3097,7 +3097,7 @@ pub fn render_review_capsule_import(import: &ReviewCapsuleImport) -> String {
 
 pub fn render_review_delegation_packet(packet: &ReviewDelegationPacket) -> String {
     let mut lines = vec![
-        "Swarm Team Six Review Delegation Packet".to_string(),
+        "Ambush Engine Review Delegation Packet".to_string(),
         format!("Delegation ID: {}", packet.delegation_id),
         format!("Session ID: {}", packet.session_id),
         format!("Source kind: {}", packet.source_kind.as_str()),
@@ -3132,7 +3132,7 @@ pub fn render_review_delegation_packet(packet: &ReviewDelegationPacket) -> Strin
 
 pub fn render_review_session_handoff(handoff: &ReviewSessionMaintenanceHandoff) -> String {
     let mut lines = vec![
-        "Swarm Team Six Review Session Maintenance Handoff".to_string(),
+        "Ambush Engine Review Session Maintenance Handoff".to_string(),
         format!("Handoff ID: {}", handoff.handoff_id),
         format!("Session ID: {}", handoff.session_id),
         format!("Status: {}", maintenance_status_label(handoff.status)),
@@ -3155,7 +3155,7 @@ pub fn render_review_session_promotion_readiness(
     readiness: &ReviewSessionPromotionReadiness,
 ) -> String {
     let mut lines = vec![
-        "Swarm Team Six Promotion Readiness Review".to_string(),
+        "Ambush Engine Promotion Readiness Review".to_string(),
         format!("Readiness ID: {}", readiness.readiness_id),
         format!("Session ID: {}", readiness.session_id),
         format!("Recommendation: {}", readiness.recommendation.as_str()),

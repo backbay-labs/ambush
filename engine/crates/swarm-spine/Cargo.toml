@@ -1,6 +1,6 @@
 [package]
 name = "swarm-spine"
-description = "Signed envelopes, checkpoints, and Merkle audit trail (from ClawdStrike spine)"
+description = "Signed envelopes, checkpoints, and Merkle audit trail for Ambush Engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

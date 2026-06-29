@@ -75,7 +75,7 @@ as plain markdown; the swarm just runs ungoverned and the wiki is a folder inste
 ## Two halves: control plane + engine
 
 Ambush is a desktop **control plane** (TypeScript/Electron) sitting on top of a Rust
-**detection & live-response engine** (originally *Swarm Team Six / ClawdStrike Ambush*).
+**detection & live-response engine** (originally *Ambush Engine*).
 
 - The **control plane** orchestrates agent swarms, intel, and governance for offensive /
   emergency-response work.
@@ -137,5 +137,5 @@ are wired end-to-end with graceful degradation when external binaries are absent
 ## License
 
 The control plane (`src/`) is **MIT** (see [LICENSE](./LICENSE)). The Rust engine under
-`engine/` originates from Swarm Team Six and is **Apache-2.0** (see `engine/README.md`). Both are
+`engine/` is the Ambush Engine and is **Apache-2.0** (see `engine/README.md`). Both are
 permissive and compatible.

@@ -2598,7 +2598,7 @@ impl DefaultReplayHarness {
 /// Render one replay run in a concise operator-friendly format.
 pub fn render_replay_run(run: &ReplayRunBundle) -> String {
     let mut lines = vec![
-        "Swarm Team Six Replay Run".to_string(),
+        "Ambush Engine Replay Run".to_string(),
         format!("Scenario: {}", run.scenario_name),
         format!("Run: {}", run.run_id),
         format!("Source: {:?}", run.input_kind),
@@ -2633,7 +2633,7 @@ pub fn render_replay_run(run: &ReplayRunBundle) -> String {
 /// Render one evaluation report for operator review or CI failure output.
 pub fn render_evaluation_report(report: &ReplayEvaluationReport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Replay Evaluation".to_string(),
+        "Ambush Engine Replay Evaluation".to_string(),
         format!("Scenario: {}", report.scenario_name),
         format!("Run: {}", report.run_id),
         format!("Status: {}", if report.passed { "pass" } else { "fail" }),
@@ -2656,7 +2656,7 @@ pub fn render_evaluation_report(report: &ReplayEvaluationReport) -> String {
 /// Render a whole-suite replay evaluation report.
 pub fn render_suite_report(report: &ReplaySuiteReport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Replay Suite".to_string(),
+        "Ambush Engine Replay Suite".to_string(),
         format!("Source: {}", report.source),
         format!(
             "Selection: {}",
@@ -2732,7 +2732,7 @@ pub fn render_suite_report(report: &ReplaySuiteReport) -> String {
 /// Render one persisted detector experiment report.
 pub fn render_experiment_report(report: &StrategyExperimentReport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Detector Experiment".to_string(),
+        "Ambush Engine Detector Experiment".to_string(),
         format!("Experiment: {}", report.experiment_name),
         format!("Experiment ID: {}", report.experiment_id),
         format!("Suite: {} ({})", report.suite_name, report.corpus_version),
@@ -2794,7 +2794,7 @@ pub fn render_experiment_report(report: &StrategyExperimentReport) -> String {
 /// Render one persisted detector verification report.
 pub fn render_verification_report(report: &DetectorVerificationReport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Detector Verification".to_string(),
+        "Ambush Engine Detector Verification".to_string(),
         format!("Experiment: {}", report.experiment_name),
         format!("Verification ID: {}", report.verification_id),
         format!("Corpus: {}", report.corpus_name),
@@ -2826,7 +2826,7 @@ pub fn render_verification_report(report: &DetectorVerificationReport) -> String
 /// Render one persisted shadow comparison report.
 pub fn render_shadow_report(report: &StrategyShadowReport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Shadow Evaluation".to_string(),
+        "Ambush Engine Shadow Evaluation".to_string(),
         format!("Experiment: {}", report.experiment_name),
         format!("Shadow ID: {}", report.shadow_id),
         format!("Suite: {} ({})", report.suite_name, report.corpus_version),
@@ -2876,7 +2876,7 @@ pub fn render_shadow_report(report: &StrategyShadowReport) -> String {
 /// Render one persisted promotion review packet.
 pub fn render_promotion_review_packet(packet: &PromotionReviewPacket) -> String {
     let mut lines = vec![
-        "Swarm Team Six Promotion Review Packet".to_string(),
+        "Ambush Engine Promotion Review Packet".to_string(),
         format!("Experiment: {}", packet.experiment_name),
         format!("Review ID: {}", packet.review_id),
         format!("Candidate: {}", packet.candidate_strategy_id),

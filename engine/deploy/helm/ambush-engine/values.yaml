@@ -4,7 +4,7 @@ fullnameOverride: ""
 replicaCount: 1
 
 image:
-  repository: swarm-team-six
+  repository: ambush-engine
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -79,7 +79,7 @@ tls:
 swarmConfig:
   schema_version: 1
   name: helm-deployment
-  description: Swarm Team Six deployment rendered by Helm
+  description: Ambush Engine deployment rendered by Helm
   runtime:
     mode: detect_only
     telemetry_sources:

@@ -1406,7 +1406,7 @@ impl DefaultEvidenceHarness {
 
 pub fn render_evidence_bundle(bundle: &EvidenceBundle) -> String {
     [
-        "Swarm Team Six Evidence Bundle".to_string(),
+        "Ambush Engine Evidence Bundle".to_string(),
         format!("Bundle ID: {}", bundle.bundle_id),
         format!(
             "Subject: {} {}",
@@ -1425,7 +1425,7 @@ pub fn render_evidence_bundle(bundle: &EvidenceBundle) -> String {
 
 pub fn render_evidence_bundle_list(list: &EvidenceBundleList) -> String {
     let mut lines = vec![
-        "Swarm Team Six Evidence Bundles".to_string(),
+        "Ambush Engine Evidence Bundles".to_string(),
         format!("Total: {}", list.total_count),
     ];
     for bundle in &list.bundles {
@@ -1449,7 +1449,7 @@ pub fn render_evidence_bundle_list(list: &EvidenceBundleList) -> String {
 
 pub fn render_evidence_verification(report: &EvidenceVerificationReport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Evidence Verification".to_string(),
+        "Ambush Engine Evidence Verification".to_string(),
         format!("Verification ID: {}", report.verification_id),
         format!("Bundle ID: {}", report.bundle_id),
         format!(
@@ -1474,7 +1474,7 @@ pub fn render_evidence_verification(report: &EvidenceVerificationReport) -> Stri
 
 pub fn render_promotion_evidence_packet(packet: &PromotionEvidencePacket) -> String {
     let mut lines = vec![
-        "Swarm Team Six Promotion Evidence Packet".to_string(),
+        "Ambush Engine Promotion Evidence Packet".to_string(),
         format!("Packet ID: {}", packet.packet_id),
         format!("Promotion ID: {}", packet.promotion_id),
         format!(

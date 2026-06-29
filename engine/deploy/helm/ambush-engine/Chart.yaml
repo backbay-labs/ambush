@@ -1,6 +1,6 @@
 apiVersion: v2
-name: swarm-team-six
-description: Repo-owned Helm chart for Swarm Team Six detect-server deployments
+name: ambush-engine
+description: Repo-owned Helm chart for Ambush Engine detect-server deployments
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

@@ -533,7 +533,7 @@ impl DefaultEvolutionStatusHarness {
 
 pub fn render_evolution_status(report: &EvolutionStatusReport) -> String {
     let mut lines = vec![
-        "Swarm Team Six Evolution Status".to_string(),
+        "Ambush Engine Evolution Status".to_string(),
         format!("Enabled: {}", report.enabled),
         format!("Generation count: {}", report.generation_count),
         format!(

@@ -8,7 +8,7 @@ what lanes they operate in, and what boundaries constrain them.
 
 ## Executive Summary
 
-Swarm Team Six ships eight runtime agent roles:
+Ambush Engine ships eight runtime agent roles:
 
 - `Whisker` drives hot-path detection and pheromone deposit.
 - `Stalker` drives async investigation when investigation is enabled.

@@ -1,4 +1,4 @@
-# Swarm Team Six: Configuration Reference
+# Ambush Engine: Configuration Reference
 
 > Canonical runtime configuration surface, tuning parameters, and environment
 > variables.  
@@ -315,8 +315,8 @@ File-backed runtime config now also requires an adjacent detached-signature side
 
 This applies to the shipped repo config too:
 
-- [default.yaml](/Users/connor/Medica/backbay/standalone/swarm-team-six/rulesets/default.yaml)
-- [default.yaml.sig.json](/Users/connor/Medica/backbay/standalone/swarm-team-six/rulesets/default.yaml.sig.json)
+- [default.yaml](/Users/connor/Medica/backbay/standalone/ambush-engine/rulesets/default.yaml)
+- [default.yaml.sig.json](/Users/connor/Medica/backbay/standalone/ambush-engine/rulesets/default.yaml.sig.json)
 
 Operationally:
 
@@ -473,7 +473,7 @@ Deployment bootstrap commands:
 
 ### Helm Deployment
 
-The repo now ships a base Helm chart at `deploy/helm/swarm-team-six/` for `swarm_detect --serve`.
+The repo now ships a base Helm chart at `deploy/helm/ambush-engine/` for `swarm_detect --serve`.
 
 The chart renders the runtime config from Helm values, mounts secret files into `runtime.secret_dir`, wires the existing `/startupz`, `/readyz`, `/livez`, and `/prestop` surfaces, and includes a declared `charts/nats` dependency for JetStream-backed pheromone storage.
 
@@ -485,12 +485,12 @@ There are now two distinct chart entrypoints:
 Use the production profile for supported deployments:
 
 ```bash
-helm template swarm-team-six deploy/helm/swarm-team-six \
-  -f deploy/helm/swarm-team-six/values-production.yaml
+helm template ambush-engine deploy/helm/ambush-engine \
+  -f deploy/helm/ambush-engine/values-production.yaml
 
-helm install swarm-team-six deploy/helm/swarm-team-six \
-  -f deploy/helm/swarm-team-six/values-production.yaml \
-  --set image.repository=ghcr.io/example/swarm-team-six \
+helm install ambush-engine deploy/helm/ambush-engine \
+  -f deploy/helm/ambush-engine/values-production.yaml \
+  --set image.repository=ghcr.io/example/ambush-engine \
   --set image.tag=latest
 ```
 
@@ -522,7 +522,7 @@ Supported durability matrix:
 
 | Surface | Backing store | Backup expectation | Restore source |
 | --- | --- | --- | --- |
-| `deploy/helm/swarm-team-six/values-production.yaml` and rendered `/etc/swarm/config.yaml` | Git plus Helm release history | Required, but backed up as repo and release metadata rather than PVC contents | Re-render with Helm, then reapply the release |
+| `deploy/helm/ambush-engine/values-production.yaml` and rendered `/etc/swarm/config.yaml` | Git plus Helm release history | Required, but backed up as repo and release metadata rather than PVC contents | Re-render with Helm, then reapply the release |
 | `/var/run/swarm-secrets` and `/var/run/swarm-tls` | Kubernetes Secret objects | Required | Restore the Secret objects before restarting the pod |
 | `/var/lib/swarm` runtime state root | Runtime PVC | Required | Restore the runtime PVC snapshot or clone before bringing the deployment back |
 | `/var/lib/swarm/pheromones/pheromones.jsonl` in bootstrap `local_journal` mode | Runtime PVC | Required when `nats.enabled=false` | Restored as part of the runtime PVC |
@@ -2290,7 +2290,7 @@ nats:
 
 ## Environment Variables
 
-Environment variables override YAML config for deployment flexibility. They are prefixed with `STS_` (Swarm Team Six).
+Environment variables override YAML config for deployment flexibility. They are prefixed with `STS_`.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|

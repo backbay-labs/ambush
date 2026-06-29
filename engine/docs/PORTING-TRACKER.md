@@ -1,12 +1,12 @@
 # Porting Tracker
 
-Status of upstream code assimilation into STS-native crates.
+Status of upstream code assimilation into Ambush Engine's native crates.
 
 Last reviewed: 2026-04-04
 
 ## swarm-crypto (stub — needs hush-core)
 
-Source: `vendor/reference/clawdstrike/libs/hush-core/src/`
+Source: `vendor/reference/ambush-engine/libs/hush-core/src/`
 
 | Upstream File | Lines | Target | Status | Notes |
 |---|---|---|---|---|
@@ -19,9 +19,9 @@ Source: `vendor/reference/clawdstrike/libs/hush-core/src/`
 
 New workspace dep needed: `ryu` (canonical JSON number formatting).
 
-## swarm-guard (stub — needs clawdstrike guards)
+## swarm-guard (stub — needs ambush-engine guards)
 
-Source: `clawdstrike/crates/libs/clawdstrike/src/guards/` (live repo, not vendor snapshot — async guards and spider sense are not vendored)
+Source: `ambush-engine/crates/libs/ambush-engine/src/guards/` (live repo, not vendor snapshot — async guards and spider sense are not vendored)
 
 ### Core framework
 
@@ -42,11 +42,11 @@ Source: `clawdstrike/crates/libs/clawdstrike/src/guards/` (live repo, not vendor
 | PromptInjectionGuard | `prompt_injection.rs` | 8.9K | Low | Future — when LLM integration arrives |
 | JailbreakGuard | `jailbreak.rs` | 10.9K | Low | Future — when LLM integration arrives |
 
-Adaptation: `GuardAction` needs swarm's `ResponseAction` variants (IsolateHost, BlockEgress, RevokeCredential) alongside clawdstrike's existing action types.
+Adaptation: `GuardAction` needs swarm's `ResponseAction` variants (IsolateHost, BlockEgress, RevokeCredential) alongside ambush-engine's existing action types.
 
 ## swarm-spine (partial — needs envelope/checkpoint from spine)
 
-Source: `vendor/reference/clawdstrike/libs/spine/src/`
+Source: `vendor/reference/ambush-engine/libs/spine/src/`
 
 Existing swarm-spine code (incident.rs, investigation.rs, store.rs) stays unchanged. New modules add cryptographic commitment on top.
 
@@ -60,10 +60,10 @@ Existing swarm-spine code (incident.rs, investigation.rs, store.rs) stays unchan
 
 ## swarm-consensus (stub — no upstream source)
 
-ClawdStrike has checkpoint witness quorum validation but no BFT consensus rounds. The checkpoint signing pattern in `spine/checkpoint.rs` is a useful reference for vote encoding, but propose/prevote/precommit state machine must be built from scratch or ported from an external BFT library.
+Ambush Engine has checkpoint witness quorum validation but no BFT consensus rounds. The checkpoint signing pattern in `spine/checkpoint.rs` is a useful reference for vote encoding, but propose/prevote/precommit state machine must be built from scratch or ported from an external BFT library.
 
 Status: Deferred. Not blocking current milestones.
 
 ## Arc as complementary source
 
-See [ARC-UPSTREAM.md](ARC-UPSTREAM.md) for items better sourced from `../arc/` than clawdstrike.
+See [ARC-UPSTREAM.md](ARC-UPSTREAM.md) for items better sourced from `../arc/` than ambush-engine.

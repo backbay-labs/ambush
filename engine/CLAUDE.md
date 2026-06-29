@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Swarm Team Six is a Rust-first autonomous detection and live-response engine. Product name: **ClawdStrike Ambush**.
+Ambush Engine is a Rust-first autonomous detection and live-response engine. Product name: **Ambush**.
 
 The first proof point is narrow and operational:
 - ingest telemetry in Rust
@@ -31,8 +31,8 @@ These paths exist for inspiration or archive context, not as the production runt
 
 ## Upstream Adaptation Strategy
 
-Swarm Team Six is being made self-contained. Useful ideas may be copied and refactored locally from:
-- ClawdStrike - detection, guards, receipts, signing, envelope ideas
+Ambush Engine is being made self-contained. Useful ideas may be copied and refactored locally from these predecessor and sibling codebases:
+- the predecessor engine - detection, guards, receipts, signing, envelope ideas
 - Hellcat - replay and adversarial evaluation ideas
 - Cyntra - scheduler and orchestration patterns
 

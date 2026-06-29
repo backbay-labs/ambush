@@ -343,7 +343,7 @@ This is a hard architectural constraint, enforced in [`AGENTS.md`](../AGENTS.md)
 - **Chio governance is preferred but optional** — all external binaries (`ok`, `chio`, agent CLIs)
   must degrade gracefully when missing (see §3).
 - **`vendor/` is intentionally excluded.** The engine was seeded with porting *references* from
-  private upstreams — ClawdStrike, Hellcat, Cyntra, Arc (see
+  private upstreams — the engine's own predecessor lineage, Hellcat, Cyntra, and Arc (see
   [`engine/docs/VENDOR-REFERENCES.md`](../engine/docs/VENDOR-REFERENCES.md) and
   [`engine/docs/ARC-UPSTREAM.md`](../engine/docs/ARC-UPSTREAM.md)). Those copies are **not** runtime
   dependencies and must not be checked in here: do not leak private upstream code. Any promoted

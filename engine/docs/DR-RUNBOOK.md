@@ -1,4 +1,4 @@
-# Swarm Team Six Disaster Recovery Runbook
+# Ambush Engine Disaster Recovery Runbook
 
 > Operational recovery procedures for the supported `v1.53` production profile
 > and the hardened serve-mode runtime.  
@@ -26,8 +26,8 @@ The Phase 180 production profile defines two durable boundaries:
 
 Object names in the examples below assume the default chart naming contract:
 
-- runtime Deployment: `${RELEASE}-swarm-team-six`
-- runtime PVC: `${RELEASE}-swarm-team-six`
+- runtime Deployment: `${RELEASE}-ambush-engine`
+- runtime PVC: `${RELEASE}-ambush-engine`
 - NATS StatefulSet: `${RELEASE}-nats`
 - NATS PVC: `data-${RELEASE}-nats-0`
 
@@ -36,11 +36,11 @@ If `fullnameOverride` is set, substitute the actual names consistently.
 Use the same repo-owned packaging and runtime surfaces for every drill:
 
 ```bash
-export RELEASE=swarm-team-six
+export RELEASE=ambush-engine
 export NAMESPACE=swarm-system
-export CHART=deploy/helm/swarm-team-six
-export VALUES=deploy/helm/swarm-team-six/values-production.yaml
-export RENDERED=/tmp/swarm-team-six-values-production-rendered.yaml
+export CHART=deploy/helm/ambush-engine
+export VALUES=deploy/helm/ambush-engine/values-production.yaml
+export RENDERED=/tmp/ambush-engine-values-production-rendered.yaml
 
 helm template "$RELEASE" "$CHART" -f "$VALUES" --show-only templates/configmap.yaml \
   | sed -n '/^  config.yaml: |$/,$p' \
@@ -49,7 +49,7 @@ helm template "$RELEASE" "$CHART" -f "$VALUES" --show-only templates/configmap.y
 cargo run -p swarm-runtime --bin swarmctl -- validate --config "$RENDERED" --json
 
 kubectl -n "$NAMESPACE" get deploy,sts,pvc
-kubectl -n "$NAMESPACE" port-forward deploy/"$RELEASE"-swarm-team-six 9090:9090
+kubectl -n "$NAMESPACE" port-forward deploy/"$RELEASE"-ambush-engine 9090:9090
 ```
 
 ## 1. Supported Durability Inventory
@@ -88,8 +88,8 @@ This is the minimum durable evidence set for later recovery and capacity phases.
 
 ```bash
 curl -sf http://127.0.0.1:9090/prestop | jq .
-kubectl -n "$NAMESPACE" scale deploy/"$RELEASE"-swarm-team-six --replicas=0
-kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-swarm-team-six
+kubectl -n "$NAMESPACE" scale deploy/"$RELEASE"-ambush-engine --replicas=0
+kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-ambush-engine
 ```
 
 3. Take a storage-level snapshot of the runtime PVC mounted at `/var/lib/swarm`.
@@ -110,8 +110,8 @@ test -s "$RENDERED"
 
 ```bash
 helm upgrade --install "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$VALUES"
-kubectl -n "$NAMESPACE" scale deploy/"$RELEASE"-swarm-team-six --replicas=1
-kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-swarm-team-six
+kubectl -n "$NAMESPACE" scale deploy/"$RELEASE"-ambush-engine --replicas=1
+kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-ambush-engine
 ```
 
 4. Re-establish the port-forward and verify readiness:
@@ -134,7 +134,7 @@ Upgrade drill:
 
 ```bash
 helm upgrade --install "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$VALUES"
-kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-swarm-team-six
+kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-ambush-engine
 kubectl -n "$NAMESPACE" rollout status sts/"$RELEASE"-nats
 ```
 
@@ -172,8 +172,8 @@ kubectl -n "$NAMESPACE" rollout status sts/"$RELEASE"-nats
 ```bash
 kubectl -n "$NAMESPACE" scale sts/"$RELEASE"-nats --replicas=1
 kubectl -n "$NAMESPACE" rollout status sts/"$RELEASE"-nats
-kubectl -n "$NAMESPACE" scale deploy/"$RELEASE"-swarm-team-six --replicas=1
-kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-swarm-team-six
+kubectl -n "$NAMESPACE" scale deploy/"$RELEASE"-ambush-engine --replicas=1
+kubectl -n "$NAMESPACE" rollout status deploy/"$RELEASE"-ambush-engine
 ```
 
 5. Verify the substrate is healthy:
@@ -268,7 +268,7 @@ kubectl -n "$NAMESPACE" logs sts/"$RELEASE"-nats --tail=100
 #### Verification Commands
 
 ```bash
-kubectl -n "$NAMESPACE" exec deploy/"$RELEASE"-swarm-team-six -- df -h /var/lib/swarm
+kubectl -n "$NAMESPACE" exec deploy/"$RELEASE"-ambush-engine -- df -h /var/lib/swarm
 curl -sf http://127.0.0.1:9090/healthz | jq .
 ```
 

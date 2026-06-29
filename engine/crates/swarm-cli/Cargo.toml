@@ -1,6 +1,6 @@
 [package]
 name = "swarm-cli"
-description = "Repo-owned operator CLI surface for Swarm Team Six"
+description = "Repo-owned operator CLI surface for Ambush Engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

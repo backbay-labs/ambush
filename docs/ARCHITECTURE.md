@@ -24,7 +24,7 @@ governance, signed receipts) but ship and run independently today.
 | Half | Path | Language / Stack | License | Role |
 | --- | --- | --- | --- | --- |
 | **Control plane** | [`src/`](../src) | TypeScript · Electron · `electron-vite` · React 19 · Tailwind 4 · Zustand · xterm · node-pty | MIT | Operator surface: deploy/observe/govern a live agent swarm. Mirrors Orca's structure. |
-| **Engine** | [`engine/`](../engine) | Rust workspace (`cargo`) | Apache-2.0 | Autonomous detection + live-response runtime ("Swarm Team Six / ClawdStrike Ambush"). |
+| **Engine** | [`engine/`](../engine) | Rust workspace (`cargo`) | Apache-2.0 | Autonomous detection + live-response runtime ("Ambush Engine"). |
 
 They are **separate processes / separate build systems**. The control plane is
 the shipping product; the Rust engine is a parallel runtime whose planned
@@ -363,8 +363,7 @@ returns the path. Triggered from the Intel pane's "Consolidate" button
 
 ## 5. The Rust Engine
 
-The engine under [`engine/`](../engine) is **Swarm Team Six / ClawdStrike
-Ambush** — a Rust-first autonomous detection and live-response runtime
+The engine under [`engine/`](../engine) is **Ambush Engine** — a Rust-first autonomous detection and live-response runtime
 (Apache-2.0). Its product proof point is *fast detection with safe live response*,
 not a full multi-agent platform.
 
@@ -475,7 +474,7 @@ ambush/
 │                                        #   TopBar, StatusBar, OperationSetup
 │
 └─ engine/                               # Rust detection/response runtime (Apache-2.0)
-   ├─ README.md                          # "Swarm Team Six / ClawdStrike Ambush"
+   ├─ README.md                          # "Ambush Engine"
    ├─ docs/ARCHITECTURE.md               # canonical Rust runtime architecture
    └─ crates/                            # swarm-core, -whisker, -pheromone, -policy,
                                          #   -response, -runtime, -spine, -crypto,

@@ -22,5 +22,5 @@ SOFTWARE.
 
 ---
 
-The Rust engine under `engine/` originates from the Swarm Team Six / ClawdStrike
-Ambush project and is licensed under Apache-2.0. See `engine/README.md` for details.
+The Rust engine under `engine/` originates from the Ambush Engine project and
+is licensed under Apache-2.0. See `engine/README.md` for details.

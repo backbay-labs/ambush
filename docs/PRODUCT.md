@@ -180,7 +180,7 @@ What Ambush v0 intentionally does **not** try to be:
 ### The engine (planned convergence)
 
 Under `engine/` lives a separate **Rust detection + live-response engine** (originally
-*Swarm Team Six / ClawdStrike Ambush*, Apache-2.0): ingest telemetry → detect (whisker) →
+*Ambush Engine*, Apache-2.0): ingest telemetry → detect (whisker) →
 pheromone state → fail-closed policy gate → capability-scoped response → signed receipt chain.
 It shares Ambush's philosophy — **fan-out + fail-closed governance + signed receipts** — and
 is intended to converge so the desktop app becomes the operator surface for the engine's

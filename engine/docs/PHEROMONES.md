@@ -1,6 +1,6 @@
 # Pheromone Substrate
 
-Technical reference for the pheromone-based stigmergic coordination layer in Swarm Team Six.
+Technical reference for the pheromone-based stigmergic coordination layer in Ambush Engine.
 
 ---
 
@@ -31,7 +31,7 @@ Stigmergy -- indirect coordination through environmental modification -- elimina
 
 This is the same pattern used by ant colonies: individual ants deposit chemical trails on the ground; other ants follow trails with higher concentration. No ant knows the global plan. The global behavior emerges from local interactions with the shared environment.
 
-In Swarm Team Six, the substrate is backed by NATS JetStream. Pheromones are append-only, cryptographically signed, and subject to exponential decay. The swarm's collective threat picture emerges from the concentration gradients across threat classes, not from any single agent's view.
+In Ambush Engine, the substrate is backed by NATS JetStream. Pheromones are append-only, cryptographically signed, and subject to exponential decay. The swarm's collective threat picture emerges from the concentration gradients across threat classes, not from any single agent's view.
 
 ### Properties of Stigmergic Coordination
 

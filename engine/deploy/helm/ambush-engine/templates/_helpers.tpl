@@ -1,39 +1,39 @@
-{{- define "swarm-team-six.name" -}}
+{{- define "ambush-engine.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "swarm-team-six.fullname" -}}
+{{- define "ambush-engine.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s" .Release.Name (include "swarm-team-six.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s" .Release.Name (include "ambush-engine.name" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "swarm-team-six.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "swarm-team-six.name" . }}
+{{- define "ambush-engine.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "ambush-engine.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "swarm-team-six.labels" -}}
+{{- define "ambush-engine.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
-{{ include "swarm-team-six.selectorLabels" . }}
+{{ include "ambush-engine.selectorLabels" . }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "swarm-team-six.secretName" -}}
+{{- define "ambush-engine.secretName" -}}
 {{- if .Values.secrets.existingSecret -}}
 {{- .Values.secrets.existingSecret -}}
 {{- else -}}
-{{- printf "%s-secrets" (include "swarm-team-six.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-secrets" (include "ambush-engine.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "swarm-team-six.natsServiceName" -}}
+{{- define "ambush-engine.natsServiceName" -}}
 {{- printf "%s-nats" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "swarm-team-six.stateRoot" -}}
+{{- define "ambush-engine.stateRoot" -}}
 {{- $stateRoot := .Values.runtimePaths.stateRoot | default .Values.persistence.mountPath -}}
 {{- if empty $stateRoot -}}
 {{- fail "runtimePaths.stateRoot or persistence.mountPath must be set" -}}
@@ -41,17 +41,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $stateRoot -}}
 {{- end -}}
 
-{{- define "swarm-team-six.tlsSecretName" -}}
+{{- define "ambush-engine.tlsSecretName" -}}
 {{- if .Values.tls.existingSecret -}}
 {{- .Values.tls.existingSecret -}}
 {{- else -}}
-{{- printf "%s-tls" (include "swarm-team-six.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-tls" (include "ambush-engine.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "swarm-team-six.renderConfig" -}}
+{{- define "ambush-engine.renderConfig" -}}
 {{- $config := fromYaml (toYaml .Values.swarmConfig) -}}
-{{- $stateRoot := include "swarm-team-six.stateRoot" . -}}
+{{- $stateRoot := include "ambush-engine.stateRoot" . -}}
 {{- $runtime := default (dict) $config.runtime -}}
 {{- if and (or .Values.secrets.enabled .Values.secrets.existingSecret) (empty $runtime.secret_dir) -}}
 {{- $_ := set $runtime "secret_dir" .Values.secrets.mountPath -}}
@@ -66,7 +66,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- else if eq $backendKind "jet_stream" -}}
 {{- $backendUrl := $backend.url -}}
 {{- if and .Values.nats.enabled (empty $backendUrl) -}}
-{{- $backendUrl = (printf "nats://%s:%v" (include "swarm-team-six.natsServiceName" .) .Values.nats.service.port) -}}
+{{- $backendUrl = (printf "nats://%s:%v" (include "ambush-engine.natsServiceName" .) .Values.nats.service.port) -}}
 {{- end -}}
 {{- $backend = dict "kind" "jet_stream" "url" $backendUrl "connect_timeout_ms" (default 5000 $backend.connect_timeout_ms) "gc_page_size" (default 512 $backend.gc_page_size) -}}
 {{- else if eq $backendKind "in_memory" -}}

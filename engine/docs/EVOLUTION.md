@@ -9,7 +9,7 @@ promotion, and operator-visible evidence.
 
 ## Executive Summary
 
-Swarm Team Six no longer treats evolution as a distant research track. The Rust
+Ambush Engine no longer treats evolution as a distant research track. The Rust
 runtime already owns a bounded evolution lifecycle.
 
 That lifecycle is intentionally narrow:

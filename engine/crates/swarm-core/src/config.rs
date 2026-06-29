@@ -583,7 +583,6 @@ pub struct ResponsePlaybookBranch {
     pub actions: Vec<ResponseAction>,
 }
 
-
 /// Additional bounded selectors for one playbook branch.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

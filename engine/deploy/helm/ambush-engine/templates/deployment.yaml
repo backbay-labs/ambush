@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "swarm-team-six.fullname" . }}
+  name: {{ include "ambush-engine.fullname" . }}
   labels:
-    {{- include "swarm-team-six.labels" . | nindent 4 }}
+    {{- include "ambush-engine.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "swarm-team-six.selectorLabels" . | nindent 6 }}
+      {{- include "ambush-engine.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "swarm-team-six.selectorLabels" . | nindent 8 }}
+        {{- include "ambush-engine.selectorLabels" . | nindent 8 }}
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -80,7 +80,7 @@ spec:
               subPath: config.yaml
               readOnly: true
             - name: data
-              mountPath: {{ include "swarm-team-six.stateRoot" . }}
+              mountPath: {{ include "ambush-engine.stateRoot" . }}
             {{- if .Values.scratchVolume.enabled }}
             - name: scratch
               mountPath: {{ .Values.scratchVolume.mountPath }}
@@ -98,11 +98,11 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "swarm-team-six.fullname" . }}
+            name: {{ include "ambush-engine.fullname" . }}
         {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:
-            claimName: {{ include "swarm-team-six.fullname" . }}
+            claimName: {{ include "ambush-engine.fullname" . }}
         {{- else }}
         - name: data
           emptyDir: {}
@@ -114,12 +114,12 @@ spec:
         {{- if or .Values.secrets.existingSecret (and .Values.secrets.enabled (gt (len .Values.secrets.files) 0)) }}
         - name: secrets
           secret:
-            secretName: {{ include "swarm-team-six.secretName" . }}
+            secretName: {{ include "ambush-engine.secretName" . }}
         {{- end }}
         {{- if .Values.tls.enabled }}
         - name: tls
           secret:
-            secretName: {{ include "swarm-team-six.tlsSecretName" . }}
+            secretName: {{ include "ambush-engine.tlsSecretName" . }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

@@ -1,4 +1,4 @@
-//! Rust-first runtime orchestration for Swarm Team Six.
+//! Rust-first runtime orchestration for Ambush Engine.
 //!
 //! This crate is the intended composition root for the production runtime:
 //! detection stays in Rust, policy stays deterministic, and live response

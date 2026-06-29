@@ -1,6 +1,6 @@
 [package]
 name = "swarm-evolution"
-description = "Evolution, canary, promotion, strategy, and evidence workflows for Swarm Team Six"
+description = "Evolution, canary, promotion, strategy, and evidence workflows for Ambush Engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

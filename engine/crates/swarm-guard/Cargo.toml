@@ -1,6 +1,6 @@
 [package]
 name = "swarm-guard"
-description = "Guard pipeline and Spider Sense detection (from ClawdStrike)"
+description = "Guard pipeline and Spider Sense detection for Ambush Engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

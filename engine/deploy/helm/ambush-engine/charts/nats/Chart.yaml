@@ -1,6 +1,6 @@
 apiVersion: v2
 name: nats
-description: Minimal JetStream-capable NATS subchart for Swarm Team Six
+description: Minimal JetStream-capable NATS subchart for Ambush Engine
 type: application
 version: 0.1.0
 appVersion: "2.11.0"

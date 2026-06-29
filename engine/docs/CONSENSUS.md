@@ -9,7 +9,7 @@ fail-closed partition handling.
 
 ## Executive Summary
 
-Swarm Team Six now ships a real governance lane, but it is deliberately narrow.
+Ambush Engine now ships a real governance lane, but it is deliberately narrow.
 
 The runtime does not require consensus for every action. Most roles observe,
 investigate, correlate, remember, or evolve without entering the governance

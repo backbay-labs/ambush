@@ -1,9 +1,9 @@
-# Swarm Team Six
+# Ambush Engine
 
-**Codename:** Swarm Team Six  
-**Product:** ClawdStrike Ambush
+**Codename:** Ambush Engine  
+**Product:** Ambush
 
-Swarm Team Six is now being rebuilt as a Rust-first autonomous detection and live-response engine.
+Ambush Engine is now being rebuilt as a Rust-first autonomous detection and live-response engine.
 
 The old Python-heavy swarm design is still present in this repository as reference material, but it is no longer the production direction. The current plan is:
 
@@ -89,7 +89,7 @@ The canonical docs for the new direction are:
 ## Workspace Layout
 
 ```text
-swarm-team-six/
+ambush-engine/
 |
 |-- Cargo.toml
 |-- crates/
@@ -112,7 +112,7 @@ swarm-team-six/
 
 ## Vendor References
 
-Selected source trees from ClawdStrike, Hellcat, and Cyntra have been copied into `vendor/reference/` for temporary inspiration while STS is made self-contained.
+Selected source trees from Hellcat, Cyntra, and the engine's own predecessor lineage have been copied into `vendor/reference/` for temporary inspiration while Ambush Engine is made self-contained.
 
 See:
 

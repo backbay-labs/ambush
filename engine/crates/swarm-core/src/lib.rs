@@ -1,4 +1,4 @@
-//! Core types, traits, and primitives for Swarm Team Six.
+//! Core types, traits, and primitives for Ambush Engine.
 //!
 //! This crate defines the fundamental abstractions:
 //! - `SwarmAgent` trait — the interface every agent archetype implements

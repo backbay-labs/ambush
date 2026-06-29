@@ -6,8 +6,7 @@
 > **Operation**) fans out into many parallel agents (**Vectors**), each running in an
 > isolated git worktree with a live terminal, reporting into an embedded
 > **OpenKnowledge** intel vault, governed by **Chio** signed receipts. A separate Rust
-> detection + live-response **engine** (`engine/`, from *Swarm Team Six / ClawdStrike
-> Ambush*) is present in-repo but **not yet wired** to the desktop control plane.
+> detection + live-response **engine** (`engine/`, from *Ambush Engine*) is present in-repo but **not yet wired** to the desktop control plane.
 
 This document tracks where Ambush is today and where it's going. It is grounded in the
 current code state — see the cross-referenced specs for deeper design detail.

@@ -89,7 +89,7 @@ use swarm_runtime::service::ResponsePlaybookPreviewRequest;
 #[derive(Debug, Parser)]
 #[command(
     name = "swarmctl",
-    about = "Repo-owned operator control surface for Swarm Team Six"
+    about = "Repo-owned operator control surface for Ambush Engine"
 )]
 pub struct Cli {
     #[arg(long, global = true, default_value = "rulesets/default.yaml")]

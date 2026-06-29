@@ -712,7 +712,7 @@ fn build_providence_incident_description(
     bridge_health_status: &str,
 ) -> String {
     format!(
-        "Swarm Team Six detected {threat_class} activity from strategy {strategy_id}.\n\
+        "Ambush Engine detected {threat_class} activity from strategy {strategy_id}.\n\
 Incident Key: {incident_key}\n\
 Severity: {severity}\n\
 Confidence: {confidence:.2}\n\

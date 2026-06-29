@@ -753,7 +753,7 @@ fn guided_first_run_config(
 fn render_status(envelope: &ControlEnvelope<OperatorStatusReport>) -> String {
     let report = &envelope.data;
     let mut lines = vec![
-        "Swarm Team Six Operator Status".to_string(),
+        "Ambush Engine Operator Status".to_string(),
         format!("Schema version: {}", envelope.schema_version),
         format!("Origin: {}", origin_label(envelope.origin)),
         format!("Config: {}", envelope.config_name),
@@ -915,7 +915,7 @@ fn render_status(envelope: &ControlEnvelope<OperatorStatusReport>) -> String {
 fn render_readiness(envelope: &ControlEnvelope<ReadinessDiagnosticReport>) -> String {
     let report = &envelope.data;
     let mut lines = vec![
-        "Swarm Team Six Readiness Diagnostic".to_string(),
+        "Ambush Engine Readiness Diagnostic".to_string(),
         format!("Schema version: {}", envelope.schema_version),
         format!("Origin: {}", origin_label(envelope.origin)),
         format!("Config: {}", envelope.config_name),
@@ -982,7 +982,7 @@ fn render_readiness(envelope: &ControlEnvelope<ReadinessDiagnosticReport>) -> St
 fn render_first_run(envelope: &ControlEnvelope<FirstRunDiagnosticReport>) -> String {
     let report = &envelope.data;
     let mut lines = vec![
-        "Swarm Team Six First-Run Wizard".to_string(),
+        "Ambush Engine First-Run Wizard".to_string(),
         format!("Schema version: {}", envelope.schema_version),
         format!("Origin: {}", origin_label(envelope.origin)),
         format!("Config: {}", envelope.config_name),
@@ -1031,7 +1031,7 @@ fn render_first_run(envelope: &ControlEnvelope<FirstRunDiagnosticReport>) -> Str
 fn render_playbook_preview(envelope: &ControlEnvelope<ResponsePlaybookPreviewReport>) -> String {
     let report = &envelope.data;
     let mut lines = vec![
-        "Swarm Team Six Playbook Preview".to_string(),
+        "Ambush Engine Playbook Preview".to_string(),
         format!("Schema version: {}", envelope.schema_version),
         format!("Origin: {}", origin_label(envelope.origin)),
         format!("Config: {}", envelope.config_name),
@@ -1114,7 +1114,7 @@ fn render_playbook_preview(envelope: &ControlEnvelope<ResponsePlaybookPreviewRep
 fn render_replay(envelope: &ControlEnvelope<ReplayArtifactView>) -> String {
     let view = &envelope.data;
     [
-        "Swarm Team Six Replay Bundle".to_string(),
+        "Ambush Engine Replay Bundle".to_string(),
         format!("Schema version: {}", envelope.schema_version),
         format!("Origin: {}", origin_label(envelope.origin)),
         format!("Config: {}", envelope.config_name),
@@ -1130,7 +1130,7 @@ fn render_replay(envelope: &ControlEnvelope<ReplayArtifactView>) -> String {
 fn render_investigation(envelope: &ControlEnvelope<InvestigationArtifactView>) -> String {
     let view = &envelope.data;
     [
-        "Swarm Team Six Investigation Bundle".to_string(),
+        "Ambush Engine Investigation Bundle".to_string(),
         format!("Schema version: {}", envelope.schema_version),
         format!("Origin: {}", origin_label(envelope.origin)),
         format!("Config: {}", envelope.config_name),
@@ -1151,7 +1151,7 @@ fn render_investigation(envelope: &ControlEnvelope<InvestigationArtifactView>) -
 fn render_incident(envelope: &ControlEnvelope<IncidentArtifactView>) -> String {
     let view = &envelope.data;
     [
-        "Swarm Team Six Incident".to_string(),
+        "Ambush Engine Incident".to_string(),
         format!("Schema version: {}", envelope.schema_version),
         format!("Origin: {}", origin_label(envelope.origin)),
         format!("Config: {}", envelope.config_name),
@@ -2059,7 +2059,7 @@ mod tests {
         let rendered = render_output(&OperatorControlOutput::Readiness(Box::new(
             readiness.clone(),
         )));
-        assert!(rendered.contains("Swarm Team Six Readiness Diagnostic"));
+        assert!(rendered.contains("Ambush Engine Readiness Diagnostic"));
         assert!(rendered.contains("Schema version: 1"));
         assert!(rendered.contains("Origin: config_diagnostic"));
 
@@ -2109,7 +2109,7 @@ mod tests {
         );
 
         let rendered = render_output(&OperatorControlOutput::FirstRun(Box::new(report)));
-        assert!(rendered.contains("Swarm Team Six First-Run Wizard"));
+        assert!(rendered.contains("Ambush Engine First-Run Wizard"));
         assert!(rendered.contains("Schema version: 1"));
         assert!(rendered.contains("Origin: guided_first_run"));
     }
@@ -2204,7 +2204,7 @@ mod tests {
         let rendered = render_output(&OperatorControlOutput::PlaybookPreview(Box::new(
             preview.clone(),
         )));
-        assert!(rendered.contains("Swarm Team Six Playbook Preview"));
+        assert!(rendered.contains("Ambush Engine Playbook Preview"));
         assert!(rendered.contains("Schema version: 1"));
         assert!(rendered.contains("Origin: playbook_dry_run"));
         assert!(rendered.contains("Matched branch: #0 incident_containment"));

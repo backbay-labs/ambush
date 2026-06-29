@@ -1,4 +1,4 @@
-# Swarm Team Six: Integration Status
+# Ambush Engine: Integration Status
 
 Status: historical reference only.
 
@@ -33,7 +33,7 @@ agent, governance, evolution, and operator surfaces in the runtime itself.
 Even though this document is not canonical, some themes remain useful as
 background:
 
-- ClawdStrike influenced receipts, signing, policy, and audit-envelope ideas.
+- Ambush Engine influenced receipts, signing, policy, and audit-envelope ideas.
 - Cyntra influenced scheduler, dispatcher, and memory patterns.
 - Hellcat influenced replay pressure, adversarial evaluation, and evolution
   terminology.

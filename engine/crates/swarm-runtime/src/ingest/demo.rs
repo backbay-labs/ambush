@@ -854,7 +854,7 @@ li{{padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.04);font-si
 <main class="shell">
   <section class="header">
     <div>
-      <p class="eyebrow">Swarm Team Six</p>
+      <p class="eyebrow">Ambush Engine</p>
       <h1>Providence Context Widget</h1>
       <div class="muted" id="scope-label">Loading scoped context…</div>
     </div>

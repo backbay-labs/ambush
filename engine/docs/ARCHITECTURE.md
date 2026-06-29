@@ -8,7 +8,7 @@ lane boundaries, and current operator surfaces, not milestone history.
 
 ## Executive Summary
 
-Swarm Team Six ships as a Rust-first detection and controlled-response runtime.
+Ambush Engine ships as a Rust-first detection and controlled-response runtime.
 The runtime already includes:
 
 - a critical detection and response lane

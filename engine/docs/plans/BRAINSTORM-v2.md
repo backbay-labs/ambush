@@ -1,19 +1,19 @@
-# Swarm Team Six: Brainstorm v2
+# Ambush Engine: Brainstorm v2
 
-> Autonomous, self-evolving threat hunting swarm built on ClawdStrike + Cyntra + Hellcat
+> Autonomous, self-evolving threat hunting swarm built on Ambush Engine + Cyntra + Hellcat
 
 ---
 
 ## What Changed Since v1
 
-Wave 2 research revealed that the foundation is far stronger than initially scoped. Three internal systems (ClawdStrike, Cyntra, Hellcat) already provide ~90% of the primitives needed. External research (DeerFlow, MiroFish, 2026 SOTA) validated architectural choices and added new patterns.
+Wave 2 research revealed that the foundation is far stronger than initially scoped. Three internal systems (Ambush Engine, Cyntra, Hellcat) already provide ~90% of the primitives needed. External research (DeerFlow, MiroFish, 2026 SOTA) validated architectural choices and added new patterns.
 
-**The big reframe**: STS is not a greenfield project. It's an **orchestration layer** that wires together:
-- **ClawdStrike** = security enforcement, crypto, transport, formal verification
+**The big reframe**: Ambush Engine is not a greenfield project. It's an **orchestration layer** that wires together:
+- **Ambush Engine** = security enforcement, crypto, transport, formal verification
 - **Cyntra** = scheduling, dispatching, verification, memory, sentinels
 - **Hellcat** = the red swarm (autonomous red teaming kernel, 16 attack operators, OPSEC, learning)
 
-Hellcat is the breakthrough finding. **The co-evolutionary arms race already has one side built.** Hellcat IS the red swarm. STS is the blue swarm. They co-evolve against each other.
+Hellcat is the breakthrough finding. **The co-evolutionary arms race already has one side built.** Hellcat IS the red swarm. Ambush Engine is the blue swarm. They co-evolve against each other.
 
 ---
 
@@ -58,9 +58,9 @@ Each kernel owns a distinct concern:
 |--------|---------|----------|---------|
 | **Cyntra** | "What to do next" -- scheduling, dispatching, verification, memory | Python | ~80% direct |
 | **Hellcat** | "How to attack" -- red team operators, evasion, OPSEC, proof gates | Python | ~70% as red swarm |
-| **ClawdStrike** | "Is it safe" -- policy enforcement, crypto, transport, formal proofs | Rust | ~90% direct |
+| **Ambush Engine** | "Is it safe" -- policy enforcement, crypto, transport, formal proofs | Rust | ~90% direct |
 
-STS itself is thin glue: pheromone substrate, archetype routing, co-evolutionary fitness, and the blue swarm agent implementations.
+Ambush Engine itself is thin glue: pheromone substrate, archetype routing, co-evolutionary fitness, and the blue swarm agent implementations.
 
 ---
 
@@ -69,7 +69,7 @@ STS itself is thin glue: pheromone substrate, archetype routing, co-evolutionary
 This was theoretical in v1. With Hellcat, it's implementable:
 
 ```
-BLUE SWARM (STS)                    RED SWARM (Hellcat)
+BLUE SWARM (Ambush Engine)                    RED SWARM (Hellcat)
 ================                    ===================
 Whiskers detect anomalies    <--->  Operators probe targets
 Stalkers investigate leads   <--->  Evasion engine adapts
@@ -93,7 +93,7 @@ Tom governs                  <--->  StealthBudget constrains
 - Prompt genome evolution (Pareto selection, curriculum-based)
 - AttackPatternDB (cross-engagement technique outcome tracking)
 
-**What STS adds (the blue side):**
+**What Ambush Engine adds (the blue side):**
 - Detection strategy evolution (mirroring Hellcat's prompt evolution)
 - Pheromone-based threat signal aggregation
 - Multi-agent consensus on response actions
@@ -112,7 +112,7 @@ Tom governs                  <--->  StealthBudget constrains
 | **Stalker** (investigate) | Cyntra Dispatcher + workcell isolation | Spawns isolated investigation contexts (Cyntra workcells). Full HushEngine capability. Timeline reconstruction via hunt-query. |
 | **Weaver** (correlate) | Cyntra Verifier + MAGMA multi-graph memory | Maintains 4 parallel graphs: temporal (attack timeline), causal (kill chain), entity (adversary infra), semantic (TTP patterns). Cross-hunt correlation. |
 | **Pouncer** (respond) | Broker capability model + BFT consensus | Never acts alone. Requires 2f+1 consensus from Tom committee. Response actions go through broker (time-bounded, path-scoped, audited). |
-| **Tom** (govern) | ClawdStrike policy engine + posture state machine | Sets autonomy tiers, validates receipts, manages agent lifecycle. Rotating BFT committee membership via VRF. |
+| **Tom** (govern) | Ambush Engine policy engine + posture state machine | Sets autonomy tiers, validates receipts, manages agent lifecycle. Rotating BFT committee membership via VRF. |
 | **Kitten** (evolve) | Hellcat's cognition/evolve loop + Z3 gate | Mutates detection strategies. Tests against Hellcat red swarm replays. Z3 verifies safety invariants. MemRL Q-value scoring for strategy selection. |
 | **Sphinx** (memory) | Cyntra Memory + knowledge graph | Multi-scope memory (individual agent, collective swarm, world/threat landscape). MiroFish-inspired knowledge-graph grounding prevents hallucinated threats. |
 | **Calico** (deception) | New -- honeypot/canary infrastructure | Deploys and manages deception assets. Coordinates with Whiskers to monitor honeypot interactions. Low-risk autonomous action. |
@@ -146,14 +146,14 @@ Tom governs                  <--->  StealthBudget constrains
 
 ### From DeerFlow: Agent Construction
 
-**Ordered Middleware Pipeline.** DeerFlow's 14-middleware pattern for cross-cutting concerns. Proposed STS middleware:
+**Ordered Middleware Pipeline.** DeerFlow's 14-middleware pattern for cross-cutting concerns. Proposed Ambush Engine middleware:
 
 ```
 1. IdentityVerification    (Ed25519 delegation token)
 2. TierAuthorization       (autonomy level enforcement)
 3. PheromoneInjection      (load relevant NATS trails)
 4. ContextCompression      (token-aware summarization)
-5. GuardPipeline           (ClawdStrike guard evaluation)
+5. GuardPipeline           (Ambush Engine guard evaluation)
 6. ToolBoundary            (action-specific access control)
 7. ConsensusGate           (BFT for response actions)
 8. EvidenceCollection      (receipt signing, audit trail)
@@ -162,7 +162,7 @@ Tom governs                  <--->  StealthBudget constrains
 
 **Config-Driven Agent Assembly.** Hunt missions defined in YAML -- which archetypes participate, autonomy tiers, allowed tools, pheromone subscriptions, escalation rules. The swarm assembles from config, not code.
 
-**Harness, Not Framework.** STS is a complete threat hunting runtime you extend, not a library of primitives you assemble. Provides isolation, transport, verification, and coordination out of the box.
+**Harness, Not Framework.** Ambush Engine is a complete threat hunting runtime you extend, not a library of primitives you assemble. Provides isolation, transport, verification, and coordination out of the box.
 
 **Harness/App Layer Separation.** `swarm-core` (reusable) never imports from `swarm-deployment` (environment-specific). Strict unidirectional dependency.
 
@@ -213,11 +213,11 @@ Validated by both devil's advocate analysis and external research:
 ## Concrete Implementation Path
 
 ### Phase 0: Wire the Kernels (foundation)
-- Create `swarm-team-six` crate/package in standalone/
+- Create `ambush-engine` crate/package in standalone/
 - Define `SwarmAgent` trait and archetype configs (YAML)
 - Build pheromone substrate on NATS JetStream (deposit/query/decay)
 - Wire Cyntra Scheduler for hunt task prioritization
-- Wire ClawdStrike guard pipeline as middleware
+- Wire Ambush Engine guard pipeline as middleware
 
 ### Phase 1: Whisker + Stalker Pair (prove the loop)
 - Implement Whisker as Flink-style streaming agent on NATS
@@ -272,11 +272,11 @@ Validated by both devil's advocate analysis and external research:
 
 | Context | Name |
 |---------|------|
-| Internal codename | **Swarm Team Six** |
-| Product name | **ClawdStrike Ambush** |
+| Internal codename | **Ambush Engine** |
+| Product name | **Ambush** |
 | Community name | **The Clowder** |
-| Crate prefix | `clawdstrike-swarm-*` |
-| CLI subcommand | `clawdstrike hunt swarm` |
+| Crate prefix | `ambush-engine-swarm-*` |
+| CLI subcommand | `ambush-engine hunt swarm` |
 | NATS subject prefix | `swarm.*` |
 
 Agent log format:
@@ -293,7 +293,7 @@ Agent log format:
 
 ## Open Questions (Narrowed)
 
-1. **Language split**: Cyntra + Hellcat are Python; ClawdStrike is Rust. Whiskers MUST be Rust (performance). Does the swarm orchestration layer live in Python (reuse Cyntra) or Rust (performance)? Or a Python orchestrator dispatching Rust agents?
+1. **Language split**: Cyntra + Hellcat are Python; Ambush Engine is Rust. Whiskers MUST be Rust (performance). Does the swarm orchestration layer live in Python (reuse Cyntra) or Rust (performance)? Or a Python orchestrator dispatching Rust agents?
 
 2. **Deployment topology**: Hellcat currently runs as a single-process kernel. Making it a NATS-connected red swarm requires refactoring its operators into independent agents. How deep is that refactor?
 
@@ -308,7 +308,7 @@ Agent log format:
 ## Key References (Updated)
 
 **Internal Systems:**
-- ClawdStrike: Guard pipeline, Spine, delegation tokens, Spider Sense, Logos/Z3, Lean 4 spec
+- Ambush Engine: Guard pipeline, Spine, delegation tokens, Spider Sense, Logos/Z3, Lean 4 spec
 - Cyntra Kernel: Scheduler, Dispatcher, Verifier, Memory, Sentinels, Ralph
 - Hellcat: TargetGraph, AttackPlanner, 16 Operators, OPSEC, Proof gates, Prompt evolution
 
