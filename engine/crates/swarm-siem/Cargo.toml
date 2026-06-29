@@ -1,0 +1,17 @@
+[package]
+name = "swarm-siem"
+description = "SIEM export connector — maps swarm-crypto SignedReceipts to OCSF / CEF / HEC-JSON for enterprise SIEM ingestion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+swarm-crypto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+
+[lints]
+workspace = true
