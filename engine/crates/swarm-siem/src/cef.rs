@@ -52,7 +52,13 @@ impl CefFormatter {
         let rt_ms = epoch_millis(event.timestamp()).unwrap_or(0);
         let signature = signature_id(event);
         let name = event_name(outcome);
-        let severity = severity(outcome);
+        // Tamper hygiene (#16): a receipt that failed signature verification gets CEF max severity
+        // so it cannot be filtered out as a low-severity event.
+        let severity = if event.signature_verified == Some(false) {
+            10
+        } else {
+            severity(outcome)
+        };
         let reason = event.reason().unwrap_or_else(|| outcome.as_str());
 
         let header = format!(

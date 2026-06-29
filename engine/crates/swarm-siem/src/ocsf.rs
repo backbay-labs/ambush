@@ -1,15 +1,17 @@
-//! OCSF 1.3.0 Authorization mapping for swarm-crypto receipts.
+//! OCSF 1.3.0 "Authorize Session" mapping for swarm-crypto receipts.
 //!
 //! Transforms a [`SiemEvent`] (or a raw [`SignedReceipt`]) into a JSON object conforming to the
-//! OCSF 1.3.0 Authorization event class (category 3 / `class_uid` 3002).
+//! OCSF 1.3.0 "Authorize Session" event class (IAM category 3 / `class_uid` 3003). NB: 3002 is OCSF
+//! Authentication — an MCP allow/deny verdict is an authorization decision, so 3003 is the right
+//! class.
 //!
-//! Reference: <https://schema.ocsf.io/1.3.0/classes/authorization>
+//! Reference: <https://schema.ocsf.io/1.3.0/classes/authorize_session>
 //!
-//! ## Fail-closed behaviour
+//! ## Tamper hygiene
 //!
-//! Mapping never panics. If `raw_data` serialization fails the event is still emitted with
-//! `class_uid = 3002`, downgraded to `status_id = 0` (Unknown), and an error note is recorded in
-//! the `unmapped` block.
+//! Mapping never panics. A receipt that failed signature verification renders as `status_id = 0`
+//! (Unknown) + Critical severity rather than an authoritative Success, so a forged `passed=true`
+//! cannot masquerade as a clean event.
 
 use serde_json::{Map, Value, json};
 use swarm_crypto::SignedReceipt;
@@ -19,13 +21,14 @@ use crate::event::{ReceiptOutcome, SiemEvent, epoch_millis};
 /// OCSF schema version targeted by this mapper.
 pub const OCSF_SCHEMA_VERSION: &str = "1.3.0";
 
-/// OCSF Authorization event class identifier.
-pub const OCSF_CLASS_UID: u32 = 3002;
+/// OCSF "Authorize Session" event class identifier (IAM category). NB: 3002 is OCSF
+/// Authentication, not Authorization — an MCP allow/deny verdict is an authorization decision.
+pub const OCSF_CLASS_UID: u32 = 3003;
 
-/// OCSF Authorization class name.
-pub const OCSF_CLASS_NAME: &str = "Authorization";
+/// OCSF "Authorize Session" class name.
+pub const OCSF_CLASS_NAME: &str = "Authorize Session";
 
-/// OCSF IAM category identifier (parent of class 3002).
+/// OCSF IAM category identifier (parent of class 3003).
 pub const OCSF_CATEGORY_UID: u32 = 3;
 
 /// OCSF IAM category name.
@@ -47,9 +50,21 @@ pub fn receipt_to_ocsf(receipt: &SignedReceipt) -> Value {
 #[must_use]
 pub fn siem_event_to_ocsf(event: &SiemEvent) -> Value {
     let outcome = event.outcome;
-    let (activity_id, activity_name) = (1_u32, "Grant");
-    let (status_id, status_name) = status_for(outcome);
-    let (severity_id, severity_name) = severity_for(outcome);
+    // Activity reflects the verdict: Allow assigns privileges, Deny revokes them.
+    let (activity_id, activity_name) = match outcome {
+        ReceiptOutcome::Allow => (1_u32, "Assign Privileges"),
+        ReceiptOutcome::Deny => (2_u32, "Revoke Privileges"),
+    };
+    let (mut status_id, mut status_name) = status_for(outcome);
+    let (mut severity_id, mut severity_name) = severity_for(outcome);
+    // Tamper hygiene (#16): a receipt that FAILED signature verification must not render as an
+    // authoritative Success/low-severity event — surface it as Unknown status + Critical severity.
+    if event.signature_verified == Some(false) {
+        status_id = 0;
+        status_name = "Unknown";
+        severity_id = 5;
+        severity_name = "Critical";
+    }
     let type_uid = OCSF_CLASS_UID * 100 + activity_id;
 
     let mut map = Map::new();
@@ -296,10 +311,10 @@ mod tests {
         let ev = siem_event_to_ocsf(&event);
 
         assert_eq!(ev["category_uid"], 3);
-        assert_eq!(ev["class_uid"], 3002);
-        assert_eq!(ev["class_name"], "Authorization");
-        assert_eq!(ev["type_uid"], 300201);
-        assert_eq!(ev["activity_name"], "Grant");
+        assert_eq!(ev["class_uid"], 3003);
+        assert_eq!(ev["class_name"], "Authorize Session");
+        assert_eq!(ev["type_uid"], 300302);
+        assert_eq!(ev["activity_name"], "Revoke Privileges");
         assert_eq!(ev["status_id"], 2);
         assert_eq!(ev["status"], "Failure");
         assert_eq!(ev["severity_id"], 4);
@@ -310,6 +325,18 @@ mod tests {
         assert_eq!(ev["metadata"]["product"]["name"], "Ambush");
         assert_eq!(ev["unmapped"]["ambush"]["outcome"], "deny");
         assert_eq!(ev["unmapped"]["ambush"]["gate_id"], "path-guard");
+    }
+
+    #[test]
+    fn tamper_failed_signature_renders_unknown_critical() {
+        // An ALLOW receipt whose signature did NOT verify must not render as Success/Informational.
+        let mut event = SiemEvent::from_receipt(allow_receipt());
+        event.signature_verified = Some(false);
+        let ev = siem_event_to_ocsf(&event);
+        assert_eq!(ev["status_id"], 0);
+        assert_eq!(ev["status"], "Unknown");
+        assert_eq!(ev["severity_id"], 5);
+        assert_eq!(ev["severity"], "Critical");
     }
 
     #[test]

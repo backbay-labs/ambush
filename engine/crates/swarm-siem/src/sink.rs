@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(body.lines().count(), 2);
         for line in body.lines() {
             let value: Value = serde_json::from_str(line).unwrap();
-            assert_eq!(value["class_uid"], 3002);
+            assert_eq!(value["class_uid"], 3003);
         }
     }
 
