@@ -16,3 +16,5 @@ Generated 2026-06-28 by a multi-agent research/design run. **PLATFORM-BRIEF.md i
 | [DOCS-SECURITY-HARDENING.md](./DOCS-SECURITY-HARDENING.md) | Doc-accuracy fixes + the security-hardening shortlist. |
 | [ARCHITECTURE-REVIEW.md](./ARCHITECTURE-REVIEW.md) | ARCHITECTURE.md accuracy review (graded excellent). |
 | [BRAND-NAMING.md](./BRAND-NAMING.md) | Trademark/naming risk — incl. the ClawdStrike blocker + rename candidates. |
+| [UPSTREAM-HARVEST-PLAN.md](./UPSTREAM-HARVEST-PLAN.md) | **What to copy into Ambush** from the ClawdStrike (engine parent) and Arc/Chio (real governance) upstreams — ranked, with exact paths, effort, and license posture. |
+| [UPSTREAM-HARVEST-VETTING.md](./UPSTREAM-HARVEST-VETTING.md) | License/coupling/over-vendoring skeptic pass + ROI ranking behind the harvest plan. |
