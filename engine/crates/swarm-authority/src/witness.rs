@@ -101,6 +101,8 @@ pub struct DelegatedAdmissionContext {
     pub expected_operation_id: Option<String>,
     pub expected_leaf_vector_id: Option<String>,
     pub expected_leaf_scope_hash: Option<String>,
+    /// The live revocation-epoch number the caller knows; denies a rolled-back older epoch.
+    pub expected_min_epoch: Option<u64>,
 }
 
 /// What a successful delegated admission grants: the root single-hop admission plus the
@@ -265,6 +267,7 @@ pub fn verify_delegated_admission(
         expected_operation_id: ctx.expected_operation_id.clone(),
         expected_vector_id: Some(chain.root_vector_id.clone()),
         expected_vector_scope_hash: None,
+        expected_min_epoch: ctx.expected_min_epoch,
     };
     let root = verify_admission(token, epoch, trusted_keys, &root_ctx, &mut scratch)?;
 
@@ -552,6 +555,7 @@ mod tests {
             expected_operation_id: Some("op-1".into()),
             expected_leaf_vector_id: Some("vec-leaf".into()),
             expected_leaf_scope_hash: Some(witness_scope_hash(&h.leaf_scope).unwrap()),
+            expected_min_epoch: None,
         }
     }
 

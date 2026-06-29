@@ -44,6 +44,10 @@ pub struct AdmissionContext {
     pub expected_operation_id: Option<String>,
     pub expected_vector_id: Option<String>,
     pub expected_vector_scope_hash: Option<String>,
+    /// The current live revocation-epoch number the caller knows (from its authoritative store).
+    /// Admission denies any presented epoch OLDER than this — defeating an epoch-rollback that
+    /// replays a still-in-window genesis epoch to mask a revocation done in a newer epoch.
+    pub expected_min_epoch: Option<u64>,
 }
 
 /// What a successful admission grants the caller.
@@ -88,10 +92,15 @@ pub fn verify_admission(
         return Err(AuthorityError::denied(DenyReason::EpochLineageMismatch));
     }
 
-    // 3. recall: monotonic epoch (no rollback) + revoked-set membership.
-    if epoch.epoch_number < token.min_epoch_number {
+    // 3. recall: monotonic epoch (no rollback) + revoked-set membership. The token's frozen
+    //    min_epoch_number is a floor; the caller's `expected_min_epoch` (the live epoch it knows)
+    //    is the authoritative freshness floor that defeats an epoch-rollback replay.
+    let min_epoch = token
+        .min_epoch_number
+        .max(ctx.expected_min_epoch.unwrap_or(0));
+    if epoch.epoch_number < min_epoch {
         return Err(AuthorityError::denied(DenyReason::StaleEpoch {
-            min_epoch: token.min_epoch_number,
+            min_epoch,
             presented_epoch: epoch.epoch_number,
         }));
     }
@@ -295,6 +304,18 @@ mod tests {
         let pinned = vec![op.public_key()];
         let err = verify_admission(&token, &epoch, &pinned, &ctx(), &mut ReplayGuard::new()).unwrap_err();
         assert!(matches!(err, AuthorityError::Denied(DenyReason::StaleEpoch { .. })));
+    }
+
+    #[test]
+    fn caller_min_epoch_denies_rolled_back_epoch() {
+        let (_op, epoch, token, pinned) = harness(); // token issued at epoch 0
+        // The caller knows the live epoch is now 3 (a recall happened in a newer epoch); presenting
+        // the still-in-window genesis (epoch 0) must be denied even though the token allows epoch 0.
+        let fresh = AdmissionContext { now_unix_ms: NOW, expected_min_epoch: Some(3), ..Default::default() };
+        let err = verify_admission(&token, &epoch, &pinned, &fresh, &mut ReplayGuard::new()).unwrap_err();
+        assert!(matches!(err, AuthorityError::Denied(DenyReason::StaleEpoch { .. })));
+        // Without the assertion (None), the genesis epoch still admits.
+        assert!(verify_admission(&token, &epoch, &pinned, &ctx(), &mut ReplayGuard::new()).is_ok());
     }
 
     #[test]

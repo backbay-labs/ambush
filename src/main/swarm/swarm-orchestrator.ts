@@ -207,7 +207,10 @@ export class SwarmOrchestrator {
       governed,
     })
 
-    const terminalId = `term-${vector.id}`
+    // Unique per launch: on redeploy the new pty gets a fresh id, so the OLD pty's async exit
+    // (which carries the old id) no longer matches the reassigned vector.terminalId and is ignored
+    // by onTerminalExit — it cannot mark the fresh run failed or delete the new live session.
+    const terminalId = `term-${vector.id}-${shortId()}`
     vector.terminalId = terminalId
 
     const args = [...profile.command.slice(1)]
