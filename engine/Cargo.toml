@@ -18,6 +18,7 @@ members = [
     "crates/swarm-crypto",
     "crates/swarm-attest",
     "crates/swarm-governor",
+    "crates/swarm-authority",
 ]
 
 [workspace.package]
@@ -45,6 +46,7 @@ swarm-guard = { version = "0.1.0", path = "crates/swarm-guard" }
 swarm-crypto = { version = "0.1.0", path = "crates/swarm-crypto" }
 swarm-attest = { version = "0.1.0", path = "crates/swarm-attest" }
 swarm-governor = { version = "0.1.0", path = "crates/swarm-governor" }
+swarm-authority = { version = "0.1.0", path = "crates/swarm-authority" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
