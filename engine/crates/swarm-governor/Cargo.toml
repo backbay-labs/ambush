@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 swarm-guard.workspace = true
 swarm-crypto.workspace = true
+swarm-metering.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

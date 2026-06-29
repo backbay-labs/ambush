@@ -1,0 +1,14 @@
+[package]
+name = "swarm-metering"
+description = "Per-lane budget metering (the cost doom-loop lever): BudgetEnforcer (check pre-allow / record post-spend), AggregateSpend over tokens/requests/bytes/usd_micros, and a BudgetTree org hierarchy with subtree roll-up. Wired into swarm-governor to fail-closed deny over-budget actions while still signing the receipt."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
