@@ -1,0 +1,94 @@
+# Adapted from ClawdStrike/Arc (Apache-2.0)
+#
+# Standalone Cargo workspace so libFuzzer / nightly requirements do not
+# leak into the main stable workspace lanes at ../Cargo.toml.
+
+[package]
+name = "swarm-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Expose the structure-aware canonical-JSON mutator to the JSON-decoding
+# `[[bin]]` targets below via library indirection.
+[lib]
+name = "swarm_fuzz"
+path = "src/lib.rs"
+
+# An empty `[workspace]` stanza marks this crate as the root of its own
+# Cargo workspace. Without it, `cargo +nightly fuzz build` would attempt to
+# fold the fuzz crate into the parent workspace at `../Cargo.toml`, which
+# denies `unwrap`/`expect` workspace-wide and pins editions/toolchains that
+# libFuzzer's nightly-only runtime need not satisfy. This crate is therefore
+# intentionally NOT a member of the engine workspace; it does not need to be
+# added to a `[workspace] exclude` list because the engine workspace lists
+# its members explicitly (no globs) and never path-references `fuzz/`.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# `derive` lets per-target structs use `#[derive(Arbitrary)]`.
+arbitrary = { version = "1", features = ["derive"] }
+# Pinned to the same 1.x line consumed by the engine crates.
+serde_json = "1"
+
+# Real Ambush primitives under test. Path deps point back at the engine
+# crates so the fuzzer drives production code, not a copy.
+swarm-crypto = { path = "../crates/swarm-crypto" }
+swarm-guard = { path = "../crates/swarm-guard" }
+swarm-policy = { path = "../crates/swarm-policy" }
+swarm-core = { path = "../crates/swarm-core" }
+swarm-spine = { path = "../crates/swarm-spine" }
+
+# `unwrap_used`/`expect_used` denied so fuzz targets cannot mask panics
+# behind a hidden `.unwrap()`. Targets must consume `Result` via `if let
+# Ok(_)` / `match`, keeping the fail-closed contract honest.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[[bin]]
+name = "canonical_json"
+path = "fuzz_targets/canonical_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sha256"
+path = "fuzz_targets/sha256.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "merkle"
+path = "fuzz_targets/merkle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy_parse"
+path = "fuzz_targets/policy_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "secret_leak"
+path = "fuzz_targets/secret_leak.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attest_verify"
+path = "fuzz_targets/attest_verify.rs"
+test = false
+doc = false
+bench = false
