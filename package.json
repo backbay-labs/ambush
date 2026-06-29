@@ -21,7 +21,8 @@
     "smoke": "node smoke/gate-emission-smoke.mjs",
     "smoke:metering": "node smoke/metering-smoke.mjs",
     "smoke:review": "tsx smoke/findings-review-smoke.ts",
-    "e2e": "tsx smoke/e2e.ts"
+    "e2e": "tsx smoke/e2e.ts",
+    "smoke:security": "node smoke/security-smoke.mjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

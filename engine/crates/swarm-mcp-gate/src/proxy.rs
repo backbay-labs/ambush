@@ -79,13 +79,28 @@ pub fn pump_agent_to_inner<R: BufRead, W: Write>(
                 continue;
             }
         };
+        // Fail closed on non-object frames (JSON-RPC batch arrays, primitives): there is no single
+        // method to gate, so an array wrapping a `tools/call` must NOT slip through ungoverned.
+        if !frame.is_object() {
+            write_locked(&agent_out, &json_rpc_invalid());
+            continue;
+        }
         let method = frame.get("method").and_then(|m| m.as_str()).unwrap_or("");
-        if method != "tools/call" {
+        let id = frame.get("id").cloned().unwrap_or(serde_json::Value::Null);
+
+        // Deny-by-default on method. A frame with no method is a response to a server-initiated
+        // request; inert handshake/list/notification methods pass verbatim; `tools/call` is gated;
+        // every OTHER (side-effecting) method — resources/read, prompts/get, sampling/*, … — is
+        // denied fail-closed so nothing reaches the inner server without a guard decision + receipt.
+        if method.is_empty() || is_passthrough_method(method) {
             let _ = writeln!(inner, "{line}");
             let _ = inner.flush();
             continue;
         }
-        let id = frame.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        if method != "tools/call" {
+            write_locked(&agent_out, &gate.deny_method(&id, method));
+            continue;
+        }
         let params = frame.get("params").cloned().unwrap_or(serde_json::Value::Null);
         let tool = params.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
         let args = params.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
@@ -98,4 +113,20 @@ pub fn pump_agent_to_inner<R: BufRead, W: Write>(
             write_locked(&agent_out, &json_rpc_error(&id, &tool, &outcome));
         }
     }
+}
+
+/// Inert MCP methods that carry no agent action: the handshake, capability listing, notifications,
+/// and log-level — safe to forward verbatim. Everything else is gated or denied.
+fn is_passthrough_method(method: &str) -> bool {
+    method.starts_with("notifications/")
+        || matches!(
+            method,
+            "initialize"
+                | "ping"
+                | "tools/list"
+                | "resources/list"
+                | "resources/templates/list"
+                | "prompts/list"
+                | "logging/setLevel"
+        )
 }

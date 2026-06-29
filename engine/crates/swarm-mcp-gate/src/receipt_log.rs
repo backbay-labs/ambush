@@ -79,7 +79,13 @@ impl GateCtx {
                         enforcer: &mut enforcer,
                     }),
                 ),
-                Err(_) => evaluate_metered(&action, self.agent_id.as_deref(), &self.keypair, None),
+                Err(_) => {
+                    // Budget mutex poisoned: fail CLOSED rather than silently skip the cap.
+                    let code = "urn:ambush:gate:denied:lane_budget".to_string();
+                    let reason = "lane budget unavailable (poisoned lock) — fail-closed".to_string();
+                    self.log.append(&minimal_envelope(tool, &self.server_id, &code, &reason));
+                    return GateOutcome { allow: false, code, reason, receipt_id: String::new() };
+                }
             },
             None => evaluate_metered(&action, self.agent_id.as_deref(), &self.keypair, None),
         };
@@ -126,6 +132,24 @@ impl GateCtx {
         }
 
         GateOutcome { allow: gate_allow, code, reason, receipt_id }
+    }
+
+    /// Hard-deny a side-effecting, non-allowlisted MCP method fail-closed: append a deny envelope to
+    /// the audit log and return the JSON-RPC error for the agent. Nothing reaches the inner server.
+    pub fn deny_method(&self, id: &serde_json::Value, method: &str) -> String {
+        let code = "urn:ambush:gate:denied:method".to_string();
+        let reason = format!("MCP method '{method}' is not permitted by the gate (fail-closed)");
+        self.log.append(&minimal_envelope(method, &self.server_id, &code, &reason));
+        serde_json::to_string(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": reason,
+                "data": { "ambush_code": code, "method": method }
+            }
+        }))
+        .unwrap_or_else(|_| "{}".into())
     }
 }
 

@@ -53,6 +53,8 @@ jobs:
       - run: cargo build -p swarm-mcp-gate -p swarm-attest --manifest-path engine/Cargo.toml
       - name: Gate-emission smoke (ALLOW + DENY land in receipts.jsonl)
         run: pnpm smoke
+      - name: Security smoke (batch-array + ungoverned-method bypasses fail-closed)
+        run: pnpm smoke:security
       - name: Metering smoke (over-budget lane denies at the gate)
         run: pnpm smoke:metering
       - name: Slop-filter review smoke (cross-model corroboration clustering)
