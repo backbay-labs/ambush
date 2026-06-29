@@ -1,0 +1,19 @@
+[package]
+name = "swarm-attest"
+description = "Ambush attestation bundles — signed, hash-bound, offline-verifiable (Export Attestation + `ambush verify`)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-crypto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[[bin]]
+name = "ambush-verify"
+path = "src/bin/ambush-verify.rs"
+
+[lints]
+workspace = true
