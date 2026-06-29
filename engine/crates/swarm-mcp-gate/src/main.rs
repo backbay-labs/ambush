@@ -17,6 +17,7 @@ use std::thread;
 
 use receipt_log::{GateCtx, ReceiptLog};
 use swarm_governor::keypair_from_secret;
+use swarm_metering::{BudgetEnforcer, BudgetLimit};
 
 fn fail(msg: &str) -> ! {
     eprintln!("swarm-mcp-gate: {msg}");
@@ -74,6 +75,14 @@ fn main() {
     let agent_id = std::env::var("AMBUSH_VECTOR_ID")
         .ok()
         .or_else(|| std::env::var("SWARM_AGENT_ID").ok());
+    // Optional per-lane request budget: AMBUSH_LANE_BUDGET_REQUESTS=N caps governed tool calls
+    // for this Vector; over budget denies at the `lane_budget` gate (the cost doom-loop lever).
+    let lane = agent_id.clone().unwrap_or_else(|| "default".to_string());
+    let budget = std::env::var("AMBUSH_LANE_BUDGET_REQUESTS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .map(|n| Mutex::new(BudgetEnforcer::new(BudgetLimit::default().with_max_requests(n))));
     let log = match ReceiptLog::open(&log_path) {
         Ok(l) => l,
         Err(e) => fail(&format!("cannot open receipt log {log_path}: {e}")),
@@ -93,7 +102,7 @@ fn main() {
     let Some(inner_stdout) = child.stdout.take() else { fail("inner stdout unavailable") };
 
     let agent_out = Arc::new(Mutex::new(io::stdout()));
-    let gate = GateCtx { keypair, agent_id, server_id, vault, log };
+    let gate = GateCtx { keypair, agent_id, server_id, vault, log, budget, lane };
 
     // Thread B: inner -> agent (verbatim).
     let b_out = Arc::clone(&agent_out);

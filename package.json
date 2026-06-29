@@ -19,6 +19,7 @@
     "check": "pnpm run typecheck && pnpm run build",
     "rebuild": "electron-rebuild -f -w node-pty",
     "smoke": "node smoke/gate-emission-smoke.mjs",
+    "smoke:metering": "node smoke/metering-smoke.mjs",
     "e2e": "tsx smoke/e2e.ts"
   },
   "dependencies": {

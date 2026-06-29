@@ -53,5 +53,7 @@ jobs:
       - run: cargo build -p swarm-mcp-gate -p swarm-attest --manifest-path engine/Cargo.toml
       - name: Gate-emission smoke (ALLOW + DENY land in receipts.jsonl)
         run: pnpm smoke
+      - name: Metering smoke (over-budget lane denies at the gate)
+        run: pnpm smoke:metering
       - name: Full attestation E2E (findings + dual coverage + ambush-verify ok)
         run: pnpm e2e

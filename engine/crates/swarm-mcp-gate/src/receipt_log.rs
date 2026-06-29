@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use fs2::FileExt;
 use swarm_crypto::Keypair;
 use swarm_governor::evaluate_metered;
+use swarm_metering::{AggregateSpend, BudgetEnforcer, MeteringRequest};
 
 use crate::mapping::{Mapping, map_tool};
 
@@ -39,6 +40,11 @@ pub struct GateCtx {
     pub server_id: String,
     pub vault: String,
     pub log: ReceiptLog,
+    /// Optional per-lane request budget: when set, each tools/call charges 1 request and an
+    /// over-budget call is denied (gate_id `lane_budget`) even when the guards would allow it.
+    pub budget: Option<Mutex<BudgetEnforcer>>,
+    /// Lane id the budget is metered against (the Vector id, or "default").
+    pub lane: String,
 }
 
 pub struct GateOutcome {
@@ -58,9 +64,26 @@ impl GateCtx {
             Mapping::HardDeny { action, reason } => (action, true, reason),
         };
 
-        // On the metered path (None budget for now) so the gate already ships on the rails that
-        // wave-2 per-lane budget enforcement will pass a real MeteringRequest through.
-        let verdict = match evaluate_metered(&action, self.agent_id.as_deref(), &self.keypair, None) {
+        // Per-lane request metering: when a budget is configured, charge 1 request per tools/call,
+        // so an over-budget lane is DENIED (gate_id `lane_budget`) even when the guards would allow
+        // it, with the cost riding the receipt. Otherwise the metered path with no budget (None).
+        let eval = match &self.budget {
+            Some(budget) => match budget.lock() {
+                Ok(mut enforcer) => evaluate_metered(
+                    &action,
+                    self.agent_id.as_deref(),
+                    &self.keypair,
+                    Some(MeteringRequest {
+                        lane: self.lane.clone(),
+                        draft: AggregateSpend::with_requests(1),
+                        enforcer: &mut enforcer,
+                    }),
+                ),
+                Err(_) => evaluate_metered(&action, self.agent_id.as_deref(), &self.keypair, None),
+            },
+            None => evaluate_metered(&action, self.agent_id.as_deref(), &self.keypair, None),
+        };
+        let verdict = match eval {
             Ok(v) => v,
             Err(e) => {
                 let code = "urn:ambush:gate:denied:internal".to_string();

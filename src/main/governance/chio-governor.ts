@@ -142,10 +142,16 @@ export class ChioGovernor {
 
   /** Env the governed MCP child needs: the signing key + the shared receipt log path. */
   gateEnv(): Record<string, string> {
-    return {
+    const env: Record<string, string> = {
       SWARM_GOVERNOR_KEY: this.signingSecret,
       AMBUSH_RECEIPT_LOG: this.status.receiptDbPath ?? '',
     }
+    // Opt-in per-lane request budget: the operator sets AMBUSH_LANE_BUDGET_REQUESTS=N to cap
+    // governed tool calls per Vector (over budget -> signed DENY at the gate). Off by default so
+    // long legitimate sessions are not truncated; passed explicitly so it reaches the gate child.
+    const budget = process.env.AMBUSH_LANE_BUDGET_REQUESTS
+    if (budget && /^\d+$/.test(budget)) env.AMBUSH_LANE_BUDGET_REQUESTS = budget
+    return env
   }
 
   async listReceipts(): Promise<ReceiptSummary[]> {
