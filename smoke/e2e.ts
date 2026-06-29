@@ -55,9 +55,11 @@ async function main(): Promise<void> {
     receipts.some((r) => r.verdict === 'ALLOW'),
     'has an ALLOW receipt',
   )
+  // Require the DENY to come from the shell_command GUARD — not an internal-error/budget DENY that
+  // would keep coverage green even if the `rm -rf /` guard regressed.
   assert.ok(
-    receipts.some((r) => r.verdict === 'DENY'),
-    'has a DENY receipt',
+    receipts.some((r) => r.verdict === 'DENY' && (r.raw as { guard?: string }).guard === 'shell_command'),
+    'has a DENY receipt from the shell_command guard',
   )
 
   // 2. build the bundle with the REAL producer (exportBundle reads name + intelVaultPath).

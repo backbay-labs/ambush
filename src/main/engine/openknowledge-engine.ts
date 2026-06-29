@@ -105,17 +105,20 @@ export class OpenKnowledgeEngine {
           const text = d.toString()
           const m = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1):(\d+)\S*/)
           if (m && !this.status.url) {
+            // The printed URL is the authoritative "serving" signal — mark running + emit now.
             this.status.url = m[0]
-            // Surface a freshly-parsed URL only once we are already serving.
-            if (this.status.running) bus.engineUpdate(this.getStatus())
+            this.status.running = true
+            this.status.detail = `running (${this.status.source})`
+            bus.engineUpdate(this.getStatus())
           }
         })
         return proc
       },
-      // Ready once the web UI prints its URL; otherwise the timeout below falls
-      // back to optimistically assuming the conventional UI port.
+      // Ready once the web UI prints its URL. The timeout is generous because the default invoker
+      // is `npx @inkeep/open-knowledge` whose cold start (download + boot) routinely exceeds a
+      // few seconds; on timeout we stay honestly "starting" rather than fabricate a dead URL.
       isReady: () => this.status.url !== null,
-      readinessTimeoutMs: 1500,
+      readinessTimeoutMs: 60_000,
       readinessTimeout: 'ready',
       onState: (event) => this.onSupervisorState(event),
       onLog: (level, message) => bus.log(level, 'engine', message),
@@ -135,9 +138,15 @@ export class OpenKnowledgeEngine {
             : 'starting OpenKnowledge…'
         break
       case 'ready':
-        this.status.running = true
-        if (!this.status.url) this.status.url = `http://127.0.0.1:${UI_PORT}`
-        this.status.detail = `running (${this.status.source})`
+        if (this.status.url) {
+          this.status.running = true
+          this.status.detail = `running (${this.status.source})`
+        } else {
+          // Readiness timed out before the UI printed its URL — do NOT report a fabricated URL or
+          // "running" (that showed "intel live" over a webview that refuses connection).
+          this.status.running = false
+          this.status.detail = 'OpenKnowledge starting (awaiting URL)…'
+        }
         break
       case 'crashed':
         this.status.running = false

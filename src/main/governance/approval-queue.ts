@@ -165,11 +165,20 @@ export class ApprovalQueue {
 
   private evictIfFull(): void {
     if (this.requests.size < MAX_QUEUE) return
+    // First evict resolved/expired entries.
     for (const [id, r] of this.requests) {
       if (r.status !== 'pending') {
         this.requests.delete(id)
         if (this.requests.size < MAX_QUEUE) return
       }
+    }
+    // Still full of pending requests: evict the OLDEST pending (Map is insertion-ordered) so the
+    // cap is a hard bound — a flood of distinct pending tuples cannot grow the map without limit.
+    // Dropping a pending request grants nothing, so fail-closed semantics hold.
+    for (const [id] of this.requests) {
+      this.requests.delete(id)
+      bus.approvalExpired(id)
+      if (this.requests.size < MAX_QUEUE) return
     }
   }
 }

@@ -57,6 +57,10 @@ interface AmbushState {
   _applyVector: (v: Vector) => void
 }
 
+// IPC subscriptions are process-global and never torn down; guard so a re-run of bootstrap
+// (e.g. React 18 StrictMode double-mount) does not stack duplicate listeners.
+let ipcSubscribed = false
+
 export const useStore = create<AmbushState>((set, get) => ({
   operation: null,
   agents: [],
@@ -82,23 +86,23 @@ export const useStore = create<AmbushState>((set, get) => ({
     ])
     set({ agents, operation, engine, governor, booting: false })
 
-    window.ambush.onOperationUpdate((op) => get()._applyOperation(op))
-    window.ambush.onVectorUpdate((v) => get()._applyVector(v))
-    window.ambush.onEngineUpdate((s) => set({ engine: s }))
-    window.ambush.onGovernorUpdate((s) => set({ governor: s }))
-    window.ambush.onLog((line) =>
-      set((st) => ({ logs: [...st.logs.slice(-300), line] })),
-    )
-    // Live signed governance receipts (terminal-command verdicts + intel-MCP gate denials).
-    window.ambush.onReceipt((r) => get()._applyReceipt(r))
-    // Approvals can fire even when ungoverned (the fail-closed launch gate), so
-    // refresh/subscribe unconditionally.
+    if (!ipcSubscribed) {
+      ipcSubscribed = true
+      window.ambush.onOperationUpdate((op) => get()._applyOperation(op))
+      window.ambush.onVectorUpdate((v) => get()._applyVector(v))
+      window.ambush.onEngineUpdate((s) => set({ engine: s }))
+      window.ambush.onGovernorUpdate((s) => set({ governor: s }))
+      window.ambush.onLog((line) => set((st) => ({ logs: [...st.logs.slice(-300), line] })))
+      // Live signed governance receipts (terminal-command verdicts + intel-MCP gate denials).
+      window.ambush.onReceipt((r) => get()._applyReceipt(r))
+      window.ambush.onApprovalNew((req) => get()._applyApproval(req))
+      window.ambush.onApprovalResolved((req) => get()._applyApproval(req))
+      window.ambush.onApprovalExpired((id) =>
+        set((st) => ({ approvals: st.approvals.filter((a) => a.id !== id) })),
+      )
+    }
+    // Approvals can fire even when ungoverned (the fail-closed launch gate), so refresh each boot.
     void get().refreshApprovals()
-    window.ambush.onApprovalNew((req) => get()._applyApproval(req))
-    window.ambush.onApprovalResolved((req) => get()._applyApproval(req))
-    window.ambush.onApprovalExpired((id) =>
-      set((st) => ({ approvals: st.approvals.filter((a) => a.id !== id) })),
-    )
     if (governor.available) void get().refreshReceipts()
   },
 
@@ -172,11 +176,14 @@ export const useStore = create<AmbushState>((set, get) => ({
   _applyApproval: (req) =>
     set((st) => {
       const exists = st.approvals.some((a) => a.id === req.id)
-      return {
-        approvals: exists
-          ? st.approvals.map((a) => (a.id === req.id ? req : a))
-          : [req, ...st.approvals],
-      }
+      const next = exists
+        ? st.approvals.map((a) => (a.id === req.id ? req : a))
+        : [req, ...st.approvals]
+      // Keep all pending, cap resolved/expired (backend GCs them with no bus event) so the array
+      // can't grow without bound.
+      const pending = next.filter((a) => a.status === 'pending')
+      const settled = next.filter((a) => a.status !== 'pending').slice(0, 100)
+      return { approvals: [...pending, ...settled] }
     }),
   _applyReceipt: (r) =>
     set((st) => {
@@ -189,7 +196,10 @@ export const useStore = create<AmbushState>((set, get) => ({
         vectorLabel: r.server.replace(/^terminal:/, ''),
         at: r.timestamp ?? Date.now(),
       }
-      return { receipts, denyToasts: [...st.denyToasts, toast] }
+      // Dedup by id (a re-delivered receipt must not duplicate the React key) and cap the stack so
+      // a denial burst can't overflow the viewport.
+      const denyToasts = [...st.denyToasts.filter((t) => t.id !== toast.id), toast].slice(-5)
+      return { receipts, denyToasts }
     }),
   _applyVector: (v) =>
     set((st) => {

@@ -251,6 +251,9 @@ export class SwarmOrchestrator {
     if (!this.operation) return
     const vector = this.operation.vectors.find((v) => v.terminalId === terminalId)
     if (!vector) return
+    // A terminal state was set deliberately (operator kill/recall/scale, or an already-recorded
+    // exit). The pty.kill() that follows still fires this exit on the same id — do not clobber it.
+    if (vector.status === 'killed' || vector.status === 'done' || vector.status === 'failed') return
     vector.hasFindings = this.checkFindings(vector)
     this.setVectorStatus(vector, code === 0 ? 'done' : 'failed', code)
     this.persist()

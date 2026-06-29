@@ -9,11 +9,16 @@ export function FindingsReview(): React.JSX.Element {
   const operation = useStore((s) => s.operation)
   const [review, setReview] = useState<Review | null>(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
       setReview(await window.ambush.intelReview())
+    } catch (e) {
+      // Surface a vault-read failure as an error, not the misleading "No findings yet" empty state.
+      setError(e instanceof Error ? e.message : 'review failed')
     } finally {
       setLoading(false)
     }
@@ -53,6 +58,10 @@ export function FindingsReview(): React.JSX.Element {
 
       {!operation ? (
         <Empty>No operation.</Empty>
+      ) : error ? (
+        <Empty>
+          <span className="text-danger">Review failed: {error}</span>
+        </Empty>
       ) : !review || review.clusters.length === 0 ? (
         <Empty>No findings yet — deploy lanes (or the `seed` profile) so the vault fills.</Empty>
       ) : (
