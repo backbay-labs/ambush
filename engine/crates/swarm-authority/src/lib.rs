@@ -12,6 +12,7 @@ pub mod admission;
 pub mod epoch;
 pub mod error;
 pub mod token;
+pub mod witness;
 mod util;
 
 pub use admission::{Admission, AdmissionContext, ReplayGuard, verify_admission};
@@ -23,5 +24,11 @@ pub use error::{AuthorityError, DenyReason};
 pub use token::{
     BudgetLease, CONTINUATION_TOKEN_SCHEMA, ContinuationMode, IssueTokenRequest, SwarmContinuationToken,
     continuation_token_signature_body, issue_token, sign_continuation_token, vector_scope_hash,
+};
+pub use witness::{
+    DELEGATION_CHAIN_SCHEMA, DELEGATION_WITNESS_SCHEMA, DelegateRequest, DelegatedAdmission,
+    DelegatedAdmissionContext, DelegationChain, DelegationWitness, VectorScope, delegate,
+    delegation_witness_signature_body, sign_delegation_witness, verify_delegated_admission,
+    witness_scope_hash,
 };
 pub use util::DID_AMBUSH_PREFIX;

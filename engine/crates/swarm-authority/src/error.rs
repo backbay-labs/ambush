@@ -41,6 +41,43 @@ pub enum DenyReason {
     TokenNotYetValid,
     /// Single-use token nonce already consumed (replay).
     Replay,
+
+    // ---- Multi-hop delegation (witness chain) deny reasons. ----
+    /// A witness `issuer` is not a valid self-certifying public key.
+    MalformedWitnessIssuer,
+    /// The chain-root (hop 0) witness issuer is not in the caller's pinned `trusted_keys`.
+    UntrustedWitnessIssuer,
+    /// A witness signature does not verify under its issuer key.
+    WitnessSignatureInvalid,
+    /// The delegation chain carried no hops.
+    WitnessChainEmpty,
+    /// Hop indices are not sequential from zero.
+    WitnessHopIndexMismatch,
+    /// The chain/operation/root binding on a hop or chain does not match the root token.
+    WitnessChainMismatch,
+    /// The chain and the root token are scoped to different operations.
+    WitnessOperationMismatch,
+    /// A hop's delegator key does not match the prior hop's delegatee, or the parent vector
+    /// does not match the prior hop's child (broken delegation link).
+    WitnessChainBroken,
+    /// A hop's parent scope hash does not equal the prior hop's child scope hash.
+    WitnessScopeDiscontinuity,
+    /// Hop 0's parent scope hash does not equal the root token's `vector_scope_hash`.
+    WitnessRootScopeMismatch,
+    /// A hop's recomputed scope hash does not match its declared hash (scope inflation/tamper).
+    WitnessScopeHashMismatch,
+    /// A hop's child scope is not a subset of its parent scope (a widening).
+    WitnessScopeWidens,
+    /// A hop's child vector is in the epoch's revoked-vector set (recall mid-chain).
+    WitnessVectorRevoked,
+    /// A hop's validity window does not yet contain `now`.
+    WitnessNotYetValid,
+    /// A hop's validity window has closed.
+    WitnessExpired,
+    /// A hop's expiry extends beyond its parent's expiry (time widening).
+    WitnessExpiryWidens,
+    /// A single-use witness nonce was already consumed (replay).
+    WitnessReplay,
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -30,6 +30,11 @@ impl ReplayGuard {
     fn record(&mut self, nonce: &str) -> bool {
         self.seen.insert(nonce.to_string())
     }
+    /// Record a nonce as consumed; returns `true` if newly inserted, `false` if already seen.
+    /// Additive API used by the multi-hop witness verifier to replay-deny per hop.
+    pub fn observe(&mut self, nonce: &str) -> bool {
+        self.record(nonce)
+    }
 }
 
 /// Operational bindings the caller asserts at admission time.
