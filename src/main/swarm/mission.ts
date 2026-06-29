@@ -9,12 +9,22 @@ export interface MissionContext {
   findingsAbsPath: string
   /** Argv for the (possibly Chio-wrapped) intel MCP server, or null. */
   governedMcpCommand: string[] | null
+  /** Whether real, signed governance (Chio) is active. Drives honest briefing language. */
+  governed: boolean
 }
 
 /** Write the per-vector briefing the agent reads on launch. */
 export function writeMissionFiles(worktreePath: string, ctx: MissionContext): void {
-  const { operation, vector, findingsAbsPath, governedMcpCommand } = ctx
+  const { operation, vector, findingsAbsPath, governedMcpCommand, governed } = ctx
   mkdirSync(worktreePath, { recursive: true })
+
+  const reportingNote = governed
+    ? `Preferred path: use the **open-knowledge** MCP \`write\` tool to create/update
+\`${vector.findingsPath}\`. These writes are **governed by Chio and signed into an
+append-only receipt log** — non-repudiation is part of the mission.`
+    : `Preferred path: use the **open-knowledge** MCP \`write\` tool to create/update
+\`${vector.findingsPath}\`. (Note: governance is not active for this run, so these
+writes are **not** signed into a receipt log.)`
 
   const briefing = `# AMBUSH MISSION BRIEFING
 
@@ -33,9 +43,7 @@ the end. Write your findings as markdown to:
 
 \`${vector.findingsPath}\` (in the shared intel vault)
 
-Preferred path: use the **open-knowledge** MCP \`write\` tool to create/update
-\`${vector.findingsPath}\`. These writes are **governed by Chio and signed into an
-append-only receipt log** — non-repudiation is part of the mission.
+${reportingNote}
 
 If the MCP server is unavailable, write directly to:
 \`${findingsAbsPath}\`
@@ -61,13 +69,16 @@ graph stays navigable. When your lane is complete, print \`DONE\` on its own lin
 }
 
 export function buildPrompt(ctx: MissionContext): string {
-  const { operation, vector } = ctx
+  const { operation, vector, governed } = ctx
+  const reportNote = governed
+    ? `Record findings via the open-knowledge MCP 'write' tool to ${vector.findingsPath} (governed, receipt-logged).`
+    : `Record findings via the open-knowledge MCP 'write' tool to ${vector.findingsPath} (ungoverned this run — not receipt-logged).`
   return [
     `You are vector ${vector.name} in Ambush operation "${operation.name}".`,
     `Objective: ${vector.objective}`,
     `Operation goal: ${operation.objective}.`,
     `Read AMBUSH_MISSION.md for the full briefing and reporting protocol.`,
-    `Record findings via the open-knowledge MCP 'write' tool to ${vector.findingsPath} (governed, receipt-logged).`,
+    reportNote,
     `Print DONE when your lane is complete.`,
   ].join(' ')
 }

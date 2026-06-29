@@ -155,6 +155,16 @@ export class SwarmOrchestrator {
     }
     this.setVectorStatus(vector, 'deploying')
 
+    // Fail-closed governance gate: refuse to launch ungoverned unless the operator
+    // has explicitly opted in (AMBUSH_ALLOW_UNGOVERNED=1).
+    const blocked = this.governor.launchBlockReason()
+    if (blocked) {
+      bus.log('error', 'governance', `vector ${vector.name} blocked: ${blocked}`)
+      this.setVectorStatus(vector, 'failed')
+      this.persist()
+      return
+    }
+
     const handle = await this.worktrees.create(this.operation.targetPath, vector.id, vector.name)
     this.handles.set(vector.id, handle)
     vector.worktreePath = handle.path
@@ -166,11 +176,13 @@ export class SwarmOrchestrator {
       return inner ? this.governor.wrapMcp(inner) : null
     })()
 
+    const governed = this.governor.isGoverned()
     writeMissionFiles(handle.path, {
       operation: this.operation,
       vector,
       findingsAbsPath,
       governedMcpCommand,
+      governed,
     })
 
     const prompt = buildPrompt({
@@ -178,6 +190,7 @@ export class SwarmOrchestrator {
       vector,
       findingsAbsPath,
       governedMcpCommand,
+      governed,
     })
 
     const terminalId = `term-${vector.id}`

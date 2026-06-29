@@ -4,11 +4,15 @@ import { bus } from '../util/bus'
 import { run, which } from '../util/run'
 import type { GovernorStatus, ReceiptSummary } from '@shared/types'
 
-// Default HushSpec-style policy for the swarm: allow the OpenKnowledge intel
-// tools plus read-only inspection, deny everything else. Chio is fail-closed, so
-// anything not listed is denied and every decision is signed into the receipt db.
+// Default HushSpec-style policy for the swarm. Least-privilege: allow only the
+// OpenKnowledge intel tools a reporting lane needs (read/search + write/edit its
+// own findings). Fail-closed — anything not listed is denied. The dangerous verbs
+// `exec`, `skills`, and `move` are intentionally NOT allowed (broad for an
+// offensive-agent fleet), and `delete` is explicitly denied so findings can't be
+// silently erased. The richer guard+capability policy lives in
+// engine/rulesets/code-agent.yaml for the engine guard-eval path.
 const DEFAULT_POLICY = `# Ambush swarm governance policy (HushSpec)
-# Wraps the OpenKnowledge intel MCP server. Fail-closed by default.
+# Wraps the OpenKnowledge intel MCP server. Fail-closed, least-privilege.
 version: 1
 tool_access:
   allow:
@@ -20,18 +24,20 @@ tool_access:
     - workflow
     - write
     - edit
-    - move
     - checkpoint
-    - skills
-    - exec
   deny:
     - delete
+    - exec
+    - move
+    - skills
 `
 
 /**
- * Wraps swarm tool access with Chio so every agent action against the intel
- * vault produces a signed, append-only receipt. Fits the security mission:
- * non-repudiation for everything the swarm touches.
+ * Wraps swarm tool access with Chio so every agent tool call against the intel
+ * vault produces a signed, append-only receipt — non-repudiation for the
+ * *governed intel-vault calls* (not arbitrary shell/agent actions outside that
+ * path). Fail-closed: when no governor is available the swarm refuses to launch
+ * unless the operator explicitly opts into ungoverned mode (AMBUSH_ALLOW_UNGOVERNED=1).
  */
 export class ChioGovernor {
   private status: GovernorStatus = {
@@ -46,16 +52,43 @@ export class ChioGovernor {
     return { ...this.status }
   }
 
+  /** Whether the swarm is running under real, signed governance right now. */
+  isGoverned(): boolean {
+    return this.status.available
+  }
+
+  /**
+   * Fail-closed launch gate. Returns a human-readable reason a Vector launch is
+   * blocked, or null if it may proceed. When no governor is available we refuse
+   * to launch ungoverned by default; the operator overrides with
+   * AMBUSH_ALLOW_UNGOVERNED=1 (fail-closed-but-overridable).
+   */
+  launchBlockReason(): string | null {
+    if (this.status.available) return null
+    if (process.env.AMBUSH_ALLOW_UNGOVERNED === '1') return null
+    return 'governance unavailable (chio not found) and AMBUSH_ALLOW_UNGOVERNED is not set — refusing to launch ungoverned. Wire a governor or set AMBUSH_ALLOW_UNGOVERNED=1 to run without signed receipts.'
+  }
+
   configure(opsDir: string): GovernorStatus {
     const bin = which('chio')
     if (!bin) {
+      const overridden = process.env.AMBUSH_ALLOW_UNGOVERNED === '1'
       this.status = {
         available: false,
         binaryPath: null,
         policyPath: null,
         receiptDbPath: null,
-        detail: 'chio not found on PATH. Agents run ungoverned.',
+        detail: overridden
+          ? 'chio not found — running UNGOVERNED (operator override). No signed receipts.'
+          : 'chio not found — governance unavailable. Swarm is fail-closed; set AMBUSH_ALLOW_UNGOVERNED=1 to run anyway.',
       }
+      bus.log(
+        'warn',
+        'governance',
+        overridden
+          ? 'chio not found on PATH — swarm is UNGOVERNED by operator override (no signed receipts).'
+          : 'chio not found on PATH — governance unavailable. Deploys are blocked (fail-closed). Set AMBUSH_ALLOW_UNGOVERNED=1 to run ungoverned.',
+      )
       bus.governorUpdate(this.getStatus())
       return this.getStatus()
     }

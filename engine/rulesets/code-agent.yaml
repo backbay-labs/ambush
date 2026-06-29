@@ -1,0 +1,124 @@
+# Ambush code-agent governance policy
+#
+# Adapted from the upstream Chio `code_agent.yaml` (Arc/Chio, Apache-2.0). This is the
+# fail-closed, least-privilege policy for coding/review agents: anything not explicitly
+# allowed is denied. It is the TARGET policy for Ambush's real governance path — consumed
+# by the engine guard-eval / trust-kernel once wired (see docs/research/UPSTREAM-HARVEST-PLAN.md,
+# "The Chio reunification"). The control-plane `ChioGovernor` writes a HushSpec view today;
+# this is the richer guard+capability form the engine enforces.
+
+kernel:
+  max_capability_ttl: 3600
+  delegation_depth_limit: 3
+
+guards:
+  # Block the filesystem minefield: secrets, VCS internals, shell rc files.
+  forbidden_path:
+    enabled: true
+    additional_patterns:
+      - "**/.env"
+      - "**/.env.*"
+      - "**/.git/**"
+      - "**/.ssh/**"
+      - "**/.aws/credentials"
+      - "**/.aws/config"
+      - "**/.netrc"
+      - "**/.npmrc"
+      - "**/.pypirc"
+      - "**/.gnupg/**"
+      - "**/id_rsa"
+      - "**/id_ed25519"
+      - "**/*.pem"
+      - "**/*.key"
+
+  # Restrict shell commands: require explicit allow for anything destructive.
+  shell_command:
+    enabled: true
+    forbidden_patterns:
+      - "(?i)rm\\s+-rf\\s+/"
+      - "(?i)rm\\s+-rf\\s+~"
+      - "(?i)rm\\s+-rf\\s+\\$HOME"
+      - "(?i)chmod\\s+777"
+      - "(?i)curl\\s+[^|]+\\|\\s*(sh|bash|zsh|fish)"
+      - "(?i)wget\\s+[^|]+\\|\\s*(sh|bash|zsh|fish)"
+      # `git push --force`/`-f` stay blocked (destructive), but `--force-with-lease`
+      # is the standard-safe rebased-feature-branch workflow and is allowed. Match
+      # `--force` only when followed by whitespace or end-of-string (the regex crate
+      # has no negative lookahead).
+      - "(?i)git\\s+push\\s+.*--force(\\s|$)"
+      - "(?i)git\\s+push\\s+.*-f(\\s|$)"
+      - "(?i)git\\s+reset\\s+--hard\\s+origin"
+      - "(?i)sudo\\s+"
+      - "(?i)eval\\s*\\("
+      - "(?i):\\(\\)\\s*\\{.*\\};:"
+      - "(?i)mkfs\\."
+      - "(?i)dd\\s+if=.*of=/dev/"
+
+  # Block obvious secret leaks in the patch surface.
+  secret_patterns:
+    enabled: true
+
+  # Keep patch sizes sane so agents cannot accidentally rewrite the world.
+  patch_integrity:
+    enabled: true
+
+capabilities:
+  default:
+    tools:
+      # File reads — the forbidden_path guard filters secrets/.git/.ssh out.
+      - server: "fs"
+        tool: "read_file"
+        operations: [invoke]
+        ttl: 3600
+      - server: "fs"
+        tool: "list_directory"
+        operations: [invoke]
+        ttl: 3600
+      - server: "fs"
+        tool: "search_files"
+        operations: [invoke]
+        ttl: 3600
+
+      # File writes — guards filter forbidden paths.
+      - server: "fs"
+        tool: "write_file"
+        operations: [invoke]
+        ttl: 3600
+      - server: "fs"
+        tool: "edit_file"
+        operations: [invoke]
+        ttl: 3600
+      - server: "fs"
+        tool: "create_directory"
+        operations: [invoke]
+        ttl: 3600
+
+      # Shell: restricted by the shell_command guard. Destructive commands are
+      # denied; approval-required commands surface a verdict the host routes to a
+      # human-gate approval prompt.
+      - server: "shell"
+        tool: "run_command"
+        operations: [invoke]
+        ttl: 600
+
+      # Git: safe read + local-commit ops. push/force-push are blocked above.
+      - server: "git"
+        tool: "status"
+        operations: [invoke]
+        ttl: 3600
+      - server: "git"
+        tool: "diff"
+        operations: [invoke]
+        ttl: 3600
+      - server: "git"
+        tool: "log"
+        operations: [invoke]
+        ttl: 3600
+      - server: "git"
+        tool: "add"
+        operations: [invoke]
+        ttl: 3600
+      - server: "git"
+        tool: "commit"
+        operations: [invoke]
+        ttl: 3600
