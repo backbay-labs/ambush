@@ -407,6 +407,18 @@ mod tests {
     }
 
     #[test]
+    fn default_pipeline_blocks_cloud_metadata_ip() {
+        let pipeline = default_pipeline();
+        let result = pipeline.evaluate(
+            &GuardAction::NetworkEgress("169.254.169.254", 80),
+            &GuardContext::new(),
+        );
+
+        assert!(!result.allowed);
+        assert_eq!(result.guard, "egress_allowlist");
+    }
+
+    #[test]
     fn default_pipeline_blocks_forbidden_file_access() {
         let pipeline = default_pipeline();
         let result = pipeline.evaluate(
