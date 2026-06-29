@@ -40,6 +40,12 @@ import type { Channel } from "@/shared/api/types";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { copyCodeBlockToClipboard } from "@/shared/lib/codeBlockClipboard";
 import { cn } from "@/shared/lib/cn";
+import {
+  extractSupportedLinkPreviews,
+  isSupportedLinkAutolinkLabel,
+  parseSupportedLinkPreview,
+} from "@/shared/lib/linkPreview";
+import { useResolvedLinkPreviews } from "@/shared/lib/useResolvedLinkPreviews";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import rehypeImageGallery from "@/shared/lib/rehypeImageGallery";
 import rehypeSearchHighlight from "@/shared/lib/rehypeSearchHighlight";
@@ -51,6 +57,8 @@ import remarkMentions from "@/shared/lib/remarkMentions";
 import remarkSpoilers from "@/shared/lib/remarkSpoilers";
 import remarkMessageLinks from "@/features/messages/lib/remarkMessageLinks";
 import { Button } from "@/shared/ui/button";
+import { AttachmentGroup } from "@/shared/ui/attachment";
+import { LinkPreviewAttachment } from "@/shared/ui/link-preview-attachment";
 import {
   INLINE_CODE_CHIP_CLASS,
   MENTION_CHIP_BASE_CLASSES,
@@ -210,6 +218,7 @@ type MarkdownRuntime = {
   agentMentionPubkeysByName?: Record<string, string>;
   channels: Channel[];
   imetaByUrl?: ImetaLookup;
+  linkPreviewHrefs: ReadonlySet<string>;
   mentionPubkeysByName?: Record<string, string>;
   onOpenChannel: (channelId: string) => void;
   onOpenMessageLink: (link: ParsedMessageLink) => void;
@@ -2210,7 +2219,8 @@ function createMarkdownComponents(
       </SpoilerInline>
     ),
     a: ({ children, href, ...props }) => {
-      const { imetaByUrl, onOpenMessageLink } = runtimeRef.current;
+      const { imetaByUrl, linkPreviewHrefs, onOpenMessageLink } =
+        runtimeRef.current;
       if (!interactive) {
         return <span className="font-medium text-current">{children}</span>;
       }
@@ -2222,13 +2232,15 @@ function createMarkdownComponents(
         return <>{children}</>;
       }
 
+      const label = getReactNodeText(children);
+
       // Generic file attachment: a `[filename](url)` link whose href matches an
       // imeta entry with a non-image, non-video MIME. Render a download card
       // instead of a plain link. (Media uses the `img` renderer, not this path.)
       const card = resolveFileCard(
         href ? imetaByUrl?.get(href) : undefined,
         href,
-        getReactNodeText(children),
+        label,
       );
       if (card) {
         return (
@@ -2246,7 +2258,7 @@ function createMarkdownComponents(
       if (href) {
         const messageLinkTarget = resolveMessageLinkRenderTarget({
           href,
-          label: getReactNodeText(children),
+          label,
         });
         if (messageLinkTarget.kind !== "none") {
           if (messageLinkTarget.kind === "pill") {
@@ -2278,10 +2290,26 @@ function createMarkdownComponents(
         // Malformed message deep link — fall through to the default
         // anchor (renders as a normal external link).
       }
+
+      const supportedLinkPreview = href
+        ? parseSupportedLinkPreview(href)
+        : null;
+      const isLinearLink = supportedLinkPreview?.kind === "linear-issue";
+      if (
+        supportedLinkPreview &&
+        linkPreviewHrefs.has(supportedLinkPreview.href) &&
+        isSupportedLinkAutolinkLabel(label, supportedLinkPreview)
+      ) {
+        return null;
+      }
+
       return (
         <a
           {...props}
-          className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
+          className={cn(
+            "font-medium underline underline-offset-4 transition-colors",
+            isLinearLink ? "linear-link" : "text-primary hover:text-primary/80",
+          )}
           href={href}
           rel="noreferrer"
           target="_blank"
@@ -2615,10 +2643,19 @@ function MarkdownInner({
     },
     [goChannel],
   );
+  const linkPreviews = React.useMemo(
+    () => (interactive ? extractSupportedLinkPreviews(content) : []),
+    [content, interactive],
+  );
+  const linkPreviewHrefs = React.useMemo(
+    () => new Set(linkPreviews.map((preview) => preview.href)),
+    [linkPreviews],
+  );
   const runtimeRef = useLatestRef<MarkdownRuntime>({
     agentMentionPubkeysByName,
     channels,
     imetaByUrl,
+    linkPreviewHrefs,
     mentionPubkeysByName,
     onOpenChannel,
     onOpenMessageLink,
@@ -2663,6 +2700,8 @@ function MarkdownInner({
     processedContent = `${processedContent}\u200B`;
   }
 
+  const resolvedLinkPreviews = useResolvedLinkPreviews(linkPreviews);
+
   const markdownNode = (
     <ReactMarkdown
       components={components}
@@ -2697,6 +2736,16 @@ function MarkdownInner({
     >
       <VideoReviewMarkdownContext.Provider value={videoReviewContext}>
         {markdownNode}
+        {resolvedLinkPreviews.length > 0 ? (
+          <AttachmentGroup
+            className="max-w-full flex-wrap overflow-visible pb-0"
+            data-link-preview-list=""
+          >
+            {resolvedLinkPreviews.map((preview) => (
+              <LinkPreviewAttachment key={preview.href} preview={preview} />
+            ))}
+          </AttachmentGroup>
+        ) : null}
       </VideoReviewMarkdownContext.Provider>
     </div>
   );
