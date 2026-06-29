@@ -63,7 +63,7 @@ export function useChannelFind({
     return found;
   }, [messages, query]);
 
-  // Relay-backed search: full history via Typesense.
+  // Relay-backed search: full history via Postgres FTS.
   const relaySearch = useSearchMessagesQuery(debouncedQuery, {
     channelId: channelId ?? undefined,
     enabled: isOpen && debouncedQuery.length >= MIN_QUERY_LENGTH,
