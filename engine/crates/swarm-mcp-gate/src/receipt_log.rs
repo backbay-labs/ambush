@@ -23,13 +23,28 @@ impl ReceiptLog {
     }
 
     pub fn append(&self, line: &str) {
-        if let Ok(mut f) = self.file.lock() {
-            let locked = FileExt::lock_exclusive(&*f).is_ok();
-            let _ = writeln!(f, "{line}");
-            let _ = f.flush();
-            if locked {
-                let _ = FileExt::unlock(&*f);
+        let Ok(mut f) = self.file.lock() else { return };
+        // Acquire the cross-process lock (retrying on EINTR); write the whole record in ONE
+        // write_all so concurrent per-Vector gate processes can't interleave a partial line into
+        // the shared tamper-evident JSONL.
+        let mut locked = false;
+        loop {
+            match FileExt::lock_exclusive(&*f) {
+                Ok(()) => {
+                    locked = true;
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break, // best-effort: append-mode single write_all is still ~atomic
             }
+        }
+        let mut record = Vec::with_capacity(line.len() + 1);
+        record.extend_from_slice(line.as_bytes());
+        record.push(b'\n');
+        let _ = f.write_all(&record);
+        let _ = f.flush();
+        if locked {
+            let _ = FileExt::unlock(&*f);
         }
     }
 }
