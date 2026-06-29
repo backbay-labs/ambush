@@ -132,3 +132,24 @@ export interface LogLine {
   message: string
   at: number
 }
+
+export type ApprovalResolution = 'allow-once' | 'allow-session' | 'allow-always' | 'deny'
+
+export type ApprovalStatus = 'pending' | 'resolved' | 'expired'
+
+/** One human-gate approval request surfaced to the operator. */
+export interface ApprovalRequest {
+  id: string
+  tool: string
+  resource: string
+  guard: string
+  reason: string
+  severity: string
+  status: ApprovalStatus
+  resolution: ApprovalResolution | null
+  /** True when resolved by the trusted operator UI vs a local/low-trust path. */
+  resolvedByTrustedAuthority: boolean
+  createdAt: number
+  expiresAt: number
+  resolvedAt: number | null
+}

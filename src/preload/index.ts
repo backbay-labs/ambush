@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AmbushApi } from '@shared/ipc'
 import type {
+  ApprovalRequest,
+  ApprovalResolution,
   CreateOperationInput,
   DeploySwarmInput,
   TerminalChunk,
@@ -34,6 +36,9 @@ const api: AmbushApi = {
   engineStop: () => ipcRenderer.invoke(IPC.engineStop),
   governorStatus: () => ipcRenderer.invoke(IPC.governorStatus),
   receiptsList: () => ipcRenderer.invoke(IPC.receiptsList),
+  approvalList: () => ipcRenderer.invoke(IPC.approvalList),
+  approvalResolve: (id: string, resolution: ApprovalResolution) =>
+    ipcRenderer.invoke(IPC.approvalResolve, { id, resolution }),
   pickDirectory: () => ipcRenderer.invoke(IPC.pickDirectory),
 
   onTerminalData: (cb) => subscribe<TerminalChunk>(IPC.evtTerminalData, cb),
@@ -42,6 +47,9 @@ const api: AmbushApi = {
   onOperationUpdate: (cb) => subscribe(IPC.evtOperationUpdate, cb),
   onEngineUpdate: (cb) => subscribe(IPC.evtEngineUpdate, cb),
   onGovernorUpdate: (cb) => subscribe(IPC.evtGovernorUpdate, cb),
+  onApprovalNew: (cb) => subscribe<ApprovalRequest>(IPC.evtApprovalNew, cb),
+  onApprovalResolved: (cb) => subscribe<ApprovalRequest>(IPC.evtApprovalResolved, cb),
+  onApprovalExpired: (cb) => subscribe<string>(IPC.evtApprovalExpired, cb),
   onLog: (cb) => subscribe(IPC.evtLog, cb),
 }
 

@@ -3,6 +3,8 @@
 
 import type {
   AgentProfile,
+  ApprovalRequest,
+  ApprovalResolution,
   CreateOperationInput,
   DeploySwarmInput,
   EngineStatus,
@@ -35,6 +37,8 @@ export const IPC = {
   engineStop: 'engine:stop',
   governorStatus: 'governor:status',
   receiptsList: 'receipts:list',
+  approvalList: 'approval:list',
+  approvalResolve: 'approval:resolve',
   pickDirectory: 'dialog:pickDirectory',
 
   // events (main -> renderer)
@@ -44,6 +48,9 @@ export const IPC = {
   evtOperationUpdate: 'evt:operation:update',
   evtEngineUpdate: 'evt:engine:update',
   evtGovernorUpdate: 'evt:governor:update',
+  evtApprovalNew: 'evt:approval:new',
+  evtApprovalResolved: 'evt:approval:resolved',
+  evtApprovalExpired: 'evt:approval:expired',
   evtLog: 'evt:log',
 } as const
 
@@ -66,6 +73,8 @@ export interface AmbushApi {
   engineStop(): Promise<EngineStatus>
   governorStatus(): Promise<GovernorStatus>
   receiptsList(): Promise<ReceiptSummary[]>
+  approvalList(): Promise<ApprovalRequest[]>
+  approvalResolve(id: string, resolution: ApprovalResolution): Promise<ApprovalRequest | null>
   pickDirectory(): Promise<string | null>
 
   // subscriptions return an unsubscribe function
@@ -75,5 +84,8 @@ export interface AmbushApi {
   onOperationUpdate(cb: (op: Operation) => void): () => void
   onEngineUpdate(cb: (status: EngineStatus) => void): () => void
   onGovernorUpdate(cb: (status: GovernorStatus) => void): () => void
+  onApprovalNew(cb: (req: ApprovalRequest) => void): () => void
+  onApprovalResolved(cb: (req: ApprovalRequest) => void): () => void
+  onApprovalExpired(cb: (id: string) => void): () => void
   onLog(cb: (line: LogLine) => void): () => void
 }

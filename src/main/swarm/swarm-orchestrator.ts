@@ -10,6 +10,7 @@ import type {
   VectorStatus,
 } from '@shared/types'
 import { OpenKnowledgeEngine } from '../engine/openknowledge-engine'
+import { ApprovalQueue } from '../governance/approval-queue'
 import { ChioGovernor } from '../governance/chio-governor'
 import { PtyManager } from '../terminal/pty-manager'
 import { bus } from '../util/bus'
@@ -29,6 +30,7 @@ export class SwarmOrchestrator {
     userDataDir: string,
     private engine: OpenKnowledgeEngine,
     private governor: ChioGovernor,
+    private approvals: ApprovalQueue,
     private worktrees: WorktreeManager,
     private pty: PtyManager,
   ) {
@@ -156,10 +158,18 @@ export class SwarmOrchestrator {
     this.setVectorStatus(vector, 'deploying')
 
     // Fail-closed governance gate: refuse to launch ungoverned unless the operator
-    // has explicitly opted in (AMBUSH_ALLOW_UNGOVERNED=1).
-    const blocked = this.governor.launchBlockReason()
-    if (blocked) {
-      bus.log('error', 'governance', `vector ${vector.name} blocked: ${blocked}`)
+    // opted in via env (AMBUSH_ALLOW_UNGOVERNED=1) or approved it in the human-gate.
+    if (
+      !this.governor.isGoverned() &&
+      process.env.AMBUSH_ALLOW_UNGOVERNED !== '1' &&
+      !this.approvals.isUngovernedAllowed()
+    ) {
+      this.approvals.requestUngovernedLaunch(this.operation.name)
+      bus.log(
+        'warn',
+        'governance',
+        `vector ${vector.name} held — ungoverned launch needs operator approval (Approvals tab) or AMBUSH_ALLOW_UNGOVERNED=1`,
+      )
       this.setVectorStatus(vector, 'failed')
       this.persist()
       return

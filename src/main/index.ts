@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, shell } from 'electron'
 import { OpenKnowledgeEngine } from './engine/openknowledge-engine'
+import { ApprovalQueue } from './governance/approval-queue'
 import { ChioGovernor } from './governance/chio-governor'
 import { registerIpc } from './ipc/register-ipc'
 import { SwarmOrchestrator } from './swarm/swarm-orchestrator'
@@ -13,6 +14,7 @@ let mainWindow: BrowserWindow | null = null
 
 const engine = new OpenKnowledgeEngine()
 const governor = new ChioGovernor()
+const approvals = new ApprovalQueue()
 const worktrees = new WorktreeManager()
 const pty = new PtyManager()
 let orchestrator: SwarmOrchestrator
@@ -51,8 +53,16 @@ function createWindow(): void {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('dev.backbay.ambush')
 
-  orchestrator = new SwarmOrchestrator(app.getPath('userData'), engine, governor, worktrees, pty)
-  registerIpc({ orchestrator, engine, governor, pty })
+  approvals.start()
+  orchestrator = new SwarmOrchestrator(
+    app.getPath('userData'),
+    engine,
+    governor,
+    approvals,
+    worktrees,
+    pty,
+  )
+  registerIpc({ orchestrator, engine, governor, approvals, pty })
 
   // Restore the last operation (vectors marked idle; agents are not re-spawned).
   const restored = orchestrator.loadPersisted()
@@ -70,10 +80,12 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   pty.killAll()
   engine.stop()
+  approvals.stop()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
   pty.killAll()
   engine.stop()
+  approvals.stop()
 })

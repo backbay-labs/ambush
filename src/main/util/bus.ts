@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { IPC } from '@shared/ipc'
 import type {
+  ApprovalRequest,
   EngineStatus,
   GovernorStatus,
   LogLine,
@@ -43,6 +44,18 @@ class AppBus extends EventEmitter {
 
   governorUpdate(status: GovernorStatus): void {
     this.emit(IPC.evtGovernorUpdate, status)
+  }
+
+  approvalNew(req: ApprovalRequest): void {
+    this.emit(IPC.evtApprovalNew, req)
+  }
+
+  approvalResolved(req: ApprovalRequest): void {
+    this.emit(IPC.evtApprovalResolved, req)
+  }
+
+  approvalExpired(id: string): void {
+    this.emit(IPC.evtApprovalExpired, id)
   }
 }
 

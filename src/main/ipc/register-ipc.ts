@@ -1,8 +1,9 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { AGENT_PROFILES } from '@shared/agents'
 import { IPC } from '@shared/ipc'
-import type { CreateOperationInput, DeploySwarmInput } from '@shared/types'
+import type { ApprovalResolution, CreateOperationInput, DeploySwarmInput } from '@shared/types'
 import type { OpenKnowledgeEngine } from '../engine/openknowledge-engine'
+import type { ApprovalQueue } from '../governance/approval-queue'
 import type { ChioGovernor } from '../governance/chio-governor'
 import type { SwarmOrchestrator } from '../swarm/swarm-orchestrator'
 import type { PtyManager } from '../terminal/pty-manager'
@@ -12,11 +13,12 @@ interface Deps {
   orchestrator: SwarmOrchestrator
   engine: OpenKnowledgeEngine
   governor: ChioGovernor
+  approvals: ApprovalQueue
   pty: PtyManager
 }
 
 export function registerIpc(deps: Deps): void {
-  const { orchestrator, engine, governor, pty } = deps
+  const { orchestrator, engine, governor, approvals, pty } = deps
 
   const broadcast = (channel: string, payload: unknown): void => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -32,6 +34,9 @@ export function registerIpc(deps: Deps): void {
     IPC.evtOperationUpdate,
     IPC.evtEngineUpdate,
     IPC.evtGovernorUpdate,
+    IPC.evtApprovalNew,
+    IPC.evtApprovalResolved,
+    IPC.evtApprovalExpired,
     IPC.evtLog,
   ]) {
     bus.on(channel, (payload) => broadcast(channel, payload))
@@ -78,6 +83,12 @@ export function registerIpc(deps: Deps): void {
   ipcMain.handle(IPC.engineStop, () => engine.stop())
   ipcMain.handle(IPC.governorStatus, () => governor.getStatus())
   ipcMain.handle(IPC.receiptsList, () => governor.listReceipts())
+  ipcMain.handle(IPC.approvalList, () => approvals.list())
+  ipcMain.handle(
+    IPC.approvalResolve,
+    (_e, { id, resolution }: { id: string; resolution: ApprovalResolution }) =>
+      approvals.resolve(id, resolution),
+  )
 
   ipcMain.handle(IPC.pickDirectory, async () => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]

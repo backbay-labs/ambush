@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import type {
   AgentProfile,
+  ApprovalRequest,
+  ApprovalResolution,
   CreateOperationInput,
   EngineStatus,
   GovernorStatus,
@@ -10,7 +12,7 @@ import type {
   Vector,
 } from '@shared/types'
 
-export type Tab = 'swarm' | 'intel' | 'receipts'
+export type Tab = 'swarm' | 'intel' | 'receipts' | 'approvals'
 
 interface AmbushState {
   operation: Operation | null
@@ -18,6 +20,7 @@ interface AmbushState {
   engine: EngineStatus | null
   governor: GovernorStatus | null
   receipts: ReceiptSummary[]
+  approvals: ApprovalRequest[]
   logs: LogLine[]
   selectedVectorId: string | null
   tab: Tab
@@ -35,8 +38,11 @@ interface AmbushState {
   redeployVector: (id: string) => Promise<void>
   consolidate: () => Promise<string>
   refreshReceipts: () => Promise<void>
+  refreshApprovals: () => Promise<void>
+  resolveApproval: (id: string, resolution: ApprovalResolution) => Promise<void>
 
   _applyOperation: (op: Operation) => void
+  _applyApproval: (req: ApprovalRequest) => void
   _applyVector: (v: Vector) => void
 }
 
@@ -46,6 +52,7 @@ export const useStore = create<AmbushState>((set, get) => ({
   engine: null,
   governor: null,
   receipts: [],
+  approvals: [],
   logs: [],
   selectedVectorId: null,
   tab: 'swarm',
@@ -66,6 +73,14 @@ export const useStore = create<AmbushState>((set, get) => ({
     window.ambush.onGovernorUpdate((s) => set({ governor: s }))
     window.ambush.onLog((line) =>
       set((st) => ({ logs: [...st.logs.slice(-300), line] })),
+    )
+    // Approvals can fire even when ungoverned (the fail-closed launch gate), so
+    // refresh/subscribe unconditionally.
+    void get().refreshApprovals()
+    window.ambush.onApprovalNew((req) => get()._applyApproval(req))
+    window.ambush.onApprovalResolved((req) => get()._applyApproval(req))
+    window.ambush.onApprovalExpired((id) =>
+      set((st) => ({ approvals: st.approvals.filter((a) => a.id !== id) })),
     )
     if (governor.available) void get().refreshReceipts()
   },
@@ -105,8 +120,25 @@ export const useStore = create<AmbushState>((set, get) => ({
     const receipts = await window.ambush.receiptsList()
     set({ receipts })
   },
+  refreshApprovals: async () => {
+    const approvals = await window.ambush.approvalList()
+    set({ approvals })
+  },
+  resolveApproval: async (id, resolution) => {
+    const req = await window.ambush.approvalResolve(id, resolution)
+    if (req) get()._applyApproval(req)
+  },
 
   _applyOperation: (op) => set({ operation: op }),
+  _applyApproval: (req) =>
+    set((st) => {
+      const exists = st.approvals.some((a) => a.id === req.id)
+      return {
+        approvals: exists
+          ? st.approvals.map((a) => (a.id === req.id ? req : a))
+          : [req, ...st.approvals],
+      }
+    }),
   _applyVector: (v) =>
     set((st) => {
       if (!st.operation) return st

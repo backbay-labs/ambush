@@ -1,5 +1,5 @@
 import type * as React from 'react'
-import { Crosshair, FileText, ScrollText, Waypoints } from 'lucide-react'
+import { Crosshair, FileText, ScrollText, ShieldQuestion, Waypoints } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { useStore, type Tab } from '../store/useStore'
 
@@ -7,6 +7,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'swarm', label: 'Swarm', icon: Waypoints },
   { id: 'intel', label: 'Intel', icon: FileText },
   { id: 'receipts', label: 'Receipts', icon: ScrollText },
+  { id: 'approvals', label: 'Approvals', icon: ShieldQuestion },
 ]
 
 export function TopBar(): React.JSX.Element {
