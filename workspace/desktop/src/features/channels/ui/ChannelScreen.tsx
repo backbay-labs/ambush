@@ -60,10 +60,8 @@ import { useMainInsetRef } from "@/shared/layout/MainInsetContext";
 import { channelContentTopPaddingMeasurement } from "@/shared/layout/chromeLayout";
 import { useMeasuredCssVariable } from "@/shared/layout/useMeasuredCssVariable";
 import { useElementWidth } from "@/shared/hooks/use-mobile";
-import {
-  THREAD_PANEL_SINGLE_COLUMN_BREAKPOINT_PX,
-  useThreadPanelWidth,
-} from "@/shared/hooks/useThreadPanelWidth";
+import { useThreadPanelWidth } from "@/shared/hooks/useThreadPanelWidth";
+import { AUXILIARY_PANEL_SINGLE_COLUMN_BREAKPOINT_PX } from "@/shared/layout/AuxiliaryPanel";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   mergeAgentNamesIntoProfiles,
@@ -725,7 +723,7 @@ export function ChannelScreen({
   );
   const isNarrowPanelViewport =
     channelContentWidthPx > 0 &&
-    channelContentWidthPx < THREAD_PANEL_SINGLE_COLUMN_BREAKPOINT_PX;
+    channelContentWidthPx < AUXILIARY_PANEL_SINGLE_COLUMN_BREAKPOINT_PX;
   const isSinglePanelView =
     isNarrowPanelViewport &&
     activeChannel?.channelType !== "forum" &&
