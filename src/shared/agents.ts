@@ -1,5 +1,21 @@
 import type { AgentProfile } from './types'
 
+// Inline, self-contained seed runner (run via `node -e`, so there is no worktree-cwd
+// path to resolve). Writes a deterministic finding to $AMBUSH_FINDINGS and exits, so a
+// non-interactive lane closes the findings half of the emission void with no installed
+// agent. The receipts half flows through the governed MCP gate when a real agent runs.
+// Each lane stamps a synthetic model-family + a shared "port 8080" corroboration line so
+// the Wave-3 cross-model slop-filter has diverse, overlapping input. Used by headless
+// smoke/CI E2E and offline demos.
+const SEED_RUNNER = [
+  'const fs=require("node:fs"),path=require("node:path");',
+  'const f=process.env.AMBUSH_FINDINGS,v=process.env.AMBUSH_VECTOR_ID||"vec";',
+  'if(f){fs.mkdirSync(path.dirname(f),{recursive:true});',
+  'fs.writeFileSync(f,"# "+v+"\\n\\nObserved: open port 8080 (http) on the target.\\n"+',
+  '"Lane "+v+" enumerated candidate endpoints; [[triage]] should rank them.\\n\\n"+',
+  '"<!-- model-family: seed -->\\n");}',
+].join('')
+
 // Built-in agent runtimes. Like Orca, Ambush works with "any CLI agent": if it
 // runs in a terminal, it runs in a vector. The `shell` profile always works even
 // with no agent installed, so the swarm mechanism is demonstrable out of the box.
@@ -51,6 +67,14 @@ export const AGENT_PROFILES: AgentProfile[] = [
     command: [process.platform === 'win32' ? 'powershell.exe' : 'bash'],
     promptDelivery: 'file',
     icon: 'SquareTerminal',
+  },
+  {
+    id: 'seed',
+    name: 'Seed (deterministic)',
+    description: 'Non-interactive lane: writes a deterministic finding and exits. For headless smoke/CI E2E and offline demos.',
+    command: ['node', '-e', SEED_RUNNER],
+    promptDelivery: 'file',
+    icon: 'FlaskConical',
   },
 ]
 

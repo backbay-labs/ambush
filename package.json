@@ -18,7 +18,8 @@
     "typecheck": "pnpm run typecheck:node && pnpm run typecheck:web",
     "check": "pnpm run typecheck && pnpm run build",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "smoke": "node smoke/gate-emission-smoke.mjs"
+    "smoke": "node smoke/gate-emission-smoke.mjs",
+    "e2e": "tsx smoke/e2e.ts"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -45,6 +46,7 @@
     "react-dom": "^19.0.0",
     "tailwind-merge": "^2.6.0",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",
     "zustand": "^5.0.2"

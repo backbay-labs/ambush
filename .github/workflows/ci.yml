@@ -1,0 +1,57 @@
+name: CI
+
+# Canonical monorepo CI (the engine/.github copy is inert at a subdir and kept only
+# for archival). Gates the Rust engine AND the control-plane + the headless E2E that
+# proves the swarm emits a non-degenerate, verifiable attestation bundle.
+on:
+  push:
+    branches: [master, "bb-connor/**"]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine:
+    name: engine (rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace --all-targets
+
+  control-plane:
+    name: control-plane (ts) + e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      # The governed-gate smoke + full attestation E2E need these two engine binaries.
+      - run: cargo build -p swarm-mcp-gate -p swarm-attest --manifest-path engine/Cargo.toml
+      - name: Gate-emission smoke (ALLOW + DENY land in receipts.jsonl)
+        run: pnpm smoke
+      - name: Full attestation E2E (findings + dual coverage + ambush-verify ok)
+        run: pnpm e2e
