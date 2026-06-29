@@ -1,0 +1,343 @@
+// Adapted from ClawdStrike/Arc (Apache-2.0)
+//! Patch integrity guard — validates the safety of a unified diff before it is applied.
+
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+
+use crate::{Guard, GuardAction, GuardContext, GuardResult, Severity};
+
+/// Configuration for [`PatchIntegrityGuard`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatchIntegrityConfig {
+    /// Enable/disable this guard.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    /// Maximum lines added in a single patch.
+    #[serde(default = "default_max_additions")]
+    pub max_additions: usize,
+    /// Maximum lines deleted in a single patch.
+    #[serde(default = "default_max_deletions")]
+    pub max_deletions: usize,
+    /// Patterns that are forbidden in patches.
+    #[serde(default = "default_forbidden_patterns")]
+    pub forbidden_patterns: Vec<String>,
+    /// Require patches to have balanced additions/deletions.
+    #[serde(default)]
+    pub require_balance: bool,
+    /// Maximum imbalance ratio (additions/deletions).
+    #[serde(default = "default_max_imbalance")]
+    pub max_imbalance_ratio: f64,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+fn default_max_additions() -> usize {
+    1000
+}
+
+fn default_max_deletions() -> usize {
+    500
+}
+
+fn default_forbidden_patterns() -> Vec<String> {
+    vec![
+        // Disable security features.
+        r"(?i)disable[ _\-]?(security|auth|ssl|tls)".to_string(),
+        r"(?i)skip[ _\-]?(verify|validation|check)".to_string(),
+        // Dangerous operations.
+        r"(?i)rm\s+-rf\s+/".to_string(),
+        r"(?i)chmod\s+777".to_string(),
+        r"(?i)eval\s*\(".to_string(),
+        r"(?i)exec\s*\(".to_string(),
+        // Backdoor indicators.
+        r"(?i)reverse[_\-]?shell".to_string(),
+        r"(?i)bind[_\-]?shell".to_string(),
+        r"base64[_\-]?decode.*exec".to_string(),
+    ]
+}
+
+fn default_max_imbalance() -> f64 {
+    10.0
+}
+
+impl Default for PatchIntegrityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_additions: default_max_additions(),
+            max_deletions: default_max_deletions(),
+            forbidden_patterns: default_forbidden_patterns(),
+            require_balance: false,
+            max_imbalance_ratio: default_max_imbalance(),
+        }
+    }
+}
+
+/// Guard that validates patch safety.
+pub struct PatchIntegrityGuard {
+    name: String,
+    enabled: bool,
+    config: PatchIntegrityConfig,
+    forbidden_regexes: Vec<Regex>,
+}
+
+impl PatchIntegrityGuard {
+    /// Create with default configuration.
+    pub fn new() -> Self {
+        Self::with_config(PatchIntegrityConfig::default())
+    }
+
+    /// Create with custom configuration.
+    pub fn with_config(config: PatchIntegrityConfig) -> Self {
+        let enabled = config.enabled;
+        let forbidden_regexes = config
+            .forbidden_patterns
+            .iter()
+            .filter_map(|p| Regex::new(p).ok())
+            .collect();
+
+        Self {
+            name: "patch_integrity".to_string(),
+            enabled,
+            config,
+            forbidden_regexes,
+        }
+    }
+
+    /// Analyze a unified diff.
+    pub fn analyze(&self, diff: &str) -> PatchAnalysis {
+        let mut additions = 0;
+        let mut deletions = 0;
+        let mut forbidden_matches = Vec::new();
+
+        for line in diff.lines() {
+            if line.starts_with('+') && !line.starts_with("+++") {
+                additions += 1;
+
+                // Check for forbidden patterns in added lines.
+                for (idx, regex) in self.forbidden_regexes.iter().enumerate() {
+                    if regex.is_match(line) {
+                        forbidden_matches.push(ForbiddenMatch {
+                            line: line.to_string(),
+                            pattern: self
+                                .config
+                                .forbidden_patterns
+                                .get(idx)
+                                .cloned()
+                                .unwrap_or_else(|| "<unknown>".to_string()),
+                        });
+                    }
+                }
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                deletions += 1;
+            }
+        }
+
+        let imbalance_ratio = if deletions > 0 {
+            additions as f64 / deletions as f64
+        } else if additions > 0 {
+            f64::INFINITY
+        } else {
+            1.0
+        };
+
+        PatchAnalysis {
+            additions,
+            deletions,
+            imbalance_ratio,
+            forbidden_matches,
+            exceeds_max_additions: additions > self.config.max_additions,
+            exceeds_max_deletions: deletions > self.config.max_deletions,
+            exceeds_imbalance: self.config.require_balance
+                && imbalance_ratio > self.config.max_imbalance_ratio,
+        }
+    }
+}
+
+impl Default for PatchIntegrityGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Analysis result for a patch.
+#[derive(Clone, Debug)]
+pub struct PatchAnalysis {
+    pub additions: usize,
+    pub deletions: usize,
+    pub imbalance_ratio: f64,
+    pub forbidden_matches: Vec<ForbiddenMatch>,
+    pub exceeds_max_additions: bool,
+    pub exceeds_max_deletions: bool,
+    pub exceeds_imbalance: bool,
+}
+
+impl PatchAnalysis {
+    /// Check if the patch is safe.
+    pub fn is_safe(&self) -> bool {
+        self.forbidden_matches.is_empty()
+            && !self.exceeds_max_additions
+            && !self.exceeds_max_deletions
+            && !self.exceeds_imbalance
+    }
+}
+
+/// A forbidden pattern match.
+#[derive(Clone, Debug)]
+pub struct ForbiddenMatch {
+    pub line: String,
+    pub pattern: String,
+}
+
+impl Guard for PatchIntegrityGuard {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn handles(&self, action: &GuardAction<'_>) -> bool {
+        self.enabled && matches!(action, GuardAction::Patch(_, _))
+    }
+
+    fn check(&self, action: &GuardAction<'_>, _context: &GuardContext) -> GuardResult {
+        if !self.enabled {
+            return GuardResult::allow(&self.name);
+        }
+
+        let (path, diff) = match action {
+            GuardAction::Patch(p, d) => (*p, *d),
+            _ => return GuardResult::allow(&self.name),
+        };
+
+        let analysis = self.analyze(diff);
+
+        if analysis.is_safe() {
+            return GuardResult::allow(&self.name);
+        }
+
+        let mut issues = Vec::new();
+
+        if !analysis.forbidden_matches.is_empty() {
+            issues.push(format!(
+                "contains forbidden patterns: {}",
+                analysis
+                    .forbidden_matches
+                    .iter()
+                    .map(|m| m.pattern.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+
+        if analysis.exceeds_max_additions {
+            issues.push(format!(
+                "too many additions: {} (max: {})",
+                analysis.additions, self.config.max_additions
+            ));
+        }
+
+        if analysis.exceeds_max_deletions {
+            issues.push(format!(
+                "too many deletions: {} (max: {})",
+                analysis.deletions, self.config.max_deletions
+            ));
+        }
+
+        if analysis.exceeds_imbalance {
+            issues.push(format!(
+                "imbalanced patch: ratio {:.2} (max: {:.2})",
+                analysis.imbalance_ratio, self.config.max_imbalance_ratio
+            ));
+        }
+
+        let severity = if !analysis.forbidden_matches.is_empty() {
+            Severity::Critical
+        } else {
+            Severity::Error
+        };
+
+        GuardResult::block(&self.name, severity, issues.join("; ")).with_details(
+            serde_json::json!({
+                "path": path,
+                "additions": analysis.additions,
+                "deletions": analysis.deletions,
+                "imbalance_ratio": analysis.imbalance_ratio,
+                "forbidden_matches": analysis.forbidden_matches.len(),
+            }),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Guard;
+
+    #[test]
+    fn analyze_simple_patch() {
+        let guard = PatchIntegrityGuard::new();
+
+        let diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,4 @@\n unchanged\n+added line 1\n+added line 2\n-deleted line\n";
+
+        let analysis = guard.analyze(diff);
+        assert_eq!(analysis.additions, 2);
+        assert_eq!(analysis.deletions, 1);
+        assert!(analysis.is_safe());
+    }
+
+    #[test]
+    fn forbidden_pattern_detected() {
+        let guard = PatchIntegrityGuard::new();
+
+        let diff = "+disable_security = True\n+disable security = True\n+rm -rf /\n";
+
+        let analysis = guard.analyze(diff);
+        assert!(
+            analysis
+                .forbidden_matches
+                .iter()
+                .any(|m| m.line.contains("disable security"))
+        );
+        assert!(!analysis.forbidden_matches.is_empty());
+        assert!(!analysis.is_safe());
+    }
+
+    #[test]
+    fn max_additions_enforced() {
+        let config = PatchIntegrityConfig {
+            max_additions: 5,
+            ..Default::default()
+        };
+        let guard = PatchIntegrityGuard::with_config(config);
+
+        let diff = "+line1\n+line2\n+line3\n+line4\n+line5\n+line6";
+        let analysis = guard.analyze(diff);
+        assert!(analysis.exceeds_max_additions);
+        assert!(!analysis.is_safe());
+    }
+
+    #[test]
+    fn handles_only_patch_actions() {
+        let guard = PatchIntegrityGuard::new();
+        assert!(guard.handles(&GuardAction::Patch("f.txt", "+x")));
+        assert!(!guard.handles(&GuardAction::FileAccess("/tmp/file")));
+    }
+
+    #[test]
+    fn check_allows_safe_and_blocks_unsafe() {
+        let guard = PatchIntegrityGuard::new();
+        let context = GuardContext::new();
+
+        let safe_diff = "+added line\n-deleted line";
+        let result = guard.check(&GuardAction::Patch("file.txt", safe_diff), &context);
+        assert!(result.allowed);
+
+        let unsafe_diff = "+eval(user_input)";
+        let result = guard.check(&GuardAction::Patch("file.py", unsafe_diff), &context);
+        assert!(!result.allowed);
+        assert_eq!(result.guard, "patch_integrity");
+        assert_eq!(result.severity, Severity::Critical);
+    }
+}

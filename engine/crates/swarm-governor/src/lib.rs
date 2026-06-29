@@ -21,6 +21,12 @@ pub enum AgentAction {
     FileWrite { path: String, content: String },
     ShellCommand { command: String },
     NetworkEgress { host: String, port: u16 },
+    /// An MCP tool invocation that has no honest filesystem/shell semantics: governed by the
+    /// `mcp_tool` guard against its tool name and JSON arguments (deny-by-default).
+    McpTool {
+        tool: String,
+        args: serde_json::Value,
+    },
 }
 
 impl AgentAction {
@@ -30,6 +36,7 @@ impl AgentAction {
             Self::FileWrite { path, content } => GuardAction::FileWrite(path, content.as_bytes()),
             Self::ShellCommand { command } => GuardAction::ShellCommand(command),
             Self::NetworkEgress { host, port } => GuardAction::NetworkEgress(host, *port),
+            Self::McpTool { tool, args } => GuardAction::McpTool(tool, args),
         }
     }
 }

@@ -1,8 +1,14 @@
 //! Guard pipeline for response and filesystem safety checks.
 
+pub mod computer_use;
 pub mod egress_allowlist;
 pub mod forbidden_path;
+pub mod input_injection_capability;
+pub mod mcp_tool;
+pub mod patch_integrity;
+pub mod path_allowlist;
 pub mod path_normalization;
+pub mod remote_desktop_side_channel;
 pub mod secret_leak;
 pub mod shell_command;
 
@@ -11,8 +17,18 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use serde::{Deserialize, Serialize};
 use swarm_core::types::ResponseAction;
 
+pub use computer_use::{ComputerUseConfig, ComputerUseGuard, ComputerUseMode};
 pub use egress_allowlist::{DefaultAction, EgressAllowlistConfig, EgressAllowlistGuard};
 pub use forbidden_path::{ForbiddenPathConfig, ForbiddenPathGuard};
+pub use input_injection_capability::{
+    InputInjectionCapabilityConfig, InputInjectionCapabilityGuard,
+};
+pub use mcp_tool::{McpDefaultAction, McpToolConfig, McpToolGuard, ToolDecision};
+pub use patch_integrity::{PatchAnalysis, PatchIntegrityConfig, PatchIntegrityGuard};
+pub use path_allowlist::{PathAllowlistConfig, PathAllowlistGuard};
+pub use remote_desktop_side_channel::{
+    RemoteDesktopSideChannelConfig, RemoteDesktopSideChannelGuard,
+};
 pub use secret_leak::{SecretLeakConfig, SecretLeakGuard, SecretPattern};
 pub use shell_command::{ShellCommandConfig, ShellCommandGuard};
 
@@ -106,6 +122,13 @@ pub enum GuardAction<'a> {
     ShellCommand(&'a str),
     NetworkEgress(&'a str, u16),
     ResponseAction(&'a ResponseAction),
+    /// An MCP tool invocation: tool name plus its JSON arguments.
+    McpTool(&'a str, &'a serde_json::Value),
+    /// A patch/diff applied to a path: target path plus the unified-diff text.
+    Patch(&'a str, &'a str),
+    /// An escape-hatch action for capabilities outside the core surface (for example CUA /
+    /// remote-desktop side channels): a custom type tag plus structured JSON data.
+    Custom(&'a str, &'a serde_json::Value),
 }
 
 /// Synchronous guard trait.
@@ -159,13 +182,23 @@ impl GuardPipeline {
     }
 }
 
-/// Convenience constructor for the default four-guard pipeline.
+/// Convenience constructor for the default, always-on guard pipeline.
+///
+/// In addition to the four filesystem/shell/egress guards, this registers the always-on
+/// trust-boundary guards that govern the MCP, patch, and computer-use action surfaces. The
+/// opt-in [`PathAllowlistGuard`] (deny-by-default, disabled until configured) is intentionally
+/// *not* included here; construct it explicitly with a [`PathAllowlistConfig`] to enable it.
 pub fn default_pipeline() -> GuardPipeline {
     GuardPipeline::new(vec![
         Box::new(ForbiddenPathGuard::new()),
         Box::new(ShellCommandGuard::new()),
         Box::new(SecretLeakGuard::new()),
         Box::new(EgressAllowlistGuard::new()),
+        Box::new(McpToolGuard::new()),
+        Box::new(PatchIntegrityGuard::new()),
+        Box::new(ComputerUseGuard::new()),
+        Box::new(InputInjectionCapabilityGuard::new()),
+        Box::new(RemoteDesktopSideChannelGuard::new()),
     ])
 }
 
@@ -390,6 +423,69 @@ mod tests {
         let pipeline = default_pipeline();
         let result = pipeline.evaluate(
             &GuardAction::FileAccess("/app/main.rs"),
+            &GuardContext::new(),
+        );
+
+        assert!(result.allowed);
+        assert_eq!(result.guard, "pipeline");
+    }
+
+    #[test]
+    fn default_pipeline_blocks_unknown_mcp_tool() {
+        let pipeline = default_pipeline();
+        let args = serde_json::json!({ "path": "/app/file.txt" });
+        let result = pipeline.evaluate(
+            &GuardAction::McpTool("shell_exec", &args),
+            &GuardContext::new(),
+        );
+
+        assert!(!result.allowed);
+        assert_eq!(result.guard, "mcp_tool");
+    }
+
+    #[test]
+    fn default_pipeline_blocks_unsafe_patch() {
+        let pipeline = default_pipeline();
+        let result = pipeline.evaluate(
+            &GuardAction::Patch("src/app.py", "+eval(user_input)"),
+            &GuardContext::new(),
+        );
+
+        assert!(!result.allowed);
+        assert_eq!(result.guard, "patch_integrity");
+    }
+
+    #[test]
+    fn default_pipeline_allows_safe_patch() {
+        let pipeline = default_pipeline();
+        let result = pipeline.evaluate(
+            &GuardAction::Patch("src/app.rs", "+let x = 1;\n-let y = 2;"),
+            &GuardContext::new(),
+        );
+
+        assert!(result.allowed);
+        assert_eq!(result.guard, "pipeline");
+    }
+
+    #[test]
+    fn default_pipeline_blocks_disallowed_input_injection() {
+        let pipeline = default_pipeline();
+        let data = serde_json::json!({ "input_type": "gamepad" });
+        let result = pipeline.evaluate(
+            &GuardAction::Custom("input.inject", &data),
+            &GuardContext::new(),
+        );
+
+        assert!(!result.allowed);
+        assert_eq!(result.guard, "input_injection_capability");
+    }
+
+    #[test]
+    fn default_pipeline_allows_known_remote_side_channel() {
+        let pipeline = default_pipeline();
+        let data = serde_json::json!({});
+        let result = pipeline.evaluate(
+            &GuardAction::Custom("remote.clipboard", &data),
             &GuardContext::new(),
         );
 
