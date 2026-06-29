@@ -32,6 +32,12 @@ pub enum Error {
 
     #[error("JSON serialization error: {0}")]
     JsonError(String),
+
+    #[error("Invalid receipt version: {version}")]
+    InvalidReceiptVersion { version: String },
+
+    #[error("Unsupported receipt version: found {found}, supported {supported}")]
+    UnsupportedReceiptVersion { found: String, supported: String },
 }
 
 impl From<serde_json::Error> for Error {

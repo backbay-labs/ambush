@@ -4,12 +4,17 @@ pub mod canonical;
 pub mod error;
 pub mod hashing;
 pub mod merkle;
+pub mod receipt;
 pub mod signing;
 
 pub use canonical::canonicalize as canonicalize_json;
 pub use error::{Error, Result};
 pub use hashing::{Hash, hmac_sha256, hmac_sha256_hex, sha256};
 pub use merkle::{MerkleProof, MerkleTree, leaf_hash, node_hash};
+pub use receipt::{
+    Provenance, Receipt, SignedReceipt, Signatures, PublicKeySet, Verdict, VerificationResult,
+    ViolationRef, RECEIPT_SCHEMA_VERSION, validate_receipt_version,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub use signing::{Keypair, PublicKey, Signature, Signer, verify_signature};
