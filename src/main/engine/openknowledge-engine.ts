@@ -1,7 +1,8 @@
-import { type ChildProcess, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { resolveBin } from '../util/binary-resolver'
 import { bus } from '../util/bus'
+import { ProcessSupervisor, type SupervisorEvent } from './process-supervisor'
 import { run, which } from '../util/run'
 import type { EngineStatus } from '@shared/types'
 
@@ -15,7 +16,7 @@ const UI_PORT = 39847
  * Resolution order: a local `ok` binary, else `npx @inkeep/open-knowledge`.
  */
 export class OpenKnowledgeEngine {
-  private proc: ChildProcess | null = null
+  private supervisor: ProcessSupervisor | null = null
   private vaultPath = ''
   private status: EngineStatus = {
     available: false,
@@ -86,46 +87,85 @@ export class OpenKnowledgeEngine {
   }
 
   async start(): Promise<EngineStatus> {
-    if (this.proc) return this.getStatus()
+    if (this.supervisor && this.supervisor.getState() !== 'stopped') return this.getStatus()
     const invoker = this.resolveInvoker()
     if (!invoker || !this.vaultPath) return this.getStatus()
 
     bus.log('info', 'engine', 'Starting OpenKnowledge web UI…')
-    this.proc = spawn(invoker.bin, [...invoker.base, 'start'], {
-      cwd: this.vaultPath,
-      env: { ...process.env, PORT: String(UI_PORT) },
+    // Drive the `ok` subprocess through a supervisor so a crash auto-restarts
+    // with capped backoff and the renderer sees the same EngineStatus stream.
+    this.supervisor = new ProcessSupervisor({
+      name: 'openknowledge',
+      spawn: () => {
+        const proc = spawn(invoker.bin, [...invoker.base, 'start'], {
+          cwd: this.vaultPath,
+          env: { ...process.env, PORT: String(UI_PORT) },
+        })
+        proc.stdout?.on('data', (d) => {
+          const text = d.toString()
+          const m = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1):(\d+)\S*/)
+          if (m && !this.status.url) {
+            this.status.url = m[0]
+            // Surface a freshly-parsed URL only once we are already serving.
+            if (this.status.running) bus.engineUpdate(this.getStatus())
+          }
+        })
+        return proc
+      },
+      // Ready once the web UI prints its URL; otherwise the timeout below falls
+      // back to optimistically assuming the conventional UI port.
+      isReady: () => this.status.url !== null,
+      readinessTimeoutMs: 1500,
+      readinessTimeout: 'ready',
+      onState: (event) => this.onSupervisorState(event),
+      onLog: (level, message) => bus.log(level, 'engine', message),
     })
-    this.proc.stdout?.on('data', (d) => {
-      const text = d.toString()
-      const m = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1):(\d+)\S*/)
-      if (m && !this.status.url) {
-        this.status.url = m[0]
-        this.status.running = true
-        bus.engineUpdate(this.getStatus())
-      }
-    })
-    this.proc.on('close', (code) => {
-      bus.log('warn', 'engine', `OpenKnowledge exited (${code})`)
-      this.proc = null
-      this.status.running = false
-      this.status.url = null
-      bus.engineUpdate(this.getStatus())
-    })
-
-    // Optimistically assume the conventional UI port if we don't parse one.
-    this.status.running = true
-    this.status.url = `http://127.0.0.1:${UI_PORT}`
-    bus.engineUpdate(this.getStatus())
+    this.supervisor.start()
     return this.getStatus()
   }
 
+  /** Project supervisor lifecycle transitions onto EngineStatus + the bus. */
+  private onSupervisorState(event: SupervisorEvent): void {
+    switch (event.state) {
+      case 'starting':
+        this.status.running = false
+        this.status.detail =
+          event.restartCount > 0
+            ? `restarting OpenKnowledge (attempt ${event.restartCount})…`
+            : 'starting OpenKnowledge…'
+        break
+      case 'ready':
+        this.status.running = true
+        if (!this.status.url) this.status.url = `http://127.0.0.1:${UI_PORT}`
+        this.status.detail = `running (${this.status.source})`
+        break
+      case 'crashed':
+        this.status.running = false
+        this.status.url = null
+        this.status.detail = `OpenKnowledge crashed: ${event.detail}`
+        break
+      case 'stopped':
+        this.status.running = false
+        this.status.url = null
+        this.status.detail = event.givenUp
+          ? `OpenKnowledge stopped after ${event.restartCount} failed restarts`
+          : 'stopped'
+        break
+    }
+    bus.engineUpdate(this.getStatus())
+  }
+
   stop(): EngineStatus {
-    if (this.proc) {
-      this.proc.kill()
-      this.proc = null
+    if (this.supervisor) {
+      // supervisor.stop() drives the 'stopped' transition synchronously, which
+      // clears running/url and emits the engine update via onSupervisorState.
+      this.supervisor.stop()
+      this.supervisor = null
+      return this.getStatus()
     }
     this.status.running = false
     this.status.url = null
+    this.status.detail = 'stopped'
     bus.engineUpdate(this.getStatus())
     return this.getStatus()
   }
