@@ -1,0 +1,23 @@
+[project]
+name = "ambush-eval"
+version = "0.1.0"
+description = "Ambush validation eval: does filtered, consensus-gated heterogeneous fan-out beat one strong agent? (GO/KILL gate)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Optional: only needed for live runs / richer stats. The core + tests run on numpy alone.
+full = [
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "pyyaml>=6.0",
+    "datasets>=2.14",   # HuggingFace, for PrimeVul
+]
+dev = ["pytest>=7.4"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
