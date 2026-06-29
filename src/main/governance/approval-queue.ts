@@ -108,11 +108,18 @@ export class ApprovalQueue {
     req.resolution = resolution
     req.resolvedByTrustedAuthority = trusted
     req.resolvedAt = Date.now()
-    if (resolution === 'allow-session' || resolution === 'allow-always') {
+    // Only a TRUSTED operator resolution grants standing authority — a local/untrusted resolution
+    // resolves the request but never adds a session grant (otherwise the trust flag is decorative).
+    if (trusted && (resolution === 'allow-session' || resolution === 'allow-always')) {
       this.sessionGrants.add(req.resource)
     }
     bus.approvalResolved(req)
     return req
+  }
+
+  /** Per-operation key for the ungoverned-launch grant so it never leaks across operations. */
+  private static ungovernedKey(operationId: string): string {
+    return `${ApprovalQueue.UNGOVERNED_RESOURCE}:${operationId}`
   }
 
   /** Whether a session/always grant exists for a resource key. */
@@ -120,20 +127,20 @@ export class ApprovalQueue {
     return this.sessionGrants.has(resource)
   }
 
-  /** Producer: enqueue (deduped) the "launch ungoverned?" human-gate request. */
-  requestUngovernedLaunch(operationName: string): ApprovalRequest {
+  /** Producer: enqueue (deduped) the "launch ungoverned?" human-gate request, scoped to this op. */
+  requestUngovernedLaunch(operationName: string, operationId: string): ApprovalRequest {
     return this.request({
       tool: 'swarm.deploy',
-      resource: ApprovalQueue.UNGOVERNED_RESOURCE,
+      resource: ApprovalQueue.ungovernedKey(operationId),
       guard: 'governance.fail_closed',
-      reason: `Operation "${operationName}" has no active governor — launching agents UNGOVERNED (no signed receipts). Approve to proceed for this session.`,
+      reason: `Operation "${operationName}" has no active governor — launching agents UNGOVERNED (no signed receipts). Approve to proceed for this operation.`,
       severity: 'high',
       ttlMs: MAX_TTL_MS,
     })
   }
 
-  isUngovernedAllowed(): boolean {
-    return this.isGranted(ApprovalQueue.UNGOVERNED_RESOURCE)
+  isUngovernedAllowed(operationId: string): boolean {
+    return this.isGranted(ApprovalQueue.ungovernedKey(operationId))
   }
 
   private expireStale(): void {

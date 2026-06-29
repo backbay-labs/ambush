@@ -141,6 +141,9 @@ export class ProcessSupervisor {
   /** Start (idempotent while starting/ready). Resets the circuit breaker. */
   start(): void {
     if (this.state === 'starting' || this.state === 'ready') return
+    // Cancel any pending crash-backoff respawn so start() during the crashed/backoff window
+    // does not double-spawn (the backoff timer would later spawn a second, orphaned child).
+    this.clearBackoffTimer()
     this.stopping = false
     this.givenUp = false
     this.restartStreak = 0

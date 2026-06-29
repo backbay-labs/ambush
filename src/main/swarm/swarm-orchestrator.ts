@@ -165,9 +165,9 @@ export class SwarmOrchestrator {
     if (
       !this.governor.isGoverned() &&
       process.env.AMBUSH_ALLOW_UNGOVERNED !== '1' &&
-      !this.approvals.isUngovernedAllowed()
+      !this.approvals.isUngovernedAllowed(this.operation.id)
     ) {
-      this.approvals.requestUngovernedLaunch(this.operation.name)
+      this.approvals.requestUngovernedLaunch(this.operation.name, this.operation.id)
       bus.log(
         'warn',
         'governance',

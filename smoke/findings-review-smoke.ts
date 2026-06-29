@@ -18,6 +18,11 @@ const shared = 'Observed: open port 8080 (http) on the target.'
 writeFileSync(join(dir, 'recon-01.md'), `# recon-01\n\n${shared}\nUnique: SQL injection on /login.\n\n<!-- model-family: claude -->\n`)
 writeFileSync(join(dir, 'recon-02.md'), `# recon-02\n\n${shared}\nUnique: weak TLS ciphers negotiated.\n\n<!-- model-family: gpt -->\n`)
 writeFileSync(join(dir, 'recon-03.md'), `# recon-03\n\n${shared}\n\n<!-- model-family: gemini -->\n`)
+// Two UNTAGGED lanes sharing a different claim must NOT corroborate each other (the per-vector
+// fallback must not masquerade as two distinct model families).
+const untagged = 'Observed: weak password policy on the admin panel.'
+writeFileSync(join(dir, 'recon-04.md'), `# recon-04\n\n${untagged}\n`)
+writeFileSync(join(dir, 'recon-05.md'), `# recon-05\n\n${untagged}\n`)
 
 const review = reviewFindings(vault)
 
@@ -28,9 +33,12 @@ else {
   if (corroboratedCluster.modelFamilies.length < 2) problems.push('corroborated cluster has <2 model families')
   if (!corroboratedCluster.summary.toLowerCase().includes('8080')) problems.push('corroborated cluster is not the 8080 claim')
 }
-if (review.corroborated < 1) problems.push('corroborated count < 1')
-if (review.quarantined < 2) problems.push('the two unique single-source lines should be quarantined')
-if (review.modelFamilies.length !== 3) problems.push(`expected 3 model families, got ${review.modelFamilies.length}`)
+if (review.corroborated !== 1) problems.push(`exactly 1 cluster should be corroborated, got ${review.corroborated}`)
+if (review.quarantined < 2) problems.push('the unique + untagged single-source lines should be quarantined')
+// The untagged shared claim must be quarantined, not corroborated (no known model families).
+const untaggedCluster = review.clusters.find((c) => c.summary.toLowerCase().includes('weak password'))
+if (!untaggedCluster) problems.push('untagged shared claim did not cluster')
+else if (untaggedCluster.label !== 'quarantine') problems.push('untagged same-claim lanes were falsely corroborated')
 
 if (problems.length) {
   console.error('\x1b[31mREVIEW SMOKE FAIL:\x1b[0m', problems.join('; '))

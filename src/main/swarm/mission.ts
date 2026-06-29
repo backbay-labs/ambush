@@ -67,7 +67,9 @@ graph stays navigable. When your lane is complete, print \`DONE\` on its own lin
     }
     if (ctx.governedMcpEnv) server.env = ctx.governedMcpEnv
     const mcpConfig = { mcpServers: { 'open-knowledge': server } }
-    writeFileSync(join(worktreePath, '.mcp.json'), JSON.stringify(mcpConfig, null, 2))
+    // .mcp.json carries the governor signing secret (SWARM_GOVERNOR_KEY) in its env block, so write
+    // it owner-only (0o600) rather than the world-readable default inside the target worktree.
+    writeFileSync(join(worktreePath, '.mcp.json'), JSON.stringify(mcpConfig, null, 2), { mode: 0o600 })
   }
 }
 

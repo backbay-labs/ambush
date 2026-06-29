@@ -15,9 +15,14 @@ const STOP = new Set([
 
 const SIMILARITY_THRESHOLD = 0.4
 
-function familyOf(text: string, fallback: string): string {
+// Untagged findings get a constant 'unknown' family — NOT the per-vector name — so two
+// same-model (or untagged) lanes are not mistaken for two distinct model families (which would
+// fake corroboration). Corroboration counts only KNOWN families.
+const UNKNOWN_FAMILY = 'unknown'
+
+function familyOf(text: string): string {
   const m = text.match(/model-family:\s*([\w-]+)/i)
-  return m ? m[1] : fallback
+  return m ? m[1] : UNKNOWN_FAMILY
 }
 
 function signalLines(text: string): string[] {
@@ -60,7 +65,7 @@ export function reviewFindings(vaultPath: string): FindingsReview {
       if (!name.endsWith('.md')) continue
       const text = readFileSync(join(dir, name), 'utf8')
       const vector = name.replace(/\.md$/, '')
-      const family = familyOf(text, vector)
+      const family = familyOf(text)
       for (const line of signalLines(text)) {
         const tokens = tokenize(line)
         if (tokens.size > 0) claims.push({ vector, family, line, tokens })
@@ -86,6 +91,9 @@ export function reviewFindings(vaultPath: string): FindingsReview {
 
   const clusters: FindingCluster[] = buckets.map((bucket, i) => {
     const modelFamilies = [...new Set(bucket.map((c) => c.family))].sort()
+    // Corroboration requires >=2 distinct KNOWN model families — untagged ('unknown') lanes can
+    // never corroborate each other, so they fail-safe to QUARANTINE.
+    const knownFamilies = modelFamilies.filter((f) => f !== UNKNOWN_FAMILY)
     const evidence: FindingEvidence[] = bucket.map((c) => ({
       vector: c.vector,
       modelFamily: c.family,
@@ -95,7 +103,7 @@ export function reviewFindings(vaultPath: string): FindingsReview {
       id: `cluster-${i}`,
       summary: bucket[0].line.slice(0, 120),
       modelFamilies,
-      label: modelFamilies.length >= 2 ? 'corroborated' : 'quarantine',
+      label: knownFamilies.length >= 2 ? 'corroborated' : 'quarantine',
       evidence,
     }
   })
