@@ -20,34 +20,57 @@ export function run(
       env: opts.env ?? process.env,
       shell: false,
     })
+    const MAX_BYTES = 16 * 1024 * 1024 // cap captured output so a runaway child can't OOM main
     let stdout = ''
     let stderr = ''
+    let bytes = 0
+    let truncated = false
     let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
     const finish = (code: number | null): void => {
       if (settled) return
       settled = true
+      if (timer) clearTimeout(timer) // always clear, incl. the error path (was dangling)
       resolve({ code, stdout, stderr })
     }
-    const timer = opts.timeoutMs
+    timer = opts.timeoutMs
       ? setTimeout(() => {
           child.kill('SIGKILL')
           finish(null)
         }, opts.timeoutMs)
       : null
-    child.stdout?.on('data', (d) => {
-      stdout += d.toString()
-    })
-    child.stderr?.on('data', (d) => {
-      stderr += d.toString()
-    })
+    const capture = (chunk: Buffer, isStdout: boolean): void => {
+      if (truncated) return
+      bytes += chunk.length
+      if (bytes > MAX_BYTES) {
+        truncated = true
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          /* already gone */
+        }
+        return
+      }
+      if (isStdout) stdout += chunk.toString()
+      else stderr += chunk.toString()
+    }
+    child.stdout?.on('data', (d: Buffer) => capture(d, true))
+    child.stderr?.on('data', (d: Buffer) => capture(d, false))
+    // A child that closes stdin before/while we write `input` emits an async EPIPE on the stdin
+    // stream; with no listener Node re-throws it as an uncaught exception that kills the whole main
+    // process (this is the per-Enter governor trust path). Swallow it — the close/error wins.
+    child.stdin?.on('error', () => {})
     child.on('error', () => finish(null))
-    child.on('close', (code) => {
-      if (timer) clearTimeout(timer)
-      finish(code)
-    })
+    child.on('close', (code) => finish(code))
     if (opts.input) {
-      child.stdin?.write(opts.input)
-      child.stdin?.end()
+      try {
+        if (child.stdin?.writable) {
+          child.stdin.write(opts.input)
+          child.stdin.end()
+        }
+      } catch {
+        /* child exited before reading stdin — error/close resolves the promise */
+      }
     }
   })
 }

@@ -7,6 +7,8 @@ import type { PtyManager } from './pty-manager'
 interface TermState {
   line: string
   queue: Promise<void>
+  /** Count of in-flight command evaluations: while > 0, the held line must not accept live writes. */
+  pending: number
 }
 
 /**
@@ -46,7 +48,18 @@ export class TerminalGovernor {
   handleWrite(terminalId: string, data: string): void {
     const st = this.state(terminalId)
     if (!data.includes('\r') && !data.includes('\n')) {
-      // common keystroke case: forward raw + reconstruct (pure sync, microseconds)
+      // Common keystroke case. But if a command is in-flight (its Enter is held pending the async
+      // verdict), this terminator-less write must NOT jump the queue and concatenate onto the held
+      // line — chain it so the governed verdict still matches what executes (the two-write bypass).
+      if (st.pending > 0) {
+        st.queue = st.queue
+          .then(() => {
+            this.deps.pty.write(terminalId, data)
+            st.line = applyChars(st.line, data)
+          })
+          .catch(() => {})
+        return
+      }
       this.deps.pty.write(terminalId, data)
       st.line = applyChars(st.line, data)
       return
@@ -61,7 +74,7 @@ export class TerminalGovernor {
   private state(id: string): TermState {
     let s = this.states.get(id)
     if (!s) {
-      s = { line: '', queue: Promise.resolve() }
+      s = { line: '', queue: Promise.resolve(), pending: 0 }
       this.states.set(id, s)
     }
     return s
@@ -88,6 +101,10 @@ export class TerminalGovernor {
     if (seg) steps.push({ seg, terminator: null })
 
     for (const step of steps) {
+      // A terminator step holds a command pending its verdict — mark it in-flight synchronously so
+      // a racing fast-path keystroke (handleWrite) chains instead of jumping ahead of it.
+      const holdsCommand = step.terminator !== null
+      if (holdsCommand) st.pending += 1
       st.queue = st.queue
         .then(async () => {
           if (step.seg) {
@@ -104,6 +121,9 @@ export class TerminalGovernor {
           await this.evaluateAndApply(terminalId, step.terminator, cmd)
         })
         .catch(() => {})
+        .finally(() => {
+          if (holdsCommand) st.pending -= 1
+        })
     }
   }
 

@@ -244,6 +244,9 @@ export class ProcessSupervisor {
 
   private onProcExit(epoch: number, code: number | null, signal: NodeJS.Signals | null): void {
     if (epoch !== this.epoch) return
+    // Invalidate this spawn's epoch immediately so a sibling 'error'/'exit' for the SAME child
+    // (Node can emit both) fails its guard and cannot double-run handleCrash → double respawn.
+    this.epoch += 1
     this.proc = null
     this.clearReadinessTimer()
     if (this.stopping) return
@@ -253,6 +256,7 @@ export class ProcessSupervisor {
 
   private onProcError(epoch: number, err: Error): void {
     if (epoch !== this.epoch) return
+    this.epoch += 1 // see onProcExit: invalidate so a sibling exit/error can't double-crash
     this.proc = null
     this.clearReadinessTimer()
     if (this.stopping) return
@@ -278,6 +282,7 @@ export class ProcessSupervisor {
     this.setState('crashed', reason)
     const delay = computeBackoff(this.restartStreak, this.restartCount, this.backoffBaseMs, this.backoffCapMs)
     this.log('info', `${this.name} restarting in ${delay}ms (attempt ${this.restartStreak}/${this.maxRetries})`)
+    this.clearBackoffTimer() // never leave a prior pending timer to fire alongside this one
     this.backoffTimer = setTimeout(() => {
       this.backoffTimer = null
       if (this.stopping) return

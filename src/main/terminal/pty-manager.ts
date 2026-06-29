@@ -49,7 +49,13 @@ export class PtyManager {
           env: spec.env as Record<string, string>,
         })
         const wrapped: PtyProcess = {
-          write: (d) => proc.write(d),
+          write: (d) => {
+            try {
+              proc.write(d)
+            } catch {
+              /* terminal may have exited */
+            }
+          },
           resize: (c, r) => {
             try {
               proc.resize(c, r)
@@ -84,8 +90,31 @@ export class PtyManager {
       bus.terminalExit({ terminalId: spec.terminalId, code: 127 })
       return false
     }
+    // ENOENT/EACCES for a missing bare binary (the common headless fallback) arrive ASYNCHRONOUSLY
+    // as an 'error' event — the sync try/catch above never sees them. Without a listener Node
+    // re-throws and crashes main; and since spawn returned, the vector would be marked "running".
+    let exited = false
+    const onceExit = (code: number | null): void => {
+      if (exited) return
+      exited = true
+      this.sessions.delete(spec.terminalId)
+      bus.terminalExit({ terminalId: spec.terminalId, code })
+    }
+    child.on('error', (err) => {
+      bus.log('error', 'pty', `spawn failed (${spec.command}): ${String(err)}`)
+      bus.terminalData({ terminalId: spec.terminalId, data: `\r\n[ambush] cannot launch ${spec.command}\r\n` })
+      onceExit(127)
+    })
+    child.stdin.on('error', () => {}) // swallow write-after-exit EPIPE (handled by onceExit)
     const wrapped: PtyProcess = {
-      write: (d) => child.stdin.write(d),
+      write: (d) => {
+        if (!child.stdin.writable) return
+        try {
+          child.stdin.write(d)
+        } catch {
+          /* dead pipe; the exit handler removes the session */
+        }
+      },
       resize: () => {},
       kill: () => child.kill('SIGKILL'),
       onData: (cb) => {
@@ -94,7 +123,9 @@ export class PtyManager {
       },
       onExit: (cb) => child.on('close', (code) => cb(code)),
     }
-    this.register(spec.terminalId, wrapped)
+    this.sessions.set(spec.terminalId, wrapped)
+    wrapped.onData((data) => bus.terminalData({ terminalId: spec.terminalId, data }))
+    wrapped.onExit(onceExit) // dedups with the 'error' path so terminalExit fires once
     return true
   }
 
