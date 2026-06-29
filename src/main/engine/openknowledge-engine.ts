@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
+import { resolveBin } from '../util/binary-resolver'
 import { bus } from '../util/bus'
 import { run, which } from '../util/run'
 import type { EngineStatus } from '@shared/types'
@@ -31,7 +32,8 @@ export class OpenKnowledgeEngine {
 
   /** [bin, ...baseArgs] used to invoke the OpenKnowledge CLI, or null. */
   resolveInvoker(): { bin: string; base: string[]; source: EngineStatus['source'] } | null {
-    const local = which('ok')
+    // PATH (dev), dev build outputs, then packaged-app resources so a bundled `ok` is found.
+    const local = resolveBin('ok', ['engine/bin', 'bin'])
     if (local) return { bin: local, base: [], source: 'local-ok' }
     const npx = which('npx')
     if (npx) return { bin: npx, base: ['-y', '@inkeep/open-knowledge@latest'], source: 'npx' }

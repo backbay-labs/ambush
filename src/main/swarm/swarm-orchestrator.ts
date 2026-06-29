@@ -13,6 +13,7 @@ import { OpenKnowledgeEngine } from '../engine/openknowledge-engine'
 import { ApprovalQueue } from '../governance/approval-queue'
 import { ChioGovernor } from '../governance/chio-governor'
 import { PtyManager } from '../terminal/pty-manager'
+import { writePrivateAtomic } from '../util/atomic-write'
 import { bus } from '../util/bus'
 import { buildPrompt, writeMissionFiles } from './mission'
 import { WorktreeManager, type WorktreeHandle } from './worktree-manager'
@@ -45,7 +46,9 @@ export class SwarmOrchestrator {
   private persist(): void {
     if (!this.operation) return
     try {
-      writeFileSync(join(this.dataDir, 'current.json'), JSON.stringify(this.operation, null, 2))
+      // Crash-recovery state (loadPersisted): write atomically so a crash mid-write
+      // can't corrupt current.json.
+      writePrivateAtomic(join(this.dataDir, 'current.json'), JSON.stringify(this.operation, null, 2))
     } catch (err) {
       bus.log('warn', 'swarm', `persist failed: ${String(err)}`)
     }

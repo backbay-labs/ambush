@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { writePrivateAtomic } from '../util/atomic-write'
+import { resolveBin } from '../util/binary-resolver'
 import { bus } from '../util/bus'
-import { which } from '../util/run'
 import type { GovernorStatus, ReceiptSummary } from '@shared/types'
 
 // Default HushSpec-style policy for the swarm. Least-privilege: allow only the
@@ -56,15 +57,10 @@ export class ChioGovernor {
     return { ...this.status }
   }
 
-  /** Resolve the real MCP-wrap gate binary (PATH, then known dev build locations). */
+  /** Resolve the real MCP-wrap gate binary: PATH (dev), dev build outputs, then packaged-app
+   * resources — so fail-closed governance survives in a packaged Electron .app. */
   private resolveGateBin(): string | null {
-    const onPath = which('swarm-mcp-gate')
-    if (onPath) return onPath
-    for (const rel of ['engine/target/release/swarm-mcp-gate', 'engine/target/debug/swarm-mcp-gate']) {
-      const p = join(process.cwd(), rel)
-      if (existsSync(p)) return p
-    }
-    return null
+    return resolveBin('swarm-mcp-gate', ['engine/bin', 'bin'])
   }
 
   /** Whether the swarm is running under real, signed governance right now. */
@@ -111,7 +107,8 @@ export class ChioGovernor {
     mkdirSync(chioDir, { recursive: true })
     const policyPath = join(chioDir, 'policy.yaml')
     const receiptLogPath = join(chioDir, 'receipts.jsonl')
-    writeFileSync(policyPath, DEFAULT_POLICY) // informational; the gate's real policy is the guards + mapping
+    // Security-sensitive: write atomically with 0o600 so a crash can't leave a partial policy.
+    writePrivateAtomic(policyPath, DEFAULT_POLICY) // informational; the gate's real policy is the guards + mapping
 
     // One pinned signing key per operation, so every gate process emits verifiable receipts.
     const secretPath = join(chioDir, 'governor.secret')
@@ -119,7 +116,7 @@ export class ChioGovernor {
       this.signingSecret = readFileSync(secretPath, 'utf8').trim()
     } else {
       this.signingSecret = randomBytes(32).toString('hex')
-      writeFileSync(secretPath, this.signingSecret, { mode: 0o600 })
+      writePrivateAtomic(secretPath, this.signingSecret)
     }
 
     this.status = {

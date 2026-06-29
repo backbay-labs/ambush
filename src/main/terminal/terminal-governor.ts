@@ -1,8 +1,7 @@
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import type { Operation, ReceiptSummary } from '@shared/types'
+import { resolveBin as resolveBinUtil } from '../util/binary-resolver'
 import { bus } from '../util/bus'
-import { run, which } from '../util/run'
+import { run } from '../util/run'
 import type { PtyManager } from './pty-manager'
 
 interface TermState {
@@ -85,20 +84,9 @@ export class TerminalGovernor {
 
   private resolveBin(): string | null {
     if (this.bin !== undefined) return this.bin
-    const onPath = which('swarm-governor')
-    if (onPath) {
-      this.bin = onPath
-      return onPath
-    }
-    for (const rel of ['engine/target/release/swarm-governor', 'engine/target/debug/swarm-governor']) {
-      const p = join(process.cwd(), rel)
-      if (existsSync(p)) {
-        this.bin = p
-        return p
-      }
-    }
-    this.bin = null
-    return null
+    // PATH (dev), dev build outputs, then packaged-app resources.
+    this.bin = resolveBinUtil('swarm-governor', ['engine/bin', 'bin'])
+    return this.bin
   }
 
   private async evaluateAndApply(terminalId: string, terminator: string, cmd: string): Promise<void> {
