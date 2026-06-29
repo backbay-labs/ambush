@@ -131,7 +131,7 @@ impl Guard for ForbiddenPathGuard {
         self.enabled
             && matches!(
                 action,
-                GuardAction::FileAccess(_) | GuardAction::FileWrite(_, _)
+                GuardAction::FileAccess(_) | GuardAction::FileWrite(_, _) | GuardAction::Patch(_, _)
             )
     }
 
@@ -143,6 +143,8 @@ impl Guard for ForbiddenPathGuard {
         let path = match action {
             GuardAction::FileAccess(path) => *path,
             GuardAction::FileWrite(path, _) => *path,
+            // A patch writes to its target path just like a FileWrite — same forbidden-path rules.
+            GuardAction::Patch(path, _) => *path,
             _ => return GuardResult::allow(&self.name),
         };
 

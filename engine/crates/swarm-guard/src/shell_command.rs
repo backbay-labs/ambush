@@ -37,7 +37,11 @@ fn default_enforce_forbidden_paths() -> bool {
 
 fn default_forbidden_patterns() -> Vec<String> {
     vec![
-        r"(?i)\brm\s+(-rf?|--recursive)\s+/\s*(?:$|\*)".to_string(),
+        // Recursive delete of root, in any flag order/form: -rf, -fr, -Rf, split `-r -f`, and the
+        // long `--recursive`. (A specific path like /home is left to the forbidden-path checks.)
+        r"(?i)\brm\b[^\n]*\s-[a-z]*r[a-z]*\b[^\n]*\s/\s*(?:$|\*|\s)".to_string(),
+        r"(?i)\brm\b[^\n]*--recursive\b[^\n]*\s/\s*(?:$|\*|\s)".to_string(),
+        r"(?i)\brm\b[^\n]*--no-preserve-root\b".to_string(),
         r"(?i)\bcurl\s+[^|]*\|\s*(bash|sh|zsh)\b".to_string(),
         r"(?i)\bwget\s+[^|]*\|\s*(bash|sh|zsh)\b".to_string(),
         r"(?i)\bnc\s+[^\n]*\s+-e\s+".to_string(),
@@ -355,6 +359,22 @@ mod tests {
                 .check(&GuardAction::ShellCommand("rm -rf /"), &Default::default())
                 .allowed
         );
+        // Flag-order / split / long-form variants must also be blocked.
+        for cmd in [
+            "rm -fr /",
+            "rm -r -f /",
+            "rm -Rf /",
+            "rm --recursive --force /",
+            "rm -rf --no-preserve-root /",
+            "rm --no-preserve-root -rf /",
+        ] {
+            assert!(
+                !guard.check(&GuardAction::ShellCommand(cmd), &Default::default()).allowed,
+                "should block: {cmd}"
+            );
+        }
+        // A specific subdirectory is not the catastrophic root delete.
+        assert!(guard.check(&GuardAction::ShellCommand("rm -rf /tmp/build"), &Default::default()).allowed);
     }
 
     #[test]

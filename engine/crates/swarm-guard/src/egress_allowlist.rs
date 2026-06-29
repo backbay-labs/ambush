@@ -179,8 +179,15 @@ impl EgressAllowlistGuard {
             .any(|pattern| Self::matches_domain(pattern, &normalized));
         let explicitly_allowed = self.host_is_explicitly_allowlisted(&normalized);
 
-        match normalized.parse::<IpAddr>() {
-            Ok(ip) => {
+        // Resolve the host as an IP literal, including non-dotted inet_aton forms (decimal
+        // 2130706433, hex 0x7f000001, octal 0177.0.0.1, short 127.1) that Rust's strict parser
+        // rejects but libc/curl resolvers honour — closing an SSRF classifier bypass.
+        let parsed_ip = normalized
+            .parse::<IpAddr>()
+            .ok()
+            .or_else(|| parse_inet_aton(&normalized).map(IpAddr::V4));
+        match parsed_ip {
+            Some(ip) => {
                 let (denied, label) = match classify_ip(ip) {
                     IpClass::Global => (false, ""),
                     IpClass::Loopback => (self.config.deny_loopback, "loopback"),
@@ -197,7 +204,14 @@ impl EgressAllowlistGuard {
 
                 self.finalize(&normalized, allowed_by_pattern, explicitly_allowed)
             }
-            Err(_) => {
+            None => {
+                // Numeric-looking host that did not resolve to a valid IP: fail closed rather than
+                // let an ambiguous/overflowing literal fall through to the permissive name path.
+                if looks_numeric_ip(&normalized) && !explicitly_allowed {
+                    return EgressDecision::Deny(format!(
+                        "SSRF-blocked ambiguous numeric host: {normalized}"
+                    ));
+                }
                 if self.config.deny_loopback
                     && is_loopback_hostname(&normalized)
                     && !explicitly_allowed
@@ -289,6 +303,53 @@ fn normalize_host(host: &str) -> String {
 /// Known loopback hostnames, including the reserved `.localhost` TLD.
 fn is_loopback_hostname(host: &str) -> bool {
     host == "localhost" || host == "localhost.localdomain" || host.ends_with(".localhost")
+}
+
+/// True when a host is an IP-literal-looking numeric string (so a non-IP form should fail closed
+/// rather than be treated as a resolvable name). Numeric = a digit present and every char is a hex
+/// digit, `.`, or the `x`/`X` radix marker; real hostnames contain other letters or `-`.
+fn looks_numeric_ip(host: &str) -> bool {
+    !host.is_empty()
+        && host.bytes().any(|b| b.is_ascii_digit())
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() || b == b'.' || b == b'x' || b == b'X')
+}
+
+/// inet_aton-style IPv4 parser for the non-dotted-quad forms libc accepts: 1–4 parts, each decimal,
+/// octal (`0`-prefixed) or hex (`0x`-prefixed). Returns None on overflow/garbage.
+fn parse_inet_aton(host: &str) -> Option<Ipv4Addr> {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+    let mut nums = Vec::with_capacity(parts.len());
+    for p in &parts {
+        nums.push(parse_radix_u32(p)?);
+    }
+    let value: u32 = match nums.as_slice() {
+        [a] => *a,
+        [a, b] if *a <= 0xff && *b <= 0x00ff_ffff => (a << 24) | b,
+        [a, b, c] if *a <= 0xff && *b <= 0xff && *c <= 0xffff => (a << 24) | (b << 16) | c,
+        [a, b, c, d] if *a <= 0xff && *b <= 0xff && *c <= 0xff && *d <= 0xff => {
+            (a << 24) | (b << 16) | (c << 8) | d
+        }
+        _ => return None,
+    };
+    Some(Ipv4Addr::from(value))
+}
+
+fn parse_radix_u32(s: &str) -> Option<u32> {
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u32::from_str_radix(hex, 16).ok()
+    } else if s.len() > 1 && s.starts_with('0') {
+        u32::from_str_radix(&s[1..], 8).ok()
+    } else {
+        s.parse::<u32>().ok()
+    }
 }
 
 fn classify_ip(ip: IpAddr) -> IpClass {
@@ -468,6 +529,26 @@ mod tests {
         // An IPv4-mapped IPv6 literal must not smuggle a private address through.
         assert!(!guard.is_allowed("::ffff:10.0.0.5"));
         assert!(!guard.is_allowed("[::ffff:169.254.169.254]"));
+    }
+
+    #[test]
+    fn blocks_non_dotted_numeric_ip_encodings() {
+        let guard = EgressAllowlistGuard::new();
+        // inet_aton forms of 127.0.0.1 and 169.254.169.254 must not slip past the classifier.
+        assert!(!guard.is_allowed("2130706433")); // 127.0.0.1 decimal
+        assert!(!guard.is_allowed("0x7f000001")); // 127.0.0.1 hex
+        assert!(!guard.is_allowed("0177.0.0.1")); // octal first octet
+        assert!(!guard.is_allowed("127.1")); // short form -> 127.0.0.1
+        assert!(!guard.is_allowed("2852039166")); // 169.254.169.254 decimal
+        // even under default_action=Allow.
+        let permissive = EgressAllowlistGuard::with_config(EgressAllowlistConfig {
+            enabled: true,
+            allow: Vec::new(),
+            default_action: DefaultAction::Allow,
+            ..EgressAllowlistConfig::default()
+        });
+        assert!(!permissive.is_allowed("2130706433"));
+        assert!(!permissive.is_allowed("0x7f000001"));
     }
 
     #[test]

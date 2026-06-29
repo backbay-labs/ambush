@@ -230,7 +230,7 @@ impl Guard for SecretLeakGuard {
         self.enabled
             && matches!(
                 action,
-                GuardAction::FileWrite(_, _) | GuardAction::ResponseAction(_)
+                GuardAction::FileWrite(_, _) | GuardAction::ResponseAction(_) | GuardAction::Patch(_, _)
             )
     }
 
@@ -239,10 +239,22 @@ impl Guard for SecretLeakGuard {
             return GuardResult::allow(&self.name);
         }
 
+        let patch_added;
         let matches = match action {
             GuardAction::FileWrite(_, content) => self.scan(content),
             GuardAction::ResponseAction(action) => {
                 self.scan(serde_json::to_string(action).unwrap_or_default().as_bytes())
+            }
+            // A patch can introduce a secret on an added line just like a FileWrite — scan the
+            // `+` lines of the diff (excluding the `+++` file header).
+            GuardAction::Patch(_, diff) => {
+                patch_added = diff
+                    .lines()
+                    .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+                    .map(|l| &l[1..])
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.scan(patch_added.as_bytes())
             }
             _ => return GuardResult::allow(&self.name),
         };

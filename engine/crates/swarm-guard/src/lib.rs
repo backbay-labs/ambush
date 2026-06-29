@@ -468,6 +468,28 @@ mod tests {
     }
 
     #[test]
+    fn default_pipeline_blocks_patch_to_forbidden_path() {
+        let pipeline = default_pipeline();
+        let result = pipeline.evaluate(
+            &GuardAction::Patch("/home/user/.ssh/authorized_keys", "+ssh-rsa AAAAB3Nz attacker\n"),
+            &GuardContext::new(),
+        );
+        assert!(!result.allowed);
+        assert_eq!(result.guard, "forbidden_path");
+    }
+
+    #[test]
+    fn default_pipeline_blocks_patch_adding_a_secret() {
+        let pipeline = default_pipeline();
+        let result = pipeline.evaluate(
+            &GuardAction::Patch("src/config.rs", "+let key = \"AKIAIOSFODNN7EXAMPLE\";\n"),
+            &GuardContext::new(),
+        );
+        assert!(!result.allowed);
+        assert_eq!(result.guard, "secret_leak");
+    }
+
+    #[test]
     fn default_pipeline_allows_safe_patch() {
         let pipeline = default_pipeline();
         let result = pipeline.evaluate(
