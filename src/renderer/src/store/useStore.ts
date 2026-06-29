@@ -3,6 +3,7 @@ import type {
   AgentProfile,
   ApprovalRequest,
   ApprovalResolution,
+  AttestationResult,
   CreateOperationInput,
   EngineStatus,
   GovernorStatus,
@@ -10,6 +11,7 @@ import type {
   Operation,
   ReceiptSummary,
   Vector,
+  VerifyOutcome,
 } from '@shared/types'
 
 export type Tab = 'swarm' | 'intel' | 'receipts' | 'approvals'
@@ -21,6 +23,9 @@ interface AmbushState {
   governor: GovernorStatus | null
   receipts: ReceiptSummary[]
   approvals: ApprovalRequest[]
+  attestation: AttestationResult | null
+  verifyOutcome: VerifyOutcome | null
+  attesting: boolean
   logs: LogLine[]
   selectedVectorId: string | null
   tab: Tab
@@ -40,6 +45,8 @@ interface AmbushState {
   refreshReceipts: () => Promise<void>
   refreshApprovals: () => Promise<void>
   resolveApproval: (id: string, resolution: ApprovalResolution) => Promise<void>
+  exportAttestation: () => Promise<void>
+  verifyAttestation: () => Promise<void>
 
   _applyOperation: (op: Operation) => void
   _applyApproval: (req: ApprovalRequest) => void
@@ -53,6 +60,9 @@ export const useStore = create<AmbushState>((set, get) => ({
   governor: null,
   receipts: [],
   approvals: [],
+  attestation: null,
+  verifyOutcome: null,
+  attesting: false,
   logs: [],
   selectedVectorId: null,
   tab: 'swarm',
@@ -127,6 +137,21 @@ export const useStore = create<AmbushState>((set, get) => ({
   resolveApproval: async (id, resolution) => {
     const req = await window.ambush.approvalResolve(id, resolution)
     if (req) get()._applyApproval(req)
+  },
+  exportAttestation: async () => {
+    set({ attesting: true, verifyOutcome: null })
+    try {
+      const attestation = await window.ambush.attestationExport()
+      set({ attestation })
+    } finally {
+      set({ attesting: false })
+    }
+  },
+  verifyAttestation: async () => {
+    const att = get().attestation
+    if (!att) return
+    const verifyOutcome = await window.ambush.attestationVerify(att.bundleDir, att.signerKeyHex)
+    set({ verifyOutcome })
   },
 
   _applyOperation: (op) => set({ operation: op }),

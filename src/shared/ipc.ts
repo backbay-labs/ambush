@@ -5,6 +5,7 @@ import type {
   AgentProfile,
   ApprovalRequest,
   ApprovalResolution,
+  AttestationResult,
   CreateOperationInput,
   DeploySwarmInput,
   EngineStatus,
@@ -15,6 +16,7 @@ import type {
   TerminalChunk,
   TerminalExit,
   Vector,
+  VerifyOutcome,
 } from './types'
 
 export const IPC = {
@@ -39,6 +41,8 @@ export const IPC = {
   receiptsList: 'receipts:list',
   approvalList: 'approval:list',
   approvalResolve: 'approval:resolve',
+  attestationExport: 'attestation:export',
+  attestationVerify: 'attestation:verify',
   pickDirectory: 'dialog:pickDirectory',
 
   // events (main -> renderer)
@@ -75,6 +79,8 @@ export interface AmbushApi {
   receiptsList(): Promise<ReceiptSummary[]>
   approvalList(): Promise<ApprovalRequest[]>
   approvalResolve(id: string, resolution: ApprovalResolution): Promise<ApprovalRequest | null>
+  attestationExport(): Promise<AttestationResult>
+  attestationVerify(bundleDir: string, signerKeyHex: string): Promise<VerifyOutcome>
   pickDirectory(): Promise<string | null>
 
   // subscriptions return an unsubscribe function

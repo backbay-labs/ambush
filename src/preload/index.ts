@@ -39,6 +39,9 @@ const api: AmbushApi = {
   approvalList: () => ipcRenderer.invoke(IPC.approvalList),
   approvalResolve: (id: string, resolution: ApprovalResolution) =>
     ipcRenderer.invoke(IPC.approvalResolve, { id, resolution }),
+  attestationExport: () => ipcRenderer.invoke(IPC.attestationExport),
+  attestationVerify: (bundleDir: string, signerKeyHex: string) =>
+    ipcRenderer.invoke(IPC.attestationVerify, { bundleDir, signerKeyHex }),
   pickDirectory: () => ipcRenderer.invoke(IPC.pickDirectory),
 
   onTerminalData: (cb) => subscribe<TerminalChunk>(IPC.evtTerminalData, cb),

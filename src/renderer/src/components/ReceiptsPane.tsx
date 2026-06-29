@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useEffect } from 'react'
-import { RefreshCw, ShieldCheck, ShieldX } from 'lucide-react'
+import { BadgeCheck, RefreshCw, ShieldAlert, ShieldCheck, ShieldX, Stamp } from 'lucide-react'
 import type { ReceiptSummary } from '@shared/types'
 import { cn } from '../lib/cn'
 import { useStore } from '../store/useStore'
@@ -16,7 +16,13 @@ const VERDICT_STYLE: Record<ReceiptSummary['verdict'], string> = {
 export function ReceiptsPane(): React.JSX.Element {
   const receipts = useStore((s) => s.receipts)
   const governor = useStore((s) => s.governor)
+  const operation = useStore((s) => s.operation)
   const refreshReceipts = useStore((s) => s.refreshReceipts)
+  const attestation = useStore((s) => s.attestation)
+  const verifyOutcome = useStore((s) => s.verifyOutcome)
+  const attesting = useStore((s) => s.attesting)
+  const exportAttestation = useStore((s) => s.exportAttestation)
+  const verifyAttestation = useStore((s) => s.verifyAttestation)
 
   useEffect(() => {
     void refreshReceipts()
@@ -32,14 +38,57 @@ export function ReceiptsPane(): React.JSX.Element {
         )}
         <span className="text-xs font-medium text-zinc-300">Governance receipts</span>
         <span className="text-[11px] text-zinc-600">{governor?.detail}</span>
-        <button
-          type="button"
-          onClick={() => void refreshReceipts()}
-          className="ml-auto flex items-center gap-1.5 rounded-md border border-edge px-2 py-1 text-[11px] text-zinc-300 hover:border-accent hover:text-white"
-        >
-          <RefreshCw size={13} /> Refresh
-        </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={!operation || attesting}
+            onClick={() => void exportAttestation()}
+            className="flex items-center gap-1.5 rounded-md border border-edge px-2 py-1 text-[11px] text-zinc-300 hover:border-accent hover:text-white disabled:opacity-40"
+          >
+            <Stamp size={13} /> {attesting ? 'Signing…' : 'Export Attestation'}
+          </button>
+          {attestation && (
+            <button
+              type="button"
+              onClick={() => void verifyAttestation()}
+              className="flex items-center gap-1.5 rounded-md border border-edge px-2 py-1 text-[11px] text-zinc-300 hover:border-accent hover:text-white"
+            >
+              <BadgeCheck size={13} /> Verify
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void refreshReceipts()}
+            className="flex items-center gap-1.5 rounded-md border border-edge px-2 py-1 text-[11px] text-zinc-300 hover:border-accent hover:text-white"
+          >
+            <RefreshCw size={13} /> Refresh
+          </button>
+        </div>
       </div>
+
+      {attestation && (
+        <div className="flex shrink-0 items-center gap-3 border-b border-edge bg-panel-2 px-3 py-1.5 text-[11px]">
+          <Stamp size={13} className="text-accent" />
+          <span className="text-zinc-300">Attestation</span>
+          <span className="font-mono text-zinc-500">{attestation.bundleId}</span>
+          <span className="text-zinc-600">{attestation.artifactCount} artifacts</span>
+          <span className="font-mono text-zinc-600" title={attestation.bundleDir}>
+            signer {attestation.signerKeyHex.slice(0, 12)}…
+          </span>
+          {verifyOutcome &&
+            (verifyOutcome.ok ? (
+              <span className="ml-auto flex items-center gap-1.5 rounded px-2 py-0.5 font-medium text-emerald-400 bg-emerald-500/10">
+                <BadgeCheck size={13} /> VERIFIED · {verifyOutcome.signaturesVerified} sig ·{' '}
+                {verifyOutcome.artifactsVerified} artifacts · chain intact
+              </span>
+            ) : (
+              <span className="ml-auto flex items-center gap-1.5 rounded px-2 py-0.5 font-medium text-danger bg-red-500/10">
+                <ShieldAlert size={13} /> {verifyOutcome.errorCode ?? 'FAILED'} ·{' '}
+                {verifyOutcome.error}
+              </span>
+            ))}
+        </div>
+      )}
 
       {!governor?.available ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-zinc-400">

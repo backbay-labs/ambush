@@ -153,3 +153,24 @@ export interface ApprovalRequest {
   expiresAt: number
   resolvedAt: number | null
 }
+
+/** Result of producing a signed attestation bundle from an operation. */
+export interface AttestationResult {
+  bundleDir: string
+  bundleId: string
+  /** Hex Ed25519 public key the client pins to verify the bundle. */
+  signerKeyHex: string
+  artifactCount: number
+}
+
+/** Outcome of verifying an attestation bundle (mirrors the `ambush-verify` JSON contract). */
+export interface VerifyOutcome {
+  ok: boolean
+  exitCode: number
+  errorCode?: string | null
+  error?: string | null
+  bundleId?: string
+  artifactsVerified?: number
+  signaturesVerified?: number
+  claimsVerified?: number
+}

@@ -3,6 +3,7 @@ import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, shell } from 'electron'
 import { OpenKnowledgeEngine } from './engine/openknowledge-engine'
 import { ApprovalQueue } from './governance/approval-queue'
+import { AttestationManager } from './governance/attestation'
 import { ChioGovernor } from './governance/chio-governor'
 import { registerIpc } from './ipc/register-ipc'
 import { SwarmOrchestrator } from './swarm/swarm-orchestrator'
@@ -15,6 +16,7 @@ let mainWindow: BrowserWindow | null = null
 const engine = new OpenKnowledgeEngine()
 const governor = new ChioGovernor()
 const approvals = new ApprovalQueue()
+const attest = new AttestationManager()
 const worktrees = new WorktreeManager()
 const pty = new PtyManager()
 let orchestrator: SwarmOrchestrator
@@ -62,7 +64,7 @@ app.whenReady().then(() => {
     worktrees,
     pty,
   )
-  registerIpc({ orchestrator, engine, governor, approvals, pty })
+  registerIpc({ orchestrator, engine, governor, approvals, attest, pty })
 
   // Restore the last operation (vectors marked idle; agents are not re-spawned).
   const restored = orchestrator.loadPersisted()

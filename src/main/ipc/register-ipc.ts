@@ -4,6 +4,7 @@ import { IPC } from '@shared/ipc'
 import type { ApprovalResolution, CreateOperationInput, DeploySwarmInput } from '@shared/types'
 import type { OpenKnowledgeEngine } from '../engine/openknowledge-engine'
 import type { ApprovalQueue } from '../governance/approval-queue'
+import type { AttestationManager } from '../governance/attestation'
 import type { ChioGovernor } from '../governance/chio-governor'
 import type { SwarmOrchestrator } from '../swarm/swarm-orchestrator'
 import type { PtyManager } from '../terminal/pty-manager'
@@ -14,11 +15,12 @@ interface Deps {
   engine: OpenKnowledgeEngine
   governor: ChioGovernor
   approvals: ApprovalQueue
+  attest: AttestationManager
   pty: PtyManager
 }
 
 export function registerIpc(deps: Deps): void {
-  const { orchestrator, engine, governor, approvals, pty } = deps
+  const { orchestrator, engine, governor, approvals, attest, pty } = deps
 
   const broadcast = (channel: string, payload: unknown): void => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -88,6 +90,17 @@ export function registerIpc(deps: Deps): void {
     IPC.approvalResolve,
     (_e, { id, resolution }: { id: string; resolution: ApprovalResolution }) =>
       approvals.resolve(id, resolution),
+  )
+  ipcMain.handle(IPC.attestationExport, async () => {
+    const op = orchestrator.getOperation()
+    if (!op) throw new Error('no active operation to attest')
+    const receipts = await governor.listReceipts()
+    return attest.exportBundle(op, receipts)
+  })
+  ipcMain.handle(
+    IPC.attestationVerify,
+    (_e, { bundleDir, signerKeyHex }: { bundleDir: string; signerKeyHex: string }) =>
+      attest.verifyBundle(bundleDir, signerKeyHex),
   )
 
   ipcMain.handle(IPC.pickDirectory, async () => {
