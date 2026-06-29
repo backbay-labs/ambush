@@ -25,6 +25,8 @@ const frames = [
   [{ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'write', arguments: { path: 'x', content: 'y' } } }],
   // (b) side-effecting resources/read of a secret — must be hard-denied (deny-by-default on method).
   { jsonrpc: '2.0', id: 3, method: 'resources/read', params: { uri: 'file:///etc/shadow' } },
+  // (c) a present-but-non-string method must be rejected, not collapsed to "" and forwarded.
+  { jsonrpc: '2.0', id: 4, method: ['tools/call'], params: { name: 'write', arguments: { path: 'x' } } },
 ]
 
 const { stdout } = await driveGate({ vault, receiptLog, frames }).catch((e) => fail(e.message))
@@ -46,6 +48,10 @@ if (!responses.some((r) => r.id === 3 && r.error && r.error.data?.ambush_code ==
 // Neither the batch write (id 2) nor resources/read (id 3) may have a forwarded success result.
 if (responses.some((r) => r.id === 2 && r.result)) problems.push('the batched write reached the inner server')
 if (responses.some((r) => r.id === 3 && r.result)) problems.push('resources/read reached the inner server')
+// The non-string method (id 4) must be rejected and not forwarded.
+if (!responses.some((r) => r.error && r.error.data?.ambush_code === 'urn:ambush:gate:invalid-request' && (r.id === 4 || r.id === null)))
+  problems.push('non-string method was not rejected')
+if (responses.some((r) => r.id === 4 && r.result)) problems.push('non-string-method frame reached the inner server')
 
 if (problems.length) fail(problems.join('; '))
 

@@ -57,7 +57,7 @@ pub struct ShellCommandGuard {
     name: String,
     enabled: bool,
     config: ShellCommandConfig,
-    forbidden_regexes: Vec<Regex>,
+    forbidden_regexes: Vec<(String, Regex)>,
     forbidden_path: ForbiddenPathGuard,
 }
 
@@ -73,7 +73,7 @@ impl ShellCommandGuard {
         let forbidden_regexes = config
             .forbidden_patterns
             .iter()
-            .filter_map(|pattern| Regex::new(pattern).ok())
+            .filter_map(|pattern| Regex::new(pattern).ok().map(|r| (pattern.clone(), r)))
             .collect();
 
         Self {
@@ -159,14 +159,9 @@ impl Guard for ShellCommandGuard {
         let commandline = *commandline;
 
         let normalized = commandline.replace("'|'", "|");
-        for (index, regex) in self.forbidden_regexes.iter().enumerate() {
+        for (pattern, regex) in &self.forbidden_regexes {
             if regex.is_match(&normalized) {
-                let pattern = self
-                    .config
-                    .forbidden_patterns
-                    .get(index)
-                    .cloned()
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                let pattern = pattern.clone();
                 return GuardResult::block(
                     &self.name,
                     Severity::Critical,

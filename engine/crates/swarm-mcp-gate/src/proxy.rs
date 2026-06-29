@@ -10,7 +10,31 @@ use std::sync::{Arc, Mutex};
 
 use crate::receipt_log::{GateCtx, json_rpc_error, json_rpc_invalid};
 
+/// Max agent->inner request frame. Requests are small; an oversize one is suspicious.
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
+/// Max inner->agent reply frame. Tool results (large file reads) can be big, so this is larger and
+/// the pump recovers from an over-cap frame rather than dying.
+const MAX_INNER_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+/// Discard bytes from `reader` up to and including the next newline (recover after an oversize frame).
+fn drain_to_newline<R: BufRead>(reader: &mut R) {
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return,
+        };
+        if available.is_empty() {
+            return; // EOF
+        }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            reader.consume(pos + 1);
+            return;
+        }
+        let len = available.len();
+        reader.consume(len);
+    }
+}
 
 /// Read one newline-delimited frame, bounded to `max` bytes (fail-closed on oversize). Returns the
 /// line with trailing CR/LF stripped, or None at EOF.
@@ -54,9 +78,15 @@ fn write_locked(out: &Arc<Mutex<Stdout>>, line: &str) {
 }
 
 /// inner -> agent: copy every frame verbatim to our stdout (tools/call results, initialize, etc.).
+/// Resilient: an over-cap frame is drained (not fatal) so the pump never dies and wedges the agent.
 pub fn pump_inner_to_agent<R: BufRead>(mut inner: R, agent: Arc<Mutex<Stdout>>) {
-    while let Ok(Some(line)) = read_bounded_line(&mut inner, MAX_FRAME_BYTES) {
-        write_locked(&agent, &line);
+    loop {
+        match read_bounded_line(&mut inner, MAX_INNER_FRAME_BYTES) {
+            Ok(Some(line)) => write_locked(&agent, &line),
+            Ok(None) => break, // EOF
+            Err(e) if e.kind() == ErrorKind::InvalidData => drain_to_newline(&mut inner), // oversize
+            Err(_) => break,   // hard IO error
+        }
     }
 }
 
@@ -68,7 +98,16 @@ pub fn pump_agent_to_inner<R: BufRead, W: Write>(
     agent_out: Arc<Mutex<Stdout>>,
     gate: &GateCtx,
 ) {
-    while let Ok(Some(line)) = read_bounded_line(&mut agent_in, MAX_FRAME_BYTES) {
+    loop {
+        let line = match read_bounded_line(&mut agent_in, MAX_FRAME_BYTES) {
+            Ok(Some(l)) => l,
+            Ok(None) => break,                                                  // EOF
+            Err(e) if e.kind() == ErrorKind::InvalidData => {
+                drain_to_newline(&mut agent_in); // oversize request: drop + recover, do not die
+                continue;
+            }
+            Err(_) => break, // hard IO error
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -85,8 +124,18 @@ pub fn pump_agent_to_inner<R: BufRead, W: Write>(
             write_locked(&agent_out, &json_rpc_invalid());
             continue;
         }
-        let method = frame.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let id = frame.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        // Distinguish an ABSENT method (a response to a server-initiated request -> passthrough) from
+        // a PRESENT-but-non-string method (malformed -> fail closed); collapsing both to "" let a
+        // `{"method":[...]}` frame pass ungated.
+        let method = match frame.get("method") {
+            None => "",
+            Some(serde_json::Value::String(s)) => s.as_str(),
+            Some(_) => {
+                write_locked(&agent_out, &json_rpc_invalid());
+                continue;
+            }
+        };
 
         // Deny-by-default on method. A frame with no method is a response to a server-initiated
         // request; inert handshake/list/notification methods pass verbatim; `tools/call` is gated;

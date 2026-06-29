@@ -81,7 +81,9 @@ pub struct PatchIntegrityGuard {
     name: String,
     enabled: bool,
     config: PatchIntegrityConfig,
-    forbidden_regexes: Vec<Regex>,
+    /// (source pattern, compiled regex) pairs — the source travels WITH its regex so a dropped
+    /// un-compilable pattern can't shift the positional index and mis-label a later match.
+    forbidden_regexes: Vec<(String, Regex)>,
 }
 
 impl PatchIntegrityGuard {
@@ -96,7 +98,7 @@ impl PatchIntegrityGuard {
         let forbidden_regexes = config
             .forbidden_patterns
             .iter()
-            .filter_map(|p| Regex::new(p).ok())
+            .filter_map(|p| Regex::new(p).ok().map(|r| (p.clone(), r)))
             .collect();
 
         Self {
@@ -118,16 +120,11 @@ impl PatchIntegrityGuard {
                 additions += 1;
 
                 // Check for forbidden patterns in added lines.
-                for (idx, regex) in self.forbidden_regexes.iter().enumerate() {
+                for (pattern, regex) in &self.forbidden_regexes {
                     if regex.is_match(line) {
                         forbidden_matches.push(ForbiddenMatch {
                             line: line.to_string(),
-                            pattern: self
-                                .config
-                                .forbidden_patterns
-                                .get(idx)
-                                .cloned()
-                                .unwrap_or_else(|| "<unknown>".to_string()),
+                            pattern: pattern.clone(),
                         });
                     }
                 }

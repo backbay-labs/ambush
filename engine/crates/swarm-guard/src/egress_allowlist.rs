@@ -309,11 +309,14 @@ fn is_loopback_hostname(host: &str) -> bool {
 /// rather than be treated as a resolvable name). Numeric = a digit present and every char is a hex
 /// digit, `.`, or the `x`/`X` radix marker; real hostnames contain other letters or `-`.
 fn looks_numeric_ip(host: &str) -> bool {
+    // Numeric STRUCTURALLY: every dot-part is itself a number (decimal/octal/hex) or all-digits
+    // (an overflowing decimal). This catches an ambiguous/overflowing numeric literal that
+    // parse_inet_aton rejected — without misclassifying an all-hex hostname like `1a.cc` (whose
+    // labels do not parse as numbers) as numeric.
     !host.is_empty()
-        && host.bytes().any(|b| b.is_ascii_digit())
         && host
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() || b == b'.' || b == b'x' || b == b'X')
+            .split('.')
+            .all(|p| parse_radix_u32(p).is_some() || (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())))
 }
 
 /// inet_aton-style IPv4 parser for the non-dotted-quad forms libc accepts: 1–4 parts, each decimal,
@@ -570,6 +573,21 @@ mod tests {
         });
         assert!(!permissive.is_allowed("2130706433"));
         assert!(!permissive.is_allowed("0x7f000001"));
+    }
+
+    #[test]
+    fn all_hex_hostnames_are_not_treated_as_numeric() {
+        let guard = EgressAllowlistGuard::with_config(EgressAllowlistConfig {
+            enabled: true,
+            allow: Vec::new(),
+            default_action: DefaultAction::Allow,
+            ..EgressAllowlistConfig::default()
+        });
+        // all-hex labels with a hex TLD are real hostnames, not numeric IPs -> allowed under Allow.
+        assert!(guard.is_allowed("1a.cc"));
+        assert!(guard.is_allowed("b2b.de"));
+        // an overflowing all-numeric literal still fails closed.
+        assert!(!guard.is_allowed("99999999999"));
     }
 
     #[test]
