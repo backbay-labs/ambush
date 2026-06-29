@@ -10,10 +10,12 @@ import type { AgentProfile } from './types'
 const SEED_RUNNER = [
   'const fs=require("node:fs"),path=require("node:path");',
   'const f=process.env.AMBUSH_FINDINGS,v=process.env.AMBUSH_VECTOR_ID||"vec";',
+  'const fams=["claude","gpt","gemini"];',
+  'const fam=fams[[...v].reduce((a,c)=>a+c.charCodeAt(0),0)%fams.length];',
   'if(f){fs.mkdirSync(path.dirname(f),{recursive:true});',
   'fs.writeFileSync(f,"# "+v+"\\n\\nObserved: open port 8080 (http) on the target.\\n"+',
   '"Lane "+v+" enumerated candidate endpoints; [[triage]] should rank them.\\n\\n"+',
-  '"<!-- model-family: seed -->\\n");}',
+  '"<!-- model-family: "+fam+" -->\\n");}',
 ].join('')
 
 // Built-in agent runtimes. Like Orca, Ambush works with "any CLI agent": if it

@@ -55,5 +55,7 @@ jobs:
         run: pnpm smoke
       - name: Metering smoke (over-budget lane denies at the gate)
         run: pnpm smoke:metering
+      - name: Slop-filter review smoke (cross-model corroboration clustering)
+        run: pnpm smoke:review
       - name: Full attestation E2E (findings + dual coverage + ambush-verify ok)
         run: pnpm e2e

@@ -115,6 +115,33 @@ export interface SiemExportResult {
   bytes: number
 }
 
+/** One piece of evidence supporting a finding cluster. */
+export interface FindingEvidence {
+  vector: string
+  modelFamily: string
+  snippet: string
+}
+
+/** A cluster of corroborating (or lone) findings, labelled by cross-model agreement. */
+export interface FindingCluster {
+  id: string
+  summary: string
+  /** Distinct model families that independently reported this cluster. */
+  modelFamilies: string[]
+  /** corroborated = >=2 model families agree; quarantine = single-source (possible slop). */
+  label: 'corroborated' | 'quarantine'
+  evidence: FindingEvidence[]
+}
+
+/** The validated slop-filter view: findings clustered + labelled by cross-model corroboration. */
+export interface FindingsReview {
+  clusters: FindingCluster[]
+  corroborated: number
+  quarantined: number
+  /** All model families seen across the operation (the diversity meter). */
+  modelFamilies: string[]
+}
+
 /** A transient toast shown when governance blocks a terminal command. */
 export interface DenyToast {
   id: string

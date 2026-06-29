@@ -32,6 +32,7 @@ const api: AmbushApi = {
     ipcRenderer.send(IPC.terminalResize, { terminalId, cols, rows }),
   intelConsolidate: () => ipcRenderer.invoke(IPC.intelConsolidate),
   intelOpenVault: () => ipcRenderer.invoke(IPC.intelOpenVault),
+  intelReview: () => ipcRenderer.invoke(IPC.intelReview),
   engineStatus: () => ipcRenderer.invoke(IPC.engineStatus),
   engineStart: () => ipcRenderer.invoke(IPC.engineStart),
   engineStop: () => ipcRenderer.invoke(IPC.engineStop),

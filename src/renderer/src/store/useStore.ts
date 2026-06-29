@@ -15,7 +15,7 @@ import type {
   VerifyOutcome,
 } from '@shared/types'
 
-export type Tab = 'swarm' | 'intel' | 'receipts' | 'approvals'
+export type Tab = 'swarm' | 'intel' | 'review' | 'receipts' | 'approvals'
 
 interface AmbushState {
   operation: Operation | null

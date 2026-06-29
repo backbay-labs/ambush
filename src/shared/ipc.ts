@@ -9,6 +9,7 @@ import type {
   CreateOperationInput,
   DeploySwarmInput,
   EngineStatus,
+  FindingsReview,
   GovernorStatus,
   LogLine,
   Operation,
@@ -35,6 +36,7 @@ export const IPC = {
   terminalResize: 'terminal:resize',
   intelConsolidate: 'intel:consolidate',
   intelOpenVault: 'intel:openVault',
+  intelReview: 'intel:review',
   engineStatus: 'engine:status',
   engineStart: 'engine:start',
   engineStop: 'engine:stop',
@@ -75,6 +77,7 @@ export interface AmbushApi {
   terminalResize(terminalId: string, cols: number, rows: number): void
   intelConsolidate(): Promise<{ runbookPath: string }>
   intelOpenVault(): Promise<void>
+  intelReview(): Promise<FindingsReview | null>
   engineStatus(): Promise<EngineStatus>
   engineStart(): Promise<EngineStatus>
   engineStop(): Promise<EngineStatus>

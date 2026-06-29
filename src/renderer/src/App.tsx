@@ -4,6 +4,7 @@ import { startTerminalHub } from './lib/terminalHub'
 import { useStore } from './store/useStore'
 import { ApprovalsPane } from './components/ApprovalsPane'
 import { DenyToastStack } from './components/DenyToast'
+import { FindingsReview } from './components/FindingsReview'
 import { IntelPane } from './components/IntelPane'
 import { OperationSetup } from './components/OperationSetup'
 import { ReceiptsPane } from './components/ReceiptsPane'
@@ -36,6 +37,8 @@ export default function App(): React.JSX.Element {
           <SwarmView />
         ) : tab === 'intel' ? (
           <IntelPane />
+        ) : tab === 'review' ? (
+          <FindingsReview />
         ) : tab === 'receipts' ? (
           <ReceiptsPane />
         ) : (

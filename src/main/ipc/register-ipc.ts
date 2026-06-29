@@ -6,6 +6,7 @@ import type { OpenKnowledgeEngine } from '../engine/openknowledge-engine'
 import type { ApprovalQueue } from '../governance/approval-queue'
 import type { AttestationManager } from '../governance/attestation'
 import type { ChioGovernor } from '../governance/chio-governor'
+import { reviewFindings } from '../intel/findings-review'
 import type { SwarmOrchestrator } from '../swarm/swarm-orchestrator'
 import type { PtyManager } from '../terminal/pty-manager'
 import type { TerminalGovernor } from '../terminal/terminal-governor'
@@ -83,6 +84,10 @@ export function registerIpc(deps: Deps): void {
   ipcMain.handle(IPC.intelOpenVault, () => {
     const vault = orchestrator.getOperation()?.intelVaultPath
     if (vault) void shell.openPath(vault)
+  })
+  ipcMain.handle(IPC.intelReview, () => {
+    const op = orchestrator.getOperation()
+    return op ? reviewFindings(op.intelVaultPath) : null
   })
 
   ipcMain.handle(IPC.engineStatus, () => engine.getStatus())
