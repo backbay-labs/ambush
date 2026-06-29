@@ -105,11 +105,13 @@ type MockBridgeOptions = {
   };
   managedAgents?: MockManagedAgentSeed[];
   relayAgents?: MockRelayAgentSeed[];
+  agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   channelsReadError?: string;
   feedReadError?: string;
   canvasReadError?: string;
   openDmDelayMs?: number;
+  sendMessageDelayMs?: number;
   /** Delay (ms) for older-history fetches; see e2eBridge mock config. */
   historyDelayMs?: number;
   profileReadDelayMs?: number;

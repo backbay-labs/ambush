@@ -46,6 +46,8 @@ type MessageThreadPanelProps = {
   currentPubkey?: string;
   disabled?: boolean;
   firstUnreadReplyId?: string | null;
+  huddleMemberPubkeys?: readonly string[];
+  huddleMemberPubkeysPending?: boolean;
   layout?: "standalone" | "split";
   editTarget?: {
     author: string;
@@ -351,6 +353,8 @@ export function MessageThreadPanel({
   currentPubkey,
   disabled = false,
   firstUnreadReplyId,
+  huddleMemberPubkeys,
+  huddleMemberPubkeysPending = false,
   layout = "standalone",
   editTarget,
   isSending,
@@ -636,6 +640,8 @@ export function MessageThreadPanel({
               actionBarPlacement="inside"
               agentPubkeys={agentPubkeys}
               channelId={channelId}
+              huddleMemberPubkeys={huddleMemberPubkeys}
+              huddleMemberPubkeysPending={huddleMemberPubkeysPending}
               isFollowingThread={isFollowingThread}
               isUnread={isMessageUnreadById?.(threadHead.id)}
               layoutVariant="thread-reply"
@@ -754,6 +760,8 @@ export function MessageThreadPanel({
                         }
                         highlightThreadLineDepths={highlightedLineDepths}
                         hoverBackground={!entry.summary}
+                        huddleMemberPubkeys={huddleMemberPubkeys}
+                        huddleMemberPubkeysPending={huddleMemberPubkeysPending}
                         isUnread={isMessageUnreadById?.(entry.message.id)}
                         layoutVariant="thread-reply"
                         message={entry.message}

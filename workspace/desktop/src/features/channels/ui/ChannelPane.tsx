@@ -14,6 +14,10 @@ import {
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import { buildDirectMessageIntro } from "@/features/channels/lib/dmParticipantDisplay";
 import {
+  getDmHuddleMemberPubkeys,
+  hasOtherDmParticipant,
+} from "@/features/channels/lib/dmHuddleMembers";
+import {
   buildVideoReviewCommentsByRootId,
   buildVideoReviewContextForMessage,
 } from "@/features/messages/lib/videoReviewContext";
@@ -69,6 +73,7 @@ type ChannelPaneProps = {
   activeChannel: Channel | null;
   activityAgents?: BotActivityAgent[];
   agentPubkeys?: ReadonlySet<string>;
+  agentPubkeysPending?: boolean;
   agentSessionAgents: ChannelAgentSessionAgent[];
   botTypingEntries: TypingIndicatorEntry[];
   channelFind: ReturnType<typeof useChannelFind>;
@@ -180,6 +185,7 @@ type ChannelPaneProps = {
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   agentPubkeys,
+  agentPubkeysPending = false,
   agentSessionAgents,
   activityAgents = agentSessionAgents,
   botTypingEntries,
@@ -274,6 +280,12 @@ export const ChannelPane = React.memo(function ChannelPane({
     !activeChannel.archivedAt;
   const hasMainComposerOverlay = !isNonMemberView;
   const activeChannelId = activeChannel?.id ?? null;
+  const huddleMemberPubkeys = React.useMemo(
+    () => getDmHuddleMemberPubkeys(activeChannel, agentPubkeys, currentPubkey),
+    [activeChannel, agentPubkeys, currentPubkey],
+  );
+  const huddleMemberPubkeysPending =
+    agentPubkeysPending && hasOtherDmParticipant(activeChannel, currentPubkey);
   const isActiveWelcomeChannel =
     activeChannel !== null && isWelcomeChannel(activeChannel);
   useComposerHeightPadding(
@@ -695,6 +707,8 @@ export const ChannelPane = React.memo(function ChannelPane({
             followThreadById={followThreadById}
             hasComposerOverlay={hasMainComposerOverlay}
             hasOlderMessages={hasOlderMessages}
+            huddleMemberPubkeys={huddleMemberPubkeys}
+            huddleMemberPubkeysPending={huddleMemberPubkeysPending}
             isFetchingOlder={isFetchingOlder}
             isFollowingThreadById={isFollowingThreadById}
             isMessageUnreadById={isMessageUnreadById}
@@ -861,6 +875,8 @@ export const ChannelPane = React.memo(function ChannelPane({
               disabled={isComposerDisabled}
               editTarget={threadEditTarget}
               firstUnreadReplyId={threadFirstUnreadReplyId}
+              huddleMemberPubkeys={huddleMemberPubkeys}
+              huddleMemberPubkeysPending={huddleMemberPubkeysPending}
               isFollowingThread={isFollowingThread}
               isMessageUnreadById={isMessageUnreadById}
               isSending={isSending}

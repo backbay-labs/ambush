@@ -123,7 +123,7 @@ export function ChatHeader({
       <div className="flex h-9 min-w-0 items-center gap-2.5">
         <div className="min-w-0 flex-1">
           <div className="group/title flex min-w-0 items-center gap-[4px] overflow-hidden">
-            <div className="shrink-0">
+            <div className="flex shrink-0 items-center">
               {leadingContent ?? (
                 <ChannelIcon
                   channelType={channelType}
@@ -133,7 +133,10 @@ export function ChatHeader({
               )}
             </div>
             <h1
-              className="min-w-0 translate-y-px truncate text-base font-semibold leading-6 tracking-tight"
+              className={cn(
+                "min-w-0 truncate text-base font-semibold leading-6 tracking-tight",
+                channelType !== "dm" && "translate-y-px",
+              )}
               data-testid="chat-title"
               title={trimmedDescription || undefined}
             >
