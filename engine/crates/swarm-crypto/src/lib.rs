@@ -5,6 +5,7 @@ pub mod error;
 pub mod hashing;
 pub mod merkle;
 pub mod receipt;
+pub mod sandbox;
 pub mod signing;
 
 pub use canonical::canonicalize as canonicalize_json;
@@ -14,6 +15,12 @@ pub use merkle::{MerkleProof, MerkleTree, leaf_hash, node_hash};
 pub use receipt::{
     Provenance, Receipt, SignedReceipt, Signatures, PublicKeySet, Verdict, VerificationResult,
     ViolationRef, RECEIPT_SCHEMA_VERSION, validate_receipt_version,
+};
+pub use sandbox::{
+    AuditEntry, CapabilitySnapshot, EnforcementLevel, FsCapSnapshot, PlatformInfo,
+    ProviderApprovalStatus, ProviderAvailability, ProviderState, SandboxAttestation,
+    SandboxRuntimeState, SupervisorStats, TimestampedDenial, attach_sandbox_attestation,
+    read_sandbox_attestation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
