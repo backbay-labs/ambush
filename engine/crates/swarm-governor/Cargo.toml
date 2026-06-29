@@ -1,0 +1,19 @@
+[package]
+name = "swarm-governor"
+description = "Real fail-closed governance oracle: evaluate an agent action through swarm-guard and emit a signed verdict receipt (replaces the vapor Chio shim)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+swarm-guard.workspace = true
+swarm-crypto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "swarm-governor"
+path = "src/bin/swarm-governor.rs"
+
+[lints]
+workspace = true
