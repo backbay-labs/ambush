@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use fs2::FileExt;
 use swarm_crypto::Keypair;
-use swarm_governor::evaluate;
+use swarm_governor::evaluate_metered;
 
 use crate::mapping::{Mapping, map_tool};
 
@@ -58,7 +58,9 @@ impl GateCtx {
             Mapping::HardDeny { action, reason } => (action, true, reason),
         };
 
-        let verdict = match evaluate(&action, self.agent_id.as_deref(), &self.keypair) {
+        // On the metered path (None budget for now) so the gate already ships on the rails that
+        // wave-2 per-lane budget enforcement will pass a real MeteringRequest through.
+        let verdict = match evaluate_metered(&action, self.agent_id.as_deref(), &self.keypair, None) {
             Ok(v) => v,
             Err(e) => {
                 let code = "urn:ambush:gate:denied:internal".to_string();

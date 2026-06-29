@@ -11,7 +11,7 @@
 use std::io::Read;
 
 use swarm_crypto::Keypair;
-use swarm_governor::{AgentAction, evaluate, keypair_from_secret};
+use swarm_governor::{AgentAction, evaluate_metered, keypair_from_secret};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -47,7 +47,7 @@ fn main() {
     eprintln!("governor signer pubkey: {}", signer.public_key().to_hex());
 
     let agent_id = std::env::var("SWARM_AGENT_ID").ok();
-    match evaluate(&action, agent_id.as_deref(), &signer) {
+    match evaluate_metered(&action, agent_id.as_deref(), &signer, None) {
         Ok(v) => {
             match v.receipt.to_json() {
                 Ok(json) => println!("{json}"),
