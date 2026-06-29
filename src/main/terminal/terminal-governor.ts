@@ -25,7 +25,23 @@ export class TerminalGovernor {
   private bin: string | null | undefined
   private warned = false
 
-  constructor(private deps: { pty: PtyManager; getOperation: () => Operation | null }) {}
+  constructor(
+    private deps: {
+      pty: PtyManager
+      getOperation: () => Operation | null
+      /** The governor's real per-operation signing secret (shared with the MCP gate). */
+      getSigningKey?: () => string
+    },
+  ) {}
+
+  /** Fail-closed denial: suppress the command, kill the echoed line, and warn in-terminal. */
+  private failClosed(terminalId: string, why: string): void {
+    this.deps.pty.write(terminalId, '\x15')
+    bus.terminalData({
+      terminalId,
+      data: `\r\n\x1b[31m⛔ ambush: blocked — ${why} (fail-closed)\x1b[0m\r\n`,
+    })
+  }
 
   handleWrite(terminalId: string, data: string): void {
     const st = this.state(terminalId)
@@ -52,33 +68,42 @@ export class TerminalGovernor {
   }
 
   private processMixed(terminalId: string, st: TermState, data: string): void {
+    // Split into ordered (segment, terminator?) steps and serialize ALL of them through st.queue.
+    // Forwarding a later command's bytes is chained AFTER the prior command's verdict, so a multi-
+    // line paste (`true;\rrm -rf /\r`) cannot concatenate in the shell buffer and ride an earlier
+    // ALLOW — the paste-concat deny bypass.
+    const steps: { seg: string; terminator: string | null }[] = []
     let seg = ''
     for (let i = 0; i < data.length; i++) {
       const ch = data[i]
       if (ch === '\r' || ch === '\n') {
-        if (seg) {
-          this.deps.pty.write(terminalId, seg)
-          st.line = applyChars(st.line, seg)
-          seg = ''
-        }
         const terminator = ch === '\r' && data[i + 1] === '\n' ? '\r\n' : ch
         if (terminator === '\r\n') i++
-        const cmd = st.line.trim()
-        st.line = ''
-        if (cmd === '') {
-          this.deps.pty.write(terminalId, terminator)
-          continue
-        }
-        const t = terminator
-        const c = cmd
-        st.queue = st.queue.then(() => this.evaluateAndApply(terminalId, t, c)).catch(() => {})
+        steps.push({ seg, terminator })
+        seg = ''
       } else {
         seg += ch
       }
     }
-    if (seg) {
-      this.deps.pty.write(terminalId, seg)
-      st.line = applyChars(st.line, seg)
+    if (seg) steps.push({ seg, terminator: null })
+
+    for (const step of steps) {
+      st.queue = st.queue
+        .then(async () => {
+          if (step.seg) {
+            this.deps.pty.write(terminalId, step.seg)
+            st.line = applyChars(st.line, step.seg)
+          }
+          if (step.terminator === null) return
+          const cmd = st.line.trim()
+          st.line = ''
+          if (cmd === '') {
+            this.deps.pty.write(terminalId, step.terminator)
+            return
+          }
+          await this.evaluateAndApply(terminalId, step.terminator, cmd)
+        })
+        .catch(() => {})
     }
   }
 
@@ -97,35 +122,40 @@ export class TerminalGovernor {
 
     const bin = this.resolveBin()
     if (!bin) {
-      if (process.env.AMBUSH_TERM_FAILCLOSED !== '1') {
+      if (process.env.AMBUSH_TERM_FAILCLOSED === '1') {
+        this.failClosed(terminalId, 'governance unavailable (governor not found)')
+      } else {
         if (!this.warned) {
           this.warned = true
           bus.log('warn', 'term-gov', 'swarm-governor not found; terminal commands run ungoverned')
         }
         this.deps.pty.write(terminalId, terminator)
-      } else {
-        bus.terminalData({
-          terminalId,
-          data: `\r\n\x1b[31m⛔ ambush: governance unavailable (fail-closed)\x1b[0m\r\n`,
-        })
       }
       return
     }
 
+    // Sign with the governor's real per-operation secret (shared with the MCP gate) so terminal
+    // receipts are not forgeable from the public operation id; omit the var (ephemeral key) if none.
+    const signingKey = this.deps.getSigningKey?.() ?? ''
     const action = JSON.stringify({ kind: 'shell_command', command: cmd.slice(0, 8192) })
     const res = await run(bin, [], {
       input: action,
       timeoutMs: 4000,
       env: {
         ...process.env,
-        SWARM_GOVERNOR_KEY: `ambush-governor-${op?.id ?? 'default'}`,
+        ...(signingKey ? { SWARM_GOVERNOR_KEY: signingKey } : {}),
         SWARM_AGENT_ID: vectorId,
       },
     })
 
     if (res.code === null || res.code === 2) {
-      // evaluation error/timeout -> fail-open (forward), keep the terminal usable.
-      this.deps.pty.write(terminalId, terminator)
+      // Governor timed out or errored. Honor the operator's posture: fail-closed denies, else
+      // fail-open keeps the terminal usable (the documented default).
+      if (process.env.AMBUSH_TERM_FAILCLOSED === '1') {
+        this.failClosed(terminalId, res.code === null ? 'governor timed out' : 'governor errored')
+      } else {
+        this.deps.pty.write(terminalId, terminator)
+      }
       return
     }
 

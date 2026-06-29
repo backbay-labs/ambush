@@ -65,7 +65,11 @@ app.whenReady().then(() => {
     worktrees,
     pty,
   )
-  const terminalGovernor = new TerminalGovernor({ pty, getOperation: () => orchestrator.getOperation() })
+  const terminalGovernor = new TerminalGovernor({
+    pty,
+    getOperation: () => orchestrator.getOperation(),
+    getSigningKey: () => governor.getSigningKey(),
+  })
   registerIpc({ orchestrator, engine, governor, approvals, attest, terminalGovernor, pty })
 
   // Restore the last operation (vectors marked idle; agents are not re-spawned).

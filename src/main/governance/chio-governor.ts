@@ -69,6 +69,11 @@ export class ChioGovernor {
     return this.status.available
   }
 
+  /** The per-operation Ed25519 signing secret (hex), shared with the gate. Empty before configure. */
+  getSigningKey(): string {
+    return this.signingSecret
+  }
+
   /**
    * Fail-closed launch gate. Returns a human-readable reason a Vector launch is
    * blocked, or null if it may proceed. When no governor is available we refuse
