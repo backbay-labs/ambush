@@ -19,6 +19,7 @@ members = [
     "crates/swarm-attest",
     "crates/swarm-governor",
     "crates/swarm-authority",
+    "crates/swarm-mcp-gate",
 ]
 
 [workspace.package]
