@@ -9,6 +9,7 @@ pub mod checkpoint;
 pub mod envelope;
 pub mod incident;
 pub mod investigation;
+pub mod lineage;
 pub mod spine_error;
 pub mod store;
 
@@ -43,6 +44,10 @@ pub use investigation::{
     InvestigationDecision, InvestigationInterpretation, InvestigationPriority,
     InvestigationPriorityClass, InvestigationStatus, InvestigationStoreError,
     InvestigationStoreHealth, InvestigationVote, MemoryInvestigationBundleStore,
+};
+pub use lineage::{
+    EdgeKind, EvidenceClass, LINEAGE_GRAPH_SCHEMA_V1, Lineage, LineageBuilder, LineageEdge,
+    LineageGraph, LineageNode, NodeKind, TraversalBounds, TruncationMarker,
 };
 pub use spine_error::{SpineError, SpineResult};
 pub use store::{
