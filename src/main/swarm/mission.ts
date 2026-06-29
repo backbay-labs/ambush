@@ -7,9 +7,11 @@ export interface MissionContext {
   vector: Vector
   /** Absolute path the agent should write findings to. */
   findingsAbsPath: string
-  /** Argv for the (possibly Chio-wrapped) intel MCP server, or null. */
+  /** Argv for the (possibly gate-wrapped) intel MCP server, or null. */
   governedMcpCommand: string[] | null
-  /** Whether real, signed governance (Chio) is active. Drives honest briefing language. */
+  /** Env the gate-wrapped MCP server needs (signing key + receipt log), or undefined. */
+  governedMcpEnv?: Record<string, string>
+  /** Whether real, signed governance is active. Drives honest briefing language. */
   governed: boolean
 }
 
@@ -59,11 +61,12 @@ graph stays navigable. When your lane is complete, print \`DONE\` on its own lin
   // the governed intel server without manual setup.
   if (governedMcpCommand && governedMcpCommand.length > 0) {
     const [command, ...args] = governedMcpCommand
-    const mcpConfig = {
-      mcpServers: {
-        'open-knowledge': { command, args },
-      },
+    const server: { command: string; args: string[]; env?: Record<string, string> } = {
+      command,
+      args,
     }
+    if (ctx.governedMcpEnv) server.env = ctx.governedMcpEnv
+    const mcpConfig = { mcpServers: { 'open-knowledge': server } }
     writeFileSync(join(worktreePath, '.mcp.json'), JSON.stringify(mcpConfig, null, 2))
   }
 }

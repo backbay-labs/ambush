@@ -1,7 +1,8 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { bus } from '../util/bus'
-import { run, which } from '../util/run'
+import { which } from '../util/run'
 import type { GovernorStatus, ReceiptSummary } from '@shared/types'
 
 // Default HushSpec-style policy for the swarm. Least-privilege: allow only the
@@ -48,8 +49,22 @@ export class ChioGovernor {
     detail: 'not initialized',
   }
 
+  /** Per-operation Ed25519 signing secret (hex) the gate uses; never exposed to the renderer. */
+  private signingSecret = ''
+
   getStatus(): GovernorStatus {
     return { ...this.status }
+  }
+
+  /** Resolve the real MCP-wrap gate binary (PATH, then known dev build locations). */
+  private resolveGateBin(): string | null {
+    const onPath = which('swarm-mcp-gate')
+    if (onPath) return onPath
+    for (const rel of ['engine/target/release/swarm-mcp-gate', 'engine/target/debug/swarm-mcp-gate']) {
+      const p = join(process.cwd(), rel)
+      if (existsSync(p)) return p
+    }
+    return null
   }
 
   /** Whether the swarm is running under real, signed governance right now. */
@@ -70,7 +85,7 @@ export class ChioGovernor {
   }
 
   configure(opsDir: string): GovernorStatus {
-    const bin = which('chio')
+    const bin = this.resolveGateBin()
     if (!bin) {
       const overridden = process.env.AMBUSH_ALLOW_UNGOVERNED === '1'
       this.status = {
@@ -79,15 +94,15 @@ export class ChioGovernor {
         policyPath: null,
         receiptDbPath: null,
         detail: overridden
-          ? 'chio not found — running UNGOVERNED (operator override). No signed receipts.'
-          : 'chio not found — governance unavailable. Swarm is fail-closed; set AMBUSH_ALLOW_UNGOVERNED=1 to run anyway.',
+          ? 'swarm-mcp-gate not found — running UNGOVERNED (operator override). No signed receipts.'
+          : 'swarm-mcp-gate not found — governance unavailable. Swarm is fail-closed; set AMBUSH_ALLOW_UNGOVERNED=1 to run anyway.',
       }
       bus.log(
         'warn',
         'governance',
         overridden
-          ? 'chio not found on PATH — swarm is UNGOVERNED by operator override (no signed receipts).'
-          : 'chio not found on PATH — governance unavailable. Deploys are blocked (fail-closed). Set AMBUSH_ALLOW_UNGOVERNED=1 to run ungoverned.',
+          ? 'swarm-mcp-gate not found — swarm is UNGOVERNED by operator override (no signed receipts).'
+          : 'swarm-mcp-gate not found — governance unavailable. Deploys are blocked (fail-closed). Build engine/crates/swarm-mcp-gate or set AMBUSH_ALLOW_UNGOVERNED=1.',
       )
       bus.governorUpdate(this.getStatus())
       return this.getStatus()
@@ -95,50 +110,56 @@ export class ChioGovernor {
     const chioDir = join(opsDir, 'chio')
     mkdirSync(chioDir, { recursive: true })
     const policyPath = join(chioDir, 'policy.yaml')
-    const receiptDbPath = join(chioDir, 'receipts.db')
-    writeFileSync(policyPath, DEFAULT_POLICY)
+    const receiptLogPath = join(chioDir, 'receipts.jsonl')
+    writeFileSync(policyPath, DEFAULT_POLICY) // informational; the gate's real policy is the guards + mapping
+
+    // One pinned signing key per operation, so every gate process emits verifiable receipts.
+    const secretPath = join(chioDir, 'governor.secret')
+    if (existsSync(secretPath)) {
+      this.signingSecret = readFileSync(secretPath, 'utf8').trim()
+    } else {
+      this.signingSecret = randomBytes(32).toString('hex')
+      writeFileSync(secretPath, this.signingSecret, { mode: 0o600 })
+    }
 
     this.status = {
       available: true,
       binaryPath: bin,
       policyPath,
-      receiptDbPath,
-      detail: 'governing intel MCP with signed receipts',
+      receiptDbPath: receiptLogPath,
+      detail: 'governing intel MCP via swarm-mcp-gate (real guards, signed receipts)',
     }
     bus.governorUpdate(this.getStatus())
     return this.getStatus()
   }
 
   /**
-   * Given the inner MCP command, return a Chio-wrapped command if available.
-   * Otherwise the inner command is returned unchanged (ungoverned).
+   * Wrap the inner MCP command with the swarm-mcp-gate proxy so every `tools/call` is gated by the
+   * real guards and signed into the receipt log. Returns the inner command unchanged if unavailable.
    */
   wrapMcp(inner: string[]): string[] {
-    if (!this.status.available || !this.status.binaryPath || !this.status.policyPath) return inner
-    return [
-      this.status.binaryPath,
-      '--receipt-db',
-      this.status.receiptDbPath as string,
-      'mcp',
-      'serve',
-      '--policy',
-      this.status.policyPath,
-      '--server-id',
-      'open-knowledge',
-      '--',
-      ...inner,
-    ]
+    if (!this.status.available || !this.status.binaryPath) return inner
+    return [this.status.binaryPath, '--server-id', 'open-knowledge', '--', ...inner]
+  }
+
+  /** Env the governed MCP child needs: the signing key + the shared receipt log path. */
+  gateEnv(): Record<string, string> {
+    return {
+      SWARM_GOVERNOR_KEY: this.signingSecret,
+      AMBUSH_RECEIPT_LOG: this.status.receiptDbPath ?? '',
+    }
   }
 
   async listReceipts(): Promise<ReceiptSummary[]> {
-    if (!this.status.available || !this.status.binaryPath || !this.status.receiptDbPath) return []
-    const res = await run(
-      this.status.binaryPath,
-      ['--receipt-db', this.status.receiptDbPath, 'receipt', 'list', '--admin-all', '--json'],
-      { timeoutMs: 15_000 },
-    )
-    if (res.code !== 0) return []
-    return parseReceipts(res.stdout)
+    const p = this.status.receiptDbPath
+    if (!this.status.available || !p || !existsSync(p)) return []
+    let content = ''
+    try {
+      content = readFileSync(p, 'utf8')
+    } catch {
+      return []
+    }
+    return parseReceipts(content)
   }
 }
 

@@ -192,6 +192,7 @@ export class SwarmOrchestrator {
       vector,
       findingsAbsPath,
       governedMcpCommand,
+      governedMcpEnv: governed ? this.governor.gateEnv() : undefined,
       governed,
     })
 
