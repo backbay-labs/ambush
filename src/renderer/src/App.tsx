@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { startTerminalHub } from './lib/terminalHub'
 import { useStore } from './store/useStore'
 import { ApprovalsPane } from './components/ApprovalsPane'
+import { DenyToastStack } from './components/DenyToast'
 import { IntelPane } from './components/IntelPane'
 import { OperationSetup } from './components/OperationSetup'
 import { ReceiptsPane } from './components/ReceiptsPane'
@@ -42,6 +43,7 @@ export default function App(): React.JSX.Element {
         )}
       </div>
       <StatusBar />
+      <DenyToastStack />
     </div>
   )
 }

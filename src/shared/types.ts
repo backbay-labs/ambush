@@ -99,7 +99,20 @@ export interface ReceiptSummary {
   server: string
   policyHash: string | null
   timestamp: number | null
+  /** Human-readable deny reason / guard message, when present. */
+  reason?: string | null
+  /** Which governance surface produced it: the intel MCP gate, or a terminal-command verdict. */
+  source?: 'engine-governor' | 'intel-mcp'
   raw?: unknown
+}
+
+/** A transient toast shown when governance blocks a terminal command. */
+export interface DenyToast {
+  id: string
+  command: string
+  reason: string | null
+  vectorLabel: string
+  at: number
 }
 
 export interface DeploySwarmInput {

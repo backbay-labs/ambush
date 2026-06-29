@@ -8,6 +8,7 @@ import type { AttestationManager } from '../governance/attestation'
 import type { ChioGovernor } from '../governance/chio-governor'
 import type { SwarmOrchestrator } from '../swarm/swarm-orchestrator'
 import type { PtyManager } from '../terminal/pty-manager'
+import type { TerminalGovernor } from '../terminal/terminal-governor'
 import { bus } from '../util/bus'
 
 interface Deps {
@@ -16,11 +17,12 @@ interface Deps {
   governor: ChioGovernor
   approvals: ApprovalQueue
   attest: AttestationManager
+  terminalGovernor: TerminalGovernor
   pty: PtyManager
 }
 
 export function registerIpc(deps: Deps): void {
-  const { orchestrator, engine, governor, approvals, attest, pty } = deps
+  const { orchestrator, engine, governor, approvals, attest, terminalGovernor, pty } = deps
 
   const broadcast = (channel: string, payload: unknown): void => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -36,6 +38,7 @@ export function registerIpc(deps: Deps): void {
     IPC.evtOperationUpdate,
     IPC.evtEngineUpdate,
     IPC.evtGovernorUpdate,
+    IPC.evtReceipt,
     IPC.evtApprovalNew,
     IPC.evtApprovalResolved,
     IPC.evtApprovalExpired,
@@ -47,6 +50,7 @@ export function registerIpc(deps: Deps): void {
   // Terminal lifecycle: keep the orchestrator's vector state in sync.
   bus.on(IPC.evtTerminalExit, (exit: { terminalId: string; code: number | null }) => {
     orchestrator.onTerminalExit(exit.terminalId, exit.code)
+    terminalGovernor.dispose(exit.terminalId)
   })
 
   ipcMain.handle(IPC.agentsList, () => AGENT_PROFILES)
@@ -65,7 +69,8 @@ export function registerIpc(deps: Deps): void {
   })
 
   ipcMain.on(IPC.terminalWrite, (_e, { terminalId, data }: { terminalId: string; data: string }) => {
-    pty.write(terminalId, data)
+    // Governed: keystrokes forward live, but each submitted command is evaluated by swarm-governor.
+    terminalGovernor.handleWrite(terminalId, data)
   })
   ipcMain.on(
     IPC.terminalResize,

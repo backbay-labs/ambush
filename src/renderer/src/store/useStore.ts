@@ -5,6 +5,7 @@ import type {
   ApprovalResolution,
   AttestationResult,
   CreateOperationInput,
+  DenyToast,
   EngineStatus,
   GovernorStatus,
   LogLine,
@@ -26,6 +27,7 @@ interface AmbushState {
   attestation: AttestationResult | null
   verifyOutcome: VerifyOutcome | null
   attesting: boolean
+  denyToasts: DenyToast[]
   logs: LogLine[]
   selectedVectorId: string | null
   tab: Tab
@@ -47,9 +49,11 @@ interface AmbushState {
   resolveApproval: (id: string, resolution: ApprovalResolution) => Promise<void>
   exportAttestation: () => Promise<void>
   verifyAttestation: () => Promise<void>
+  dismissDenyToast: (id: string) => void
 
   _applyOperation: (op: Operation) => void
   _applyApproval: (req: ApprovalRequest) => void
+  _applyReceipt: (r: ReceiptSummary) => void
   _applyVector: (v: Vector) => void
 }
 
@@ -63,6 +67,7 @@ export const useStore = create<AmbushState>((set, get) => ({
   attestation: null,
   verifyOutcome: null,
   attesting: false,
+  denyToasts: [],
   logs: [],
   selectedVectorId: null,
   tab: 'swarm',
@@ -84,6 +89,8 @@ export const useStore = create<AmbushState>((set, get) => ({
     window.ambush.onLog((line) =>
       set((st) => ({ logs: [...st.logs.slice(-300), line] })),
     )
+    // Live signed governance receipts (terminal-command verdicts + intel-MCP gate denials).
+    window.ambush.onReceipt((r) => get()._applyReceipt(r))
     // Approvals can fire even when ungoverned (the fail-closed launch gate), so
     // refresh/subscribe unconditionally.
     void get().refreshApprovals()
@@ -127,8 +134,13 @@ export const useStore = create<AmbushState>((set, get) => ({
     return runbookPath
   },
   refreshReceipts: async () => {
-    const receipts = await window.ambush.receiptsList()
-    set({ receipts })
+    // Merge: keep live engine-governor (terminal) receipts, re-fetch the intel-MCP gate log.
+    const chio = await window.ambush.receiptsList()
+    set((st) => {
+      const live = st.receipts.filter((r) => r.source === 'engine-governor')
+      const seen = new Set(live.map((r) => r.id))
+      return { receipts: [...live, ...chio.filter((r) => !seen.has(r.id))] }
+    })
   },
   refreshApprovals: async () => {
     const approvals = await window.ambush.approvalList()
@@ -155,6 +167,8 @@ export const useStore = create<AmbushState>((set, get) => ({
   },
 
   _applyOperation: (op) => set({ operation: op }),
+  dismissDenyToast: (id) => set((st) => ({ denyToasts: st.denyToasts.filter((t) => t.id !== id) })),
+
   _applyApproval: (req) =>
     set((st) => {
       const exists = st.approvals.some((a) => a.id === req.id)
@@ -163,6 +177,19 @@ export const useStore = create<AmbushState>((set, get) => ({
           ? st.approvals.map((a) => (a.id === req.id ? req : a))
           : [req, ...st.approvals],
       }
+    }),
+  _applyReceipt: (r) =>
+    set((st) => {
+      const receipts = [r, ...st.receipts.filter((x) => x.id !== r.id)].slice(0, 500)
+      if (r.verdict !== 'DENY') return { receipts }
+      const toast: DenyToast = {
+        id: `toast-${r.id}`,
+        command: r.tool,
+        reason: r.reason ?? null,
+        vectorLabel: r.server.replace(/^terminal:/, ''),
+        at: r.timestamp ?? Date.now(),
+      }
+      return { receipts, denyToasts: [...st.denyToasts, toast] }
     }),
   _applyVector: (v) =>
     set((st) => {

@@ -90,17 +90,19 @@ export function ReceiptsPane(): React.JSX.Element {
         </div>
       )}
 
-      {!governor?.available ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-zinc-400">
-          <p>Chio isn’t on PATH, so the swarm runs ungoverned.</p>
-          <p className="text-[11px] text-zinc-600">
-            Install Chio to sign every agent tool call into an append-only receipt log.
-          </p>
-        </div>
-      ) : receipts.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center text-zinc-600">
-          No receipts yet — they appear as governed vectors touch the intel vault.
-        </div>
+      {receipts.length === 0 ? (
+        !governor?.available ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-zinc-400">
+            <p>No governor on PATH, so the swarm runs ungoverned.</p>
+            <p className="text-[11px] text-zinc-600">
+              Build swarm-mcp-gate to sign every agent tool call into an append-only receipt log.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-zinc-600">
+            No receipts yet — they appear as governed vectors touch the vault or run commands.
+          </div>
+        )
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
           <table className="w-full text-left text-xs">

@@ -206,6 +206,8 @@ function normalize(obj: Record<string, unknown>): ReceiptSummary {
     server: String(obj.server ?? obj.tool_server ?? '—'),
     policyHash: obj.policy ? String(obj.policy) : obj.policy_hash ? String(obj.policy_hash) : null,
     timestamp,
+    reason: typeof obj.gate_reason === 'string' ? obj.gate_reason : null,
+    source: 'intel-mcp',
     raw: obj,
   }
 }

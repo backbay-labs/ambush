@@ -5,6 +5,7 @@ import type {
   ApprovalResolution,
   CreateOperationInput,
   DeploySwarmInput,
+  ReceiptSummary,
   TerminalChunk,
   TerminalExit,
 } from '@shared/types'
@@ -50,6 +51,7 @@ const api: AmbushApi = {
   onOperationUpdate: (cb) => subscribe(IPC.evtOperationUpdate, cb),
   onEngineUpdate: (cb) => subscribe(IPC.evtEngineUpdate, cb),
   onGovernorUpdate: (cb) => subscribe(IPC.evtGovernorUpdate, cb),
+  onReceipt: (cb) => subscribe<ReceiptSummary>(IPC.evtReceipt, cb),
   onApprovalNew: (cb) => subscribe<ApprovalRequest>(IPC.evtApprovalNew, cb),
   onApprovalResolved: (cb) => subscribe<ApprovalRequest>(IPC.evtApprovalResolved, cb),
   onApprovalExpired: (cb) => subscribe<string>(IPC.evtApprovalExpired, cb),

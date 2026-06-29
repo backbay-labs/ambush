@@ -9,6 +9,7 @@ import { registerIpc } from './ipc/register-ipc'
 import { SwarmOrchestrator } from './swarm/swarm-orchestrator'
 import { WorktreeManager } from './swarm/worktree-manager'
 import { PtyManager } from './terminal/pty-manager'
+import { TerminalGovernor } from './terminal/terminal-governor'
 import { bus } from './util/bus'
 
 let mainWindow: BrowserWindow | null = null
@@ -64,7 +65,8 @@ app.whenReady().then(() => {
     worktrees,
     pty,
   )
-  registerIpc({ orchestrator, engine, governor, approvals, attest, pty })
+  const terminalGovernor = new TerminalGovernor({ pty, getOperation: () => orchestrator.getOperation() })
+  registerIpc({ orchestrator, engine, governor, approvals, attest, terminalGovernor, pty })
 
   // Restore the last operation (vectors marked idle; agents are not re-spawned).
   const restored = orchestrator.loadPersisted()

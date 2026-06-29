@@ -6,6 +6,7 @@ import type {
   GovernorStatus,
   LogLine,
   Operation,
+  ReceiptSummary,
   TerminalChunk,
   TerminalExit,
   Vector,
@@ -44,6 +45,10 @@ class AppBus extends EventEmitter {
 
   governorUpdate(status: GovernorStatus): void {
     this.emit(IPC.evtGovernorUpdate, status)
+  }
+
+  receipt(summary: ReceiptSummary): void {
+    this.emit(IPC.evtReceipt, summary)
   }
 
   approvalNew(req: ApprovalRequest): void {
