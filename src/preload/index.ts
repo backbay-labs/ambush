@@ -37,6 +37,7 @@ const api: AmbushApi = {
   engineStop: () => ipcRenderer.invoke(IPC.engineStop),
   governorStatus: () => ipcRenderer.invoke(IPC.governorStatus),
   receiptsList: () => ipcRenderer.invoke(IPC.receiptsList),
+  siemExport: (format) => ipcRenderer.invoke(IPC.siemExport, format),
   approvalList: () => ipcRenderer.invoke(IPC.approvalList),
   approvalResolve: (id: string, resolution: ApprovalResolution) =>
     ipcRenderer.invoke(IPC.approvalResolve, { id, resolution }),

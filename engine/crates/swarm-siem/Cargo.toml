@@ -13,5 +13,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 
+[[bin]]
+name = "ambush-siem"
+path = "src/bin/ambush-siem.rs"
+
 [lints]
 workspace = true

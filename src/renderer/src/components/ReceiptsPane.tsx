@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useEffect } from 'react'
-import { BadgeCheck, RefreshCw, ShieldAlert, ShieldCheck, ShieldX, Stamp } from 'lucide-react'
+import { BadgeCheck, RefreshCw, Share2, ShieldAlert, ShieldCheck, ShieldX, Stamp } from 'lucide-react'
 import type { ReceiptSummary } from '@shared/types'
 import { cn } from '../lib/cn'
 import { useStore } from '../store/useStore'
@@ -58,6 +58,15 @@ export function ReceiptsPane(): React.JSX.Element {
           )}
           <button
             type="button"
+            disabled={!governor?.available || receipts.length === 0}
+            onClick={() => void window.ambush.siemExport('ocsf')}
+            title="Render the signed receipt log as OCSF for your SIEM (path logged)"
+            className="flex items-center gap-1.5 rounded-md border border-edge px-2 py-1 text-[11px] text-zinc-300 hover:border-accent hover:text-white disabled:opacity-40"
+          >
+            <Share2 size={13} /> Export SIEM
+          </button>
+          <button
+            type="button"
             onClick={() => void refreshReceipts()}
             className="flex items-center gap-1.5 rounded-md border border-edge px-2 py-1 text-[11px] text-zinc-300 hover:border-accent hover:text-white"
           >
@@ -110,6 +119,7 @@ export function ReceiptsPane(): React.JSX.Element {
               <tr>
                 <Th>Verdict</Th>
                 <Th>Tool</Th>
+                <Th>Guard</Th>
                 <Th>Server</Th>
                 <Th>Policy</Th>
                 <Th>When</Th>
@@ -124,6 +134,9 @@ export function ReceiptsPane(): React.JSX.Element {
                     </span>
                   </td>
                   <td className="px-3 py-1.5 font-mono text-zinc-200">{r.tool}</td>
+                  <td className="px-3 py-1.5 font-mono text-zinc-500" title={r.reason ?? undefined}>
+                    {r.guard ?? '—'}
+                  </td>
                   <td className="px-3 py-1.5 text-zinc-400">{r.server}</td>
                   <td className="px-3 py-1.5 font-mono text-zinc-600">
                     {r.policyHash ? r.policyHash.slice(0, 10) : '—'}

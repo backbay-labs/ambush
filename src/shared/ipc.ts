@@ -13,6 +13,7 @@ import type {
   LogLine,
   Operation,
   ReceiptSummary,
+  SiemExportResult,
   TerminalChunk,
   TerminalExit,
   Vector,
@@ -39,6 +40,7 @@ export const IPC = {
   engineStop: 'engine:stop',
   governorStatus: 'governor:status',
   receiptsList: 'receipts:list',
+  siemExport: 'siem:export',
   approvalList: 'approval:list',
   approvalResolve: 'approval:resolve',
   attestationExport: 'attestation:export',
@@ -78,6 +80,7 @@ export interface AmbushApi {
   engineStop(): Promise<EngineStatus>
   governorStatus(): Promise<GovernorStatus>
   receiptsList(): Promise<ReceiptSummary[]>
+  siemExport(format: SiemExportResult['format']): Promise<SiemExportResult | null>
   approvalList(): Promise<ApprovalRequest[]>
   approvalResolve(id: string, resolution: ApprovalResolution): Promise<ApprovalRequest | null>
   attestationExport(): Promise<AttestationResult>

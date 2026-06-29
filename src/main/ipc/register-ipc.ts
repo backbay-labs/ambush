@@ -90,6 +90,7 @@ export function registerIpc(deps: Deps): void {
   ipcMain.handle(IPC.engineStop, () => engine.stop())
   ipcMain.handle(IPC.governorStatus, () => governor.getStatus())
   ipcMain.handle(IPC.receiptsList, () => governor.listReceipts())
+  ipcMain.handle(IPC.siemExport, (_e, format) => governor.exportSiem(format))
   ipcMain.handle(IPC.approvalList, () => approvals.list())
   ipcMain.handle(
     IPC.approvalResolve,

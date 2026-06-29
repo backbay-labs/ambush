@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { writePrivateAtomic } from '../util/atomic-write'
 import { resolveBin } from '../util/binary-resolver'
 import { bus } from '../util/bus'
-import type { GovernorStatus, ReceiptSummary } from '@shared/types'
+import { run } from '../util/run'
+import type { GovernorStatus, ReceiptSummary, SiemExportResult } from '@shared/types'
 
 // Default HushSpec-style policy for the swarm. Least-privilege: allow only the
 // OpenKnowledge intel tools a reporting lane needs (read/search + write/edit its
@@ -158,6 +159,31 @@ export class ChioGovernor {
     }
     return parseReceipts(content)
   }
+
+  /**
+   * Render the operation's signed receipt log as SIEM events (OCSF/CEF/HEC) via the `ambush-siem`
+   * engine binary, writing the result next to the receipt log. Returns null if unavailable.
+   */
+  async exportSiem(format: SiemExportResult['format'] = 'ocsf'): Promise<SiemExportResult | null> {
+    const log = this.status.receiptDbPath
+    if (!this.status.available || !log || !existsSync(log)) return null
+    const bin = resolveBin('ambush-siem', ['engine/bin', 'bin'])
+    if (!bin) {
+      bus.log('warn', 'governance', 'ambush-siem not found — build engine/crates/swarm-siem')
+      return null
+    }
+    const res = await run(bin, ['--format', format, log], { timeoutMs: 15_000 })
+    if (res.code !== 0) {
+      bus.log('warn', 'governance', `ambush-siem failed (exit ${res.code})`)
+      return null
+    }
+    const ext = format === 'cef' ? 'cef' : 'json'
+    const outPath = join(dirname(log), `siem-export.${format}.${ext}`)
+    writeFileSync(outPath, res.stdout)
+    const bytes = Buffer.byteLength(res.stdout)
+    bus.log('info', 'governance', `SIEM export (${format}, ${bytes} bytes) → ${outPath}`)
+    return { format, path: outPath, bytes }
+  }
 }
 
 function parseReceipts(stdout: string): ReceiptSummary[] {
@@ -204,6 +230,7 @@ function normalize(obj: Record<string, unknown>): ReceiptSummary {
     policyHash: obj.policy ? String(obj.policy) : obj.policy_hash ? String(obj.policy_hash) : null,
     timestamp,
     reason: typeof obj.gate_reason === 'string' ? obj.gate_reason : null,
+    guard: typeof obj.guard === 'string' ? obj.guard : null,
     source: 'intel-mcp',
     raw: obj,
   }

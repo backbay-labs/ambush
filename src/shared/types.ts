@@ -101,9 +101,18 @@ export interface ReceiptSummary {
   timestamp: number | null
   /** Human-readable deny reason / guard message, when present. */
   reason?: string | null
+  /** The deciding guard (e.g. shell_command, secret_leak, mcp_tool, lane_budget), when present. */
+  guard?: string | null
   /** Which governance surface produced it: the intel MCP gate, or a terminal-command verdict. */
   source?: 'engine-governor' | 'intel-mcp'
   raw?: unknown
+}
+
+/** Result of a SIEM export: the format, where the rendered file was written, and its size. */
+export interface SiemExportResult {
+  format: 'ocsf' | 'ocsf-array' | 'cef' | 'hec'
+  path: string
+  bytes: number
 }
 
 /** A transient toast shown when governance blocks a terminal command. */

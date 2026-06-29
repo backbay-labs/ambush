@@ -185,6 +185,7 @@ function toReceiptSummary(stdout: string, cmd: string, vectorLabel: string): Rec
     policyHash: r.content_hash ?? null,
     timestamp: Number.isNaN(tsParsed) ? null : tsParsed,
     reason: r.metadata?.message ?? r.verdict?.gate_id ?? null,
+    guard: r.verdict?.gate_id ?? null,
     source: 'engine-governor',
     raw: json,
   }
