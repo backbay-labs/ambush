@@ -370,14 +370,21 @@ impl SignedReceipt {
     }
 
     /// Whether this receipt attests to kernel-level (OS-sandbox) enforcement.
+    ///
+    /// Requires BOTH the `enforced` flag AND a kernel-backed `enforcement_level`
+    /// (`kernel`/`kernel_supervised`), matching SandboxAttestation's own stricter check — a stray
+    /// `enforced=true` with a non-kernel level (e.g. `degraded`) must not read as kernel-enforced.
     pub fn is_kernel_enforced(&self) -> bool {
-        self.receipt
-            .metadata
-            .as_ref()
-            .and_then(|m| m.get("sandbox"))
+        let sandbox = self.receipt.metadata.as_ref().and_then(|m| m.get("sandbox"));
+        let enforced = sandbox
             .and_then(|s| s.get("enforced"))
             .and_then(|e| e.as_bool())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        let kernel_level = sandbox
+            .and_then(|s| s.get("enforcement_level"))
+            .and_then(|l| l.as_str())
+            .is_some_and(|l| l == "kernel" || l == "kernel_supervised");
+        enforced && kernel_level
     }
 
     /// The enforcement-level string from metadata, if present.
@@ -603,9 +610,17 @@ mod tests {
         let signed = SignedReceipt::sign(receipt, &keypair).unwrap();
         assert!(!signed.is_kernel_enforced());
 
-        let receipt = make_test_receipt().with_metadata(serde_json::json!({ "sandbox": {"enforced": true} }));
+        // enforced=true with a kernel-backed level -> kernel-enforced.
+        let receipt = make_test_receipt()
+            .with_metadata(serde_json::json!({ "sandbox": {"enforced": true, "enforcement_level": "kernel"} }));
         let signed = SignedReceipt::sign(receipt, &keypair).unwrap();
         assert!(signed.is_kernel_enforced());
+
+        // enforced=true but a non-kernel level (degraded) must NOT read as kernel-enforced.
+        let receipt = make_test_receipt()
+            .with_metadata(serde_json::json!({ "sandbox": {"enforced": true, "enforcement_level": "degraded"} }));
+        let signed = SignedReceipt::sign(receipt, &keypair).unwrap();
+        assert!(!signed.is_kernel_enforced());
 
         let receipt = make_test_receipt().with_metadata(serde_json::json!({ "sandbox": {"enforced": false} }));
         let signed = SignedReceipt::sign(receipt, &keypair).unwrap();

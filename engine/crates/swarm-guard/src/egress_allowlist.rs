@@ -379,6 +379,11 @@ fn classify_ipv6(address: &Ipv6Addr) -> IpClass {
     if address.is_loopback() {
         return IpClass::Loopback;
     }
+    // IPv4-compatible (::a.b.c.d) and NAT64 (64:ff9b::/96) forms embed an IPv4 address that some
+    // stacks route — classify by the embedded v4 so they cannot reach a private/metadata target.
+    if let Some(embedded) = embedded_ipv4(address) {
+        return classify_ipv4(&embedded);
+    }
     if is_ipv6_unicast_link_local(address) {
         return IpClass::LinkLocal;
     }
@@ -412,6 +417,22 @@ fn is_ipv4_private_or_special_use(address: &Ipv4Addr) -> bool {
         || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
         || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
         || octets[0] >= 240
+}
+
+/// Extract the IPv4 embedded in an IPv4-compatible (`::a.b.c.d`) or NAT64 (`64:ff9b::/96`) address.
+fn embedded_ipv4(address: &Ipv6Addr) -> Option<Ipv4Addr> {
+    let s = address.segments();
+    let last = ((s[6] as u32) << 16) | s[7] as u32;
+    if last == 0 {
+        return None; // `::` (unspecified) is not an IPv4 host
+    }
+    if s[0..6] == [0u16, 0, 0, 0, 0, 0] {
+        return Some(Ipv4Addr::from(last)); // IPv4-compatible ::a.b.c.d
+    }
+    if s[0] == 0x0064 && s[1] == 0xff9b && s[2..6] == [0u16, 0, 0, 0] {
+        return Some(Ipv4Addr::from(last)); // NAT64 well-known prefix
+    }
+    None
 }
 
 fn is_ipv6_private_or_special_use(address: &Ipv6Addr) -> bool {
@@ -549,6 +570,15 @@ mod tests {
         });
         assert!(!permissive.is_allowed("2130706433"));
         assert!(!permissive.is_allowed("0x7f000001"));
+    }
+
+    #[test]
+    fn blocks_embedded_ipv4_in_ipv6() {
+        let guard = EgressAllowlistGuard::new();
+        assert!(!guard.is_allowed("::127.0.0.1")); // IPv4-compatible loopback
+        assert!(!guard.is_allowed("::169.254.169.254")); // IPv4-compatible cloud-metadata
+        assert!(!guard.is_allowed("64:ff9b::a9fe:a9fe")); // NAT64 of 169.254.169.254
+        assert!(!guard.is_allowed("::10.0.0.5")); // IPv4-compatible private
     }
 
     #[test]

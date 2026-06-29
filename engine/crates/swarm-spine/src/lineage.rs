@@ -333,12 +333,14 @@ impl LineageBuilder {
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.timestamp_millis());
 
-            let mut node = LineageNode::new(
-                envelope_hash,
-                NodeKind::Envelope,
-                EvidenceClass::Verified,
-            )
-            .with_label(format!("{issuer}#{seq}"));
+            // Only claim Verified when the envelope's signature + hash actually verify; otherwise
+            // it is merely Asserted (do not stamp the top trust tier on an unverified projection).
+            let evidence = match crate::envelope::verify_envelope(envelope) {
+                Ok(true) => EvidenceClass::Verified,
+                _ => EvidenceClass::Asserted,
+            };
+            let mut node = LineageNode::new(envelope_hash, NodeKind::Envelope, evidence)
+                .with_label(format!("{issuer}#{seq}"));
             node.source_id = Some(envelope_hash.to_string());
             node.source_table = Some("spine.envelope".to_string());
             if let Some(ms) = recorded_at {
