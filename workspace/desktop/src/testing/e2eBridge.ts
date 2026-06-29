@@ -5084,6 +5084,7 @@ async function handleParsePersonaFiles(args: {
     display_name: string;
     system_prompt: string;
     avatar_data_url: string | null;
+    avatar_ref: string | null;
     source_file: string;
   }[];
   skipped: { source_file: string; reason: string }[];
@@ -5095,6 +5096,7 @@ async function handleParsePersonaFiles(args: {
         display_name: "Imported Persona",
         system_prompt: "You are an imported test persona.",
         avatar_data_url: null,
+        avatar_ref: null,
         source_file: args.fileName,
       },
     ],
@@ -6830,6 +6832,43 @@ export function maybeInstallE2eTauriMocks() {
           selectedModel: null,
           supportsSwitching: false,
         };
+      case "discover_agent_models": {
+        const input = (payload as { input?: { provider?: string } } | null)
+          ?.input;
+        const provider = input?.provider?.trim() ?? "";
+        const openAiModels = [
+          { id: "gpt-5.5", name: "GPT-5.5", description: null },
+          { id: "gpt-5.4", name: "GPT-5.4", description: null },
+          { id: "gpt-5.4-mini", name: "GPT-5.4 mini", description: null },
+          { id: "gpt-5.4-nano", name: "GPT-5.4 nano", description: null },
+        ];
+        const anthropicModels = [
+          {
+            id: "goose-claude-4-6-opus",
+            name: "Claude Opus 4.6",
+            description: null,
+          },
+          {
+            id: "goose-claude-4-6-sonnet",
+            name: "Claude Sonnet 4.6",
+            description: null,
+          },
+        ];
+        const models =
+          provider === "openai"
+            ? openAiModels
+            : provider === "anthropic"
+              ? anthropicModels
+              : [...anthropicModels, ...openAiModels];
+        return {
+          agentName: "mock-agent",
+          agentVersion: "0.0.0",
+          models,
+          agentDefaultModel: null,
+          selectedModel: null,
+          supportsSwitching: true,
+        };
+      }
       case "update_managed_agent":
         return handleUpdateManagedAgent(
           payload as Parameters<typeof handleUpdateManagedAgent>[0],
