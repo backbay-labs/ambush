@@ -34,6 +34,9 @@ use crate::util::{
 pub const DELEGATION_WITNESS_SCHEMA: &str = "ambush.swarm.delegation-witness.v1";
 pub const DELEGATION_CHAIN_SCHEMA: &str = "ambush.swarm.delegation-chain.v1";
 
+/// Upper bound on delegation chain length, bounding signature-verification work per admission.
+pub const MAX_DELEGATION_HOPS: usize = 16;
+
 /// A set-based capability scope. Narrowing is set containment: removing capabilities narrows,
 /// adding any capability the parent lacks widens. A `BTreeSet` serializes as a sorted JSON array,
 /// so its canonical hash is stable.
@@ -247,6 +250,14 @@ pub fn verify_delegated_admission(
     if chain.hops.is_empty() {
         return Err(AuthorityError::denied(DenyReason::WitnessChainEmpty));
     }
+    if chain.hops.len() > MAX_DELEGATION_HOPS {
+        return Err(AuthorityError::denied(DenyReason::WitnessChainTooLong));
+    }
+
+    // Validate the WHOLE chain against a SCRATCH replay clone and commit the consumed nonces back
+    // only on full success — so a failure mid-walk never irreversibly burns the single-use root
+    // token or earlier hop nonces (preserving "consume last, only on full success").
+    let mut scratch = replay.clone();
 
     // 2. root single-hop admission (reuses all token + epoch checks, incl. root replay).
     let root_ctx = AdmissionContext {
@@ -255,7 +266,7 @@ pub fn verify_delegated_admission(
         expected_vector_id: Some(chain.root_vector_id.clone()),
         expected_vector_scope_hash: None,
     };
-    let root = verify_admission(token, epoch, trusted_keys, &root_ctx, replay)?;
+    let root = verify_admission(token, epoch, trusted_keys, &root_ctx, &mut scratch)?;
 
     // 3. walk the witness chain.
     let now = ctx.now_unix_ms;
@@ -336,10 +347,11 @@ pub fn verify_delegated_admission(
             return Err(AuthorityError::denied(DenyReason::WitnessVectorRevoked));
         }
 
-        // 3h. single-use replay-deny at every hop (namespaced from token nonces).
+        // 3h. single-use replay-deny at every hop (namespaced from token nonces). Recorded into the
+        // scratch guard; committed only if the whole chain validates (see step 4).
         if let ContinuationMode::SingleUse = hop.mode {
             let key = format!("witness-nonce:{}", hop.nonce);
-            if !replay.observe(&key) {
+            if !scratch.observe(&key) {
                 return Err(AuthorityError::denied(DenyReason::WitnessReplay));
             }
         }
@@ -365,6 +377,9 @@ pub fn verify_delegated_admission(
     {
         return Err(AuthorityError::denied(DenyReason::ScopeMismatch));
     }
+
+    // Full chain validated — commit the consumed nonces (root + hops) into the caller's guard.
+    *replay = scratch;
 
     let epoch_number = root.epoch_number;
     Ok(DelegatedAdmission {
@@ -557,6 +572,29 @@ mod tests {
         assert_eq!(adm.epoch_number, 0);
         assert_eq!(adm.root.vector_id, "vec-root");
         assert_eq!(adm.leaf_scope_hash, witness_scope_hash(&h.leaf_scope).unwrap());
+    }
+
+    #[test]
+    fn failed_chain_does_not_burn_replay_nonces() {
+        let mut h = harness(ContinuationMode::SingleUse);
+        // Make hop 1 widen scope so the chain fails AT hop 1 (after the root + hop 0 were checked).
+        h.chain.hops[1] = signed_hop(
+            1,
+            "vec-mid",
+            "vec-leaf",
+            scope(&["a", "b"]),
+            scope(&["a", "b", "d"]),
+            &h.leaf.public_key(),
+            "hop1-nonce",
+            ContinuationMode::SingleUse,
+            &h.mid,
+        );
+        let mut guard = ReplayGuard::new();
+        assert!(
+            verify_delegated_admission(&h.token, &h.chain, &h.epoch, &h.pinned, &ctx(&h), &mut guard).is_err()
+        );
+        // No nonce (root or hop) may be consumed when the chain fails mid-walk.
+        assert!(guard.is_empty(), "a failed chain must not burn any replay nonce");
     }
 
     #[test]

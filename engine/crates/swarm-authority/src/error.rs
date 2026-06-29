@@ -51,6 +51,8 @@ pub enum DenyReason {
     WitnessSignatureInvalid,
     /// The delegation chain carried no hops.
     WitnessChainEmpty,
+    /// The delegation chain exceeds the maximum permitted hop count.
+    WitnessChainTooLong,
     /// Hop indices are not sequential from zero.
     WitnessHopIndexMismatch,
     /// The chain/operation/root binding on a hop or chain does not match the root token.

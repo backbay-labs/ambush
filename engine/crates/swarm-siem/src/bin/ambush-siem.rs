@@ -63,11 +63,20 @@ fn main() {
             skipped += 1;
             continue;
         };
-        // Envelope carries the full SignedReceipt under "receipt"; accept a bare receipt too.
-        let receipt_value = value.get("receipt").cloned().unwrap_or(value);
-        match serde_json::from_value::<SignedReceipt>(receipt_value) {
-            Ok(receipt) => events.push(SiemEvent::from_receipt(receipt)),
-            Err(_) => skipped += 1,
+        // Accept either a bare SignedReceipt (`{receipt,signatures}`) OR a gate envelope carrying
+        // the SignedReceipt under "receipt". Try the whole value FIRST so a bare receipt — whose own
+        // inner `receipt` field would otherwise be mis-extracted — is not silently dropped.
+        let receipt = serde_json::from_value::<SignedReceipt>(value.clone())
+            .ok()
+            .or_else(|| {
+                value
+                    .get("receipt")
+                    .cloned()
+                    .and_then(|r| serde_json::from_value::<SignedReceipt>(r).ok())
+            });
+        match receipt {
+            Some(receipt) => events.push(SiemEvent::from_receipt(receipt)),
+            None => skipped += 1,
         }
     }
 
