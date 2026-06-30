@@ -403,9 +403,10 @@ const MessageTimelineBase = React.forwardRef<
         ) : null}
         <div
           className={cn(
-            "absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-none px-2 pt-1",
+            "absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-2 pt-1",
             hasComposerOverlay ? "pb-24" : "pb-4",
           )}
+          data-buzz-conversation-scroll
           data-scroll-restoration-id={scrollRestorationId}
           data-testid="message-timeline"
           key={scrollContainerDomKey}
