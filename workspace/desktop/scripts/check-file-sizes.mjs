@@ -130,10 +130,15 @@ const overrides = new Map([
   // catalog module; agent_models.rs retains the thin wrapper (~50 lines).
   // File still exceeds 1000 due to OpenAI/Anthropic discovery + subprocess
   // fallback. Queued to split into dedicated discovery modules.
-  ["src-tauri/src/commands/agent_models.rs", 1066],
   // Kept activity-feed design fixture: realistic prompt context and tool-heavy
   // chatter for render-class test/reference coverage. Queued to split with the
   // rest of this list if it grows further.
+  // +2: baked build env folded under merged_env in both get_agent_models and
+  // discover_agent_models so in-process discovery sees baked provider config on
+  // a GUI-launched DMG (the discovery_env_with_baked_floor fold).
+  // +3: provider tri-state applied in update_managed_agent handler
+  // (if let Some(provider_update) = input.provider { record.provider = provider_update; }).
+  ["src-tauri/src/commands/agent_models.rs", 1071],
 ]);
 
 await runFileSizeCheck({
