@@ -380,7 +380,7 @@ export const MessageRow = React.memo(
     const actionBarNode = (
       <div
         className={cn(
-          "absolute right-2 top-1 z-10",
+          "absolute right-2 top-1 z-10 sm:pointer-events-none",
           actionBarPlacement === "floating"
             ? "sm:top-0 sm:-translate-y-1/2"
             : "sm:top-1 sm:translate-y-0",
@@ -644,7 +644,7 @@ export const MessageRow = React.memo(
         <article
           className={cn(
             "group/message relative z-10 rounded-2xl transition-colors",
-            isThreadReplyLayout ? "py-1.5" : "py-2",
+            isThreadReplyLayout ? "py-1.5" : "py-1",
             hoverBackground
               ? "mx-1 px-2 hover:bg-muted/50 focus-within:bg-muted/50"
               : isThreadReplyLayout
