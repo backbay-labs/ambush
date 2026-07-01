@@ -186,6 +186,7 @@ pub(crate) async fn fan_out_event_to_local_subscribers(
 }
 
 /// Fan out one event received from Redis pub/sub to this relay's local subscribers.
+#[tracing::instrument(skip_all)]
 pub async fn fan_out_pubsub_event(state: &Arc<AppState>, channel_event: buzz_pubsub::ChannelEvent) {
     // The Redis topic carries the tenant-local routing scope explicitly:
     // `Channel(id)` for a per-channel event, `Global` for a channel-less one.
@@ -401,11 +402,18 @@ pub(crate) async fn dispatch_persistent_event(
 ///
 /// Extracts auth from the WS connection, dispatches ephemeral events locally,
 /// and delegates persistent events to [`super::ingest::ingest_event`].
+#[tracing::instrument(skip_all, fields(event_id, kind))]
 pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let start = std::time::Instant::now();
     let event_id_hex = event.id.to_hex();
     let kind_u32 = event_kind_u32(&event);
     let kind_str = bounded_kind_label(kind_u32);
+
+    // Record the declared span fields now that we have the values.
+    tracing::Span::current()
+        .record("event_id", event_id_hex.as_str())
+        .record("kind", kind_u32);
+
     debug!(event_id = %event_id_hex, kind = kind_u32, "EVENT");
     metrics::counter!("buzz_events_received_total", "kind" => kind_str.clone()).increment(1);
 

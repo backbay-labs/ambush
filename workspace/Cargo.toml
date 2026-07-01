@@ -65,8 +65,12 @@ serde_yaml  = "0.9"
 evalexpr    = "11"
 cron        = "0.16"
 # Observability
-tracing             = "0.1"
-tracing-subscriber  = { version = "0.3", features = ["env-filter", "json"] }
+tracing                     = "0.1"
+tracing-subscriber          = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry       = { version = "0.33" }
+opentelemetry               = { version = "0.32", features = ["trace"] }
+opentelemetry_sdk           = { version = "0.32", features = ["trace", "rt-tokio"] }
+opentelemetry-otlp          = { version = "0.32", default-features = false, features = ["trace", "grpc-tonic", "tls-ring"] }
 metrics             = "0.24"
 metrics-exporter-prometheus = "0.18"
 
