@@ -772,6 +772,9 @@ export function AppSidebar({
                   isReconnectPending={
                     sidebarRelayConnectionCard.isRelayReconnectPending
                   }
+                  isWaitingOnReconnectHook={
+                    sidebarRelayConnectionCard.isWaitingOnReconnectHook
+                  }
                   onDismiss={
                     sidebarRelayConnectionCard.onDismissRelayConnectionCard
                   }
