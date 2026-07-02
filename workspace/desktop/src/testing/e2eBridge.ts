@@ -93,6 +93,9 @@ type E2eConfig = {
     channelsReadError?: string;
     feedReadError?: string;
     canvasReadError?: string;
+    /** Delay (ms) for `apply_workspace` so e2e tests can observe the
+     *  workspace-switch gate. 0/undefined = instant. */
+    applyWorkspaceDelayMs?: number;
     openDmDelayMs?: number;
     sendMessageDelayMs?: number;
     usersBatchDelayMs?: number;
@@ -7462,8 +7465,15 @@ export function maybeInstallE2eTauriMocks() {
         return importMockIdentity(
           (payload as { nsec?: string } | null)?.nsec ?? "",
         );
-      case "apply_workspace":
+      case "apply_workspace": {
+        const applyDelayMs = activeConfig?.mock?.applyWorkspaceDelayMs ?? 0;
+        if (applyDelayMs > 0) {
+          return new Promise((resolve) =>
+            window.setTimeout(resolve, applyDelayMs),
+          );
+        }
         return;
+      }
       case "get_profile":
         return handleGetProfile(activeConfig);
       case "update_profile":
