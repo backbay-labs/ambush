@@ -18,6 +18,8 @@ import {
 } from "@/shared/api/customEmoji";
 import {
   KIND_AGENT_OBSERVER_FRAME,
+  KIND_CHANNEL_THREAD_SUMMARY,
+  KIND_CHANNEL_WINDOW_BOUNDS,
   KIND_DM_VISIBILITY,
   KIND_EVENT_REMINDER,
   KIND_GIT_ISSUE,
@@ -125,9 +127,9 @@ type E2eConfig = {
     openDmDelayMs?: number;
     sendMessageDelayMs?: number;
     usersBatchDelayMs?: number;
-    /** Delay (ms) applied to older-history (`history-` subId) fetches so e2e
+    /** Delay (ms) applied to continuation channel-window requests so e2e
      *  tests can observe the in-flight prepend window. 0/undefined = instant. */
-    historyDelayMs?: number;
+    channelWindowDelayMs?: number;
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
@@ -736,6 +738,17 @@ const DEFAULT_RELAY_WS_URL = "ws://localhost:3000";
 // NIP event kinds the mock reaction handlers emit.
 const KIND_REACTION = 7; // NIP-25 reaction
 const KIND_DELETION = 5; // NIP-09 deletion
+const KIND_NIP29_DELETION = 9005;
+const CHANNEL_WINDOW_AUX_KINDS = new Set([
+  KIND_REACTION,
+  KIND_DELETION,
+  KIND_NIP29_DELETION,
+  KIND_STREAM_MESSAGE_EDIT,
+]);
+const CHANNEL_WINDOW_AUX_DELETION_KINDS = new Set([
+  KIND_DELETION,
+  KIND_NIP29_DELETION,
+]);
 
 // Fake media-proxy port the mock answers for `get_media_proxy_port`, so
 // `rewriteRelayUrl()` produces a real `http://127.0.0.1:<port>/media/...` src
@@ -2789,6 +2802,31 @@ function getThreadReferenceFromTags(tags: string[][]) {
   };
 }
 
+/**
+ * A reply broadcast to the channel timeline carries the exact tag
+ * `["broadcast", "1"]` (NIP-CW §Top-level Classification).
+ */
+function isMockBroadcastReply(tags: string[][]): boolean {
+  return tags.some((tag) => tag[0] === "broadcast" && tag[1] === "1");
+}
+
+/**
+ * Mirror the relay's channel-window row set (buzz-db `thread.rs`, NIP-CW
+ * §Top-level Classification): an event is a timeline row iff its depth is 0
+ * (no reply marker → `rootEventId === null`) OR its depth is 1 (its parent is
+ * the thread root) AND it is broadcast. Depth ≥ 2 replies never surface on the
+ * timeline. A bare-`rootEventId === null` predicate silently dropped broadcast
+ * depth-1 replies the real relay serves.
+ */
+function isMockTopLevelRow(event: RelayEvent): boolean {
+  const { parentEventId, rootEventId } = getThreadReferenceFromTags(event.tags);
+  if (rootEventId === null) {
+    return true;
+  }
+  const isDepthOne = parentEventId !== null && parentEventId === rootEventId;
+  return isDepthOne && isMockBroadcastReply(event.tags);
+}
+
 function appendMentionTags(
   tags: string[][],
   mentionPubkeys: string[] | undefined,
@@ -3128,35 +3166,6 @@ function emitMockHistory(
     }
     sendWsText(socket.handler, ["EOSE", subId]);
   };
-
-  // Optionally pace older-history fetches so e2e tests can observe the
-  // in-flight prepend window (scroll up, abandon, etc.). Scoped to
-  // `history-` subscriptions — the prefix `relayClientSession` uses for
-  // older-message pagination — so live/initial subscriptions stay instant.
-  const delayMs = getConfig()?.mock?.historyDelayMs ?? 0;
-  const isVisibleOlderHistoryPage =
-    subId.startsWith("history-") && filter.until !== undefined && !filter["#e"];
-  if (isVisibleOlderHistoryPage) {
-    const counter = window as unknown as { __HISTORY_FETCH_COUNT__?: number };
-    counter.__HISTORY_FETCH_COUNT__ =
-      (counter.__HISTORY_FETCH_COUNT__ ?? 0) + 1;
-  }
-  if (delayMs > 0 && isVisibleOlderHistoryPage) {
-    const probe = window as unknown as {
-      __HISTORY_INFLIGHT__?: number;
-      __HISTORY_INFLIGHT_PEAK__?: number;
-    };
-    probe.__HISTORY_INFLIGHT__ = (probe.__HISTORY_INFLIGHT__ ?? 0) + 1;
-    probe.__HISTORY_INFLIGHT_PEAK__ = Math.max(
-      probe.__HISTORY_INFLIGHT_PEAK__ ?? 0,
-      probe.__HISTORY_INFLIGHT__,
-    );
-    window.setTimeout(() => {
-      probe.__HISTORY_INFLIGHT__ = (probe.__HISTORY_INFLIGHT__ ?? 1) - 1;
-      emit();
-    }, delayMs);
-    return;
-  }
 
   emit();
 }
@@ -3668,7 +3677,7 @@ async function handleGetChannelMessagesBefore(
       if (!TIMELINE_KINDS.has(event.kind)) {
         return false;
       }
-      return getThreadReferenceFromTags(event.tags).rootEventId === null;
+      return isMockTopLevelRow(event);
     });
   } else {
     // Config mode: exercise the real bridge keyset over /query.
@@ -3721,6 +3730,239 @@ async function handleGetChannelMessagesBefore(
       : null;
 
   return { events: page, next_cursor: nextCursor };
+}
+
+function getEventTargets(event: RelayEvent) {
+  return event.tags.flatMap((tag) =>
+    tag[0] === "e" && typeof tag[1] === "string" ? [tag[1]] : [],
+  );
+}
+
+function buildMockChannelWindowAux(
+  events: RelayEvent[],
+  rows: RelayEvent[],
+): RelayEvent[] {
+  const collectHop = (kinds: Set<number>, targetIds: Set<string>) =>
+    events.filter(
+      (event) =>
+        kinds.has(event.kind) &&
+        getEventTargets(event).some((target) => targetIds.has(target)),
+    );
+
+  const firstHop = collectHop(
+    CHANNEL_WINDOW_AUX_KINDS,
+    new Set(rows.map((row) => row.id)),
+  );
+  const secondHop = collectHop(
+    CHANNEL_WINDOW_AUX_DELETION_KINDS,
+    new Set(firstHop.map((event) => event.id)),
+  );
+  const byId = new Map(firstHop.map((event) => [event.id, event]));
+  for (const event of secondHop) byId.set(event.id, event);
+  return [...byId.values()];
+}
+
+function buildMockChannelThreadSummary(
+  channelId: string,
+  root: RelayEvent,
+  events: RelayEvent[],
+): RelayEvent | null {
+  const replies = events.filter((event) => {
+    const thread = getThreadReferenceFromTags(event.tags);
+    return thread.rootEventId === root.id;
+  });
+  if (replies.length === 0) return null;
+
+  const directReplies = replies.filter(
+    (event) => getThreadReferenceFromTags(event.tags).parentEventId === root.id,
+  );
+  const participants = [
+    ...new Set(
+      replies
+        .sort(
+          (left, right) =>
+            right.created_at - left.created_at ||
+            left.id.localeCompare(right.id),
+        )
+        .map((event) => event.pubkey),
+    ),
+  ].slice(0, 10);
+  const lastReplyAt = Math.max(...replies.map((event) => event.created_at));
+  return {
+    id: `mock-window-summary-${root.id}`,
+    pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    kind: KIND_CHANNEL_THREAD_SUMMARY,
+    tags: [
+      ["e", root.id],
+      ["d", root.id],
+      ["h", channelId],
+    ],
+    content: JSON.stringify({
+      reply_count: directReplies.length,
+      descendant_count: replies.length,
+      last_reply_at: lastReplyAt,
+      participants,
+    }),
+    sig: "mocksig".repeat(20).slice(0, 128),
+  };
+}
+
+/**
+ * Build the single kind-39006 bounds event a channel window response must carry.
+ * The `d` tag key must match `expectedBoundsKey` in channelWindowResponse.ts:
+ * `<channel>:head` at the frontier, else `<channel>:<created_at>:<event_id>` of
+ * the request cursor (lower-cased). `has_more`/`next_cursor` must agree — the
+ * parser rejects a bounds event where they disagree.
+ */
+function buildMockChannelWindowBounds(
+  args: {
+    channelId: string;
+    cursor?: { created_at: number; event_id: string } | null;
+  },
+  hasMore: boolean,
+  nextCursor: { created_at: number; id: string } | null,
+): RelayEvent {
+  const suffix = args.cursor
+    ? `${args.cursor.created_at}:${args.cursor.event_id.toLowerCase()}`
+    : "head";
+  const boundsKey = `${args.channelId.toLowerCase()}:${suffix}`;
+  return {
+    id: `mock-window-bounds-${boundsKey}`,
+    pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    kind: KIND_CHANNEL_WINDOW_BOUNDS,
+    tags: [["d", boundsKey]],
+    content: JSON.stringify({ has_more: hasMore, next_cursor: nextCursor }),
+    sig: "mocksig".repeat(20).slice(0, 128),
+  };
+}
+
+/**
+ * one server-assembled channel window over the `/query` bridge. Emits the flat
+ * event array the relay assembles — top-level rows (newest first), then the aux
+ * closure, then relay-signed `39005` summaries and exactly one `39006` bounds
+ * event carrying `has_more` + `next_cursor`. The client derives its cursor and
+ * exhaustion solely from `39006`, never from the rows, so this handler returns
+ * the raw array unchanged.
+ *
+ * This is the window read-model surface the overhaul introduced; without it the
+ * relay-mode bridge has no handler and the timeline renders empty.
+ */
+async function handleGetChannelWindow(
+  args: {
+    channelId: string;
+    limitRows?: number | null;
+    cursor?: { created_at: number; event_id: string } | null;
+  },
+  config: E2eConfig | undefined,
+): Promise<RelayEvent[]> {
+  const execute = async () => {
+    const cap = Math.min(args.limitRows ?? 50, 200);
+    const identity = getIdentity(config);
+
+    if (!identity) {
+      // Mock store: server-assembled channel window over the mock event store,
+      // mirroring the relay path's shape so callers (parseChannelWindowResponse)
+      // parse both modes identically. Top-level timeline rows in relay order,
+      // then exactly one kind-39006 bounds event.
+      const events = getMockMessageStore(args.channelId);
+      const candidates = events
+        .filter(
+          (event) => TIMELINE_KINDS.has(event.kind) && isMockTopLevelRow(event),
+        )
+        .sort(
+          (left, right) =>
+            right.created_at - left.created_at ||
+            left.id.localeCompare(right.id),
+        );
+      // Honor the composite (until, before_id) cursor exactly like the relay's
+      // keyset: keep only rows strictly older than the cursor under the
+      // (created_at DESC, id ASC) order — older created_at, or the same second
+      // with a strictly greater id.
+      const cursor = args.cursor;
+      const afterCursor = cursor
+        ? candidates.filter(
+            (event) =>
+              event.created_at < cursor.created_at ||
+              (event.created_at === cursor.created_at &&
+                event.id > cursor.event_id),
+          )
+        : candidates;
+      const rows = afterCursor.slice(0, cap);
+      // Exhaustion probe mirrors the relay's limit+1: more rows past the cursor
+      // than the page cap means another page exists. next_cursor is the last
+      // retained row.
+      const hasMore = afterCursor.length > cap;
+      const lastRow = rows[rows.length - 1];
+      const nextCursor =
+        hasMore && lastRow
+          ? { created_at: lastRow.created_at, id: lastRow.id }
+          : null;
+      const aux = buildMockChannelWindowAux(events, rows);
+      const summaries = rows.flatMap((row) => {
+        const summary = buildMockChannelThreadSummary(
+          args.channelId,
+          row,
+          events,
+        );
+        return summary ? [summary] : [];
+      });
+      return [
+        ...rows,
+        ...aux,
+        ...summaries,
+        buildMockChannelWindowBounds(args, hasMore, nextCursor),
+      ];
+    }
+
+    // Relay mode: mirror build_channel_window_filter exactly — top-level dispatch
+    // with summaries + aux, composite (until, before_id) cursor (both or neither).
+    const filter: Record<string, unknown> = {
+      "#h": [args.channelId],
+      kinds: [...TIMELINE_KINDS],
+      limit: cap,
+      top_level: true,
+      include_summaries: true,
+      include_aux: true,
+    };
+    if (args.cursor) {
+      filter.until = args.cursor.created_at;
+      filter.before_id = args.cursor.event_id;
+    }
+    return relayQuery(config, [filter]);
+  };
+
+  if (!args.cursor) {
+    return execute();
+  }
+
+  const probe = window as unknown as {
+    __CHANNEL_WINDOW_FETCH_COUNT__?: number;
+    __CHANNEL_WINDOW_INFLIGHT__?: number;
+    __CHANNEL_WINDOW_INFLIGHT_PEAK__?: number;
+  };
+  probe.__CHANNEL_WINDOW_FETCH_COUNT__ =
+    (probe.__CHANNEL_WINDOW_FETCH_COUNT__ ?? 0) + 1;
+
+  const delayMs = getConfig()?.mock?.channelWindowDelayMs ?? 0;
+  if (delayMs <= 0) {
+    return execute();
+  }
+
+  probe.__CHANNEL_WINDOW_INFLIGHT__ =
+    (probe.__CHANNEL_WINDOW_INFLIGHT__ ?? 0) + 1;
+  probe.__CHANNEL_WINDOW_INFLIGHT_PEAK__ = Math.max(
+    probe.__CHANNEL_WINDOW_INFLIGHT_PEAK__ ?? 0,
+    probe.__CHANNEL_WINDOW_INFLIGHT__,
+  );
+  await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  try {
+    return await execute();
+  } finally {
+    probe.__CHANNEL_WINDOW_INFLIGHT__ =
+      (probe.__CHANNEL_WINDOW_INFLIGHT__ ?? 1) - 1;
+  }
 }
 
 function getMockUserNotes(pubkey: string): RawUserNote[] {
@@ -8271,6 +8513,11 @@ export function maybeInstallE2eTauriMocks() {
       case "get_channel_messages_before":
         return handleGetChannelMessagesBefore(
           payload as Parameters<typeof handleGetChannelMessagesBefore>[0],
+          activeConfig,
+        );
+      case "get_channel_window":
+        return handleGetChannelWindow(
+          payload as Parameters<typeof handleGetChannelWindow>[0],
           activeConfig,
         );
       case "send_channel_message":

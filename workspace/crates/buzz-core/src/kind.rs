@@ -223,6 +223,17 @@ pub const KIND_NIP29_GROUP_MEMBERS: u32 = 39002;
 /// NIP-29: Addressable group roles definition.
 pub const KIND_NIP29_GROUP_ROLES: u32 = 39003;
 
+// Channel-window overlays (relay-signed, synthesized at query time, never
+// stored). Appended to bridge `/query` responses for `top_level` window
+// requests — see docs/bridge-channel-window.md.
+/// Thread summary overlay: `e`/`d` tag = root event id, content =
+/// `{reply_count, descendant_count, last_reply_at, participants}`.
+pub const KIND_THREAD_SUMMARY: u32 = 39005;
+/// Window bounds overlay: `d` tag = `<channel_id>:<request-cursor-or-head>`,
+/// content = `{has_more, next_cursor}`. The only authority on exhaustion —
+/// clients must not infer `has_more` from row counts.
+pub const KIND_WINDOW_BOUNDS: u32 = 39006;
+
 /// Workflow definition (parameterized replaceable, d=workflow_uuid).
 pub const KIND_WORKFLOW_DEF: u32 = 30620;
 
@@ -471,6 +482,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_GROUP_ADMINS,
     KIND_NIP29_GROUP_MEMBERS,
     KIND_NIP29_GROUP_ROLES,
+    KIND_THREAD_SUMMARY,
+    KIND_WINDOW_BOUNDS,
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
     KIND_HUDDLE_REACTION,
@@ -615,6 +628,8 @@ pub const fn is_relay_only_kind(kind: u32) -> bool {
             | KIND_PRESENCE_SNAPSHOT
             | KIND_MESH_LLM_RELAY_STATUS
             | KIND_DM_VISIBILITY
+            | KIND_THREAD_SUMMARY
+            | KIND_WINDOW_BOUNDS
     )
 }
 
@@ -639,6 +654,8 @@ const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_MESH_LLM_RELAY_STATUS)); // 30621 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_THREAD_SUMMARY)); // 39005 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_WINDOW_BOUNDS)); // 39006 ∈ 30000–39999
 
 // Compile-time: NIP-34 parameterized replaceable kinds are in the correct range.
 const _: () = assert!(

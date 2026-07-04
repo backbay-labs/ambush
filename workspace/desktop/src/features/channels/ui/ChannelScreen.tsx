@@ -29,6 +29,7 @@ import {
   mergeMessages,
   useChannelMessagesQuery,
   useChannelSubscription,
+  useChannelWindowQuery,
   useDeleteMessageMutation,
   useEditMessageMutation,
   useSendMessageMutation,
@@ -39,6 +40,10 @@ import {
   collectMessageMentionPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
+import {
+  channelWindowThreadSummaries,
+  type ChannelWindowThreadSummary,
+} from "@/features/messages/lib/channelWindowStore";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import {
@@ -46,8 +51,7 @@ import {
   selectTimelineLoadingState,
 } from "@/features/messages/lib/timelineLoadingState";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
-import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
-import { useThreadReplies } from "@/features/messages/useThreadReplies";
+import { useIndependentThreadPanel } from "@/features/messages/useIndependentThreadPanel";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
@@ -177,6 +181,7 @@ export function ChannelScreen({
     });
   }, [activeChannelId, openThreadHeadId]);
   const messagesQuery = useChannelMessagesQuery(activeChannel);
+  const windowQuery = useChannelWindowQuery(activeChannel);
   useChannelSubscription(activeChannel);
   const { fetchOlder, hasOlderMessages, isFetchingOlder } =
     useFetchOlderMessages(activeChannel);
@@ -207,16 +212,10 @@ export function ChannelScreen({
     // thread itself is read.
     markChannelRead(activeChannelId, activeReadAt, { topLevelOnly: true });
   }, [activeChannel?.isMember, activeChannelId, activeReadAt, markChannelRead]);
-  // Install the NIP-RS parent resolver: every `thread:<root>` or `msg:<id>`
-  // context evaluated while this channel is active belongs to it (both are only
-  // ever read for the active channel's timeline messages), so the parent is
-  // always the active channel. Folding `msg:` to the channel — never to another
-  // message — means reading an ancestor never covers a descendant (LP4 Issue 2
-  // by construction); a channel-read still clears any message older than the
-  // top-level channel frontier. Non-thread/non-message keys (channels) have no
-  // parent → null, which degrades effective() to the own term. Cleared on
-  // channel leave / unmount so a stale channel id never becomes the parent of
-  // another channel's contexts.
+  // Install the NIP-RS parent resolver. Active `thread:` and `msg:` contexts
+  // belong to this channel; folding messages to the channel (never another
+  // message) preserves ancestor/descendant isolation while channel reads still
+  // cover top-level history. Clear on leave so the parent cannot go stale.
   React.useEffect(() => {
     if (!activeChannelId) {
       setContextParentResolver(null);
@@ -444,6 +443,14 @@ export function ChannelScreen({
       resolvedMessages,
     ],
   );
+  const threadSummaries: ReadonlyMap<string, ChannelWindowThreadSummary> =
+    React.useMemo(
+      () =>
+        windowQuery.data
+          ? channelWindowThreadSummaries(windowQuery.data)
+          : new Map(),
+      [windowQuery.data],
+    );
   const handleFindSearchHit = React.useCallback((hit: SearchHit) => {
     const event = cacheSearchHitEvent(hit);
     setFindTargetEvents((currentEvents) =>
@@ -457,6 +464,19 @@ export function ChannelScreen({
     messages: timelineMessages,
     onSearchHit: handleFindSearchHit,
   });
+  const threadPanelData = useIndependentThreadPanel({
+    activeChannel,
+    channelEvents: resolvedMessages,
+    rootId: effectiveOpenThreadHeadId,
+    replyTargetId: threadReplyTargetId,
+    expandedReplyIds: expandedThreadReplyIds,
+    currentPubkey,
+    currentAvatarUrl: currentProfile?.avatarUrl ?? null,
+    profiles: messageProfiles,
+    members: channelMembers,
+    personaLookup,
+    respondToLookup,
+  });
   const {
     firstUnreadMessageId,
     getFirstReplyIdForMessage,
@@ -467,7 +487,6 @@ export function ChannelScreen({
     markRevealedRepliesRead,
     openThreadHeadMessage,
     threadFirstUnreadReplyId,
-    threadMessages,
     threadReplyTargetMessage,
     threadReplyUnreadCounts,
     threadUnreadCounts,
@@ -476,9 +495,10 @@ export function ChannelScreen({
     activeChannelId,
     timelineMessages,
     currentPubkey,
-    openThreadHeadId,
+    openThreadHeadId: effectiveOpenThreadHeadId,
     threadReplyTargetId,
     expandedThreadReplyIds,
+    openThreadMessages: threadPanelData.visibleReplies,
     getChannelReadAt,
     getMessageReadAt,
     markChannelUnread,
@@ -714,27 +734,15 @@ export function ChannelScreen({
     threadReplyTargetMessage,
   ]);
 
-  useLoadMissingAncestors(activeChannel, resolvedMessages);
-  // Fetch the full reply subtree server-side when a thread is open, closing the
-  // descendant gap that useLoadMissingAncestors (ancestors-only) leaves. The
-  // open thread head is the top-level message, i.e. the thread root.
-  useThreadReplies(activeChannel, effectiveOpenThreadHeadId);
   const hasAuxiliaryPanel = Boolean(
     effectiveOpenThreadHeadId ||
       openAgentSessionPubkey ||
       profilePanelPubkey ||
       channelManagementOpen,
   );
-  const displayedThreadHeadMessage =
-    openThreadHeadMessage?.id === effectiveOpenThreadHeadId
-      ? openThreadHeadMessage
-      : null;
-  const displayedThreadMessages = displayedThreadHeadMessage
-    ? threadMessages
-    : [];
-  const displayedThreadReplyTargetMessage = displayedThreadHeadMessage
-    ? threadReplyTargetMessage
-    : null;
+  const displayedThreadHeadMessage = threadPanelData.threadHead;
+  const displayedThreadMessages = threadPanelData.visibleReplies;
+  const displayedThreadReplyTargetMessage = threadPanelData.replyTargetMessage;
   const displayedThreadFirstUnreadReplyId = displayedThreadHeadMessage
     ? threadFirstUnreadReplyId
     : null;
@@ -897,6 +905,7 @@ export function ChannelScreen({
                   isSinglePanelView={isSinglePanelView}
                   isTimelineLoading={isTimelineLoading}
                   messages={timelineMessages}
+                  threadSummaries={threadSummaries}
                   onCancelEdit={handleCancelEdit}
                   onCancelThreadReply={handleCancelThreadReply}
                   onChannelManagementDeleted={handleChannelManagementDeleted}

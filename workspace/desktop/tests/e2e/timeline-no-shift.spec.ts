@@ -220,7 +220,7 @@ test("timeline reserves mixed-media rows before fast scrollback", async ({
   await page.evaluate(() => {
     window.__BUZZ_E2E__ = {
       ...window.__BUZZ_E2E__,
-      mock: { ...window.__BUZZ_E2E__?.mock, historyDelayMs: 10_000 },
+      mock: { ...window.__BUZZ_E2E__?.mock, channelWindowDelayMs: 10_000 },
     };
   });
   await page.evaluate((imageUrl) => {
@@ -456,13 +456,15 @@ test("timeline prepend plus late row reflow keeps the reading row stable", async
   await page.evaluate(() => {
     window.__BUZZ_E2E__ = {
       ...window.__BUZZ_E2E__,
-      mock: { ...window.__BUZZ_E2E__?.mock, historyDelayMs: 1_000 },
+      mock: { ...window.__BUZZ_E2E__?.mock, channelWindowDelayMs: 1_000 },
     };
     (
-      window as unknown as { __HISTORY_INFLIGHT__?: number }
-    ).__HISTORY_INFLIGHT__ = 0;
+      window as unknown as { __CHANNEL_WINDOW_INFLIGHT__?: number }
+    ).__CHANNEL_WINDOW_INFLIGHT__ = 0;
   });
 
+  await page.mouse.wheel(0, 1_000);
+  await page.waitForTimeout(100);
   await timeline.evaluate((element) => {
     const scroller = element as HTMLDivElement;
     scroller.scrollTop = 150;
@@ -474,8 +476,8 @@ test("timeline prepend plus late row reflow keeps the reading row stable", async
       async () =>
         page.evaluate(
           () =>
-            (window as unknown as { __HISTORY_INFLIGHT__?: number })
-              .__HISTORY_INFLIGHT__ ?? 0,
+            (window as unknown as { __CHANNEL_WINDOW_INFLIGHT__?: number })
+              .__CHANNEL_WINDOW_INFLIGHT__ ?? 0,
         ),
       { timeout: 5_000 },
     )

@@ -59,6 +59,8 @@ export default defineConfig({
         "**/virtualization.spec.ts",
         "**/scroll-history.spec.ts",
         "**/channel-dense-second-reach.spec.ts",
+        "**/channel-window-mock-paging.spec.ts",
+        "**/live-broadcast-reply-timeline.spec.ts",
         "**/overscroll-boundary.spec.ts",
         "**/cold-switch-longtask.perf.ts",
         "**/timeline-no-shift.spec.ts",
@@ -84,6 +86,7 @@ export default defineConfig({
         "**/persona-env-vars.spec.ts",
         "**/persona-sync.spec.ts",
         "**/mesh-compute.spec.ts",
+        "**/parity-ancestor-island.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

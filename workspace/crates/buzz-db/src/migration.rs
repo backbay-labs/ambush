@@ -698,7 +698,7 @@ mod tests {
 
         run_migrations(&pool).await.expect("run migrations");
 
-        assert_eq!(applied_versions(&pool).await, vec![1, 2]);
+        assert_eq!(applied_versions(&pool).await, vec![1, 2, 3]);
         let sql = migration_sql();
         let tables = create_tables(sql.as_str());
         for table in [

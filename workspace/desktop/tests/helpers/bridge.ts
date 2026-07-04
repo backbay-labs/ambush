@@ -131,7 +131,7 @@ type MockBridgeOptions = {
   sendMessageDelayMs?: number;
   usersBatchDelayMs?: number;
   /** Delay (ms) for older-history fetches; see e2eBridge mock config. */
-  historyDelayMs?: number;
+  channelWindowDelayMs?: number;
   profileReadDelayMs?: number;
   profileReadError?: string;
   profileUpdateError?: string;
@@ -210,7 +210,12 @@ const WELCOME_CHANNEL_ENSURED_STORAGE_KEY_PREFIX =
   "buzz-welcome-channel-ensured.v2:";
 const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX = "buzz-onboarding-complete.v1:";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
-const DEFAULT_RELAY_WS_URL = "ws://localhost:3000";
+// The relay HTTP/WS URLs follow BUZZ_E2E_RELAY_URL (same env var seed.ts reads),
+// so a suite pointed at an isolated relay (e.g. the read-model harness on :3030)
+// uses it without per-spec wiring. Falls back to the shared dev relay when unset.
+const DEFAULT_RELAY_HTTP_URL =
+  process.env.BUZZ_E2E_RELAY_URL ?? "http://localhost:3000";
+const DEFAULT_RELAY_WS_URL = DEFAULT_RELAY_HTTP_URL.replace(/^http/, "ws");
 
 function cloneEngramEntry(entry: MockEngramEntry): MockEngramEntry {
   return {
@@ -512,6 +517,11 @@ export async function installRelayBridge(
   await installBridge(page, {
     mode: "relay",
     user,
+    // Thread BUZZ_E2E_RELAY_URL into BOTH transports. The app defaults these to
+    // :3000 in relay mode; without explicit wiring HTTP queries (channel list,
+    // feed) miss an isolated relay and surface as "Failed to fetch".
+    relayHttpUrl: DEFAULT_RELAY_HTTP_URL,
+    relayWsUrl: DEFAULT_RELAY_WS_URL,
     seedPreviewFeatures: options?.seedPreviewFeatures,
   });
 }
