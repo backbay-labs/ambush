@@ -1,5 +1,11 @@
 import * as React from "react";
-import { Octagon, Settings, Sparkles, TerminalSquare } from "lucide-react";
+import {
+  Clock3,
+  Octagon,
+  Settings,
+  Sparkles,
+  TerminalSquare,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
@@ -41,6 +47,10 @@ import {
   setTranscriptAnimationEnabled,
   useTranscriptAnimationEnabled,
 } from "@/features/agents/ui/transcriptAnimationPreference";
+import {
+  setTranscriptTimestampsEnabled,
+  useTranscriptTimestampsEnabled,
+} from "@/features/agents/ui/transcriptTimestampPreference";
 import type { ChannelAgentSessionAgent } from "./useChannelAgentSessions";
 
 type AgentSessionThreadPanelProps = {
@@ -117,6 +127,7 @@ export function AgentSessionThreadPanel({
     [rawFeedScopeKey],
   );
   const animateActivity = useTranscriptAnimationEnabled();
+  const showTimestamps = useTranscriptTimestampsEnabled();
   async function handleInterruptTurn() {
     if (!channel) {
       return;
@@ -217,13 +228,36 @@ export function AgentSessionThreadPanel({
                   <Sparkles className="h-4 w-4 text-muted-foreground" />
                   Show Animations
                 </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Slide new activity rows in as they arrive.
-                </span>
               </span>
               <Switch
                 aria-hidden="true"
                 checked={animateActivity && !showRawFeed}
+                className="pointer-events-none mt-0.5"
+                tabIndex={-1}
+              />
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="items-start gap-3"
+              data-testid="agent-session-toggle-show-timestamps"
+              onSelect={(event) => {
+                event.preventDefault();
+                setTranscriptTimestampsEnabled(!showTimestamps);
+              }}
+              title={
+                showTimestamps
+                  ? "Hide per-row activity timestamps."
+                  : "Show a timestamp under each activity row."
+              }
+            >
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <Clock3 className="h-4 w-4 text-muted-foreground" />
+                  Show Timestamps
+                </span>
+              </span>
+              <Switch
+                aria-hidden="true"
+                checked={showTimestamps}
                 className="pointer-events-none mt-0.5"
                 tabIndex={-1}
               />
