@@ -79,8 +79,9 @@ import { chromeCssVarDefaults } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
-import { ConnectionBanner } from "@/shared/ui/ConnectionBanner";
 import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
+import { RelayConnectionOverlay } from "@/app/RelayConnectionOverlay";
+import { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 
 const LazySettingsScreen = React.lazy(async () => {
   const module = await import("@/features/settings/ui/SettingsScreen");
@@ -180,6 +181,10 @@ export function AppShell() {
     channelsQuery.error instanceof Error
       ? channelsQuery.error.message
       : undefined;
+  const relayConnectionCard = useSidebarRelayConnectionCard(
+    channelsErrorMessage,
+    workspacesHook.activeWorkspace?.relayUrl,
+  );
   const memberChannels = React.useMemo(
     () => channels.filter((channel) => channel.isMember),
     [channels],
@@ -688,6 +693,7 @@ export function AppShell() {
                           fallbackDisplayName={identityQuery.data?.displayName}
                           homeBadgeCount={homeBadgeCount + dueReminderBadge}
                           isAddWorkspaceOpen={isAddWorkspaceOpen}
+                          relayConnectionCard={relayConnectionCard}
                           isCreatingChannel={createChannelMutation.isPending}
                           isCreatingForum={createForumMutation.isPending}
                           isLoading={channelsQuery.isLoading}
@@ -821,13 +827,19 @@ export function AppShell() {
                             style={chromeCssVarDefaults}
                           >
                             <div className="relative z-10 mb-2 ml-px mr-2 mt-px flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-background shadow-[-1px_-1px_0_0_hsl(var(--sidebar-border)/0.45)]">
-                              <ConnectionBanner
-                                errorMessage={channelsErrorMessage}
-                              />
                               <Outlet />
                             </div>
                           </SidebarInset>
                         </MainInsetProvider>
+                        <RelayConnectionOverlay
+                          card={relayConnectionCard}
+                          errorMessage={channelsErrorMessage}
+                          hasWorkspaceRail={
+                            workspaceRailEnabled &&
+                            workspacesHook.workspaces.length > 1
+                          }
+                          isHuddleDrawerOpen={isHuddleDrawerOpen}
+                        />
                       </div>
                     )}
                     <AppShellOverlays
