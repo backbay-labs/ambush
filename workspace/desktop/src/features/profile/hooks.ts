@@ -1,5 +1,6 @@
 import type {
   InfiniteData,
+  QueryClient,
   UseInfiniteQueryResult,
 } from "@tanstack/react-query";
 import * as React from "react";
@@ -25,6 +26,7 @@ import type {
   UpdateProfileInput,
   UserSearchResult,
   UserSearchPage,
+  UserProfileSummary,
   UsersBatchResponse,
 } from "@/shared/api/types";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -267,6 +269,37 @@ export function useUserProfileQuery(pubkey?: string) {
   });
 }
 
+// Per-pubkey resolution cache backing `useUsersBatchQuery`'s delta fetch.
+// `summary: null` records a relay-confirmed miss so unknown pubkeys aren't
+// re-requested every page. Entries older than the hook's 60s staleTime are
+// treated as unresolved and refetched.
+type UsersBatchEntry = {
+  summary: UserProfileSummary | null;
+  fetchedAt: number;
+};
+
+const usersBatchEntryKey = (pubkey: string) => ["users-batch-entry", pubkey];
+
+/**
+ * Drop the per-pubkey delta-fetch entries so the next `useUsersBatchQuery`
+ * run re-fetches these profiles from the relay. Must be called anywhere a
+ * specific profile (or a containing `users-batch` query) is invalidated —
+ * otherwise the re-run resolves from the still-fresh-looking entry and
+ * renders the stale name/avatar for up to the entry's 60s freshness window.
+ * Synchronous, so callers can evict before awaiting aggregate invalidations.
+ */
+export function evictUsersBatchEntries(
+  queryClient: QueryClient,
+  pubkeys: string[],
+) {
+  for (const pubkey of pubkeys) {
+    queryClient.removeQueries({
+      queryKey: usersBatchEntryKey(pubkey.toLowerCase()),
+      exact: true,
+    });
+  }
+}
+
 export function useUsersBatchQuery(
   pubkeys: string[],
   options?: {
@@ -284,7 +317,43 @@ export function useUsersBatchQuery(
   const query = useQuery<UsersBatchResponse>({
     enabled,
     queryKey: ["users-batch", ...normalizedPubkeys],
-    queryFn: () => getUsersBatch(normalizedPubkeys),
+    // Delta fetch: scroll-back grows the author set one page at a time, and
+    // keying on the full sorted list means every growth re-runs the query.
+    // Requesting the accumulated set re-downloaded every already-resolved
+    // profile (kind-0 payloads embed avatars — ~800KB per scroll page on
+    // staging; RESEARCH/PERF_STAGING_SCROLLBACK.md). Resolve from the
+    // per-pubkey entry cache first and hit the network only for pubkeys not
+    // freshly resolved.
+    queryFn: async () => {
+      const now = Date.now();
+      const profiles: UsersBatchResponse["profiles"] = {};
+      const missing: string[] = [];
+      const toFetch: string[] = [];
+      for (const pubkey of normalizedPubkeys) {
+        const entry = queryClient.getQueryData<UsersBatchEntry>(
+          usersBatchEntryKey(pubkey),
+        );
+        if (entry && now - entry.fetchedAt < 60_000) {
+          if (entry.summary) profiles[pubkey] = entry.summary;
+          else missing.push(pubkey);
+        } else {
+          toFetch.push(pubkey);
+        }
+      }
+      if (toFetch.length > 0) {
+        const fresh = await getUsersBatch(toFetch);
+        for (const pubkey of toFetch) {
+          const summary = fresh.profiles[pubkey] ?? null;
+          queryClient.setQueryData<UsersBatchEntry>(
+            usersBatchEntryKey(pubkey),
+            { summary, fetchedAt: now },
+          );
+          if (summary) profiles[pubkey] = summary;
+          else missing.push(pubkey);
+        }
+      }
+      return { profiles, missing };
+    },
     // Loading older messages grows the pubkey set, which changes this query's
     // key entirely. Without this, already-resolved authors would flash back
     // to their raw pubkey while the larger batch refetches.
@@ -411,6 +480,20 @@ export function useUpdateProfileMutation() {
       const pubkey = identityQuery.data?.pubkey ?? profile.pubkey;
       if (relayUrl && pubkey) {
         void persistSelfProfile(relayUrl, pubkey, profile);
+      }
+      if (pubkey) {
+        // Own author labels/avatars render through the users-batch delta
+        // cache too — evict so the next batch run picks up the new profile
+        // instead of the fresh-looking stale entry, then poke the aggregates.
+        evictUsersBatchEntries(queryClient, [pubkey]);
+        void queryClient.invalidateQueries({
+          queryKey: ["user-profile", pubkey.toLowerCase()],
+        });
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "users-batch" &&
+            query.queryKey.includes(pubkey.toLowerCase()),
+        });
       }
     },
     onSettled: async () => {
