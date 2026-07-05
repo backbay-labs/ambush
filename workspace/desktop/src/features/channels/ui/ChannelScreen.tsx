@@ -598,8 +598,10 @@ export function ChannelScreen({
   }, [setChannelManagementOpen, goHome]);
   const {
     agentSessionAgents,
+    backFromAgentSession: handleBackFromAgentSession,
     channelAgentSessionAgents,
     closeAgentSession: handleCloseAgentSession,
+    hasAgentSessionReturnTarget,
     openAgentSession: handleOpenAgentSession,
     openThreadAndCloseAgentSession: handleOpenThreadAndCloseAgentSession,
   } = useChannelAgentSessions({
@@ -617,6 +619,7 @@ export function ChannelScreen({
     handleOpenThread,
     managedAgents: agentSessionCandidates,
     openAgentSessionPubkey,
+    openThreadHeadId: effectiveOpenThreadHeadId,
     profilePanelPubkey,
     setChannelManagementOpen,
     setExpandedThreadReplyIds,
@@ -922,6 +925,11 @@ export function ChannelScreen({
                       : undefined
                   }
                   onCloseAgentSession={handleCloseAgentSession}
+                  onBackFromAgentSession={
+                    hasAgentSessionReturnTarget
+                      ? handleBackFromAgentSession
+                      : undefined
+                  }
                   onCloseChannelManagement={handleCloseChannelManagement}
                   onCloseThread={handleCloseThread}
                   onDelete={
