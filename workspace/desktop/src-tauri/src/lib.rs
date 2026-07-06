@@ -1,4 +1,5 @@
 mod app_state;
+mod archive;
 mod commands;
 mod deep_link;
 mod events;
@@ -613,6 +614,12 @@ pub fn run() {
             get_agent_memory,
             relay_reconnect_hook,
             relay_reconnect_hook_configured,
+            observer_archive_default_enabled,
+            archive::archive_events,
+            archive::create_save_subscription,
+            archive::list_save_subscriptions,
+            archive::delete_save_subscription,
+            archive::read_archived_events,
             is_auto_update_supported,
         ])
         .build(tauri::generate_context!())

@@ -49,6 +49,8 @@ import {
   useUserStatusSubscription,
 } from "@/features/user-status/hooks";
 import { useWorkspaceEmojiLiveUpdates } from "@/features/custom-emoji/hooks";
+import { useArchiveSync } from "@/features/local-archive/archiveSyncManager";
+import { useObserverArchiveSeed } from "@/features/local-archive/useObserverArchiveSeed";
 import { useProfileQuery } from "@/features/profile/hooks";
 import {
   DEFAULT_SETTINGS_SECTION,
@@ -147,6 +149,8 @@ export function AppShell() {
   );
   usePersonaSync(identityQuery.data?.pubkey);
   useAgentsDataRefresh();
+  useArchiveSync();
+  useObserverArchiveSeed(identityQuery.data?.pubkey);
   const profileQuery = useProfileQuery();
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
   useRelayAutoHeal();
