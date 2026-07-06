@@ -5,6 +5,7 @@ import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import { useComposerAutofocus } from "@/features/messages/lib/useComposerAutofocus";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
+import { resolveSentDraftKey } from "@/features/messages/ui/draftSubmitKey";
 import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomplete";
 import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomplete";
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
@@ -51,6 +52,7 @@ import { MessageComposerToolbar } from "./MessageComposerToolbar";
 import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
 import { useMentionSendFlow } from "./useMentionSendFlow";
 import { useComposerContentState } from "./useComposerContentState";
+import { useDraftPersistLifecycle } from "./useDraftPersistSnapshot";
 
 type MessageComposerProps = {
   channelId?: string | null;
@@ -156,6 +158,8 @@ function MessageComposerImpl({
   const [spoileredAttachmentUrls, setSpoileredAttachmentUrls] = React.useState<
     Set<string>
   >(() => new Set());
+  const spoileredAttachmentUrlsRef = React.useRef(spoileredAttachmentUrls);
+  spoileredAttachmentUrlsRef.current = spoileredAttachmentUrls;
 
   const handleFormattingToggle = React.useCallback((pressed: boolean) => {
     if (pressed) setIsEmojiPickerOpen(false);
@@ -164,7 +168,6 @@ function MessageComposerImpl({
 
   const drafts = useDrafts();
   const effectiveDraftKey = draftKey ?? channelId;
-  const previousDraftKeyRef = React.useRef<string | null>(null);
   const effectiveDraftKeyRef = React.useRef(effectiveDraftKey);
   effectiveDraftKeyRef.current = effectiveDraftKey;
   // Snapshot composer state before edit mode so cancel can restore it.
@@ -190,6 +193,38 @@ function MessageComposerImpl({
   const internalMedia = useMediaUpload();
   const media = mediaController ?? internalMedia;
   const ownsDropZone = mediaController === undefined;
+
+  // Draft-persist lifecycle: restore/clear content + imeta + spoilered urls on
+  // key change, and persist the outgoing draft in the cleanup. The StrictMode
+  // fix lives inside this hook — see useDraftPersistSnapshot.ts.
+  useDraftPersistLifecycle({
+    effectiveDraftKey,
+    channelId,
+    loadDraft: drafts.loadDraft,
+    persistDraft: drafts.persistDraft,
+    livePendingImeta: media.pendingImeta,
+    setPendingImeta: media.setPendingImeta,
+    setContent: (content) => {
+      setComposerContent(content);
+      richText.setContent(content);
+    },
+    clearContent: () => {
+      setComposerContent("");
+      richText.clearContent();
+    },
+    setSpoileredAttachmentUrls,
+    spoileredAttachmentUrlsRef,
+    syncComposerContentFromEditor,
+  });
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
+  React.useEffect(() => {
+    media.setUploadState({ status: "idle" });
+    setIsEmojiPickerOpen(false);
+    mentions.clearMentions();
+    channelLinks.clearChannels();
+    emojiAutocomplete.clearEmojis();
+  }, [effectiveDraftKey]);
 
   const disabledRef = React.useRef(disabled);
   const isSendingRef = React.useRef(isSending);
@@ -297,40 +332,6 @@ function MessageComposerImpl({
     setPendingImeta: media.setPendingImeta,
     setSpoileredAttachmentUrls,
   });
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
-  React.useEffect(() => {
-    const prevKey = previousDraftKeyRef.current;
-    if (prevKey) {
-      drafts.persistDraft(prevKey, syncComposerContentFromEditor());
-    }
-    previousDraftKeyRef.current = effectiveDraftKey;
-
-    const saved = effectiveDraftKey
-      ? drafts.loadDraft(effectiveDraftKey)
-      : undefined;
-    if (saved) {
-      setComposerContent(saved.content);
-      richText.setContent(saved.content);
-    } else {
-      setComposerContent("");
-      richText.clearContent();
-    }
-
-    media.setPendingImeta([]);
-    setSpoileredAttachmentUrls(new Set());
-    media.setUploadState({ status: "idle" });
-    setIsEmojiPickerOpen(false);
-    mentions.clearMentions();
-    channelLinks.clearChannels();
-    emojiAutocomplete.clearEmojis();
-
-    return () => {
-      if (effectiveDraftKey) {
-        drafts.persistDraft(effectiveDraftKey, syncComposerContentFromEditor());
-      }
-    };
-  }, [effectiveDraftKey]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger
   React.useEffect(() => {
@@ -600,7 +601,15 @@ function MessageComposerImpl({
       capturedChannelId: channelId,
       capturedThreadContext,
       pendingImeta: currentPendingImeta,
-      sentDraftKey: effectiveDraftKeyRef.current,
+      // resolveSentDraftKey checks at submit time (synchronously, before any
+      // await) whether a draft was actually persisted. If not — fast/
+      // never-persisted send — it returns null so no sent record is written.
+      // The function is exported and tested directly in
+      // MessageComposerDraftPredicate.test.mjs.
+      sentDraftKey: resolveSentDraftKey(
+        effectiveDraftKeyRef.current,
+        drafts.loadDraft,
+      ),
       spoileredAttachmentUrls,
       trimmed,
     });
@@ -608,6 +617,7 @@ function MessageComposerImpl({
     channelId,
     channelLinks.clearChannels,
     customEmoji,
+    drafts.loadDraft,
     emojiAutocomplete.clearEmojis,
     media.pendingImetaRef,
     media.setPendingImeta,

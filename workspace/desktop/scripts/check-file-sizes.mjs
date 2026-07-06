@@ -171,6 +171,14 @@ const overrides = new Map([
   // +3: provider tri-state applied in update_managed_agent handler
   // (if let Some(provider_update) = input.provider { record.provider = provider_update; }).
   ["src-tauri/src/commands/agent_models.rs", 1071],
+  // draft-persistence predicate: submit-time `loadDraft` check + inline comment
+  // + deps-array entry in submitMessage closes the never-persisted-boundary
+  // defect (Thufir Pass-3 finding). Load-bearing correctness fix; queued to
+  // split MessageComposer into submit/edit/media sub-modules.
+  // +18: pendingImetaForPersistRef (local snapshot ref) + synchronous restore
+  // path writes in the draft-key effect body, fixing the image-drop bug on
+  // top-level nav switch (StrictMode simulate-unmount race on remount).
+  ["src/features/messages/ui/MessageComposer.tsx", 1021],
 ]);
 
 await runFileSizeCheck({
