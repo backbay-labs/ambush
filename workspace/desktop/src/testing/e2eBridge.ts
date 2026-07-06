@@ -197,6 +197,9 @@ type RawProfile = {
   nip05_handle: string | null;
   owner_pubkey: string | null;
   is_agent?: boolean;
+  /** Mirrors the Rust `has_profile_event` flag: true when a real kind:0 event
+   * backed this profile, false for the synthesized empty fallback. */
+  has_profile_event: boolean;
 };
 
 type RawUserProfileSummary = {
@@ -1594,6 +1597,7 @@ function resetMockManagedAgents(config?: E2eConfig) {
       nip05_handle: null,
       owner_pubkey: MOCK_IDENTITY_PUBKEY,
       is_agent: true,
+      has_profile_event: true,
     });
     for (const channel of mockChannels) {
       const isSeedChannel =
@@ -1777,6 +1781,7 @@ function seedMockSearchProfiles(config?: E2eConfig) {
       nip05_handle: seed.nip05Handle ?? null,
       owner_pubkey: seed.ownerPubkey ?? null,
       is_agent: seed.isAgent ?? false,
+      has_profile_event: true,
     };
     mockProfiles.set(pubkey, profile);
     applyMockDisplayName(pubkey, seed.displayName);
@@ -1805,6 +1810,7 @@ function getMockProfileByPubkey(pubkey: string): RawProfile | null {
     nip05_handle: null,
     owner_pubkey: null,
     is_agent: mockAgentPubkeys.has(normalizedPubkey),
+    has_profile_event: true,
   };
 }
 
@@ -2515,8 +2521,14 @@ const mockProfiles = new Map<string, RawProfile>([
       nip05_handle: null,
       owner_pubkey: null,
       is_agent: false,
+      has_profile_event: true,
     },
   ],
+  // alice, bob, and charlie are intentionally NOT seeded here — they are
+  // covered by mockDisplayNames + mockAgentPubkeys and synthesised on demand
+  // by getMockProfileByPubkey. Static seeds would cause ensureMockProfile to
+  // return has_profile_event:true when alice/bob/charlie are used as the
+  // active first-run identity, incorrectly skipping onboarding page 1.
   [
     PROFILE_ONLY_AGENT_PUBKEY,
     {
@@ -2527,6 +2539,7 @@ const mockProfiles = new Map<string, RawProfile>([
       nip05_handle: null,
       owner_pubkey: MOCK_IDENTITY_PUBKEY,
       is_agent: true,
+      has_profile_event: true,
     },
   ],
   [
@@ -2539,6 +2552,7 @@ const mockProfiles = new Map<string, RawProfile>([
       nip05_handle: null,
       owner_pubkey: MOCK_IDENTITY_PUBKEY,
       is_agent: true,
+      has_profile_event: true,
     },
   ],
 ]);
@@ -2666,6 +2680,10 @@ function importMockIdentity(nsec: string) {
       about: null,
       nip05_handle: null,
       owner_pubkey: null,
+      // A non-empty username means this identity is registered in
+      // mockDisplayNames — it has a real mock relay profile (kind:0).
+      // A truly new identity (no username) has no event yet.
+      has_profile_event: username.length > 0,
     });
   }
 
@@ -2706,13 +2724,18 @@ function ensureMockProfile(config: E2eConfig | undefined): RawProfile {
     return existing;
   }
 
+  const displayName = getMockMemberDisplayName(config);
   const profile = {
     pubkey,
-    display_name: getMockMemberDisplayName(config),
+    display_name: displayName,
     avatar_url: null,
     about: null,
     nip05_handle: null,
     owner_pubkey: null,
+    // Synthesised fallback: no kind:0 event exists on the relay for this
+    // identity. Always false regardless of display name so the onboarding
+    // gate cannot mistake a blank first-run identity for a returning user.
+    has_profile_event: false,
   };
   mockProfiles.set(pubkey, profile);
   return profile;
@@ -4557,6 +4580,7 @@ async function handleGetProfile(config: E2eConfig | undefined) {
       avatar_url: null,
       nip05_handle: null,
       owner_pubkey: null,
+      has_profile_event: false,
     };
   }
   const content = JSON.parse(events[0].content ?? "{}");
@@ -4567,6 +4591,7 @@ async function handleGetProfile(config: E2eConfig | undefined) {
     avatar_url: content.picture ?? null,
     nip05_handle: content.nip05 ?? null,
     owner_pubkey: null,
+    has_profile_event: true,
   };
 }
 
@@ -4651,6 +4676,7 @@ async function handleUpdateProfile(
     avatar_url: updated.picture ?? null,
     nip05_handle: updated.nip05 ?? null,
     owner_pubkey: null,
+    has_profile_event: true,
   };
 }
 
@@ -4683,6 +4709,7 @@ async function handleGetUserProfile(
       avatar_url: null,
       nip05_handle: null,
       owner_pubkey: null,
+      has_profile_event: false,
     };
   }
   const content = JSON.parse(events[0].content ?? "{}");
@@ -4693,6 +4720,7 @@ async function handleGetUserProfile(
     avatar_url: content.picture ?? null,
     nip05_handle: content.nip05 ?? null,
     owner_pubkey: null,
+    has_profile_event: true,
   };
 }
 
@@ -6589,6 +6617,7 @@ async function handleCreateManagedAgent(
     nip05_handle: null,
     owner_pubkey: MOCK_IDENTITY_PUBKEY,
     is_agent: true,
+    has_profile_event: true,
   });
   syncMockRelayAgentsFromManagedAgents();
 
