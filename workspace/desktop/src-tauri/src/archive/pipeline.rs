@@ -124,7 +124,15 @@ pub(super) fn plan_archive(
             continue;
         }
 
-        if cand.matched_scope.scope_type.is_ephemeral() {
+        // owner_p scope splits by kind:
+        //   kind 24200 (observer frames) → ephemeral path (relay never stores them).
+        //   kind 44200 (turn metrics)    → persistent path (relay stores, #p-gated).
+        //   Any other kind under owner_p follows the same ephemeral path as 24200
+        //   (conservative default for unknowns).
+        let is_ephemeral = cand.matched_scope.scope_type.is_ephemeral()
+            && raw_kind != super::KIND_AGENT_TURN_METRIC as u64;
+
+        if is_ephemeral {
             ephemeral.push(Parsed {
                 event,
                 raw_json: cand.raw_event_json,
@@ -188,6 +196,11 @@ pub(super) fn plan_archive(
                 "#e":    [&scope_value],
                 "kinds": allowed_kinds,
             }),
+            "owner_p" => serde_json::json!({
+                "ids":   ids,
+                "#p":    [&scope_value],
+                "kinds": allowed_kinds,
+            }),
             _ => {
                 pre_dropped += group.len() as u32;
                 continue;
@@ -249,6 +262,7 @@ pub(super) fn commit_archive(
     pre_dropped: u32,
     identity_pk: &str,
     relay_url: &str,
+    owner_keys: &nostr::Keys,
     now: i64,
     conn: &Connection,
 ) -> Result<ArchiveBatchResult, String> {
@@ -257,16 +271,19 @@ pub(super) fn commit_archive(
 
     // Collect writes; count drops first, then execute inside a single
     // transaction so event and scope rows are always committed atomically.
-    struct WriteRow<'a> {
+    //
+    // raw_json is owned so kind-44200 rows can store decrypted plaintext
+    // instead of the original NIP-44 ciphertext.
+    struct WriteRow {
         eid: String,
         kind: i64,
         pubkey: String,
         created_at: i64,
-        raw_json: &'a str,
-        scope_type: &'a str,
-        scope_value: &'a str,
+        raw_json: String,
+        scope_type: String,
+        scope_value: String,
     }
-    let mut writes: Vec<WriteRow<'_>> = Vec::new();
+    let mut writes: Vec<WriteRow> = Vec::new();
 
     // ── Persistent path ──────────────────────────────────────────────────────
     for result in &bucket_results {
@@ -293,7 +310,33 @@ pub(super) fn commit_archive(
                 continue;
             }
 
-            // The relay returning this event for {ids, #h/#e, kinds} IS the
+            // For kind-44200 (agent turn metrics): decrypt at ingest and store
+            // the plaintext payload JSON so token-usage calculators can read
+            // the archive without needing the owner key.  Fail-closed: if
+            // decrypt fails for any reason, drop the event — never store
+            // ciphertext or partial output.
+            let stored_json =
+                if p.event.kind.as_u16() as u64 == super::KIND_AGENT_TURN_METRIC as u64 {
+                    match buzz_core_pkg::agent_turn_metric::decrypt_agent_turn_metric(
+                        owner_keys, &p.event,
+                    ) {
+                        Ok(payload) => match serde_json::to_string(&payload) {
+                            Ok(json) => json,
+                            Err(_) => {
+                                dropped += 1;
+                                continue;
+                            }
+                        },
+                        Err(_) => {
+                            dropped += 1;
+                            continue;
+                        }
+                    }
+                } else {
+                    p.raw_json.clone()
+                };
+
+            // The relay returning this event for {ids, #h/#e/#p, kinds} IS the
             // proof of scope membership. Use scope_value directly; no local
             // tag re-derivation (which would incorrectly drop h-less events
             // matched via the relay's StoredEvent.channel_id fallback).
@@ -302,9 +345,9 @@ pub(super) fn commit_archive(
                 kind: p.event.kind.as_u16() as i64,
                 pubkey: p.event.pubkey.to_hex(),
                 created_at: p.event.created_at.as_secs() as i64,
-                raw_json: &p.raw_json,
-                scope_type: &result.scope_type_str,
-                scope_value: &result.scope_value,
+                raw_json: stored_json,
+                scope_type: result.scope_type_str.clone(),
+                scope_value: result.scope_value.clone(),
             });
         }
     }
@@ -343,7 +386,7 @@ pub(super) fn commit_archive(
                 w.kind,
                 &w.pubkey,
                 w.created_at,
-                w.raw_json,
+                &w.raw_json,
                 now,
             )?;
             store::upsert_event_scope(
@@ -351,8 +394,8 @@ pub(super) fn commit_archive(
                 identity_pk,
                 relay_url,
                 &w.eid,
-                w.scope_type,
-                w.scope_value,
+                &w.scope_type,
+                &w.scope_value,
                 now,
             )?;
             persisted += 1;

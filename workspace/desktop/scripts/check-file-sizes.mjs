@@ -69,7 +69,25 @@ const overrides = new Map([
   // E2E test-depth hardening added the owner_p content round-trip assert and
   // two empty-table drop asserts (~24 lines). Queued to split the test module
   // into archive/mod_tests.rs in a follow-up.
-  ["src-tauri/src/archive/mod.rs", 1465],
+  // agent-metric-archive PR added 4 new unit tests (owner_p+44200 routing,
+  // decrypt-success plaintext storage, decrypt-fail-closed, 24200 still
+  // ephemeral) + run_batch_sync_with_keys helper (~175 lines). Same test-growth
+  // category as above. Still queued to split.
+  // merge_save_subscription_kinds command + owner_p-kinds TOCTOU fix adds ~30
+  // lines. Atomic merge to close the concurrent-seed race. Still queued to split.
+  // IMMEDIATE-tx fix: BEGIN IMMEDIATE replaces DEFERRED unchecked_transaction
+  // in merge_owner_p_kinds comment block (~5 lines). Still queued to split.
+  // doc-comment: mixed row-shape invariant on read_archived_events (~5 lines).
+  ["src-tauri/src/archive/mod.rs", 1705],
+  // archive/store.rs: merge_owner_p_kinds fn (read+union+upsert under a single
+  // SQLite tx) + 4 unit tests (create-when-none, adds-kind, idempotent,
+  // concurrent-interleave). Load-bearing TOCTOU fix for the owner_p shared row.
+  // Queued to split test module into store_tests.rs in a follow-up.
+  // IMMEDIATE-tx fix: replaces mislabeled sequential test with a real
+  // two-connection WAL regression test (tempfile + std::thread + Barrier,
+  // ~85 lines). The new test exercises the actual concurrent write path and
+  // fails fast if IMMEDIATE guard is removed. Still queued to split.
+  ["src-tauri/src/archive/store.rs", 1179],
   ["src-tauri/src/commands/agents.rs", 1437],
   // #1418 read-path fix: get_thread_replies' blocker fix (shared TIMELINE_KINDS
   // const + build_thread_replies_filter helper, mirroring the channel sibling so

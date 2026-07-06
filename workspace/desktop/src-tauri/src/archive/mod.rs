@@ -5,9 +5,11 @@
 //!
 //! Two access proof paths, chosen by event kind:
 //!
-//! **Persistent scopes** (`channel_h`, `referenced_e`): the relay is the
-//! source of truth. Candidates are grouped and re-queried via a batched
-//! authed `/query`; only events the relay returns are inserted.
+//! **Persistent scopes** (`channel_h`, `referenced_e`, and `owner_p`+44200):
+//! the relay is the source of truth. Candidates are grouped and re-queried via
+//! a batched authed `/query`; only events the relay returns are inserted.
+//! For kind-44200 (agent turn metrics), content is decrypted at ingest and
+//! stored as plaintext JSON — fail-closed (decrypt error → drop).
 //!
 //! **Ephemeral scope** (`owner_p`, kind 24200 observer frames): the relay
 //! never stores these, so `/query` cannot verify them. The relay's REQ-time
@@ -32,6 +34,7 @@ use crate::relay::{query_relay, relay_ws_url_with_override};
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const KIND_AGENT_OBSERVER_FRAME: u16 = 24200;
+const KIND_AGENT_TURN_METRIC: u16 = 44200;
 const OBSERVER_FRAME_TELEMETRY: &str = "telemetry";
 
 // ── DB helpers ───────────────────────────────────────────────────────────────
@@ -143,12 +146,18 @@ pub async fn archive_events(
 
     // ── Phase 3: persist (sync) ──────────────────────────────────────────────
     let conn = open_db()?;
+    let owner_keys = {
+        let keys_guard = state.keys.lock().map_err(|e| e.to_string())?;
+        keys_guard.clone()
+        // guard drops here
+    };
     commit_archive(
         bucket_results,
         plan.ephemeral,
         plan.pre_dropped,
         &identity_pk,
         &relay_url,
+        &owner_keys,
         now,
         &conn,
     )
@@ -375,6 +384,32 @@ async fn probe_event_readable(state: &AppState, event_id: &str) -> Result<(), St
     Ok(())
 }
 
+// ── merge_save_subscription_kinds ────────────────────────────────────────────
+
+/// Atomically merge `kind` into the `owner_p` save subscription for the
+/// current identity + relay.
+///
+/// Reads the existing `kinds` array, unions in `kind`, and writes back — all
+/// inside a single SQLite transaction. This prevents the TOCTOU race where two
+/// concurrent seed hooks (observer seed + metric seed) each read an empty row
+/// and the last writer clobbers the first.
+///
+/// Called by both `useObserverArchiveSeed` (kind 24200) and
+/// `useAgentMetricArchiveSeed` (kind 44200) instead of the former
+/// list → merge-in-TS → create pattern.
+#[tauri::command]
+pub fn merge_save_subscription_kinds(state: State<'_, AppState>, kind: u32) -> Result<(), String> {
+    if kind > u32::from(u16::MAX) {
+        return Err(format!("kind {kind} is out of the valid range 0..=65535"));
+    }
+
+    let identity_pk = identity_pubkey(&state)?;
+    let relay_url = relay_ws_url_with_override(&state);
+    let now = now_secs();
+    let conn = open_db()?;
+    store::merge_owner_p_kinds(&conn, &identity_pk, &relay_url, &identity_pk, kind, now)
+}
+
 // ── list_save_subscriptions ──────────────────────────────────────────────────
 
 /// List all save subscriptions for the current identity + relay.
@@ -429,6 +464,11 @@ const DEFAULT_READ_LIMIT: i64 = 50;
 ///
 /// `kinds` is an optional filter; an empty array means "no kinds matched"
 /// (not "all kinds") — callers should pass `null`/`None` when they want all.
+///
+/// Note: stored row payloads are not uniform — kind 44200 rows store the raw
+/// metric payload JSON, while all other kinds store full Nostr Event JSON. A
+/// caller doing `Event::from_json` on an unfiltered read must filter by kind
+/// first (today's only reader filters `kinds: [24200]`).
 #[tauri::command]
 pub fn read_archived_events(
     state: State<'_, AppState>,
@@ -520,6 +560,26 @@ mod tests {
         conn: &Connection,
         fake_relay_events: Vec<Event>,
     ) -> ArchiveBatchResult {
+        let owner_keys = Keys::generate();
+        run_batch_sync_with_keys(
+            candidates,
+            identity_pk,
+            relay_url,
+            conn,
+            fake_relay_events,
+            &owner_keys,
+        )
+    }
+
+    /// Like `run_batch_sync` but with a specific owner `Keys` for decrypt.
+    fn run_batch_sync_with_keys(
+        candidates: Vec<ArchiveCandidate>,
+        identity_pk: &str,
+        relay_url: &str,
+        conn: &Connection,
+        fake_relay_events: Vec<Event>,
+        owner_keys: &Keys,
+    ) -> ArchiveBatchResult {
         let plan = plan_archive(candidates, identity_pk, relay_url, conn).unwrap();
 
         // Synthesize BucketWithResult from the fake relay response.
@@ -544,6 +604,7 @@ mod tests {
             plan.pre_dropped,
             identity_pk,
             relay_url,
+            owner_keys,
             0,
             conn,
         )
@@ -1064,6 +1125,183 @@ mod tests {
         );
     }
 
+    // ── Kind-44200 agent-turn-metric archive tests ───────────────────────────
+
+    fn make_turn_metric_event(owner_keys: &Keys, agent_keys: &Keys) -> Event {
+        use buzz_core_pkg::agent_turn_metric::{
+            encrypt_agent_turn_metric, AgentTurnMetricPayload, TokenCounts,
+        };
+        let owner_pk = owner_keys.public_key().to_hex();
+        let payload = AgentTurnMetricPayload {
+            harness: "test-harness".to_string(),
+            model: Some("test-model".to_string()),
+            channel_id: None,
+            session_id: Some("sess-1".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            turn_seq: Some(1),
+            timestamp: "2026-07-01T00:00:00Z".to_string(),
+            turn: Some(TokenCounts {
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                total_tokens: Some(150),
+                cost_usd: Some(0.001),
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+            }),
+            cumulative: None,
+            delta_reliable: true,
+            stop_reason: None,
+        };
+        let ciphertext =
+            encrypt_agent_turn_metric(agent_keys, &owner_keys.public_key(), &payload).unwrap();
+        let tags = vec![
+            Tag::parse(["p", &owner_pk]).unwrap(),
+            Tag::parse(["agent", &agent_keys.public_key().to_hex()]).unwrap(),
+        ];
+        EventBuilder::new(Kind::Custom(44200), &ciphertext)
+            .tags(tags)
+            .sign_with_keys(agent_keys)
+            .unwrap()
+    }
+
+    /// A kind-44200 event with `owner_p` scope must route to the persistent
+    /// (relay-query) path, NOT the ephemeral path.
+    #[test]
+    fn test_owner_p_44200_routes_to_persistent_path() {
+        let conn = in_memory();
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let owner_pk = owner_keys.public_key().to_hex();
+        let relay_url = "wss://relay.example";
+        // Subscription for kind 44200 under owner_p.
+        add_sub(&conn, &owner_pk, relay_url, "owner_p", &owner_pk, "[44200]");
+
+        let ev = make_turn_metric_event(&owner_keys, &agent_keys);
+        let cand = candidate(&ev, ScopeType::OwnerP, &owner_pk);
+
+        let plan = plan_archive(vec![cand], &owner_pk, relay_url, &conn).unwrap();
+
+        // Must be in persistent buckets, NOT ephemeral list.
+        assert_eq!(plan.buckets.len(), 1, "kind-44200 must land in a bucket");
+        assert_eq!(
+            plan.ephemeral.len(),
+            0,
+            "kind-44200 must NOT be on the ephemeral path"
+        );
+        assert_eq!(
+            plan.buckets[0].scope_type_str, "owner_p",
+            "bucket scope_type must be owner_p"
+        );
+    }
+
+    /// A kind-24200 event with `owner_p` scope must still route to ephemeral.
+    #[test]
+    fn test_owner_p_24200_still_routes_to_ephemeral() {
+        let conn = in_memory();
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let owner_pk = owner_keys.public_key().to_hex();
+        let relay_url = "wss://relay.example";
+        add_sub(&conn, &owner_pk, relay_url, "owner_p", &owner_pk, "[24200]");
+
+        let ev = make_observer_frame(&owner_keys, &agent_keys, OBSERVER_FRAME_TELEMETRY);
+        let cand = candidate(&ev, ScopeType::OwnerP, &owner_pk);
+
+        let plan = plan_archive(vec![cand], &owner_pk, relay_url, &conn).unwrap();
+
+        assert_eq!(
+            plan.buckets.len(),
+            0,
+            "kind-24200 must NOT land in a bucket"
+        );
+        assert_eq!(
+            plan.ephemeral.len(),
+            1,
+            "kind-24200 must be on the ephemeral path"
+        );
+    }
+
+    /// Decrypt success: plaintext payload JSON is stored, not raw ciphertext.
+    #[test]
+    fn test_turn_metric_decrypt_success_stores_plaintext() {
+        let conn = in_memory();
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let owner_pk = owner_keys.public_key().to_hex();
+        let relay_url = "wss://relay.example";
+        add_sub(&conn, &owner_pk, relay_url, "owner_p", &owner_pk, "[44200]");
+
+        let ev = make_turn_metric_event(&owner_keys, &agent_keys);
+        let cand = candidate(&ev, ScopeType::OwnerP, &owner_pk);
+        let result = run_batch_sync_with_keys(
+            vec![cand],
+            &owner_pk,
+            relay_url,
+            &conn,
+            vec![ev.clone()],
+            &owner_keys,
+        );
+
+        assert_eq!(result.persisted, 1, "event must be persisted");
+        assert_eq!(result.dropped, 0, "no drops on successful decrypt");
+
+        // The stored raw_json must be plaintext JSON, not NIP-44 ciphertext.
+        let raw_json: String = conn
+            .query_row("SELECT raw_json FROM archived_events", [], |r| r.get(0))
+            .unwrap();
+        // Plaintext JSON should be a valid object with "harness" key.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw_json).expect("stored raw_json must be valid JSON");
+        assert_eq!(
+            parsed["harness"], "test-harness",
+            "stored plaintext must decode to AgentTurnMetricPayload"
+        );
+        // Sanity: must NOT be the original NIP-44 ciphertext (which is not JSON).
+        assert_ne!(
+            raw_json, ev.content,
+            "stored content must differ from original ciphertext"
+        );
+    }
+
+    /// Decrypt fail: event is dropped, nothing written to the store (fail-closed).
+    #[test]
+    fn test_turn_metric_decrypt_fail_drops_fail_closed() {
+        let conn = in_memory();
+        let owner_keys = Keys::generate();
+        let wrong_keys = Keys::generate(); // wrong owner key — decrypt will fail
+        let agent_keys = Keys::generate();
+        let owner_pk = owner_keys.public_key().to_hex();
+        let relay_url = "wss://relay.example";
+        // Register subscription under owner_pk so the event passes plan-phase,
+        // but use `wrong_keys` in commit so decrypt fails.
+        add_sub(&conn, &owner_pk, relay_url, "owner_p", &owner_pk, "[44200]");
+
+        let ev = make_turn_metric_event(&owner_keys, &agent_keys);
+        let cand = candidate(&ev, ScopeType::OwnerP, &owner_pk);
+        let result = run_batch_sync_with_keys(
+            vec![cand],
+            &owner_pk,
+            relay_url,
+            &conn,
+            vec![ev.clone()],
+            &wrong_keys, // wrong key → decrypt fails
+        );
+
+        assert_eq!(
+            result.persisted, 0,
+            "decrypt failure must not persist the event"
+        );
+        assert_eq!(result.dropped, 1, "decrypt failure must count as dropped");
+
+        let event_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM archived_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            event_count, 0,
+            "no rows must be written to archived_events on decrypt failure"
+        );
+    }
+
     // ── Real-relay integration tests ──────────────────────────────────────────
     //
     // Gated on `#[cfg(not(target_os = "windows"))]` because `build_app_state()`
@@ -1202,12 +1440,14 @@ mod tests {
 
             // Phase 3: persist (sync). Fresh connection, same file.
             let conn = store::open_archive_db(db_path).expect("open archive db for commit");
+            let owner_keys = state.keys.lock().unwrap().clone();
             commit_archive(
                 bucket_results,
                 plan.ephemeral,
                 plan.pre_dropped,
                 &identity_pk,
                 &relay_url,
+                &owner_keys,
                 0,
                 &conn,
             )

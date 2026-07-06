@@ -9,7 +9,10 @@ import {
   type SaveSubscription,
   type ScopeType,
 } from "@/shared/api/tauriArchive";
-import { KIND_AGENT_OBSERVER_FRAME } from "@/shared/constants/kinds";
+import {
+  KIND_AGENT_OBSERVER_FRAME,
+  KIND_AGENT_TURN_METRIC,
+} from "@/shared/constants/kinds";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { Button } from "@/shared/ui/button";
@@ -21,6 +24,7 @@ import {
 } from "@/features/settings/ui/SettingsOptionGroup";
 import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
 import { setExplicitObserverArchiveChoice } from "../observerArchivePreference";
+import { setExplicitAgentMetricArchiveChoice } from "../agentMetricArchivePreference";
 
 import {
   buildSubscriptionRequest,
@@ -42,6 +46,9 @@ function scopeLabel(
     return channelNameById.get(sub.scopeValue) ?? sub.scopeValue;
   }
   if (sub.scopeType === "owner_p") {
+    if (sub.kinds.includes(KIND_AGENT_TURN_METRIC)) {
+      return "My agents' turn metrics";
+    }
     return "My agent session frames";
   }
   return sub.scopeValue;
@@ -89,6 +96,50 @@ function ObserverArchiveSection({
             data-testid="local-archive-observer-toggle"
             disabled={toggling}
             id="local-archive-observer-toggle"
+            onCheckedChange={onToggle}
+          />
+        </SettingsOptionRow>
+      </SettingsOptionGroup>
+    </div>
+  );
+}
+
+// ── Agent-turn-metric archive section ────────────────────────────────────────
+
+type AgentMetricSectionProps = {
+  enabled: boolean;
+  toggling: boolean;
+  onToggle: (checked: boolean) => void;
+};
+
+function AgentMetricArchiveSection({
+  enabled,
+  toggling,
+  onToggle,
+}: AgentMetricSectionProps) {
+  return (
+    <div className="space-y-3" data-testid="local-archive-agent-metric-section">
+      <h3 className="text-sm font-medium">Agent turn metrics</h3>
+      <SettingsOptionGroup>
+        <SettingsOptionRow>
+          <div className="min-w-0 flex-1">
+            <label
+              className="text-sm font-medium"
+              htmlFor="local-archive-agent-metric-toggle"
+            >
+              Archive my agents' turn metrics
+            </label>
+            <p className="text-sm font-normal text-muted-foreground">
+              Saves kind {KIND_AGENT_TURN_METRIC} turn-metric events addressed
+              to your pubkey. Stored as plaintext in your local archive so
+              token-usage calculators can read them directly.
+            </p>
+          </div>
+          <Switch
+            checked={enabled}
+            data-testid="local-archive-agent-metric-toggle"
+            disabled={toggling}
+            id="local-archive-agent-metric-toggle"
             onCheckedChange={onToggle}
           />
         </SettingsOptionRow>
@@ -331,6 +382,7 @@ export function LocalArchiveSettingsCard() {
   const [deletingKey, setDeletingKey] = React.useState<string | null>(null);
   const [isAddingOpen, setIsAddingOpen] = React.useState(false);
   const [observerToggling, setObserverToggling] = React.useState(false);
+  const [metricToggling, setMetricToggling] = React.useState(false);
 
   const pubkey = identityQuery.data?.pubkey ?? "";
 
@@ -381,24 +433,42 @@ export function LocalArchiveSettingsCard() {
     [reload],
   );
 
-  const observerEnabled = subs.some((s) => s.scopeType === "owner_p");
+  const observerEnabled = subs.some(
+    (s) =>
+      s.scopeType === "owner_p" && s.kinds.includes(KIND_AGENT_OBSERVER_FRAME),
+  );
+  const metricEnabled = subs.some(
+    (s) =>
+      s.scopeType === "owner_p" && s.kinds.includes(KIND_AGENT_TURN_METRIC),
+  );
 
   const handleObserverToggle = React.useCallback(
     async (checked: boolean) => {
       if (!pubkey) return;
       setObserverToggling(true);
       try {
-        if (checked) {
-          await createSaveSubscription("owner_p", pubkey, [
-            KIND_AGENT_OBSERVER_FRAME,
-          ]);
-          setExplicitObserverArchiveChoice(pubkey, true);
-          toast.success("Observer feed archive enabled.");
+        // The owner_p row is keyed by (scope_type, scope_value) — both observer
+        // (24200) and metric (44200) share the same row. Merge kinds atomically:
+        // read current kinds, add or remove 24200, upsert the result.
+        const currentKinds =
+          subs
+            .find((s) => s.scopeType === "owner_p" && s.scopeValue === pubkey)
+            ?.kinds.filter((k) => k !== KIND_AGENT_OBSERVER_FRAME) ?? [];
+        const nextKinds = checked
+          ? [...currentKinds, KIND_AGENT_OBSERVER_FRAME]
+          : currentKinds;
+
+        if (nextKinds.length > 0) {
+          await createSaveSubscription("owner_p", pubkey, nextKinds);
         } else {
           await deleteSaveSubscription("owner_p", pubkey);
-          setExplicitObserverArchiveChoice(pubkey, false);
-          toast.success("Observer feed archive disabled.");
         }
+        setExplicitObserverArchiveChoice(pubkey, checked);
+        toast.success(
+          checked
+            ? "Observer feed archive enabled."
+            : "Observer feed archive disabled.",
+        );
         await reload();
       } catch (err) {
         toast.error(
@@ -410,10 +480,51 @@ export function LocalArchiveSettingsCard() {
         setObserverToggling(false);
       }
     },
-    [pubkey, reload],
+    [pubkey, subs, reload],
   );
 
-  // Non-observer subscriptions shown in the active-subscriptions list.
+  const handleMetricToggle = React.useCallback(
+    async (checked: boolean) => {
+      if (!pubkey) return;
+      setMetricToggling(true);
+      try {
+        // Same row as observer — merge 44200 in or out.
+        const currentKinds =
+          subs
+            .find((s) => s.scopeType === "owner_p" && s.scopeValue === pubkey)
+            ?.kinds.filter((k) => k !== KIND_AGENT_TURN_METRIC) ?? [];
+        const nextKinds = checked
+          ? [...currentKinds, KIND_AGENT_TURN_METRIC]
+          : currentKinds;
+
+        if (nextKinds.length > 0) {
+          await createSaveSubscription("owner_p", pubkey, nextKinds);
+        } else {
+          await deleteSaveSubscription("owner_p", pubkey);
+        }
+        setExplicitAgentMetricArchiveChoice(pubkey, checked);
+        toast.success(
+          checked
+            ? "Agent turn metric archive enabled."
+            : "Agent turn metric archive disabled.",
+        );
+        await reload();
+      } catch (err) {
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : "Failed to update agent metric archive.",
+        );
+      } finally {
+        setMetricToggling(false);
+      }
+    },
+    [pubkey, subs, reload],
+  );
+
+  // Non-owner_p subscriptions shown in the active-subscriptions list.
+  // observer (24200) and metric (44200) owner_p subs each have their own
+  // dedicated section above.
   const channelSubs = subs.filter((s) => s.scopeType !== "owner_p");
 
   return (
@@ -429,6 +540,13 @@ export function LocalArchiveSettingsCard() {
           enabled={observerEnabled}
           onToggle={(checked) => void handleObserverToggle(checked)}
           toggling={observerToggling}
+        />
+
+        {/* Agent-turn-metric archive — dedicated first-class section */}
+        <AgentMetricArchiveSection
+          enabled={metricEnabled}
+          onToggle={(checked) => void handleMetricToggle(checked)}
+          toggling={metricToggling}
         />
 
         {/* Channel subscriptions */}

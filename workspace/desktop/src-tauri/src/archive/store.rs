@@ -195,6 +195,85 @@ pub fn has_save_subscription(
     Ok(count > 0)
 }
 
+/// Atomically merge `new_kind` into the `owner_p` save subscription for the
+/// given identity + relay + scope_value.
+///
+/// Reads the current `kinds` array, unions in `new_kind`, and writes back —
+/// all inside a single `BEGIN IMMEDIATE` SQLite transaction.  `IMMEDIATE`
+/// acquires the write lock at `BEGIN` (before the `SELECT`), so a second
+/// concurrent caller blocks on `busy_timeout` (5000 ms, set by
+/// `open_archive_db`) and then reads the first caller's committed row.  This
+/// guarantees the union is complete; a `DEFERRED` transaction would let two
+/// concurrent callers both read the empty snapshot and produce a
+/// `BUSY_SNAPSHOT` failure on the losing writer.
+///
+/// If no row exists yet it is created with `[new_kind]`. `now` is used as
+/// `created_at` only on insert (the conflict clause never updates it).
+pub fn merge_owner_p_kinds(
+    conn: &Connection,
+    identity_pubkey: &str,
+    relay_url: &str,
+    scope_value: &str,
+    new_kind: u32,
+    now: i64,
+) -> Result<(), String> {
+    // BEGIN IMMEDIATE takes the write lock before the SELECT so concurrent
+    // callers serialize here rather than racing to a BUSY_SNAPSHOT error.
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("merge_owner_p_kinds begin immediate: {e}"))?;
+
+    let result = (|| -> Result<(), String> {
+        // Read the current kinds, if any.
+        let existing_json: Option<String> = conn
+            .query_row(
+                "SELECT kinds FROM save_subscriptions
+                 WHERE identity_pubkey = ?1
+                   AND relay_url       = ?2
+                   AND scope_type      = 'owner_p'
+                   AND scope_value     = ?3",
+                params![identity_pubkey, relay_url, scope_value],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| format!("merge_owner_p_kinds read: {e}"))?;
+
+        // Parse, union, re-serialize.
+        let mut kinds: Vec<u32> = match existing_json {
+            Some(ref json) => serde_json::from_str(json).unwrap_or_default(),
+            None => vec![],
+        };
+        if !kinds.contains(&new_kind) {
+            kinds.push(new_kind);
+        }
+        let kinds_json = serde_json::to_string(&kinds)
+            .map_err(|e| format!("merge_owner_p_kinds serialize: {e}"))?;
+
+        // Upsert — INSERT on first call, UPDATE kinds on subsequent.
+        conn.execute(
+            "INSERT INTO save_subscriptions
+                 (identity_pubkey, relay_url, scope_type, scope_value, kinds, created_at)
+             VALUES (?1, ?2, 'owner_p', ?3, ?4, ?5)
+             ON CONFLICT (identity_pubkey, relay_url, scope_type, scope_value)
+             DO UPDATE SET kinds = excluded.kinds",
+            params![identity_pubkey, relay_url, scope_value, kinds_json, now],
+        )
+        .map_err(|e| format!("merge_owner_p_kinds upsert: {e}"))?;
+
+        Ok(())
+    })();
+
+    if result.is_ok() {
+        conn.execute_batch("COMMIT")
+            .map_err(|e| format!("merge_owner_p_kinds commit: {e}"))?;
+    } else {
+        // Best-effort rollback; ignore the rollback error to surface the
+        // original error to the caller.
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+
+    result
+}
+
 /// Return the `kinds` JSON string for a matching save subscription, or `None`
 /// if no subscription exists.
 pub fn get_subscription_kinds(
@@ -522,6 +601,130 @@ mod tests {
         upsert_save_subscription(&conn, "pk", "wss://r", "owner_p", "mypk", "[24200]", 1).unwrap();
         assert!(has_save_subscription(&conn, "pk", "wss://r", "owner_p", "mypk").unwrap());
         assert!(!has_save_subscription(&conn, "pk", "wss://r", "owner_p", "other").unwrap());
+    }
+
+    // ── merge_owner_p_kinds ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_merge_owner_p_kinds_creates_row_when_none_exists() {
+        let conn = in_memory();
+        merge_owner_p_kinds(&conn, "pk", "wss://r", "mypk", 24200, 1).unwrap();
+        let subs = list_save_subscriptions(&conn, "pk", "wss://r").unwrap();
+        assert_eq!(subs.len(), 1);
+        let kinds: Vec<u32> = serde_json::from_str(&subs[0].kinds).unwrap();
+        assert_eq!(kinds, [24200]);
+    }
+
+    #[test]
+    fn test_merge_owner_p_kinds_adds_new_kind_to_existing_row() {
+        let conn = in_memory();
+        // Seed with 24200 first.
+        merge_owner_p_kinds(&conn, "pk", "wss://r", "mypk", 24200, 1).unwrap();
+        // Now merge 44200 in — must produce [24200, 44200].
+        merge_owner_p_kinds(&conn, "pk", "wss://r", "mypk", 44200, 2).unwrap();
+        let subs = list_save_subscriptions(&conn, "pk", "wss://r").unwrap();
+        assert_eq!(subs.len(), 1);
+        let kinds: Vec<u32> = serde_json::from_str(&subs[0].kinds).unwrap();
+        assert!(kinds.contains(&24200), "must still contain 24200");
+        assert!(kinds.contains(&44200), "must now contain 44200");
+        assert_eq!(kinds.len(), 2, "no duplicates");
+    }
+
+    #[test]
+    fn test_merge_owner_p_kinds_idempotent_on_existing_kind() {
+        let conn = in_memory();
+        merge_owner_p_kinds(&conn, "pk", "wss://r", "mypk", 44200, 1).unwrap();
+        merge_owner_p_kinds(&conn, "pk", "wss://r", "mypk", 44200, 2).unwrap();
+        let subs = list_save_subscriptions(&conn, "pk", "wss://r").unwrap();
+        let kinds: Vec<u32> = serde_json::from_str(&subs[0].kinds).unwrap();
+        assert_eq!(kinds, [44200], "no duplicates after idempotent call");
+    }
+
+    /// Two-connection WAL regression test for the BEGIN IMMEDIATE fix.
+    ///
+    /// Opens TWO separate connections to the same WAL file (mirroring the
+    /// real scenario where the observer-archive seed hook and the
+    /// metric-archive seed hook each open their own connection via
+    /// `open_archive_db`).  Both threads call `merge_owner_p_kinds`
+    /// concurrently from an empty row.  With `BEGIN IMMEDIATE` the losing
+    /// thread blocks on `busy_timeout` until the winner commits, then
+    /// reads the committed row and merges its kind in.  Both calls must
+    /// resolve `Ok` and the final row must contain exactly `[24200, 44200]`.
+    ///
+    /// A `DEFERRED` transaction would produce `SQLITE_BUSY_SNAPSHOT` on the
+    /// loser (not retried by busy_timeout), causing one kind to be silently
+    /// dropped.  This test fails in <10 ms if the IMMEDIATE guard is removed.
+    #[test]
+    fn test_merge_owner_p_kinds_two_conn_wal_both_kinds_survive() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        use tempfile::NamedTempFile;
+
+        // A real file DB is required for WAL mode (in-memory dbs don't support
+        // shared-cache WAL across multiple connections in the same process).
+        let db_file = NamedTempFile::new().unwrap();
+        let db_path = db_file.path().to_path_buf();
+
+        // Initialise schema on the file DB via conn-A so both threads see it.
+        let init_conn = open_archive_db(&db_path).unwrap();
+        drop(init_conn);
+
+        // Barrier ensures both threads are inside `merge_owner_p_kinds` before
+        // either one issues `BEGIN IMMEDIATE`, maximising the race window.
+        let barrier = Arc::new(Barrier::new(2));
+
+        let path_a = db_path.clone();
+        let path_b = db_path.clone();
+        let bar_a = Arc::clone(&barrier);
+        let bar_b = Arc::clone(&barrier);
+
+        let handle_observer = thread::spawn(move || {
+            let conn = open_archive_db(&path_a).unwrap();
+            bar_a.wait(); // sync: both threads ready
+            merge_owner_p_kinds(&conn, "pk", "wss://r", "mypk", 24200, 1)
+        });
+
+        let handle_metric = thread::spawn(move || {
+            let conn = open_archive_db(&path_b).unwrap();
+            bar_b.wait(); // sync: both threads ready
+            merge_owner_p_kinds(&conn, "pk", "wss://r", "mypk", 44200, 2)
+        });
+
+        let res_observer = handle_observer.join().expect("observer thread panicked");
+        let res_metric = handle_metric.join().expect("metric thread panicked");
+
+        assert!(
+            res_observer.is_ok(),
+            "observer seed must succeed: {:?}",
+            res_observer
+        );
+        assert!(
+            res_metric.is_ok(),
+            "metric seed must succeed: {:?}",
+            res_metric
+        );
+
+        // Verify the final row contains both kinds.
+        let verify_conn = open_archive_db(&db_path).unwrap();
+        let subs = list_save_subscriptions(&verify_conn, "pk", "wss://r").unwrap();
+        assert_eq!(subs.len(), 1, "exactly one owner_p row");
+        let kinds: Vec<u32> = serde_json::from_str(&subs[0].kinds).unwrap();
+        assert!(
+            kinds.contains(&24200),
+            "observer kind 24200 must survive concurrent metric seed; got {:?}",
+            kinds
+        );
+        assert!(
+            kinds.contains(&44200),
+            "metric kind 44200 must be present after concurrent seed; got {:?}",
+            kinds
+        );
+        assert_eq!(
+            kinds.len(),
+            2,
+            "exactly two kinds, no duplicates; got {:?}",
+            kinds
+        );
     }
 
     // ── Archived events ──────────────────────────────────────────────────────

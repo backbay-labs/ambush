@@ -1,60 +1,60 @@
 /**
- * First-run seeding for observer-feed archive.
+ * First-run seeding for agent-turn-metric archive.
  *
- * When an internal build has `BUZZ_BUILD_OBSERVER_ARCHIVE_DEFAULT` set and the
- * current identity has not yet made an explicit choice, this hook
- * auto-creates an `owner_p` save subscription including kind 24200 observer
- * frames, scoped to the current identity's pubkey.
+ * When an internal build has `BUZZ_BUILD_AGENT_METRIC_ARCHIVE_DEFAULT` set and
+ * the current identity has not yet made an explicit choice, this hook
+ * auto-creates an `owner_p` save subscription including kind 44200 agent turn
+ * metrics, scoped to the current identity's pubkey.
  *
  * Uses `mergeSaveSubscriptionKinds` (atomic DB-side merge) so a concurrently
- * running metric seed (44200) cannot clobber this kind — the union happens
+ * running observer seed (24200) cannot clobber this kind — the union happens
  * under a single SQLite transaction regardless of await ordering.
  *
- * OSS builds return `false` from `observer_archive_default_enabled` → no-op.
- * After any explicit user action (seeding or opt-out), the localStorage flag
- * prevents re-seeding on subsequent starts.
+ * OSS builds return `false` from `agent_metric_archive_default_enabled` →
+ * no-op. After any explicit user action (seeding or opt-out), the localStorage
+ * flag prevents re-seeding on subsequent starts.
  */
 
 import * as React from "react";
 
-import { KIND_AGENT_OBSERVER_FRAME } from "@/shared/constants/kinds";
+import { KIND_AGENT_TURN_METRIC } from "@/shared/constants/kinds";
 import {
   mergeSaveSubscriptionKinds,
-  observerArchiveDefaultEnabled,
+  agentMetricArchiveDefaultEnabled,
 } from "@/shared/api/tauriArchive";
 import {
-  hasExplicitObserverArchiveChoice,
-  setExplicitObserverArchiveChoice,
-} from "./observerArchivePreference";
+  hasExplicitAgentMetricArchiveChoice,
+  setExplicitAgentMetricArchiveChoice,
+} from "./agentMetricArchivePreference";
 
 /**
  * Deps interface for testing.  Production callers pass nothing.
  */
-export interface ObserverArchiveSeedDeps {
-  observerArchiveDefaultEnabled: () => Promise<boolean>;
+export interface AgentMetricArchiveSeedDeps {
+  agentMetricArchiveDefaultEnabled: () => Promise<boolean>;
   mergeSaveSubscriptionKinds: (kind: number) => Promise<void>;
   hasExplicitChoice: (pubkey: string) => boolean;
   setExplicitChoice: (pubkey: string, enabled: boolean) => void;
 }
 
-const defaultDeps: ObserverArchiveSeedDeps = {
-  observerArchiveDefaultEnabled,
+const defaultDeps: AgentMetricArchiveSeedDeps = {
+  agentMetricArchiveDefaultEnabled,
   mergeSaveSubscriptionKinds,
-  hasExplicitChoice: hasExplicitObserverArchiveChoice,
-  setExplicitChoice: setExplicitObserverArchiveChoice,
+  hasExplicitChoice: hasExplicitAgentMetricArchiveChoice,
+  setExplicitChoice: setExplicitAgentMetricArchiveChoice,
 };
 
 /**
- * Seed the observer-feed archive subscription for `pubkey` once per identity
- * per device on internal builds.
+ * Seed the agent-turn-metric archive subscription for `pubkey` once per
+ * identity per device on internal builds.
  *
  * @param pubkey - current identity pubkey.  When undefined (identity not yet
  *   loaded), the hook waits until it becomes available.
  * @param deps - optional dep-injection for tests.
  */
-export function useObserverArchiveSeed(
+export function useAgentMetricArchiveSeed(
   pubkey: string | undefined,
-  deps: ObserverArchiveSeedDeps = defaultDeps,
+  deps: AgentMetricArchiveSeedDeps = defaultDeps,
 ): void {
   React.useEffect(() => {
     if (!pubkey) return;
@@ -71,9 +71,9 @@ export function useObserverArchiveSeed(
 
       let defaultOn: boolean;
       try {
-        defaultOn = await deps.observerArchiveDefaultEnabled();
+        defaultOn = await deps.agentMetricArchiveDefaultEnabled();
       } catch (err) {
-        console.warn("[useObserverArchiveSeed] flag check failed:", err);
+        console.warn("[useAgentMetricArchiveSeed] flag check failed:", err);
         return;
       }
 
@@ -87,10 +87,10 @@ export function useObserverArchiveSeed(
 
       // Internal build + no prior choice → auto-seed via atomic DB merge.
       try {
-        await deps.mergeSaveSubscriptionKinds(KIND_AGENT_OBSERVER_FRAME);
+        await deps.mergeSaveSubscriptionKinds(KIND_AGENT_TURN_METRIC);
       } catch (err) {
         console.warn(
-          "[useObserverArchiveSeed] mergeSaveSubscriptionKinds failed:",
+          "[useAgentMetricArchiveSeed] mergeSaveSubscriptionKinds failed:",
           err,
         );
         // Do NOT set the localStorage flag — a transient failure (relay

@@ -1,5 +1,6 @@
 mod agent_config;
 mod agent_discovery;
+mod agent_metric_archive;
 mod agent_models;
 mod agent_providers;
 mod agent_settings;
@@ -42,6 +43,7 @@ mod workspace;
 
 pub use agent_config::*;
 pub use agent_discovery::*;
+pub use agent_metric_archive::*;
 pub use agent_models::*;
 pub use agent_providers::*;
 pub use agent_settings::*;
