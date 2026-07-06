@@ -23,6 +23,7 @@ import {
   DeleteSectionAlertDialog,
   RenameSectionDialog,
   useLeaveChannelDialog,
+  type SectionDialogValue,
 } from "@/features/sidebar/ui/ChannelSectionDialogs";
 import { AppSidebarPinnedHeader } from "@/features/sidebar/ui/AppSidebarPinnedHeader";
 import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
@@ -404,8 +405,8 @@ export function AppSidebar({
   );
 
   const handleCreateSectionConfirm = React.useCallback(
-    (name: string) => {
-      const section = createSection(name);
+    (value: SectionDialogValue) => {
+      const section = createSection(value.name, value.icon);
       if (!section) {
         return;
       }
@@ -854,9 +855,10 @@ export function AppSidebar({
           if (!open) setRenameSectionTarget(null);
         }}
         sectionName={renameSectionTarget?.name ?? ""}
-        onConfirm={(newName) => {
+        sectionIcon={renameSectionTarget?.icon}
+        onConfirm={(value) => {
           if (renameSectionTarget) {
-            renameSection(renameSectionTarget.id, newName);
+            renameSection(renameSectionTarget.id, value.name, value.icon);
           }
           setRenameSectionTarget(null);
         }}
