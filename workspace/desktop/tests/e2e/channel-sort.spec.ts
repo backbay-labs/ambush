@@ -66,11 +66,13 @@ test.describe("per-group channel sort", () => {
     const streamList = page.getByTestId("stream-list");
     await expect(streamList).toBeVisible();
     await page.getByText("Channels", { exact: true }).hover();
-    const trigger = page.getByTestId("channel-sort-trigger-channels");
+    const trigger = page.getByTestId("section-actions-channels");
     await expect(trigger).toBeVisible();
     await waitForAnimations(page);
     await page.screenshot({ path: `${SHOTS}/01-channels-sort-ingress.png` });
     await trigger.click();
+    // Sort is now a submenu flyout — open it before the radio items render.
+    await page.getByRole("menuitem", { name: "Sort" }).click();
     await expect(
       page.getByRole("menuitemradio", { name: "Recent" }),
     ).toBeVisible();
@@ -153,9 +155,11 @@ test.describe("per-group channel sort", () => {
     const dmList = page.getByTestId("dm-list");
     await expect(dmList).toBeVisible();
     await page.getByText("Direct messages", { exact: true }).hover();
-    const trigger = page.getByTestId("channel-sort-trigger-dms");
+    const trigger = page.getByTestId("section-actions-dms");
     await expect(trigger).toBeVisible();
     await trigger.click();
+    // Sort is now a submenu flyout — open it before the radio items render.
+    await page.getByRole("menuitem", { name: "Sort" }).click();
     await expect(
       page.getByRole("menuitemradio", { name: "A–Z" }),
     ).toBeVisible();
