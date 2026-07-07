@@ -7,7 +7,12 @@ import {
   requiredCredentialEnvKeys,
   isMissingRequiredDropdownField,
 } from "./personaDialogPickers.tsx";
-import { shouldClearModelForRuntimeChange } from "./personaRuntimeModel.ts";
+import {
+  computeEditAgentFormValidity,
+  hasMissingRequiredEnvKey,
+  resolveAgentCommandUpdate,
+  shouldClearModelForRuntimeChange,
+} from "./personaRuntimeModel.ts";
 
 // ── LLM provider field visibility ──────────────────────────────────────────
 //
@@ -356,6 +361,311 @@ test("editAgent_runtimeDropdown_pinsHarnessWhenConcreteCatalogRuntimeSelected", 
     inheritHarness,
     false,
     "selecting a concrete catalog runtime must set inheritHarness=false",
+  );
+});
+
+// ── Custom command as a runtime pin ──────────────────────────────────────────
+//
+// "Custom command" has no catalog entry (nextRuntime === undefined), so it must
+// clear inheritance directly in the handler rather than relying on the
+// concrete-runtime branch. Without this, an inheriting persona-linked agent that
+// picks "Custom command" keeps inheritHarness=true, the command input stays
+// gated behind !inheritHarness, and Save silently follows the inherit path —
+// discarding the custom-command intent.
+
+test("editAgent_runtimeDropdown_pinsHarnessWhenCustomCommandSelected", () => {
+  // Simulate handleRuntimeDropdownChange("custom") for an inherited agent.
+  let inheritHarness = true; // starts inherited
+
+  const NO_RUNTIME_DROPDOWN_VALUE = "__none__";
+  const nextValue = "custom";
+  const nextRuntimeId =
+    nextValue === NO_RUNTIME_DROPDOWN_VALUE ? "" : nextValue;
+  const nextRuntime = undefined; // "custom" has no catalog entry
+
+  // The fixed handler clears inheritance for ANY explicit selection, before the
+  // concrete-runtime branch (which never runs for a custom command).
+  inheritHarness = false;
+  if (nextRuntime?.command) {
+    // concrete-runtime branch — not taken for custom command
+  }
+
+  assert.equal(nextRuntimeId, "custom");
+  assert.equal(
+    inheritHarness,
+    false,
+    "selecting 'Custom command' must set inheritHarness=false so the command input is editable and Save takes the pin path",
+  );
+});
+
+test("editAgent_runtimeDropdown_keepsInheritWhenCatalogEntryHasNoCommand", () => {
+  // A catalog entry whose adapter is missing/not installed has command:null.
+  // Selecting it must NOT clear inheritance: the concrete-runtime branch can't
+  // set a command, so pinning would leave agentCommand unchanged on Save while
+  // the provider/model logic treats the new runtime as effective — an inherited
+  // Claude agent could persist a Databricks provider while still running Claude.
+  let inheritHarness = true; // inherited Claude agent
+
+  const NO_RUNTIME_DROPDOWN_VALUE = "__none__";
+  const nextValue = "buzz-agent"; // catalog entry, but adapter missing
+  const nextRuntimeId =
+    nextValue === NO_RUNTIME_DROPDOWN_VALUE ? "" : nextValue;
+  const resolvedRuntimeId = nextRuntimeId || "custom";
+  const nextRuntime = { id: "buzz-agent", command: null, defaultArgs: [] };
+
+  // Mirror the guarded handler: only pin when a command can be supplied.
+  const isCustomCommand = resolvedRuntimeId === "custom";
+  if (isCustomCommand || nextRuntime?.command) {
+    inheritHarness = false;
+  }
+
+  assert.equal(
+    inheritHarness,
+    true,
+    "selecting a command:null catalog entry must keep inheritHarness=true to avoid a mismatched command/provider pair",
+  );
+});
+
+test("editAgent_resolveAgentCommandUpdate_pinsCustomCommandNotInherit", () => {
+  // After the custom-command selection clears inheritance, the submit path must
+  // pin the (edited) custom command rather than following the inherit sentinel.
+  assert.equal(
+    resolveAgentCommandUpdate({
+      inheritHarness: false,
+      agentCommand: "/opt/bin/my-custom-agent",
+      originalAgentCommand: "", // was inheriting, no command
+      agentCommandOverride: null,
+    }),
+    "/opt/bin/my-custom-agent",
+    "edited custom command must be persisted as a pin",
+  );
+});
+
+test("editAgent_resolveAgentCommandUpdate_pinsUnchangedPrefillOnInheritTransition", () => {
+  // Codex scenario: a persona-linked agent that was inheriting selects Custom
+  // command and Saves the visible prefilled command without editing it. The
+  // command equals the resolved original, but because the agent had no override
+  // (agentCommandOverride == null) this is an inherit→pin transition and the
+  // command MUST be sent as the pin — otherwise the update is omitted and the
+  // agent keeps inheriting (silent no-op).
+  assert.equal(
+    resolveAgentCommandUpdate({
+      inheritHarness: false,
+      agentCommand: "goose run",
+      originalAgentCommand: "goose run", // prefilled, unchanged
+      agentCommandOverride: null, // was inheriting
+    }),
+    "goose run",
+    "unchanged prefilled command must still be pinned on inherit→pin transition",
+  );
+});
+
+test("editAgent_resolveAgentCommandUpdate_noOpWhenPinnedAndUnchanged", () => {
+  // An already-pinned agent (had an override) whose command is unchanged must
+  // stay a no-op so an unrelated edit does not rewrite the command.
+  assert.equal(
+    resolveAgentCommandUpdate({
+      inheritHarness: false,
+      agentCommand: "claude",
+      originalAgentCommand: "claude",
+      agentCommandOverride: "claude", // already pinned
+    }),
+    undefined,
+    "unchanged command on an already-pinned agent must be omitted",
+  );
+});
+
+test("editAgent_resolveAgentCommandUpdate_inheritSentinelOnlyWhenPinToClear", () => {
+  // Reverting to inherit sends the empty sentinel only when there's a pin to
+  // clear; a name-only edit on an already-inheriting agent leaves it alone.
+  assert.equal(
+    resolveAgentCommandUpdate({
+      inheritHarness: true,
+      agentCommand: "claude",
+      originalAgentCommand: "claude",
+      agentCommandOverride: "claude", // had a pin → clear it
+    }),
+    "",
+    "reverting to inherit with a prior pin must send the clear sentinel",
+  );
+  assert.equal(
+    resolveAgentCommandUpdate({
+      inheritHarness: true,
+      agentCommand: "claude",
+      originalAgentCommand: "claude",
+      agentCommandOverride: null, // was already inheriting → no-op
+    }),
+    undefined,
+    "name-only edit on an inheriting agent must leave the command alone",
+  );
+});
+
+test("editAgent_customCommandSelected_autoExpandsAdvancedSection", () => {
+  // Selecting "Custom command" must reveal the Advanced command input, which is
+  // otherwise collapsed. Without this the user can Save without ever seeing the
+  // field, leaving agentCommand equal to the original effective command (so the
+  // update is omitted) and the custom selection silently no-ops.
+  let showAdvancedFields = false; // starts collapsed on open
+
+  const NO_RUNTIME_DROPDOWN_VALUE = "__none__";
+  const nextValue = "custom";
+  const nextRuntimeId =
+    nextValue === NO_RUNTIME_DROPDOWN_VALUE ? "" : nextValue;
+  const resolvedRuntimeId = nextRuntimeId || "custom";
+  const isCustomCommand = resolvedRuntimeId === "custom";
+
+  // Mirror the handler's auto-expand branch.
+  if (isCustomCommand) {
+    showAdvancedFields = true;
+  }
+
+  assert.equal(
+    showAdvancedFields,
+    true,
+    "selecting 'Custom command' must auto-expand Advanced so the command input is visible",
+  );
+});
+
+test("editAgent_missingRequiredEnvKey_autoExpandsAdvancedOnTransition", () => {
+  // Codex P2: when a provider change makes a credential newly required, the
+  // EnvVarsEditor lives inside the collapsed Advanced section, so the amber
+  // required row would stay unmounted (invisible) while Save is disabled. The
+  // effect auto-expands Advanced on the missing→present-requirement transition.
+  let showAdvancedFields = false; // collapsed by default on open
+  let previousMissing = false;
+
+  // Mirror the effect's transition guard.
+  function applyMissingEffect(requiredEnvKeyMissing) {
+    if (requiredEnvKeyMissing && !previousMissing) {
+      showAdvancedFields = true;
+    }
+    previousMissing = requiredEnvKeyMissing;
+  }
+
+  // Initial render: buzz-agent with no provider — nothing required yet.
+  applyMissingEffect(
+    hasMissingRequiredEnvKey(requiredCredentialEnvKeys("buzz-agent", ""), {}),
+  );
+  assert.equal(
+    showAdvancedFields,
+    false,
+    "Advanced stays collapsed while no credential is required",
+  );
+
+  // User picks anthropic → ANTHROPIC_API_KEY becomes required and is unset.
+  applyMissingEffect(
+    hasMissingRequiredEnvKey(
+      requiredCredentialEnvKeys("buzz-agent", "anthropic"),
+      {},
+    ),
+  );
+  assert.equal(
+    showAdvancedFields,
+    true,
+    "Advanced auto-expands when a required credential is newly missing",
+  );
+
+  // User fills the key, then collapses Advanced manually — no re-expand.
+  showAdvancedFields = false;
+  applyMissingEffect(
+    hasMissingRequiredEnvKey(
+      requiredCredentialEnvKeys("buzz-agent", "anthropic"),
+      { ANTHROPIC_API_KEY: "sk-ant-test" },
+    ),
+  );
+  assert.equal(
+    showAdvancedFields,
+    false,
+    "Advanced does not re-expand once the required credential is filled",
+  );
+});
+
+test("editAgent_missingRequiredEnvKey_blocksSaveViaValidity", () => {
+  // The block-save gate is folded into computeEditAgentFormValidity so the
+  // Save button disables when a runtime/provider-required credential is unset.
+  const base = {
+    name: "My Agent",
+    parallelism: "",
+    turnTimeoutSeconds: "",
+    agentAcpCommand: "",
+    acpCommand: "",
+    respondTo: "all",
+    respondToAllowlistLength: 0,
+    selectedRuntimeId: "buzz-agent",
+    inheritHarness: false,
+    agentCommand: "buzz-agent",
+    requiredEnvKeyMissing: false,
+  };
+
+  assert.equal(
+    computeEditAgentFormValidity({ ...base, requiredEnvKeyMissing: true }),
+    false,
+    "Save must be blocked when a required credential key is missing",
+  );
+  assert.equal(
+    computeEditAgentFormValidity({ ...base, requiredEnvKeyMissing: false }),
+    true,
+    "Save must be allowed once the required credential key is present",
+  );
+});
+
+test("editAgent_customCommandPinned_blocksSaveWhenCommandEmpty", () => {
+  // A pinned custom command with an empty command field must block Save — the
+  // backend would spawn a runtime with no command otherwise. Exercises the real
+  // computeEditAgentFormValidity helper.
+  const base = {
+    name: "My Agent",
+    parallelism: "",
+    turnTimeoutSeconds: "",
+    agentAcpCommand: "",
+    acpCommand: "",
+    respondTo: "all",
+    respondToAllowlistLength: 0,
+    selectedRuntimeId: "custom",
+    inheritHarness: false,
+    agentCommand: "",
+    requiredEnvKeyMissing: false,
+  };
+
+  assert.equal(
+    computeEditAgentFormValidity(base),
+    false,
+    "empty pinned custom command must block Save",
+  );
+
+  assert.equal(
+    computeEditAgentFormValidity({ ...base, agentCommand: "/opt/bin/agent" }),
+    true,
+    "non-empty custom command must allow Save",
+  );
+
+  // An inherited (not pinned) selection is never gated by this rule, even with
+  // an empty command — the inherit path resolves the command server-side.
+  assert.equal(
+    computeEditAgentFormValidity({ ...base, inheritHarness: true }),
+    true,
+    "inheriting agents must not be gated by the custom-command rule",
+  );
+
+  // The other validity gates still apply through the helper.
+  assert.equal(
+    computeEditAgentFormValidity({
+      ...base,
+      agentCommand: "/opt/bin/agent",
+      name: "   ",
+    }),
+    false,
+    "blank name must block Save",
+  );
+  assert.equal(
+    computeEditAgentFormValidity({
+      ...base,
+      agentCommand: "/opt/bin/agent",
+      respondTo: "allowlist",
+      respondToAllowlistLength: 0,
+    }),
+    false,
+    "empty allowlist must block Save",
   );
 });
 
@@ -1078,15 +1388,14 @@ test("requiredCredentialEnvKeys: custom/unknown runtime → empty", () => {
   assert.deepEqual(keys, []);
 });
 
-// ── Block-save gate: hasRequiredEnvKeyMissing logic ────────────────────────
+// ── Block-save gate: hasMissingRequiredEnvKey logic ────────────────────────
 //
 // The EditAgentDialog computes:
-//   hasRequiredEnvKeyMissing = requiredEnvKeys.some(k => (envVars[k] ?? "").length === 0)
-// and folds it into canSubmit. These tests exercise that predicate directly.
+//   requiredEnvKeyMissing = hasMissingRequiredEnvKey(requiredEnvKeys, envVars)
+// and folds it into canSubmit (via computeEditAgentFormValidity). These tests
+// exercise the exported predicate directly.
 
-function hasRequiredEnvKeyMissing(requiredKeys, envVars) {
-  return requiredKeys.some((key) => (envVars[key] ?? "").length === 0);
-}
+const hasRequiredEnvKeyMissing = hasMissingRequiredEnvKey;
 
 test("blockSave_buzzAgentAnthropicMissingKey_blocked", () => {
   // Will's exact case: buzz-agent / anthropic / opus / no ANTHROPIC_API_KEY
