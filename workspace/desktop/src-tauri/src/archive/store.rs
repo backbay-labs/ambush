@@ -390,6 +390,8 @@ pub fn get_subscription_kinds(
 /// Upsert an event row (idempotent on the PK).
 ///
 /// Does nothing if the event is already archived (same identity/relay/id).
+// Args mirror the archived_events columns; a params struct would just rename them.
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_archived_event(
     conn: &Connection,
     identity_pubkey: &str,
@@ -471,6 +473,8 @@ pub fn upsert_event_scope(
 /// An optional `kinds` slice filters by event kind; `None` admits all kinds.
 ///
 /// Returns at most `limit` rows (caller is responsible for a sane default).
+// Query surface: four scope keys + kind filter + compound cursor + limit.
+#[allow(clippy::too_many_arguments)]
 pub fn read_archived_events(
     conn: &Connection,
     identity_pubkey: &str,

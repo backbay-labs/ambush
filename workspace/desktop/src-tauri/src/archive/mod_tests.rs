@@ -27,7 +27,7 @@ fn make_observer_frame(owner_keys: &Keys, agent_keys: &Keys, frame_type: &str) -
         Tag::parse(["agent", &agent_pk]).unwrap(),
         Tag::parse(["frame", frame_type]).unwrap(),
     ];
-    EventBuilder::new(Kind::Custom(24200), &"A".repeat(200))
+    EventBuilder::new(Kind::Custom(24200), "A".repeat(200))
         .tags(tags)
         .sign_with_keys(agent_keys)
         .unwrap()
@@ -170,7 +170,7 @@ fn test_ephemeral_validator_rejects_missing_p_tag() {
     let owner_pk = owner_keys.public_key().to_hex();
     let relay_url = "wss://relay.example";
     add_sub(&conn, &owner_pk, relay_url, "owner_p", &owner_pk, "[24200]");
-    let ev = EventBuilder::new(Kind::Custom(24200), &"A".repeat(200))
+    let ev = EventBuilder::new(Kind::Custom(24200), "A".repeat(200))
         .tags(vec![
             Tag::parse(["agent", &agent_keys.public_key().to_hex()]).unwrap(),
             Tag::parse(["frame", OBSERVER_FRAME_TELEMETRY]).unwrap(),
@@ -190,7 +190,7 @@ fn test_ephemeral_validator_rejects_missing_agent_tag() {
     let owner_pk = owner_keys.public_key().to_hex();
     let relay_url = "wss://relay.example";
     add_sub(&conn, &owner_pk, relay_url, "owner_p", &owner_pk, "[24200]");
-    let ev = EventBuilder::new(Kind::Custom(24200), &"A".repeat(200))
+    let ev = EventBuilder::new(Kind::Custom(24200), "A".repeat(200))
         .tags(vec![
             Tag::parse(["p", &owner_pk]).unwrap(),
             Tag::parse(["frame", OBSERVER_FRAME_TELEMETRY]).unwrap(),
@@ -225,7 +225,7 @@ fn test_ephemeral_validator_rejects_wrong_author() {
     let owner_pk = owner_keys.public_key().to_hex();
     let relay_url = "wss://relay.example";
     add_sub(&conn, &owner_pk, relay_url, "owner_p", &owner_pk, "[24200]");
-    let ev = EventBuilder::new(Kind::Custom(24200), &"A".repeat(200))
+    let ev = EventBuilder::new(Kind::Custom(24200), "A".repeat(200))
         .tags(vec![
             Tag::parse(["p", &owner_pk]).unwrap(),
             Tag::parse(["agent", &agent_keys.public_key().to_hex()]).unwrap(),

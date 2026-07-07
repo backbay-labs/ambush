@@ -366,16 +366,16 @@ fn openai_dated_snapshot_alias(id: &str) -> Option<String> {
 fn openai_model_display_name(id: &str) -> String {
     let canonical = openai_dated_snapshot_alias(id).unwrap_or_else(|| id.to_string());
     if let Some(rest) = canonical.strip_prefix("chatgpt-") {
-        return format!("ChatGPT {}", title_case_model_suffix(rest, false));
+        return format!("ChatGPT {}", title_case_model_suffix(rest));
     }
     if let Some(rest) = canonical.strip_prefix("gpt-") {
-        return format!("GPT-{}", title_case_model_suffix(rest, true));
+        return format!("GPT-{}", title_case_model_suffix(rest));
     }
 
     canonical
 }
 
-fn title_case_model_suffix(value: &str, preserve_first_separator: bool) -> String {
+fn title_case_model_suffix(value: &str) -> String {
     value
         .split('-')
         .enumerate()
@@ -390,9 +390,7 @@ fn title_case_model_suffix(value: &str, preserve_first_separator: bool) -> Strin
                 part.to_string()
             };
 
-            if preserve_first_separator && index == 0 {
-                part
-            } else if index == 0 {
+            if index == 0 {
                 part
             } else {
                 format!(" {part}")

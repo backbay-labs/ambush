@@ -18,7 +18,6 @@ use path::build_augmented_path;
 
 mod sweep;
 pub(crate) use sweep::sweep_untracked_bundle_harnesses;
-pub use sweep::{expected_harness_exe_path, select_untracked_bundle_harnesses, ProcessSnapshot};
 
 type RespondToEnv = (Vec<(&'static str, String)>, Vec<&'static str>);
 
@@ -70,9 +69,7 @@ fn name_matches_known_binary(name: &str) -> bool {
 /// a managed agent wrapper (e.g. `node` running an npm shim for `codex-acp`).
 /// Callers must additionally verify `BUZZ_MANAGED_AGENT` ownership.
 fn name_matches_interpreter(name: &str) -> bool {
-    KNOWN_SCRIPT_INTERPRETERS
-        .iter()
-        .any(|&interp| name == interp)
+    KNOWN_SCRIPT_INTERPRETERS.contains(&name)
 }
 
 #[cfg(unix)]

@@ -66,6 +66,9 @@ pub(crate) struct EffectiveAgentEnv {
     /// The process-env map the spawned harness would receive.
     pub env: BTreeMap<String, String>,
     /// Harness config file path, if any (e.g. `~/.config/goose/config.yaml`).
+    // Not read yet; kept for the unified-agent-record rewrite (chunk A) which
+    // replaces this resolution path wholesale.
+    #[allow(dead_code)]
     pub config_file_path: Option<&'static str>,
     /// The resolved harness binary name (e.g. `"buzz-agent"`, `"goose"`).
     pub effective_command: String,
@@ -150,17 +153,6 @@ pub enum Requirement {
     },
 }
 
-impl Requirement {
-    /// Short label for logging/nudge copy.
-    pub(crate) fn label(&self) -> String {
-        match self {
-            Requirement::NormalizedField { field } => format!("missing {field}"),
-            Requirement::EnvKey { key } => format!("missing env {key}"),
-            Requirement::CliLogin { setup_copy, .. } => setup_copy.clone(),
-        }
-    }
-}
-
 // ── AgentReadiness ────────────────────────────────────────────────────────────
 
 /// Whether a managed agent has all required configuration to start.
@@ -178,11 +170,13 @@ pub enum AgentReadiness {
 
 impl AgentReadiness {
     /// Returns `true` if the agent is ready to spawn.
+    #[cfg(test)]
     pub(crate) fn is_ready(&self) -> bool {
         matches!(self, AgentReadiness::Ready)
     }
 
     /// Returns the missing requirements, or an empty slice if ready.
+    #[cfg(test)]
     pub(crate) fn requirements(&self) -> &[Requirement] {
         match self {
             AgentReadiness::Ready => &[],
@@ -290,31 +284,28 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
     // Provider-specific credential requirements.
     // A key present with an empty value is treated as absent — matching the
     // dialog's (envVars[key] ?? "").length === 0 emptiness check.
-    let env_key_missing = |key: &str| effective.env.get(key).map_or(true, |v| v.is_empty());
+    let env_key_missing = |key: &str| effective.env.get(key).is_none_or(|v| v.is_empty());
     match provider {
-        Some("anthropic") => {
-            if env_key_missing("ANTHROPIC_API_KEY") {
+        Some("anthropic")
+            if env_key_missing("ANTHROPIC_API_KEY") => {
                 missing.push(Requirement::EnvKey {
                     key: "ANTHROPIC_API_KEY".to_string(),
                 });
             }
-        }
-        Some("openai") => {
-            if env_key_missing("OPENAI_COMPAT_API_KEY") {
+        Some("openai")
+            if env_key_missing("OPENAI_COMPAT_API_KEY") => {
                 missing.push(Requirement::EnvKey {
                     key: "OPENAI_COMPAT_API_KEY".to_string(),
                 });
             }
-        }
-        Some("databricks") | Some("databricks_v2") => {
+        Some("databricks") | Some("databricks_v2")
             // DATABRICKS_HOST is hard-required; DATABRICKS_TOKEN is optional
             // (OAuth PKCE is the normal path — see buzz-agent/src/config.rs:143).
-            if env_key_missing("DATABRICKS_HOST") {
+            if env_key_missing("DATABRICKS_HOST") => {
                 missing.push(Requirement::EnvKey {
                     key: "DATABRICKS_HOST".to_string(),
                 });
             }
-        }
         _ => {
             // Unknown provider or no provider yet — only the NormalizedField
             // requirement above captures this gap.
@@ -390,38 +381,37 @@ fn goose_requirements(
     }
 
     // Provider-specific credentials — same empty-string semantics as buzz-agent.
-    let env_key_missing = |key: &str| effective.env.get(key).map_or(true, |v| v.is_empty());
+    let env_key_missing = |key: &str| effective.env.get(key).is_none_or(|v| v.is_empty());
     // A credential key is also satisfied when the file config's `extra` map
     // contains it (e.g. DATABRICKS_HOST set in the goose config file).
     let file_key_present = |key: &str| -> bool {
         file_cfg
             .as_ref()
-            .map(|c| c.extra.get(key).map_or(false, |v| !v.is_empty()))
+            .map(|c| c.extra.get(key).is_some_and(|v| !v.is_empty()))
             .unwrap_or(false)
     };
     match effective_provider {
-        Some("anthropic") => {
-            if env_key_missing("ANTHROPIC_API_KEY") && !file_key_present("ANTHROPIC_API_KEY") {
-                missing.push(Requirement::EnvKey {
-                    key: "ANTHROPIC_API_KEY".to_string(),
-                });
-            }
+        Some("anthropic")
+            if env_key_missing("ANTHROPIC_API_KEY") && !file_key_present("ANTHROPIC_API_KEY") =>
+        {
+            missing.push(Requirement::EnvKey {
+                key: "ANTHROPIC_API_KEY".to_string(),
+            });
         }
-        Some("openai") => {
+        Some("openai")
             if env_key_missing("OPENAI_COMPAT_API_KEY")
-                && !file_key_present("OPENAI_COMPAT_API_KEY")
-            {
-                missing.push(Requirement::EnvKey {
-                    key: "OPENAI_COMPAT_API_KEY".to_string(),
-                });
-            }
+                && !file_key_present("OPENAI_COMPAT_API_KEY") =>
+        {
+            missing.push(Requirement::EnvKey {
+                key: "OPENAI_COMPAT_API_KEY".to_string(),
+            });
         }
-        Some("databricks") | Some("databricks_v2") => {
-            if env_key_missing("DATABRICKS_HOST") && !file_key_present("DATABRICKS_HOST") {
-                missing.push(Requirement::EnvKey {
-                    key: "DATABRICKS_HOST".to_string(),
-                });
-            }
+        Some("databricks") | Some("databricks_v2")
+            if env_key_missing("DATABRICKS_HOST") && !file_key_present("DATABRICKS_HOST") =>
+        {
+            missing.push(Requirement::EnvKey {
+                key: "DATABRICKS_HOST".to_string(),
+            });
         }
         _ => {}
     }

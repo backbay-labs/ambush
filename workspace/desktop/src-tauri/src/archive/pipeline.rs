@@ -256,6 +256,7 @@ pub(super) async fn query_buckets(buckets: Vec<Bucket>, state: &AppState) -> Vec
 /// every write in the batch commits or none do. This preserves the invariant
 /// that every `archived_events` row has at least one matching `archived_event_scopes`
 /// row — a partial failure can never leave an orphaned event with no scope proof.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn commit_archive(
     bucket_results: Vec<BucketWithResult>,
     ephemeral: Vec<Parsed>,
