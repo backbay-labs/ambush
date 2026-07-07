@@ -13,6 +13,8 @@ import {
   initDraftStore,
 } from "@/features/messages/lib/useDrafts";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
+import { resetActiveAgentTurnsStore } from "@/features/agents/activeAgentTurnsStore";
+import { resetAgentWorkingSignal } from "@/features/agents/agentWorkingSignal";
 import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
@@ -30,6 +32,8 @@ import type { Workspace } from "./types";
 function resetWorkspaceState(): void {
   relayClient.disconnect();
   resetAgentObserverStore();
+  resetActiveAgentTurnsStore();
+  resetAgentWorkingSignal();
   resetSidebarRelayConnectionCardState();
   resetMediaCaches();
   resetVideoPlayerState();
