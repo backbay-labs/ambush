@@ -8206,6 +8206,49 @@ export function maybeInstallE2eTauriMocks() {
         };
       case "get_project_local_repo_snapshot":
         return null;
+      case "get_project_repo_diff":
+        return {
+          additions: 27,
+          deletions: 4,
+          files: [
+            {
+              path: "desktop/src/features/projects/ui/ProjectDetailScreen.tsx",
+              additions: 18,
+              deletions: 3,
+              patch: [
+                "@@ -1,6 +1,8 @@",
+                ' import { Tabs } from "@/shared/ui/tabs";',
+                "",
+                "-function WorkspaceTabs() {",
+                "+function WorkspaceTabs({ selectedCommitHash }) {",
+                '+  const [selectedTab, setSelectedTab] = useState("overview");',
+                "+",
+                "   return (",
+                '     <Tabs value="overview">',
+                "       <ProjectTabsList />",
+              ].join("\n"),
+              truncated: false,
+            },
+            {
+              path: "desktop/src/features/projects/hooks.ts",
+              additions: 9,
+              deletions: 1,
+              patch: [
+                "@@ -10,4 +10,12 @@",
+                " export function useProjectQuery(projectId) {",
+                "   return useQuery({ queryKey: [projectId] });",
+                " }",
+                "+",
+                "+export function useProjectCommitDiffQuery(project, hash) {",
+                '+  return useQuery({ queryKey: [project?.id, "commit-diff", hash] });',
+                "+}",
+              ].join("\n"),
+              truncated: false,
+            },
+          ],
+        };
+      case "get_project_local_repo_diff":
+        return null;
       case "get_project_repo_sync_status":
         return {
           local_path: null,

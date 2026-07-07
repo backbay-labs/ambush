@@ -74,6 +74,7 @@ export default defineConfig({
         "**/reaction-order.spec.ts",
         "**/reaction-names.spec.ts",
         "**/send-channel-binding.spec.ts",
+        "**/project-commit-detail.spec.ts",
         "**/persona-model-combobox-screenshots.spec.ts",
         "**/drafts-screenshots.spec.ts",
         "**/channel-sort.spec.ts",
