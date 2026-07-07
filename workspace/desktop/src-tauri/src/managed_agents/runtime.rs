@@ -16,6 +16,10 @@ use crate::{
 mod path;
 use path::build_augmented_path;
 
+mod sweep;
+pub(crate) use sweep::sweep_untracked_bundle_harnesses;
+pub use sweep::{expected_harness_exe_path, select_untracked_bundle_harnesses, ProcessSnapshot};
+
 type RespondToEnv = (Vec<(&'static str, String)>, Vec<&'static str>);
 
 /// Binary name fragments for all known agent/harness processes that Buzz
@@ -169,40 +173,9 @@ fn buzz_marker_entry(instance_id: &str) -> Vec<u8> {
 #[cfg(target_os = "macos")]
 fn process_has_buzz_marker(pid: u32, instance_id: &str) -> bool {
     let marker = buzz_marker_entry(instance_id);
-
-    let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
-    let mut buf_size: libc::size_t = 0;
-
-    // First call: get required buffer size.
-    if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            std::ptr::null_mut(),
-            &mut buf_size,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-    {
+    let Some(buf) = sweep::procargs2_buffer(pid) else {
         return false;
-    }
-
-    let mut buf: Vec<u8> = vec![0; buf_size];
-    if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            &mut buf_size,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-    {
-        return false;
-    }
-    buf.truncate(buf_size);
+    };
 
     // Buffer layout: [i32 argc][exec_path\0][null padding][argv\0...][env\0...]
     if buf.len() < std::mem::size_of::<libc::c_int>() {
@@ -463,11 +436,16 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, _skip_pids: &[u32]
 }
 
 // ── macOS process-info FFI (shared by all sweep/reap functions) ──────────
+//
+// `proc_listallpids` lives in `sweep.rs` (which owns `collect_all_pids`).
+// All callers in this file reach it through `sweep::collect_all_pids()`.
+// `proc_pidinfo` and `BSDInfo` are declared here as `pub(super)` so that
+// `sweep.rs` can call `super::proc_pidinfo` / use `super::BSDInfo` without
+// redefining the struct layout in two places.
 
 #[cfg(target_os = "macos")]
 extern "C" {
-    fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
-    fn proc_pidinfo(
+    pub(super) fn proc_pidinfo(
         pid: libc::c_int,
         flavor: libc::c_int,
         arg: u64,
@@ -480,11 +458,11 @@ extern "C" {
 /// against the macOS SDK — total size 136 bytes.
 #[cfg(target_os = "macos")]
 #[repr(C)]
-struct BSDInfo {
+pub(super) struct BSDInfo {
     _flags_status_xstatus: [u8; 12], // pbi_flags + pbi_status + pbi_xstatus
-    pbi_pid: u32,                    // offset 12
-    pbi_ppid: u32,                   // offset 16
-    pbi_uid: u32,                    // offset 20
+    pub(super) pbi_pid: u32,         // offset 12
+    pub(super) pbi_ppid: u32,        // offset 16
+    pub(super) pbi_uid: u32,         // offset 20
     _rest: [u8; 112],
 }
 
@@ -492,7 +470,7 @@ struct BSDInfo {
 const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
 
 #[cfg(target_os = "macos")]
-const PROC_PIDTBSDINFO: libc::c_int = 3;
+pub(super) const PROC_PIDTBSDINFO: libc::c_int = 3;
 
 /// Enumerate all processes on the system owned by the current user and kill any
 /// agent binary stamped with *this* instance's `BUZZ_MANAGED_AGENT` marker
@@ -503,33 +481,10 @@ const PROC_PIDTBSDINFO: libc::c_int = 3;
 #[cfg(target_os = "macos")]
 pub(crate) fn sweep_system_agent_processes(instance_id: &str, skip_pids: &[u32]) {
     let my_uid = unsafe { libc::getuid() };
-
-    // Loop until the buffer is large enough to hold all PIDs. Under a fork
-    // storm the process table can outgrow the initial estimate between the
-    // probe and the fill call.
-    let mut pids: Vec<libc::c_int>;
-    loop {
-        let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-        if count <= 0 {
-            return;
-        }
-        let buf_len = (count as usize) * 2;
-        pids = vec![0; buf_len];
-        let actual = unsafe {
-            proc_listallpids(
-                pids.as_mut_ptr(),
-                (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
-            )
-        };
-        if actual <= 0 {
-            return;
-        }
-        pids.truncate(actual as usize);
-        if (actual as usize) < buf_len {
-            break;
-        }
+    let pids = sweep::collect_all_pids();
+    if pids.is_empty() {
+        return;
     }
-
     let my_pid = std::process::id() as i32;
     let mut orphans: Vec<i32> = Vec::new();
 
@@ -729,27 +684,9 @@ pub(crate) fn collect_same_instance_orphans(
     let my_pid = std::process::id() as i32;
     let mut orphans = std::collections::HashSet::new();
 
-    let mut pids: Vec<libc::c_int>;
-    loop {
-        let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-        if count <= 0 {
-            return orphans;
-        }
-        let buf_len = (count as usize) * 2;
-        pids = vec![0; buf_len];
-        let actual = unsafe {
-            proc_listallpids(
-                pids.as_mut_ptr(),
-                (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
-            )
-        };
-        if actual <= 0 {
-            return orphans;
-        }
-        pids.truncate(actual as usize);
-        if (actual as usize) < buf_len {
-            break;
-        }
+    let pids = sweep::collect_all_pids();
+    if pids.is_empty() {
+        return orphans;
     }
 
     for &pid in &pids {
@@ -904,39 +841,7 @@ fn buffer_contains_identifier(buf: &[u8], id: &[u8]) -> bool {
 #[cfg(target_os = "macos")]
 fn extract_buzz_marker_value(pid: u32) -> Option<String> {
     let prefix = b"BUZZ_MANAGED_AGENT=";
-
-    let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
-    let mut buf_size: libc::size_t = 0;
-
-    if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            std::ptr::null_mut(),
-            &mut buf_size,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-    {
-        return None;
-    }
-
-    let mut buf: Vec<u8> = vec![0; buf_size];
-    if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            &mut buf_size,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-    {
-        return None;
-    }
-    buf.truncate(buf_size);
+    let buf = sweep::procargs2_buffer(pid)?;
 
     if buf.len() < std::mem::size_of::<libc::c_int>() {
         return None;
@@ -1009,27 +914,9 @@ fn desktop_is_alive_for_instance(instance_id: &str) -> bool {
     let my_uid = unsafe { libc::getuid() };
     let identifier_bytes = instance_id.as_bytes();
 
-    let mut pids: Vec<libc::c_int>;
-    loop {
-        let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-        if count <= 0 {
-            return false;
-        }
-        let buf_len = (count as usize) * 2;
-        pids = vec![0; buf_len];
-        let actual = unsafe {
-            proc_listallpids(
-                pids.as_mut_ptr(),
-                (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
-            )
-        };
-        if actual <= 0 {
-            return false;
-        }
-        pids.truncate(actual as usize);
-        if (actual as usize) < buf_len {
-            break;
-        }
+    let pids = sweep::collect_all_pids();
+    if pids.is_empty() {
+        return false;
     }
 
     for &pid in &pids {
@@ -1072,36 +959,9 @@ fn desktop_is_alive_for_instance(instance_id: &str) -> bool {
         }
         // Check if this desktop process's args/env contain the identifier.
         // The KERN_PROCARGS2 buffer holds argv + environ as null-delimited strings.
-        let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
-        let mut buf_size: libc::size_t = 0;
-        if unsafe {
-            libc::sysctl(
-                mib.as_mut_ptr(),
-                3,
-                std::ptr::null_mut(),
-                &mut buf_size,
-                std::ptr::null_mut(),
-                0,
-            )
-        } != 0
-        {
+        let Some(args_buf) = sweep::procargs2_buffer(pid as u32) else {
             continue;
-        }
-        let mut args_buf: Vec<u8> = vec![0; buf_size];
-        if unsafe {
-            libc::sysctl(
-                mib.as_mut_ptr(),
-                3,
-                args_buf.as_mut_ptr() as *mut libc::c_void,
-                &mut buf_size,
-                std::ptr::null_mut(),
-                0,
-            )
-        } != 0
-        {
-            continue;
-        }
-        args_buf.truncate(buf_size);
+        };
         // Boundary-anchored search: the identifier in the config JSON is
         // followed by a non-identifier char (typically `"`). A raw substring
         // match would let `...app` match inside `...app.dev`.
@@ -1168,27 +1028,9 @@ pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]
     let my_uid = unsafe { libc::getuid() };
     let my_pid = std::process::id() as i32;
 
-    let mut pids: Vec<libc::c_int>;
-    loop {
-        let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
-        if count <= 0 {
-            return;
-        }
-        let buf_len = (count as usize) * 2;
-        pids = vec![0; buf_len];
-        let actual = unsafe {
-            proc_listallpids(
-                pids.as_mut_ptr(),
-                (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
-            )
-        };
-        if actual <= 0 {
-            return;
-        }
-        pids.truncate(actual as usize);
-        if (actual as usize) < buf_len {
-            break;
-        }
+    let pids = sweep::collect_all_pids();
+    if pids.is_empty() {
+        return;
     }
 
     // Collect (pid, instance_id) for all foreign agent processes.
@@ -1310,6 +1152,8 @@ pub(crate) fn reap_dead_instance_agents(our_instance_id: &str, skip_pids: &[u32]
 
 #[cfg(not(unix))]
 pub(crate) fn reap_dead_instance_agents(_our_instance_id: &str, _skip_pids: &[u32]) {}
+
+// Exact-path harness sweep lives in runtime/sweep.rs (re-exported above).
 
 /// Kill stale agent processes from a previous session whose PID is still alive
 /// but not tracked in the current `runtimes` map. Updates the record fields and
