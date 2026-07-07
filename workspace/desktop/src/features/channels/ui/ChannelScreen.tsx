@@ -84,6 +84,7 @@ const HEADER_ACTIONS_COMPACT_BREAKPOINT_PX = 760,
   EMPTY_RELAY_EVENTS: RelayEvent[] = [];
 export function ChannelScreen({
   activeChannel,
+  autoSendDraftKey,
   currentIdentity,
   currentProfile,
   onCloseForumPost,
@@ -112,6 +113,7 @@ export function ChannelScreen({
   } = useAppShell();
   const {
     channelManagementOpen,
+    clearAutoSend,
     clearMessageRouteTarget,
     openAgentSessionChannelId,
     openAgentSessionPubkey,
@@ -846,6 +848,8 @@ export function ChannelScreen({
                   agentPubkeys={agentPubkeys}
                   agentPubkeysPending={agentPubkeysPending}
                   agentSessionAgents={agentSessionAgents}
+                  autoSendDraftKey={autoSendDraftKey}
+                  onAutoSendComplete={clearAutoSend}
                   botTypingEntries={botTypingEntries}
                   channelFind={channelFind}
                   channelManagementOpen={channelManagementOpen}
