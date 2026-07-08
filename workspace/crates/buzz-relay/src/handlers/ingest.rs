@@ -200,7 +200,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
             Ok(Scope::AdminChannels)
         }
         // NIP-43: relay membership admin commands (9030–9032) + Buzz
-        // workspace-profile command (9033)
+        // workspace-profile command (9033).
         k if k == RELAY_ADMIN_ADD_MEMBER
             || k == RELAY_ADMIN_REMOVE_MEMBER
             || k == RELAY_ADMIN_CHANGE_ROLE
