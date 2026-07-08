@@ -80,6 +80,7 @@ export default defineConfig({
         "**/project-commit-detail.spec.ts",
         "**/persona-model-combobox-screenshots.spec.ts",
         "**/drafts-screenshots.spec.ts",
+        "**/buzz-theme-screenshots.spec.ts",
         "**/channel-sort.spec.ts",
       ],
       use: {

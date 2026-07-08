@@ -41,6 +41,7 @@ import {
   getThemePair,
 } from "@/shared/theme/theme-loader";
 import {
+  BUZZ_GRADIENT_STOPS,
   SystemPreferencePreviewFrame,
   ThemePreviewFrame,
   type ThemePreviewVars,
@@ -292,6 +293,7 @@ function PairedThemeTile({
   darkVars: ThemePreviewVars | null;
   onSelect: () => void;
 }) {
+  const darkName = getThemePair(lightName);
   return (
     <button
       aria-pressed={isActive}
@@ -307,7 +309,9 @@ function PairedThemeTile({
             ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
             : "group-hover:ring-2 group-hover:ring-border",
         )}
+        darkGradient={darkName ? BUZZ_GRADIENT_STOPS[darkName] : undefined}
         darkVars={darkVars}
+        lightGradient={BUZZ_GRADIENT_STOPS[lightName]}
         lightVars={lightVars}
       />
       <span
@@ -348,6 +352,7 @@ function SingleThemeTile({
             ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
             : "group-hover:ring-2 group-hover:ring-border",
         )}
+        sidebarGradient={BUZZ_GRADIENT_STOPS[name]}
         vars={vars}
       />
       <span

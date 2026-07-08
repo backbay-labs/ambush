@@ -206,6 +206,16 @@ function applyAccentColor(value: string) {
   root.style.setProperty("--sidebar-active-foreground", fgHsl);
 }
 
+/** Toggle the Buzz sidebar-gradient marker on the document root. */
+function applyBuzzSidebar(themeName: string) {
+  const root = document.documentElement;
+  if (themeName === "buzz" || themeName === "buzz-dark") {
+    root.setAttribute("data-buzz-sidebar", "");
+  } else {
+    root.removeAttribute("data-buzz-sidebar");
+  }
+}
+
 /** Apply cached CSS vars synchronously to prevent FOUC. */
 function applyCachedVars(): string | null {
   try {
@@ -218,6 +228,7 @@ function applyCachedVars(): string | null {
     }
     root.classList.remove("light", "dark");
     root.classList.add(isDark ? "dark" : "light");
+    applyBuzzSidebar(themeName);
 
     const accent =
       window.localStorage.getItem(ACCENT_STORAGE_KEY) ?? DEFAULT_ACCENT;
@@ -246,6 +257,7 @@ async function applyTheme(name: SyntaxThemeName): Promise<{ isDark: boolean }> {
 
   root.classList.remove("light", "dark");
   root.classList.add(isDark ? "dark" : "light");
+  applyBuzzSidebar(name);
 
   // Cache for FOUC prevention
   try {
