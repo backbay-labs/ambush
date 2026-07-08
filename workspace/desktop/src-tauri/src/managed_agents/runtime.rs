@@ -1636,10 +1636,12 @@ pub fn spawn_agent_child(
                         Requirement::CliLogin {
                             probe_args,
                             setup_copy,
+                            availability,
                         } => serde_json::json!({
                             "surface": "cli_login",
                             "probe_args": probe_args,
                             "setup_copy": setup_copy,
+                            "availability": availability,
                         }),
                     })
                     .collect();

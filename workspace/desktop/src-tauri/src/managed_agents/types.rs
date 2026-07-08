@@ -551,7 +551,7 @@ pub struct ManagedAgentLogResponse {
     pub log_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AcpAvailabilityStatus {
     Available,
