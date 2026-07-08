@@ -868,13 +868,22 @@ export const ChannelPane = React.memo(function ChannelPane({
         })()
       ) : activeChannel && selectedAgent ? (
         (() => {
+          // When the panel was opened from a different channel than the
+          // currently active one, re-scope it to the active channel so
+          // that both the content/header AND channel-backed actions (e.g.
+          // Stop current turn) operate on the same channel object.
+          const effectiveAgentSessionChannelId =
+            openAgentSessionChannelId &&
+            activeChannel.id !== openAgentSessionChannelId
+              ? activeChannelId
+              : openAgentSessionChannelId;
           const panel = (
             <AgentSessionThreadPanel
               agent={selectedAgent}
               canInterruptTurn={selectedAgent.canInterruptTurn}
               channel={
-                openAgentSessionChannelId
-                  ? activeChannel?.id === openAgentSessionChannelId
+                effectiveAgentSessionChannelId
+                  ? effectiveAgentSessionChannelId === activeChannel.id
                     ? activeChannel
                     : null
                   : agentSessionSelection.isAgentInActivityList({
@@ -884,7 +893,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                     ? activeChannel
                     : null
               }
-              channelId={openAgentSessionChannelId}
+              channelId={effectiveAgentSessionChannelId}
               isSinglePanelView={
                 useSplitAuxiliaryPane ? false : isSinglePanelView
               }
@@ -903,6 +912,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           const panel = (
             <UserProfilePanel
               currentPubkey={currentPubkey}
+              callerChannelId={activeChannelId}
               isSinglePanelView={
                 useSplitAuxiliaryPane ? false : isSinglePanelView
               }
