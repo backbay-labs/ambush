@@ -37,12 +37,26 @@ export type FriendlyAgentLastError =
 export const RELAY_MESH_DENIED_COPY =
   "Relay mesh denied this agent — check your relay membership.";
 
+export const MODEL_NOT_FOUND_COPY =
+  "The configured model is not available — open agent settings and select a different one from the dropdown.";
+
 export function friendlyAgentLastError(
   raw: string | null,
+  code?: number | null,
 ): FriendlyAgentLastError | null {
   if (raw == null) return null;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
+
+  // Structured code path — no string matching, works across all providers.
+  if (code != null) {
+    switch (code) {
+      case -32001:
+        return { severity: "denied", copy: RELAY_MESH_DENIED_COPY };
+      case -32002:
+        return { severity: "denied", copy: MODEL_NOT_FOUND_COPY };
+    }
+  }
 
   // Match either the unwrapped buzz-agent prefix or the buzz-acp wrap.
   // The desktop supervisor recovers whichever appears first in the log tail.
@@ -54,4 +68,14 @@ export function friendlyAgentLastError(
   }
 
   return { severity: "generic", copy: trimmed };
+}
+
+/**
+ * Convenience for `turn_error` / `agent_panic` observer payloads: coerce the
+ * payload's untyped `code` JSON value and return the display copy, falling
+ * back to the raw error text when no classification applies.
+ */
+export function friendlyTurnErrorCopy(raw: string, code: unknown): string {
+  const numeric = code == null ? null : Number(code);
+  return friendlyAgentLastError(raw, numeric)?.copy ?? raw;
 }
