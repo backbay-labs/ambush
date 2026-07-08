@@ -165,8 +165,10 @@ fn retag_persona_default(field: &mut Option<NormalizedField>) {
 /// Returns `null` when the runtime has no config file or it cannot be parsed.
 /// Currently only "goose" is supported; other runtimes return `null`.
 #[tauri::command]
-pub fn get_runtime_file_config(runtime_id: String) -> Option<RuntimeFileConfigSubset> {
-    match runtime_id.as_str() {
+pub async fn get_runtime_file_config(
+    runtime_id: String,
+) -> Result<Option<RuntimeFileConfigSubset>, String> {
+    tokio::task::spawn_blocking(move || match runtime_id.as_str() {
         "goose" => {
             let cfg = read_goose_file_config()?;
             let satisfied_env_keys = cfg
@@ -182,7 +184,9 @@ pub fn get_runtime_file_config(runtime_id: String) -> Option<RuntimeFileConfigSu
             })
         }
         _ => None,
-    }
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {e}"))
 }
 
 /// Return the key names of all non-empty baked build env vars.

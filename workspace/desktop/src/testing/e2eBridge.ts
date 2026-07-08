@@ -2372,6 +2372,13 @@ function handleGetChannelWorkflows(args: { channelId: string }) {
   return mockWorkflows.filter((w) => w.channel_id === args.channelId);
 }
 
+function handleGetChannelsWorkflows(args: { channelIds: string[] }) {
+  const ids = new Set(args.channelIds);
+  return mockWorkflows.filter(
+    (w) => w.channel_id != null && ids.has(w.channel_id),
+  );
+}
+
 function handleGetWorkflow(args: { workflowId: string }) {
   const workflow = mockWorkflows.find((w) => w.id === args.workflowId);
   if (!workflow) throw new Error(`Workflow ${args.workflowId} not found`);
@@ -8809,6 +8816,10 @@ export function maybeInstallE2eTauriMocks() {
       case "get_channel_workflows":
         return handleGetChannelWorkflows(
           payload as Parameters<typeof handleGetChannelWorkflows>[0],
+        );
+      case "get_channels_workflows":
+        return handleGetChannelsWorkflows(
+          payload as Parameters<typeof handleGetChannelsWorkflows>[0],
         );
       case "get_workflow":
         return handleGetWorkflow(

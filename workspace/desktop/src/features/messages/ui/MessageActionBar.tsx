@@ -365,7 +365,7 @@ function isCustomEmojiShortcode(emoji: string) {
   return emoji.startsWith(":") && emoji.endsWith(":");
 }
 
-export function MessageActionBar({
+export const MessageActionBar = React.memo(function MessageActionBar({
   channelId,
   message,
   onDelete,
@@ -588,4 +588,6 @@ export function MessageActionBar({
       </div>
     </div>
   );
-}
+});
+
+MessageActionBar.displayName = "MessageActionBar";

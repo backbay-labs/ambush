@@ -226,14 +226,13 @@ pub fn run() {
             resolve_persisted_identity(&app_handle, &state)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-            // Sync team-dir edits and reconcile persona/team events. Needs the
-            // resolved owner keys, so it runs after identity resolution.
+            // Snapshot owner keys after identity resolution; the best-effort
+            // event reconcile itself runs off the synchronous setup path below.
             let owner_keys = state
                 .keys
                 .lock()
                 .map(|k| k.clone())
                 .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
-            event_sync::run_event_sync(&app_handle, &owner_keys);
 
             // Backfill the pinned persona snapshot for any pre-existing agent
             // that predates the record-authoritative-spawn cutover (persona_id
@@ -331,6 +330,12 @@ pub fn run() {
             }
 
             try_regenerate_nest(&app_handle);
+
+            // Sync team-dir edits and reconcile persona/team/agent events after
+            // setup can continue. It is best-effort retention backfill, unlike
+            // identity resolution above, so JSON/SQLite/signing work must not
+            // hold the boot path hostage.
+            event_sync::spawn_event_sync(app_handle.clone(), owner_keys);
 
             if let Some(mgr) = huddle::models::global_model_manager() {
                 mgr.start_stt_download(state.http_client.clone());
@@ -570,6 +575,7 @@ pub fn run() {
             parse_persona_files,
             export_persona_to_json,
             get_channel_workflows,
+            get_channels_workflows,
             get_workflow,
             create_workflow,
             update_workflow,

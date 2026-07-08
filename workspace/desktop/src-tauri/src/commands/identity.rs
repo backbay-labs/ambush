@@ -165,43 +165,48 @@ pub fn get_nsec(state: State<'_, AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn import_identity(
+pub async fn import_identity(
     nsec: String,
     app_handle: tauri::AppHandle,
-    state: State<'_, AppState>,
 ) -> Result<IdentityInfo, String> {
-    let trimmed = nsec.trim();
-    let keys = Keys::parse(trimmed).map_err(|e| format!("Invalid private key: {e}"))?;
+    tokio::task::spawn_blocking(move || {
+        let trimmed = nsec.trim();
+        let keys = Keys::parse(trimmed).map_err(|e| format!("Invalid private key: {e}"))?;
 
-    // Persist to identity.key
-    let data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app data dir: {e}"))?;
-    std::fs::create_dir_all(&data_dir).map_err(|e| format!("create app data dir: {e}"))?;
-    let key_path = data_dir.join("identity.key");
-    crate::app_state::save_key_file(&key_path, &keys)?;
+        // Persist to identity.key before swapping in-memory state. If the disk
+        // write fails, the running app keeps the old identity.
+        let data_dir = app_handle
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {e}"))?;
+        std::fs::create_dir_all(&data_dir).map_err(|e| format!("create app data dir: {e}"))?;
+        let key_path = data_dir.join("identity.key");
+        crate::app_state::save_key_file(&key_path, &keys)?;
 
-    // Update in-memory keys
-    let pubkey = keys.public_key();
-    *state.keys.lock().map_err(|e| e.to_string())? = keys;
+        // Update in-memory keys only after persistence succeeds.
+        let state = app_handle.state::<AppState>();
+        let pubkey = keys.public_key();
+        *state.keys.lock().map_err(|e| e.to_string())? = keys;
 
-    let pubkey_hex = pubkey.to_hex();
-    let bech32 = pubkey
-        .to_bech32()
-        .map_err(|error| format!("bech32 encode failed: {error}"))?;
-    let display_name = if bech32.len() > 16 {
-        format!("{}…{}", &bech32[..10], &bech32[bech32.len() - 4..])
-    } else {
-        bech32
-    };
+        let pubkey_hex = pubkey.to_hex();
+        let bech32 = pubkey
+            .to_bech32()
+            .map_err(|error| format!("bech32 encode failed: {error}"))?;
+        let display_name = if bech32.len() > 16 {
+            format!("{}…{}", &bech32[..10], &bech32[bech32.len() - 4..])
+        } else {
+            bech32
+        };
 
-    eprintln!("buzz-desktop: imported identity pubkey {}", pubkey_hex);
+        eprintln!("buzz-desktop: imported identity pubkey {}", pubkey_hex);
 
-    Ok(IdentityInfo {
-        pubkey: pubkey_hex,
-        display_name,
+        Ok(IdentityInfo {
+            pubkey: pubkey_hex,
+            display_name,
+        })
     })
+    .await
+    .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
 #[tauri::command]
