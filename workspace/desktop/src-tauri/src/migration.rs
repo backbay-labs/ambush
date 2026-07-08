@@ -153,6 +153,7 @@ pub fn run_boot_migrations(app: &tauri::AppHandle) {
         eprintln!("buzz-desktop: sync-team-personas: {e}");
     }
     reconcile_provider_mcp_commands(app);
+    materialize_agent_runtimes(app);
 }
 
 /// Copy one-time app state from the legacy app identifier directory to
@@ -1270,6 +1271,9 @@ pub fn migrate_persona_provider_to_runtime(app: &tauri::AppHandle) {
     }
     rename_provider_to_runtime_in_personas(&path);
 }
+
+mod materialize;
+pub use materialize::materialize_agent_runtimes;
 
 #[cfg(test)]
 #[path = "migration_test_support.rs"]

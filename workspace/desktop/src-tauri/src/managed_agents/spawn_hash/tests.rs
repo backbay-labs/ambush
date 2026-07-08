@@ -40,6 +40,14 @@ fn record() -> ManagedAgentRecord {
         last_error: None,
         respond_to: Default::default(),
         respond_to_allowlist: vec![],
+        display_name: None,
+        slug: None,
+        runtime: None,
+        name_pool: Vec::new(),
+        is_builtin: false,
+        is_active: true,
+        source_team: None,
+        source_team_persona_slug: None,
         relay_mesh: None,
     }
 }
@@ -70,6 +78,28 @@ fn hash_is_deterministic() {
     assert_eq!(
         spawn_config_hash(&rec, &[], "wss://ws.example"),
         spawn_config_hash(&rec, &[], "wss://ws.example")
+    );
+}
+
+#[test]
+fn materializing_runtime_keeps_hash_stable() {
+    // Migration cutover invariant (Phase 1A): materializing the linked
+    // persona's runtime onto the record must NOT change the spawn hash —
+    // otherwise every running persona-linked agent would show a spurious
+    // restart badge right after migration. Pre-migration the command resolves
+    // through the persona fallback; post-migration through record.runtime.
+    // Same persona, same runtime, same command → same hash.
+    let personas = vec![persona("p1", Some("goose"), "Persona prompt.")];
+
+    let mut pre = record();
+    pre.persona_id = Some("p1".into());
+
+    let mut post = pre.clone();
+    post.runtime = Some("goose".into());
+
+    assert_eq!(
+        spawn_config_hash(&pre, &personas, "wss://ws.example"),
+        spawn_config_hash(&post, &personas, "wss://ws.example")
     );
 }
 
