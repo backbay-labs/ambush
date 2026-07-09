@@ -1732,7 +1732,11 @@ pub fn spawn_agent_child(
     // persona) is what keeps a running agent pinned across restarts: a persona
     // edit reaches the agent only via delete+respawn, which rewrites the
     // snapshot.
-    let effective_prompt = record.system_prompt.clone();
+    // Prompt via the shared spawn-effective filter — the SAME function the
+    // config hash digests, so env write and badge cannot disagree (see
+    // `effective_spawn_prompt` for the Some("")/None collapse and the
+    // team-pack suppression exception).
+    let effective_prompt = super::spawn_hash::effective_spawn_prompt(record);
     let effective_model = record.model.clone();
     let effective_provider = record.provider.clone();
 

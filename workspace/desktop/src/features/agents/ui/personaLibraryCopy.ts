@@ -4,7 +4,6 @@ export const personaLibraryCopy = {
     "The agents you have chosen for this app. Use them to create teams and launch agents.",
   chooseFromCatalog: "Choose from catalog",
   createNew: "New agent",
-  customAgent: "Custom agent",
   import: "Import",
   emptyTitle: "No agents yet",
   emptyDescription:
@@ -25,7 +24,7 @@ export const personaCatalogCopy = {
   emptyCatalogTitle: "No agents in the catalog yet",
   detailsAction: "View details",
   selectAction: "Choose",
-  deselectAction: "Selected",
+  deselectAction: "Deselect",
   selectedState: "Selected",
   availableState: "Available",
   detailSelectedTitle: "Selected for My Agents",

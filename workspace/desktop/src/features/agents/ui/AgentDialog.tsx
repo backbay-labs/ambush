@@ -2,26 +2,29 @@ import * as React from "react";
 
 import type {
   AcpRuntimeCatalogEntry,
-  CreateManagedAgentResponse,
   CreatePersonaInput,
   ManagedAgent,
   UpdatePersonaInput,
 } from "@/shared/api/types";
 import { Switch } from "@/shared/ui/switch";
+import type { BackendIntent } from "../lib/instanceInputForDefinition";
 import {
   definitionCreateDialogState,
   intentForStartToggle,
   type AgentCreateIntent,
 } from "./agentCreateIntent";
 import { AgentInstanceEditDialog } from "./AgentInstanceEditDialog";
-import { CreateAgentDialog } from "./CreateAgentDialog";
 import { createPersonaDialogState } from "./personaDialogState";
 import { AgentDefinitionDialog } from "./AgentDefinitionDialog";
-
-export type AgentDialogCreateMode = "definition" | "instance";
+import { WhereToRunSection } from "./WhereToRunSection";
+import {
+  canSubmitWhereToRun,
+  emptyWhereToRunDraft,
+  resolveBackendIntent,
+} from "./whereToRunIntent";
 
 type AgentDialogCreateProps = {
-  mode: AgentDialogCreateMode;
+  mode: "definition";
   onOpenChange: (open: boolean) => void;
   definitionError: Error | null;
   isDefinitionPending: boolean;
@@ -30,8 +33,8 @@ type AgentDialogCreateProps = {
   onSubmitDefinition: (
     input: CreatePersonaInput | UpdatePersonaInput,
     intent: AgentCreateIntent,
+    backendIntent: BackendIntent | null,
   ) => Promise<boolean>;
-  onInstanceCreated: (result: CreateManagedAgentResponse) => void;
 };
 
 type AgentDialogInstanceEditProps = {
@@ -75,7 +78,6 @@ type AgentDialogProps =
  * that owns it. The definition family renders AgentDefinitionDialog — create
  * mode adds a "start after create" toggle, definition-edit passes the caller's
  * PersonaDialogState-derived props through unchanged (edit/duplicate/import).
- * The standalone-instance intent renders CreateAgentDialog unchanged;
  * instance-edit renders AgentInstanceEditDialog (persistent mount + `open`
  * toggle — its reset lifecycle is keyed on [open, agent.pubkey]).
  */
@@ -98,32 +100,21 @@ export function AgentDialog(props: AgentDialogProps) {
 }
 
 function AgentCreateDialogRouter({
-  mode,
   onOpenChange,
   definitionError,
   isDefinitionPending,
   runtimes,
   runtimesLoading,
   onSubmitDefinition,
-  onInstanceCreated,
 }: AgentDialogCreateProps) {
   const [startAfterCreate, setStartAfterCreate] = React.useState(true);
+  const [runDraft, setRunDraft] = React.useState(emptyWhereToRunDraft);
   // Stable identity across toggle flips — AgentDefinitionDialog re-initializes its
   // fields whenever `initialValues` changes.
   const initialValues = React.useMemo(
     () => createPersonaDialogState().initialValues,
     [],
   );
-
-  if (mode === "instance") {
-    return (
-      <CreateAgentDialog
-        onCreated={onInstanceCreated}
-        onOpenChange={onOpenChange}
-        open
-      />
-    );
-  }
 
   const copy = definitionCreateDialogState(startAfterCreate);
 
@@ -141,9 +132,21 @@ function AgentCreateDialogRouter({
             id="agent-dialog-start-toggle"
             onCheckedChange={setStartAfterCreate}
           />
-          Start agent after create
+          Start agent after creation
         </label>
       }
+      createRunSection={
+        // "Where to run" is instance state: with the start toggle off no
+        // instance exists, so the section disappears instead of dangling.
+        startAfterCreate ? (
+          <WhereToRunSection
+            draft={runDraft}
+            isPending={isDefinitionPending}
+            onDraftChange={setRunDraft}
+          />
+        ) : null
+      }
+      createSubmitBlocked={!canSubmitWhereToRun(runDraft, startAfterCreate)}
       description={copy.description}
       error={definitionError}
       initialValues={initialValues}
@@ -153,6 +156,7 @@ function AgentCreateDialogRouter({
         const submitted = await onSubmitDefinition(
           input,
           intentForStartToggle(startAfterCreate),
+          resolveBackendIntent(runDraft, startAfterCreate),
         );
         if (submitted) {
           onOpenChange(false);

@@ -51,6 +51,10 @@ fn record() -> ManagedAgentRecord {
         is_active: true,
         source_team: None,
         source_team_persona_slug: None,
+        definition_respond_to: None,
+        definition_respond_to_allowlist: Vec::new(),
+        definition_mcp_toolsets: None,
+        definition_parallelism: None,
         relay_mesh: None,
     }
 }
@@ -70,6 +74,10 @@ fn persona(id: &str, runtime: Option<&str>, prompt: &str) -> PersonaRecord {
         source_team: None,
         source_team_persona_slug: None,
         env_vars: BTreeMap::new(),
+        respond_to: None,
+        respond_to_allowlist: Vec::new(),
+        mcp_toolsets: None,
+        parallelism: None,
         created_at: "now".into(),
         updated_at: "now".into(),
     }
@@ -300,5 +308,94 @@ fn non_spawn_bookkeeping_fields_do_not_change_hash() {
     assert_eq!(
         spawn_config_hash(&rec, &[], "wss://ws.example"),
         spawn_config_hash(&edited, &[], "wss://ws.example")
+    );
+}
+
+#[test]
+fn resnapshot_does_not_clobber_record_quad_with_definition_absent_quad() {
+    // B5 hash row 3: the prospective re-snapshot copies ONLY
+    // prompt/model/provider/env from the linked definition. An instance
+    // whose owner hand-set respond_to/allowlist/parallelism/toolsets must
+    // hash identically whether or not its definition carries a quad —
+    // activation of the definition-level defaults must never reach through
+    // spawn and overwrite instance state.
+    let quadless_definition = vec![persona("p1", Some("goose"), "Persona prompt.")];
+
+    let mut rec = record();
+    rec.persona_id = Some("p1".into());
+    rec.respond_to = RespondTo::Allowlist;
+    rec.respond_to_allowlist = vec!["a".repeat(64)];
+    rec.parallelism = 4;
+    rec.mcp_toolsets = Some("default,canvas".into());
+
+    let mut definition_with_quad = quadless_definition.clone();
+    definition_with_quad[0].respond_to = Some("anyone".into());
+    definition_with_quad[0].parallelism = Some(8);
+    definition_with_quad[0].mcp_toolsets = Some("default".into());
+
+    assert_eq!(
+        spawn_config_hash(&rec, &quadless_definition, "wss://ws.example"),
+        spawn_config_hash(&rec, &definition_with_quad, "wss://ws.example"),
+        "definition quad must not leak into the spawn hash of an existing instance"
+    );
+}
+
+#[test]
+fn empty_prompt_hashes_like_absent_prompt() {
+    // B5 hash row 2 foundation: Some("") and None spawn identically (env var
+    // absent either way), so they must hash equal — a backfilled prompt-less
+    // record re-snapshots to Some("") and must not trip the badge.
+    let mut absent = record();
+    absent.system_prompt = None;
+    let mut empty = record();
+    empty.system_prompt = Some(String::new());
+    assert_eq!(
+        spawn_config_hash(&absent, &[], "wss://ws.example"),
+        spawn_config_hash(&empty, &[], "wss://ws.example"),
+    );
+}
+
+#[test]
+fn team_pack_records_keep_empty_vs_absent_prompt_distinction() {
+    // Wrinkle-1 exception (Pinky): with BUZZ_ACP_PERSONA_PACK set, buzz-acp
+    // inherits the pack persona's prompt when the env var is ABSENT, while
+    // set-but-empty suppresses it. For team records the two states spawn
+    // differently, so they must hash differently.
+    let mut absent = record();
+    absent.persona_team_dir = Some(std::path::PathBuf::from("/teams/alpha"));
+    absent.persona_name_in_team = Some("lep".into());
+    absent.system_prompt = None;
+
+    let mut empty = absent.clone();
+    empty.system_prompt = Some(String::new());
+
+    assert_ne!(
+        spawn_config_hash(&absent, &[], "wss://ws.example"),
+        spawn_config_hash(&empty, &[], "wss://ws.example"),
+        "suppressed pack prompt is a different spawn than inherited pack prompt"
+    );
+}
+
+#[test]
+fn effective_spawn_prompt_matches_hash_semantics() {
+    // The env write and the hash share effective_spawn_prompt — this row
+    // pins the helper's own semantics so a refactor of either caller cannot
+    // silently diverge from the contract.
+    let mut r = record();
+    r.system_prompt = Some(String::new());
+    assert_eq!(
+        effective_spawn_prompt(&r),
+        None,
+        "empty collapses to absent"
+    );
+    r.system_prompt = Some("real".into());
+    assert_eq!(effective_spawn_prompt(&r).as_deref(), Some("real"));
+    r.system_prompt = Some(String::new());
+    r.persona_team_dir = Some(std::path::PathBuf::from("/teams/alpha"));
+    r.persona_name_in_team = Some("lep".into());
+    assert_eq!(
+        effective_spawn_prompt(&r).as_deref(),
+        Some(""),
+        "team-pack set-but-empty survives (deliberate suppression)"
     );
 }

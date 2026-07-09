@@ -26,7 +26,6 @@ import type {
   UpdatePersonaInput,
 } from "@/shared/api/types";
 import {
-  createPersonaDialogState,
   duplicatePersonaDialogState,
   editPersonaDialogState,
   importPersonaDialogState,
@@ -37,7 +36,12 @@ import {
   type AgentCreateIntent,
 } from "./agentCreateIntent";
 import { resolveManagedAgentAvatarUrl } from "./managedAgentAvatar";
-import { buildInstanceInputForDefinition } from "../lib/instanceInputForDefinition";
+import {
+  buildInstanceInputForDefinition,
+  mintDefinitionWithPreflight,
+  type BackendIntent,
+} from "../lib/instanceInputForDefinition";
+import { meshPrepareRelayMeshClient } from "@/shared/api/tauriMesh";
 import { usePersonaImportActions } from "./usePersonaImportActions";
 
 type PersonaFeedbackSurface = "catalog" | "library";
@@ -161,6 +165,7 @@ export function usePersonaActions() {
   async function handleSubmit(
     input: CreatePersonaInput | UpdatePersonaInput,
     intent?: AgentCreateIntent,
+    backendIntent?: BackendIntent | null,
   ): Promise<boolean> {
     if (isPersonaSubmitPending) {
       return false;
@@ -183,15 +188,26 @@ export function usePersonaActions() {
           return false;
         }
 
+        // Stale-intent guard: a definition-only create never carries one.
+        const startIntent =
+          resolveCreateIntent(intent) === "definition_start"
+            ? (backendIntent ?? null)
+            : null;
+
         const avatarUrl = await resolveManagedAgentAvatarUrl(
           input.avatarUrl,
           undefined,
           runtime.avatarUrl,
         );
-        const persona = await createPersonaMutation.mutateAsync({
-          ...input,
-          avatarUrl,
-        });
+        const persona = await mintDefinitionWithPreflight(
+          startIntent,
+          meshPrepareRelayMeshClient,
+          () =>
+            createPersonaMutation.mutateAsync({
+              ...input,
+              avatarUrl,
+            }),
+        );
 
         if (resolveCreateIntent(intent) === "definition") {
           setPersonaNoticeMessage(`Created ${persona.displayName}.`);
@@ -201,6 +217,8 @@ export function usePersonaActions() {
         const agentInput = await buildInstanceInputForDefinition(
           persona,
           runtime,
+          undefined,
+          startIntent ?? undefined,
         );
 
         try {
@@ -330,11 +348,6 @@ export function usePersonaActions() {
     setShouldLoadAcpRuntimes(true);
   }
 
-  function openCreate() {
-    prepareCreate();
-    setPersonaDialogState(createPersonaDialogState());
-  }
-
   function openEdit(persona: AgentPersona) {
     clearFeedback("library");
     setShouldLoadAcpRuntimes(true);
@@ -427,7 +440,6 @@ export function usePersonaActions() {
     handleImportFile,
     handleExport,
     handleBatchImportComplete,
-    openCreate,
     prepareCreate,
     openEdit,
     openDuplicate,

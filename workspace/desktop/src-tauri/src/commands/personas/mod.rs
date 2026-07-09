@@ -5,10 +5,10 @@ use super::export_util::save_json_with_dialog;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        agent_events::ManagedAgentEventContent, effective_agent_command, encode_persona_json,
-        load_managed_agents, load_personas, load_teams, managed_agent_avatar_url,
-        parse_json_persona, parse_md_persona, parse_png_persona, parse_zip_personas,
-        persona_events::persona_d_tag, save_managed_agents, save_personas,
+        agent_events::ManagedAgentEventContent, apply_persona_behavior, effective_agent_command,
+        encode_persona_json, load_managed_agents, load_personas, load_teams,
+        managed_agent_avatar_url, parse_json_persona, parse_md_persona, parse_png_persona,
+        parse_zip_personas, persona_events::persona_d_tag, save_managed_agents, save_personas,
         team_events::TeamEventContent, team_persona_key, try_regenerate_nest,
         validate_persona_activation_change, validate_persona_deletion, CreatePersonaRequest,
         ManagedAgentRecord, ParsePersonaFilesResult, PersonaRecord, TeamRecord,
@@ -32,123 +32,9 @@ fn trim_optional(value: Option<String>) -> Option<String> {
     })
 }
 
-/// Retain a freshly authored persona event in the local store, flagged for
-/// relay sync. Called inside a command's `managed_agents_store_lock`-held body
-/// after `save_personas`; the background flush loop publishes it out-of-band.
-///
-/// The event is signed with the owner keys at call time, so its `created_at`
-/// is `now` — newer than any prior retained row, clearing the upsert's
-/// newer-or-equal guard. `pending_sync = 1` enqueues it for the flush loop,
-/// which is the sole publisher. Best-effort: a failure here is logged and
-/// swallowed so a retention hiccup never blocks the disk-authoritative write.
-///
-/// Unlike `retain_managed_agent_pending`, this has no projection-equality
-/// short-circuit: personas have no start/stop runtime churn, so a republish
-/// only happens on a genuine create/update/delete user edit (`set_persona_active`
-/// does not retain, so the local-only `is_active` toggle never republishes, and
-/// a byte-identical user-save republish is harmlessly NIP-33-replaced). The
-/// guard is intentionally omitted.
-fn retain_persona_pending(app: &AppHandle, state: &AppState, persona: &PersonaRecord) {
-    use crate::managed_agents::{
-        managed_agents_base_dir,
-        persona_events::{build_persona_event, monotonic_created_at, persona_d_tag},
-        retention::{get_retained_event, open_retention_db, retain_event, RetainedEvent},
-    };
-    use buzz_core_pkg::kind::KIND_PERSONA;
-    use nostr::JsonUtil;
-
-    let result = (|| -> Result<(), String> {
-        let d_tag = persona_d_tag(persona);
-        let conn = open_retention_db(&managed_agents_base_dir(app)?.join("retention.db"))?;
-        let (pubkey, event) = {
-            let keys = state.keys.lock().map_err(|e| e.to_string())?;
-            // Monotonic created_at: read the retained head for this coordinate
-            // and bump past it (NIP-AP step 3) so a same-second edit supersedes.
-            let prior =
-                get_retained_event(&conn, KIND_PERSONA, &keys.public_key().to_hex(), &d_tag)?
-                    .map(|row| row.created_at);
-            let event = build_persona_event(persona)?
-                .custom_created_at(monotonic_created_at(prior))
-                .sign_with_keys(&keys)
-                .map_err(|e| format!("failed to sign persona event: {e}"))?;
-            (keys.public_key().to_hex(), event)
-        };
-        retain_event(
-            &conn,
-            &RetainedEvent {
-                kind: KIND_PERSONA,
-                pubkey,
-                d_tag,
-                content: event.content.to_string(),
-                created_at: event.created_at.as_secs() as i64,
-                raw_event: event.as_json(),
-                pending_sync: true,
-            },
-        )
-    })();
-    if let Err(e) = result {
-        eprintln!("buzz-desktop: persona-retain: {e}");
-    }
-}
-
-/// Purge a deleted persona's pending row and enqueue a NIP-09 tombstone, both
-/// inside the `managed_agents_store_lock`-held delete body.
-///
-/// PURGE IN: `delete_retained_event` removes the persona's `(30175, pubkey,
-/// d_tag)` row. Running it under the same lock that serializes `retain_event`
-/// closes the same-second resurrect race — a concurrent edit can't re-insert a
-/// pending persona row after the tombstone is queued.
-///
-/// PUBLISH OUT: the kind:5 tombstone is retained at its own coordinate `(5,
-/// pubkey, d_tag)` (distinct from the purged persona row) with `pending_sync =
-/// 1`; the flush loop publishes it. Best-effort: a failure is logged and
-/// swallowed so a retention hiccup never blocks the disk-authoritative delete.
-pub(super) fn tombstone_persona_pending(app: &AppHandle, state: &AppState, d_tag: &str) {
-    use crate::managed_agents::{
-        managed_agents_base_dir,
-        persona_events::build_persona_delete,
-        retention::{
-            delete_retained_event, open_retention_db, retain_event, tombstone_retention_d_tag,
-            RetainedEvent,
-        },
-    };
-    use buzz_core_pkg::kind::KIND_PERSONA;
-    use nostr::JsonUtil;
-
-    const KIND_DELETE: u32 = 5;
-
-    let result = (|| -> Result<(), String> {
-        let (pubkey, event) = {
-            let keys = state.keys.lock().map_err(|e| e.to_string())?;
-            let pubkey = keys.public_key().to_hex();
-            let event = build_persona_delete(d_tag, &pubkey)?
-                .sign_with_keys(&keys)
-                .map_err(|e| format!("failed to sign persona tombstone: {e}"))?;
-            (pubkey, event)
-        };
-        let conn = open_retention_db(&managed_agents_base_dir(app)?.join("retention.db"))?;
-        // Purge the persona row first so an unpublished edit can never resurrect
-        // it after the tombstone publishes.
-        delete_retained_event(&conn, KIND_PERSONA, &pubkey, d_tag)?;
-        retain_event(
-            &conn,
-            &RetainedEvent {
-                kind: KIND_DELETE,
-                pubkey,
-                // Key by the target coordinate so cross-kind d-tag tombstones
-                // occupy distinct rows (F2c).
-                d_tag: tombstone_retention_d_tag(KIND_PERSONA, d_tag),
-                content: event.content.to_string(),
-                created_at: event.created_at.as_secs() as i64,
-                raw_event: event.as_json(),
-                pending_sync: true,
-            },
-        )
-    })();
-    if let Err(e) = result {
-        eprintln!("buzz-desktop: persona-tombstone: {e}");
-    }
-}
+mod pending;
+use pending::retain_persona_pending;
+pub(super) use pending::tombstone_persona_pending;
 
 #[tauri::command]
 pub async fn list_personas(app: AppHandle) -> Result<Vec<PersonaRecord>, String> {
@@ -193,7 +79,7 @@ pub async fn create_persona(
             .filter(|s| !s.is_empty())
             .collect();
         crate::managed_agents::validate_user_env_keys(&input.env_vars)?;
-        let persona = PersonaRecord {
+        let mut persona = PersonaRecord {
             id: Uuid::new_v4().to_string(),
             display_name,
             avatar_url,
@@ -207,9 +93,14 @@ pub async fn create_persona(
             source_team: None,
             source_team_persona_slug: None,
             env_vars: input.env_vars,
+            respond_to: None,
+            respond_to_allowlist: Vec::new(),
+            mcp_toolsets: None,
+            parallelism: None,
             created_at: now.clone(),
             updated_at: now,
         };
+        apply_persona_behavior(&mut persona, input.behavior)?;
         personas.push(persona.clone());
         save_personas(&app, &personas)?;
         retain_persona_pending(&app, &state, &persona);
@@ -279,6 +170,7 @@ pub async fn update_persona(
                 crate::managed_agents::validate_user_env_keys(&env_vars)?;
                 persona.env_vars = env_vars;
             }
+            apply_persona_behavior(persona, input.behavior)?;
             persona.updated_at = now_iso();
 
             save_personas(&app, &personas)?;
@@ -721,6 +613,10 @@ fn apply_inbound_persona(personas: &mut Vec<PersonaRecord>, inbound: PersonaReco
             local.model = inbound.model;
             local.provider = inbound.provider;
             local.name_pool = inbound.name_pool;
+            local.respond_to = inbound.respond_to;
+            local.respond_to_allowlist = inbound.respond_to_allowlist;
+            local.mcp_toolsets = inbound.mcp_toolsets;
+            local.parallelism = inbound.parallelism;
             local.updated_at = inbound.updated_at;
         }
         None => personas.push(inbound),

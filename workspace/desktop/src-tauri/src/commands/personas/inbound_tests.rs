@@ -23,6 +23,10 @@ fn local_in_app() -> PersonaRecord {
         source_team: Some("team-1".to_string()),
         source_team_persona_slug: None,
         env_vars: BTreeMap::from([("API_KEY".to_string(), "secret".to_string())]),
+        respond_to: None,
+        respond_to_allowlist: Vec::new(),
+        mcp_toolsets: None,
+        parallelism: None,
         created_at: "2025-01-01T00:00:00Z".to_string(),
         updated_at: "2025-01-01T00:00:00Z".to_string(),
     }
@@ -45,6 +49,10 @@ fn inbound_for(d_tag: &str, display_name: &str) -> PersonaRecord {
         source_team: None,
         source_team_persona_slug: Some(d_tag.to_string()),
         env_vars: BTreeMap::new(),
+        respond_to: None,
+        respond_to_allowlist: Vec::new(),
+        mcp_toolsets: None,
+        parallelism: None,
         created_at: "2025-06-01T00:00:00Z".to_string(),
         updated_at: "2025-06-01T00:00:00Z".to_string(),
     }
@@ -67,6 +75,36 @@ fn in_app_persona_matches_existing_uuid_and_patches() {
     assert_eq!(p.source_team, Some("team-1".to_string()));
     assert_eq!(p.source_team_persona_slug, None);
     assert_eq!(p.created_at, "2025-01-01T00:00:00Z");
+}
+
+#[test]
+fn inbound_quad_edit_applies_to_existing_matched_record() {
+    // B5 quad activation: a remote quad edit must land on the MATCH branch,
+    // not just the insert branch — otherwise device B keeps its stale quad
+    // and its next reconcile republishes it over device A's edit, and the
+    // two devices never converge (permanent ping-pong).
+    let mut local = local_in_app();
+    local.respond_to = Some("owner-only".to_string());
+    local.parallelism = Some(2);
+    let mut personas = vec![local];
+
+    let mut inbound = inbound_for(UUID, "Remote");
+    inbound.respond_to = Some("allowlist".to_string());
+    inbound.respond_to_allowlist = vec!["a".repeat(64)];
+    inbound.mcp_toolsets = Some("default,canvas".to_string());
+    inbound.parallelism = Some(8);
+    apply_inbound_persona(&mut personas, inbound);
+
+    assert_eq!(personas.len(), 1, "no duplicate row");
+    let p = &personas[0];
+    assert_eq!(p.respond_to, Some("allowlist".to_string()));
+    assert_eq!(p.respond_to_allowlist, vec!["a".repeat(64)]);
+    assert_eq!(p.mcp_toolsets, Some("default,canvas".to_string()));
+    assert_eq!(p.parallelism, Some(8));
+    // A quad-absent inbound also applies (clears), same as prompt/model.
+    apply_inbound_persona(&mut personas, inbound_for(UUID, "Remote"));
+    assert_eq!(personas[0].respond_to, None);
+    assert_eq!(personas[0].parallelism, None);
 }
 
 #[test]
@@ -171,6 +209,10 @@ fn local_agent() -> ManagedAgentRecord {
         is_active: true,
         source_team: None,
         source_team_persona_slug: None,
+        definition_respond_to: None,
+        definition_respond_to_allowlist: Vec::new(),
+        definition_mcp_toolsets: None,
+        definition_parallelism: None,
         relay_mesh: None,
     }
 }
