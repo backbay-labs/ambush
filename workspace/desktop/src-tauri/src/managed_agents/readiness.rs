@@ -276,12 +276,29 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
 
     // Model is required — maps to BUZZ_AGENT_MODEL in the effective env.
     // Same empty-string treatment as provider.
-    let model = effective
+    // Also accept provider-specific model fallback keys, matching buzz-agent's
+    // own config.rs `from_env()` resolution order (e.g. DATABRICKS_MODEL for
+    // databricks/databricks_v2, ANTHROPIC_MODEL for anthropic, etc.). The
+    // baked buzz-releases env sets DATABRICKS_MODEL but not BUZZ_AGENT_MODEL,
+    // so without this fallback agents baked from releases appear "not ready".
+    let provider_model_key = match provider {
+        Some("databricks") | Some("databricks_v2") | Some("databricks-v2") => {
+            Some("DATABRICKS_MODEL")
+        }
+        Some("anthropic") => Some("ANTHROPIC_MODEL"),
+        Some("openai") | Some("openai-compat") => Some("OPENAI_COMPAT_MODEL"),
+        _ => None,
+    };
+    let model_present = effective
         .env
         .get("BUZZ_AGENT_MODEL")
         .filter(|v| !v.is_empty())
-        .map(String::as_str);
-    if model.is_none() {
+        .is_some()
+        || provider_model_key
+            .and_then(|k| effective.env.get(k))
+            .filter(|v| !v.is_empty())
+            .is_some();
+    if !model_present {
         missing.push(Requirement::NormalizedField {
             field: "model".to_string(),
         });
@@ -304,7 +321,7 @@ fn buzz_agent_requirements(effective: &EffectiveAgentEnv) -> Vec<Requirement> {
                     key: "OPENAI_COMPAT_API_KEY".to_string(),
                 });
             }
-        Some("databricks") | Some("databricks_v2")
+        Some("databricks") | Some("databricks_v2") | Some("databricks-v2")
             // DATABRICKS_HOST is hard-required; DATABRICKS_TOKEN is optional
             // (OAuth PKCE is the normal path — see buzz-agent/src/config.rs:143).
             if env_key_missing("DATABRICKS_HOST") => {
@@ -412,7 +429,7 @@ fn goose_requirements(
                 key: "OPENAI_COMPAT_API_KEY".to_string(),
             });
         }
-        Some("databricks") | Some("databricks_v2")
+        Some("databricks") | Some("databricks_v2") | Some("databricks-v2")
             if env_key_missing("DATABRICKS_HOST") && !file_key_present("DATABRICKS_HOST") =>
         {
             missing.push(Requirement::EnvKey {
@@ -1198,6 +1215,141 @@ mod tests {
             effective.env.get("BUZZ_AGENT_MODEL").map(String::as_str),
             Some("claude-opus-4-5")
         );
+    }
+
+    // ── provider-specific model fallback tests ────────────────────────────
+
+    #[test]
+    fn buzz_agent_databricks_v2_with_databricks_model_but_no_buzz_agent_model_is_ready() {
+        // The baked buzz-releases env sets DATABRICKS_MODEL but not BUZZ_AGENT_MODEL.
+        // An agent with only DATABRICKS_MODEL must pass the readiness gate.
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "databricks_v2"),
+                ("DATABRICKS_MODEL", "goose-claude-4-6-sonnet"),
+                ("DATABRICKS_HOST", "https://dbc.example.com"),
+            ]),
+        );
+        assert!(
+            agent_readiness(&env).is_ready(),
+            "DATABRICKS_MODEL must satisfy the model requirement for databricks_v2"
+        );
+    }
+
+    #[test]
+    fn buzz_agent_databricks_v2_hyphen_alias_with_databricks_model_is_ready() {
+        // buzz-agent accepts both "databricks_v2" and "databricks-v2". The
+        // readiness gate must recognize the hyphen alias and accept DATABRICKS_MODEL.
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "databricks-v2"),
+                ("DATABRICKS_MODEL", "goose-claude-4-6-sonnet"),
+                ("DATABRICKS_HOST", "https://dbc.example.com"),
+            ]),
+        );
+        assert!(
+            agent_readiness(&env).is_ready(),
+            "databricks-v2 alias with DATABRICKS_MODEL must be Ready"
+        );
+    }
+
+    #[test]
+    fn buzz_agent_databricks_hyphen_alias_missing_host_returns_not_ready() {
+        // The hyphen alias "databricks-v2" requires DATABRICKS_HOST just like
+        // the underscore variants. Without it the agent cannot reach the endpoint.
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "databricks-v2"),
+                ("DATABRICKS_MODEL", "goose-claude-4-6-sonnet"),
+                // DATABRICKS_HOST intentionally absent
+            ]),
+        );
+        let result = agent_readiness(&env);
+        assert!(
+            !result.is_ready(),
+            "databricks-v2 without DATABRICKS_HOST must be NotReady"
+        );
+        let reqs = result.requirements();
+        assert!(
+            reqs.iter()
+                .any(|r| matches!(r, Requirement::EnvKey { key } if key == "DATABRICKS_HOST")),
+            "missing requirements must include DATABRICKS_HOST; got {reqs:?}"
+        );
+    }
+
+    #[test]
+    fn buzz_agent_databricks_v1_with_databricks_model_but_no_buzz_agent_model_is_ready() {
+        // V1 (Model Serving) also resolves DATABRICKS_MODEL — same fallback applies.
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "databricks"),
+                ("DATABRICKS_MODEL", "dbrx-instruct"),
+                ("DATABRICKS_HOST", "https://dbc.example.com"),
+            ]),
+        );
+        assert!(
+            agent_readiness(&env).is_ready(),
+            "DATABRICKS_MODEL must satisfy the model requirement for databricks (V1)"
+        );
+    }
+
+    #[test]
+    fn buzz_agent_anthropic_with_anthropic_model_but_no_buzz_agent_model_is_ready() {
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "anthropic"),
+                ("ANTHROPIC_MODEL", "claude-opus-4-5"),
+                ("ANTHROPIC_API_KEY", "sk-test"),
+            ]),
+        );
+        assert!(
+            agent_readiness(&env).is_ready(),
+            "ANTHROPIC_MODEL must satisfy the model requirement for anthropic"
+        );
+    }
+
+    #[test]
+    fn buzz_agent_openai_with_openai_compat_model_but_no_buzz_agent_model_is_ready() {
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "openai"),
+                ("OPENAI_COMPAT_MODEL", "gpt-4o"),
+                ("OPENAI_COMPAT_API_KEY", "sk-test"),
+            ]),
+        );
+        assert!(
+            agent_readiness(&env).is_ready(),
+            "OPENAI_COMPAT_MODEL must satisfy the model requirement for openai"
+        );
+    }
+
+    #[test]
+    fn buzz_agent_empty_provider_model_fallback_key_is_not_ready() {
+        // An empty DATABRICKS_MODEL with no BUZZ_AGENT_MODEL must still be NotReady.
+        let env = make_env(
+            "buzz-agent",
+            env_with(&[
+                ("BUZZ_AGENT_PROVIDER", "databricks_v2"),
+                ("DATABRICKS_MODEL", ""),
+                ("DATABRICKS_HOST", "https://dbc.example.com"),
+            ]),
+        );
+        let result = agent_readiness(&env);
+        assert!(
+            !result.is_ready(),
+            "empty DATABRICKS_MODEL with no BUZZ_AGENT_MODEL must be NotReady"
+        );
+        assert!(result
+            .requirements()
+            .contains(&Requirement::NormalizedField {
+                field: "model".to_string()
+            }));
     }
 }
 
