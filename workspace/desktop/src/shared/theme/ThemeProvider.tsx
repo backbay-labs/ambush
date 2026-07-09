@@ -7,6 +7,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { isTauri } from "@tauri-apps/api/core";
+import { invokeTauri } from "@/shared/api/tauri";
+import { isMacPlatform } from "@/shared/lib/platform";
 import { createThemeVars, hexToHsl } from "./adaptive-theme";
 import {
   SYNTAX_THEMES,
@@ -26,6 +29,7 @@ const VIDEO_REVIEW_NEUTRAL_ACCENT = "0 0% 98%";
 const VIDEO_REVIEW_CHIP_SURFACE = "#161616";
 const VIDEO_REVIEW_TEXT_CONTRAST = 4.5;
 const VIDEO_REVIEW_CHIP_BACKGROUND_ALPHAS = [0.15, 0.3] as const;
+const BUZZ_VIBRANCY_MATERIAL = "sidebar";
 
 export const ACCENT_COLORS = [
   { name: "Neutral", value: NEUTRAL_ACCENT },
@@ -206,13 +210,51 @@ function applyAccentColor(value: string) {
   root.style.setProperty("--sidebar-active-foreground", fgHsl);
 }
 
-/** Toggle the Buzz sidebar-gradient marker on the document root. */
+function isBuzzTheme(themeName: string): boolean {
+  return themeName === "buzz" || themeName === "buzz-dark";
+}
+
+/** Toggle the Buzz sidebar-gradient and translucency markers on the root. */
 function applyBuzzSidebar(themeName: string) {
   const root = document.documentElement;
-  if (themeName === "buzz" || themeName === "buzz-dark") {
+  if (isBuzzTheme(themeName)) {
     root.setAttribute("data-buzz-sidebar", "");
+    // The translucent treatment (transparent root/body + semi-transparent
+    // sidebar gradient) relies on the native macOS `NSVisualEffectView`
+    // vibrancy layer painting behind the webview. On Windows/Linux
+    // `set_window_vibrancy` is a no-op, but the window is transparent
+    // globally (tauri.conf.json), so a transparent root would show raw
+    // desktop content through the UI. Gate the translucent marker and
+    // transparent root background to macOS; other platforms fall back to the
+    // opaque Buzz gradient (`data-buzz-sidebar` paints solid colors) with the
+    // normal `bg-background` body fill.
+    if (isMacPlatform()) {
+      root.setAttribute("data-buzz-translucent", "");
+      root.style.setProperty("background-color", "transparent");
+      root.style.setProperty("background-image", "none");
+    } else {
+      root.removeAttribute("data-buzz-translucent");
+      root.style.removeProperty("background-color");
+      root.style.removeProperty("background-image");
+    }
   } else {
     root.removeAttribute("data-buzz-sidebar");
+    root.removeAttribute("data-buzz-translucent");
+    root.style.removeProperty("background-color");
+    root.style.removeProperty("background-image");
+  }
+}
+
+async function applyBuzzVibrancy(themeName: string) {
+  if (!isTauri()) return;
+
+  try {
+    await invokeTauri<void>("set_window_vibrancy", {
+      enabled: isBuzzTheme(themeName),
+      material: BUZZ_VIBRANCY_MATERIAL,
+    });
+  } catch (error) {
+    console.warn("set_window_vibrancy failed", error);
   }
 }
 
@@ -326,6 +368,11 @@ export function ThemeProvider({
         );
       }
     });
+  }, [effectiveTheme]);
+
+  useEffect(() => {
+    if (!isValidThemeName(effectiveTheme)) return;
+    void applyBuzzVibrancy(effectiveTheme);
   }, [effectiveTheme]);
 
   // Listen for system color scheme changes when followSystem is enabled
