@@ -145,10 +145,10 @@ pub async fn update_persona(
             let persona = personas
                 .iter_mut()
                 .find(|record| record.id == input.id)
-                .ok_or_else(|| format!("persona {} not found", input.id))?;
+                .ok_or_else(|| format!("agent {} not found", input.id))?;
 
             if persona.is_builtin {
-                return Err("Built-in personas cannot be edited.".to_string());
+                return Err("Built-in agents cannot be edited.".to_string());
             }
 
             // Track whether avatar changed so we can sync linked agents.
@@ -177,7 +177,7 @@ pub async fn update_persona(
             let result = personas
                 .into_iter()
                 .find(|record| record.id == input.id)
-                .ok_or_else(|| format!("persona {} disappeared unexpectedly", input.id))?;
+                .ok_or_else(|| format!("agent {} disappeared unexpectedly", input.id))?;
 
             // For pack-backed personas, also write the edit back to the source
             // `.persona.md` so that launch sync (which reads the file) becomes a
@@ -291,7 +291,7 @@ pub async fn delete_persona(id: String, app: AppHandle) -> Result<(), String> {
         let persona = personas
             .iter()
             .find(|record| record.id == id)
-            .ok_or_else(|| format!("persona {id} not found"))?;
+            .ok_or_else(|| format!("agent {id} not found"))?;
         let referenced_by_team = load_teams(&app)?.iter().any(|team| {
             team.persona_ids
                 .iter()
@@ -306,7 +306,7 @@ pub async fn delete_persona(id: String, app: AppHandle) -> Result<(), String> {
         let original_len = personas.len();
         personas.retain(|record| record.id != id);
         if personas.len() == original_len {
-            return Err(format!("persona {id} not found"));
+            return Err(format!("agent {id} not found"));
         }
         save_personas(&app, &personas)?;
         tombstone_persona_pending(&app, &state, &d_tag);
@@ -383,8 +383,7 @@ fn reconcile_inbound_persona_event_blocking(
     use nostr::JsonUtil;
 
     let state = app.state::<AppState>();
-    let event = nostr::Event::from_json(&event_json)
-        .map_err(|e| format!("failed to parse inbound event: {e}"))?;
+    let event = parse_verified_inbound_event(&event_json)?;
 
     // The live filter subscribes to 30175/30176/30177 (upserts) plus kind:5
     // (NIP-09 deletions). d-tags are NOT unique across kinds, so every path
@@ -474,6 +473,21 @@ fn reconcile_inbound_persona_event_blocking(
     Ok(())
 }
 
+/// Parse an inbound wire event and enforce the signature gate. Everything
+/// downstream trusts `event.pubkey` (ownership routing, tombstone scoping,
+/// behavioral-quad application), so a forged pubkey must die here — the
+/// TS-side owner filter reads the same attacker-controlled field and is no
+/// defense.
+fn parse_verified_inbound_event(event_json: &str) -> Result<nostr::Event, String> {
+    use nostr::JsonUtil;
+    let event = nostr::Event::from_json(event_json)
+        .map_err(|e| format!("failed to parse inbound event: {e}"))?;
+    event
+        .verify()
+        .map_err(|e| format!("inbound event failed signature verification: {e}"))?;
+    Ok(event)
+}
+
 /// Parse a NIP-09 `a`-tag coordinate `<kind>:<owner_pubkey>:<d_tag>` into its
 /// target kind and d-tag. Returns `None` if the tag is absent or malformed, so
 /// the caller no-ops on a tombstone it can't route.
@@ -488,7 +502,14 @@ fn parse_deletion_coordinate(event: &nostr::Event) -> Option<(u32, String)> {
         // most twice and keep the remainder as the d_tag.
         let mut parts = coord.splitn(3, ':');
         let kind: u32 = parts.next()?.parse().ok()?;
-        let _owner = parts.next()?;
+        let owner = parts.next()?;
+        // NIP-09 scoping: only the record's author may tombstone it. The
+        // signature gate upstream proves `event.pubkey`; requiring the
+        // coordinate owner to match closes the other half — a validly
+        // signed kind:5 naming ANOTHER owner's coordinate must no-op.
+        if owner != event.pubkey.to_hex() {
+            return None;
+        }
         let d_tag = parts.next()?;
         Some((kind, d_tag.to_string()))
     })
@@ -715,7 +736,7 @@ pub async fn set_persona_active(
         let persona = personas
             .iter_mut()
             .find(|record| record.id == id)
-            .ok_or_else(|| format!("persona {id} not found"))?;
+            .ok_or_else(|| format!("agent {id} not found"))?;
 
         let referenced_by_managed_agent = !active
             && load_managed_agents(&app)?
@@ -860,7 +881,7 @@ pub async fn export_persona_to_json(
         let persona = personas
             .iter()
             .find(|p| p.id == id)
-            .ok_or_else(|| format!("persona {id} not found"))?;
+            .ok_or_else(|| format!("agent {id} not found"))?;
         (
             persona.display_name.clone(),
             persona.system_prompt.clone(),
