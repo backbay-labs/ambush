@@ -494,6 +494,7 @@ jobs:
             build-essential \
             ca-certificates \
             curl \
+            desktop-file-utils \
             file \
             git \
             libasound2-dev \
@@ -505,7 +506,9 @@ jobs:
             libxdo-dev \
             patchelf \
             pkg-config \
-            wget
+            squashfs-tools \
+            wget \
+            xdg-utils
           # Install GitHub CLI — preinstalled on runners but absent in containers.
           # wget and ca-certificates are now available from the step above.
           mkdir -p -m 755 /etc/apt/keyrings
