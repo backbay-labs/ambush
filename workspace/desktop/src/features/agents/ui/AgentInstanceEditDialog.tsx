@@ -96,11 +96,7 @@ export function AgentInstanceEditDialog({
     agent.personaId != null && agent.agentCommandOverride == null,
   );
   const [agentArgs, setAgentArgs] = React.useState(agent.agentArgs.join(","));
-  const [mcpCommand, setMcpCommand] = React.useState(agent.mcpCommand);
   const [mcpToolsets, setMcpToolsets] = React.useState(agent.mcpToolsets ?? "");
-  const [turnTimeoutSeconds, setTurnTimeoutSeconds] = React.useState(
-    String(agent.turnTimeoutSeconds),
-  );
   const [parallelism, setParallelism] = React.useState(
     String(agent.parallelism),
   );
@@ -155,9 +151,7 @@ export function AgentInstanceEditDialog({
         agent.personaId != null && agent.agentCommandOverride == null,
       );
       setAgentArgs(agent.agentArgs.join(","));
-      setMcpCommand(agent.mcpCommand);
       setMcpToolsets(agent.mcpToolsets ?? "");
-      setTurnTimeoutSeconds(String(agent.turnTimeoutSeconds));
       setParallelism(String(agent.parallelism));
       setSystemPrompt(agent.systemPrompt ?? "");
       setModel(agent.model ?? "");
@@ -458,7 +452,6 @@ export function AgentInstanceEditDialog({
     computeEditAgentFormValidity({
       name,
       parallelism,
-      turnTimeoutSeconds,
       agentAcpCommand: agent.acpCommand,
       acpCommand,
       respondTo,
@@ -474,7 +467,6 @@ export function AgentInstanceEditDialog({
   async function handleSubmit() {
     try {
       const parsedParallelism = Number.parseInt(parallelism, 10);
-      const parsedTimeout = Number.parseInt(turnTimeoutSeconds, 10);
       const parsedArgs = agentArgs
         .split(",")
         .map((v) => v.trim())
@@ -532,17 +524,9 @@ export function AgentInstanceEditDialog({
           parsedArgs.join(",") !== agent.agentArgs.join(",")
             ? parsedArgs
             : undefined,
-        mcpCommand:
-          mcpCommand.trim() !== agent.mcpCommand
-            ? mcpCommand.trim()
-            : undefined,
         mcpToolsets:
           (mcpToolsets.trim() || null) !== agent.mcpToolsets
             ? mcpToolsets.trim() || null
-            : undefined,
-        turnTimeoutSeconds:
-          parsedTimeout > 0 && parsedTimeout !== agent.turnTimeoutSeconds
-            ? parsedTimeout
             : undefined,
         parallelism:
           parsedParallelism > 0 && parsedParallelism !== agent.parallelism
@@ -943,26 +927,22 @@ export function AgentInstanceEditDialog({
                       inheritedEnvVars={inheritedEnvVars}
                       inheritHarness={inheritHarness}
                       linkedPersona={linkedPersona}
-                      mcpCommand={mcpCommand}
                       mcpToolsets={mcpToolsets}
                       parallelism={parallelism}
                       relayUrl={relayUrl}
                       requiredEnvKeys={requiredEnvKeys}
                       selectedRuntimeId={selectedRuntimeId}
                       systemPrompt={systemPrompt}
-                      turnTimeoutSeconds={turnTimeoutSeconds}
                       onAcpCommandChange={setAcpCommand}
                       onAgentArgsChange={setAgentArgs}
                       onAgentCommandChange={setAgentCommand}
                       onAutoRestartChange={setAutoRestartOnConfigChange}
                       onEnvVarsChange={setEnvVars}
                       onInheritHarnessChange={setInheritHarness}
-                      onMcpCommandChange={setMcpCommand}
                       onMcpToolsetsChange={setMcpToolsets}
                       onParallelismChange={setParallelism}
                       onRelayUrlChange={setRelayUrl}
                       onSystemPromptChange={setSystemPrompt}
-                      onTurnTimeoutChange={setTurnTimeoutSeconds}
                     />
                   </motion.div>
                 ) : null}
