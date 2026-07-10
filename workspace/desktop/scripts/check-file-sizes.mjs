@@ -72,7 +72,9 @@ const overrides = new Map([
   ["src-tauri/src/archive/mod_tests.rs", 1208],
   // unified-agent-model 1A.1: profile reconcile split to agents_profile.rs,
   // ratcheting 1443 -> 1295. Queued to split further in the A2 fold.
-  ["src-tauri/src/commands/agents.rs", 1295],
+  // global-agent-config: resolve_deploy_model_provider + visibility exports
+  // add ~40 lines on top of the 1A.1 ratchet. Queued to split.
+  ["src-tauri/src/commands/agents.rs", 1340],
   // #1418 read-path fix: get_thread_replies' blocker fix (shared TIMELINE_KINDS
   // const + build_thread_replies_filter helper, mirroring the channel sibling so
   // the two p-gate filters can't drift) plus two guard unit tests. The file was
@@ -108,7 +110,9 @@ const overrides = new Map([
   // +1 for agent_pubkey field in setup payload (config-nudge card wire).
   // persona-blank-fallback: resolve_effective_prompt_model_provider gains a
   // record_provider param + applies persona_field_with_record_fallback. +5 lines.
-  ["src-tauri/src/managed_agents/runtime.rs", 2213],
+  // global-agent-config: spawn_agent_child loads global config and merges as
+  // lowest env layer (+8 lines). Queued to split.
+  ["src-tauri/src/managed_agents/runtime.rs", 2216],
   // config-bridge setup-payload env-boundary fix adds readiness wiring in
   // spawn_agent_child; load-bearing security fix, queued to split.
   ["src-tauri/src/managed_agents/config_bridge/reader.rs", 1016],
@@ -132,7 +136,11 @@ const overrides = new Map([
   // host/credential match arms + 30+ readiness tests for provider aliases,
   // missing-host, and DATABRICKS_MODEL fallback. Load-bearing correctness fix.
   // #1613 augmented-PATH readiness probes grew the file +3 past the prior cap.
-  ["src-tauri/src/managed_agents/readiness.rs", 1549],
+  // +16: resolve_effective_agent_env + global-config readiness wiring (#1448).
+  // +1 rebase merge: GlobalAgentConfig import added alongside AcpAvailabilityStatus.
+  // +2 rebase onto #1667: behavioral quad fields in PersonaRecord/ManagedAgentRecord.
+  // +3 rebase onto main (#1568 + #1613): identity-import-keyring + augmented-PATH probes.
+  ["src-tauri/src/managed_agents/readiness.rs", 1565],
   // applyWorkspace reposDir parameter plus the validateReposDir binding,
   // threaded through Tauri invokes for configurable repos_dir, plus the
   // harness-persona-sync `harnessOverride` create-input bit — load-bearing
@@ -156,7 +164,8 @@ const overrides = new Map([
   // mention-alias fix: profile wrappers (RawProfile/RawUserProfileSummary types,
   // getProfile/updateProfile/getUserProfile/getUsersBatch/searchUsers) moved to
   // tauriProfiles.ts; limit ratcheted down 1360 → 1241 to bank the headroom.
-  ["src/shared/api/tauri.ts", 1241],
+  // baked-env fold-in: getBakedBuildEnv + BakedEnvEntry type adds ~28 lines.
+  ["src/shared/api/tauri.ts", 1271],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -164,8 +173,13 @@ const overrides = new Map([
   // config-bridge-aware requirements: useRuntimeFileConfigQuery wiring adds
   // ~16 lines. Queued to split.
   // baked-env-required-badge: useBakedBuildEnvKeysQuery + bakedEnvKeys wiring
-  // + correct exclusion-semantics for requiredEnvKeys adds ~14 lines. Queued to split.
-  ["src/features/agents/ui/PersonaDialog.tsx", 1046],
+  // + correct exclusion-semantics for requiredEnvKeys adds ~14 lines.
+  // +2 lines: filter managed provider key from requiredEnvKeys (suppress dead-input locked row).
+  // global-agent-config parity: wire useGlobalAgentConfig into PersonaDialog
+  // (Gap A: global-aware computeLocalModeGate + drop bare requiredCredentialEnvKeys;
+  // Gap B: hasAutoOpenedAdvancedRef auto-expand effect) + effective-provider
+  // save gate + Inherit/Select-a-provider label. Queued to split.
+  ["src/features/agents/ui/PersonaDialog.tsx", 1080],
   // harness-persona-sync feature growth, queued to split in the resolver-unify
   // refactor followup. discovery.rs is dominated by the new test module
   // (the effective_agent_command / divergent / create-time override matrix);
@@ -226,7 +240,8 @@ const overrides = new Map([
   // props restored after 826d735fe removal (UserProfilePanel.tsx still needs them).
   ["src/features/profile/ui/UserProfilePanelSections.tsx", 1140],
   // +14 for openEditAgent event subscription (config-nudge card "Open Edit Agent" action).
-  ["src/features/profile/ui/UserProfilePanel.tsx", 1014],
+  // +11 for editAgentFocus state + initialFocus prop threading (deep-link granularity).
+  ["src/features/profile/ui/UserProfilePanel.tsx", 1025],
   // PersistBackend enum + marker-on-keyring-success plumbing and its three
   // fail-closed regression tests (silent identity rotation on keyring outage).
   // A small overage from load-bearing security plumbing on a file already at
@@ -285,6 +300,10 @@ const overrides = new Map([
   // +8: harness_override thread-through in update_managed_agent so a deliberate
   // Custom pin routes to update_time_agent_command_override (comment + call).
   ["src-tauri/src/commands/agent_models.rs", 1079],
+  // global-agent-config: get_agent_config_surface / write_agent_config_field /
+  // put_agent_session_config commands + GlobalAgentConfig serde types. New file
+  // in this PR; queued to split with the command module refactor.
+  ["src-tauri/src/commands/agent_config.rs", 1002],
   // draft-persistence predicate: submit-time `loadDraft` check + inline comment
   // + deps-array entry in submitMessage closes the never-persisted-boundary
   // defect (Thufir Pass-3 finding). Load-bearing correctness fix; queued to
@@ -300,6 +319,25 @@ const overrides = new Map([
   // the ⌘K link-editor shortcut, mirroring the existing onEditLinkRef
   // pattern. Queued to split with the rest of this list.
   ["src/features/messages/ui/MessageComposer.tsx", 1036],
+  // global-agent-config: model-tuning section (BuzzAgentModelTuningFields via
+  // EditAgentAdvancedFields) + providerValid gate + effectiveProvider derivation
+  // + globalProvider threading into getPersonaProviderOptions. All load-bearing
+  // feature logic; queued to split with the rest of this list.
+  ["src/features/agents/ui/EditAgentDialog.tsx", 1088],
+  // global-agent-config rebase over #1639: AgentInstanceEditDialog (renamed from
+  // EditAgentDialog by #1639) gained initialFocus?/EditAgentFocusTarget prop
+  // threading from the deep-link focus feature, and isEditAgentProviderSaveValid
+  // extracted as a testable helper with originalRuntimeSupportsProvider to close
+  // the runtime-switch hole in Will's (b) providerValid gate narrowing.
+  // E2E-fix round: added globalProvider fallback to useRequiredCredentialState
+  // call site and buzz-agent auto-expand effect for model-tuning knob visibility.
+  // F1-fix: added globalEnvVars to useRequiredCredentialState so globally-satisfied
+  // credential keys are excluded from requiredEnvKeyMissing (display/gate parity).
+  // Feature logic, not generic debt. Approved override; still queued to split.
+  // +23 rebase onto #1667: behavioral quad fields (respond_to/parallelism/toolsets)
+  // plumbed through AgentInstanceEditDialog from PersonaAdvancedFields.
+  // +2 provider-aware effort: model/provider props threaded to BuzzAgentModelTuningFields.
+  ["src/features/agents/ui/AgentInstanceEditDialog.tsx", 1165],
 ]);
 
 await runFileSizeCheck({

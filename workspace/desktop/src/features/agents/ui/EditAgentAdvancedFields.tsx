@@ -8,6 +8,8 @@ import {
   PERSONA_LABEL_OPTIONAL_CLASS,
 } from "./personaDialogPickers";
 import type { AgentPersona } from "@/shared/api/types";
+import { BuzzAgentModelTuningFields } from "./buzzAgentModelTuningFields";
+import { isBuzzAgentRuntime } from "./buzzAgentConfig";
 
 export function EditAgentAdvancedFields({
   acpCommand,
@@ -17,11 +19,15 @@ export function EditAgentAdvancedFields({
   disabled,
   envVars,
   fileSatisfiedEnvKeys,
+  focusKey,
   inheritedEnvVars,
   inheritHarness,
   linkedPersona,
   mcpToolsets,
+  model,
+  modelTuningRuntimeId,
   parallelism,
+  provider,
   relayUrl,
   requiredEnvKeys,
   selectedRuntimeId,
@@ -44,11 +50,23 @@ export function EditAgentAdvancedFields({
   disabled: boolean;
   envVars: EnvVarsValue;
   fileSatisfiedEnvKeys: readonly string[];
+  /** When set, EnvVarsEditor scrolls and focuses this key's input on mount. */
+  focusKey?: string;
   inheritedEnvVars: Record<string, string>;
   inheritHarness: boolean;
   linkedPersona: AgentPersona | null;
   mcpToolsets: string;
+  /** Active LLM model — forwarded to BuzzAgentModelTuningFields for effort filtering. */
+  model?: string;
+  /**
+   * The actual/prospective runtime id used to decide whether to show the
+   * buzz-agent model-tuning fields. Uses `prospectiveRuntimeId` from
+   * EditAgentDialog — the resolved runtime, not the "inherit"/"custom" sentinel.
+   */
+  modelTuningRuntimeId: string;
   parallelism: string;
+  /** Active LLM provider id — forwarded to BuzzAgentModelTuningFields for effort filtering. */
+  provider?: string;
   relayUrl: string;
   requiredEnvKeys: readonly string[];
   selectedRuntimeId: string;
@@ -322,13 +340,33 @@ export function EditAgentAdvancedFields({
       <EnvVarsEditor
         disabled={disabled}
         fileSatisfiedKeys={fileSatisfiedEnvKeys}
+        focusKey={focusKey}
         helperText="Per-agent env vars. Override the template's vars on collision."
         inheritedFrom={inheritedEnvVars}
-        inheritedLabel="template"
+        inheritedLabel="template / global defaults"
         onChange={onEnvVarsChange}
         requiredKeys={requiredEnvKeys}
         value={envVars}
       />
+
+      {/* Tier-1 buzz-agent model-tuning knobs — only shown for buzz-agent. */}
+      {isBuzzAgentRuntime(modelTuningRuntimeId) ? (
+        <BuzzAgentModelTuningFields
+          envVars={envVars}
+          inheritedEnvVars={inheritedEnvVars}
+          model={model}
+          onEnvVarChange={(key, value) => {
+            const next = { ...envVars };
+            if (value === "") {
+              delete next[key];
+            } else {
+              next[key] = value;
+            }
+            onEnvVarsChange(next);
+          }}
+          provider={provider}
+        />
+      ) : null}
     </div>
   );
 }
