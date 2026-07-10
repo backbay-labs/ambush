@@ -79,6 +79,7 @@ export function AgentInstanceEditDialog({
   agent,
   initialFocus,
   open,
+  onEditLinkedPersona,
   onOpenChange,
   onUpdated,
 }: {
@@ -86,6 +87,9 @@ export function AgentInstanceEditDialog({
   /** Optional field to scroll/focus when the dialog opens from a card deep-link. */
   initialFocus?: EditAgentFocusTarget;
   open: boolean;
+  /** Present only when the linked definition is editable (non-built-in,
+   * resolved). Caller closes this dialog and enters definition-edit. */
+  onEditLinkedPersona?: () => void;
   onOpenChange: (open: boolean) => void;
   onUpdated?: (agent: ManagedAgent) => void;
 }) {
@@ -822,18 +826,36 @@ export function AgentInstanceEditDialog({
         }
       >
         <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-          {/* Avatar is definition-level identity (Wes decision 2026-07-09,
-              "2a"): edit it on the agent profile; instances inherit and
-              re-sync on restart. Read-only here by design. */}
-          <AgentCreationPreview
-            avatarUrl={previewAvatarUrl}
-            disabled
-            label={previewLabel}
-            onClearAvatar={() => setAvatarUrl("")}
-            onUploadPendingChange={setIsAvatarUploadPending}
-            onSelectAvatar={setAvatarUrl}
-          />
-
+          {/* Avatar is definition-level identity. hideEditControl suppresses
+              the internal pencil badge; the CTA below is the only edit path. */}
+          <div className="flex flex-col items-center gap-2">
+            <AgentCreationPreview
+              avatarUrl={previewAvatarUrl}
+              hideEditControl
+              label={previewLabel}
+              onClearAvatar={() => setAvatarUrl("")}
+              onUploadPendingChange={setIsAvatarUploadPending}
+              onSelectAvatar={setAvatarUrl}
+            />
+            {onEditLinkedPersona ? (
+              <Button
+                className="w-full"
+                onClick={() => {
+                  handleOpenChange(false);
+                  onEditLinkedPersona();
+                }}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Edit avatar
+              </Button>
+            ) : (
+              <p className="text-center text-xs text-muted-foreground">
+                Avatar is shared identity
+              </p>
+            )}
+          </div>
           <div className="space-y-5">
             {/* Agent name */}
             <div className="space-y-1.5">
