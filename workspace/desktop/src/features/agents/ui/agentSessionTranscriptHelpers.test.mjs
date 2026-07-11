@@ -237,3 +237,255 @@ test("parseSystemPromptSections returns no sections for empty input", () => {
   assert.deepEqual(parseSystemPromptSections(""), []);
   assert.deepEqual(parseSystemPromptSections("   "), []);
 });
+
+// ── [Agent Memory — core] section tests ──────────────────────────────────────
+
+test("parseSystemPromptSections extracts core as its own section after Base+System", () => {
+  const framed =
+    "[Base]\nbase text\n\n[System]\npersona text\n\n[Agent Memory — core]\nmy memories";
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "Base", body: "base text" },
+    { title: "System", body: "persona text" },
+    { title: "Core Memory", body: "my memories" },
+  ]);
+});
+
+test("parseSystemPromptSections extracts core as its own section after Base only", () => {
+  const framed = "[Base]\nbase text\n\n[Agent Memory — core]\nmy memories";
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "Base", body: "base text" },
+    { title: "Core Memory", body: "my memories" },
+  ]);
+});
+
+test("parseSystemPromptSections extracts core as its own section after System only", () => {
+  const framed = "[System]\npersona text\n\n[Agent Memory — core]\nmy memories";
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "System", body: "persona text" },
+    { title: "Core Memory", body: "my memories" },
+  ]);
+});
+
+test("parseSystemPromptSections returns only a core section when no Base/System present", () => {
+  const framed = "[Agent Memory — core]\nmy memories";
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [{ title: "Core Memory", body: "my memories" }]);
+});
+
+test("parseSystemPromptSections keeps an embedded core-like line literal when a real appended core follows", () => {
+  // The persona body contains a line that looks like the header. The actual
+  // appended core block comes last — only the LAST boundary should split.
+  const framed = [
+    "[Base]",
+    "base text",
+    "",
+    "[System]",
+    "persona preamble",
+    "[Agent Memory — core]",
+    "this is NOT the core section — it is inside the persona body",
+    "",
+    "[Agent Memory — core]",
+    "this IS the appended core",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "Base", body: "base text" },
+    {
+      title: "System",
+      body: "persona preamble\n[Agent Memory — core]\nthis is NOT the core section — it is inside the persona body",
+    },
+    {
+      title: "Core Memory",
+      body: "this IS the appended core",
+    },
+  ]);
+});
+
+test("parseSystemPromptSections keeps exact core header literal when only a single newline precedes it (no-core persona)", () => {
+  // A no-core [System] persona that contains the exact header text on its own
+  // line (preceded by only a single \n, not the double-newline appended
+  // separator) must NOT be extracted as a Core Memory section.
+  const framed = [
+    "[System]",
+    "persona preamble",
+    "[Agent Memory — core]",
+    "this is persona text, not a real core block",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    {
+      title: "System",
+      body: "persona preamble\n[Agent Memory — core]\nthis is persona text, not a real core block",
+    },
+  ]);
+});
+
+test("parseSystemPromptSections pins the realistic Workspace+Base+System+Core harness shape", () => {
+  // The real Buzz harness emits [Workspace] content before [Base]. The parser
+  // folds [Workspace] into the Base section (existing unchanged behavior);
+  // core is extracted as a distinct "Core Memory" section last.
+  const framed = [
+    "[Workspace]",
+    "You are operating inside the Buzz platform.",
+    "",
+    "[Base]",
+    "You are an assistant.",
+    "",
+    "[System]",
+    "Custom persona instructions.",
+    "",
+    "[Agent Memory — core]",
+    "I am Duncan.",
+    "## Lessons Learned",
+    "Always tag on handoff.",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    {
+      title: "Base",
+      body: "[Workspace]\nYou are operating inside the Buzz platform.\n\n[Base]\nYou are an assistant.",
+    },
+    { title: "System", body: "Custom persona instructions." },
+    {
+      title: "Core Memory",
+      body: "I am Duncan.\n## Lessons Learned\nAlways tag on handoff.",
+    },
+  ]);
+});
+
+// ── Channel Canvas extraction ─────────────────────────────────────────────────
+
+test("parseSystemPromptSections pins the full Base+System+Core+Canvas harness shape", () => {
+  // with_canvas() appends "\n\n[Channel Canvas]\n{metadata}" after the core block.
+  // render_canvas_section() emits the revision event ID, last-modified timestamp,
+  // and fetch command — never the canvas body. All four sections are extracted in order.
+  const framed = [
+    "[Base]",
+    "You are an assistant.",
+    "",
+    "[System]",
+    "Persona instructions.",
+    "",
+    "[Agent Memory — core]",
+    "I am Duncan.",
+    "",
+    "[Channel Canvas]",
+    "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+    "Last modified: 2026-07-11T10:00:00Z",
+    "Fetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "Base", body: "You are an assistant." },
+    { title: "System", body: "Persona instructions." },
+    { title: "Core Memory", body: "I am Duncan." },
+    {
+      title: "Channel Canvas",
+      body: "Canvas revision (event ID): a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\nLast modified: 2026-07-11T10:00:00Z\nFetch current content with: buzz canvas get --channel 94a444a4-c0a3-5966-ab05-530c6ddc2301",
+    },
+  ]);
+});
+
+test("parseSystemPromptSections extracts canvas when no Base/System/Core present (canvas-only)", () => {
+  const framed = ["[Channel Canvas]", "Canvas only."].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "Channel Canvas", body: "Canvas only." },
+  ]);
+});
+
+test("parseSystemPromptSections extracts Core+Canvas with no Base/System", () => {
+  const framed = [
+    "[Agent Memory — core]",
+    "Core content.",
+    "",
+    "[Channel Canvas]",
+    "Canvas content.",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "Core Memory", body: "Core content." },
+    { title: "Channel Canvas", body: "Canvas content." },
+  ]);
+});
+
+test("parseSystemPromptSections extracts Base+Canvas when no System or Core", () => {
+  const framed = [
+    "[Base]",
+    "Base content.",
+    "",
+    "[Channel Canvas]",
+    "Canvas content.",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "Base", body: "Base content." },
+    { title: "Channel Canvas", body: "Canvas content." },
+  ]);
+});
+
+test("parseSystemPromptSections omits canvas section when no canvas present (no regression)", () => {
+  // Existing Base+System+Core shape must still produce exactly three sections.
+  const framed = [
+    "[Base]",
+    "Base.",
+    "",
+    "[System]",
+    "System.",
+    "",
+    "[Agent Memory — core]",
+    "Core.",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    { title: "Base", body: "Base." },
+    { title: "System", body: "System." },
+    { title: "Core Memory", body: "Core." },
+  ]);
+});
+
+test("parseSystemPromptSections keeps embedded canvas-like line literal when only a single newline precedes it (no-canvas persona)", () => {
+  // A [Channel Canvas] header inside a persona body preceded by a single \n
+  // (not the double-newline appended separator) must NOT be extracted as a
+  // Canvas section — same last-occurrence guard as the Core extraction.
+  const framed = [
+    "[System]",
+    "persona preamble",
+    "[Channel Canvas]",
+    "this is persona text, not a real canvas block",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    {
+      title: "System",
+      body: "persona preamble\n[Channel Canvas]\nthis is persona text, not a real canvas block",
+    },
+  ]);
+});
+
+test("parseSystemPromptSections keeps an embedded canvas-like line literal when a real appended canvas follows", () => {
+  // If the persona body contains "[Channel Canvas]\n..." with only a single
+  // preceding newline AND a real appended canvas (double-newline boundary)
+  // follows, the LAST-occurrence guard picks the appended one as the real
+  // boundary, leaving the embedded one in the System body.
+  const framed = [
+    "[System]",
+    "persona preamble",
+    "[Channel Canvas]",
+    "this is inside the persona body — NOT the real canvas",
+    "",
+    "[Channel Canvas]",
+    "this IS the appended canvas",
+  ].join("\n");
+  const sections = parseSystemPromptSections(framed);
+  assert.deepEqual(sections, [
+    {
+      title: "System",
+      body: "persona preamble\n[Channel Canvas]\nthis is inside the persona body — NOT the real canvas",
+    },
+    { title: "Channel Canvas", body: "this IS the appended canvas" },
+  ]);
+});
