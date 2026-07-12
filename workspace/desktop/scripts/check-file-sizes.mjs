@@ -146,7 +146,13 @@ const overrides = new Map([
   // +18: CliConfigInvalid requirement surface for config-parse probe classification —
   // new Requirement variant + updated cli_login_requirements + 3 new probe-layer tests.
   // Load-bearing UX fix (bad config → clear diagnostic, not "run codex login").
-  ["src-tauri/src/managed_agents/readiness.rs", 1583],
+  // codex-acp-package-swap: AdapterOutdated version-probe in cli_login_requirements
+  // (+22 lines). Load-bearing — blocks login gate for deprecated 0.16.x adapter.
+  // code-reviewer fix-round: codex readiness gate tests — 2 new tests for
+  // outdated-adapter and garbage-version-output paths through the codex id gate
+  // (+140 lines: make_codex_runtime helper, PATH_MUTEX serializer, 2 test fns).
+  // Load-bearing test coverage; queued to split with the file generally.
+  ["src-tauri/src/managed_agents/readiness.rs", 1750],
   // applyWorkspace reposDir parameter plus the validateReposDir binding,
   // threaded through Tauri invokes for configurable repos_dir, plus the
   // harness-persona-sync `harnessOverride` create-input bit — load-bearing
@@ -175,7 +181,8 @@ const overrides = new Map([
   // passthrough (+2 lines).
   ["src/shared/api/tauri.ts", 1273],
   // doctor-npm-eacces-preflight: hint field added to InstallStepResult (+1 line).
-  ["src/shared/api/types.ts", 1001],
+  // codex-acp-package-swap: "adapter_outdated" variant added to AcpAvailabilityStatus (+1 line).
+  ["src/shared/api/types.ts", 1002],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -209,7 +216,15 @@ const overrides = new Map([
   // agent-config-propagation: the agent_command_override decision family
   // (divergent / create-time / update-time / apply) moved to
   // discovery/overrides.rs; ratcheting 802 -> 685 to bank the headroom.
-  ["src-tauri/src/managed_agents/discovery.rs", 685],
+  // codex-acp-package-swap: probe_codex_acp_major_version (+24 lines) +
+  // AdapterOutdated version-gate in discover_acp_runtimes (+22 lines). Both
+  // load-bearing — required to detect the deprecated 0.16.x adapter and
+  // prevent silent relay breakage after the spawn-contract change.
+  // codex-acp-package-swap follow-up: tempfile-based bounded stdout read
+  // (+18 lines), codex_adapter_availability/is_outdated helpers (+16 lines),
+  // cross-platform probe contract. All load-bearing — required for correct
+  // probe behaviour on Windows and descendant-process edge cases.
+  ["src-tauri/src/managed_agents/discovery.rs", 810],
   // identity-import-keyring: the identity resolution state machine's behavioral
   // matrix (46 tests over FakeIdentityStore — probe × marker × file cells,
   // adoption / read-back-corruption / marker-failure arms, recovery-mode
