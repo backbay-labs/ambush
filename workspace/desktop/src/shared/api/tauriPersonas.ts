@@ -193,6 +193,119 @@ export async function exportPersonaToJson(id: string): Promise<boolean> {
   return invokeTauri<boolean>("export_persona_to_json", { id });
 }
 
+export type SnapshotMemoryLevel = "none" | "core" | "everything";
+export type SnapshotFormat = "json" | "png";
+
+export async function exportAgentSnapshot(
+  id: string,
+  memoryLevel: SnapshotMemoryLevel,
+  format: SnapshotFormat,
+  memorySourcePubkey?: string | null,
+): Promise<boolean> {
+  return invokeTauri<boolean>("export_agent_snapshot", {
+    id,
+    memorySourcePubkey: memorySourcePubkey ?? null,
+    memoryLevel,
+    format,
+  });
+}
+
+/** The byte payload returned by `encode_agent_snapshot_for_send`. */
+export type EncodedSnapshotPayload = {
+  /** Raw snapshot bytes — pass directly to `uploadMediaBytes`. */
+  fileBytes: number[];
+  /** Suggested filename (e.g. `my-agent.agent.json`). */
+  fileName: string;
+};
+
+/**
+ * Encode a snapshot in memory and return the bytes to the frontend without
+ * opening any file dialog.  Use this for the native-send path; use
+ * `exportAgentSnapshot` for the local save-to-disk path.
+ *
+ * Both commands call the same shared Rust encoder, so byte output is
+ * identical for identical inputs.
+ */
+export async function encodeAgentSnapshotForSend(
+  id: string,
+  memoryLevel: SnapshotMemoryLevel,
+  format: SnapshotFormat,
+  memorySourcePubkey?: string | null,
+): Promise<EncodedSnapshotPayload> {
+  return invokeTauri<EncodedSnapshotPayload>("encode_agent_snapshot_for_send", {
+    id,
+    memorySourcePubkey: memorySourcePubkey ?? null,
+    memoryLevel,
+    format,
+  });
+}
+
+// ── Snapshot import ───────────────────────────────────────────────────────────
+
+/** Preview returned by `preview_agent_snapshot_import` before any write. */
+export type AgentSnapshotImportPreview = {
+  displayName: string;
+  systemPrompt: string | null;
+  /** Effective avatar: data URL if present, source URL fallback otherwise. */
+  avatarUrl: string | null;
+  /** "none" | "core" | "everything" */
+  memoryLevel: string;
+  memoryEntryCount: number;
+  /** True when the snapshot's respond_to_allowlist is non-empty. */
+  hasSourceAllowlist: boolean;
+  sourceAllowlistCount: number;
+};
+
+/** Confirmation sent to `confirm_agent_snapshot_import`. */
+export type AgentSnapshotImportConfirm = {
+  fileBytes: number[];
+  /** When true, copy source allowlist to the new agent. Default: false (Clear). */
+  keepAllowlist: boolean;
+};
+
+/** Structured result from a confirmed import. */
+export type AgentSnapshotImportResult = {
+  displayName: string;
+  /** Hex pubkey of the newly minted agent. */
+  newPubkey: string;
+  /** Persona ID created for the agent. */
+  personaId: string;
+  memoryWritten: number;
+  memoryTotal: number;
+  /** Non-empty when some memory entries failed to publish. */
+  memoryErrors: string[];
+  /** Non-empty when profile sync encountered a non-fatal relay error. */
+  profileSyncError: string | null;
+};
+
+/**
+ * Decode and validate a snapshot file, returning a preview for the
+ * confirmation UI. No writes of any kind are performed.
+ */
+export async function previewAgentSnapshotImport(
+  fileBytes: number[],
+  fileName: string,
+): Promise<AgentSnapshotImportPreview> {
+  return invokeTauri<AgentSnapshotImportPreview>(
+    "preview_agent_snapshot_import",
+    { fileBytes, fileName },
+  );
+}
+
+/**
+ * Import a `buzz-agent-snapshot v1` file as a brand-new agent with fresh
+ * keys. Returns a structured result describing what was created and whether
+ * memory restoration was complete.
+ */
+export async function confirmAgentSnapshotImport(
+  input: AgentSnapshotImportConfirm,
+): Promise<AgentSnapshotImportResult> {
+  return invokeTauri<AgentSnapshotImportResult>(
+    "confirm_agent_snapshot_import",
+    { input },
+  );
+}
+
 // Patches a single inbound persona/team/agent projection event into the local
 // store (personas.json). The backend resolves the match key and the
 // pending-edit race; the frontend only forwards the raw Nostr event JSON.

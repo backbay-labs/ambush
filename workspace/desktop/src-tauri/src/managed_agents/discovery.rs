@@ -313,7 +313,7 @@ pub fn default_agent_command() -> String {
 ///   4. `default_agent_command()`.
 pub fn record_agent_command(
     record: &crate::managed_agents::types::ManagedAgentRecord,
-    personas: &[crate::managed_agents::types::PersonaRecord],
+    personas: &[crate::managed_agents::types::AgentDefinition],
 ) -> String {
     if let Some(pin) = record
         .agent_command_override
@@ -346,7 +346,7 @@ pub fn record_agent_command(
 ///   3. `default_agent_command()` — no persona/runtime, or persona deleted.
 pub fn effective_agent_command(
     persona_id: Option<&str>,
-    personas: &[crate::managed_agents::types::PersonaRecord],
+    personas: &[crate::managed_agents::types::AgentDefinition],
     agent_command_override: Option<&str>,
 ) -> String {
     if let Some(pin) = agent_command_override
@@ -983,7 +983,7 @@ pub(crate) fn probe_codex_acp_major_version(binary_path: &Path) -> Option<u64> {
 
     let stdout = String::from_utf8_lossy(&buf);
     // Output format: "<package-name> <major>.<minor>.<patch>"
-    let version_str = stdout.trim().split_whitespace().last()?;
+    let version_str = stdout.split_whitespace().last()?;
     let major_str = version_str.split('.').next()?;
     major_str.parse::<u64>().ok()
 }

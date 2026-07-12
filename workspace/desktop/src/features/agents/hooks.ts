@@ -33,6 +33,16 @@ import {
   createPersona,
   deletePersona,
   exportPersonaToJson,
+  exportAgentSnapshot,
+  encodeAgentSnapshotForSend,
+  previewAgentSnapshotImport,
+  confirmAgentSnapshotImport,
+  type AgentSnapshotImportPreview,
+  type AgentSnapshotImportConfirm,
+  type AgentSnapshotImportResult,
+  type EncodedSnapshotPayload,
+  type SnapshotMemoryLevel,
+  type SnapshotFormat,
   listPersonas,
   setPersonaActive,
   updatePersona,
@@ -590,6 +600,66 @@ export function useExportPersonaJsonMutation() {
     mutationFn: (id: string) => exportPersonaToJson(id),
   });
 }
+
+export function useExportAgentSnapshotMutation() {
+  return useMutation({
+    mutationFn: ({
+      id,
+      memoryLevel,
+      format,
+      memorySourcePubkey,
+    }: {
+      id: string;
+      memoryLevel: SnapshotMemoryLevel;
+      format: SnapshotFormat;
+      memorySourcePubkey?: string | null;
+    }) => exportAgentSnapshot(id, memoryLevel, format, memorySourcePubkey),
+  });
+}
+
+export function useEncodeAgentSnapshotForSendMutation() {
+  return useMutation({
+    mutationFn: ({
+      id,
+      memoryLevel,
+      format,
+      memorySourcePubkey,
+    }: {
+      id: string;
+      memoryLevel: SnapshotMemoryLevel;
+      format: SnapshotFormat;
+      memorySourcePubkey?: string | null;
+    }) =>
+      encodeAgentSnapshotForSend(id, memoryLevel, format, memorySourcePubkey),
+  });
+}
+
+export function usePreviewAgentSnapshotImportMutation() {
+  return useMutation({
+    mutationFn: ({
+      fileBytes,
+      fileName,
+    }: {
+      fileBytes: number[];
+      fileName: string;
+    }) => previewAgentSnapshotImport(fileBytes, fileName),
+  });
+}
+
+export function useConfirmAgentSnapshotImportMutation() {
+  return useMutation({
+    mutationFn: (input: AgentSnapshotImportConfirm) =>
+      confirmAgentSnapshotImport(input),
+  });
+}
+
+// Re-export import types for consumers that import from hooks.
+export type {
+  AgentSnapshotImportPreview,
+  AgentSnapshotImportConfirm,
+  AgentSnapshotImportResult,
+  EncodedSnapshotPayload,
+};
 
 export function useManagedAgentLogQuery(
   pubkey: string | null,

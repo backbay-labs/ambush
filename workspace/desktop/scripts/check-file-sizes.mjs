@@ -79,8 +79,9 @@ const overrides = new Map([
   // 3-phase (stage/stop/commit) + commit_cascade_agents injectable helper for
   // retry-safety. Load-bearing reviewer-required change; queued to split.
   // +23: collect_remote_deployed pre-flight guard (provider-deployed cascade
-  // targets refuse the delete before any destructive work).
-  ["src-tauri/src/commands/personas/mod.rs", 1116],
+  // targets refuse the delete before any destructive work). Main #1766 grew
+  // this to 1115; the snapshot branch adds 8 lines, so ratchet to 1124.
+  ["src-tauri/src/commands/personas/mod.rs", 1124],
   // #1418 read-path fix: get_thread_replies' blocker fix (shared TIMELINE_KINDS
   // const + build_thread_replies_filter helper, mirroring the channel sibling so
   // the two p-gate filters can't drift) plus two guard unit tests. The file was
@@ -147,7 +148,7 @@ const overrides = new Map([
   // #1613 augmented-PATH readiness probes grew the file +3 past the prior cap.
   // +16: resolve_effective_agent_env + global-config readiness wiring (#1448).
   // +1 rebase merge: GlobalAgentConfig import added alongside AcpAvailabilityStatus.
-  // +2 rebase onto #1667: behavioral quad fields in PersonaRecord/ManagedAgentRecord.
+  // +2 rebase onto #1667: behavioral quad fields in AgentDefinition/ManagedAgentRecord.
   // +3 rebase onto main (#1568 + #1613): identity-import-keyring + augmented-PATH probes.
   // +18: CliConfigInvalid requirement surface for config-parse probe classification —
   // new Requirement variant + updated cli_login_requirements + 3 new probe-layer tests.

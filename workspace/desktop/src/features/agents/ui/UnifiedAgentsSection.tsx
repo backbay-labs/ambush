@@ -52,9 +52,14 @@ type UnifiedAgentsSectionProps = {
   onDuplicatePersona: (persona: AgentPersona) => void;
   onEditPersona: (persona: AgentPersona) => void;
   onSharePersona: (persona: AgentPersona) => void;
+  onExportPersonaSnapshot: (
+    persona: AgentPersona,
+    linkedAgent: ManagedAgent | undefined,
+  ) => void;
   onDeactivatePersona: (persona: AgentPersona) => void;
   onDeletePersona: (persona: AgentPersona) => void;
   onImportPersonaFile: (fileBytes: number[], fileName: string) => void;
+  onImportSnapshotFile: (fileBytes: number[], fileName: string) => void;
 };
 
 const AGENT_CARD_COLUMN_CLASS = "w-full";
@@ -87,9 +92,11 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     onDuplicatePersona,
     onEditPersona,
     onSharePersona,
+    onExportPersonaSnapshot,
     onDeactivatePersona,
     onDeletePersona,
     onImportPersonaFile,
+    onImportSnapshotFile,
   } = props;
 
   const runningCount = agents.filter((agent) =>
@@ -170,10 +177,12 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
                       isActionPending={isActionPending}
                       isPending={isPersonasPending}
                       persona={group.persona}
+                      linkedAgent={profileAgent}
                       onDeactivate={onDeactivatePersona}
                       onDelete={onDeletePersona}
                       onDuplicate={onDuplicatePersona}
                       onEdit={onEditPersona}
+                      onExportSnapshot={onExportPersonaSnapshot}
                       onShare={onSharePersona}
                     />
                   }
@@ -195,6 +204,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               openFilePicker={openFilePicker}
               onChooseCatalog={onChooseCatalog}
               onCreatePersona={onCreatePersona}
+              onImportSnapshotFile={onImportSnapshotFile}
             />
           </div>
 
@@ -475,45 +485,83 @@ function NewAgentCard({
   openFilePicker,
   onChooseCatalog,
   onCreatePersona,
+  onImportSnapshotFile,
 }: {
   canChooseCatalog: boolean;
   isPersonasPending: boolean;
   openFilePicker: () => void;
   onChooseCatalog: () => void;
   onCreatePersona: () => void;
+  onImportSnapshotFile: (fileBytes: number[], fileName: string) => void;
 }) {
+  // Hidden file input for the snapshot import picker.
+  const snapshotInputRef = React.useRef<HTMLInputElement>(null);
+
+  function handleSnapshotFileChange(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const buffer = reader.result as ArrayBuffer;
+      onImportSnapshotFile(Array.from(new Uint8Array(buffer)), file.name);
+    };
+    reader.readAsArrayBuffer(file);
+    // Reset so the same file can be picked again.
+    event.target.value = "";
+  }
+
   return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <CreateIdentityCard
-          ariaLabel="New agent"
-          dataTestId="new-agent-card"
-          label="New agent"
-        />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        onCloseAutoFocus={(event) => event.preventDefault()}
-      >
-        <DropdownMenuItem
-          disabled={isPersonasPending}
-          onClick={onCreatePersona}
+    <>
+      <input
+        accept=".agent.json,.agent.png"
+        aria-hidden
+        className="sr-only"
+        onChange={handleSnapshotFileChange}
+        ref={snapshotInputRef}
+        type="file"
+      />
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <CreateIdentityCard
+            ariaLabel="New agent"
+            dataTestId="new-agent-card"
+            label="New agent"
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          onCloseAutoFocus={(event) => event.preventDefault()}
         >
-          New agent
-        </DropdownMenuItem>
-        {canChooseCatalog ? (
           <DropdownMenuItem
             disabled={isPersonasPending}
-            onClick={onChooseCatalog}
+            onClick={onCreatePersona}
           >
-            Choose from catalog
+            New agent
           </DropdownMenuItem>
-        ) : null}
-        <DropdownMenuItem onClick={openFilePicker}>
-          Import agent file
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          {canChooseCatalog ? (
+            <DropdownMenuItem
+              disabled={isPersonasPending}
+              onClick={onChooseCatalog}
+            >
+              Choose from catalog
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuItem onClick={openFilePicker}>
+            Import agent file
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="import-agent-snapshot-menu-item"
+            onClick={() => snapshotInputRef.current?.click()}
+          >
+            Import agent snapshot
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
   );
 }
 

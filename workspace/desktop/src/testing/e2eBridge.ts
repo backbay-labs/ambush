@@ -9,6 +9,7 @@ import type { ConnectionState } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
 import { getMarkdownParseCount } from "@/shared/ui/markdown/nodeCache";
 import { syncAgentTurnsFromEvents } from "@/features/agents/activeAgentTurnsStore";
+import { recordTimeoutFromRejection } from "@/features/moderation/lib/timeoutStore";
 import {
   injectObserverEventsForE2E,
   syncAgentObserverEvents,
@@ -171,6 +172,17 @@ type E2eConfig = {
     // tests/helpers/bridge.ts:MockBridgeOptions.uploadDescriptors.
     meshReporterPubkey?: string;
     uploadDelayMs?: number;
+    /** Delay (ms) applied to `encode_agent_snapshot_for_send` so E2E tests can
+     *  observe the "preparing" phase before the upload begins. 0/undefined = instant. */
+    encodeDelayMs?: number;
+    /** Delay (ms) applied to `get_relay_self` so E2E tests can prove the
+     *  fail-closed race: DMs are withheld while classification is unresolved. */
+    relaySelfDelayMs?: number;
+    /**
+     * When set to a non-empty string, `fetch_snapshot_bytes` throws with this
+     * message — lets specs prove malformed/hash/size-mismatch error paths.
+     */
+    snapshotFetchError?: string;
     uploadDescriptors?: RawBlobDescriptor[];
     // Seed rows returned by `list_save_subscriptions`. Each entry uses the same
     // snake_case wire shape the Rust backend returns so tests can drive the
@@ -818,6 +830,32 @@ declare global {
       invalidateQueries: (filters: { queryKey: readonly unknown[] }) => unknown;
     };
     __BUZZ_E2E_MD_PARSE_COUNT__?: () => number;
+    /**
+     * Activate the community timeout store as if a send was rejected with a
+     * timeout message. Lets E2E tests prove the timeout gate fires before encode.
+     * Call after page load. Pass expiresAtMs (epoch ms) or 0 for unknown expiry.
+     */
+    __BUZZ_E2E_ACTIVATE_TIMEOUT__?: (expiresAtMs: number) => void;
+    /**
+     * Invalidate the channels React Query cache so E2E tests can trigger a
+     * re-fetch after calling archive_channel / update_channel via
+     * __BUZZ_E2E_INVOKE_MOCK_COMMAND__. Call after the mutation to make the
+     * updated channel state visible to subscribers.
+     */
+    __BUZZ_E2E_INVALIDATE_CHANNELS__?: () => Promise<void>;
+    /**
+     * Directly mutate a mock channel's properties without going through a
+     * command handler.  Use for E2E regressions that need to change
+     * channel_type or remove isMember in a single synchronous step, then
+     * follow up with __BUZZ_E2E_INVALIDATE_CHANNELS__ to flush the cache.
+     *
+     * Only the listed fields are writeable; omitted fields are left unchanged.
+     */
+    __BUZZ_E2E_MUTATE_CHANNEL__?: (opts: {
+      channelId: string;
+      channelType?: "stream" | "forum" | "dm";
+      removeMemberPubkey?: string;
+    }) => void;
   }
 }
 
@@ -2272,6 +2310,70 @@ const mockChannels: MockChannel[] = [
     members: [
       createMockMember(BOB_PUBKEY, "member", 700),
       createMockMember(MOCK_IDENTITY_PUBKEY, "member", 700),
+    ],
+  }),
+  // Generic-named DM — name is "DM" so resolveChannelDisplayLabel must resolve
+  // the participant display name instead of returning the raw channel name.
+  // Used by agent-snapshot-send.spec.ts to prove picker/search/memgate/done
+  // all use the same resolved label from useUsersBatchQuery.
+  createMockChannel({
+    id: "d1ec7000-d000-4000-8000-000000000001",
+    name: "DM",
+    channel_type: "dm",
+    visibility: "private",
+    description: "Generic-named DM with charlie",
+    topic: null,
+    purpose: null,
+    last_message_at: null,
+    archived_at: null,
+    created_by: CHARLIE_PUBKEY,
+    topic_set_by: null,
+    topic_set_at: null,
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: 2,
+    nip29_group_id: null,
+    created_minutes_ago: 680,
+    updated_minutes_ago: 680,
+    participants: ["charlie", "tyler"],
+    participant_pubkeys: [CHARLIE_PUBKEY, MOCK_IDENTITY_PUBKEY],
+    members: [
+      createMockMember(CHARLIE_PUBKEY, "member", 680),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 680),
+    ],
+  }),
+  // Generic-named Group DM — name "Group DM (3)" so resolveChannelDisplayLabel
+  // must resolve all OTHER participants' display names (bob, charlie).
+  // Used by agent-snapshot-send.spec.ts group-DM label test.
+  // NOTE: participants are BOB + CHARLIE (not ALICE, which conflicts with
+  // ANALYST_PUBKEY in managed-agent tests).
+  createMockChannel({
+    id: "d1ec7000-d000-4000-8000-000000000003",
+    name: "Group DM (3)",
+    channel_type: "dm",
+    visibility: "private",
+    description: "Generic-named group DM with bob and charlie",
+    topic: null,
+    purpose: null,
+    last_message_at: null,
+    archived_at: null,
+    created_by: BOB_PUBKEY,
+    topic_set_by: null,
+    topic_set_at: null,
+    purpose_set_by: null,
+    purpose_set_at: null,
+    topic_required: false,
+    max_members: 3,
+    nip29_group_id: null,
+    created_minutes_ago: 660,
+    updated_minutes_ago: 660,
+    participants: ["bob", "charlie", "tyler"],
+    participant_pubkeys: [BOB_PUBKEY, CHARLIE_PUBKEY, MOCK_IDENTITY_PUBKEY],
+    members: [
+      createMockMember(BOB_PUBKEY, "member", 660),
+      createMockMember(CHARLIE_PUBKEY, "member", 660),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 660),
     ],
   }),
   // Deep history channel for the load-older-under-virtualization E2E. Seeded
@@ -8030,6 +8132,37 @@ export function maybeInstallE2eTauriMocks() {
     return item;
   };
   window.__BUZZ_E2E_MD_PARSE_COUNT__ = getMarkdownParseCount;
+  window.__BUZZ_E2E_ACTIVATE_TIMEOUT__ = (expiresAtMs: number) => {
+    const expiresAtSec = expiresAtMs > 0 ? Math.floor(expiresAtMs / 1000) : 0;
+    const msg =
+      expiresAtSec > 0
+        ? `restricted: you are timed out until ${expiresAtSec}`
+        : "restricted: you are timed out until 0";
+    recordTimeoutFromRejection(msg);
+  };
+  window.__BUZZ_E2E_INVALIDATE_CHANNELS__ = async () => {
+    await window.__BUZZ_E2E_QUERY_CLIENT__?.invalidateQueries({
+      queryKey: ["channels"],
+    });
+  };
+  window.__BUZZ_E2E_MUTATE_CHANNEL__ = ({
+    channelId,
+    channelType,
+    removeMemberPubkey,
+  }) => {
+    const channel = mockChannels.find((ch) => ch.id === channelId);
+    if (!channel) return;
+    if (channelType !== undefined) {
+      channel.channel_type = channelType;
+    }
+    if (removeMemberPubkey !== undefined) {
+      channel.members = channel.members.filter(
+        (m) => m.pubkey !== removeMemberPubkey,
+      );
+      syncMockChannel(channel);
+    }
+    touchMockChannel(channel);
+  };
   window.__BUZZ_E2E_EMIT_MOCK_READ_STATE__ = ({
     clientId,
     contexts,
@@ -8700,6 +8833,63 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "export_persona_to_json":
         return handleExportPersonaToJson(payload as { id: string });
+      case "export_agent_snapshot":
+        // Mimics the save-to-disk path: report success without a real dialog.
+        // Specs assert invocation via __BUZZ_E2E_COMMANDS__.
+        return true;
+      case "encode_agent_snapshot_for_send": {
+        // Return a minimal valid `.agent.json` payload so the send flow can
+        // proceed through upload_media_bytes without a real Rust encode step.
+        // Optional encodeDelayMs lets specs observe the "preparing" phase before
+        // the upload begins.
+        const encodeDelayMs = activeConfig?.mock?.encodeDelayMs ?? 0;
+        if (encodeDelayMs > 0) {
+          await new Promise((resolve) =>
+            window.setTimeout(resolve, encodeDelayMs),
+          );
+        }
+        const jsonBytes = Array.from(
+          new TextEncoder().encode(
+            JSON.stringify({
+              format: "buzz-agent-snapshot",
+              version: 1,
+              definition: { system_prompt: null },
+              profile: { display_name: "E2E Agent" },
+              memory: { level: "none", entries: [] },
+            }),
+          ),
+        );
+        return {
+          fileBytes: jsonBytes,
+          fileName: "e2e-agent.agent.json",
+        };
+      }
+      case "preview_agent_snapshot_import": {
+        // Return a minimal preview — no writes performed.
+        return {
+          displayName: "Imported Agent",
+          systemPrompt: null,
+          avatarUrl: null,
+          memoryLevel: "none",
+          memoryEntryCount: 0,
+          hasSourceAllowlist: false,
+          sourceAllowlistCount: 0,
+        };
+      }
+      case "confirm_agent_snapshot_import": {
+        // Return a successful import result with fresh synthetic keys.
+        const importResult = {
+          displayName: "Imported Agent",
+          newPubkey:
+            "e2e000000000000000000000000000000000000000000000000000000000000ff",
+          personaId: `e2e-persona-${Date.now()}`,
+          memoryWritten: 0,
+          memoryTotal: 0,
+          memoryErrors: [],
+          profileSyncError: null,
+        };
+        return importResult;
+      }
       case "list_managed_agents":
         return handleListManagedAgents(activeConfig);
       case "get_agent_memory":
@@ -8995,6 +9185,29 @@ export function maybeInstallE2eTauriMocks() {
         if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
         return await response.arrayBuffer();
       }
+      case "fetch_snapshot_bytes": {
+        // The real command fetches + validates a snapshot attachment in memory
+        // (size cap, SHA-256, decode). In E2E the bridge returns a minimal
+        // valid .agent.json payload so the import flow can proceed without a
+        // real relay. A non-null snapshotFetchError config forces a rejection.
+        const err = activeConfig?.mock?.snapshotFetchError;
+        if (err) throw new Error(err);
+        const jsonBytes = Array.from(
+          new TextEncoder().encode(
+            JSON.stringify({
+              format: "buzz-agent-snapshot",
+              version: 1,
+              definition: { system_prompt: "E2E imported agent prompt." },
+              profile: { display_name: "Imported Agent" },
+              memory: { level: "none", entries: [] },
+            }),
+          ),
+        );
+        // Return as ArrayBuffer to mirror the real Tauri ipc::Response.
+        const buf = new ArrayBuffer(jsonBytes.length);
+        new Uint8Array(buf).set(jsonBytes);
+        return buf;
+      }
       case "download_image":
       case "download_file":
         // The save dialog can't run headlessly; report a successful save so the
@@ -9158,6 +9371,11 @@ export function maybeInstallE2eTauriMocks() {
         return { archived };
       }
       case "get_relay_self":
+        if ((activeConfig?.mock?.relaySelfDelayMs ?? 0) > 0) {
+          await new Promise((resolve) =>
+            window.setTimeout(resolve, activeConfig!.mock!.relaySelfDelayMs),
+          );
+        }
         return activeConfig?.mock?.relaySelf ?? null;
       case "archive_identity":
       case "unarchive_identity":
