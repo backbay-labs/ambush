@@ -1265,6 +1265,7 @@ function buildMockConfigSurface(pubkey: string): {
   isPreSpawn: boolean;
   normalized: Record<string, unknown>;
   advanced: unknown[];
+  extensions: unknown[];
   sources: Record<string, unknown>;
 } {
   // Goose running — mixed origins, override on model
@@ -1317,38 +1318,18 @@ function buildMockConfigSurface(pubkey: string): {
     },
     advanced: [
       {
-        key: "extensions.developer",
-        label: "Extension: developer",
-        value: "enabled",
+        key: "active_provider",
+        label: "active_provider",
+        value: "openai",
         origin: "configFile",
-        schemaType: { type: "enum", options: ["enabled", "disabled"] },
-        writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.extensions.developer",
-        },
+        schemaType: { type: "string" },
+        writeVia: { type: "readOnly" },
       },
-      {
-        key: "extensions.web_search",
-        label: "Extension: web_search",
-        value: "enabled",
-        origin: "configFile",
-        schemaType: { type: "enum", options: ["enabled", "disabled"] },
-        writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.extensions.web_search",
-        },
-      },
-      {
-        key: "extensions.memory",
-        label: "Extension: memory",
-        value: "disabled",
-        origin: "configFile",
-        schemaType: { type: "enum", options: ["enabled", "disabled"] },
-        writeVia: {
-          type: "gooseNativeConfigWrite",
-          configKey: "goose.extensions.memory",
-        },
-      },
+    ],
+    extensions: [
+      { name: "developer", kind: "stdio", enabled: true },
+      { name: "web_search", kind: "stdio", enabled: true },
+      { name: "memory", kind: "stdio", enabled: false },
     ],
     sources: {
       acpNative: "available",
@@ -1356,6 +1337,7 @@ function buildMockConfigSurface(pubkey: string): {
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.config/goose/config.yaml",
+      mcpConfigFilePath: "~/.config/goose/config.yaml",
     },
   };
 
@@ -1409,12 +1391,17 @@ function buildMockConfigSurface(pubkey: string): {
       systemPrompt: null,
     },
     advanced: [],
+    extensions: [
+      { name: "filesystem", kind: "mcp", enabled: true },
+      { name: "github", kind: "mcp", enabled: true },
+    ],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
       envVars: "notApplicable",
       configFile: "available",
       configFilePath: "~/.claude/settings.json",
+      mcpConfigFilePath: "~/.claude.json",
     },
   };
 
@@ -1464,12 +1451,14 @@ function buildMockConfigSurface(pubkey: string): {
       systemPrompt: null,
     },
     advanced: [],
+    extensions: [{ name: "developer", kind: "stdio", enabled: true }],
     sources: {
       acpNative: "pending",
       acpConfigOptions: "pending",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.config/goose/config.yaml",
+      mcpConfigFilePath: "~/.config/goose/config.yaml",
     },
   };
 
@@ -1538,12 +1527,17 @@ function buildMockConfigSurface(pubkey: string): {
         writeVia: { type: "respawnWithEnvVar", envKey: "GOOSE_SANDBOX_MODE" },
       },
     ],
+    extensions: [
+      { name: "filesystem", kind: "mcp", enabled: true },
+      { name: "github", kind: "mcp", enabled: true },
+    ],
     sources: {
       acpNative: "notApplicable",
       acpConfigOptions: "notApplicable",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.codex/config.toml",
+      mcpConfigFilePath: "~/.codex/config.toml",
     },
   };
 
@@ -1595,12 +1589,14 @@ function buildMockConfigSurface(pubkey: string): {
       systemPrompt: null,
     },
     advanced: [],
+    extensions: [{ name: "web_search", kind: "stdio", enabled: true }],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.config/goose/config.yaml",
+      mcpConfigFilePath: "~/.config/goose/config.yaml",
     },
   };
 
@@ -1653,19 +1649,36 @@ function buildMockConfigSurface(pubkey: string): {
       systemPrompt: null,
     },
     advanced: [],
+    extensions: [],
     sources: {
       acpNative: "available",
       acpConfigOptions: "available",
       envVars: "available",
       configFile: "available",
       configFilePath: "~/.config/goose/config.yaml",
+      mcpConfigFilePath: "~/.config/goose/config.yaml",
     },
   };
 
-  // Map well-known test pubkeys to specific fixtures
-  // Synthetic agent for the multi-origin provenance showcase (not a TEST_IDENTITY).
+  const buzzAgentSurface = {
+    ...gooseSurface,
+    runtimeId: "buzz-agent",
+    runtimeLabel: "Buzz Agent",
+    advanced: [],
+    extensions: [],
+    sources: {
+      ...gooseSurface.sources,
+      configFilePath: null,
+      mcpConfigFilePath: null,
+    },
+  };
+
+  // Map well-known test pubkeys to specific fixtures.
+  // Synthetic agents are intentionally not TEST_IDENTITIES.
   const PUBKEY_MULTI_ORIGIN =
     "abc1230000000000000000000000000000000000000000000000000000000def";
+  const PUBKEY_BUZZ_AGENT =
+    "b0220000000000000000000000000000000000000000000000000000000000a9";
 
   switch (pubkey) {
     case ALICE_PUBKEY:
@@ -1678,6 +1691,8 @@ function buildMockConfigSurface(pubkey: string): {
       return runtimeOverrideSurface;
     case PUBKEY_MULTI_ORIGIN:
       return multiOriginSurface;
+    case PUBKEY_BUZZ_AGENT:
+      return buzzAgentSurface;
     default:
       return gooseSurface;
   }

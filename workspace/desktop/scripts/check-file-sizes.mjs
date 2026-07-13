@@ -198,7 +198,8 @@ const overrides = new Map([
   // loginHint fields on AcpRuntimeCatalogEntry (+14 lines). Load-bearing new feature.
   // agent-lifecycle-fixes: GlobalAgentConfigSaveResult type grows with
   // failed_restart_count (+2 lines). Queued to split with the rest of this list.
-  ["src/shared/api/types.ts", 1030],
+  // mcp-readonly-view rebase: PR2 MCP config surface FE-type fields force +1 over the grandfathered ceiling.
+  ["src/shared/api/types.ts", 1031],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
