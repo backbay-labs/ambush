@@ -9526,7 +9526,7 @@ export function maybeInstallE2eTauriMocks() {
       case "get_relay_self":
         if ((activeConfig?.mock?.relaySelfDelayMs ?? 0) > 0) {
           await new Promise((resolve) =>
-            window.setTimeout(resolve, activeConfig!.mock!.relaySelfDelayMs),
+            window.setTimeout(resolve, activeConfig?.mock?.relaySelfDelayMs),
           );
         }
         return activeConfig?.mock?.relaySelf ?? null;

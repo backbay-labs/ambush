@@ -21,6 +21,7 @@ import { OnboardingSlideTransition } from "@/features/onboarding/ui/OnboardingSl
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
+import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
 import type { Community } from "@/features/communities/types";
 import { useCommunityInit } from "@/features/communities/useCommunityInit";
 import { useNestNotifications } from "@/features/communities/useNestNotifications";
@@ -298,6 +299,10 @@ function AppReady({
     onboarding.stage,
     onFirstRunCommunitySettled,
   ]);
+
+  if (onboarding.stage === "reset-failed") {
+    return <ResetFailedScreen />;
+  }
 
   if (onboarding.stage === "keyring-locked") {
     return <KeyringLockedScreen />;

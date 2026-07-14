@@ -18,6 +18,7 @@ pub mod nostr_convert;
 mod prevent_sleep;
 mod ptt_shortcut;
 mod relay;
+mod reset;
 mod secret_store;
 mod shutdown;
 mod templates;
@@ -415,8 +416,41 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
+            // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
+            // Must run before migrations and identity resolution so the wipe
+            // completes atomically on crash recovery.
+            //
+            // init_nest_dir is called early here (normally it runs inside
+            // run_boot_migrations) so reset::run_boot_reset can call nest_dir().
+            let reset_outcome = if let Ok(data_dir) = app_handle.path().app_data_dir() {
+                let is_dev_for_reset = data_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(crate::migration::is_dev_data_dir_name)
+                    .unwrap_or(false);
+                crate::managed_agents::init_nest_dir(is_dev_for_reset);
+                crate::reset::run_boot_reset(&data_dir)
+            } else {
+                crate::reset::ResetOutcome::default()
+            };
+
+            if reset_outcome.failed {
+                // Surface reset-failed state — skip identity resolution and
+                // all side-effecting setup. The webview still loads so the
+                // frontend can show the recovery screen via get_identity.
+                let state = app_handle.state::<AppState>();
+                state
+                    .reset_failed
+                    .store(true, std::sync::atomic::Ordering::Release);
+                return Ok(());
+            }
+
             // Run all pre-identity data migrations before state loads from disk.
-            migration::run_boot_migrations(&app_handle);
+            if reset_outcome.completed {
+                migration::run_boot_migrations_after_reset(&app_handle);
+            } else {
+                migration::run_boot_migrations(&app_handle);
+            }
 
             // Resolve persisted identity key (env var → file → generate+save).
             // This is fatal — the app should not start with an ephemeral identity
@@ -517,7 +551,9 @@ pub fn run() {
             // destination is present. Non-fatal.
             // On a real migration, emit a one-time hint so the user can delete
             // the now-inert ~/.sprout; the frontend dedupes the toast.
-            if migration::migrate_legacy_nest() {
+            // Suppressed when a reset completed this boot: the nest was wiped and
+            // a fresh ~/.sprout-less state is exactly what we want.
+            if !reset_outcome.completed && migration::migrate_legacy_nest() {
                 let _ = app_handle.emit("legacy-nest-migrated", ());
             }
 
@@ -525,10 +561,12 @@ pub fn run() {
             // from the shared ~/.buzz nest into the new dedicated ~/.buzz-dev
             // nest so no work is lost when the nest is first namespaced.
             // Runs only when nest_dir() resolved to ~/.buzz-dev (dev instance).
+            // Suppressed after a reset so re-importing ~/.buzz into ~/.buzz-dev
+            // doesn't re-populate what was just wiped.
             let is_dev_nest = managed_agents::nest_dir()
                 .and_then(|p| p.file_name().map(|n| n.to_os_string()))
                 .is_some_and(|n| n == ".buzz-dev");
-            if is_dev_nest {
+            if !reset_outcome.completed && is_dev_nest {
                 migration::migrate_dev_nest();
             }
 
@@ -691,6 +729,7 @@ pub fn run() {
             discover_managed_agent_prereqs,
             sign_event,
             sign_nostr_identity_binding,
+            sign_out,
             decrypt_observer_event,
             build_observer_control_event,
             create_auth_event,

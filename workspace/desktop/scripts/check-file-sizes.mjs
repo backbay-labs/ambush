@@ -207,7 +207,8 @@ const overrides = new Map([
   // mcp-readonly-view rebase: PR2 MCP config surface FE-type fields force +1 over the grandfathered ceiling.
   // Git Bash prerequisite payload adds four fields to the shared Tauri API
   // contract. This is the canonical type location; split remains queued.
-  ["src/shared/api/types.ts", 1038],
+  // signout-wipe: resetFailed field added to Identity type (+6 lines).
+  ["src/shared/api/types.ts", 1044],
   // readiness-gate: PersonaDialog.tsx threads computeLocalModeGate +
   // requiredCredentialEnvKeys + RequiredFieldLabel so the "New agent" dialog
   // shows required markers and credential amber rows (parity with
@@ -307,7 +308,7 @@ const overrides = new Map([
   // am review fix: also clear stale V1 model field on provider rewrite +
   // new model-clear test. Load-bearing chimera fix.
   // keyring-dev-isolation: run_boot_migrations wires agent-key migration.
-  ["src-tauri/src/migration.rs", 1415],
+  ["src-tauri/src/migration.rs", 1436],
   // onMarkRead + isUnread prop threading (mirrors the onMarkUnread prop
   // already here) for the single-toggle mark-read/unread menu item — a small
   // overage from load-bearing per-message plumbing, not generic debt growth.
@@ -331,7 +332,22 @@ const overrides = new Map([
   // security fix for the lost-update race that stranded agent keys.
   // identity-import-keyring: KeyringLockedScreen, RecoveryScreen,
   // load_readonly + load_all_readonly + store_all for safe cross-service reads.
-  ["src-tauri/src/secret_store.rs", 1140],
+  // sign-out wipe: delete_all() method removes the entire keychain blob under
+  // the interprocess advisory lock; +8 lines. Load-bearing; queued to split.
+  // signout-wipe phase 2: delete_all_with_legacy_cleanup replaces delete_all;
+  // reads blob keys + deletes per-key legacy entries to prevent resurrection.
+  // + regression test for per-key resurrection via real OS keychain.
+  // Net growth ~36+32 lines over prior cap. Load-bearing correctness fix.
+  // signout-wipe pass-2 (F2): delete_all_with_legacy_cleanup DPK deletes now
+  // observable (propagate real errors); verify_fully_wiped checks all three
+  // keychain shapes (main blob, DPK blob, per-key "identity"). +73 lines.
+  ["src-tauri/src/secret_store.rs", 1307],
+  // sign-out wipe: Sign Out section (AlertDialog + controlled state) added
+  // at the bottom of the Profile settings page. Load-bearing UX feature;
+  // queued to split when ProfileSettingsCard is broken into sub-components.
+  // +20 lines: scroll-position save/restore across avatar editor open/close
+  // to prevent layout shift from the Sign Out section causing a viewport jump.
+  ["src/features/settings/ui/ProfileSettingsCard.tsx", 1033],
   // keyring-dev-isolation: keyring_service() fn (7 lines) replaces the const
   // to return "buzz-desktop-dev" in debug builds. Load-bearing isolation fix.
   ["src-tauri/src/app_state.rs", 1042],
