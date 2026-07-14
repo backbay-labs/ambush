@@ -1,8 +1,10 @@
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:nostr/nostr.dart' as nostr;
@@ -27,6 +29,13 @@ part 'compose_bar/suggestions.dart';
 part 'compose_bar/formatting_toolbar.dart';
 part 'compose_bar/attachments.dart';
 part 'compose_bar/send_button.dart';
+
+const _pastedImageMimeTypes = <String>[
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+];
 
 /// Rich compose bar with @mention autocomplete, emoji picker, and a markdown
 /// formatting toolbar. Used in both channel and thread views — the caller
@@ -67,6 +76,7 @@ class ComposeBar extends HookConsumerWidget {
     final attachments = useState<List<BlobDescriptor>>([]);
     final uploadError = useState<String?>(null);
     final uploadingCount = useState(0);
+    final clipboardHasImage = useState(false);
     final hasAttachments = attachments.value.isNotEmpty;
     final hasPendingUploads = uploadingCount.value > 0;
     final customEmoji = ref.watch(customEmojiListProvider);
@@ -74,6 +84,35 @@ class ComposeBar extends HookConsumerWidget {
     final resolvedHint =
         hintText ??
         (channelName.isNotEmpty ? 'Message #$channelName' : 'Message\u2026');
+
+    useEffect(() {
+      if (defaultTargetPlatform != TargetPlatform.iOS) return null;
+
+      var disposed = false;
+      Future<void> refreshClipboardAvailability() async {
+        final hasImage = await ref
+            .read(mediaUploadServiceProvider)
+            .clipboardHasImage();
+        if (!disposed && context.mounted) {
+          clipboardHasImage.value = hasImage;
+        }
+      }
+
+      void refreshWhenFocused() {
+        if (focusNode.hasFocus) refreshClipboardAvailability();
+      }
+
+      final lifecycleListener = AppLifecycleListener(
+        onResume: refreshClipboardAvailability,
+      );
+      focusNode.addListener(refreshWhenFocused);
+      refreshClipboardAvailability();
+      return () {
+        disposed = true;
+        focusNode.removeListener(refreshWhenFocused);
+        lifecycleListener.dispose();
+      };
+    }, [focusNode]);
 
     // Mention state --------------------------------------------------------
     final mentionQuery = useState<String?>(null);
@@ -348,6 +387,60 @@ class ComposeBar extends HookConsumerWidget {
       }
     }
 
+    Widget buildContextMenu(
+      BuildContext context,
+      EditableTextState editableTextState,
+    ) {
+      void pasteImage() {
+        ContextMenuController.removeAny();
+        pickAndUpload(
+          ref.read(mediaUploadServiceProvider).readAndUploadClipboardImage,
+        );
+      }
+
+      if (defaultTargetPlatform == TargetPlatform.iOS &&
+          SystemContextMenu.isSupportedByField(editableTextState)) {
+        return SystemContextMenu.editableText(
+          editableTextState: editableTextState,
+          items: [
+            if (clipboardHasImage.value)
+              IOSSystemContextMenuItemCustom(
+                title: 'Paste Image',
+                onPressed: pasteImage,
+              ),
+            ...SystemContextMenu.getDefaultItems(editableTextState),
+          ],
+        );
+      }
+
+      final buttonItems = [...editableTextState.contextMenuButtonItems];
+      if (defaultTargetPlatform == TargetPlatform.iOS &&
+          clipboardHasImage.value) {
+        buttonItems.insert(
+          0,
+          ContextMenuButtonItem(label: 'Paste Image', onPressed: pasteImage),
+        );
+      }
+      return AdaptiveTextSelectionToolbar.buttonItems(
+        anchors: editableTextState.contextMenuAnchors,
+        buttonItems: buttonItems,
+      );
+    }
+
+    void uploadPastedImage(KeyboardInsertedContent content) {
+      final bytes = content.data;
+      if (bytes == null || bytes.isEmpty) {
+        uploadError.value = 'Unable to read pasted image';
+        return;
+      }
+
+      pickAndUpload(
+        () => ref
+            .read(mediaUploadServiceProvider)
+            .uploadImage(XFile.fromData(bytes)),
+      );
+    }
+
     // Insert an emoji at the cursor.
     void insertEmoji(String emoji) {
       final text = controller.text;
@@ -479,6 +572,11 @@ class ComposeBar extends HookConsumerWidget {
                 controller: controller,
                 focusNode: focusNode,
                 textInputAction: TextInputAction.send,
+                contextMenuBuilder: buildContextMenu,
+                contentInsertionConfiguration: ContentInsertionConfiguration(
+                  allowedMimeTypes: _pastedImageMimeTypes,
+                  onContentInserted: uploadPastedImage,
+                ),
                 onSubmitted: (_) => send(),
                 minLines: 1,
                 maxLines: 5,
