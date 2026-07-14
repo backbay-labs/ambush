@@ -1082,6 +1082,7 @@ name = "buzz-relay"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "buzz-audit",
@@ -1091,6 +1092,7 @@ dependencies = [
  "buzz-db",
  "buzz-media",
  "buzz-pubsub",
+ "buzz-relay-mesh",
  "buzz-sdk",
  "buzz-search",
  "buzz-workflow",
@@ -1111,6 +1113,7 @@ dependencies = [
  "opentelemetry 0.32.0",
  "opentelemetry-otlp 0.32.0",
  "opentelemetry_sdk 0.32.1",
+ "postcard",
  "rand 0.10.1",
  "redis",
  "reqwest 0.13.3",
@@ -1132,6 +1135,29 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "buzz-relay-mesh"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "deadpool-redis",
+ "futures-util",
+ "hex",
+ "hmac 0.13.0",
+ "iroh",
+ "nostr",
+ "postcard",
+ "proptest",
+ "redis",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
