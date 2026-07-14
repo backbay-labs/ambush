@@ -44,6 +44,7 @@ import type {
   RawAcpRuntimeCatalogEntry,
   RawInstallRuntimeResult,
 } from "@/shared/api/tauri";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 
 type TestIdentity = {
   privateKey: string;
@@ -124,8 +125,10 @@ type E2eConfig = {
     agentListDelayMs?: number;
     agentMemory?: RawAgentMemoryListing | Record<string, RawAgentMemoryListing>;
     addChannelMembersDelayMs?: number;
+    channelMembersReadDelayMs?: number;
     createManagedAgentDelayMs?: number;
     channelsReadError?: string;
+    channelsReadDelayMs?: number;
     /** Number of seeded rows in the deep-history fixture. Defaults to 600. */
     deepHistoryMessageCount?: number;
     feedReadError?: string;
@@ -135,6 +138,10 @@ type E2eConfig = {
     applyWorkspaceDelayMs?: number;
     openDmDelayMs?: number;
     sendMessageDelayMs?: number;
+    /** Reject successive kind-9 sends with these messages, then resume. */
+    sendMessageErrors?: string[];
+    /** Reject successive managed-agent starts, then resume. */
+    startManagedAgentErrors?: string[];
     /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
      *  deliver live reply/aux events while an older response is in flight. */
     threadRepliesDelayMs?: number;
@@ -4741,6 +4748,13 @@ async function submitSignedEvent(
 }
 
 async function handleGetChannels(config: E2eConfig | undefined) {
+  const channelsReadDelayMs = config?.mock?.channelsReadDelayMs ?? 0;
+  if (channelsReadDelayMs > 0) {
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, channelsReadDelayMs),
+    );
+  }
+
   const channelsReadError = config?.mock?.channelsReadError;
   if (channelsReadError) {
     throw new Error(channelsReadError);
@@ -5503,6 +5517,11 @@ async function handleGetChannelMembers(
   args: { channelId: string },
   config: E2eConfig | undefined,
 ): Promise<RawChannelMembersResponse> {
+  const delayMs = config?.mock?.channelMembersReadDelayMs ?? 0;
+  if (delayMs > 0) {
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+
   const identity = getIdentity(config);
   if (!identity) {
     const channel = getMockChannel(args.channelId);
@@ -5819,9 +5838,13 @@ async function handleAddChannelMembers(
     const channel = getMockChannel(args.channelId);
     const added: string[] = [];
     const errors: RawAddChannelMembersResponse["errors"] = [];
+    const existingPubkeys = new Set(
+      channel.members.map((member) => normalizePubkey(member.pubkey)),
+    );
 
     for (const pubkey of args.pubkeys) {
-      if (channel.members.some((member) => member.pubkey === pubkey)) {
+      const normalizedPubkey = normalizePubkey(pubkey);
+      if (existingPubkeys.has(normalizedPubkey)) {
         errors.push({
           pubkey,
           error: "Already a member.",
@@ -5829,7 +5852,43 @@ async function handleAddChannelMembers(
         continue;
       }
 
-      channel.members.push({
+      existingPubkeys.add(normalizedPubkey);
+      added.push(pubkey);
+    }
+
+    // DM participant sets are immutable. Adding a member creates or reuses a
+    // separate DM for the expanded set instead of mutating the source channel.
+    const targetChannel =
+      channel.channel_type === "dm" && added.length > 0
+        ? getMockChannel(
+            (
+              await handleOpenDm(
+                {
+                  pubkeys: [
+                    ...channel.members.map((member) => member.pubkey),
+                    ...added,
+                  ],
+                },
+                config,
+              )
+            ).id,
+          )
+        : channel;
+
+    for (const pubkey of added) {
+      const existingMember = targetChannel.members.find(
+        (member) => normalizePubkey(member.pubkey) === normalizePubkey(pubkey),
+      );
+      if (existingMember) {
+        existingMember.role = args.role ?? "member";
+        existingMember.is_agent =
+          args.role === "bot" ||
+          mockAgentPubkeys.has(pubkey) ||
+          mockManagedAgents.some((agent) => agent.pubkey === pubkey);
+        existingMember.display_name = mockDisplayNames.get(pubkey) ?? null;
+        continue;
+      }
+      targetChannel.members.push({
         pubkey,
         role: args.role ?? "member",
         is_agent:
@@ -5839,11 +5898,10 @@ async function handleAddChannelMembers(
         joined_at: new Date().toISOString(),
         display_name: mockDisplayNames.get(pubkey) ?? null,
       });
-      added.push(pubkey);
     }
 
-    syncMockChannel(channel);
-    touchMockChannel(channel);
+    syncMockChannel(targetChannel);
+    touchMockChannel(targetChannel);
     syncMockRelayAgentsFromManagedAgents();
     return {
       added,
@@ -6986,9 +7044,17 @@ function isRelayMeshManagedAgent(agent: MockManagedAgent): boolean {
   );
 }
 
-async function handleStartManagedAgent(args: {
-  pubkey: string;
-}): Promise<RawManagedAgent> {
+async function handleStartManagedAgent(
+  args: {
+    pubkey: string;
+  },
+  config?: E2eConfig,
+): Promise<RawManagedAgent> {
+  const startError = config?.mock?.startManagedAgentErrors?.shift();
+  if (startError) {
+    throw new Error(startError);
+  }
+
   const agent = getMockManagedAgent(args.pubkey);
   if (isRelayMeshManagedAgent(agent)) {
     // Model the backend start preflight (ensure_relay_mesh_for_record): a
@@ -8090,6 +8156,13 @@ function sendToMockSocket(args: {
       return;
     }
 
+    const sendMessageError =
+      event.kind === 9 ? getConfig()?.mock?.sendMessageErrors?.shift() : null;
+    if (sendMessageError) {
+      sendWsText(socket.handler, ["OK", event.id, false, sendMessageError]);
+      return;
+    }
+
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     sendWsText(socket.handler, ["OK", event.id, true, ""]);
@@ -8977,6 +9050,7 @@ export function maybeInstallE2eTauriMocks() {
       case "start_managed_agent":
         return handleStartManagedAgent(
           payload as Parameters<typeof handleStartManagedAgent>[0],
+          activeConfig,
         );
       case "stop_managed_agent":
         return handleStopManagedAgent(

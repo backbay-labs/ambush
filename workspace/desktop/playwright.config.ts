@@ -45,6 +45,7 @@ export default defineConfig({
         "**/edit-agent.spec.ts",
         "**/doctor-cta-screenshots.spec.ts",
         "**/pubkey-display-screenshots.spec.ts",
+        "**/dm-new-message-screenshots.spec.ts",
         "**/file-attachment.spec.ts",
         "**/image-attachment-gallery.spec.ts",
         "**/composer-image-draw.spec.ts",

@@ -152,6 +152,7 @@ type MockBridgeOptions = {
   agentListDelayMs?: number;
   createManagedAgentDelayMs?: number;
   addChannelMembersDelayMs?: number;
+  channelMembersReadDelayMs?: number;
   channelsReadError?: string;
   /** Number of seeded rows in the deep-history fixture. Defaults to 600. */
   deepHistoryMessageCount?: number;
@@ -161,6 +162,10 @@ type MockBridgeOptions = {
   applyWorkspaceDelayMs?: number;
   openDmDelayMs?: number;
   sendMessageDelayMs?: number;
+  /** Reject successive kind-9 sends with these messages, then resume. */
+  sendMessageErrors?: string[];
+  /** Reject successive managed-agent starts, then resume. */
+  startManagedAgentErrors?: string[];
   /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
    * deliver live reply/aux events while an older response is in flight. */
   threadRepliesDelayMs?: number;
@@ -677,7 +682,8 @@ export async function openCreateChannelDialog(page: Page) {
   await page.getByRole("menuitem", { name: "New channel" }).click();
 }
 
-export async function openNewDirectMessageDialog(page: Page) {
+export async function openNewMessagePage(page: Page) {
   await openSectionMenu(page, "section-actions-dms");
   await page.getByRole("menuitem", { name: "New message" }).click();
+  await page.getByTestId("new-message-page").waitFor({ state: "visible" });
 }
