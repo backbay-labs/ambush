@@ -101,6 +101,13 @@ pub const KIND_AGENT_ENGRAM: u32 = 30174;
 /// author-only (see [`AUTHOR_ONLY_KINDS`]). See `docs/nips/NIP-ER.md`.
 pub const KIND_EVENT_REMINDER: u32 = 30300;
 
+/// NIP-PL: encrypted push lease (parameterized replaceable, author-only).
+///
+/// The source event contains endpoint-bearing NIP-44 ciphertext and is readable
+/// only by its authenticated author. Effective delivery state lives in the
+/// dedicated push lease tables.
+pub const KIND_PUSH_LEASE: u32 = 30350;
+
 /// Kinds whose stored events are readable only by their author.
 ///
 /// The relay must never reveal the existence, count, tags, content, schedule,
@@ -108,9 +115,9 @@ pub const KIND_EVENT_REMINDER: u32 = 30300;
 /// Shared across the ingest write path (NIP-ER `not_before` validation) and the
 /// read path (REQ/COUNT/subscription author-only filtering).
 ///
-/// Currently O(1) with a single entry. If this grows past ~4 kinds, convert to
-/// a compile-time bitset or sorted array with binary search for hot-path use.
-pub const AUTHOR_ONLY_KINDS: &[u32] = &[KIND_EVENT_REMINDER];
+/// Currently a tiny linear set. If this grows past ~4 kinds, convert to a
+/// compile-time bitset or sorted array with binary search for hot-path use.
+pub const AUTHOR_ONLY_KINDS: &[u32] = &[KIND_EVENT_REMINDER, KIND_PUSH_LEASE];
 
 /// Kinds that require a result-level read gate beyond the filter-layer
 /// `#p` check: even a reader who knows an event id MUST match the event's

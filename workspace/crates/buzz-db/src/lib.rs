@@ -31,6 +31,8 @@ pub mod migration;
 pub mod moderation;
 /// Monthly table partition management.
 pub mod partition;
+/// Community-scoped push lease and durable wake-outbox persistence.
+pub mod push;
 /// Reaction persistence.
 pub mod reaction;
 /// Relay-level membership persistence (NIP-43).
@@ -865,6 +867,29 @@ impl Db {
         ids: &[&[u8]],
     ) -> Result<Vec<StoredEvent>> {
         event::get_events_by_ids(&self.pool, community_id, ids).await
+    }
+
+    /// Atomically persist a validated kind:30350 event and its effective lease.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn accept_push_lease_event(
+        &self,
+        community: CommunityId,
+        event: &nostr::Event,
+        installation_id: &str,
+        version: push::LeaseVersion<'_>,
+        active: Option<push::ActiveLease<'_>>,
+        max_active_leases: i64,
+    ) -> Result<push::AcceptLeaseOutcome> {
+        push::accept_lease_event(
+            &self.pool,
+            community,
+            event,
+            installation_id,
+            version,
+            active,
+            max_active_leases,
+        )
+        .await
     }
 
     /// Atomically insert an event AND its thread metadata in a single transaction.

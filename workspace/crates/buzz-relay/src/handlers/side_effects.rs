@@ -1984,6 +1984,10 @@ async fn handle_a_tag_deletion(
     let actor_bytes = effective_message_author(event, &state.relay_keypair.public_key());
 
     match kind_num {
+        // kind:30350 revocation is exclusively a higher-generation inactive replacement.
+        super::push_lease::KIND_PUSH_LEASE => {
+            tracing::debug!(d_tag, "NIP-09 deletion ignored for push lease");
+        }
         buzz_core::kind::KIND_WORKFLOW_DEF => {
             // Try UUID first (workflow_id); fall back to name-based lookup.
             if let Ok(wf_id) = uuid::Uuid::parse_str(d_tag) {
@@ -2107,6 +2111,13 @@ async fn handle_standard_deletion_event(
             Some(target) => target,
             None => continue,
         };
+        if u32::from(target_event.event.kind.as_u16()) == super::push_lease::KIND_PUSH_LEASE {
+            tracing::debug!(
+                target_id = %hex::encode(&target_id),
+                "NIP-09 deletion ignored for push lease"
+            );
+            continue;
+        }
 
         let meta = state
             .db
