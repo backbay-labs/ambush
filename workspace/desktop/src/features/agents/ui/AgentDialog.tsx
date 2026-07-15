@@ -21,6 +21,7 @@ import {
 
 type AgentDialogCreateProps = {
   mode: "definition";
+  initialValues?: CreatePersonaInput | null;
   onOpenChange: (open: boolean) => void;
   definitionError: Error | null;
   isDefinitionPending: boolean;
@@ -101,6 +102,7 @@ export function AgentDialog(props: AgentDialogProps) {
 }
 
 function AgentCreateDialogRouter({
+  initialValues: providedInitialValues,
   onOpenChange,
   definitionError,
   isDefinitionPending,
@@ -110,8 +112,8 @@ function AgentCreateDialogRouter({
 }: AgentDialogCreateProps) {
   const [runDraft, setRunDraft] = React.useState(emptyWhereToRunDraft);
   const initialValues = React.useMemo(
-    () => createPersonaDialogState().initialValues,
-    [],
+    () => providedInitialValues ?? createPersonaDialogState().initialValues,
+    [providedInitialValues],
   );
 
   const copy = createPersonaDialogState();
