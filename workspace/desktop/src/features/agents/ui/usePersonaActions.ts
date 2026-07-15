@@ -42,10 +42,8 @@ import {
 import { resolveManagedAgentAvatarUrl } from "./managedAgentAvatar";
 import {
   buildInstanceInputForDefinition,
-  mintDefinitionWithPreflight,
   type BackendIntent,
 } from "../lib/instanceInputForDefinition";
-import { meshPrepareRelayMeshClient } from "@/shared/api/tauriMesh";
 
 type PersonaFeedbackSurface = "catalog" | "library";
 
@@ -207,15 +205,10 @@ export function usePersonaActions() {
           undefined,
           runtime.avatarUrl,
         );
-        const persona = await mintDefinitionWithPreflight(
-          startIntent,
-          meshPrepareRelayMeshClient,
-          () =>
-            createPersonaMutation.mutateAsync({
-              ...input,
-              avatarUrl,
-            }),
-        );
+        const persona = await createPersonaMutation.mutateAsync({
+          ...input,
+          avatarUrl,
+        });
 
         if (resolveCreateIntent(intent) === "definition") {
           setPersonaNoticeMessage(`Created ${persona.displayName}.`);

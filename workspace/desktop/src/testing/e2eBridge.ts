@@ -188,7 +188,6 @@ type E2eConfig = {
     // `upload_media_bytes` commands. Lets a spec drive the attachment flow
     // (e.g. a generic PDF) without a real upload pipeline. See
     // tests/helpers/bridge.ts:MockBridgeOptions.uploadDescriptors.
-    meshReporterPubkey?: string;
     uploadDelayMs?: number;
     /** Delay (ms) applied to `encode_agent_snapshot_for_send` so E2E tests can
      *  observe the "preparing" phase before the upload begins. 0/undefined = instant. */
@@ -558,6 +557,7 @@ type RawManagedAgent = {
   system_prompt: string | null;
   avatar_url: string | null;
   model: string | null;
+  provider?: string | null;
   env_vars?: Record<string, string>;
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
@@ -785,12 +785,6 @@ declare global {
     __BUZZ_E2E_COMMAND_LOG__?: Array<{
       command: string;
       payload: unknown;
-    }>;
-    /** Results emitted only after a mocked mesh-availability request resolves. */
-    __BUZZ_E2E_MESH_AVAILABILITY_RESULTS__?: Array<{
-      admitted: boolean;
-      available: boolean;
-      reason: string | null;
     }>;
     __BUZZ_E2E_WEBVIEW_ZOOM__?: number;
     __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
@@ -1225,6 +1219,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     system_prompt: agent.system_prompt,
     avatar_url: agent.avatar_url ?? null,
     model: agent.model,
+    provider: agent.provider ?? null,
     env_vars: { ...(agent.env_vars ?? {}) },
     status: agent.status,
     pid: agent.pid,
@@ -6652,6 +6647,9 @@ async function handleCreatePersona(args: {
     displayName: string;
     avatarUrl?: string;
     systemPrompt: string;
+    runtime?: string;
+    model?: string;
+    provider?: string;
     envVars?: Record<string, string>;
     behavior?: PersonaBehaviorInput;
   };
@@ -6662,6 +6660,9 @@ async function handleCreatePersona(args: {
     display_name: args.input.displayName.trim(),
     avatar_url: args.input.avatarUrl?.trim() || null,
     system_prompt: args.input.systemPrompt.trim(),
+    runtime: args.input.runtime?.trim() || null,
+    model: args.input.model?.trim() || null,
+    provider: args.input.provider?.trim() || null,
     is_builtin: false,
     is_active: true,
     source_team: null,
@@ -6680,6 +6681,9 @@ async function handleUpdatePersona(args: {
     displayName: string;
     avatarUrl?: string;
     systemPrompt: string;
+    runtime?: string;
+    model?: string;
+    provider?: string;
     envVars?: Record<string, string>;
     behavior?: PersonaBehaviorInput;
   };
@@ -6697,6 +6701,9 @@ async function handleUpdatePersona(args: {
   persona.display_name = args.input.displayName.trim();
   persona.avatar_url = args.input.avatarUrl?.trim() || null;
   persona.system_prompt = args.input.systemPrompt.trim();
+  persona.runtime = args.input.runtime?.trim() || null;
+  persona.model = args.input.model?.trim() || null;
+  persona.provider = args.input.provider?.trim() || null;
   if (args.input.envVars !== undefined) {
     // Absent = preserve; present = replace entirely (matches Rust handler).
     persona.env_vars = { ...args.input.envVars };
@@ -6943,6 +6950,7 @@ async function handleCreateManagedAgent(
       systemPrompt?: string;
       avatarUrl?: string;
       model?: string;
+      provider?: string;
       envVars?: Record<string, string>;
       spawnAfterCreate?: boolean;
       startOnAppLaunch?: boolean;
@@ -7015,7 +7023,8 @@ async function handleCreateManagedAgent(
     parallelism: mintParallelism,
     system_prompt: args.input.systemPrompt?.trim() || null,
     avatar_url: avatarUrl,
-    model: args.input.model?.trim() || null,
+    model: args.input.model?.trim() || linkedPersona?.model || null,
+    provider: args.input.provider?.trim() || linkedPersona?.provider || null,
     env_vars: { ...(args.input.envVars ?? {}) },
     status: args.input.spawnAfterCreate ? "running" : "stopped",
     pid: args.input.spawnAfterCreate ? 42000 + mockManagedAgents.length : null,
@@ -7080,14 +7089,7 @@ function getMockManagedAgent(pubkey: string): MockManagedAgent {
 }
 
 function isRelayMeshManagedAgent(agent: MockManagedAgent): boolean {
-  const env = agent.env_vars ?? {};
-  return (
-    agent.backend.type === "local" &&
-    env.BUZZ_AGENT_PROVIDER === "openai" &&
-    env.OPENAI_COMPAT_BASE_URL?.replace(/\/+$/, "") ===
-      "http://127.0.0.1:9337/v1" &&
-    env.OPENAI_COMPAT_API_KEY === "buzz-mesh-local"
-  );
+  return agent.backend.type === "local" && agent.provider === "relay-mesh";
 }
 
 async function handleStartManagedAgent(
@@ -7106,13 +7108,14 @@ async function handleStartManagedAgent(
     // Model the backend start preflight (ensure_relay_mesh_for_record): a
     // saved relay-mesh agent re-resolves a live serve target for its model
     // and only fails when no peer currently serves it.
-    const modelId = agent.env_vars?.OPENAI_COMPAT_MODEL;
+    const modelId = agent.model ?? "auto";
     const hasLiveTarget =
       mockMeshState.admitted &&
-      mockMeshState.models.some((model) => model.id === modelId);
+      (modelId === "auto" ||
+        mockMeshState.models.some((model) => model.id === modelId));
     if (!hasLiveTarget) {
       throw new Error(
-        "relay mesh agents cannot be started from saved state because no live serve target is available for this model. Start serving on a mesh peer, or create a new agent with Run on relay mesh selected to refresh the target for http://127.0.0.1:9337/v1.",
+        "Buzz shared compute cannot start because no live member is serving this model.",
       );
     }
   }
@@ -8112,28 +8115,6 @@ function sendToMockSocket(args: {
       return;
     }
 
-    // Mesh control events (24620 status report, 24621 connect request) are not
-    // channel messages — they carry a `p` tag, not an `h` tag. The real relay
-    // accepts them after membership/shape checks; the mock just ACKs so legacy
-    // direct-TS mesh helpers can proceed. Current create/start flows publish
-    // these from the Rust coordinator instead.
-    if (event.kind === 24620 || event.kind === 24621) {
-      if (
-        event.kind === 24621 &&
-        !event.tags.some((tag) => tag[0] === "p" && typeof tag[1] === "string")
-      ) {
-        sendWsText(socket.handler, [
-          "OK",
-          event.id,
-          false,
-          "invalid: mesh connect request missing #p target",
-        ]);
-        return;
-      }
-      sendWsText(socket.handler, ["OK", event.id, true, ""]);
-      return;
-    }
-
     if (event.kind === 30078) {
       sendWsText(socket.handler, ["OK", event.id, true, ""]);
       return;
@@ -8249,7 +8230,6 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_COMMANDS__ = [];
   window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
-  window.__BUZZ_E2E_MESH_AVAILABILITY_RESULTS__ = [];
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
   window.__BUZZ_E2E_WEBVIEW_ZOOM__ = 1;
   window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ = ({
@@ -8429,9 +8409,8 @@ export function maybeInstallE2eTauriMocks() {
     for (const socketId of socketIds) disconnectMockSocket(socketId);
     return socketIds.length;
   };
-  // Tests flip `admitted` to exercise the denial path: mesh_ensure_client_node
-  // rejects when not admitted, which proves relay membership is the gate and
-  // that the create flow surfaces denial copy without spawning the agent.
+  // Tests vary mesh admission and models to exercise provider discovery and
+  // the managed-agent start preflight.
   window.__BUZZ_E2E_SET_MESH__ = (mesh) => {
     if (mesh.admitted !== undefined) mockMeshState.admitted = mesh.admitted;
     if (mesh.models !== undefined) mockMeshState.models = mesh.models;
@@ -8496,43 +8475,6 @@ export function maybeInstallE2eTauriMocks() {
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
     switch (command) {
-      case "mesh_availability": {
-        const result = {
-          capable: true,
-          admitted: mockMeshState.admitted,
-          available: mockMeshState.admitted && mockMeshState.models.length > 0,
-          reason: !mockMeshState.admitted
-            ? mockMeshState.denyReason
-            : mockMeshState.models.length === 0
-              ? "no relay mesh serve targets are available"
-              : null,
-          models: mockMeshState.models,
-          serveTargets: mockMeshState.models.map((model) => ({
-            modelId: model.id,
-            modelName: model.name,
-            endpointAddr: "mock-endpoint-addr",
-            nodeName: "Mock desktop",
-            capacity: { vramGb: null },
-            reporterPubkey:
-              activeConfig?.mock?.meshReporterPubkey ??
-              identity?.pubkey ??
-              DEFAULT_MOCK_IDENTITY.pubkey,
-            endpointId: "mock-endpoint-id",
-            deviceId: "mock-endpoint-id",
-            deviceName: "Mock desktop",
-          })),
-        };
-        return Promise.resolve(result).then((resolved) => {
-          // Unlike the command log above, record this only after the mocked
-          // result has resolved so E2E can distinguish it from loading.
-          window.__BUZZ_E2E_MESH_AVAILABILITY_RESULTS__?.push({
-            admitted: resolved.admitted,
-            available: resolved.available,
-            reason: resolved.reason,
-          });
-          return resolved;
-        });
-      }
       case "mesh_installed_models":
         return mockMeshState.models;
       case "mesh_node_status":
@@ -8549,90 +8491,6 @@ export function maybeInstallE2eTauriMocks() {
         mockMeshState.nodeState = "off";
         mockMeshState.nodeMode = null;
         return meshNodeStatus("off", null);
-      case "mesh_ensure_client_node":
-        // The invariant under test: membership is the only factor. A
-        // non-admitted (non-member) caller cannot bring up the client node,
-        // and no extra manual auth step exists — admission alone decides.
-        if (!mockMeshState.admitted) {
-          throw new Error(mockMeshState.denyReason);
-        }
-        mockMeshState.nodeState = "running";
-        mockMeshState.nodeMode = "client";
-        return meshNodeStatus("running", "client");
-      case "mesh_prepare_relay_mesh_client": {
-        // The Rust coordinator owns connect signaling. In the browser e2e
-        // bridge, mirror the event template it would publish so specs can keep
-        // asserting canonical #p targets without resurrecting the old TS
-        // signaling helper.
-        if (!mockMeshState.admitted) {
-          throw new Error(mockMeshState.denyReason);
-        }
-        mockMeshState.nodeState = "running";
-        mockMeshState.nodeMode = "client";
-        const target = (
-          payload as {
-            request?: {
-              target?: {
-                endpointAddr?: string;
-                endpointId?: string | null;
-                reporterPubkey?: string;
-              };
-            };
-          } | null
-        )?.request?.target;
-        const reporterPubkey = target?.reporterPubkey?.trim().toLowerCase();
-        const selfPubkey = (
-          identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey
-        ).toLowerCase();
-        if (reporterPubkey && reporterPubkey !== selfPubkey) {
-          window.__BUZZ_E2E_SIGNED_EVENTS__?.push({
-            kind: 24621,
-            tags: [["p", reporterPubkey]],
-            content: JSON.stringify({
-              self_endpoint_addr: "mock-endpoint-addr",
-              peer_endpoint_addr: target?.endpointAddr ?? "mock-endpoint-addr",
-              self_endpoint_id: "mock-endpoint-id",
-              peer_endpoint_id: target?.endpointId ?? undefined,
-              attempt_id: "mock-attempt-id",
-            }),
-          });
-        }
-        return meshNodeStatus("running", "client");
-      }
-      case "mesh_dial_endpoint_addr":
-        return meshNodeStatus("running", mockMeshState.nodeMode ?? "client");
-      case "mesh_status_report_payload":
-        return mockMeshState.nodeState === "running"
-          ? {
-              token: "mock-endpoint-addr",
-              node_id: "mock-endpoint-id",
-              endpointId: "mock-endpoint-id",
-              deviceId: "mock-endpoint-id",
-              deviceName: "Mock desktop",
-              hosted_models: mockMeshState.models.map((model) => model.id),
-            }
-          : null;
-      case "mesh_agent_preset": {
-        const req = (payload as { request?: { modelId?: string } } | null)
-          ?.request;
-        const model = req?.modelId ?? mockMeshState.models[0]?.id ?? "";
-        return {
-          providerId: "relay-mesh" as const,
-          label: "Run on relay mesh",
-          acpCommand: "",
-          agentCommand: "buzz-agent",
-          agentArgs: [],
-          mcpCommand: "",
-          model,
-          envVars: {
-            BUZZ_AGENT_PROVIDER: "openai",
-            OPENAI_COMPAT_BASE_URL: "http://127.0.0.1:9337/v1",
-            OPENAI_COMPAT_MODEL: model,
-            OPENAI_COMPAT_API_KEY: "buzz-mesh-local",
-            OPENAI_COMPAT_API: "chat",
-          },
-        };
-      }
       case "get_identity": {
         const isLost =
           !mockIdentityLostCleared && activeConfig?.mock?.identityLost === true;
@@ -9252,12 +9110,28 @@ export function maybeInstallE2eTauriMocks() {
             description: null,
           },
         ];
+        if (provider === "relay-mesh") {
+          if (!mockMeshState.admitted) {
+            throw new Error(mockMeshState.denyReason);
+          }
+          if (mockMeshState.models.length === 0) {
+            throw new Error(
+              "no Buzz shared compute serving members are available",
+            );
+          }
+        }
         const models =
-          provider === "openai"
-            ? openAiModels
-            : provider === "anthropic"
-              ? anthropicModels
-              : [...anthropicModels, ...openAiModels];
+          provider === "relay-mesh"
+            ? mockMeshState.models.map((model) => ({
+                id: model.id,
+                name: model.name,
+                description: null,
+              }))
+            : provider === "openai"
+              ? openAiModels
+              : provider === "anthropic"
+                ? anthropicModels
+                : [...anthropicModels, ...openAiModels];
         return {
           agentName: "mock-agent",
           agentVersion: "0.0.0",

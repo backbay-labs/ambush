@@ -8,7 +8,6 @@ export default defineConfig({
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: "playwright-report" }],
-    ["json", { outputFile: "playwright-report.json" }],
   ],
   use: {
     baseURL: "http://127.0.0.1:4173",
@@ -42,11 +41,9 @@ export default defineConfig({
         "**/local-archive-screenshots.spec.ts",
         "**/agent-readiness-screenshots.spec.ts",
         "**/agent-error-state-screenshots.spec.ts",
-        "**/needs-restart-screenshots.spec.ts",
         "**/edit-agent.spec.ts",
         "**/doctor-cta-screenshots.spec.ts",
         "**/pubkey-display-screenshots.spec.ts",
-        "**/dm-new-message-screenshots.spec.ts",
         "**/file-attachment.spec.ts",
         "**/image-attachment-gallery.spec.ts",
         "**/composer-image-draw.spec.ts",
@@ -66,7 +63,7 @@ export default defineConfig({
         "**/home-collapsed-top-chrome.spec.ts",
         "**/top-chrome-zoom-clearance.spec.ts",
         "**/thread-unread.spec.ts",
-        "**/community-rail.spec.ts",
+        "**/workspace-rail.spec.ts",
         "**/boot-splash.spec.ts",
         "**/thread-reply-anchor-roleplay.spec.ts",
         "**/threadpane-ultrawide.spec.ts",
@@ -90,7 +87,6 @@ export default defineConfig({
         "**/project-pr-review.spec.ts",
         "**/persona-model-combobox-screenshots.spec.ts",
         "**/drafts-screenshots.spec.ts",
-        "**/signout-screenshots.spec.ts",
         "**/buzz-theme-screenshots.spec.ts",
         "**/channel-sort.spec.ts",
         "**/identity-lost.spec.ts",
@@ -103,6 +99,7 @@ export default defineConfig({
         "**/agent-provider-dropdowns.spec.ts",
         "**/agent-lifecycle-feedback.spec.ts",
         "**/inbox-live-update.spec.ts",
+        "**/mesh-compute.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
@@ -124,7 +121,6 @@ export default defineConfig({
         "**/persona-env-vars.spec.ts",
         "**/persona-sync.spec.ts",
         "**/team-snapshot.spec.ts",
-        "**/mesh-compute.spec.ts",
         "**/parity-ancestor-island.spec.ts",
       ],
       use: {
