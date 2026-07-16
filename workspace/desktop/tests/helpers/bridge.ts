@@ -212,6 +212,12 @@ type MockBridgeOptions = {
   nostrBindSignDelayMs?: number;
   stallWebsocketSends?: boolean;
   userSearchDelayMs?: number;
+  /**
+   * Value returned by the `observer_archive_default_enabled` mock command.
+   * `true` = internal-policy build (toggle locked ON); `false`/omitted = OSS
+   * build (toggle functional). Drives LocalArchiveSettingsCard policy state.
+   */
+  observerArchiveDefaultEnabled?: boolean;
   // NIP-IA gate inputs — drive the archive-button gate matrix in
   // tests/e2e/identity-archive.spec.ts.
   /**
