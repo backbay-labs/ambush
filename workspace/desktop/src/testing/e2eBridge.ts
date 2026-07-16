@@ -8782,6 +8782,8 @@ export function maybeInstallE2eTauriMocks() {
           has_untracked_files: false,
           can_push: false,
           push_block_reason: "No local checkout found.",
+          can_pull: false,
+          pull_block_reason: "No local checkout found.",
         };
       case "list_project_local_repositories":
         return [];
@@ -8789,6 +8791,11 @@ export function maybeInstallE2eTauriMocks() {
         return {
           pushed: true,
           message: "Pushed main to remote.",
+        };
+      case "pull_project_local_repository":
+        return {
+          pulled: true,
+          message: "Pulled main from remote.",
         };
       case "get_relay_ws_url":
         return getRelayWsUrl(activeConfig);
