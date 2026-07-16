@@ -33,7 +33,17 @@ export type CommunityOnboardingTransaction = {
   createdAt: string;
   updatedAt: string;
   error?: string;
+  // Deep links are persisted before machine onboarding completes. Set when
+  // the user dismisses the acknowledgment so it stays dismissed on relaunch.
+  acknowledged?: boolean;
 };
+
+export type CommunityOnboardingTransactionPatch = Partial<
+  Pick<
+    CommunityOnboardingTransaction,
+    "stage" | "communityId" | "communityName" | "error" | "acknowledged"
+  >
+>;
 
 export type StartCommunityOnboardingInput = {
   source: CommunityOnboardingSource;
@@ -119,6 +129,9 @@ export function startCommunityOnboarding(
       reposDir: input.reposDir ?? existing.reposDir,
       updatedAt: now.toISOString(),
       error: undefined,
+      // A freshly opened link deserves fresh feedback — re-present the gate
+      // even if a previous link for this relay was already dismissed.
+      acknowledged: undefined,
     };
     saveCommunityOnboardingTransaction(updated, storage);
     return updated;
@@ -143,18 +156,24 @@ export function startCommunityOnboarding(
 
 export function updateCommunityOnboardingTransaction(
   transaction: CommunityOnboardingTransaction,
-  patch: Partial<
-    Pick<
-      CommunityOnboardingTransaction,
-      "stage" | "communityId" | "communityName" | "error"
-    >
-  >,
+  patch: CommunityOnboardingTransactionPatch,
   storage: Storage = localStorage,
   now = new Date(),
 ): CommunityOnboardingTransaction {
   const updated = { ...transaction, ...patch, updatedAt: now.toISOString() };
   saveCommunityOnboardingTransaction(updated, storage);
   return updated;
+}
+
+export function updateCurrentCommunityOnboardingTransaction(
+  current: CommunityOnboardingTransaction | null,
+  patch: CommunityOnboardingTransactionPatch,
+  expectedId: string | undefined,
+  storage: Storage = localStorage,
+  now = new Date(),
+): CommunityOnboardingTransaction | null {
+  if (!current || (expectedId && current.id !== expectedId)) return current;
+  return updateCommunityOnboardingTransaction(current, patch, storage, now);
 }
 
 export function markCommunityOnboardingComplete(
@@ -177,12 +196,8 @@ type CommunityOnboardingContextValue = {
   transaction: CommunityOnboardingTransaction | null;
   start: (input: StartCommunityOnboardingInput) => boolean;
   update: (
-    patch: Partial<
-      Pick<
-        CommunityOnboardingTransaction,
-        "stage" | "communityId" | "communityName" | "error"
-      >
-    >,
+    patch: CommunityOnboardingTransactionPatch,
+    expectedId?: string,
   ) => void;
   clear: () => void;
 };
@@ -212,18 +227,9 @@ export function CommunityOnboardingProvider({
     [transaction],
   );
   const update = React.useCallback(
-    (
-      patch: Partial<
-        Pick<
-          CommunityOnboardingTransaction,
-          "stage" | "communityId" | "communityName" | "error"
-        >
-      >,
-    ) => {
+    (patch: CommunityOnboardingTransactionPatch, expectedId?: string) => {
       setTransaction((current) =>
-        current
-          ? updateCommunityOnboardingTransaction(current, patch)
-          : current,
+        updateCurrentCommunityOnboardingTransaction(current, patch, expectedId),
       );
     },
     [],

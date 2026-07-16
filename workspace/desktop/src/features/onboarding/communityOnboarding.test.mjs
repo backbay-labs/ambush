@@ -7,6 +7,7 @@ import {
   markCommunityOnboardingComplete,
   startCommunityOnboarding,
   updateCommunityOnboardingTransaction,
+  updateCurrentCommunityOnboardingTransaction,
 } from "./communityOnboarding.tsx";
 
 function createMemoryStorage(initial = {}) {
@@ -77,6 +78,53 @@ test("same-relay ingress resumes rather than replacing progress", () => {
   assert.equal(resumed.stage, "profile");
   assert.equal(resumed.communityId, "community-id");
   assert.equal(resumed.inviteCode, "new-code");
+});
+
+test("stale asynchronous updates cannot mutate a replacement transaction", () => {
+  const storage = createMemoryStorage();
+  const original = startCommunityOnboarding(
+    {
+      source: "deep-link-join",
+      relayUrl: "wss://relay.example",
+      inviteCode: "invite-code",
+    },
+    storage,
+  );
+  const replacement = startCommunityOnboarding(
+    { source: "deep-link-connect", relayUrl: "wss://other.example" },
+    storage,
+  );
+
+  const result = updateCurrentCommunityOnboardingTransaction(
+    replacement,
+    { stage: "connecting", error: "stale error" },
+    original.id,
+    storage,
+  );
+
+  assert.equal(result, replacement);
+  assert.equal(loadCommunityOnboardingTransaction(storage)?.id, replacement.id);
+  assert.equal(loadCommunityOnboardingTransaction(storage)?.error, undefined);
+});
+
+test("acknowledgment persists but resets when the same-relay link reopens", () => {
+  const storage = createMemoryStorage();
+  const transaction = startCommunityOnboarding(
+    { source: "deep-link-connect", relayUrl: "wss://relay.example" },
+    storage,
+  );
+  assert.equal(transaction.stage, "connecting");
+  updateCommunityOnboardingTransaction(
+    transaction,
+    { acknowledged: true },
+    storage,
+  );
+  assert.equal(loadCommunityOnboardingTransaction(storage)?.acknowledged, true);
+  const reopened = startCommunityOnboarding(
+    { source: "deep-link-connect", relayUrl: "wss://relay.example" },
+    storage,
+  );
+  assert.equal(reopened.acknowledged, undefined);
 });
 
 test("malformed persisted state is ignored and can be cleared", () => {

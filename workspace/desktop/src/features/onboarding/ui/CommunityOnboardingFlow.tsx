@@ -7,10 +7,9 @@ import {
   useCommunityOnboarding,
 } from "@/features/onboarding/communityOnboarding";
 import { initializeWelcomeChannel } from "@/features/onboarding/hooks";
+import { useClaimInvite } from "@/features/onboarding/useClaimInvite";
 import { AvatarUpload } from "@/features/profile/ui/AvatarUpload";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import { claimInvite } from "@/shared/api/invites";
-import { inviteErrorMessage } from "@/shared/api/inviteHelpers";
 import { updateProfile } from "@/shared/api/tauriProfiles";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { listPersonas } from "@/shared/api/tauriPersonas";
@@ -50,19 +49,11 @@ export function CommunityOnboardingFlow({
       .catch(() => setStarterPersonas([]));
   }, [transaction?.stage]);
 
-  React.useEffect(() => {
-    if (transaction?.stage !== "claiming" || isPending) return;
-    setIsPending(true);
-    void claimInvite(transaction.relayUrl, transaction.inviteCode ?? "")
-      .then(() => update({ stage: "connecting", error: undefined }))
-      .catch((error: unknown) => update({ error: inviteErrorMessage(error) }))
-      .finally(() => setIsPending(false));
-  }, [isPending, transaction, update]);
+  useClaimInvite();
 
   React.useEffect(() => {
-    if (transaction?.stage !== "connecting") return;
-    onConnect();
-  }, [onConnect, transaction]);
+    if (transaction?.stage === "connecting") onConnect();
+  }, [onConnect, transaction?.stage]);
 
   const retryClaim = () => update({ stage: "claiming", error: undefined });
   const relayUrl = transaction?.relayUrl;
