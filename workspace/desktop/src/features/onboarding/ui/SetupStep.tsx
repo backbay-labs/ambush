@@ -23,6 +23,8 @@ import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Spinner } from "@/shared/ui/spinner";
+import { ONBOARDING_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
+import { OnboardingFooter } from "./OnboardingFooter";
 import {
   type OnboardingTransitionDirection,
   OnboardingSlideTransition,
@@ -457,7 +459,7 @@ function RuntimeProvidersSection({
   return (
     <section className="flex w-full flex-col items-center gap-8">
       <div className="w-full max-w-[520px] text-center">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+        <h1 className="text-title font-normal text-foreground">
           Use the models that fit the task
         </h1>
         <p className="mt-3 text-sm leading-6 text-foreground/80">
@@ -516,16 +518,18 @@ function SetupStepContent({
 
   return (
     <OnboardingSlideTransition
-      className="flex w-full flex-col items-center"
+      // pb clears the always-docked footer: the provider list can overflow on
+      // short windows, so reserve room to scroll clear of the fixed CTA group.
+      className="flex w-full flex-col items-center pb-20"
       data-testid="onboarding-page-2"
       direction={direction}
       transitionKey={`setup-${direction}`}
     >
       <RuntimeProvidersSection runtimeProviders={runtimeProviders} />
 
-      <div className="mt-10 flex flex-col items-center gap-3">
+      <OnboardingFooter>
         <Button
-          className="h-10 rounded-full px-8"
+          className={ONBOARDING_PRIMARY_CTA_CLASS}
           data-testid="onboarding-setup-next"
           onClick={actions.next}
           type="button"
@@ -542,7 +546,7 @@ function SetupStepContent({
         >
           Back
         </Button>
-      </div>
+      </OnboardingFooter>
     </OnboardingSlideTransition>
   );
 }

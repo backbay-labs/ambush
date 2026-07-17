@@ -13,7 +13,7 @@ import { pubkeyToNpub } from "@/shared/lib/nostrUtils";
 import { Button } from "@/shared/ui/button";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
-import { OnboardingStepDots } from "@/features/onboarding/ui/OnboardingStepDots";
+import { OnboardingChrome } from "@/features/onboarding/ui/OnboardingChrome";
 
 type WelcomeSetupPage = "welcome" | "join" | "invite";
 type WelcomeTransitionMode = "initial" | OnboardingTransitionDirection;
@@ -95,7 +95,7 @@ export function WelcomeSetup({
       data-system-color-scheme={systemColorScheme}
     >
       <StartupWindowDragRegion />
-      <OnboardingStepDots current={5} />
+      <OnboardingChrome current={5} />
       <div className="relative flex w-full max-w-[760px] flex-col items-center text-center">
         {page === "welcome" ? (
           <OnboardingSlideTransition
@@ -105,7 +105,7 @@ export function WelcomeSetup({
             transitionKey={`welcome-${welcomeEffect}-${transitionDirection}`}
           >
             <div className="w-full max-w-[440px]">
-              <h1 className="text-3xl font-semibold tracking-tight">
+              <h1 className="text-title font-normal">
                 Join or create a community
               </h1>
               <p className="mt-3 text-sm leading-6 text-foreground/80">
@@ -152,9 +152,7 @@ export function WelcomeSetup({
             transitionKey={`join-${transitionDirection}`}
           >
             <div className="w-full max-w-[440px]">
-              <h1 className="text-3xl font-semibold tracking-tight">
-                Join a community
-              </h1>
+              <h1 className="text-title font-normal">Join a community</h1>
               <p className="mt-3 text-sm leading-6 text-muted-foreground">
                 Send your public key to a community owner. Keep Buzz open; once
                 they add you, their invite link will continue setup here.
@@ -211,9 +209,7 @@ export function WelcomeSetup({
             transitionKey={`invite-${transitionDirection}`}
           >
             <div className="w-full max-w-[440px]">
-              <h1 className="text-3xl font-semibold tracking-tight">
-                I have an invite link
-              </h1>
+              <h1 className="text-title font-normal">I have an invite link</h1>
               <p className="mt-3 text-sm leading-6 text-muted-foreground">
                 Keep this page open, then click the invite link you received.
                 Buzz will continue automatically. You can also paste it below.

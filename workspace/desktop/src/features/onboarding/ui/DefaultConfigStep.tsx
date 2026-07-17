@@ -14,6 +14,8 @@ import {
 import type { GlobalAgentConfig } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Spinner } from "@/shared/ui/spinner";
+import { ONBOARDING_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
+import { OnboardingFooter } from "./OnboardingFooter";
 import {
   type OnboardingTransitionDirection,
   OnboardingSlideTransition,
@@ -133,13 +135,15 @@ export function DefaultConfigStep({
 }: DefaultConfigStepProps) {
   return (
     <OnboardingSlideTransition
-      className="flex w-full flex-col items-center"
+      // pb clears the always-docked footer: the config fields can overflow on
+      // short windows, so reserve room to scroll clear of the fixed CTA group.
+      className="flex w-full flex-col items-center pb-20"
       data-testid="onboarding-page-config"
       direction={direction}
       transitionKey={`default-config-${direction}`}
     >
       <div className="w-full max-w-[500px] text-center">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+        <h1 className="text-title font-normal text-foreground">
           Configure your default model settings
         </h1>
         <p className="mt-3 text-sm leading-6 text-foreground/80">
@@ -152,9 +156,9 @@ export function DefaultConfigStep({
         <AgentDefaultsSection />
       </div>
 
-      <div className="mt-10 flex flex-col items-center gap-3">
+      <OnboardingFooter>
         <Button
-          className="h-10 rounded-full px-8"
+          className={ONBOARDING_PRIMARY_CTA_CLASS}
           data-testid="onboarding-finish"
           onClick={actions.complete}
           type="button"
@@ -171,7 +175,7 @@ export function DefaultConfigStep({
         >
           Back
         </Button>
-      </div>
+      </OnboardingFooter>
     </OnboardingSlideTransition>
   );
 }
