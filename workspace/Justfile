@@ -363,6 +363,30 @@ relay-web: bootstrap _ensure-migrations
     pnpm -C web build
     BUZZ_WEB_DIR=./web/dist cargo run -p buzz-relay
 
+# Build and run the private read-only admin dashboard
+admin: bootstrap _ensure-migrations
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="{{justfile_directory()}}/bin:$PATH"
+    [[ -d node_modules ]] || pnpm install
+    pnpm -C admin-web build
+    export BUZZ_ADMIN_HOST="${BUZZ_ADMIN_HOST:-admin.localhost:3000}"
+    export BUZZ_ADMIN_WEB_DIR="${BUZZ_ADMIN_WEB_DIR:-{{justfile_directory()}}/admin-web/dist}"
+    echo "Admin dashboard: http://${BUZZ_ADMIN_HOST}/reports"
+    cargo run -p buzz-relay
+
+# Seed deterministic reports and product feedback for local admin dashboard review
+admin-seed: _ensure-migrations
+    ./scripts/seed-admin-dashboard.sh
+
+# Run focused relay and browser checks for the read-only admin dashboard
+admin-check: fmt-check
+    cargo check -p buzz-relay --all-targets
+    cargo test -p buzz-relay api::admin
+    cargo test -p buzz-relay router::tests
+    pnpm -C admin-web check
+    pnpm -C admin-web exec playwright test
+
 # Start the relay server in release mode
 relay-release: _ensure-migrations
     cargo run -p buzz-relay --release

@@ -24,6 +24,15 @@ pub enum ConfigError {
     InvalidValue(String),
 }
 
+/// Deny-by-default read-only deployment-admin configuration.
+#[derive(Debug, Clone)]
+pub struct AdminConfig {
+    /// Exact admin HTTP authority.
+    pub host: String,
+    /// Optional admin SPA bundle directory.
+    pub web_dir: Option<std::path::PathBuf>,
+}
+
 /// Relay-hosted policy content presented on join surfaces.
 #[derive(Debug, Clone)]
 pub struct JoinPolicyConfig {
@@ -218,6 +227,9 @@ pub struct Config {
     /// Optional relay-hosted policy shown on join surfaces. Disabled when no
     /// documents or age attestation are configured.
     pub join_policy: Option<JoinPolicyConfig>,
+
+    /// Deployment-admin API and SPA configuration. Absent means the surface is disabled.
+    pub admin: Option<AdminConfig>,
 
     /// Optional path to the web UI `dist/` directory.
     /// When set, the relay serves the invite landing page and its static assets.
@@ -737,6 +749,35 @@ impl Config {
             })
         };
 
+        // Read-only deployment-admin surface. The route is absent when the host is unset.
+        let admin = match std::env::var("BUZZ_ADMIN_HOST")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        {
+            None => None,
+            Some(host) => {
+                if host.contains(['/', '\\', '@']) {
+                    return Err(ConfigError::InvalidValue(
+                        "BUZZ_ADMIN_HOST must be an exact authority".to_string(),
+                    ));
+                }
+                let web_dir = std::env::var("BUZZ_ADMIN_WEB_DIR")
+                    .ok()
+                    .map(|value| std::path::PathBuf::from(value.trim()))
+                    .filter(|value| !value.as_os_str().is_empty());
+                if let Some(ref dir) = web_dir {
+                    if !dir.join("index.html").is_file() {
+                        return Err(ConfigError::InvalidValue(format!(
+                            "BUZZ_ADMIN_WEB_DIR={} does not contain index.html",
+                            dir.display()
+                        )));
+                    }
+                }
+                Some(AdminConfig { host, web_dir })
+            }
+        };
+
         // Web UI static file serving
         let web_dir = std::env::var("BUZZ_WEB_DIR")
             .ok()
@@ -810,6 +851,7 @@ impl Config {
             push_gateway_delivery_url,
             push_gateway_timeout,
             join_policy,
+            admin,
             web_dir,
             serve_git_web_gui,
         })
