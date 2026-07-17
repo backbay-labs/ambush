@@ -759,6 +759,7 @@ fn handle_cancel_turn_control(
                 channel_id: Some(channel_id.to_string()),
                 session_id: None,
                 turn_id: None,
+                started_at: None,
             },
             serde_json::json!({
                 "type": "cancel_turn",
@@ -835,6 +836,7 @@ fn handle_switch_model_control(
                 channel_id: Some(channel_id.to_string()),
                 session_id: None,
                 turn_id: None,
+                started_at: None,
             },
             serde_json::json!({
                 "type": "switch_model",
@@ -2697,6 +2699,8 @@ fn dispatch_pending(
         // Prompt text is now built inside run_prompt_task (needs async for
         // context fetching). Pass None for prompt_text; batch carries the data.
         let (control_tx, control_rx) = tokio::sync::oneshot::channel::<ControlSignal>();
+        let turn_id = Uuid::new_v4().to_string();
+        let task_turn_id = turn_id.clone();
 
         let abort_handle = pool.join_set.spawn(async move {
             pool::run_prompt_task(
@@ -2706,6 +2710,7 @@ fn dispatch_pending(
                 ctx_clone,
                 result_tx,
                 Some(control_rx),
+                task_turn_id,
             )
             .await;
         });
@@ -2715,6 +2720,7 @@ fn dispatch_pending(
             pool::TaskMeta {
                 agent_index,
                 channel_id: Some(channel_id),
+                turn_id,
                 recoverable_batch,
                 control_tx: Some(control_tx),
                 steer_tx,
@@ -2888,6 +2894,7 @@ fn handle_prompt_result(
         PromptSource::Channel(ch) => Some(*ch),
         PromptSource::Heartbeat => None,
     };
+    let turn_id = result.turn_id.clone();
     let emit_turn_error = |error_msg: &str, error_code: Option<i64>| {
         if let Some(ref observer) = observer {
             let mut payload = serde_json::json!({
@@ -2900,7 +2907,7 @@ fn handle_prompt_result(
             observer.emit(
                 "turn_error",
                 Some(agent_index),
-                &observer::context_for(channel_id, None, None),
+                &observer::context_for(channel_id, None, Some(turn_id.clone())),
                 payload,
             );
         }
@@ -3123,7 +3130,7 @@ fn recover_panicked_agent(
         observer.emit(
             "agent_panic",
             Some(i),
-            &observer::context_for(meta.channel_id, None, None),
+            &observer::context_for(meta.channel_id, None, Some(meta.turn_id)),
             serde_json::json!({
                 "outcome": "panic",
                 "error": format!("Agent task panicked: {join_error}"),
@@ -3228,9 +3235,20 @@ fn dispatch_heartbeat(
     let result_tx = pool.result_tx();
     let ctx_clone = Arc::clone(ctx);
     let agent_index = agent.index;
+    let turn_id = Uuid::new_v4().to_string();
+    let task_turn_id = turn_id.clone();
 
     let abort_handle = pool.join_set.spawn(async move {
-        pool::run_prompt_task(agent, None, Some(prompt_text), ctx_clone, result_tx, None).await;
+        pool::run_prompt_task(
+            agent,
+            None,
+            Some(prompt_text),
+            ctx_clone,
+            result_tx,
+            None,
+            task_turn_id,
+        )
+        .await;
     });
 
     pool.task_map_mut().insert(
@@ -3238,6 +3256,7 @@ fn dispatch_heartbeat(
         pool::TaskMeta {
             agent_index,
             channel_id: None,
+            turn_id,
             recoverable_batch: None,
             control_tx: None,
             steer_tx: None,
@@ -3825,6 +3844,7 @@ mod owner_control_command_tests {
             pool::TaskMeta {
                 agent_index: 0,
                 channel_id: Some(channel_id),
+                turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: Some(control_tx),
                 steer_tx: None,
@@ -4027,6 +4047,7 @@ mod observer_chunk_coalescer_tests {
             channel_id: Some("channel-1".to_string()),
             session_id: Some("session-1".to_string()),
             turn_id: Some("turn-1".to_string()),
+            started_at: None,
             payload: serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "session/update",
@@ -4054,6 +4075,7 @@ mod observer_chunk_coalescer_tests {
             channel_id: Some("channel-1".to_string()),
             session_id: Some("session-1".to_string()),
             turn_id: Some("turn-1".to_string()),
+            started_at: None,
             payload: serde_json::json!({ "type": "turn_started" }),
         }
     }
@@ -4374,6 +4396,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
                 steer_tx: None,
@@ -4396,6 +4419,7 @@ mod error_outcome_emission_tests {
         let result = PromptResult {
             agent,
             source: PromptSource::Channel(Uuid::new_v4()),
+            turn_id: "test-turn-id".to_string(),
             outcome,
             batch: None,
         };
@@ -4414,16 +4438,88 @@ mod error_outcome_emission_tests {
             None,
         );
 
-        observer
+        let turn_errors: Vec<_> = observer
             .snapshot()
-            .iter()
+            .into_iter()
             .filter(|e| e.kind == "turn_error")
-            .count()
+            .collect();
+        assert!(
+            turn_errors
+                .iter()
+                .all(|event| event.turn_id.as_deref() == Some("test-turn-id")),
+            "turn_error must retain the completed turn id"
+        );
+        turn_errors.len()
     }
 
     #[tokio::test]
     async fn agent_exited_emits_exactly_one_feed_event() {
         assert_eq!(turn_errors_emitted_for(PromptOutcome::AgentExited).await, 1);
+    }
+
+    #[tokio::test]
+    async fn panic_event_retains_task_turn_id() {
+        let mut pool = AgentPool::from_slots(vec![]);
+        let channel_id = Uuid::new_v4();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let abort_handle = pool.join_set.spawn(async move {
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        let task_id = abort_handle.id();
+        pool.task_map_mut().insert(
+            task_id,
+            crate::pool::TaskMeta {
+                agent_index: 0,
+                channel_id: Some(channel_id),
+                turn_id: "panic-turn-id".to_string(),
+                recoverable_batch: None,
+                control_tx: None,
+                steer_tx: None,
+            },
+        );
+        started_rx.await.unwrap();
+        abort_handle.abort();
+        let join_error = pool.join_set.join_next().await.unwrap().unwrap_err();
+
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let config = test_config();
+        let mut heartbeat_in_flight = false;
+        let removed_channels = HashSet::new();
+        let mut typing_channels = HashMap::new();
+        let mut crash_history = vec![SlotCircuit {
+            crash_times: Vec::new(),
+            open_until: None,
+            respawn_in_flight: false,
+        }];
+        let (respawn_tx, _respawn_rx) = mpsc::channel(8);
+        let mut respawn_tasks = tokio::task::JoinSet::new();
+        let observer = ObserverHandle::in_process();
+
+        recover_panicked_agent(
+            &mut pool,
+            &mut queue,
+            &config,
+            join_error,
+            &mut heartbeat_in_flight,
+            &removed_channels,
+            &mut typing_channels,
+            &mut crash_history,
+            &respawn_tx,
+            &mut respawn_tasks,
+            Some(observer.clone()),
+        );
+
+        let panic = observer
+            .snapshot()
+            .into_iter()
+            .find(|event| event.kind == "agent_panic")
+            .expect("panic recovery emits an observer event");
+        assert_eq!(
+            panic.channel_id.as_deref(),
+            Some(channel_id.to_string().as_str())
+        );
+        assert_eq!(panic.turn_id.as_deref(), Some("panic-turn-id"));
     }
 
     #[tokio::test]
@@ -4465,6 +4561,7 @@ mod error_outcome_emission_tests {
                 crate::pool::TaskMeta {
                     agent_index: 0,
                     channel_id: None,
+                    turn_id: "test-turn-id".to_string(),
                     recoverable_batch: None,
                     control_tx: None,
                     steer_tx: None,
@@ -4485,6 +4582,7 @@ mod error_outcome_emission_tests {
             let result = PromptResult {
                 agent,
                 source: PromptSource::Channel(Uuid::new_v4()),
+                turn_id: "test-turn-id".to_string(),
                 outcome,
                 batch: None,
             };
@@ -4548,6 +4646,7 @@ mod error_outcome_emission_tests {
                 crate::pool::TaskMeta {
                     agent_index: 0,
                     channel_id: None,
+                    turn_id: "test-turn-id".to_string(),
                     recoverable_batch: None,
                     control_tx: None,
                     steer_tx: None,
@@ -4567,6 +4666,7 @@ mod error_outcome_emission_tests {
             let result = PromptResult {
                 agent,
                 source: PromptSource::Channel(channel_id),
+                turn_id: "test-turn-id".to_string(),
                 outcome,
                 batch: Some(batch),
             };
@@ -4658,6 +4758,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
                 steer_tx: None,
@@ -4689,6 +4790,7 @@ mod error_outcome_emission_tests {
         let result = PromptResult {
             agent,
             source: PromptSource::Channel(channel_id),
+            turn_id: "test-turn-id".to_string(),
             outcome: PromptOutcome::CancelDrainTimeout(grace),
             batch: Some(batch),
         };
@@ -4795,6 +4897,7 @@ mod error_outcome_emission_tests {
             crate::pool::TaskMeta {
                 agent_index: 0,
                 channel_id: None,
+                turn_id: "test-turn-id".to_string(),
                 recoverable_batch: None,
                 control_tx: None,
                 steer_tx: None,
@@ -4816,6 +4919,7 @@ mod error_outcome_emission_tests {
         let result = PromptResult {
             agent,
             source: PromptSource::Channel(Uuid::new_v4()),
+            turn_id: "test-turn-id".to_string(),
             outcome: PromptOutcome::CancelDrainTimeout(grace),
             // Explicit Stop already dropped the batch upstream in
             // `classify_control_cancel_failure` — `handle_prompt_result`
@@ -4905,6 +5009,7 @@ mod observer_payload_trim_tests {
             channel_id: Some("11111111-1111-1111-1111-111111111111".to_string()),
             session_id: Some("sess-1".to_string()),
             turn_id: Some("turn-1".to_string()),
+            started_at: None,
             payload,
         }
     }
