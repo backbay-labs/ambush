@@ -478,6 +478,7 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
     <>
       <MachineOnboardingFlow
         complete={completeMachineOnboarding}
+        continueWithIdentity={machine.continueWithIdentity}
         identityLost={machine.identityLost}
         initialPage={machineInitialPage}
         queryClient={machine.queryClient}
