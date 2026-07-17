@@ -4,6 +4,7 @@ import { Outlet, useLocation } from "@tanstack/react-router";
 
 import { deriveShellRoute } from "@/app/AppShell.helpers";
 import { AppShellProvider } from "@/app/AppShellContext";
+import * as BuzzTheme from "@/app/BuzzThemeSurfaces";
 import { AppShellOverlays } from "@/app/AppShellOverlays";
 import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
@@ -761,6 +762,7 @@ export function AppShell() {
                     isHuddleDrawerOpen && "buzz-huddle-app-surface-open",
                   )}
                 >
+                  <BuzzTheme.GradientLayer />
                   {hasCommunityRail ? (
                     <CommunityRail
                       activeCommunityId={
@@ -921,11 +923,12 @@ export function AppShell() {
                             ref={mainInsetRef}
                             className="isolate min-h-0 min-w-0 overflow-hidden bg-sidebar"
                             data-buzz-glass-inset
+                            data-buzz-shadow-viewport
                             style={chromeCssVarDefaults as React.CSSProperties}
                           >
-                            <div className="relative z-10 mb-2 ml-px mr-2 mt-px flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-background shadow-[-1px_-1px_0_0_hsl(var(--sidebar-border)/0.45)]">
+                            <BuzzTheme.ContentSurface>
                               <Outlet />
-                            </div>
+                            </BuzzTheme.ContentSurface>
                           </SidebarInset>
                         </MainInsetProvider>
                         <RelayConnectionOverlay
