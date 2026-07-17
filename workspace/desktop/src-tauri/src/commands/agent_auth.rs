@@ -3,6 +3,9 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[cfg(target_os = "macos")]
+use std::{fs, io::Write, os::unix::fs::PermissionsExt};
+
 use serde_json::Value;
 
 use serde::{Deserialize, Serialize};
@@ -84,8 +87,12 @@ fn connect_acp_runtime_blocking(
         .find(|candidate| candidate.id == request.method_id)
         .ok_or_else(|| "auth method is no longer advertised by this adapter".to_string())?;
 
-    if method.method_type.as_deref() == Some("terminal") {
-        launch_terminal_auth(&request.runtime_id, method)?;
+    if uses_terminal_auth(method)? {
+        if method.id == "claude-login" && terminal_auth_meta_command(method)?.is_some() {
+            run_claude_login(&request.runtime_id, method)?;
+        } else {
+            launch_terminal_auth(&request.runtime_id, method)?;
+        }
         return Ok(ConnectAcpRuntimeResult { launched: true });
     }
 
@@ -208,6 +215,29 @@ fn command_error(label: &str, output: &std::process::Output) -> String {
     }
 }
 
+fn run_claude_login(runtime_id: &str, method: &AcpAuthMethod) -> Result<(), String> {
+    let runtime = known_acp_runtime_exact(runtime_id)
+        .ok_or_else(|| format!("unknown ACP runtime: {runtime_id}"))?;
+    let argv = adapter_terminal_argv(runtime.label, method, "")?;
+    let (command, args) = argv
+        .split_first()
+        .ok_or_else(|| "Claude login command is empty".to_string())?;
+    let status = Command::new(command)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("failed to run Claude login: {error}"))?;
+    if !status.success() {
+        return Err(format!(
+            "Claude login failed (exit {})",
+            status.code().unwrap_or(-1)
+        ));
+    }
+    Ok(())
+}
+
 fn launch_terminal_auth(runtime_id: &str, method: &AcpAuthMethod) -> Result<(), String> {
     let runtime = known_acp_runtime_exact(runtime_id)
         .ok_or_else(|| format!("unknown ACP runtime: {runtime_id}"))?;
@@ -248,7 +278,15 @@ fn adapter_terminal_argv(
         .unwrap_or_else(|| command.to_string());
     let mut argv = vec![command_path];
     argv.extend(args.iter().cloned());
+    if method.id == "claude-login" && terminal_auth_meta_command(method)?.is_some() {
+        argv.extend(["auth".to_string(), "login".to_string()]);
+    }
     Ok(argv)
+}
+
+fn uses_terminal_auth(method: &AcpAuthMethod) -> Result<bool, String> {
+    Ok(method.method_type.as_deref() == Some("terminal")
+        || terminal_auth_meta_command(method)?.is_some())
 }
 
 fn terminal_auth_meta_command(method: &AcpAuthMethod) -> Result<Option<Vec<String>>, String> {
@@ -303,6 +341,7 @@ fn terminal_auth_meta_command(method: &AcpAuthMethod) -> Result<Option<Vec<Strin
     Ok((!argv.is_empty()).then_some(argv))
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn spawn_without_stdio(mut command: Command) -> Result<(), String> {
     command
         .stdin(Stdio::null())
@@ -315,14 +354,36 @@ fn spawn_without_stdio(mut command: Command) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn launch_visible_terminal(argv: &[String]) -> Result<(), String> {
-    let command = shell_join(argv);
-    let script = format!(
-        "tell application \"Terminal\"\n  activate\n  do script {}\nend tell",
-        applescript_string(&command)
-    );
-    let mut command = Command::new("osascript");
-    command.arg("-e").arg(script);
-    spawn_without_stdio(command)
+    let mut script = tempfile::Builder::new()
+        .prefix("buzz-auth-")
+        .suffix(".command")
+        .tempfile()
+        .map_err(|error| format!("failed to create terminal login script: {error}"))?;
+    writeln!(
+        script,
+        "#!/bin/sh\ntrap 'rm -f -- \"$0\"' EXIT\n{}",
+        shell_join(argv)
+    )
+    .map_err(|error| format!("failed to write terminal login script: {error}"))?;
+    fs::set_permissions(script.path(), fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("failed to prepare terminal login script: {error}"))?;
+    let script = script
+        .into_temp_path()
+        .keep()
+        .map_err(|error| format!("failed to preserve terminal login script: {error}"))?;
+
+    let status = Command::new("open")
+        .arg(&script)
+        .status()
+        .map_err(|error| format!("failed to open terminal: {error}"))?;
+    if !status.success() {
+        let _ = fs::remove_file(&script);
+        return Err(format!(
+            "failed to open terminal (exit {})",
+            status.code().unwrap_or(-1)
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -389,16 +450,11 @@ fn shell_escape(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', "'\\''"))
 }
 
-#[cfg(target_os = "macos")]
-fn applescript_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         adapter_terminal_argv, append_inherited_path, run_buzz_acp_auth_command_with_paths,
-        shell_escape, shell_join, windows_terminal_args, AcpAuthMethod,
+        shell_escape, shell_join, uses_terminal_auth, windows_terminal_args, AcpAuthMethod,
     };
 
     /// Windows regression: the augmented PATH there holds only Buzz-managed
@@ -530,6 +586,32 @@ mod tests {
         let method: AcpAuthMethod = serde_json::from_str(raw).unwrap();
         assert_eq!(method.method_type.as_deref(), Some("terminal"));
         assert_eq!(method.command[0], "claude");
+    }
+
+    #[test]
+    fn claude_terminal_meta_routes_around_unimplemented_authenticate() {
+        let raw = r#"{"_meta":{"terminal-auth":{"args":["/tmp/claude-cli.js"],"command":"node","label":"Claude Login"}},"description":"Run `claude /login` in the terminal","id":"claude-login","name":"Log in with Claude"}"#;
+        let method: AcpAuthMethod = serde_json::from_str(raw).unwrap();
+        assert_eq!(method.method_type, None);
+        assert!(uses_terminal_auth(&method).unwrap());
+    }
+
+    #[test]
+    fn claude_terminal_meta_starts_login_flow() {
+        let _guard = crate::managed_agents::lock_path_mutex();
+        let method: AcpAuthMethod = serde_json::from_str(
+            r#"{"_meta":{"terminal-auth":{"args":["/tmp/claude-cli.js"],"command":"definitely-not-on-path-node"}},"id":"claude-login","name":"Log in with Claude"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            adapter_terminal_argv("Claude Code", &method, "unused").unwrap(),
+            vec![
+                "definitely-not-on-path-node".to_string(),
+                "/tmp/claude-cli.js".to_string(),
+                "auth".to_string(),
+                "login".to_string(),
+            ]
+        );
     }
 
     #[test]
