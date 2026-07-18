@@ -22,6 +22,7 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+  {{- if .Values.autoscaling.websocketMetricEnabled }}
     - type: Pods
       pods:
         metric:
@@ -29,4 +30,5 @@ spec:
         target:
           type: AverageValue
           averageValue: {{ .Values.autoscaling.targetWebsocketConnections | quote }}
+  {{- end }}
 {{- end }}

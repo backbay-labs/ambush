@@ -41,8 +41,8 @@ surface at template time regardless of which manifest helm renders first.
   {{- if lt (.Values.autoscaling.maxReplicas | int) (.Values.autoscaling.minReplicas | int) -}}
     {{- fail "autoscaling.maxReplicas must be greater than or equal to autoscaling.minReplicas" -}}
   {{- end -}}
-  {{- if not .Values.autoscaling.websocketMetricName -}}
-    {{- fail "autoscaling.websocketMetricName is required when autoscaling.enabled=true" -}}
+  {{- if and .Values.autoscaling.websocketMetricEnabled (not .Values.autoscaling.websocketMetricName) -}}
+    {{- fail "autoscaling.websocketMetricName is required when WebSocket scaling is enabled" -}}
   {{- end -}}
 {{- end -}}
 

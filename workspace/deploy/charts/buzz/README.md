@@ -89,16 +89,18 @@ autoscaling:
   minReplicas: 5
   maxReplicas: 15
   targetCPUUtilizationPercentage: 65
+  websocketMetricEnabled: true
   websocketMetricName: buzz_ws_connections_active
   targetWebsocketConnections: 5000
 ```
 
-CPU scaling requires Kubernetes Metrics Server. WebSocket scaling additionally
-requires a custom-metrics adapter (for example Prometheus Adapter) configured to
-expose the relay's `buzz_ws_connections_active` gauge as a pod metric with the
-name in `websocketMetricName`. The chart creates the HPA but deliberately does
-not install or configure a cluster-wide metrics adapter. Scale-down is gradual
-by default so long-lived WebSocket connections have time to drain.
+CPU scaling requires Kubernetes Metrics Server. Set `websocketMetricEnabled: false`
+for a CPU-only HPA. WebSocket scaling additionally requires a custom-metrics
+adapter (for example Prometheus Adapter) configured to expose the relay's
+`buzz_ws_connections_active` gauge as a pod metric with the name in
+`websocketMetricName`. The chart creates the HPA but deliberately does not
+install or configure a cluster-wide metrics adapter. Scale-down is gradual by
+default so long-lived WebSocket connections have time to drain.
 
 ## Upgrades
 

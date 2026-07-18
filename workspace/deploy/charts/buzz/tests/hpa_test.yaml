@@ -49,6 +49,22 @@ tests:
           path: spec.behavior.scaleDown.stabilizationWindowSeconds
           value: 600
 
+  - it: supports CPU-only autoscaling without a custom metrics adapter
+    template: templates/hpa.yaml
+    set:
+      autoscaling.enabled: true
+      autoscaling.websocketMetricEnabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 1
+      - equal:
+          path: spec.metrics[0].type
+          value: Resource
+      - equal:
+          path: spec.metrics[0].resource.name
+          value: cpu
+
   - it: leaves Deployment replicas to the HPA and disables in-process huddle audio
     template: templates/deployment.yaml
     set:

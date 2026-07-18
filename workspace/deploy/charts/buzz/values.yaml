@@ -37,14 +37,15 @@ image:
 replicaCount: 1
 
 # ── Autoscaling ──────────────────────────────────────────────────────────────
-# Requires Metrics Server for CPU and a custom-metrics adapter exposing the
-# pod-level Prometheus gauge named by websocketMetricName. Kubernetes HPA uses
-# the larger replica recommendation, so either CPU or WebSocket load scales out.
+# Requires Metrics Server for CPU. Optional WebSocket scaling additionally
+# requires a custom-metrics adapter exposing its pod-level Prometheus gauge.
+# Kubernetes HPA uses the larger replica recommendation from enabled metrics.
 autoscaling:
   enabled: false
   minReplicas: 5
   maxReplicas: 15
   targetCPUUtilizationPercentage: 65
+  websocketMetricEnabled: true
   websocketMetricName: buzz_ws_connections_active
   targetWebsocketConnections: 5000
   behavior:
