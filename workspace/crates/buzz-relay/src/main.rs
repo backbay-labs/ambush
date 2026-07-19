@@ -128,12 +128,14 @@ async fn main() -> anyhow::Result<()> {
         health_port = config.health_port,
         metrics_port = config.metrics_port,
         max_frame_bytes = config.max_frame_bytes,
+        audit_enabled = config.audit_enabled,
         "Config loaded"
     );
 
     let usage_interval_secs = usage_metrics_interval_secs();
     let usage_idle_timeout_secs = usage_metrics_idle_timeout_secs(usage_interval_secs);
     relay_metrics::install(config.metrics_port, usage_idle_timeout_secs);
+    metrics::gauge!("buzz_audit_enabled").set(if config.audit_enabled { 1.0 } else { 0.0 });
     info!(
         port = config.metrics_port,
         idle_timeout_secs = usage_idle_timeout_secs,
@@ -316,17 +318,19 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => error!("Failed to backfill d_tags: {e}"),
     }
 
-    let audit_pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(5)
-        .min_connections(1)
-        .connect(&config.database_url)
-        .await
-        .map_err(|e| anyhow::anyhow!("Audit DB connection failed: {e}"))?;
-    let audit = AuditService::new(audit_pool);
-    // Audit schema is provisioned by the sqlx migrations at startup (the
-    // `audit_log` DDL is part of the migrated schema), so there is no runtime
-    // schema-ensure step.
-    info!("Audit service ready");
+    let audit = if config.audit_enabled {
+        let audit_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .min_connections(1)
+            .connect(&config.database_url)
+            .await
+            .map_err(|e| anyhow::anyhow!("Audit DB connection failed: {e}"))?;
+        info!("Audit service ready");
+        Some(AuditService::new(audit_pool))
+    } else {
+        info!("Audit logging disabled by BUZZ_AUDIT_ENABLED");
+        None
+    };
 
     let redis_pool = {
         let cfg = deadpool_redis::Config::from_url(&config.redis_url);
