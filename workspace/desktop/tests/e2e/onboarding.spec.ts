@@ -617,29 +617,20 @@ test("first-community choices expose npub and invite input", async ({
     page.getByRole("button", { name: "I have an invite link" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "I want to create a community" }),
+    page.getByRole("button", {
+      name: "Create or connect to my own community",
+    }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "I want to create a community" })
+    .getByRole("button", { name: "Create or connect to my own community" })
     .click();
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const log = (
-          window as Window & {
-            __BUZZ_E2E_COMMAND_LOG__?: Array<{
-              command: string;
-              payload: unknown;
-            }>;
-          }
-        ).__BUZZ_E2E_COMMAND_LOG__;
-        return log?.find((entry) => entry.command === "plugin:opener|open_url")
-          ?.payload;
-      }),
-    )
-    .toMatchObject({
-      url: "https://app.builderlab.xyz/signup?returnTo=/buzz",
-    });
+  await expect(
+    page.getByRole("heading", { name: "Your communities" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Continue with Builderlab" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Back" }).click();
 
   await page.getByRole("button", { name: "Add me to a community" }).click();
   await expect(page.getByTestId("welcome-join-npub")).toHaveText(
@@ -754,6 +745,338 @@ test("first-community choices expose npub and invite input", async ({
   await expect(invalidInviteTip).toHaveCSS("opacity", "0");
 });
 
+test("first-community owner can connect an existing hosted community", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(
+    page,
+    {
+      builderlabAuth: {
+        email: "owner@example.com",
+        expiresAt: "2099-01-01T00:00:00Z",
+      },
+      builderlabIdentity: { pubkey_hex: BLANK_TYLER_IDENTITY.pubkey },
+      builderlabCommunities: [
+        {
+          id: "owned-community",
+          name: "North Star",
+          normalized_host: "north-star.communities.buzz.xyz",
+        },
+      ],
+    },
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+      skipCommunitySeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page
+    .getByRole("button", { name: "Create or connect to my own community" })
+    .click();
+  await expect(page.getByText("North Star")).toBeVisible();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Build your profile" }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
+      ),
+    )
+    .toContain('"source":"first-community"');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
+      ),
+    )
+    .toContain("wss://north-star.communities.buzz.xyz");
+});
+
+test("first-community owner can create and connect a hosted community", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(
+    page,
+    {},
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+      skipCommunitySeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page
+    .getByRole("button", { name: "Create or connect to my own community" })
+    .click();
+  await page.getByRole("button", { name: "Continue with Builderlab" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Connect this Buzz identity" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Connect this Buzz identity" })
+    .click();
+  await expect(page.getByText("Signed in as owner@example.com")).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Community address" })
+    .fill("bee-lab");
+  await expect(page.getByText("That address is available.")).toBeVisible();
+  await page.getByRole("button", { name: "Create and connect" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Build your profile" }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
+      ),
+    )
+    .toContain("wss://bee-lab.communities.buzz.xyz");
+});
+
+test("first-community reports a created community without a relay address", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(
+    page,
+    {
+      builderlabAuth: {
+        email: "owner@example.com",
+        expiresAt: "2099-01-01T00:00:00Z",
+      },
+      builderlabIdentity: { pubkey_hex: BLANK_TYLER_IDENTITY.pubkey },
+      builderlabCreatedCommunity: {
+        id: "hosted-bee-lab",
+        name: "bee-lab",
+      },
+    },
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+      skipCommunitySeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page
+    .getByRole("button", { name: "Create or connect to my own community" })
+    .click();
+  await page
+    .getByRole("textbox", { name: "Community address" })
+    .fill("bee-lab");
+  await expect(page.getByText("That address is available.")).toBeVisible();
+  await page.getByRole("button", { name: "Create and connect" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "The community was created, but Builderlab did not return its relay address.",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Build your profile" }),
+  ).toHaveCount(0);
+});
+
+test("first-community can cancel a closed-browser sign-in and retry", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(
+    page,
+    { builderlabLoginDelayMs: 5_000 },
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+      skipCommunitySeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page
+    .getByRole("button", { name: "Create or connect to my own community" })
+    .click();
+  await page.getByRole("button", { name: "Continue with Builderlab" }).click();
+  await expect(page.getByText("Waiting for your browser…")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel sign-in" }).click();
+  await expect(
+    page.getByRole("button", { name: "Continue with Builderlab" }),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => window.__BUZZ_E2E_COMMANDS__ ?? []))
+    .toEqual(expect.arrayContaining(["cancel_builderlab_login"]));
+
+  await page.evaluate(() => {
+    if (window.__BUZZ_E2E_CONFIG__?.mock)
+      window.__BUZZ_E2E_CONFIG__.mock.builderlabLoginDelayMs = 0;
+  });
+  await page.getByRole("button", { name: "Continue with Builderlab" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Connect this Buzz identity" }),
+  ).toBeVisible();
+});
+
+test("first-community owner can replace a mismatched account identity", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(
+    page,
+    {
+      builderlabAuth: {
+        email: "old-owner@example.com",
+        expiresAt: "2099-01-01T00:00:00Z",
+      },
+      builderlabIdentity: { pubkey_hex: "f".repeat(64) },
+    },
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+      skipCommunitySeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page
+    .getByRole("button", { name: "Create or connect to my own community" })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "This account uses a different Buzz identity",
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Use this device's identity" })
+    .click();
+  await expect(
+    page.getByText("Signed in as old-owner@example.com"),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => window.__BUZZ_E2E_COMMANDS__ ?? []))
+    .toEqual(
+      expect.arrayContaining([
+        "delete_builderlab_nostr_identity",
+        "bind_builderlab_nostr_identity",
+      ]),
+    );
+});
+
+test("first-community explains when the local identity belongs to another account", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(
+    page,
+    {
+      builderlabAuth: {
+        email: "wrong-owner@example.com",
+        expiresAt: "2099-01-01T00:00:00Z",
+      },
+      builderlabIdentity: { pubkey_hex: "e".repeat(64) },
+      builderlabBindError: { code: "pubkey_already_bound" },
+    },
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+      skipCommunitySeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page
+    .getByRole("button", { name: "Create or connect to my own community" })
+    .click();
+  await page
+    .getByRole("button", { name: "Use this device's identity" })
+    .click();
+  await expect(
+    page.getByText(
+      "This device's Buzz identity belongs to a different Builderlab account and can't be moved from here. Sign out, then sign in with the account that already owns this identity.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Connect this Buzz identity" }),
+  ).toBeVisible();
+});
+
+test("back clears Builderlab auth before returning to first-community choices", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await page.addInitScript((pubkey) => {
+    window.localStorage.setItem(
+      `buzz-machine-onboarding-complete.v2:${pubkey}`,
+      "true",
+    );
+  }, BLANK_TYLER_IDENTITY.pubkey);
+  await installMockBridge(
+    page,
+    {
+      builderlabAuth: {
+        email: "owner@example.com",
+        expiresAt: "2099-01-01T00:00:00Z",
+      },
+      builderlabIdentity: { pubkey_hex: BLANK_TYLER_IDENTITY.pubkey },
+    },
+    {
+      relayWsUrl: "wss://default.example.com",
+      skipOnboardingSeed: true,
+      skipCommunitySeed: true,
+    },
+  );
+  await page.goto("/");
+
+  await page
+    .getByRole("button", { name: "Create or connect to my own community" })
+    .click();
+  await page.getByRole("button", { name: "Back" }).click();
+  await page
+    .getByRole("button", { name: "Create or connect to my own community" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Continue with Builderlab" }),
+  ).toBeVisible();
+});
+
 test("first-community shows the scenario cards for localhost", async ({
   page,
 }) => {
@@ -781,7 +1104,9 @@ test("first-community shows the scenario cards for localhost", async ({
     page.getByRole("button", { name: "I have an invite link" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "I want to create a community" }),
+    page.getByRole("button", {
+      name: "Create or connect to my own community",
+    }),
   ).toBeVisible();
 
   await page.getByTestId("welcome-setup-back").click();

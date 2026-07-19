@@ -426,9 +426,7 @@ pub fn run() {
             .build()
     });
 
-    // Only register the updater in release builds that were compiled with a
-    // real updater configuration. Local unsigned builds omit that config and
-    // should still launch for debugging.
+    // Register the updater only in configured release builds; omit it locally.
     #[cfg(buzz_updater_enabled)]
     let builder = if cfg!(debug_assertions) {
         builder
@@ -451,6 +449,7 @@ pub fn run() {
         .manage(ClipboardState::new())
         .manage(PendingCommunityDeepLinks::default())
         .manage(BuilderlabSession::default())
+        .manage(BuilderlabLogin::default())
         .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -744,6 +743,7 @@ pub fn run() {
             take_pending_community_deep_link,
             acknowledge_pending_community_deep_link,
             start_builderlab_login,
+            cancel_builderlab_login,
             get_builderlab_auth,
             clear_builderlab_auth,
             get_builderlab_nostr_identity,
