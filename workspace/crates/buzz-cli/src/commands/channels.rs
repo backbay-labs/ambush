@@ -29,17 +29,16 @@ pub async fn cmd_list_channels(
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     let effective_limit = limit.unwrap_or(500);
-    let raw = if member == Some(true) {
+    let events = if member == Some(true) {
         // Step 1: find channel IDs where we're a member (kind:39002)
         let my_pk = client.keys().public_key().to_hex();
         let member_filter = serde_json::json!({
             "kinds": [39002],
             "#p": [my_pk],
-            "limit": effective_limit
         });
-        let member_resp = client.query(&member_filter).await?;
-        let member_events: Vec<serde_json::Value> =
-            serde_json::from_str(&member_resp).unwrap_or_default();
+        let member_events = client
+            .query_paginated(member_filter, effective_limit)
+            .await?;
         let channel_ids: Vec<String> = member_events
             .iter()
             .map(extract_d_tag)
@@ -49,22 +48,21 @@ pub async fn cmd_list_channels(
             println!("[]");
             return Ok(());
         }
-        // Step 2: fetch kind:39000 metadata for those channels
+        // Step 2: fetch kind:39000 metadata for those channels.
         let metadata_filter = serde_json::json!({
             "kinds": [39000],
             "#d": channel_ids,
-            "limit": effective_limit
         });
-        client.query(&metadata_filter).await?
+        client
+            .query_paginated(metadata_filter, effective_limit)
+            .await?
     } else {
         let filter = serde_json::json!({
             "kinds": [39000],
-            "limit": effective_limit
         });
-        client.query(&filter).await?
+        client.query_paginated(filter, effective_limit).await?
     };
 
-    let events: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap_or_default();
     let channels: Vec<serde_json::Value> = events
         .iter()
         .filter(|e| {
@@ -130,16 +128,8 @@ pub async fn cmd_search_channels(
 
     let filter = serde_json::json!({
         "kinds": [39000],
-        "limit": limit,
     });
-    let raw = client.query(&filter).await?;
-
-    let events: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::Other(format!("failed to parse response: {e}")))?;
-    let Some(arr) = events.as_array() else {
-        println!("[]");
-        return Ok(());
-    };
+    let arr = client.query_paginated(filter, limit).await?;
 
     let needle = query.to_ascii_lowercase();
     let mut matches: Vec<ChannelSummary> = arr
@@ -337,14 +327,6 @@ pub async fn cmd_create_channel(
     Ok(())
 }
 
-/// Relay-side cap on a single historical query (`buzz-relay/src/handlers/req.rs`).
-/// Never request above this — a clamped response compared against a larger
-/// requested size would falsely look like "no more pages."
-const RELAY_MAX_HISTORICAL_LIMIT: u32 = 2000;
-
-/// One page of a keyset-paginated kind:30177 scan.
-const MANAGED_AGENT_PAGE_SIZE: u32 = RELAY_MAX_HISTORICAL_LIMIT;
-
 /// A resolved live managed-agent instance backing a template persona slug.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedAgent {
@@ -424,62 +406,29 @@ async fn scan_managed_agents_by_owner(
     owner: &str,
     slugs: &HashSet<&str>,
 ) -> Result<Vec<ResolvedAgent>, CliError> {
+    let filter = serde_json::json!({
+        "kinds": [KIND_MANAGED_AGENT],
+        "authors": [owner],
+    });
+    let events = client.query_all(filter).await?;
     let mut found: Vec<ResolvedAgent> = Vec::new();
-    let mut seen_event_ids: HashSet<String> = HashSet::new();
-    let mut cursor: Option<(i64, String)> = None;
 
-    loop {
-        let mut filter = serde_json::json!({
-            "kinds": [KIND_MANAGED_AGENT],
-            "authors": [owner],
-            "limit": MANAGED_AGENT_PAGE_SIZE,
-        });
-        if let Some((until, ref before_id)) = cursor {
-            filter["until"] = serde_json::json!(until);
-            filter["before_id"] = serde_json::json!(before_id);
+    for event in &events {
+        let pubkey = extract_d_tag(event);
+        if pubkey.is_empty() {
+            continue;
         }
-
-        let raw = client.query(&filter).await?;
-        let events: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| {
-            CliError::Other(format!("failed to parse managed-agent query response: {e}"))
-        })?;
-
-        let page_len = events.len();
-        for event in &events {
-            let Some(event_id) = event.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            if !seen_event_ids.insert(event_id.to_string()) {
-                continue;
-            }
-            let pubkey = extract_d_tag(event);
-            if pubkey.is_empty() {
-                continue;
-            }
-            let content: ManagedAgentContent = event
-                .get("content")
-                .and_then(|c| c.as_str())
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or(ManagedAgentContent { persona_id: None });
-            let Some(persona_id) = content.persona_id else {
-                continue;
-            };
-            if slugs.contains(persona_id.as_str()) {
-                found.push(ResolvedAgent { persona_id, pubkey });
-            }
-        }
-
-        if (page_len as u32) < MANAGED_AGENT_PAGE_SIZE {
-            break;
-        }
-        let Some(last) = events.last() else { break };
-        let Some(created_at) = last.get("created_at").and_then(|v| v.as_i64()) else {
-            break;
+        let content: ManagedAgentContent = event
+            .get("content")
+            .and_then(|c| c.as_str())
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or(ManagedAgentContent { persona_id: None });
+        let Some(persona_id) = content.persona_id else {
+            continue;
         };
-        let Some(last_id) = last.get("id").and_then(|v| v.as_str()) else {
-            break;
-        };
-        cursor = Some((created_at, last_id.to_string()));
+        if slugs.contains(persona_id.as_str()) {
+            found.push(ResolvedAgent { persona_id, pubkey });
+        }
     }
 
     Ok(found)
