@@ -6689,6 +6689,38 @@ async function handleListRelayAgents(
   return mockRelayAgents.map(cloneRelayAgent);
 }
 
+function withMockRuntimeConfigMetadata(
+  runtime: RawAcpRuntimeCatalogEntry,
+): RawAcpRuntimeCatalogEntry {
+  return {
+    ...runtime,
+    model_env_var:
+      "model_env_var" in runtime
+        ? runtime.model_env_var
+        : runtime.id === "buzz-agent"
+          ? "BUZZ_AGENT_MODEL"
+          : runtime.id === "goose"
+            ? "GOOSE_MODEL"
+            : null,
+    provider_env_var:
+      "provider_env_var" in runtime
+        ? runtime.provider_env_var
+        : runtime.id === "buzz-agent"
+          ? "BUZZ_AGENT_PROVIDER"
+          : runtime.id === "goose"
+            ? "GOOSE_PROVIDER"
+            : null,
+    thinking_env_var:
+      "thinking_env_var" in runtime
+        ? runtime.thinking_env_var
+        : runtime.id === "buzz-agent"
+          ? "BUZZ_AGENT_THINKING_EFFORT"
+          : runtime.id === "goose"
+            ? "GOOSE_THINKING_EFFORT"
+            : null,
+  };
+}
+
 async function handleDiscoverAcpRuntimes(
   config: E2eConfig | undefined,
 ): Promise<RawAcpRuntimeCatalogEntry[]> {
@@ -6701,9 +6733,9 @@ async function handleDiscoverAcpRuntimes(
 
   const configured = config?.mock?.acpRuntimesCatalog;
   if (configured) {
-    return configured;
+    return configured.map(withMockRuntimeConfigMetadata);
   }
-  return [
+  const defaultCatalog: RawAcpRuntimeCatalogEntry[] = [
     {
       id: "goose",
       label: "Goose",
@@ -6775,6 +6807,7 @@ async function handleDiscoverAcpRuntimes(
       login_hint: undefined,
     },
   ];
+  return defaultCatalog.map(withMockRuntimeConfigMetadata);
 }
 
 async function handleDiscoverAcpAuthMethods(
