@@ -438,6 +438,72 @@ void main() {
       },
     );
 
+    for (final statusCode in [
+      HttpStatus.unsupportedMediaType,
+      HttpStatus.unprocessableEntity,
+    ]) {
+      test(
+        'maps $statusCode media policy responses to friendly copy',
+        () async {
+          final service = MediaUploadService(
+            baseUrl: 'https://relay.example',
+            nsec: nostr.Keys.generate().nsec,
+            httpClient: http_testing.MockClient(
+              (request) async => http.Response(
+                '{"error":"media contains metadata"}',
+                statusCode,
+              ),
+            ),
+            pickGalleryVideo: () async => null,
+            pickGalleryImage: () async => null,
+          );
+
+          await expectLater(
+            service.uploadBytes(_pngBytes, mimeType: 'image/png'),
+            throwsA(
+              isA<MediaPolicyUploadException>().having(
+                (error) => error.toString(),
+                'message',
+                "We couldn't prepare this image for upload.",
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    test('preserves video policy response details', () async {
+      final service = MediaUploadService(
+        baseUrl: 'https://relay.example',
+        nsec: nostr.Keys.generate().nsec,
+        httpClient: http_testing.MockClient(
+          (request) async => http.Response(
+            '{"error":"unsupported video codec"}',
+            HttpStatus.unprocessableEntity,
+          ),
+        ),
+        pickGalleryVideo: () async => null,
+        pickGalleryImage: () async => null,
+      );
+
+      await expectLater(
+        service.uploadBytes(Uint8List(0), mimeType: 'video/mp4'),
+        throwsA(
+          isA<Exception>()
+              .having(
+                (error) => error,
+                'type',
+                isNot(isA<MediaPolicyUploadException>()),
+              )
+              .having(
+                (error) => error.toString(),
+                'message',
+                contains('unsupported video codec'),
+              ),
+        ),
+      );
+    });
+
     test(
       'checks clipboard image availability through the platform channel',
       () async {
