@@ -21,6 +21,13 @@ import { getBakedBuildEnv, type BakedEnvEntry } from "@/shared/api/tauri";
 import { globalAgentConfigQueryKey } from "@/features/agents/useGlobalAgentConfig";
 import { useAcpRuntimesQuery } from "@/features/agents/hooks";
 import {
+  formatRuntimeOptionLabel,
+  getDefaultPersonaRuntime,
+  resetConfigForHarnessChange,
+  sortPersonaRuntimes,
+} from "@/features/agents/ui/agentConfigOptions";
+import { AgentDropdownSelect } from "@/features/agents/ui/agentConfigControls";
+import {
   AgentConfigFields,
   EMPTY_GLOBAL_CONFIG,
 } from "@/features/agents/ui/AgentConfigFields";
@@ -105,17 +112,36 @@ export function AgentDefaultsEditor({
       });
   }, []);
 
-  // Resolve the buzz-agent runtime catalog entry for model discovery.
   const runtimesQuery = useAcpRuntimesQuery();
-  const buzzAgentRuntime = React.useMemo(
-    () => (runtimesQuery.data ?? []).find((r) => r.id === "buzz-agent"),
+  const sortedRuntimes = React.useMemo(
+    () => sortPersonaRuntimes(runtimesQuery.data ?? []),
     [runtimesQuery.data],
+  );
+  // A missing/stale preference displays the same effective fallback the backend
+  // would use; it is persisted only after the user edits and saves this form.
+  // Keep persona ordering here so this shared editor matches agent dialogs.
+  const selectedRuntime = React.useMemo(
+    () =>
+      sortedRuntimes.find(
+        (runtime) => runtime.id === config.preferred_runtime,
+      ) ??
+      getDefaultPersonaRuntime(sortedRuntimes) ??
+      sortedRuntimes[0],
+    [config.preferred_runtime, sortedRuntimes],
+  );
+  const harnessOptions = React.useMemo(
+    () =>
+      sortedRuntimes.map((runtime) => ({
+        label: formatRuntimeOptionLabel(runtime),
+        value: runtime.id,
+      })),
+    [sortedRuntimes],
   );
   const configSurfaceLoading = isLoading || runtimesQuery.isLoading;
   const configSurfaceError =
     loadError ||
     runtimesQuery.isError ||
-    (!configSurfaceLoading && buzzAgentRuntime === undefined);
+    (!configSurfaceLoading && selectedRuntime === undefined);
 
   function handleConfigChange(next: GlobalAgentConfig) {
     configRef.current = next;
@@ -123,6 +149,12 @@ export function AgentDefaultsEditor({
     setDirty(true);
     setSaveState("idle");
     setSaveError(null);
+  }
+
+  function handleHarnessChange(runtimeId: string) {
+    handleConfigChange(resetConfigForHarnessChange(config, runtimeId));
+    setIsCustomModelEditing(false);
+    setIsCustomProvider(false);
   }
 
   async function handleSave() {
@@ -183,18 +215,36 @@ export function AgentDefaultsEditor({
           Couldn't load agent defaults. Restart the app to try again.
         </div>
       ) : (
-        <AgentConfigFields
-          bakedEnv={bakedEnv}
-          selectedRuntime={buzzAgentRuntime}
-          config={config}
-          isCustomModelEditing={isCustomModelEditing}
-          isCustomProvider={isCustomProvider}
-          onConfigChange={handleConfigChange}
-          onCustomModelEditingChange={setIsCustomModelEditing}
-          onIsCustomProviderChange={setIsCustomProvider}
-          onValidityChange={setConfigIsValid}
-          useCustomSelect
-        />
+        <>
+          <div className="space-y-1.5">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="global-agent-default-harness"
+            >
+              Default harness
+            </label>
+            <AgentDropdownSelect
+              id="global-agent-default-harness"
+              onValueChange={handleHarnessChange}
+              options={harnessOptions}
+              placeholder="Select a harness"
+              testId="global-agent-default-harness"
+              value={selectedRuntime?.id ?? ""}
+            />
+          </div>
+          <AgentConfigFields
+            bakedEnv={bakedEnv}
+            selectedRuntime={selectedRuntime}
+            config={config}
+            isCustomModelEditing={isCustomModelEditing}
+            isCustomProvider={isCustomProvider}
+            onConfigChange={handleConfigChange}
+            onCustomModelEditingChange={setIsCustomModelEditing}
+            onIsCustomProviderChange={setIsCustomProvider}
+            onValidityChange={setConfigIsValid}
+            useCustomSelect
+          />
+        </>
       )}
 
       {/* Save bar */}

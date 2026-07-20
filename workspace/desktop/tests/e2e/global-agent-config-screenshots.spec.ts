@@ -198,6 +198,61 @@ test.describe("global agent config screenshots", () => {
     });
   });
 
+  test("settings renders and saves the persisted preferred harness", async ({
+    page,
+  }) => {
+    await installMockBridge(page, {
+      globalAgentConfig: {
+        preferred_runtime: "claude",
+        provider: null,
+        model: null,
+        env_vars: {},
+      },
+      acpRuntimesCatalog: [...CATALOG_WITH_CLAUDE, CATALOG_WITH_CODEX[1]],
+    });
+
+    await openAiDefaultsSettings(page);
+
+    const harness = page.getByTestId("global-agent-default-harness");
+    await expect(harness).toHaveText("Claude Code");
+    await expect(page.getByText("Provider", { exact: true })).toHaveCount(0);
+    await expect(page.locator("#global-agent-model")).toBeVisible();
+
+    // Make the form dirty, then return to Claude with no model override. The
+    // harness-native default keeps the now-actionable Save button enabled.
+    await harness.press("Enter");
+    await page.getByTestId("global-agent-default-harness-option-codex").click();
+    await harness.press("Enter");
+    await page
+      .getByTestId("global-agent-default-harness-option-claude")
+      .click();
+    await expect(page.getByTestId("global-agent-model")).toHaveText(
+      /Default model/,
+    );
+    await expect(
+      page.getByRole("button", { name: "Save defaults" }),
+    ).toBeEnabled();
+
+    await harness.press("Enter");
+    await page.getByTestId("global-agent-default-harness-option-codex").click();
+    const model = page.getByTestId("global-agent-model");
+    await model.click();
+    await page.getByTestId("global-agent-model-option-gpt-5.5[high]").click();
+    await page.getByRole("button", { name: "Save defaults" }).click();
+
+    const saved = await page.evaluate(async () =>
+      (
+        window as typeof window & {
+          __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
+            command: string,
+            payload: unknown,
+          ) => Promise<unknown>;
+        }
+      ).__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_global_agent_config", null),
+    );
+    expect(saved).toMatchObject({ preferred_runtime: "codex" });
+  });
+
   test("02-create-global-provider-shows-top-level-api-key", async ({
     page,
   }) => {

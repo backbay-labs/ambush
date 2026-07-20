@@ -200,8 +200,16 @@ export function AgentConfigFields({
     () => getGlobalModelFallback(bakedEnv, effectiveProvider, config.env_vars),
     [bakedEnv, config.env_vars, effectiveProvider],
   );
+  const modelField = fieldModel.fields.find(
+    (field) => field.kind === "model" && field.render === "control",
+  );
+  // CLI-login harnesses apply this setting through ACP rather than an env var
+  // and provide their own default when no model override is persisted.
+  const modelIsOptional = modelField?.targetApplication.kind === "acpNative";
   const modelIsValid =
-    (config.model?.trim().length ?? 0) > 0 || fallbackModel !== null;
+    modelIsOptional ||
+    (config.model?.trim().length ?? 0) > 0 ||
+    fallbackModel !== null;
   React.useEffect(() => {
     onValidityChange?.(modelIsValid);
   }, [modelIsValid, onValidityChange]);
@@ -653,6 +661,7 @@ export function AgentConfigFields({
           isCustomModelEditing={isCustomModelEditing}
           isRequired={
             showRequiredIndicators &&
+            !modelIsOptional &&
             fallbackModel === null &&
             !dependentFieldsDisabled
           }
