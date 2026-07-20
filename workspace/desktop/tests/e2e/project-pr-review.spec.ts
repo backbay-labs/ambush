@@ -4,6 +4,7 @@ import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const SHOTS = "test-results/project-pr-review";
+const RECOVERY_SHOTS = "test-results/project-pr-conflict-recovery";
 const REVIEWER_AGENT_PUBKEY = "a".repeat(64);
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 
@@ -265,6 +266,78 @@ test("PR creator/owner can toggle draft, request reviews, and approve", async ({
       targetOwner: DEFAULT_MOCK_PUBKEY,
     },
   });
+});
+
+test("merge conflicts offer persistent terminal recovery", async ({ page }) => {
+  await enableProjectsFeature(page);
+  await installMockBridge(page);
+  await openBuzzProject(page);
+  await page.evaluate(() => {
+    window.__BUZZ_E2E_PROJECT_MERGE_ERROR__ = {
+      code: "merge_conflict",
+      message: "Pull request has merge conflicts.",
+      recovery: {
+        action: "open_terminal",
+        sourceBranch: "feature",
+        targetBranch: "main",
+      },
+    };
+  });
+
+  await page.getByRole("tab", { name: "Pull Request" }).click();
+  const aliceRow = page
+    .getByTestId("project-pull-request-row")
+    .filter({ hasText: "alice" })
+    .first();
+  await aliceRow.getByRole("button", { name: /^#/ }).click();
+  await page.getByRole("button", { name: "Merge", exact: true }).click();
+  await page.getByTestId("merge-pull-request-confirm-button").click();
+
+  const recovery = page.getByTestId("merge-conflict-recovery");
+  await expect(recovery).toBeVisible();
+  await expect(
+    recovery.getByRole("button", { name: "Copy commands" }),
+  ).toBeDisabled();
+  await waitForAnimations(page);
+  await recovery.screenshot({
+    path: `${RECOVERY_SHOTS}/01-merge-conflict.png`,
+  });
+  await recovery.getByRole("button", { name: "Resolve in Terminal" }).click();
+  await expect(
+    page.getByText("Recovery commit fetched and terminal opened."),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Recovery commit fetched and terminal opened."),
+  ).toBeHidden({ timeout: 10_000 });
+  await expect(recovery).toContainText("git switch 'main'");
+  await expect(recovery).toContainText("git merge 'refs/buzz/merge-recovery/");
+  await expect(
+    recovery.getByRole("button", { name: "Copy commands" }),
+  ).toBeEnabled();
+  await waitForAnimations(page);
+  await recovery.screenshot({
+    path: `${RECOVERY_SHOTS}/02-merge-conflict-prepared.png`,
+  });
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.__BUZZ_E2E_COMMAND_PAYLOADS__?.find(
+            (entry) => entry.command === "open_project_merge_recovery_terminal",
+          ) ?? null,
+      ),
+    )
+    .toMatchObject({
+      command: "open_project_merge_recovery_terminal",
+      payload: {
+        input: {
+          expectedCommit: expect.any(String),
+          sourceBranch: "feature",
+          targetBranch: "main",
+        },
+      },
+    });
 });
 
 test("reviewer can leave a commit-scoped inline diff comment", async ({
