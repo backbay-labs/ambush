@@ -8,7 +8,8 @@ use crate::{
     managed_agents::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        spawn_key_refusal, ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
+        spawn_key_refusal, KnownAcpRuntime, ManagedAgentProcess, ManagedAgentRecord,
+        ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -1466,6 +1467,21 @@ pub(crate) fn build_respond_to_env(
     Ok((set, remove))
 }
 
+pub(crate) fn configure_runtime_cli(
+    command: &mut std::process::Command,
+    runtime: Option<&KnownAcpRuntime>,
+) {
+    let Some(runtime) = runtime else {
+        return;
+    };
+    if runtime.id != "claude" {
+        return;
+    }
+    if let Some(cli_path) = runtime.underlying_cli.and_then(resolve_command) {
+        command.env("CLAUDE_CODE_EXECUTABLE", cli_path);
+    }
+}
+
 /// Spawn an agent process without holding any locks on records or runtimes.
 /// Returns the child process and log path on success. The caller is responsible
 /// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
@@ -1843,6 +1859,7 @@ pub fn spawn_agent_child(
     for (key, value) in super::env_vars::merged_user_env(&persona_over_global, &record.env_vars) {
         command.env(key, value);
     }
+    configure_runtime_cli(&mut command, runtime_meta);
 
     // Buzz shared compute is stored as a native provider; derive the OpenAI-compatible
     // transport at spawn time and scrub any unrelated ambient OpenAI key.
