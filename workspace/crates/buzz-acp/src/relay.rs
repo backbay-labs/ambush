@@ -105,6 +105,11 @@ const REQ_PACING_INTERVAL: Duration = Duration::from_millis(125);
 /// below the relay's 50-frames/5s budget, and ensures the select! loop is never
 /// blocked for more than one REQ's worth of I/O between drain ticks.
 const DRAIN_BUDGET_PER_ITER: usize = 1;
+/// Maximum observer telemetry frames parked while the rate-limit gate is armed
+/// (or the socket is down). The upstream pacer feeds at most ~6 frames/s, so
+/// this covers ~40 s of gating; beyond that the oldest frames are dropped with
+/// visible accounting (`gated_observer_dropped`).
+const GATED_OBSERVER_QUEUE_CAP: usize = 256;
 
 use std::time::Instant;
 
@@ -550,6 +555,24 @@ impl RelayEventPublisher {
             })
             .await
             .map_err(|_| RelayError::ConnectionClosed)
+    }
+
+    /// Test-only publisher pair: published events are forwarded to the
+    /// returned receiver instead of a live relay socket.
+    #[cfg(test)]
+    pub(crate) fn test_pair() -> (Self, mpsc::Receiver<Event>) {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<RelayCommand>(64);
+        let (event_tx, event_rx) = mpsc::channel(64);
+        tokio::spawn(async move {
+            while let Some(cmd) = cmd_rx.recv().await {
+                if let RelayCommand::PublishEvent { event } = cmd {
+                    if event_tx.send(*event).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (Self { cmd_tx }, event_rx)
     }
 }
 
@@ -998,6 +1021,19 @@ struct BgState {
     /// subscription. The main-loop drain re-sends the REQ once the gate clears,
     /// even when `rate_limited_pending` is empty.
     observer_resub_needed: bool,
+    /// Observer telemetry frames (kind 24200) parked while the rate-limit gate
+    /// is armed. Unlike typing indicators, these frames are durable telemetry:
+    /// dropping them silently loses turn history in the Desktop observer.
+    /// Bounded at `GATED_OBSERVER_QUEUE_CAP` (drop-oldest); drained by the
+    /// main loop one frame per pacing tick once the gate clears.
+    gated_observer_pending: VecDeque<Box<Event>>,
+    /// Observer frames written to the socket but not yet acknowledged. The
+    /// relay's rate-limit NOTICE does not carry an event ID, so all unresolved
+    /// observer writes are moved back ahead of the parked FIFO when one arrives.
+    observer_in_flight: VecDeque<Box<Event>>,
+    /// Frames evicted from the bounded pending/in-flight observer buffers since
+    /// summary log. Makes overflow loss visible instead of silent.
+    gated_observer_dropped: u64,
     /// Channels whose REQ failed during `resubscribe_after_reconnect`.
     ///
     /// A single failed channel REQ is parked here instead of aborting the whole
@@ -1030,6 +1066,9 @@ impl BgState {
             rate_limited_pending: HashMap::new(),
             membership_resub_needed: false,
             observer_resub_needed: false,
+            gated_observer_pending: VecDeque::new(),
+            observer_in_flight: VecDeque::new(),
+            gated_observer_dropped: 0,
             resubscribe_retry: HashSet::new(),
             backoff_step: 0,
         }
@@ -1128,13 +1167,65 @@ impl BgState {
         }
         None
     }
+
+    /// Park an observer telemetry frame while the rate-limit gate is armed.
+    ///
+    /// Bounded drop-oldest queue: overflow evicts the oldest frame and counts
+    /// it in `gated_observer_dropped` so the loss is visible, never silent.
+    fn park_gated_observer_frame(&mut self, event: Box<Event>) {
+        if self.gated_observer_pending.len() >= GATED_OBSERVER_QUEUE_CAP {
+            self.gated_observer_pending.pop_front();
+            self.gated_observer_dropped += 1;
+            warn!(
+                dropped_total = self.gated_observer_dropped,
+                "gated observer queue full — dropped oldest frame"
+            );
+        }
+        self.gated_observer_pending.push_back(event);
+    }
+
+    /// Restore unresolved observer writes ahead of frames parked after the
+    /// gate armed. NOTICE has no event ID, so conservatively retry every frame
+    /// without an OK; duplicate IDs are harmless at the relay.
+    fn requeue_observer_in_flight(&mut self) {
+        while let Some(event) = self.observer_in_flight.pop_back() {
+            self.gated_observer_pending.push_front(event);
+        }
+        while self.gated_observer_pending.len() > GATED_OBSERVER_QUEUE_CAP {
+            self.gated_observer_pending.pop_front();
+            self.gated_observer_dropped += 1;
+        }
+    }
+
+    fn track_observer_in_flight(&mut self, event: Box<Event>) {
+        if self.observer_in_flight.len() >= GATED_OBSERVER_QUEUE_CAP {
+            self.observer_in_flight.pop_front();
+            self.gated_observer_dropped += 1;
+            warn!(
+                dropped_total = self.gated_observer_dropped,
+                "observer acknowledgment window full — dropped oldest frame"
+            );
+        }
+        self.observer_in_flight.push_back(event);
+    }
+
+    fn acknowledge_observer_frame(&mut self, event_id: &str) {
+        if let Some(index) = self
+            .observer_in_flight
+            .iter()
+            .position(|event| event.id.to_hex() == event_id)
+        {
+            self.observer_in_flight.remove(index);
+        }
+    }
 }
 
 /// Record a command's intent in state while disconnected (no WebSocket).
 ///
 /// Subscribe/Unsubscribe/SubscribeMembership record intent so reconnect
 /// restores the right subscriptions. SetStartupWatermark floors the replay
-/// window. PublishEvent and Reconnect are no-ops while disconnected.
+/// window. Observer telemetry publishes are parked for post-reconnect drain;
+/// other PublishEvent and Reconnect are no-ops while disconnected.
 ///
 /// Callers MUST handle `Shutdown` before calling — reaching the Shutdown
 /// arm here is a logic error.
@@ -1174,8 +1265,15 @@ fn apply_command_to_state(state: &mut BgState, cmd: RelayCommand) {
                 state.membership_last_seen = Some(ts);
             }
         }
-        // Ephemeral events are meaningless while disconnected.
-        RelayCommand::PublishEvent { .. } => {}
+        // Observer telemetry frames are durable: park them (bounded, visible
+        // overflow) so they are delivered by the post-reconnect drain. Other
+        // ephemeral publishes (typing indicators) are meaningless while
+        // disconnected and are dropped.
+        RelayCommand::PublishEvent { event } => {
+            if event.kind.as_u16() as u32 == KIND_AGENT_OBSERVER_FRAME {
+                state.park_gated_observer_frame(event);
+            }
+        }
         // Already reconnecting — redundant.
         RelayCommand::Reconnect => {}
         // Callers MUST handle Shutdown before calling this function.
@@ -1190,11 +1288,17 @@ fn apply_command_to_state(state: &mut BgState, cmd: RelayCommand) {
 
 /// Retain command intent after a live send failure.
 ///
-/// Subscription state must survive reconnect; ephemeral publishes are deliberately
+/// Subscription state must survive reconnect. Observer telemetry publishes are
+/// parked for post-reconnect drain; other ephemeral publishes are deliberately
 /// discarded because replaying a typing indicator after reconnect is meaningless.
 /// `Shutdown` and `Reconnect` are handled by the caller.
 fn retain_failed_command_intent(state: &mut BgState, cmd: RelayCommand) {
     match cmd {
+        RelayCommand::PublishEvent { event }
+            if event.kind.as_u16() as u32 == KIND_AGENT_OBSERVER_FRAME =>
+        {
+            state.park_gated_observer_frame(event);
+        }
         RelayCommand::PublishEvent { .. } => {}
         cmd => apply_command_to_state(state, cmd),
     }
@@ -1350,28 +1454,44 @@ async fn execute_connected_command(
             }
         }
         RelayCommand::PublishEvent { event } => {
-            // Drop ephemeral publishes while rate-gated. Stale typing indicators
-            // are worthless and sending them would consume admission budget the
-            // relay already rejected us on.
+            // Observer telemetry frames (kind 24200) are durable telemetry, not
+            // droppable ephemera: park them while the rate-limit gate is armed —
+            // and while earlier parked frames are still draining, so relative
+            // order is preserved — then let the main-loop drain deliver them
+            // one per pacing tick once the gate clears.
+            if event.kind.as_u16() as u32 == KIND_AGENT_OBSERVER_FRAME
+                && (state.check_rate_gate().is_some() || !state.gated_observer_pending.is_empty())
+            {
+                debug!(
+                    pending = state.gated_observer_pending.len(),
+                    "rate-gated: parking observer frame for paced drain"
+                );
+                state.park_gated_observer_frame(event);
+                return true;
+            }
+            // Drop remaining ephemeral publishes while rate-gated. Stale typing
+            // indicators are worthless and sending them would consume admission
+            // budget the relay already rejected us on.
             //
-            // INVARIANT: the WS publish path carries only ephemeral kinds (typing
-            // indicators). The silent drop-while-gated relies on that invariant. If a
-            // future caller publishes durable events through this path, it must add a
-            // kind guard before this branch to avoid silently discarding user data.
+            // INVARIANT: apart from observer frames (parked above), the WS publish
+            // path carries only ephemeral kinds (typing indicators). The silent
+            // drop-while-gated relies on that invariant. If a future caller
+            // publishes durable events through this path, it must extend the
+            // kind guard above to avoid silently discarding user data.
             if state.check_rate_gate().is_some() {
                 debug!("rate-gated: dropping ephemeral PublishEvent (typing indicator)");
                 return true;
             }
-            let msg = json!(["EVENT", event]);
-            if let Ok(text) = serde_json::to_string(&msg) {
-                if let Err(e) =
-                    ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await
-                {
-                    // Ephemeral events (typing indicators) are best-effort.
-                    // Log the failure but don't trigger reconnect — the next
-                    // ping or read will detect the dead socket.
-                    warn!("failed to publish event: {e}");
+            // Best-effort: log a send failure but don't trigger reconnect — the
+            // next ping or read will detect the dead socket. A failed observer
+            // frame is parked so the post-reconnect drain redelivers it.
+            let is_observer = event.kind.as_u16() as u32 == KIND_AGENT_OBSERVER_FRAME;
+            if send_publish_event_frame(ws, &event).await {
+                if is_observer {
+                    state.track_observer_in_flight(event);
                 }
+            } else if is_observer {
+                state.park_gated_observer_frame(event);
             }
             true
         }
@@ -1624,6 +1744,14 @@ async fn run_background_task(
             if budget > 0 && !state.resubscribe_retry.is_empty() {
                 let sent =
                     drain_resubscribe_retry(&mut ws, &mut state, &agent_pubkey_hex, budget).await;
+                budget = budget.saturating_sub(sent);
+                if sent > 0 {
+                    any_sent = true;
+                }
+            }
+
+            if budget > 0 && !state.gated_observer_pending.is_empty() {
+                let sent = drain_gated_observer_pending(&mut ws, &mut state, budget).await;
                 if sent > 0 {
                     any_sent = true;
                 }
@@ -1631,6 +1759,13 @@ async fn run_background_task(
 
             if any_sent {
                 drain_pacing_next = Some(tokio::time::Instant::now() + REQ_PACING_INTERVAL);
+            } else if !state.gated_observer_pending.is_empty() {
+                // Nothing sent because the gate is still armed. Arm the pacing
+                // timer to the gate deadline so parked observer frames drain
+                // promptly even when no other traffic wakes the select loop.
+                drain_pacing_next = state
+                    .check_rate_gate()
+                    .or_else(|| Some(tokio::time::Instant::now() + REQ_PACING_INTERVAL));
             }
         }
 
@@ -2050,6 +2185,7 @@ async fn handle_ws_message(
                     if message.starts_with("rate-limited:") {
                         let secs = parse_rate_limit_retry_secs(&message).unwrap_or(0);
                         let deadline = state.set_rate_limit_gate(secs);
+                        state.requeue_observer_in_flight();
                         warn!(
                             "rate-limit gate armed via NOTICE until ~{:.1}s from now",
                             deadline
@@ -2213,6 +2349,7 @@ async fn handle_ws_message(
                         warn!("mid-session AUTH rejected (event {event_id}): {message} — triggering reconnect");
                         return false;
                     }
+                    state.acknowledge_observer_frame(&event_id);
                     debug!("OK for event {event_id}: accepted={accepted} message={message}");
                 }
             }
@@ -2453,6 +2590,60 @@ async fn resubscribe_after_reconnect(
         ReconnectOutcome::Failed => ResubscribeResult::RetryConnection,
         ReconnectOutcome::Shutdown => ResubscribeResult::Shutdown,
     }
+}
+
+/// Send a signed EVENT frame on the live socket. Returns `false` on send failure.
+///
+/// Best-effort at the socket level: a failure is logged but does not trigger
+/// reconnect — the next ping or read will detect the dead socket.
+async fn send_publish_event_frame(ws: &mut WsStream, event: &Event) -> bool {
+    let msg = json!(["EVENT", event]);
+    if let Ok(text) = serde_json::to_string(&msg) {
+        if let Err(e) = ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await
+        {
+            warn!("failed to publish event: {e}");
+            return false;
+        }
+    }
+    true
+}
+
+/// Drain parked observer telemetry frames once the rate-limit gate clears.
+///
+/// Called by the main loop pacing timer. Sends at most `budget` frames without
+/// sleeping — pacing is enforced by the caller via `drain_pacing_next`. Stops
+/// immediately if the gate re-arms mid-drain. When the queue empties, any
+/// overflow loss is summarized in one warning. Returns the number of frames sent.
+async fn drain_gated_observer_pending(
+    ws: &mut WsStream,
+    state: &mut BgState,
+    budget: usize,
+) -> usize {
+    let mut sent = 0;
+    while sent < budget {
+        if state.check_rate_gate().is_some() {
+            break;
+        }
+        let Some(event) = state.gated_observer_pending.pop_front() else {
+            break;
+        };
+        if !send_publish_event_frame(ws, &event).await {
+            // Socket may be dead — re-park at the front so the frame survives
+            // reconnect (the post-reconnect drain will retry it in order).
+            state.gated_observer_pending.push_front(event);
+            break;
+        }
+        state.track_observer_in_flight(event);
+        sent += 1;
+    }
+    if state.gated_observer_pending.is_empty() && state.gated_observer_dropped > 0 {
+        warn!(
+            observer_frames_dropped = state.gated_observer_dropped,
+            "observer frames lost to gated-queue overflow"
+        );
+        state.gated_observer_dropped = 0;
+    }
+    sent
 }
 
 /// Drain `rate_limited_pending` channels whose retry deadline has passed.
@@ -2698,6 +2889,7 @@ async fn try_autonomous_reconnect(
     observer_control_tx: &mpsc::Sender<Event>,
     auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
+    state.requeue_observer_in_flight();
     // 5 attempts, up to 16s base backoff. Shares delay values with the
     // initial-connect retry in `HarnessRelay::connect()` (STARTUP_CONNECT_BACKOFFS) —
     // see its doc comment for how the two loops consume the array differently.
@@ -2827,6 +3019,7 @@ async fn wait_for_reconnect(
     skip_drain: bool,
     auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
+    state.requeue_observer_in_flight();
     if !skip_drain {
         // Drain commands until we get Reconnect (or Shutdown).
         // Other commands update state so reconnect reflects latest intent.
@@ -5561,6 +5754,214 @@ mod tests {
         assert_eq!(
             first_deadline, second_deadline,
             "shorter hint must not overwrite a later existing deadline"
+        );
+    }
+
+    /// Build a signed observer telemetry frame (kind 24200) for gate tests.
+    fn make_observer_frame(keys: &Keys) -> Event {
+        let recipient = Keys::generate();
+        let encrypted = buzz_core::observer::encrypt_observer_payload(
+            keys,
+            &recipient.public_key(),
+            &json!({"type": "test"}),
+        )
+        .expect("encrypt test observer payload");
+        buzz_sdk::build_agent_observer_frame(
+            &recipient.public_key().to_hex(),
+            &keys.public_key().to_hex(),
+            "telemetry",
+            &encrypted,
+        )
+        .expect("build test observer frame")
+        .sign_with_keys(keys)
+        .expect("sign test observer frame")
+    }
+
+    /// While the rate-limit gate is armed, an observer frame (kind 24200) is
+    /// parked — not silently dropped — and delivered by the drain once the
+    /// gate clears. A typing indicator in the same window stays dropped.
+    #[tokio::test]
+    async fn gated_observer_frame_is_parked_then_drained_not_dropped() {
+        let (mut client, mut server) = test_ws_pair().await;
+        let mut state = BgState::new();
+        let keys = Keys::generate();
+        state.rate_limit_gate = Some(tokio::time::Instant::now() + Duration::from_millis(150));
+
+        // Observer frame while gated: parked, nothing on the wire.
+        let observer_frame = make_observer_frame(&keys);
+        let ok = execute_connected_command(
+            &mut client,
+            &mut state,
+            "agent-pubkey",
+            RelayCommand::PublishEvent {
+                event: Box::new(observer_frame.clone()),
+            },
+        )
+        .await;
+        assert!(ok);
+        assert_eq!(
+            state.gated_observer_pending.len(),
+            1,
+            "observer frame must be parked while gated"
+        );
+
+        // Typing indicator while gated: still dropped, not parked.
+        let typing = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "")
+            .tags([Tag::parse(["h", &Uuid::new_v4().to_string()]).unwrap()])
+            .sign_with_keys(&keys)
+            .expect("sign typing indicator");
+        let ok = execute_connected_command(
+            &mut client,
+            &mut state,
+            "agent-pubkey",
+            RelayCommand::PublishEvent {
+                event: Box::new(typing),
+            },
+        )
+        .await;
+        assert!(ok);
+        assert_eq!(
+            state.gated_observer_pending.len(),
+            1,
+            "typing indicators must not be parked"
+        );
+        assert!(
+            timeout(Duration::from_millis(50), server.next())
+                .await
+                .is_err(),
+            "nothing may reach the wire while the gate is armed"
+        );
+
+        // Gate expires — the drain delivers the parked frame.
+        tokio::time::sleep(Duration::from_millis(160)).await;
+        assert_eq!(
+            drain_gated_observer_pending(&mut client, &mut state, 1).await,
+            1
+        );
+        assert!(state.gated_observer_pending.is_empty());
+        let frame = next_test_frame(&mut server).await;
+        assert_eq!(frame[0], "EVENT");
+        assert_eq!(frame[1]["id"], observer_frame.id.to_hex());
+        assert_eq!(
+            frame[1]["kind"],
+            u64::from(KIND_AGENT_OBSERVER_FRAME),
+            "delivered frame must be the parked observer frame"
+        );
+    }
+
+    /// Observer frames arriving while earlier parked frames are still queued
+    /// are appended behind them (order preserved), even if the gate has
+    /// already expired.
+    #[tokio::test]
+    async fn observer_frames_queue_behind_parked_backlog_in_order() {
+        let (mut client, mut server) = test_ws_pair().await;
+        let mut state = BgState::new();
+        let keys = Keys::generate();
+        state.rate_limit_gate = Some(tokio::time::Instant::now() + Duration::from_millis(50));
+
+        let first = make_observer_frame(&keys);
+        let second = make_observer_frame(&keys);
+        for event in [&first, &second] {
+            let ok = execute_connected_command(
+                &mut client,
+                &mut state,
+                "agent-pubkey",
+                RelayCommand::PublishEvent {
+                    event: Box::new(event.clone()),
+                },
+            )
+            .await;
+            assert!(ok);
+        }
+        assert_eq!(state.gated_observer_pending.len(), 2);
+
+        // Gate expires but the backlog is not drained yet — a third frame must
+        // queue behind it rather than jumping ahead on the wire.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let third = make_observer_frame(&keys);
+        let ok = execute_connected_command(
+            &mut client,
+            &mut state,
+            "agent-pubkey",
+            RelayCommand::PublishEvent {
+                event: Box::new(third.clone()),
+            },
+        )
+        .await;
+        assert!(ok);
+        assert_eq!(
+            state.gated_observer_pending.len(),
+            3,
+            "frame must queue behind undrained backlog to preserve order"
+        );
+
+        for expected in [&first, &second, &third] {
+            assert_eq!(
+                drain_gated_observer_pending(&mut client, &mut state, 1).await,
+                1
+            );
+            let frame = next_test_frame(&mut server).await;
+            assert_eq!(frame[1]["id"], expected.id.to_hex(), "order preserved");
+        }
+        assert!(state.gated_observer_pending.is_empty());
+    }
+
+    #[test]
+    fn observer_notice_requeues_unacknowledged_frames_and_ok_retires_them() {
+        let mut state = BgState::new();
+        let keys = Keys::generate();
+        let accepted = make_observer_frame(&keys);
+        let rejected = make_observer_frame(&keys);
+        let later = make_observer_frame(&keys);
+
+        state.track_observer_in_flight(Box::new(accepted.clone()));
+        state.track_observer_in_flight(Box::new(rejected.clone()));
+        state.acknowledge_observer_frame(&accepted.id.to_hex());
+        state.park_gated_observer_frame(Box::new(later.clone()));
+        state.requeue_observer_in_flight();
+
+        let ids: Vec<_> = state
+            .gated_observer_pending
+            .iter()
+            .map(|event| event.id)
+            .collect();
+        assert_eq!(ids, [rejected.id, later.id]);
+        assert!(state.observer_in_flight.is_empty());
+    }
+
+    /// The parked-frame queue is bounded: overflow evicts the oldest frame and
+    /// counts it; the drain resets the counter after logging the summary.
+    #[tokio::test]
+    async fn gated_observer_queue_drops_oldest_on_overflow() {
+        let mut state = BgState::new();
+        let keys = Keys::generate();
+        let first = make_observer_frame(&keys);
+        state.park_gated_observer_frame(Box::new(first.clone()));
+        for _ in 1..GATED_OBSERVER_QUEUE_CAP {
+            state.park_gated_observer_frame(Box::new(make_observer_frame(&keys)));
+        }
+        assert_eq!(state.gated_observer_pending.len(), GATED_OBSERVER_QUEUE_CAP);
+        assert_eq!(state.gated_observer_dropped, 0);
+
+        let overflow = make_observer_frame(&keys);
+        state.park_gated_observer_frame(Box::new(overflow.clone()));
+        assert_eq!(
+            state.gated_observer_pending.len(),
+            GATED_OBSERVER_QUEUE_CAP,
+            "queue must stay bounded"
+        );
+        assert_eq!(state.gated_observer_dropped, 1, "loss must be counted");
+        assert!(
+            !state
+                .gated_observer_pending
+                .iter()
+                .any(|e| e.id == first.id),
+            "oldest frame must be the one evicted"
+        );
+        assert_eq!(
+            state.gated_observer_pending.back().map(|e| e.id),
+            Some(overflow.id),
+            "newest frame must be retained"
         );
     }
 
