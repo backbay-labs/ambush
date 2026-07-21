@@ -1,5 +1,10 @@
 # Changelog
 
+## mobile-v0.4.11
+
+- fix(mobile): stop media fetch stampede — stable cache keys, bounded decode, 429 cooldown ([#2219](https://github.com/block/buzz/pull/2219)) ([`591bbbfa7`](https://github.com/block/buzz/commit/591bbbfa7e5931318a226555d6bf921ba50d97c2))
+
+
 ## mobile-v0.4.9
 
 - fix(mobile): sanitize Android image uploads ([#2188](https://github.com/block/buzz/pull/2188)) ([`ee21da90b`](https://github.com/block/buzz/commit/ee21da90bd6b1da6bfaaf22ba00749398aaa9640))
