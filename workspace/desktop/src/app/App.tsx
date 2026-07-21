@@ -259,9 +259,11 @@ function AppReady({
 }
 
 function CommunityApp({
+  currentPubkey,
   onBackToMachineConfig,
   sharedIdentity,
 }: {
+  currentPubkey: string | null;
   onBackToMachineConfig: () => void;
   sharedIdentity: boolean;
 }) {
@@ -325,6 +327,7 @@ function CommunityApp({
       relayUrl: transaction.relayUrl,
       token: transaction.token,
       reposDir: transaction.reposDir,
+      pubkey: currentPubkey ?? undefined,
       addedAt: new Date().toISOString(),
     });
     communityOnboarding.update({
@@ -340,6 +343,7 @@ function CommunityApp({
     addCommunity,
     communities,
     communityOnboarding,
+    currentPubkey,
     reconnectCommunity,
     switchCommunity,
   ]);
@@ -494,7 +498,9 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
   const { activeCommunity } = useCommunities();
   const communityOnboarding = useCommunityOnboarding();
   const machine = useMachineOnboardingState({
-    hasConfiguredCommunity: activeCommunity !== null,
+    activeCommunityPubkey: activeCommunity
+      ? (activeCommunity.pubkey ?? null)
+      : undefined,
     isSharedIdentity: sharedIdentity,
   });
   const [machineInitialPage, setMachineInitialPage] =
@@ -548,6 +554,7 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
   if (machine.stage === "ready") {
     return (
       <CommunityApp
+        currentPubkey={machine.currentPubkey}
         onBackToMachineConfig={reopenMachineConfig}
         sharedIdentity={sharedIdentity}
       />

@@ -586,14 +586,44 @@ async function seedOnboardingCompletionForKnownIdentities(
   );
 }
 
-async function seedDefaultCommunity(page: Page, relayWsUrl?: string) {
+async function seedDefaultCommunity(
+  page: Page,
+  fallbackPubkey: string,
+  relayWsUrl?: string,
+) {
   await page.addInitScript(
-    ({ relayUrl }) => {
+    ({ fallback, identityOverrideKey, relayUrl }) => {
+      // If seedActiveIdentity() ran before this script (the normal ordering),
+      // use its pubkey so the community matches the active identity and
+      // migrateMachineOnboardingCompletion's strict voucher accepts it.
+      // Mirror readStoredIdentityOverride()'s shape validation: require all
+      // three fields to be non-empty strings; fall through to fallback on
+      // malformed JSON, stored null, or partial objects.
+      let overridePubkey: string | undefined;
+      try {
+        const overrideRaw = window.localStorage.getItem(identityOverrideKey);
+        if (overrideRaw !== null) {
+          const parsed: unknown = JSON.parse(overrideRaw);
+          if (
+            parsed !== null &&
+            typeof parsed === "object" &&
+            typeof (parsed as Record<string, unknown>).pubkey === "string" &&
+            typeof (parsed as Record<string, unknown>).privateKey ===
+              "string" &&
+            typeof (parsed as Record<string, unknown>).username === "string"
+          ) {
+            overridePubkey = (parsed as { pubkey: string }).pubkey;
+          }
+        }
+      } catch {
+        // malformed entry — fall through to fallback
+      }
       const communityId = "e2e-default-community";
       const community = {
         id: communityId,
         name: "E2E Test",
         relayUrl,
+        pubkey: overridePubkey ?? fallback,
         addedAt: new Date().toISOString(),
       };
       window.localStorage.setItem(
@@ -602,7 +632,11 @@ async function seedDefaultCommunity(page: Page, relayWsUrl?: string) {
       );
       window.localStorage.setItem("buzz-active-community-id", communityId);
     },
-    { relayUrl: relayWsUrl ?? DEFAULT_RELAY_WS_URL },
+    {
+      fallback: fallbackPubkey,
+      identityOverrideKey: "buzz:e2e-identity-override.v1",
+      relayUrl: relayWsUrl ?? DEFAULT_RELAY_WS_URL,
+    },
   );
 }
 
@@ -625,8 +659,13 @@ export async function installBridge(page: Page, options: BridgeOptions) {
 
   // Most specs seed a community so useCommunityInit doesn't show WelcomeSetup.
   // skipOnboardingSeed only controls the onboarding-completion flag.
+  // The community is stamped with the active identity's pubkey so the strict
+  // migrateMachineOnboardingCompletion voucher recognises it. The init script
+  // reads the seedActiveIdentity override key (if present) and falls back to
+  // the bridge identity's pubkey or DEFAULT_MOCK_PUBKEY for mock mode.
   if (!options.skipCommunitySeed) {
-    await seedDefaultCommunity(page, options.relayWsUrl);
+    const activePubkey = identity?.pubkey ?? DEFAULT_MOCK_PUBKEY;
+    await seedDefaultCommunity(page, activePubkey, options.relayWsUrl);
   }
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page, options.relayWsUrl);
