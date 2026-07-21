@@ -54,8 +54,12 @@ with a TypeScript lookup table or an id comparison in a component.
    flags were deliberately killed in #2148 (`CANONICAL_CONFIG_BEHAVIORS`).
    Surface differences are expressed via the `disclosure` preset, not new
    boolean props.
-7. **Onboarding does not change.** `onboarding-agent-defaults.spec.ts` is the
-   acceptance gate for anything touching the shared renderer.
+7. **Onboarding setup detects readiness; it does not select defaults.** The
+   setup page derives visible and ready harnesses from the runtime catalog and
+   only offers install or sign-in actions. The following defaults page is the
+   sole onboarding surface that chooses and persists `preferred_runtime`.
+   `onboarding-agent-defaults.spec.ts` is the acceptance gate for anything
+   touching this flow or the shared renderer.
 
 ## The tests that enforce this
 
@@ -64,7 +68,8 @@ with a TypeScript lookup table or an id comparison in a component.
 - `ui/agentConfigFieldsContract.test.mjs` — canonical behaviors + disclosure
   presets. If this fails, you probably reintroduced a per-surface flag.
 - `desktop/tests/e2e/onboarding-agent-defaults.spec.ts` — onboarding behavior
-  pin (35 tests).
+  acceptance coverage for readiness, failure states, defaults, navigation, and
+  persistence races.
 - Rust: `runtime_metadata_env_vars` tests pin spawn-time key application.
 
 ## Keep this file true
