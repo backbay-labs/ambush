@@ -883,6 +883,7 @@ dependencies = [
 name = "buzz-cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64",
  "buzz-core",
  "buzz-persona",
@@ -896,6 +897,7 @@ dependencies = [
  "hex",
  "infer",
  "nostr",
+ "rand 0.10.1",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
