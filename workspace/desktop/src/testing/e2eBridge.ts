@@ -127,6 +127,8 @@ type MockSearchProfileSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    /** Advertised HEAD for the first mock project without adding that branch. */
+    projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
     builderlabAuth?: {
       email?: string;
@@ -962,6 +964,7 @@ declare global {
     __BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__?: {
       local_path: string | null;
       local_branch: string | null;
+      local_branches: string[];
       local_head: string | null;
       local_short_head: string | null;
       remote_branch: string | null;
@@ -4783,7 +4786,14 @@ function buildMockProjectEvents(): RelayEvent[] {
         "",
         [
           ["d", seed.dtag],
-          ["HEAD", "ref: refs/heads/main"],
+          [
+            "HEAD",
+            `ref: refs/heads/${
+              projectIndex === 0
+                ? (getConfig()?.mock?.projectHeadBranch ?? "main")
+                : "main"
+            }`,
+          ],
           ["refs/heads/main", "0123456789abcdef0123456789abcdef01234567"],
         ],
         owner,
@@ -9315,6 +9325,7 @@ export function maybeInstallE2eTauriMocks() {
           window.__BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__ ?? {
             local_path: null,
             local_branch: null,
+            local_branches: [],
             local_head: null,
             local_short_head: null,
             remote_branch: "main",
@@ -9367,6 +9378,7 @@ export function maybeInstallE2eTauriMocks() {
         window.__BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__ = {
           local_path: path,
           local_branch: "main",
+          local_branches: ["main"],
           local_head: commit,
           local_short_head: commit.slice(0, 7),
           remote_branch: "main",

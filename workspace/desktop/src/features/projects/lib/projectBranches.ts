@@ -38,15 +38,44 @@ export function projectBranchNameError(
 
 export function projectBranchOptions(
   remoteBranches: string[],
-  localBranch?: string | null,
+  localBranches: string[] = [],
 ): string[] {
-  return [
-    ...new Set(
-      [...remoteBranches, localBranch].filter((branch): branch is string =>
-        Boolean(branch),
-      ),
-    ),
-  ];
+  return [...new Set([...remoteBranches, ...localBranches].filter(Boolean))];
+}
+
+export function projectBranchOptionsFromSync(
+  remoteBranches: string[],
+  syncStatus?: {
+    localBranch: string | null;
+    localBranches: string[];
+    localHead: string | null;
+  },
+): string[] {
+  const localBranches =
+    syncStatus?.localBranches ??
+    (syncStatus?.localHead && syncStatus.localBranch
+      ? [syncStatus.localBranch]
+      : []);
+  return projectBranchOptions(remoteBranches, localBranches);
+}
+
+/** Resolve a usable default branch when a repository advertises a stale HEAD. */
+export function resolveProjectDefaultBranch(
+  announcedBranch: string,
+  repoState?: {
+    branches: Array<{ name: string }>;
+    head: string | null;
+  } | null,
+): string {
+  if (!repoState || repoState.branches.length === 0) {
+    return repoState?.head ?? announcedBranch;
+  }
+  const published = new Set(repoState.branches.map((branch) => branch.name));
+  if (repoState.head && published.has(repoState.head)) return repoState.head;
+  if (published.has(announcedBranch)) return announcedBranch;
+  if (published.has("main")) return "main";
+  if (published.has("master")) return "master";
+  return repoState.branches[0]?.name ?? announcedBranch;
 }
 
 export function projectBranchManagementState(input: {

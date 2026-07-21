@@ -29,6 +29,7 @@ import {
   usePushProjectLocalRepositoryMutation,
 } from "@/features/projects/repoSyncHooks";
 import { useProjectBranchActions } from "@/features/projects/branchMutations";
+import { useOptimisticProjectBranches } from "@/features/projects/useOptimisticProjectBranches";
 import { useUpdateProjectPullRequestMutation } from "@/features/projects/pullRequestMutations";
 import { useCreateProjectIssueMutation } from "@/features/projects/issueMutations";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
@@ -63,7 +64,8 @@ import { useGitIdentityQuery } from "@/features/projects/useGitIdentity";
 import type { ViewerGitIdentity } from "@/features/projects/lib/projectContributorMatching";
 import {
   projectBranchManagementState,
-  projectBranchOptions,
+  projectBranchOptionsFromSync,
+  resolveProjectDefaultBranch,
 } from "@/features/projects/lib/projectBranches";
 import { normalizeRepositoryUrl } from "@/features/projects/lib/projectsViewHelpers";
 import { WorkspaceTabs } from "./ProjectWorkspaceTabs";
@@ -111,25 +113,24 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   const project = projectQuery.data;
   const repoStateQuery = useRepoStateQuery(project);
   const pullRequestsQuery = useProjectPullRequestsQuery(project);
-  const branchOptions = React.useMemo(() => {
-    const names = [
-      project?.defaultBranch,
-      ...(repoStateQuery.data?.branches.map((branch) => branch.name) ?? []),
-      ...(pullRequestsQuery.data
-        ?.map((pullRequest) => pullRequest.branchName)
-        .filter((name): name is string => Boolean(name)) ?? []),
-    ].filter((name): name is string => Boolean(name));
-    return [...new Set(names)];
-  }, [
-    project?.defaultBranch,
-    pullRequestsQuery.data,
-    repoStateQuery.data?.branches,
-  ]);
+  const defaultBranch = project
+    ? resolveProjectDefaultBranch(project.defaultBranch, repoStateQuery.data)
+    : null;
+  const { branchOptions, forgetBranch, managedBranches, rememberBranch } =
+    useOptimisticProjectBranches({
+      defaultBranch,
+      observedBranches: repoStateQuery.data?.branches ?? [],
+      projectId,
+      referencedBranches:
+        pullRequestsQuery.data?.map(
+          (pullRequest) => pullRequest.branchName ?? null,
+        ) ?? [],
+    });
   const [selectedBranch, setSelectedBranch] = React.useState<string | null>(
     null,
   );
   const activeBranch =
-    selectedBranch ?? project?.defaultBranch ?? branchOptions[0] ?? null;
+    selectedBranch ?? defaultBranch ?? branchOptions[0] ?? null;
   const [selectedPullRequestId, setSelectedPullRequestId] = React.useState<
     string | null
   >(pullRequestId ?? null);
@@ -269,20 +270,14 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     repoSource === "local"
       ? localRepoDiffQuery.isLoading
       : repoDiffQuery.isLoading;
-  const branchOptionsWithLocal = React.useMemo(
-    () =>
-      projectBranchOptions(
-        branchOptions,
-        repoSyncStatusQuery.data?.localBranch,
-      ),
-    [branchOptions, repoSyncStatusQuery.data?.localBranch],
+  const branchOptionsWithLocal = projectBranchOptionsFromSync(
+    branchOptions,
+    repoSyncStatusQuery.data,
   );
-  const defaultBranch =
-    repoStateQuery.data?.head ?? project?.defaultBranch ?? null;
   const { activeBranchCommit, activeRemoteBranch, deleteBranchReason } =
     projectBranchManagementState({
       activeBranch,
-      branches: repoStateQuery.data?.branches ?? [],
+      branches: managedBranches,
       defaultBranch,
       hasOpenPullRequest: (pullRequestsQuery.data ?? []).some(
         (pullRequest) =>
@@ -293,16 +288,38 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
       remoteHead: repoSyncStatusQuery.data?.remoteHead,
       snapshotCommit: repoSnapshotQuery.data?.latestCommit?.hash,
     });
+  const handleBranchChange = React.useCallback(
+    (branch: string | null) => {
+      setSelectedBranch(branch);
+      if (
+        branch &&
+        repoSource === "local" &&
+        branch !== repoSyncStatusQuery.data?.localBranch
+      ) {
+        setRepoSource("remote");
+      }
+    },
+    [repoSource, repoSyncStatusQuery.data?.localBranch],
+  );
   const branchActions = useProjectBranchActions({
     activeBranch,
     activeBranchCommit,
     activeRemoteBranch,
     defaultBranch,
     deleteBranchReason,
+    forgetBranch,
     project,
     refetchRepoState: repoStateQuery.refetch,
-    selectBranch: setSelectedBranch,
+    rememberBranch,
+    selectBranch: handleBranchChange,
   });
+  const createBranchReason = !activeBranch
+    ? "Choose a branch first."
+    : !activeBranchCommit
+      ? repoSyncStatusQuery.data?.localHead
+        ? `Push the first local commit to ${activeBranch} before creating another branch.`
+        : "Create the repository's first commit before creating another branch."
+      : null;
   const handleFetchRepo = React.useCallback(async () => {
     const results = await Promise.all([
       repoSnapshotQuery.refetch(),
@@ -324,9 +341,10 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   const filesSourceControls: RepoSourceHeaderControls = {
     branch: activeBranch ?? "",
     branchOptions: branchOptionsWithLocal,
-    onBranchChange: setSelectedBranch,
+    onBranchChange: handleBranchChange,
     onCreateBranch: () => branchActions.setCreateOpen(true),
     createBranchDisabled: branchActions.createPending || !activeBranchCommit,
+    createBranchTitle: createBranchReason ?? "Create a remote branch",
     onDeleteBranch: () => branchActions.setDeleteOpen(true),
     deleteBranchDisabled:
       branchActions.deletePending || Boolean(deleteBranchReason),
@@ -398,9 +416,9 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
       if (currentBranch && branchOptions.includes(currentBranch)) {
         return currentBranch;
       }
-      return project.defaultBranch ?? branchOptions[0] ?? null;
+      return defaultBranch ?? branchOptions[0] ?? null;
     });
-  }, [project, branchOptions, projectPending]);
+  }, [project, branchOptions, defaultBranch, projectPending]);
   React.useEffect(() => {
     setRepoSource((currentSource) => {
       if (currentSource === "local" && !hasLocalCheckout) return "remote";
