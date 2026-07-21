@@ -231,6 +231,17 @@ pub(crate) async fn parse_json_response<T: DeserializeOwned>(
         .map_err(|_| MALFORMED_RESPONSE_MESSAGE.to_string())
 }
 
+/// Extract the `retry in Ns` hint from a rate-limit error string.
+///
+/// Matches the canonical format emitted by the relay in both HTTP 429 bodies
+/// and CLOSED/NOTICE messages: `quota exceeded; retry in 4s`.
+fn extract_retry_in_hint(body: &str) -> Option<u64> {
+    let re_match = body.find("retry in ")?;
+    let after = &body[re_match + "retry in ".len()..];
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse::<u64>().ok()
+}
+
 pub async fn relay_error_message(response: reqwest::Response) -> String {
     let status = response.status();
 
@@ -249,6 +260,27 @@ pub async fn relay_error_message(response: reqwest::Response) -> String {
 
     // Real relay error: extract the structured message field if available.
     let body = response.text().await.unwrap_or_default();
+
+    // 429 Too Many Requests → typed `relay rate-limited:` prefix so the TS
+    // client can activate the rate-limit gate without confusing it with a
+    // connectivity failure (`relay unreachable:`). Also arm the Rust-side
+    // admission gate here — the one place every relay HTTP error funnels
+    // through — so the next relay-backed command waits out the quota window
+    // instead of burning it (see `relay_admission`).
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let hint = extract_retry_in_hint(&body);
+        // Clamp the hint to MAX_HINT_SECONDS before arming the Rust gate AND
+        // before embedding it in the returned string. Every consumer (Rust gate
+        // via `activate_rate_limit` and TS gate via `applyTauriRateLimitIfNeeded`)
+        // must see the same capped value — a single policy point prevents the TS
+        // gate from receiving an uncapped hint from an untrusted relay.
+        let capped_hint = hint.map(|s| s.min(crate::relay_admission::MAX_HINT_SECONDS));
+        crate::relay_admission::activate_rate_limit(capped_hint);
+        if let Some(secs) = capped_hint {
+            return format!("relay rate-limited: retry in {secs}s");
+        }
+        return "relay rate-limited: quota exceeded".to_string();
+    }
 
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
         if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
@@ -286,6 +318,7 @@ pub async fn query_relay_at(
     api_base_url: &str,
     filters: &[serde_json::Value],
 ) -> Result<Vec<nostr::Event>, String> {
+    crate::relay_admission::wait_for_rate_limit().await;
     let url = format!("{}/query", api_base_url);
     let body_bytes =
         serde_json::to_vec(filters).map_err(|e| format!("filter serialization failed: {e}"))?;
@@ -382,6 +415,7 @@ pub async fn sync_managed_agent_profile(
     avatar_url: Option<&str>,
     auth_tag: Option<&str>, // NIP-OA auth tag JSON
 ) -> Result<(), String> {
+    crate::relay_admission::wait_for_rate_limit().await;
     // Build a signed kind:0 profile event (with optional NIP-OA auth tag).
     let event = build_profile_event(agent_keys, display_name, avatar_url, auth_tag)?;
     let event_json = event.as_json();
@@ -482,6 +516,7 @@ pub async fn submit_event(
     builder: nostr::EventBuilder,
     state: &AppState,
 ) -> Result<SubmitEventResponse, String> {
+    crate::relay_admission::wait_for_rate_limit().await;
     // All synchronous work (signing) must complete before any .await
     // so the MutexGuard is dropped and the future remains Send.
     let url = format!("{}/events", relay_api_base_url_with_override(state));
@@ -529,6 +564,7 @@ pub async fn submit_signed_event(
     event: &nostr::Event,
     state: &AppState,
 ) -> Result<SubmitEventResponse, String> {
+    crate::relay_admission::wait_for_rate_limit().await;
     let url = format!("{}/events", relay_api_base_url_with_override(state));
     let body_bytes = event.as_json().into_bytes();
     let auth_header = {
@@ -586,6 +622,7 @@ pub async fn submit_signed_event_with_keys(
     if event.pubkey != keys.public_key() {
         return Err("signed event does not match the publishing identity".to_string());
     }
+    crate::relay_admission::wait_for_rate_limit().await;
     let url = format!("{}/events", relay_api_base_url_with_override(state));
     let body_bytes = event.as_json().into_bytes();
     let auth_header = build_nip98_auth_header_for_keys(keys, &Method::POST, &url, &body_bytes)?;
@@ -624,9 +661,105 @@ pub async fn submit_signed_event_with_keys(
 mod tests {
     use super::{
         build_profile_event, classify_intercepted_response, effective_agent_relay_url,
-        parse_command_response, relay_http_base_url, MALFORMED_RESPONSE_MESSAGE,
+        extract_retry_in_hint, parse_command_response, relay_http_base_url,
+        MALFORMED_RESPONSE_MESSAGE,
     };
     use serde::Deserialize;
+
+    // ── extract_retry_in_hint ────────────────────────────────────────────────
+
+    #[test]
+    fn extracts_hint_from_429_body() {
+        assert_eq!(
+            extract_retry_in_hint(r#"{"error":"rate-limited: quota exceeded; retry in 4s"}"#),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn extracts_hint_when_no_json_wrapper() {
+        assert_eq!(extract_retry_in_hint("retry in 30s"), Some(30));
+    }
+
+    #[test]
+    fn returns_none_when_no_hint_present() {
+        assert_eq!(
+            extract_retry_in_hint(r#"{"error":"rate-limited: quota exceeded"}"#),
+            None
+        );
+        assert_eq!(extract_retry_in_hint(""), None);
+    }
+
+    #[test]
+    fn overlong_digit_string_returns_none() {
+        // A digit sequence that exceeds u64::MAX cannot be parsed; the function
+        // must return None (→ caller uses the default) rather than panicking.
+        assert_eq!(
+            extract_retry_in_hint("retry in 99999999999999999999999s"),
+            None
+        );
+    }
+
+    // ── relay_error_message: hint capping ────────────────────────────────────
+    //
+    // Verify that an oversized relay hint is capped in the returned message
+    // string, not just inside `activate_rate_limit()`. This guarantees every
+    // consumer — including the TS gate via `applyTauriRateLimitIfNeeded` —
+    // receives the capped value rather than the raw untrusted relay value.
+
+    #[tokio::test]
+    async fn oversized_hint_is_capped_in_relay_error_message_string() {
+        use crate::relay_admission::MAX_HINT_SECONDS;
+        use std::io::{Read as _, Write as _};
+
+        // Use a std::net listener on a std::thread — the same pattern as the
+        // relay_admission loopback tests. This avoids two races that cause CI
+        // failures with tokio::net + into_std():
+        //  1. No request read: the client is still sending when the response
+        //     arrives → hyper `UnexpectedMessage`/`Canceled` under load.
+        //  2. into_std() leaves the socket in nonblocking mode → write_all
+        //     may return WouldBlock and silently drop the response.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Serve a 429 with a hint far exceeding MAX_HINT_SECONDS (300).
+        let oversized = 1_000_000u64;
+        let body = format!(r#"{{"error":"rate-limited: quota exceeded; retry in {oversized}s"}}"#);
+        let body_len = body.len();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // Read the request first so the client finishes sending before
+                // we write the response — mirrors relay_admission.rs pattern.
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {body_len}\r\nConnection: close\r\n\r\n{body}"
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect("request must succeed");
+
+        let msg = super::relay_error_message(response).await;
+
+        // The message must embed the CAPPED hint, not the raw 1 000 000.
+        assert_eq!(
+            msg,
+            format!("relay rate-limited: retry in {MAX_HINT_SECONDS}s"),
+            "relay_error_message must embed the capped hint, not the raw untrusted value"
+        );
+        assert!(
+            !msg.contains(&oversized.to_string()),
+            "raw oversized hint must not appear in the message string"
+        );
+    }
 
     // ── effective_agent_relay_url: per-agent override precedence ─────────────
 

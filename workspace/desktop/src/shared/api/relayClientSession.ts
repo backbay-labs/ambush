@@ -35,6 +35,12 @@ import {
   prepareSubscriptionEvent,
 } from "@/shared/api/relayClosedRecovery";
 import { replayLiveSubscriptions } from "@/shared/api/relayReconnectReplay";
+import {
+  activateRateLimit,
+  parseRateLimitHint,
+  waitForRateLimit,
+} from "@/shared/api/relayRateLimitGate";
+import { requestHistoryGated } from "@/shared/api/relayGateBoundary";
 import { RelayConnectionStateEmitter } from "@/shared/api/relayConnectionStateEmitter";
 import {
   shouldRefuseConnect,
@@ -47,6 +53,22 @@ const RECONNECT_BASE_DELAY_MS = 1_000,
   RECONNECT_MAX_DELAY_MS = 30_000,
   EVENT_BATCH_MS = 16,
   AUX_BACKFILL_CONCURRENCY = 4;
+
+/**
+ * Op-level timeout constants. Raised from 8 s to 25 s to survive degraded
+ * networks where TLS handshakes and DNS resolution can take 3–10 s.
+ */
+export const AUTH_TIMEOUT_MS = 25_000;
+export const HISTORY_TIMEOUT_MS = 25_000;
+export const PUBLISH_TIMEOUT_MS = 25_000;
+
+/**
+ * The connection must remain stable for this long after a successful AUTH
+ * before the reconnect backoff delay resets to its base value. Stability-
+ * gated reset prevents repeated fast reconnects (flapping) from erasing the
+ * backoff that throttles them.
+ */
+export const BACKOFF_RESET_STABLE_MS = 60_000;
 
 /**
  * Passive liveness check. The relay sends heartbeat pings every 30s; if no
@@ -77,6 +99,8 @@ export class RelayClient {
   private notifyReconnectListeners = false;
   private onMessageChannel: Channel<unknown> | null = null;
   private connectionGeneration = 0;
+  private stabilityTimer: number | null = null;
+  private visibleChannelId: string | null = null;
 
   /**
    * Sticky terminal flag. Set when `resetConnection` is called with
@@ -101,6 +125,16 @@ export class RelayClient {
   });
 
   /**
+   * Track which channel the user is currently viewing so its subscriptions
+   * are sent first during reconnect replay — reducing visible latency on
+   * degraded networks where the relay REQ storm would otherwise delay all
+   * channels equally.
+   */
+  setVisibleChannelId(id: string | null) {
+    this.visibleChannelId = id;
+  }
+
+  /**
    * Cleanly tear down the connection without scheduling a reconnect.
    * Used during community switches to reset the singleton before the
    * new community applies.
@@ -112,6 +146,10 @@ export class RelayClient {
       window.clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
+    if (this.stabilityTimer !== null) {
+      window.clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
     this.stallWatchdog.stop();
     this.connectionGeneration++;
     this.keepAliveRequested = false;
@@ -119,6 +157,7 @@ export class RelayClient {
     this.hasConnectedOnce = false;
     this.notifyReconnectListeners = false;
     this.terminal = false;
+    this.visibleChannelId = null;
     this.connectionStateEmitter.set("idle");
 
     if (this.wsId !== null) {
@@ -238,33 +277,16 @@ export class RelayClient {
     return this.requestHistory(filter);
   }
 
-  private requestHistory(filter: RelaySubscriptionFilter) {
-    return new Promise<RelayEvent[]>((resolve, reject) => {
-      const subId = `history-${crypto.randomUUID()}`;
-      const timeout = window.setTimeout(() => {
-        this.subscriptions.delete(subId);
-        void this.closeSubscription(subId);
-        reject(new Error("Timed out while loading channel history."));
-      }, 8_000);
-
-      this.subscriptions.set(subId, {
-        mode: "history",
-        events: [],
-        resolve,
-        reject,
-        timeout,
-      });
-
-      void this.sendRaw(["REQ", subId, filter]).catch((error) => {
-        window.clearTimeout(timeout);
-        this.subscriptions.delete(subId);
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Failed to request channel history."),
-        );
-      });
-    });
+  private requestHistory(
+    filter: RelaySubscriptionFilter,
+  ): Promise<RelayEvent[]> {
+    return requestHistoryGated(
+      this.subscriptions,
+      (payload) => this.sendRaw(payload),
+      (subId) => this.closeSubscription(subId),
+      filter,
+      HISTORY_TIMEOUT_MS,
+    );
   }
 
   async sendMessage(
@@ -512,6 +534,13 @@ export class RelayClient {
   }
 
   private async connect() {
+    // Clear any pending stability timer from a previous connection — a new
+    // connect attempt resets the clock and must re-arm the timer on success.
+    if (this.stabilityTimer !== null) {
+      window.clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
+
     this.connectionStateEmitter.set(
       this.hasConnectedOnce ? "reconnecting" : "connecting",
     );
@@ -538,7 +567,7 @@ export class RelayClient {
           new Error("Timed out while waiting for relay authentication."),
         );
         reject(new Error("Timed out while waiting for relay authentication."));
-      }, 8_000);
+      }, AUTH_TIMEOUT_MS);
 
       this.authRequest = {
         pendingEventId: "",
@@ -548,7 +577,15 @@ export class RelayClient {
       };
     });
 
-    this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
+    // Start a stability timer instead of resetting backoff immediately.
+    // The backoff resets to its base value only after BACKOFF_RESET_STABLE_MS
+    // of uninterrupted uptime, preventing fast reconnect loops from erasing
+    // the exponential backoff that throttles them.
+    this.stabilityTimer = window.setTimeout(() => {
+      this.stabilityTimer = null;
+      this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
+    }, BACKOFF_RESET_STABLE_MS);
+
     await this.replayLiveSubscriptions();
     this.connectionStateEmitter.set("connected");
     this.stallWatchdog.start();
@@ -665,16 +702,19 @@ export class RelayClient {
     await this.sendRaw(["CLOSE", subId]);
   }
 
-  publishEvent(
+  async publishEvent(
     event: RelayEvent,
     timeoutMessage: string,
     sendErrorMessage: string,
   ) {
+    // Await the gate before sending EVENT; op timeout starts after the wait.
+    await waitForRateLimit();
+
     return new Promise<RelayEvent>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         this.pendingEvents.delete(event.id);
         reject(new Error(timeoutMessage));
-      }, 8_000);
+      }, PUBLISH_TIMEOUT_MS);
 
       this.pendingEvents.set(event.id, {
         event,
@@ -789,6 +829,16 @@ export class RelayClient {
             "Failed to restore relay subscription after CLOSED.",
           ),
       });
+      return;
+    }
+
+    if (type === "NOTICE" && typeof rest[0] === "string") {
+      const notice: string = rest[0];
+      // Relay back-pressure signal — activate the gate so pending operations
+      // back off until the window expires.
+      if (notice.startsWith("rate-limited:")) {
+        activateRateLimit(parseRateLimitHint(notice));
+      }
     }
   }
 
@@ -889,11 +939,14 @@ export class RelayClient {
   }
 
   private async replayLiveSubscriptions() {
+    const generation = this.connectionGeneration;
     try {
       await replayLiveSubscriptions({
         subscriptions: this.subscriptions,
         sendRaw: (payload) => this.sendRaw(payload),
         requestHistory: (filter) => this.requestHistory(filter),
+        visibleChannelId: this.visibleChannelId,
+        isActive: () => this.connectionGeneration === generation,
       });
     } catch (error) {
       const reconnectError =
@@ -918,7 +971,11 @@ export class RelayClient {
       return;
     }
 
-    const delay = this.reconnectDelayMs;
+    // Apply ±25% jitter so a fleet of clients reconnecting simultaneously
+    // spreads their AUTH storms across a 50% window instead of all hitting
+    // the relay at the same instant.
+    const jitter = this.reconnectDelayMs * (0.75 + Math.random() * 0.5);
+    const delay = Math.min(jitter, RECONNECT_MAX_DELAY_MS);
     this.reconnectDelayMs = Math.min(
       this.reconnectDelayMs * 2,
       RECONNECT_MAX_DELAY_MS,
@@ -961,6 +1018,10 @@ export class RelayClient {
     this.onMessageChannel = null;
     this.stallWatchdog.stop();
     this.connectionGeneration++;
+    if (this.stabilityTimer !== null) {
+      window.clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
     if (this.flushTimeout !== null) window.clearTimeout(this.flushTimeout);
     this.flushTimeout = null;
     this.eventBuffer = [];
