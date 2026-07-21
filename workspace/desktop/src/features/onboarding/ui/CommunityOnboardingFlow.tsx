@@ -13,6 +13,7 @@ import {
   takePendingWelcomeChannelForDirectEntry,
   WELCOME_SURFACE_READY_EVENT,
 } from "@/features/onboarding/welcome";
+import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
 import { profileQueryKey } from "@/features/profile/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
@@ -80,7 +81,9 @@ function AvatarCircle({
   triggerRef?: React.Ref<HTMLButtonElement>;
 }) {
   const emojiAvatar = parseEmojiAvatarDataUrl(avatarUrl);
-  const hasAvatar = avatarUrl.trim().length > 0;
+  const presentation = useAvatarPresentation(avatarUrl);
+  const hasAvatar =
+    avatarUrl.trim().length > 0 && presentation?.state !== "failed";
 
   return (
     <button
@@ -103,9 +106,13 @@ function AvatarCircle({
           avatarUrl={avatarUrl}
           className="h-36 w-36 rounded-full text-4xl"
           label={previewName}
+          testId="community-avatar-circle"
         />
       ) : (
-        <span className="flex h-36 w-36 items-center justify-center rounded-full bg-white/30 text-[var(--buzz-onboarding-backup-ink)] transition-colors group-hover:bg-white/40">
+        <span
+          className="flex h-36 w-36 items-center justify-center rounded-full bg-white/30 text-[var(--buzz-onboarding-backup-ink)] transition-colors group-hover:bg-white/40"
+          data-testid="community-avatar-empty"
+        >
           <Plus className="h-7 w-7" aria-hidden="true" />
         </span>
       )}
