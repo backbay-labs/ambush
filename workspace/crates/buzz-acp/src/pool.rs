@@ -473,6 +473,10 @@ pub struct PromptContext {
     /// Harness identity string for NIP-AM `harness` field. Derived from the
     /// configured `agent_command` at startup (e.g. `"goose"`, `"buzz-agent"`).
     pub harness_name: String,
+    /// Relay URL this harness is connected to. Rides in observer payloads that
+    /// the desktop keys per (agent, relay) pair, e.g. `session_config_captured`,
+    /// mirroring the `managed_agent_runtime_lifecycle` frames.
+    pub relay_url: String,
 }
 
 impl AgentPool {
@@ -855,6 +859,9 @@ async fn create_session_and_apply_model(
             "modes": resp.raw.get("modes").cloned().unwrap_or(serde_json::Value::Null),
             "models": resp.raw.get("models").cloned().unwrap_or(serde_json::Value::Null),
             "modelOverridden": agent.model_overridden && switch_succeeded,
+            // Pair identity for the desktop session-config cache, which is
+            // keyed by (agent, relay) like the lifecycle frames.
+            "relayUrl": ctx.relay_url,
         }),
     );
 
@@ -5254,6 +5261,7 @@ mod tests {
             agent_owner_pubkey: owner_pubkey,
             memory_enabled: false,
             harness_name: "goose".to_string(),
+            relay_url: "ws://127.0.0.1:3000".to_string(),
         }
     }
 
