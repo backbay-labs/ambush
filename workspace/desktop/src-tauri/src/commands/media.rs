@@ -212,11 +212,18 @@ fn is_animated_image(body: &[u8], mime: &str) -> bool {
     }
 }
 
-fn sanitize_image_for_upload(body: Vec<u8>, mime: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn sanitize_image_for_upload(body: Vec<u8>, mime: &str) -> Result<Vec<u8>, String> {
     let format = match mime {
         "image/jpeg" => image::ImageFormat::Jpeg,
         "image/png" => image::ImageFormat::Png,
         "image/webp" => image::ImageFormat::WebP,
+        // GIF is never re-encoded (that would destroy animation timing);
+        // metadata extensions are stripped structurally instead. Unparseable
+        // payloads pass through — the relay's validator is the authority.
+        "image/gif" => {
+            let stripped = super::media_gif::strip_gif_metadata(&body);
+            return Ok(stripped.unwrap_or(body));
+        }
         _ => return Ok(body),
     };
 
