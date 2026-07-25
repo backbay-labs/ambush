@@ -12,6 +12,8 @@ use crate::{
     relay::query_relay,
 };
 
+mod post_install_verification;
+
 fn active_installs() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
@@ -229,11 +231,10 @@ fn install_acp_runtime_blocking(runtime_id: &str) -> Result<InstallRuntimeResult
         }
     }
 
-    // Clear the resolve cache so the next discovery picks up new binaries.
-    crate::managed_agents::clear_resolve_cache();
+    post_install_verification::run(runtime_id, &mut steps);
 
     Ok(InstallRuntimeResult {
-        success: true,
+        success: steps.iter().all(|step| step.success),
         steps,
         restarted_count: 0,
         failed_restart_count: 0,
@@ -1500,17 +1501,6 @@ mod tests {
         );
     }
 
-    /// Goose install commands are the same on all platforms (script is Windows-aware).
-    #[test]
-    fn test_goose_install_commands_same_on_all_platforms() {
-        let goose = crate::managed_agents::known_acp_runtime_exact("goose").unwrap();
-        assert_eq!(
-            goose.cli_install_commands_for_os(),
-            goose.cli_install_commands,
-            "goose install commands must be identical across platforms"
-        );
-    }
-
     /// buzz-agent has no install commands on any platform.
     #[test]
     fn test_buzz_agent_has_no_install_commands() {
@@ -1672,6 +1662,32 @@ mod tests {
                 "irm https://claude.ai/install.ps1 | iex",
             ],
             "Claude catalog command must be dequoted correctly"
+        );
+    }
+
+    /// Goose Windows catalog command (discovery.rs:78) must dequote to a bare pipeline
+    /// with a literal `$env:` prefix — no backslash before the dollar sign.
+    /// This proves the `\$` → `$` escape fix: post-#2750 the spawn is native and
+    /// PowerShell receives the body verbatim, so a residual `\` would produce
+    /// `\$env:CONFIGURE='false'` which is a malformed statement.
+    #[cfg(windows)]
+    #[test]
+    fn test_powershell_command_goose_catalog_dequoted() {
+        let cmd = super::install_powershell_command(
+            r#"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$env:CONFIGURE='false'; irm https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 | iex""#,
+        );
+        assert_eq!(
+            cmd.get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec![
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "$env:CONFIGURE='false'; irm https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 | iex",
+            ],
+            "Goose catalog command must dequote with bare $env: (no backslash before $)"
         );
     }
 
