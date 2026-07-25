@@ -297,8 +297,25 @@ test.describe("list virtualization", () => {
       });
       const committedAnchor = await sampleVisibleAnchor(before.id);
       const motion = await timeline.evaluate(
-        async (scroller, { anchorId, anchorTop, oldHeight }) => {
+        async (scroller, { anchorId, anchorTop, oldHeight, testCtrlWheel }) => {
           const s = scroller as HTMLElement;
+          let ctrlWheelDispatched = false;
+          const mutationObserver = testCtrlWheel
+            ? new MutationObserver(() => {
+                if (ctrlWheelDispatched) return;
+                ctrlWheelDispatched = true;
+                // Ctrl+wheel is browser zoom, not reader scroll intent. Fire it
+                // synchronously with the prepend DOM commit, before the
+                // ResizeObserver measurement batch reconciles estimated rows.
+                s.dispatchEvent(
+                  new WheelEvent("wheel", { ctrlKey: true, deltaY: -100 }),
+                );
+              })
+            : null;
+          mutationObserver?.observe(s.firstElementChild ?? s, {
+            childList: true,
+            subtree: true,
+          });
           let maxDrift = 0;
           let sawPrepend = false;
           let sawAnchorAfterPrepend = false;
@@ -326,15 +343,20 @@ test.describe("list virtualization", () => {
             if (sawAnchorAfterPrepend && stableFrames >= 8) break;
             await new Promise((resolve) => requestAnimationFrame(resolve));
           }
-          return { maxDrift, sawPrepend };
+          mutationObserver?.disconnect();
+          return { ctrlWheelDispatched, maxDrift, sawPrepend };
         },
         {
           anchorId: committedAnchor.id,
           anchorTop: committedAnchor.top,
           oldHeight: before.scrollHeight,
+          // Exercise browser-zoom input once while a real prepend transaction
+          // still owns its measurement reconciliation.
+          testCtrlWheel: pageIndex === 0,
         },
       );
       expect(motion.sawPrepend).toBe(true);
+      if (pageIndex === 0) expect(motion.ctrlWheelDispatched).toBe(true);
       expect(motion.maxDrift).toBeLessThan(5);
 
       await expect
@@ -357,11 +379,10 @@ test.describe("list virtualization", () => {
         await timeline.evaluate((element) => element.clientHeight),
       );
 
-      // Leave the boundary with real downward wheel input while this prepend's
-      // three-second semantic-anchor watcher is still alive. The watcher belongs
-      // only to the completed prepend: it must not reinterpret this deliberate
-      // reader movement as row drift and pull the viewport back toward its stale
-      // baseline before the next upward load.
+      // Leave the boundary with real downward wheel input after this prepend.
+      // That reader intent retires Virtua's active prepend reconciliation, so
+      // later row measurements must not pull the viewport back toward the
+      // completed prepend before the next upward load.
       const exitTracePromise = timeline.evaluate(async (scroller) => {
         const s = scroller as HTMLElement;
         const startScrollTop = s.scrollTop;
@@ -667,6 +688,10 @@ test("offscreen rich-row resize preserves the viewport-center anchor", async ({
 
   const result = await timeline.evaluate(async (element) => {
     const scroller = element as HTMLDivElement;
+    // Retire bottom-follow intent the same way real reader input does before
+    // moving into detached history. A raw scrollTop assignment alone is not
+    // user intent and would correctly leave bottom following armed.
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
     scroller.scrollTop = scroller.scrollHeight / 2;
     scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 250));
