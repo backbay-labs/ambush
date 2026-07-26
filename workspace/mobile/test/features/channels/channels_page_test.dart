@@ -11,6 +11,7 @@ import 'package:buzz/features/channels/channels_page.dart';
 import 'package:buzz/features/channels/channels_provider.dart';
 import 'package:buzz/features/channels/read_state/read_state_provider.dart';
 import 'package:buzz/features/channels/unread_badge/observed_unread_event.dart';
+import 'package:buzz/features/profile/profile_avatar.dart';
 import 'package:buzz/features/profile/profile_provider.dart';
 import 'package:buzz/features/profile/user_profile.dart';
 import 'package:buzz/shared/theme/theme.dart';
@@ -42,7 +43,7 @@ void main() {
         ),
         home: const Stack(
           children: [
-            ChannelsPage(),
+            ChannelsPage(settingsPageBuilder: _buildSettingsPage),
             Positioned.fill(
               child: ChannelQuickActionsLauncher(
                 visible: true,
@@ -115,6 +116,24 @@ void main() {
     expect(find.text('DMs'), findsOneWidget);
     expect(find.text('Community'), findsOneWidget);
     expect(find.byTooltip('Create or start conversation'), findsOneWidget);
+  });
+
+  testWidgets('opens the settings page supplied by the app layer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(testChannels)),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(ProfileAvatar));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Injected settings'), findsOneWidget);
   });
 
   testWidgets('quick actions slide behind navigation when leaving home', (
@@ -884,6 +903,9 @@ void main() {
     expect(readState.markedContexts, isEmpty);
   });
 }
+
+Widget _buildSettingsPage(BuildContext context) =>
+    const Scaffold(body: Text('Injected settings'));
 
 class _FakeNotifier extends ChannelsNotifier {
   final List<Channel> _channels;
