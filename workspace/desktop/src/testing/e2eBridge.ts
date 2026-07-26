@@ -284,6 +284,8 @@ type E2eConfig = {
     oaOwnerIsMe?: boolean;
     /** Whether the mock relay advertises NIP-43 membership support. Defaults to false. */
     relayRequiresMembership?: boolean;
+    /** Delay EOSE for membership snapshots after delivering the event. */
+    relayMembershipEoseDelayMs?: number;
     relayRole?: "owner" | "admin" | "member" | null;
     // Descriptors returned by the mocked `pick_and_upload_media` /
     // `upload_media_bytes` commands. Lets a spec drive the attachment flow
@@ -296,6 +298,8 @@ type E2eConfig = {
     /** Delay (ms) applied to `get_relay_self` so E2E tests can prove the
      *  fail-closed race: DMs are withheld while classification is unresolved. */
     relaySelfDelayMs?: number;
+    /** Delay (ms) applied to `start_pairing` so pairing loading UI is observable. */
+    pairingStartDelayMs?: number;
     /**
      * Sequenced results for `confirm_team_snapshot_import`. String = throw
      * with that message; null = succeed. Call N uses results[N]; last entry
@@ -8746,7 +8750,15 @@ function sendToMockSocket(args: {
         subId,
         createMockRelayMembershipEvent(),
       ]);
-      sendWsText(socket.handler, ["EOSE", subId]);
+      const eoseDelayMs = getConfig()?.mock?.relayMembershipEoseDelayMs ?? 0;
+      if (eoseDelayMs > 0) {
+        window.setTimeout(
+          () => sendWsText(socket.handler, ["EOSE", subId]),
+          eoseDelayMs,
+        );
+      } else {
+        sendWsText(socket.handler, ["EOSE", subId]);
+      }
       return;
     }
 
@@ -10902,8 +10914,13 @@ export function maybeInstallE2eTauriMocks() {
       case "plugin:event|listen":
         // Tauri event system (pairing, huddle) — no-op in e2e, return unlisten fn ID
         return Math.floor(Math.random() * 1_000_000);
-      case "start_pairing":
+      case "start_pairing": {
+        const delayMs = activeConfig?.mock?.pairingStartDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        }
         return "nostrpair://8f4b8db31967ce14fef970a1ff1e8eecf19a430aa1c83875e2f5be68dcac0f1a?relay=wss%3A%2F%2Frelay.example.com&secret=87d5a8cfd5807a0cb44f728b67d88d6dcb8daf99be137c158f21a50c1e913c0a&v=1";
+      }
       case "cancel_pairing":
       case "confirm_pairing_sas":
         return null;
