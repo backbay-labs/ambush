@@ -1,9 +1,14 @@
 import * as React from "react";
 
+import { classifyTimelineMessageDelta } from "@/features/messages/lib/timelineSnapshot";
 import {
-  classifyTimelineMessageDelta,
-  type TimelineMessageDelta,
-} from "@/features/messages/lib/timelineSnapshot";
+  getPinnedCenterDrift,
+  settleProgrammaticBottomPin,
+  shouldIgnorePinnedCenterScroll,
+  shouldSettleForSplitPanel,
+  shouldSettleVirtualizedBottom,
+} from "./anchoredScrollPolicy";
+import { useVirtualizedViewportResize } from "./useVirtualizedViewportResize";
 
 /**
  * Distance (in CSS pixels) below which we consider the scroll position
@@ -12,80 +17,11 @@ import {
  * rounding from the layout engine.
  */
 const AT_BOTTOM_THRESHOLD_PX = 32;
-// Tests and user-visible "pinned" affordances need the view at the physical
-// floor, not merely within the looser UI at-bottom threshold. The loose
-// threshold decides whether the user is close enough to count as reading the
-// latest message; this strict threshold decides when a programmatic bottom pin
-// has actually finished settling.
-const TRUE_BOTTOM_THRESHOLD_PX = 1;
 
 type AnchorState =
   | { kind: "at-bottom" }
   | { kind: "message"; messageId: string; topOffset: number }
   | { kind: "pinned-center"; messageId: string; contentTop: number };
-
-export function getPinnedCenterDrift({
-  contentTop,
-  currentContentTop,
-}: {
-  contentTop: number;
-  currentContentTop: number;
-}): number | null {
-  const drift = currentContentTop - contentTop;
-  return Math.abs(drift) > 0.5 ? drift : null;
-}
-
-export function shouldIgnorePinnedCenterScroll({
-  currentScrollTop,
-  expectedScrollTop,
-  isWritingScroll,
-}: {
-  currentScrollTop: number;
-  expectedScrollTop: number | null;
-  isWritingScroll: boolean;
-}): boolean {
-  return isWritingScroll || expectedScrollTop === currentScrollTop;
-}
-
-type BottomSettleContainer = Pick<
-  HTMLDivElement,
-  "scrollHeight" | "clientHeight" | "scrollTop" | "scrollTo"
->;
-
-export function settleProgrammaticBottomPin(
-  container: BottomSettleContainer,
-): boolean {
-  container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
-  return isAtTrueBottom(container);
-}
-
-export function shouldSettleForSplitPanel({
-  isAtBottom,
-  splitPanelOpen,
-}: {
-  isAtBottom: boolean;
-  splitPanelOpen: boolean;
-}): boolean {
-  return isAtBottom && splitPanelOpen;
-}
-
-export function shouldSettleVirtualizedBottom({
-  isAtBottom,
-  messageDelta,
-  messagesArrived,
-  messagesChanged,
-}: {
-  isAtBottom: boolean;
-  messageDelta: TimelineMessageDelta;
-  messagesArrived: number;
-  messagesChanged: boolean;
-}): boolean {
-  return (
-    isAtBottom &&
-    messageDelta !== "prepend" &&
-    (messagesArrived > 0 || messagesChanged)
-  );
-}
 
 type UseAnchoredScrollOptions = {
   /** Scroll container. Owned by the parent so external refs still compose. */
@@ -159,18 +95,6 @@ function isAtBottomNow(
   return (
     container.scrollHeight - container.clientHeight - container.scrollTop <=
     AT_BOTTOM_THRESHOLD_PX
-  );
-}
-
-function isAtTrueBottom(
-  container: Pick<
-    HTMLDivElement,
-    "scrollHeight" | "clientHeight" | "scrollTop"
-  >,
-) {
-  return (
-    container.scrollHeight - container.clientHeight - container.scrollTop <=
-    TRUE_BOTTOM_THRESHOLD_PX
   );
 }
 
@@ -845,6 +769,12 @@ export function useAnchoredScroll({
     scrollContainerRef,
     virtualizerOwnsPrependAnchoring,
   ]);
+
+  useVirtualizedViewportResize(
+    scrollContainerRef,
+    virtualizerAtBottomRef,
+    virtualizerOwnsPrependAnchoring ? virtualSettleAtBottom : undefined,
+  );
 
   // Pinned centers survive our own corrections but release as soon as the
   // reader deliberately takes control of the scroll position or the caller
