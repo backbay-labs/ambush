@@ -3,6 +3,11 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { decode } from "nostr-tools/nip19";
 import { finalizeEvent, getPublicKey } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
+import {
+  mergeMockCustomHarnesses,
+  handleSaveCustomHarness,
+  handleDeleteCustomHarness,
+} from "./e2eBridgeCustomHarnesses.ts";
 
 import { relayClient } from "@/shared/api/relayClient";
 import type { ConnectionState } from "@/shared/api/relayClientShared";
@@ -70,6 +75,8 @@ type MockManagedAgentSeed = {
   name: string;
   avatarUrl?: string | null;
   personaId?: string | null;
+  /** Harness/runtime id pin; `null` = inherit from persona (native default). */
+  runtime?: string | null;
   status?: RawManagedAgent["status"];
   channelNames?: string[];
   channelIds?: string[];
@@ -175,6 +182,8 @@ type E2eConfig = {
     acpAuthMethods?: Record<string, RawAcpAuthMethodsResult>;
     acpAuthMethodsErrors?: Record<string, string>;
     acpAuthMethodsError?: string;
+    /** When set, the `delete_custom_harness` mock command throws with this message. */
+    deleteCustomHarnessError?: string;
     connectAcpRuntimeResult?: RawConnectAcpRuntimeResult;
     connectAcpRuntimeDelayMs?: number;
     connectAcpRuntimeError?: string;
@@ -705,6 +714,8 @@ type RawManagedAgent = {
   pubkey: string;
   name: string;
   persona_id: string | null;
+  /** Record-level harness/runtime pin (`null` when inheriting from the persona). */
+  runtime: string | null;
   relay_url: string;
   acp_command: string;
   agent_command: string;
@@ -1456,6 +1467,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     pubkey: agent.pubkey,
     name: agent.name,
     persona_id: agent.persona_id,
+    runtime: agent.runtime ?? null,
     relay_url: agent.relay_url,
     acp_command: agent.acp_command,
     agent_command: agent.agent_command,
@@ -1989,6 +2001,9 @@ function buildSeededManagedAgent(seed: MockManagedAgentSeed): MockManagedAgent {
     pubkey: seed.pubkey,
     name: seed.name,
     persona_id: seed.personaId ?? null,
+    // Native serde always emits this key (`null` when unpinned) — the bridge
+    // must mirror the wire shape, not omit the key.
+    runtime: seed.runtime ?? null,
     relay_url: DEFAULT_RELAY_WS_URL,
     acp_command: "buzz-acp",
     agent_command: "goose",
@@ -6961,7 +6976,9 @@ async function handleDiscoverAcpRuntimes(
   }
   const configured = config?.mock?.acpRuntimesCatalog;
   if (configured) {
-    return configured.map(withMockRuntimeConfigMetadata);
+    return mergeMockCustomHarnesses(
+      configured.map(withMockRuntimeConfigMetadata),
+    );
   }
   const defaultCatalog: RawAcpRuntimeCatalogEntry[] = [
     {
@@ -6980,6 +6997,7 @@ async function handleDiscoverAcpRuntimes(
       underlying_cli_path: null,
       node_required: false,
       auth_status: { status: "not_applicable" },
+      source: "builtin",
       login_hint: undefined,
     },
     {
@@ -6999,6 +7017,7 @@ async function handleDiscoverAcpRuntimes(
       underlying_cli_path: "/usr/local/bin/claude",
       node_required: false,
       auth_status: { status: "unknown" },
+      source: "builtin",
       login_hint: undefined,
     },
     {
@@ -7018,6 +7037,7 @@ async function handleDiscoverAcpRuntimes(
       underlying_cli_path: null,
       node_required: false,
       auth_status: { status: "unknown" },
+      source: "builtin",
       login_hint: undefined,
     },
     {
@@ -7036,10 +7056,13 @@ async function handleDiscoverAcpRuntimes(
       underlying_cli_path: null,
       node_required: false,
       auth_status: { status: "not_applicable" },
+      source: "builtin",
       login_hint: undefined,
     },
   ];
-  return defaultCatalog.map(withMockRuntimeConfigMetadata);
+  return mergeMockCustomHarnesses(
+    defaultCatalog.map(withMockRuntimeConfigMetadata),
+  );
 }
 
 async function handleDiscoverAcpAuthMethods(
@@ -7642,6 +7665,8 @@ async function handleCreateManagedAgent(
     pubkey,
     name,
     persona_id: args.input.personaId ?? null,
+    // Create never pins a harness id — the record inherits from the persona.
+    runtime: null,
     relay_url: args.input.relayUrl ?? DEFAULT_RELAY_WS_URL,
     acp_command: args.input.acpCommand ?? "buzz-acp",
     agent_command: agentCommand,
@@ -10016,6 +10041,15 @@ export function maybeInstallE2eTauriMocks() {
         return activeConfig?.mock?.relayRequiresMembership ?? false;
       case "discover_acp_providers":
         return handleDiscoverAcpRuntimes(activeConfig);
+      case "save_custom_harness":
+        return handleSaveCustomHarness(
+          payload as Parameters<typeof handleSaveCustomHarness>[0],
+        );
+      case "delete_custom_harness":
+        return handleDeleteCustomHarness(
+          payload as Parameters<typeof handleDeleteCustomHarness>[0],
+          activeConfig,
+        );
       case "discover_acp_auth_methods":
         return handleDiscoverAcpAuthMethods(
           payload as { runtimeId?: string },
