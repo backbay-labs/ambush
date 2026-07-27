@@ -16,7 +16,6 @@ import {
 import { relativeTime } from "@/features/projects/lib/projectsViewHelpers";
 import type { ChannelMember } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import { Markdown } from "@/shared/ui/markdown";
 import {
   ProjectFeedRow,
   ProjectFeedRowCluster,
@@ -24,6 +23,7 @@ import {
 } from "./ProjectFeedRow";
 import { OverviewRailSection } from "./ProjectOverviewPanel";
 import { ProfileIdentityButton } from "./ProjectProfileIdentity";
+import { ProjectRichContent } from "./ProjectRichContent";
 
 export function issueStatusClassName(status: ProjectIssue["status"]) {
   if (status === "Done") return "text-purple-400";
@@ -214,11 +214,7 @@ function IssueDetail({
             </h3>
           </div>
           {issue.content ? (
-            <Markdown
-              className="text-sm"
-              content={issue.content}
-              interactive={false}
-            />
+            <ProjectRichContent content={issue.content} tags={issue.tags} />
           ) : null}
         </header>
 
@@ -238,11 +234,7 @@ function IssueDetail({
                       role={relativeTime(item.createdAt)}
                     />
                   </div>
-                  <Markdown
-                    className="text-sm"
-                    content={item.content}
-                    interactive={false}
-                  />
+                  <ProjectRichContent content={item.content} tags={item.tags} />
                 </article>
               ))}
             </div>

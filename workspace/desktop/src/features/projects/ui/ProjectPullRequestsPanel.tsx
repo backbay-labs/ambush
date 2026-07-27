@@ -36,7 +36,6 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { ChannelMember } from "@/shared/api/types";
 import { normalizePubkey, truncatePubkey } from "@/shared/lib/pubkey";
-import { Markdown } from "@/shared/ui/markdown";
 import {
   ProjectFeedRow,
   ProjectFeedRowCluster,
@@ -49,6 +48,7 @@ import {
   ProfileAuthorName,
   ProfileIdentityButton,
 } from "./ProjectProfileIdentity";
+import { ProjectRichContent } from "./ProjectRichContent";
 import { PullRequestReviewersRow } from "./PullRequestReviewersRow";
 import { PullRequestReviewCard } from "./PullRequestReviewCard";
 
@@ -639,10 +639,9 @@ function PullRequestDetail({
     <div>
       {pullRequest.content ? (
         <header className="p-4">
-          <Markdown
-            className="text-sm"
+          <ProjectRichContent
             content={pullRequest.content}
-            interactive={false}
+            tags={pullRequest.tags}
           />
         </header>
       ) : null}
@@ -670,9 +669,11 @@ function PullRequestDetail({
                 ) : null}
               </div>
               {update.content ? (
-                <p className="text-sm text-muted-foreground">
-                  {update.content}
-                </p>
+                <ProjectRichContent
+                  className="text-sm text-muted-foreground"
+                  content={update.content}
+                  tags={update.tags}
+                />
               ) : null}
             </article>
           ))}
@@ -829,10 +830,10 @@ function PullRequestDetail({
                     </span>
                   </div>
                   {activityContent ? (
-                    <Markdown
+                    <ProjectRichContent
                       className="mt-1 text-sm text-foreground/90"
                       content={activityContent}
-                      interactive={false}
+                      tags={item.tags}
                     />
                   ) : null}
                   {item.anchor ? (
