@@ -8000,10 +8000,60 @@ async function handleUpdateManagedAgent(args: {
   return { agent: cloneManagedAgent(agent), profile_sync_error: null };
 }
 
+/**
+ * Mock-mode `search_messages` predicate, mirroring the relay's filter contract.
+ *
+ * `since`/`until` are NIP-01 bounds and both inclusive — the relay keeps events
+ * where `since <= created_at <= until` (`crates/buzz-core/src/filter.rs`). The
+ * `before:` operator's exclusivity is encoded upstream in
+ * `parseSearchOperators`, which subtracts a second; the mock must not subtract
+ * it a second time.
+ *
+ * Exported so the boundary behavior is unit-testable without a browser.
+ */
+export function mockSearchHitMatches(
+  hit: Pick<
+    RawSearchHit,
+    "channel_id" | "pubkey" | "created_at" | "content" | "channel_name"
+  >,
+  filters: {
+    /** Lowercased FTS query; empty matches everything. */
+    query: string;
+    channelId?: string;
+    authorSet: Set<string> | null;
+    since?: number;
+    until?: number;
+  },
+): boolean {
+  if (filters.channelId && hit.channel_id !== filters.channelId) {
+    return false;
+  }
+  if (filters.authorSet && !filters.authorSet.has(hit.pubkey.toLowerCase())) {
+    return false;
+  }
+  if (filters.since != null && hit.created_at < filters.since) {
+    return false;
+  }
+  if (filters.until != null && hit.created_at > filters.until) {
+    return false;
+  }
+  if (!filters.query) {
+    return true;
+  }
+  return (
+    hit.content.toLowerCase().includes(filters.query) ||
+    (hit.channel_name?.toLowerCase().includes(filters.query) ?? false)
+  );
+}
+
 async function handleSearchMessages(
   args: {
     q: string;
     limit?: number;
+    channelId?: string;
+    authors?: string[];
+    since?: number;
+    until?: number;
   },
   config: E2eConfig | undefined,
 ): Promise<RawSearchResponse> {
@@ -8086,17 +8136,20 @@ async function handleSearchMessages(
       }
     }
 
-    const hits = mockHits
-      .filter((hit) => {
-        if (!query) {
-          return true;
-        }
+    const authorSet = args.authors?.length
+      ? new Set(args.authors.map((author) => author.toLowerCase()))
+      : null;
 
-        return (
-          hit.content.toLowerCase().includes(query) ||
-          (hit.channel_name?.toLowerCase().includes(query) ?? false)
-        );
-      })
+    const hits = mockHits
+      .filter((hit) =>
+        mockSearchHitMatches(hit, {
+          query,
+          channelId: args.channelId,
+          authorSet,
+          since: args.since,
+          until: args.until,
+        }),
+      )
       .slice(0, limit);
 
     return {
@@ -8105,11 +8158,26 @@ async function handleSearchMessages(
     };
   }
 
-  // NIP-50 search via POST /query
+  // NIP-50 search via POST /query — forward operator pushdown fields.
   const limit = args.limit ?? 20;
-  const events = await relayQuery(config, [
-    { kinds: [9, 40002], search: args.q, limit },
-  ]);
+  const filter: Record<string, unknown> = {
+    kinds: [9, 40002, 45001, 45003],
+    search: args.q,
+    limit,
+  };
+  if (args.channelId) {
+    filter["#h"] = [args.channelId];
+  }
+  if (args.authors?.length) {
+    filter.authors = args.authors;
+  }
+  if (args.since != null) {
+    filter.since = args.since;
+  }
+  if (args.until != null) {
+    filter.until = args.until;
+  }
+  const events = await relayQuery(config, [filter]);
   const hits = events.map((ev) => ({
     event_id: ev.id ?? "",
     pubkey: ev.pubkey ?? "",
