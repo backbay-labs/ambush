@@ -346,7 +346,10 @@ const overrides = new Map([
   // entries.push block collapsed into the helper.
   // +6: legacy Goose Windows install dir (%USERPROFILE%\goose) probed in
   // common_binary_paths so pre-#2680 standalone installs are discoverable.
-  ["src-tauri/src/managed_agents/discovery.rs", 1841],
+  // +19: codex-acp minimum-version gate — MIN_CODEX_ACP_VERSION plus the strict
+  // three-component parse in probe_codex_acp_version, so an outdated 1.x adapter
+  // is offered a reinstall instead of classifying as Available on major alone.
+  ["src-tauri/src/managed_agents/discovery.rs", 1860],
   // BYOH — save_custom_harness_to_dir (backup-swap atomic write) + save_and_warm /
   // delete_and_warm (persist-mutex serialization for concurrent-safe registry
   // refresh, B-6). Also: id/collision/load/registry tests (from the file base) +
@@ -391,7 +394,11 @@ const overrides = new Map([
   // Available both-present AND adapter-present/CLI-absent — the selectability
   // regression guard), bound to an injectable resolver so the tests stay
   // PATH-independent.
-  ["src-tauri/src/managed_agents/discovery/tests.rs", 1871],
+  // +51: codex-acp minimum-version gate — probe_codex_acp_version assertions carry
+  // the full (major, minor, patch) triple instead of a bare major, plus
+  // below-the-floor and uncomparable-version (partial / prerelease) classification
+  // regressions for the fail-closed parse.
+  ["src-tauri/src/managed_agents/discovery/tests.rs", 1922],
   // identity-import-keyring: the identity resolution state machine's behavioral
   // matrix (46 tests over FakeIdentityStore — probe × marker × file cells,
   // adoption / read-back-corruption / marker-failure arms, recovery-mode
@@ -633,7 +640,9 @@ const overrides = new Map([
   // with backoff, output truncation) extracted to agent_discovery/install_exec.rs
   // alongside its tests, matching the managed_node.rs / post_install_verification.rs
   // split. The entries above describe the file's history, not its current shape.
-  ["src-tauri/src/commands/agent_discovery.rs", 1808],
+  // +27: codex-acp minimum-version gate — test_plan_adapter_install_updates_older_
+  // 1x_codex_binary pins that a 1.x adapter below the floor still plans a reinstall.
+  ["src-tauri/src/commands/agent_discovery.rs", 1835],
   // draft-persistence predicate: submit-time `loadDraft` check + inline comment
   // + deps-array entry in submitMessage closes the never-persisted-boundary
   // defect (Thufir Pass-3 finding). Load-bearing correctness fix; queued to
