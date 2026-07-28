@@ -29,6 +29,10 @@ class _MessageBubble extends ConsumerWidget {
         ref.watch(userCacheProvider.select((cache) => cache[pk])) ??
         ref.read(userCacheProvider.notifier).get(pk);
     final displayName = profile?.label ?? shortPubkey(message.pubkey);
+    final canManageMessage =
+        currentPubkey?.toLowerCase() == pk ||
+        (profile?.ownerPubkey != null &&
+            profile?.ownerPubkey == currentPubkey?.toLowerCase());
 
     // Build mention names map from event p-tags.
     final userCache = ref.watch(userCacheProvider);
@@ -55,10 +59,7 @@ class _MessageBubble extends ConsumerWidget {
         ref: ref,
         message: message,
         channelId: currentChannelId,
-        canManageMessage:
-            currentPubkey?.toLowerCase() == pk ||
-            (profile?.ownerPubkey != null &&
-                profile?.ownerPubkey == currentPubkey?.toLowerCase()),
+        canManageMessage: canManageMessage,
         allMessages: allMessages,
         currentPubkey: currentPubkey,
         isMember: isMember,
@@ -124,6 +125,38 @@ class _MessageBubble extends ConsumerWidget {
                       baseStyle: context.textTheme.bodyLarge?.copyWith(
                         color: context.colors.onSurface,
                       ),
+                      mediaCarouselTrailingOverflow: Grid.gutter,
+                      onMediaReply: allMessages == null
+                          ? null
+                          : () {
+                              if (!context.mounted) return;
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => ThreadDetailPage(
+                                    threadHead: message,
+                                    allMessages: allMessages!,
+                                    channelId: currentChannelId,
+                                    currentPubkey: currentPubkey,
+                                    isMember: isMember,
+                                    isArchived: isArchived,
+                                  ),
+                                ),
+                              );
+                            },
+                      onMediaMore: (viewerContext, imageUrl) =>
+                          showImageActions(
+                            context: viewerContext,
+                            ref: ref,
+                            message: message,
+                            channelId: currentChannelId,
+                            imageUrl: imageUrl,
+                            canManageMessage: canManageMessage,
+                            onDeleted: () {
+                              if (viewerContext.mounted) {
+                                Navigator.of(viewerContext).maybePop();
+                              }
+                            },
+                          ),
                       onChannelTap: (channelId) {
                         openChannelLink(
                           context: context,

@@ -240,7 +240,8 @@ class _MessageList extends HookConsumerWidget {
 
               final showAuthor =
                   !message.isSystem &&
-                  (prevMessage == null ||
+                  (message.hasAttachments ||
+                      prevMessage == null ||
                       prevMessage.isSystem ||
                       showDayDivider ||
                       prevMessage.pubkey.toLowerCase() !=

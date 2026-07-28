@@ -221,6 +221,7 @@ class ThreadDetailPage extends HookConsumerWidget {
                   reply.createdAt,
                 );
                 final showAuthor =
+                    reply.hasAttachments ||
                     prevReply == null ||
                     showDayDivider ||
                     prevReply.pubkey.toLowerCase() !=
@@ -455,6 +456,10 @@ class _ThreadMessage extends ConsumerWidget {
         ref.watch(userCacheProvider.select((cache) => cache[pk])) ??
         ref.read(userCacheProvider.notifier).get(pk);
     final displayName = profile?.label ?? shortPubkey(message.pubkey);
+    final canManageMessage =
+        currentPubkey?.toLowerCase() == pk ||
+        (profile?.ownerPubkey != null &&
+            profile?.ownerPubkey == currentPubkey?.toLowerCase());
 
     final userCache = ref.watch(userCacheProvider);
     final knownAgentPubkeys = ref.watch(mentionAgentPubkeysProvider(channelId));
@@ -478,10 +483,7 @@ class _ThreadMessage extends ConsumerWidget {
         ref: ref,
         message: message,
         channelId: channelId,
-        canManageMessage:
-            currentPubkey?.toLowerCase() == pk ||
-            (profile?.ownerPubkey != null &&
-                profile?.ownerPubkey == currentPubkey?.toLowerCase()),
+        canManageMessage: canManageMessage,
         allMessages: allMessages,
         currentPubkey: currentPubkey,
         isMember: isMember,
@@ -568,6 +570,38 @@ class _ThreadMessage extends ConsumerWidget {
                         baseStyle: context.textTheme.bodyLarge?.copyWith(
                           color: context.colors.onSurface,
                         ),
+                        mediaCarouselTrailingOverflow: Grid.gutter,
+                        onMediaReply: allMessages == null
+                            ? null
+                            : () {
+                                if (!context.mounted) return;
+                                Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => ThreadDetailPage(
+                                      threadHead: message,
+                                      allMessages: allMessages!,
+                                      channelId: channelId,
+                                      currentPubkey: currentPubkey,
+                                      isMember: isMember,
+                                      isArchived: isArchived,
+                                    ),
+                                  ),
+                                );
+                              },
+                        onMediaMore: (viewerContext, imageUrl) =>
+                            showImageActions(
+                              context: viewerContext,
+                              ref: ref,
+                              message: message,
+                              channelId: channelId,
+                              imageUrl: imageUrl,
+                              canManageMessage: canManageMessage,
+                              onDeleted: () {
+                                if (viewerContext.mounted) {
+                                  Navigator.of(viewerContext).maybePop();
+                                }
+                              },
+                            ),
                         onChannelTap: (targetChannelId) {
                           openChannelLink(
                             context: context,
