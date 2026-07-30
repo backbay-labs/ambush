@@ -143,6 +143,9 @@ export const MessageRow = React.memo(
     showDepthGuides?: boolean;
     videoReviewContext?: VideoReviewContext;
   }) {
+    // Keep the transient send state with its timestamp rather than collapsing
+    // it into a grouped message row with no header.
+    const isDisplayedAsContinuation = isContinuation && !message.pending;
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
@@ -443,7 +446,7 @@ export const MessageRow = React.memo(
       </div>
     );
 
-    const avatarGutterNode = isContinuation ? (
+    const avatarGutterNode = isDisplayedAsContinuation ? (
       continuationTimestampGutter
     ) : message.pubkey ? (
       <UserProfilePopover
@@ -515,7 +518,12 @@ export const MessageRow = React.memo(
       message.pending || message.edited ? (
         <>
           {message.pending ? (
-            <p className="font-medium text-primary/80">Sending</p>
+            <p
+              className="font-normal text-muted-foreground/70"
+              data-testid="message-send-status"
+            >
+              Sending…
+            </p>
           ) : null}
           {message.edited ? (
             <Tooltip>
@@ -536,13 +544,13 @@ export const MessageRow = React.memo(
     );
 
     const continuationMetadataNode =
-      isContinuation && statusMetadataNode ? (
+      isDisplayedAsContinuation && statusMetadataNode ? (
         <div className="mt-0.5 flex items-baseline gap-2 text-xs">
           {statusMetadataNode}
         </div>
       ) : null;
 
-    const headerNode = isContinuation ? null : (
+    const headerNode = isDisplayedAsContinuation ? null : (
       <MessageHeaderRow>
         {message.pubkey ? (
           <UserProfilePopover
@@ -570,7 +578,9 @@ export const MessageRow = React.memo(
         ) : null}
       </MessageHeaderRow>
     );
-    const bodyContainerClass = isContinuation ? "mt-0" : bodyOffsetClass;
+    const bodyContainerClass = isDisplayedAsContinuation
+      ? "mt-0"
+      : bodyOffsetClass;
 
     const messageBodyNode = (
       <>
@@ -788,7 +798,7 @@ export const MessageRow = React.memo(
                 ? "mx-1 px-2"
                 : "px-2",
             "flex gap-2.5",
-            isContinuation ? "items-center" : "items-start",
+            isDisplayedAsContinuation ? "items-center" : "items-start",
             hasActiveReminder ? "bg-blue-500/10" : "",
             highlighted
               ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-8"
