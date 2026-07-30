@@ -910,6 +910,41 @@ test("project overview reports aggregate work-item failures", async ({
   );
 });
 
+test("project overview does not paint a background behind its cards", async ({
+  page,
+}) => {
+  await enableProjectsFeature(page);
+  await installMockBridge(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("open-projects-view").click();
+
+  await expect(page.getByTestId("projects-overview-panel")).toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+
+  const stats = page.getByTestId("projects-overview-stat");
+  await expect(stats).toHaveCount(4);
+  for (let index = 0; index < 4; index += 1) {
+    await expect(stats.nth(index)).toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
+    await expect(stats.nth(index)).toHaveCSS("border-style", "solid");
+  }
+
+  const activityCards = page.getByTestId("projects-activity-card");
+  await expect(activityCards.first()).toBeVisible();
+  const activityCardCount = await activityCards.count();
+  for (let index = 0; index < activityCardCount; index += 1) {
+    await expect(activityCards.nth(index)).toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
+    await expect(activityCards.nth(index)).toHaveCSS("border-style", "solid");
+  }
+});
+
 test("project without a checkout offers fetch feedback and dropdown cloning", async ({
   page,
 }) => {
