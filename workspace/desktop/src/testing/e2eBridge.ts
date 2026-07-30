@@ -9873,6 +9873,12 @@ export function maybeInstallE2eTauriMocks() {
         }
         return;
       }
+      case "update_tray_agent_activity":
+      case "clear_tray_agent_activity":
+      case "requeue_tray_actions":
+        return null;
+      case "take_tray_actions":
+        return [];
       case "get_profile":
         return handleGetProfile(activeConfig);
       case "update_profile":
