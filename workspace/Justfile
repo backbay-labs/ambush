@@ -621,6 +621,11 @@ mobile-check:
 mobile-test:
     unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter test
 
+# Regenerate the emoji dataset asset from desktop's emoji-mart install.
+# Output is committed — rerun after bumping @emoji-mart/data.
+mobile-emoji-data:
+    node {{mobile_dir}}/scripts/generate-emoji-data.mjs
+
 # Compile an unsigned Android debug APK (worktree-aware debug identity)
 mobile-build-android:
     ./scripts/mobile-worktree-overrides.sh
