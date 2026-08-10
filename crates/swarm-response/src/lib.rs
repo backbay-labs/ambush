@@ -10,6 +10,7 @@ pub mod dispatch;
 pub mod http_edr;
 pub mod notification;
 pub mod resilience;
+pub mod rollback;
 pub mod siem;
 pub mod webhook;
 
@@ -28,6 +29,10 @@ pub use dispatch::DispatchingExecutor;
 pub use http_edr::HttpEdrAdapter;
 pub use notification::{NotificationError, NotificationReplayResult, NotificationRouter};
 pub use resilience::{CircuitBreakerState, ResilientExecutor};
+pub use rollback::{
+    ContainmentLedger, ContainmentLease, RollbackExecutor, RollbackReceipt, RollbackStepOutcome,
+    RollbackTrigger, SandboxRollbackExecutor,
+};
 pub use siem::{SiemFindingForwarder, SiemForwardAdapter, SwarmFindingEnvelope};
 pub use webhook::WebhookAdapter;
 
