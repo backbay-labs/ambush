@@ -58,11 +58,20 @@ struct CommitteeDescriptor<'a> {
     max_faulty: usize,
 }
 
+/// Largest `f` a committee of `committee_size` can tolerate under the `3f + 1`
+/// Byzantine model this module implements.
+///
+/// `ConsensusCommittee::new` derives `threshold = 2f + 1`, so `f` must satisfy
+/// `committee_size >= 3f + 1` for a round to remain committable after the
+/// maximum tolerable number of members are excluded by `exclude_sender`.
+/// Deriving `f` from a simple majority instead drives `threshold` up to (or
+/// past) the committee size, which makes every round require unanimity and lets
+/// a single exclusion strand it below its own threshold permanently.
 pub fn recommended_max_faulty(committee_size: usize) -> usize {
     if committee_size <= 1 {
         0
     } else {
-        (committee_size - 1) / 2
+        (committee_size - 1) / 3
     }
 }
 
@@ -1854,5 +1863,50 @@ mod tests {
             second.exclusions[0].payload.message_kind,
             super::SignedMessageKind::Precommit
         );
+    }
+
+    #[test]
+    fn recommended_max_faulty_follows_three_f_plus_one() {
+        // A committee of n tolerates f faults only when n >= 3f + 1. Deriving f
+        // from a simple majority instead pushes threshold = 2f + 1 up to or past
+        // n, which makes rounds require unanimity.
+        for (committee_size, expected_f) in [(1, 0), (2, 0), (4, 1), (7, 2), (10, 3), (13, 4)] {
+            assert_eq!(
+                super::recommended_max_faulty(committee_size),
+                expected_f,
+                "committee of {committee_size} should tolerate {expected_f} faults"
+            );
+        }
+    }
+
+    #[test]
+    fn threshold_survives_excluding_the_maximum_tolerable_faulty_members() {
+        // Regression guard for the liveness defect: threshold is fixed at
+        // construction and never shrinks when exclude_sender ejects a member, so
+        // a mis-sized committee can be stranded below its own threshold forever.
+        for committee_size in [4usize, 7, 10, 13] {
+            let max_faulty = super::recommended_max_faulty(committee_size);
+            let threshold = max_faulty * 2 + 1;
+            let honest_remaining = committee_size - max_faulty;
+            assert!(
+                honest_remaining >= threshold,
+                "committee of {committee_size} (f={max_faulty}, threshold={threshold}) strands \
+                 itself: only {honest_remaining} members remain after excluding f"
+            );
+        }
+    }
+
+    #[test]
+    fn committee_construction_accepts_three_f_plus_one_sizing() {
+        for committee_size in [4usize, 7, 10] {
+            let members: Vec<_> = (0..committee_size)
+                .map(|i| member(i as u8 + 1).agent_id)
+                .collect();
+            let max_faulty = super::recommended_max_faulty(committee_size);
+            let committee = ConsensusCommittee::new(members, max_faulty)
+                .expect("3f+1 sizing must satisfy the 2f+1 threshold check");
+            assert_eq!(committee.threshold(), max_faulty * 2 + 1);
+            assert!(committee.threshold() <= committee_size - max_faulty);
+        }
     }
 }
