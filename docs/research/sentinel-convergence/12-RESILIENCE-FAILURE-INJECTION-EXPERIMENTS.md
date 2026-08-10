@@ -4,7 +4,7 @@ series: Sentinel Convergence (supplemental)
 version: "0.1"
 date: 2026-04-07
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 prerequisite: "08-RESILIENCE-PATTERNS-FOR-DISTRIBUTED-AGENTS.md"
 ---
 

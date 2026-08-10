@@ -4,7 +4,7 @@ series: Swarm Hardening (3 of 8)
 version: "0.3"
 date: 2026-04-08
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # 03 -- Threat Intelligence Lifecycle and Enrichment
@@ -46,7 +46,7 @@ authors: Swarm Team Six Research
 ## 1. Abstract
 
 Threat intelligence is the connective tissue between external knowledge about
-adversary infrastructure and internal detection logic. Swarm Team Six already
+adversary infrastructure and internal detection logic. Ambush already
 implements a foundational threat-intel cache with TTL-based garbage collection,
 query-time enrichment of detection findings, and operator-facing HTTP APIs for
 IOC management. This document analyzes that implementation in depth, identifies
@@ -74,9 +74,9 @@ through the shared substrate.
 
 ## 2. Current State Analysis
 
-### 2.1 What STS Already Implements
+### 2.1 What Ambush Already Implements
 
-The Swarm Team Six codebase contains a working, tested threat-intel subsystem
+The Ambush codebase contains a working, tested threat-intel subsystem
 distributed across three crates. A precise inventory follows.
 
 **Core types** (`crates/swarm-core/src/pheromone.rs`):
@@ -1148,7 +1148,7 @@ Performance considerations:
   the parsing of individual STIX objects within a bundle.
 - **Schema validation**: Validate lazily. Parse the minimum fields needed
   for IOC extraction (`type`, `pattern`, `confidence`, `valid_from`,
-  `valid_until`); ignore unknown fields. Note: while internal STS types
+  `valid_until`); ignore unknown fields. Note: while internal Ambush types
   like `NetworkConnectProfile` use `#[serde(deny_unknown_fields)]` for
   strict config validation, STIX parsing structs should use
   `#[serde(default)]` and allow unknown fields for resilience against
@@ -1385,7 +1385,7 @@ L1 hot cache. Add provenance tracking and multi-source corroboration.
 - **Graph-based correlation**: IOC relationship graph enabling indirect
   correlation discovery (IP hosts domain, domain delivers malware).
 - **Federated sharing**: TAXII server mode for cooperative defense between
-  STS deployments.
+  Ambush deployments.
 - **ML-based decay**: Learned decay curves replacing fixed half-lives, based
   on historical true-positive rates per indicator type and source.
 - **Fuzzy matching**: ssdeep/TLSH for polymorphic file hash variants;

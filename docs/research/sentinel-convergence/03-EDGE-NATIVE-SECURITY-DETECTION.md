@@ -1,4 +1,4 @@
-# Edge-Native Security Detection: Converging Sentinel's Edge Patterns with Swarm Team Six
+# Edge-Native Security Detection: Converging Sentinel's Edge Patterns with Ambush
 
 ## Document Metadata
 
@@ -25,7 +25,7 @@
 1. [Executive Summary](#1-executive-summary)
 2. [The Edge Computing Security Gap](#2-the-edge-computing-security-gap)
 3. [Sentinel's Edge-Native Design Patterns](#3-sentinels-edge-native-design-patterns)
-4. [Swarm Team Six Architecture Recap](#4-swarm-team-six-architecture-recap)
+4. [Ambush Architecture Recap](#4-swarm-team-six-architecture-recap)
 5. [Resource Profiling: Detection Pipeline on Edge Hardware](#5-resource-profiling-detection-pipeline-on-edge-hardware)
 6. [Tiered Detection Architecture](#6-tiered-detection-architecture)
 7. [Compilation Strategies for Edge Targets](#7-compilation-strategies-for-edge-targets)
@@ -60,13 +60,13 @@ different angles:
   prediction model is analyzed in
   [02 -- Predictive Failure as Threat Signal](02-PREDICTIVE-FAILURE-AS-THREAT-SIGNAL.md).)
 
-- **Swarm Team Six** (`standalone/swarm-team-six`): A Rust-based security
+- **Ambush** (`standalone/swarm-team-six`): A Rust-based security
   detection engine built around stigmergic coordination (pheromone substrate),
   Ed25519-signed audit trails, and a multi-agent detection architecture. It
   currently targets server-class deployments with a tokio async runtime, NATS
   JetStream durability, and a rich operator surface.
 
-The research question is: **How should Swarm Team Six extend its detection
+The research question is: **How should Ambush extend its detection
 pipeline to edge environments, and what design patterns from Sentinel are
 directly transferable?**
 
@@ -191,7 +191,7 @@ tables and DWARF debug information for smaller production images. The result
 is a fully static binary that runs on any Linux kernel regardless of
 userspace distribution.
 
-**Lesson for STS:** Rust's default static linking with musl already achieves
+**Lesson for Ambush:** Rust's default static linking with musl already achieves
 this. The `swarm-edge` binary should target `x86_64-unknown-linux-musl` and
 `aarch64-unknown-linux-musl` to produce equivalent zero-dependency binaries.
 
@@ -236,7 +236,7 @@ This approach has three advantages over using a metrics library like
 3. **Testability.** The `WithProcPath` and `WithSysPath` options allow
    injecting fake filesystems in tests without requiring root or containers.
 
-**Lesson for STS:** The `swarm-runtime` crate currently depends on the
+**Lesson for Ambush:** The `swarm-runtime` crate currently depends on the
 `sysinfo` crate (see workspace `Cargo.toml`), which is convenient for
 server deployments but pulls in a large dependency tree and allocates
 extensively. The `swarm-edge` binary should instead read security-relevant
@@ -338,7 +338,7 @@ designed for 3-10 node edge clusters. Key characteristics:
 
 The consensus protocol enables edge nodes to make coordinated decisions
 (e.g., cordon a failing node and evict its pods) even when the Kubernetes
-control plane is unreachable. This is directly analogous to STS's
+control plane is unreachable. This is directly analogous to Ambush's
 `swarm-consensus` crate, but optimized for the tighter latency and memory
 budget of edge environments. For a detailed comparison of the two consensus
 models, see
@@ -363,7 +363,7 @@ breaker prevents the agent from spending CPU and network bandwidth on
 futile API calls. After the timeout elapses, a single probe request tests
 whether connectivity has been restored.
 
-**Lesson for STS:** The `swarm-edge` binary must include a circuit breaker
+**Lesson for Ambush:** The `swarm-edge` binary must include a circuit breaker
 for all upstream communication -- NATS, SIEM forwarding, operator surface.
 When the circuit is open, the edge binary operates in fully autonomous mode
 with local-only detection and buffered findings. This pattern is explored
@@ -372,12 +372,12 @@ further in
 
 ---
 
-## 4. Swarm Team Six Architecture Recap
+## 4. Ambush Architecture Recap
 
-Before designing the edge variant, we must understand what STS looks like
+Before designing the edge variant, we must understand what Ambush looks like
 today and which components are load-bearing versus optional. (See
 [05 -- Telemetry Bridge Architecture](05-TELEMETRY-BRIDGE-ARCHITECTURE.md)
-for the complementary question of how Sentinel telemetry flows *into* STS.)
+for the complementary question of how Sentinel telemetry flows *into* Ambush.)
 
 ### 4.1 Current Crate Structure
 
@@ -547,7 +547,7 @@ After UPX compression             |    ~1.5 MB
 ### 6.1 Architectural Overview
 
 The core insight is that detection fidelity should scale with available
-resources. A server with 32GB RAM can run the full STS runtime with
+resources. A server with 32GB RAM can run the full Ambush runtime with
 JetStream substrate, investigation agents, and the operator surface. A
 Raspberry Pi with 1GB RAM needs only the fast-path Whisker detectors
 with local buffering.
@@ -1173,7 +1173,7 @@ detection:
   offlineBufferSize: 10000
 
 upstream:
-  # How findings reach the full STS runtime
+  # How findings reach the full Ambush runtime
   mode: http   # "http", "nats", or "none"
   endpoint: "https://swarm-runtime.internal:8443/api/v1/findings"
   # Batch size for HTTP uploads
@@ -1759,7 +1759,7 @@ Tasks:
 | `deploy/docker/Dockerfile.predictor` | Multi-stage Docker build | Static binary, non-root user |
 | `Makefile` | Cross-compilation targets | `CGO_ENABLED=0`, multi-arch build |
 
-### Swarm Team Six Files Referenced
+### Ambush Files Referenced
 
 | File | Purpose | Relevance |
 |---|---|---|
@@ -1785,12 +1785,12 @@ Tasks:
 
 This document is part of the **Sentinel Convergence** research series (8
 documents). Each explores a different axis of convergence between Sentinel
-(`playground/sentinel`) and Swarm Team Six (`standalone/swarm-team-six`).
+(`playground/sentinel`) and Ambush (`standalone/swarm-team-six`).
 
 | # | Document | Relevance to This Document |
 |---|----------|---------------------------|
-| 01 | [Distributed Consensus for Agent Swarms](01-DISTRIBUTED-CONSENSUS-FOR-AGENT-SWARMS.md) | Compares Sentinel's Raft-lite with STS BFT consensus -- directly informs the edge consensus trade-offs in Section 3.5. |
-| 02 | [Predictive Failure as Threat Signal](02-PREDICTIVE-FAILURE-AS-THREAT-SIGNAL.md) | Maps Sentinel's statistical predictor to STS threat detection; the predictor's memory-bounded design (Section 3.4) is central to that analysis. |
+| 01 | [Distributed Consensus for Agent Swarms](01-DISTRIBUTED-CONSENSUS-FOR-AGENT-SWARMS.md) | Compares Sentinel's Raft-lite with Ambush BFT consensus -- directly informs the edge consensus trade-offs in Section 3.5. |
+| 02 | [Predictive Failure as Threat Signal](02-PREDICTIVE-FAILURE-AS-THREAT-SIGNAL.md) | Maps Sentinel's statistical predictor to Ambush threat detection; the predictor's memory-bounded design (Section 3.4) is central to that analysis. |
 | 03 | **Edge-Native Security Detection** (this document) | -- |
 | 04 | [Autonomous Response Under Partition](04-AUTONOMOUS-RESPONSE-UNDER-PARTITION.md) | Extends the offline-mode and circuit-breaker patterns from Sections 3.6 and 10 into a full partition-tolerant response framework. |
 | 05 | [Telemetry Bridge Architecture](05-TELEMETRY-BRIDGE-ARCHITECTURE.md) | Designs the `swarm-ingest-sentinel` bridge; the `/proc` collection patterns from Section 3.2 feed into the bridge's input contract. |

@@ -4,13 +4,13 @@ series: Sentinel Convergence (5 of 8)
 version: "0.2"
 date: 2026-04-07
 status: Draft
-authors: Swarm Team Six / AQ Stack
+authors: Ambush / AQ Stack
 ---
 
 # 05 -- Telemetry Bridge Architecture: Sentinel Convergence
 
 > Designing `swarm-ingest-sentinel` -- the bridge crate that fuses Sentinel
-> infrastructure health telemetry into the Swarm Team Six detection pipeline.
+> infrastructure health telemetry into the Ambush detection pipeline.
 
 > **Series Note**
 > - This is the canonical proposed schema document for Sentinel-derived
@@ -26,7 +26,7 @@ authors: Swarm Team Six / AQ Stack
 
 1. [Survey of Telemetry Collection Approaches](#1-survey-of-telemetry-collection-approaches)
 2. [Deep Analysis: Sentinel Collector](#2-deep-analysis-sentinel-collector)
-3. [Deep Analysis: Swarm Team Six Ingest Bridges](#3-deep-analysis-swarm-team-six-ingest-bridges)
+3. [Deep Analysis: Ambush Ingest Bridges](#3-deep-analysis-swarm-team-six-ingest-bridges)
 4. [Designing `swarm-ingest-sentinel`](#4-designing-swarm-ingest-sentinel)
 5. [Multi-Source Telemetry Correlation](#5-multi-source-telemetry-correlation)
 6. [Backpressure and Flow Control](#6-backpressure-and-flow-control)
@@ -233,7 +233,7 @@ This prediction data is critical for the swarm -- it provides forward-looking th
 
 ---
 
-## 3. Deep Analysis: Swarm Team Six Ingest Bridges
+## 3. Deep Analysis: Ambush Ingest Bridges
 
 ### 3.1 The TelemetryBridge Trait
 

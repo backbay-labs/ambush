@@ -9,7 +9,7 @@
 | **Date** | 2026-04-07 |
 | **Status** | Draft |
 | **Sentinel** | `playground/sentinel` -- Go, Raft-lite consensus for edge-cluster orchestration |
-| **Swarm Team Six** | `standalone/swarm-team-six` -- Rust, pheromone-based stigmergic threat hunting |
+| **Ambush** | `standalone/swarm-team-six` -- Rust, pheromone-based stigmergic threat hunting |
 
 > **Series Note**
 > - This document is conceptual background for the series.
@@ -23,7 +23,7 @@
 
 ## Abstract
 
-This document analyzes stigmergic coordination as implemented in Swarm Team Six's
+This document analyzes stigmergic coordination as implemented in Ambush's
 pheromone substrate and its complementary relationship with Sentinel's Raft-lite
 consensus protocol. We examine the biological foundations of stigmergy, formalize
 the mathematical models of pheromone decay and aggregation, analyze the Rust and
@@ -42,7 +42,7 @@ architecture that is both responsive and safe.
 
 1. [Biological Foundations of Stigmergy](#1-biological-foundations-of-stigmergy)
 2. [Mathematical Formalism](#2-mathematical-formalism)
-3. [Swarm Team Six: Pheromone Substrate Implementation](#3-swarm-team-six-pheromone-substrate-implementation)
+3. [Ambush: Pheromone Substrate Implementation](#3-swarm-team-six-pheromone-substrate-implementation)
 4. [Sentinel: Raft-Lite Consensus Implementation](#4-sentinel-raft-lite-consensus-implementation)
 5. [Direct vs. Indirect Coordination](#5-direct-vs-indirect-coordination)
 6. [Hybrid Coordination Model](#6-hybrid-coordination-model)
@@ -130,9 +130,9 @@ They identified four necessary properties:
 4. **Multiple interactions** -- sufficient agent count for statistical robustness
    (minimum viable swarm size)
 
-All four properties are present in Swarm Team Six's pheromone substrate:
+All four properties are present in Ambush's pheromone substrate:
 
-| Property | STS Implementation |
+| Property | Ambush Implementation |
 |---|---|
 | Positive feedback | Stalker-confirmed threats get reinforced deposits with higher confidence |
 | Negative feedback | Exponential decay with configurable half-life (default: 3600s) |
@@ -145,7 +145,7 @@ Craig Reynolds' 1987 "Boids" paper [6] demonstrated that complex flocking
 behavior emerges from three local rules: separation, alignment, and cohesion.
 Reynolds' model uses direct neighbor sensing rather than environmental
 modification, but shares the fundamental insight: global coordination from
-local rules. The mapping to STS is approximate: separation corresponds to
+local rules. The mapping to Ambush is approximate: separation corresponds to
 source diversity enforcement (agents must not cluster on redundant signals),
 alignment to swarm mode transitions (agents synchronize operational posture),
 and cohesion to pheromone concentration gradients attracting agents toward
@@ -157,7 +157,7 @@ active threat classes.
 
 ### 2.1 Exponential Decay Model
 
-Swarm Team Six implements pheromone decay using a half-life model isomorphic
+Ambush implements pheromone decay using a half-life model isomorphic
 to radioactive decay. For a single deposit with initial confidence `c_0`,
 deposited at time `t_0` with half-life `h`:
 
@@ -341,7 +341,7 @@ every ~35 minutes. This is a plausible sustained rate during an active incident.
 
 ---
 
-## 3. Swarm Team Six: Pheromone Substrate Implementation
+## 3. Ambush: Pheromone Substrate Implementation
 
 ### 3.1 Architecture Overview
 
@@ -472,7 +472,7 @@ requirement -- evaporated deposits already contribute nothing to concentration.
 
 Sentinel's Raft-lite protocol (implemented in
 `pkg/consensus/raft_lite.go`) is optimized for a fundamentally different
-problem than Swarm Team Six's pheromone substrate. Where pheromones provide
+problem than Ambush's pheromone substrate. Where pheromones provide
 probabilistic signal aggregation, Raft-lite provides deterministic agreement.
 
 The protocol is a simplified Raft [Ongaro & Ousterhout, 2014] tailored for
@@ -522,7 +522,7 @@ Stigmergy <-----> Blackboard <-----> Publish/Subscribe <-----> RPC/Consensus
 (indirect)                                                      (direct)
 ```
 
-| Property | Stigmergy (STS) | Consensus (Sentinel) |
+| Property | Stigmergy (Ambush) | Consensus (Sentinel) |
 |---|---|---|
 | Communication | Through shared environment | Direct peer-to-peer messages |
 | Coupling | None (agents unaware of each other) | Tight (nodes track peers, terms, votes) |
@@ -889,7 +889,7 @@ multi-agent coordination paradigms:
 | Single-point risk | Blackboard monitor | Auctioneer | Manager | Space server | None (distributed NATS) |
 | Overhead per signal | O(1) write | O(N) bids | O(N) bids | O(1) write | O(1) deposit |
 
-STS uses *both* pheromones and a blackboard: pheromones for continuous
+Ambush uses *both* pheromones and a blackboard: pheromones for continuous
 time-varying threat signals, and `swarm.blackboard.L{0-4}.{topic}` for
 discrete investigation findings. The pheromone substrate's key differentiator
 from all four paradigms is the temporal decay dimension -- signal relevance
@@ -903,19 +903,19 @@ where stale indicators must not drive current decisions.
 ### 12.1 Swarm-Based Intrusion Detection Systems
 
 **Digital Ants** [16]: Mobile agents depositing digital pheromones at anomalous
-nodes. Key findings relevant to STS: evaporation rate must match threat
+nodes. Key findings relevant to Ambush: evaporation rate must match threat
 dynamics, source diversity reduces false positives, and the system tolerates
-sensor failure. STS's per-deposit `decay_half_life` and
+sensor failure. Ambush's per-deposit `decay_half_life` and
 `min_sources_for_escalation` directly address these findings. Kephart's
 earlier work on biologically inspired computer immune systems [18] provides
 foundational concepts for autonomous agent-based defense.
 
 **AntNet** [17]: Stigmergic network routing that outperforms distance-vector
-under dynamic conditions. STS's NATS subject hierarchy serves an analogous
+under dynamic conditions. Ambush's NATS subject hierarchy serves an analogous
 function, routing agent attention via pheromone concentration.
 
 **BeeHive IDS** [20]: Honeybee-inspired IDS with forager and scout agents.
-STS's Whisker/Kitten division parallels forager/scout specialization.
+Ambush's Whisker/Kitten division parallels forager/scout specialization.
 
 ### 12.2 Consensus-Based Security Systems
 
@@ -983,7 +983,7 @@ T+14m Raft-Lite      Decision committed, receipt signed   Raft-Lite
 
 ### 13.4 Integration Points
 
-| Integration Point | STS Component | Sentinel Component | Protocol |
+| Integration Point | Ambush Component | Sentinel Component | Protocol |
 |---|---|---|---|
 | Response execution | Pouncer | ProposeDecision | Raft-Lite over TCP |
 | Partition awareness | Tom posture machine | PartitionCallback | Callback |
@@ -1020,7 +1020,7 @@ claims of novelty:
 
 ## 15. Conclusion
 
-The convergence of Swarm Team Six's pheromone-based stigmergic coordination
+The convergence of Ambush's pheromone-based stigmergic coordination
 with Sentinel's Raft-lite consensus produces a hybrid architecture that
 addresses the fundamental tension in autonomous security systems: the need
 for both speed (in detection) and safety (in response).
@@ -1118,4 +1118,4 @@ Related documents and their connection to stigmergic coordination:
 
 *This document is part of the Sentinel-Convergence research series examining
 the integration of Backbay's edge-cluster orchestration (Sentinel) with
-autonomous threat hunting (Swarm Team Six).*
+autonomous threat hunting (Ambush).*

@@ -4,7 +4,7 @@ series: Sentinel Convergence (2 of 8)
 version: "0.2"
 date: 2026-04-07
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # 02 -- Predictive Infrastructure Failure as a Threat Signal

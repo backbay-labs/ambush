@@ -1,6 +1,6 @@
 # Arc as Upstream Source
 
-Arc (`../arc/`) is a 26-crate economic trust infrastructure for governed AI agent actions. It overlaps with STS in crypto and audit primitives but serves a different domain (capability-based authorization and financial settlement vs. threat detection and live response).
+Arc (`../arc/`) is a 26-crate economic trust infrastructure for governed AI agent actions. It overlaps with Ambush in crypto and audit primitives but serves a different domain (capability-based authorization and financial settlement vs. threat detection and live response).
 
 ClawdStrike is the primary upstream for guards, crypto, and spine. Arc fills gaps where clawdstrike has no equivalent or where arc's implementation is more portable.
 
@@ -22,13 +22,13 @@ Target: extend `swarm-spine` receipt store with arc-style query interface.
 
 ### CI pipeline and quality infrastructure
 
-Arc has mature CI that STS lacks entirely:
+Arc has mature CI that Ambush lacks entirely:
 - `.github/workflows/ci.yml` — fmt, clippy, build, test, MSRV validation
 - `deny.toml` — license allowlist, unmaintained crate detection, security audit
 - Workspace layering guards — blocks transport deps (clap, axum, reqwest) in core domain crates
 - Clippy enforcement — `unwrap_used = "deny"`, `expect_used = "deny"` across all crates
 
-Target: model STS CI pipeline on arc's patterns. Add `deny.toml` and clippy lints to workspace.
+Target: model Ambush CI pipeline on arc's patterns. Add `deny.toml` and clippy lints to workspace.
 
 ### Capability/lease model (reference only)
 

@@ -4,12 +4,12 @@ series: Swarm Hardening (1 of 8)
 version: "0.3"
 date: 2026-04-08
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # 01 -- Adversarial Evasion and Detection Robustness
 
-## Analysis of the ClawdStrike Ambush Detection Surface
+## Analysis of the Ambush Detection Surface
 
 > Research document for the `swarm-whisker` crate detection hardening effort.
 > Source: `crates/swarm-whisker/src/`, `crates/swarm-pheromone/src/substrate.rs`,
@@ -27,7 +27,7 @@ authors: Swarm Team Six Research
 ## Table of Contents
 
 1. [Abstract](#1-abstract)
-2. [Threat Model: Adversary Capabilities Against STS](#2-threat-model-adversary-capabilities-against-sts)
+2. [Threat Model: Adversary Capabilities Against Ambush](#2-threat-model-adversary-capabilities-against-sts)
 3. [Living-off-the-Land Binary (LOLBin) Evasion](#3-living-off-the-land-binary-lolbin-evasion)
 4. [Timing-Based Evasion](#4-timing-based-evasion)
 5. [Detector Poisoning via the Pheromone Substrate](#5-detector-poisoning-via-the-pheromone-substrate)
@@ -49,7 +49,7 @@ authors: Swarm Team Six Research
 
 ## 1. Abstract
 
-ClawdStrike Ambush detects threats through eight pluggable detection strategies
+Ambush detects threats through eight pluggable detection strategies
 dispatched by a composite evaluator. Each strategy operates on single telemetry
 events, applying configurable heuristics with confidence thresholds (high: 0.90,
 medium: 0.70) and ATT&CK tactic tagging. Findings are deposited into a pheromone
@@ -72,7 +72,7 @@ and to produce an actionable roadmap for closing those gaps.
 
 ---
 
-## 2. Threat Model: Adversary Capabilities Against STS
+## 2. Threat Model: Adversary Capabilities Against Ambush
 
 ### 2.1 Adversary Tiers
 
@@ -100,7 +100,7 @@ the current detector suite provides.
 We assume the adversary:
 
 - **Knows the detection logic.** The detector code is deterministic Rust with
-  configurable profiles. An adversary who compromises a node with an STS agent
+  configurable profiles. An adversary who compromises a node with an Ambush agent
   can read the compiled binary and reconstruct all indicator lists, thresholds,
   and window sizes. Security through obscurity provides no defense.
 
@@ -124,7 +124,7 @@ We assume the adversary:
   boundaries) using `ed25519-dalek`. Without an agent's private key, the
   adversary cannot inject arbitrary deposits.
 
-- **Cannot modify the STS binary in memory undetected** (aspirational -- this
+- **Cannot modify the Ambush binary in memory undetected** (aspirational -- this
   requires self-protection mechanisms covered in doc 07).
 
 - **Cannot suppress all telemetry.** At least some telemetry sources (eBPF,
@@ -142,7 +142,7 @@ utilities that adversaries abuse to execute arbitrary code, download payloads,
 or bypass application whitelisting. Because they are OS-native, they carry valid
 signatures and execute from trusted paths.
 
-### 3.2 Current LOLBin Detection in STS
+### 3.2 Current LOLBin Detection in Ambush
 
 The `suspicious_scripting` detector maintains a configurable `lolbin_processes`
 list (default: `mshta`, `certutil`, `regsvr32`, `rundll32`, `cmstp`, `wscript`,
@@ -153,7 +153,7 @@ checks `certutil` and `rundll32` for signed-binary abuse.
 ### 3.3 Coverage Gaps
 
 **Gap 1: Missing LOLBins.** The LOLBAS project (lolbas-project.github.io)
-catalogs 150+ Windows LOLBins. STS covers 7. Notable omissions:
+catalogs 150+ Windows LOLBins. Ambush covers 7. Notable omissions:
 
 | LOLBin | Abuse Pattern | Risk |
 |--------|--------------|------|
@@ -941,7 +941,7 @@ operations. The following well-documented attack families are therefore
 **structurally undetectable** -- no amount of threshold tuning or indicator
 expansion can address them without adding new telemetry payload variants:
 
-| Technique | ATT&CK ID | Attack Description | Why STS Cannot Detect |
+| Technique | ATT&CK ID | Attack Description | Why Ambush Cannot Detect |
 |-----------|-----------|--------------------|-----------------------|
 | Process Hollowing | T1055.012 | Create a suspended process, unmap its image, write malicious code into its address space, resume execution. | No `MemoryOperation` payload. The `ProcessStart` event shows the original (legitimate) process name. The hollowed process inherits the parent-child relationship of the original. |
 | Reflective DLL Injection | T1620 / T1620.001 | Load a DLL entirely from memory using a custom loader, never touching disk. | No `ImageLoad` or `MemoryOperation` payload. `FilePersistence` events only fire on disk writes. |
@@ -1740,7 +1740,7 @@ better under high event rates.
 
 ### 16.2 Adversarial Machine Learning
 
-As STS moves toward behavioral baselines (doc 06), the detectors will
+As Ambush moves toward behavioral baselines (doc 06), the detectors will
 incorporate statistical models that learn normal patterns. These models are
 themselves vulnerable to adversarial machine learning:
 
@@ -1819,7 +1819,7 @@ documents:
 | **02 -- ATT&CK Coverage Analysis** | Maps current detector coverage against the full MITRE ATT&CK matrix. The evasion gaps identified here (Section 7) directly feed the coverage gap analysis in doc 02. Doc 02 Section 6 (Structural Detectability Gaps) provides the complementary coverage-perspective analysis of the telemetry blind spots discussed in Section 9 of this document. |
 | **05 -- Kill Chain Reconstruction and Graph Correlation** | The compound evasion chains in Section 8 demonstrate why single-event detection is insufficient. Doc 05 addresses cross-event correlation that would catch multi-stage attack chains even when individual steps evade detection. |
 | **06 -- Behavioral Baseline and Anomaly Detection** | Defines the baseline learning architecture recommended in R14. Behavioral baselines are the primary defense against mimicry attacks (Section 6) and LOLBin evasion (Section 3) where static indicators fail. |
-| **07 -- Secure Update and Self-Protection** | Covers sensor integrity (Section 16.3), telemetry attestation (R16), and runtime self-defense against Tier 3 adversaries (Section 2.1) who attempt to tamper with the STS agent itself. |
+| **07 -- Secure Update and Self-Protection** | Covers sensor integrity (Section 16.3), telemetry attestation (R16), and runtime self-defense against Tier 3 adversaries (Section 2.1) who attempt to tamper with the Ambush agent itself. |
 
 Related documents from the **Sentinel Convergence** series:
 

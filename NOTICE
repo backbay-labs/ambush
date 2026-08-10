@@ -1,0 +1,15 @@
+Ambush
+Copyright 2026 Backbay Labs
+
+This product is licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License in the LICENSE file at the root of this
+repository or at http://www.apache.org/licenses/LICENSE-2.0.
+
+This product includes third-party software components, each of which is governed
+by its own license. The licenses for those components apply to their respective
+portions of the software and are available with their corresponding source or
+package distributions.
+
+The `vendor/reference/` tree contains source copied from other Backbay Labs
+projects for adaptation and provenance. See docs/VENDOR-REFERENCES.md for the
+per-tree origin and commit record.

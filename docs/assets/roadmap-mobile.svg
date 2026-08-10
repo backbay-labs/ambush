@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 500" width="560" height="500" role="img" aria-label="Roadmap from September 2026 to April 2027: red swarm in-tree, machine-checked evolution, federated clowders, provenance-grade memory, rotating quorum, herd immunity, the detection commons, and ambush at fleet scale.">
+  <defs>
+    <linearGradient id="rm-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#070a09"/>
+      <stop offset="1" stop-color="#0d1512"/>
+    </linearGradient>
+    <linearGradient id="rm-line" gradientUnits="userSpaceOnUse" x1="64" y1="78" x2="64" y2="452">
+      <stop offset="0" stop-color="#4ade80" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#4ade80" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0.85"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="560" height="500" fill="url(#rm-bg)"/>
+
+  <text x="280" y="38" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="3.4" fill="#7f9c8d" fill-opacity="0.8">SEP 2026 THROUGH APR 2027</text>
+
+  <path d="M64 78 V452" stroke="url(#rm-line)" stroke-width="2"/>
+
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#e3eee8">
+    <circle cx="64" cy="78" r="5" fill="#4ade80"/>
+    <text x="96" y="74" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#4ade80">SEP 2026</text>
+    <text x="96" y="93">Red swarm in-tree</text>
+
+    <circle cx="64" cy="132" r="5" fill="#4ade80"/>
+    <text x="96" y="128" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#4ade80">OCT 2026</text>
+    <text x="96" y="147">Machine-checked evolution</text>
+
+    <circle cx="64" cy="186" r="5" fill="#4ade80"/>
+    <text x="96" y="182" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#4ade80">NOV 2026</text>
+    <text x="96" y="201">Federated clowders</text>
+
+    <circle cx="64" cy="240" r="5" fill="#4ade80"/>
+    <text x="96" y="236" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#4ade80">DEC 2026</text>
+    <text x="96" y="255">Provenance-grade memory</text>
+
+    <circle cx="64" cy="294" r="5" fill="#22d3ee"/>
+    <text x="96" y="290" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#22d3ee">JAN 2027</text>
+    <text x="96" y="309">Rotating quorum</text>
+
+    <circle cx="64" cy="348" r="5" fill="#22d3ee"/>
+    <text x="96" y="344" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#22d3ee">FEB 2027</text>
+    <text x="96" y="367">Herd immunity</text>
+
+    <circle cx="64" cy="400" r="5" fill="#22d3ee"/>
+    <text x="96" y="396" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#22d3ee">MAR 2027</text>
+    <text x="96" y="415">The detection commons</text>
+
+    <circle cx="64" cy="452" r="6.5" fill="#22d3ee"/>
+    <circle cx="64" cy="452" r="12" fill="none" stroke="#22d3ee" stroke-opacity="0.35" stroke-width="1.2"/>
+    <text x="96" y="448" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#22d3ee">APR 2027</text>
+    <text x="96" y="467" font-weight="700" fill="#eaf3ee">Ambush at fleet scale</text>
+  </g>
+</svg>

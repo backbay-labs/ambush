@@ -690,7 +690,7 @@ func (n *Node) GetUnreconciledDecisions() []Decision {
 ### 6.4 Convergence Summary
 
 Sentinel contributes live state comparison, health-gated recovery, and action-type
-dispatch. Swarm Team Six contributes signed envelope chains, lease lifecycle
+dispatch. Ambush contributes signed envelope chains, lease lifecycle
 recording, Merkle checkpoint proofs, policy replay, structured operator review,
 and rollback-with-audit. The merged approach wraps Sentinel's pragmatic
 reconciliation in swarm-spine's cryptographic infrastructure.

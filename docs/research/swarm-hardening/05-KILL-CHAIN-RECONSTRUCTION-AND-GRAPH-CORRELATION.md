@@ -4,14 +4,14 @@ series: Swarm Hardening (5 of 8)
 version: "0.3"
 date: 2026-04-08
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # Kill Chain Reconstruction and Graph-Based Correlation
 
 ## Extending Weaver Correlation from Time-Window Clustering to Attack-Graph DAGs
 
-> Research document for a proposed `swarm-graph` module within the STS critical
+> Research document for a proposed `swarm-graph` module within the Ambush critical
 > lane. Sources: `crates/swarm-runtime/src/correlation.rs`,
 > `crates/swarm-runtime/src/weaver_agent.rs`,
 > `crates/swarm-runtime/src/stalker_agent.rs`,
@@ -42,7 +42,7 @@ authors: Swarm Team Six Research
 
 ## 1. Abstract
 
-Swarm Team Six currently correlates detection findings using time-window
+Ambush currently correlates detection findings using time-window
 clustering with shared correlation keys. The `CorrelationEngine` in
 `crates/swarm-runtime/src/correlation.rs` assembles `CorrelatedIncident`
 records by comparing an investigation seed against recent candidates, checking
@@ -57,13 +57,13 @@ different hosts (lateral movement from host-1 to host-2) will be missed.
 This document proposes extending the correlation architecture with directed
 acyclic graph (DAG) representations of attack progression. We survey kill chain
 models (Lockheed Martin Cyber Kill Chain, MITRE ATT&CK, Diamond Model),
-formalize attack graph theory for STS, design temporal-causal correlation
+formalize attack graph theory for Ambush, design temporal-causal correlation
 algorithms, evaluate graph storage options, define graph-based severity
 scoring, and propose an integration path that feeds graph intelligence back
 into the pheromone substrate and PounceAgent response decisions.
 
 The goal is not to replace time-window correlation but to layer graph-based
-reasoning on top of it, enabling STS to answer questions that flat clustering
+reasoning on top of it, enabling Ambush to answer questions that flat clustering
 cannot: "What is the attacker trying to achieve?" and "What will they do next?"
 
 ---
@@ -186,7 +186,7 @@ completes before the next begins. This linearity is both its strength (easy
 to reason about) and its weakness (real attacks skip stages, revisit earlier
 stages, or run multiple chains in parallel).
 
-**Relevance to STS**: The `ThreatClass` enum already maps loosely to kill
+**Relevance to Ambush**: The `ThreatClass` enum already maps loosely to kill
 chain stages (`InitialAccess`, `Persistence`, `CommandAndControl`,
 `DataExfiltration`), but the mapping is not formalized and the correlation
 engine does not use `ThreatClass` ordering to infer progression.
@@ -198,10 +198,10 @@ each containing multiple techniques (the *how*). Unlike the Lockheed Martin
 model, ATT&CK does not impose strict linear ordering -- adversaries may use
 multiple techniques within a tactic and revisit tactics non-linearly.
 
-**Relevance to STS**: The `ThreatClass` enum maps to a subset of ATT&CK
+**Relevance to Ambush**: The `ThreatClass` enum maps to a subset of ATT&CK
 tactics:
 
-| STS ThreatClass        | ATT&CK Tactic         |
+| Ambush ThreatClass        | ATT&CK Tactic         |
 |------------------------|------------------------|
 | InitialAccess          | Initial Access (TA0001) |
 | Execution              | Execution (TA0002)     |
@@ -228,13 +228,13 @@ between events are captured through activity threads (temporal sequences of
 events by the same adversary) and activity-attack graphs (directed graphs
 connecting events through shared features).
 
-**Relevance to STS**: The Diamond Model's emphasis on entity relationships
+**Relevance to Ambush**: The Diamond Model's emphasis on entity relationships
 (adversary-uses-infrastructure, adversary-targets-victim) maps naturally to
 graph-based correlation. The current flat correlation key scheme captures two
 of the four Diamond features (infrastructure via `host:` keys, victim via
 `user:` keys) but lacks adversary and capability dimensions.
 
-### 3.4 Model Selection for STS
+### 3.4 Model Selection for Ambush
 
 We recommend adopting **ATT&CK tactics as the primary kill chain model** for
 graph-based correlation, for three reasons:
@@ -274,7 +274,7 @@ through node attributes, not graph topology.
 ### 4.2 Node Types
 
 We define five primary node types, each corresponding to extractable entities
-from STS telemetry:
+from Ambush telemetry:
 
 **TechniqueNode**: Represents an observed ATT&CK technique instance. Attributes
 include `threat_class: ThreatClass`, `strategy_id: String`, `confidence: f64`,
@@ -347,7 +347,7 @@ An attack graph should maintain these invariants:
 
 3. **Provenance**: Every node and edge must reference the source data that
    created it (finding ID, investigation ID, or analyst action). This enables
-   the audit trail required by STS's "fail closed on malformed requests"
+   the audit trail required by Ambush's "fail closed on malformed requests"
    convention.
 
 ---
@@ -361,7 +361,7 @@ Given a stream of `InvestigationBundle` records, each containing a
 timestamps, construct and maintain an attack graph that captures the causal
 structure of ongoing intrusions.
 
-The challenge is that causal relationships are rarely directly observed. STS
+The challenge is that causal relationships are rarely directly observed. Ambush
 telemetry provides:
 
 - Process start events with parent-child relationships (direct causation)
@@ -570,7 +570,7 @@ When a new `InvestigationBundle` arrives:
    changed meaningfully (new causal edge discovered, new kill chain stage
    reached).
 
-### 6.4 Mapping STS Telemetry Types to Graph Entities
+### 6.4 Mapping Ambush Telemetry Types to Graph Entities
 
 The `TelemetryPayload` enum in `swarm-core::telemetry` (re-exported by
 swarm-whisker) defines seven event types. Each maps to a specific entity
@@ -715,7 +715,7 @@ The attack graph storage must satisfy:
 5. **Serializable state**: The graph must be persistable for restart recovery,
    matching the `FileIncidentStore` and `FileInvestigationBundleStore` patterns
    in swarm-spine.
-6. **No external dependencies**: STS is a self-contained Rust binary. External
+6. **No external dependencies**: Ambush is a self-contained Rust binary. External
    graph databases (Neo4j, JanusGraph) violate the single-binary constraint.
 
 ### 7.2 Option A: In-Memory petgraph
@@ -772,7 +772,7 @@ petgraph for in-memory operations.
 ### 7.5 Recommendation
 
 **petgraph with file-backed persistence** (Option A) is the clear choice for
-the STS context:
+the Ambush context:
 
 1. It matches the project's "Rust-first, minimal dependencies" philosophy.
 2. The memory requirements are well within bounds for realistic workloads.
@@ -957,7 +957,7 @@ Operators need to answer these questions:
 
 ### 9.2 Information Density
 
-Graph visualizations fail when they show too much or too little. The STS
+Graph visualizations fail when they show too much or too little. The Ambush
 operator graph must balance:
 
 - **Node count**: Collapse redundant entity nodes. Show one `AssetNode` per
@@ -1317,7 +1317,7 @@ a configurable schedule:
 
 ### 11.7 Error Handling
 
-Following STS conventions, graph correlation errors are non-fatal: if graph
+Following Ambush conventions, graph correlation errors are non-fatal: if graph
 ingestion or analysis fails, the Weaver continues with time-window correlation
 alone. Errors are logged and exposed through metrics, not propagated to the
 agent tick loop. This ensures that an experimental graph feature cannot
@@ -1458,13 +1458,13 @@ incremental updates. However, some graph algorithms (connected components,
 longest path) are expensive to maintain incrementally. Should these be computed
 on-demand when an operator views an incident, or maintained continuously?
 
-**Q3: Cross-tenant graph isolation.** If STS is deployed in a multi-tenant
+**Q3: Cross-tenant graph isolation.** If Ambush is deployed in a multi-tenant
 context, attack graphs from different tenants must not leak. How should tenant
 isolation be enforced -- separate graph instances, or tenant-tagged nodes with
 access control on queries?
 
 **Q4: Machine learning integration.** Graph neural networks (GNNs) have shown
-promise in attack detection [9, 10]. Should STS reserve extension points for
+promise in attack detection [9, 10]. Should Ambush reserve extension points for
 GNN-based analysis, or is deterministic rule-based graph analysis sufficient
 for the current milestone?
 
@@ -1526,7 +1526,7 @@ FiveDirections (Windows). Each contains system call-level audit logs with
 ground-truth attack labels spanning multi-stage APT campaigns.
 
 **Evaluation plan**: Ingest CADETS and THEIA datasets through a telemetry
-adapter that maps their provenance records to STS `TelemetryPayload`
+adapter that maps their provenance records to Ambush `TelemetryPayload`
 variants. Run the graph correlator and measure:
 
 - **Kill chain reconstruction precision**: What fraction of edges in the
@@ -1537,7 +1537,7 @@ variants. Run the graph correlator and measure:
   what fraction correspond to actual lateral movement in the ground truth?
 
 The CADETS dataset is prioritized because its FreeBSD audit logs most
-closely resemble the Linux telemetry STS targets. THEIA provides
+closely resemble the Linux telemetry Ambush targets. THEIA provides
 complementary coverage with its information-flow tracking.
 
 #### 13.1.2 LANL Unified Host and Network Dataset
@@ -1569,14 +1569,14 @@ the scoring algorithms defined in Section 8:
 ### 13.3 Comparison Against Published Baselines
 
 HOLMES [8], UNICORN [9], SLEUTH [14], and ATLAS [13] have published
-evaluation results on the DARPA TC datasets. The STS graph correlator
+evaluation results on the DARPA TC datasets. The Ambush graph correlator
 should report results on the same datasets using the same metrics
 (precision, recall, F1 at the edge level) to establish whether the
 approach is competitive.
 
 Note that direct comparison is imperfect -- HOLMES and SLEUTH operate on
-raw audit logs, while STS operates on pre-filtered detection findings.
-STS trades recall at the audit-log level for lower computational cost
+raw audit logs, while Ambush operates on pre-filtered detection findings.
+Ambush trades recall at the audit-log level for lower computational cost
 and tighter integration with the pheromone substrate. The comparison
 establishes relative positioning, not strict superiority.
 

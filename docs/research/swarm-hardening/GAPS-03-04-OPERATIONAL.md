@@ -4,7 +4,7 @@ series: Swarm Hardening
 version: "0.1"
 date: 2026-04-08
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # Gap Analysis: Threat Intelligence Lifecycle (03) and Performance Characterization (04)

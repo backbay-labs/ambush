@@ -4,7 +4,7 @@ series: Swarm Hardening (4 of 8)
 version: "0.3"
 date: 2026-04-08
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # 04 -- Performance Characterization Under Load
@@ -18,7 +18,7 @@ authors: Swarm Team Six Research
 | Version        | 0.3                                                                       |
 | Date           | 2026-04-08                                                                |
 | Status         | Draft (reviewed)                                                                     |
-| Authors        | Swarm Team Six Research                                                   |
+| Authors        | Ambush Research                                                   |
 
 ---
 
@@ -46,7 +46,7 @@ authors: Swarm Team Six Research
 
 ## 1. Abstract
 
-ClawdStrike Ambush is a ~71K-line Rust-first autonomous detection and
+Ambush is a ~71K-line Rust-first autonomous detection and
 live-response engine built on a tokio async runtime. Its critical path --
 telemetry ingestion through detection, pheromone deposit, policy authorization,
 and response execution -- must sustain high event throughput with bounded tail
@@ -1394,7 +1394,7 @@ For context, published EDR/XDR performance claims:
 | Elastic Agent | 10K events/sec (documented) | 500MB-1GB RSS |
 | OSSEC/Wazuh | 1K-5K events/sec (community benchmarks) | 100-300MB RSS |
 
-Swarm Team Six's Rust-native implementation with no kernel driver and no
+Ambush's Rust-native implementation with no kernel driver and no
 managed runtime should achieve competitive throughput at significantly lower
 memory footprint.
 

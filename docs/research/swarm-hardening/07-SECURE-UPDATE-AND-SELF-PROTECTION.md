@@ -4,15 +4,15 @@ series: Swarm Hardening (7 of 8)
 version: "0.3"
 date: 2026-04-08
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # Secure Update and Self-Protection
 
-## Analysis of the ClawdStrike Ambush Self-Defense Surface
+## Analysis of the Ambush Self-Defense Surface
 
 > Research document for the self-protection, secure update, and runtime
-> integrity subsystems of the Swarm Team Six runtime.
+> integrity subsystems of the Ambush runtime.
 > Source: `crates/swarm-crypto/src/`, `crates/swarm-guard/src/`,
 > `crates/swarm-spine/src/`, `crates/swarm-runtime/src/http/`,
 > `rulesets/default.yaml`, `deny.toml`, `Cargo.toml`
@@ -61,12 +61,12 @@ authors: Swarm Team Six Research
 ## 1. Abstract
 
 A detection-and-response platform that cannot protect itself is a liability
-masquerading as an asset. If an adversary can tamper with the ClawdStrike Ambush
+masquerading as an asset. If an adversary can tamper with the Ambush
 binary, substitute a poisoned ruleset, patch the guard pipeline at runtime, or
 corrupt the audit chain, then every detection it produces and every response it
 authorizes is untrustworthy.
 
-This document analyzes the self-protection surface of the Swarm Team Six runtime
+This document analyzes the self-protection surface of the Ambush runtime
 across three broad categories:
 
 1. **Integrity at rest** -- binary attestation, configuration signing,

@@ -1,4 +1,4 @@
-# Swarm Team Six Disaster Recovery Runbook
+# Ambush Disaster Recovery Runbook
 
 > Operational recovery procedures for the supported `v1.53` production profile
 > and the hardened serve-mode runtime.  

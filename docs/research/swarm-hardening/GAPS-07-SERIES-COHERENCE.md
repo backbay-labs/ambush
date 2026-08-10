@@ -227,7 +227,7 @@ cross-references are needed.
 
 | Topic | Sentinel-Convergence Doc | Swarm-Hardening Need | Risk of Divergence |
 |-------|-------------------------|---------------------|--------------------|
-| Resilience patterns (circuit breaker, backoff, bulkhead) | SC-08 | SH should reference, not re-derive | Medium -- SC-08 covers both Sentinel and STS patterns but from a distributed perspective; SH needs the single-node lens |
+| Resilience patterns (circuit breaker, backoff, bulkhead) | SC-08 | SH should reference, not re-derive | Medium -- SC-08 covers both Sentinel and Ambush patterns but from a distributed perspective; SH needs the single-node lens |
 | Guard pipeline fail-closed semantics | SC-08 Section 13, SC-12 | SH should own this topic as the authoritative source | High -- SC-08 already describes guard panic recovery; SH must not contradict |
 | Audit chain integrity | SC-07 | SH should cover single-node audit integrity; SC-07 covers distributed reconciliation | Medium -- different scopes but shared crypto primitives (Ed25519, SHA-256, Merkle trees from swarm-spine) |
 | Partition-mode authority | SC-04, SC-11, SC-13 | SH does not need to cover partition behavior but must define the single-node trust assumptions that partition designs build on | Low |
@@ -301,7 +301,7 @@ Topics that fall between the two series and are not adequately covered by either
 | SH-05 | Process hardening: unsafe audit, release flags, allocator, panic strategy | P1 | Low effort, high signal for security posture |
 | SH-06 | Configuration integrity: tamper detection, signed config, runtime validation | P2 | Prevents silent policy weakening |
 | SH-07 | Continuity and recovery: RTO/RPO, audit backup, corruption detection, state snapshots | P2 | Extends DR-RUNBOOK into research-grade analysis |
-| SH-08 | Detection pipeline self-monitoring: integrity of the watcher itself | P2 | Addresses "who watches the watchmen" for STS |
+| SH-08 | Detection pipeline self-monitoring: integrity of the watcher itself | P2 | Addresses "who watches the watchmen" for Ambush |
 | SH-09 | Multi-instance trust bootstrap: key distribution for shared substrate | P3 | Bridge between single-node and Phase 6 governance |
 | SH-10 | Operator RBAC: role-based access, operator key management, privilege separation | P3 | Needed before multi-operator deployments |
 

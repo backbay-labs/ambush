@@ -4,7 +4,7 @@ series: Swarm Hardening (6 of 8)
 version: "0.3"
 date: 2026-04-08
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # 06 -- Behavioral Baseline and Anomaly Detection Approaches
@@ -52,7 +52,7 @@ authors: Swarm Team Six Research
 
 ## 1. Abstract
 
-Swarm Team Six currently deploys eight pattern-based detectors in the
+Ambush currently deploys eight pattern-based detectors in the
 `swarm-whisker` crate: `SuspiciousProcessTreeDetector`, `DnsExfiltrationDetector`,
 `LateralMovementDetector`, `NetworkConnectDetector`, `PersistenceDetector`,
 `SupplyChainDetector`, `SuspiciousScriptingDetector`, and
@@ -1855,7 +1855,7 @@ contracts.
 Baseline snapshots use a versioned binary envelope:
 
 ```
-[magic: 4 bytes = "STBS"]     // Swarm Team Six Baseline Snapshot
+[magic: 4 bytes = "STBS"]     // Ambush Baseline Snapshot
 [version: u16 LE]              // Schema version (currently 1)
 [flags: u16 LE]                // Reserved for future use
 [checksum: 32 bytes]           // BLAKE3 hash of the payload

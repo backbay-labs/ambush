@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 790" width="1200" height="790" role="img" aria-label="Swarm Team Six system map: telemetry bridges feed the Whisker detection lane, which deposits into the pheromone substrate; async, context, and evolution lanes read from the substrate; Tom authorizes destructive response, Pounce routes it through adapters, and every step is sealed into the receipt chain.">
+  <defs>
+    <linearGradient id="a-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#070a09"/>
+      <stop offset="1" stop-color="#0d1512"/>
+    </linearGradient>
+    <marker id="a-g" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#4ade80" fill-opacity="0.75"/>
+    </marker>
+    <marker id="a-a" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f59e0b" fill-opacity="0.8"/>
+    </marker>
+    <marker id="a-c" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#22d3ee" fill-opacity="0.75"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="790" fill="url(#a-bg)"/>
+
+  <g stroke="#4ade80" stroke-opacity="0.26" stroke-width="1">
+    <path d="M32 34 H44 M38 28 V40"/>
+    <path d="M1156 34 H1168 M1162 28 V40"/>
+    <path d="M32 756 H44 M38 750 V762"/>
+    <path d="M1156 756 H1168 M1162 750 V762"/>
+  </g>
+
+  <text x="600" y="40" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" letter-spacing="4.2" fill="#7f9c8d" fill-opacity="0.8">SYSTEM MAP</text>
+
+  <!-- telemetry sources -->
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <g>
+      <rect x="80" y="66" width="245" height="52" rx="8" fill="#0a1210" stroke="#1a2f27"/>
+      <text x="202" y="90" text-anchor="middle" font-size="13.5" font-weight="600" fill="#dbe9e1">Tetragon</text>
+      <text x="202" y="107" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#7f9c8d">eBPF gRPC stream</text>
+    </g>
+    <g>
+      <rect x="345" y="66" width="245" height="52" rx="8" fill="#0a1210" stroke="#1a2f27"/>
+      <text x="467" y="90" text-anchor="middle" font-size="13.5" font-weight="600" fill="#dbe9e1">CloudTrail</text>
+      <text x="467" y="107" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#7f9c8d">control-plane audit</text>
+    </g>
+    <g>
+      <rect x="610" y="66" width="245" height="52" rx="8" fill="#0a1210" stroke="#1a2f27"/>
+      <text x="732" y="90" text-anchor="middle" font-size="13.5" font-weight="600" fill="#dbe9e1">Sentinel</text>
+      <text x="732" y="107" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#7f9c8d">infrastructure scrape</text>
+    </g>
+    <g>
+      <rect x="875" y="66" width="245" height="52" rx="8" fill="#0a1210" stroke="#1a2f27"/>
+      <text x="997" y="90" text-anchor="middle" font-size="13.5" font-weight="600" fill="#dbe9e1">Generic JSON</text>
+      <text x="997" y="107" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#7f9c8d">declarative field mapping</text>
+    </g>
+  </g>
+
+  <g stroke="#4ade80" stroke-opacity="0.5" stroke-width="1.2" marker-end="url(#a-g)">
+    <path d="M202 118 V142"/>
+    <path d="M467 118 V142"/>
+    <path d="M732 118 V142"/>
+    <path d="M997 118 V142"/>
+  </g>
+
+  <!-- bridge registry -->
+  <rect x="80" y="146" width="1040" height="42" rx="8" fill="#0c1613" stroke="#1e3a2e"/>
+  <text x="600" y="173" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" letter-spacing="0.6" fill="#dbe9e1">Bridge runtime registry <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#7f9c8d">normalize &#183; validate &#183; backpressure</tspan></text>
+
+  <path d="M600 188 V212" stroke="#4ade80" stroke-opacity="0.5" stroke-width="1.2" marker-end="url(#a-g)"/>
+
+  <!-- whisker -->
+  <rect x="400" y="216" width="400" height="58" rx="8" fill="#0d1c17" stroke="#2c5a45" stroke-width="1.4"/>
+  <rect x="400" y="216" width="400" height="2.4" rx="1.2" fill="#4ade80"/>
+  <text x="600" y="242" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" letter-spacing="0.8" fill="#eaf3ee">Whisker</text>
+  <text x="600" y="261" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#8fb8a4">hot path &#183; 12 detector families &#183; p50 103 &#181;s</text>
+
+  <path d="M600 274 V298" stroke="#4ade80" stroke-opacity="0.5" stroke-width="1.2" marker-end="url(#a-g)"/>
+
+  <!-- pheromone substrate -->
+  <rect x="80" y="302" width="1040" height="64" rx="8" fill="#0f231c" stroke="#2c5a45"/>
+  <text x="112" y="329" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="0.6" fill="#eaf3ee">Pheromone substrate</text>
+  <text x="112" y="349" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#8fb8a4">deposit &#183; evaporate &#183; concentrate &#183; escalate</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">
+    <rect x="722" y="320" width="112" height="26" rx="13" fill="#0a1210" stroke="#26463a"/>
+    <text x="778" y="337" text-anchor="middle" fill="#9db3a8">in_memory</text>
+    <rect x="844" y="320" width="122" height="26" rx="13" fill="#0a1210" stroke="#26463a"/>
+    <text x="905" y="337" text-anchor="middle" fill="#9db3a8">local_journal</text>
+    <rect x="976" y="320" width="112" height="26" rx="13" fill="#0a1210" stroke="#26463a"/>
+    <text x="1032" y="337" text-anchor="middle" fill="#9db3a8">jetstream</text>
+  </g>
+
+  <g stroke="#4ade80" stroke-opacity="0.42" stroke-width="1.2" marker-end="url(#a-g)">
+    <path d="M240 366 V398"/>
+    <path d="M600 366 V398"/>
+    <path d="M960 366 V398"/>
+  </g>
+
+  <!-- lanes -->
+  <g>
+    <rect x="80" y="402" width="320" height="92" rx="8" fill="#0a1210" stroke="#1a2f27"/>
+    <text x="106" y="428" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="600" letter-spacing="2.6" fill="#6d8a7c">ASYNC LANE</text>
+    <text x="106" y="454" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#dbe9e1">Stalker <tspan fill="#7f9c8d" font-size="11.5">investigates leads</tspan></text>
+    <text x="106" y="477" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#dbe9e1">Weaver <tspan fill="#7f9c8d" font-size="11.5">correlates incidents</tspan></text>
+  </g>
+  <g>
+    <rect x="440" y="402" width="320" height="92" rx="8" fill="#0a1210" stroke="#1a2f27"/>
+    <text x="466" y="428" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="600" letter-spacing="2.6" fill="#6d8a7c">CONTEXT LANE</text>
+    <text x="466" y="454" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#dbe9e1">Sphinx <tspan fill="#7f9c8d" font-size="11.5">signed memory graph</tspan></text>
+    <text x="466" y="477" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#dbe9e1">Calico <tspan fill="#7f9c8d" font-size="11.5">decoys and tripwires</tspan></text>
+  </g>
+  <g>
+    <rect x="800" y="402" width="320" height="92" rx="8" fill="#0a1210" stroke="#1d3740"/>
+    <text x="826" y="428" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="600" letter-spacing="2.6" fill="#5c8894">EVOLUTION LANE</text>
+    <text x="826" y="454" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#dbe9e1">Kitten <tspan fill="#7f9c8d" font-size="11.5">mutate, validate, rank</tspan></text>
+    <text x="826" y="477" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#dbe9e1">Proof <tspan fill="#7f9c8d" font-size="11.5">canary and promotion</tspan></text>
+  </g>
+
+  <g stroke="#f59e0b" stroke-opacity="0.45" stroke-width="1.2" fill="none" marker-end="url(#a-a)">
+    <path d="M240 494 V516 H580 V534"/>
+    <path d="M600 494 V534"/>
+    <path d="M960 494 V516 H620 V534"/>
+  </g>
+
+  <!-- governance -->
+  <rect x="300" y="538" width="600" height="62" rx="8" fill="#191307" stroke="#5a4416" stroke-width="1.4"/>
+  <rect x="300" y="538" width="600" height="2.4" rx="1.2" fill="#f59e0b"/>
+  <text x="600" y="565" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" letter-spacing="0.8" fill="#f7ead2">Tom &#183; governance gate</text>
+  <text x="600" y="585" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#c99a45">policy &#183; quorum &#183; human approval &#183; partition lease</text>
+
+  <path d="M600 600 V626" stroke="#f59e0b" stroke-opacity="0.5" stroke-width="1.2" marker-end="url(#a-a)"/>
+
+  <!-- response -->
+  <rect x="300" y="630" width="600" height="76" rx="8" fill="#0a1210" stroke="#2c5a45"/>
+  <text x="600" y="656" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15.5" font-weight="700" fill="#eaf3ee">Pounce &#183; response router</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5">
+    <rect x="336" y="670" width="118" height="24" rx="12" fill="#0d1c17" stroke="#26463a"/>
+    <text x="395" y="686" text-anchor="middle" fill="#9db3a8">sandbox</text>
+    <rect x="466" y="670" width="118" height="24" rx="12" fill="#0d1c17" stroke="#26463a"/>
+    <text x="525" y="686" text-anchor="middle" fill="#9db3a8">http_edr</text>
+    <rect x="596" y="670" width="118" height="24" rx="12" fill="#0d1c17" stroke="#26463a"/>
+    <text x="655" y="686" text-anchor="middle" fill="#9db3a8">webhook</text>
+    <rect x="726" y="670" width="138" height="24" rx="12" fill="#0d1c17" stroke="#26463a"/>
+    <text x="795" y="686" text-anchor="middle" fill="#9db3a8">dead letter</text>
+  </g>
+
+  <path d="M600 706 V730" stroke="#22d3ee" stroke-opacity="0.5" stroke-width="1.2" marker-end="url(#a-c)"/>
+
+  <!-- receipts -->
+  <rect x="80" y="734" width="1040" height="48" rx="8" fill="#08191d" stroke="#1d3740"/>
+  <rect x="80" y="734" width="1040" height="2.4" rx="1.2" fill="#22d3ee"/>
+  <text x="600" y="754" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="600" fill="#d3ecf2">Receipt chain and audit spine</text>
+  <text x="600" y="772" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#63b9c9">swarm-spine &#183; swarm-crypto &#183; replay bundles &#183; evidence export</text>
+</svg>

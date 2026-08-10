@@ -22,7 +22,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/backbay-labs/swarm-team-six"
+repository = "https://github.com/backbay-labs/ambush"
 
 [workspace.dependencies]
 # Internal crates

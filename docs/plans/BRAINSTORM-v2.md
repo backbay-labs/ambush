@@ -1,4 +1,4 @@
-# Swarm Team Six: Brainstorm v2
+# Ambush: Brainstorm v2
 
 > Autonomous, self-evolving threat hunting swarm built on ClawdStrike + Cyntra + Hellcat
 
@@ -8,12 +8,12 @@
 
 Wave 2 research revealed that the foundation is far stronger than initially scoped. Three internal systems (ClawdStrike, Cyntra, Hellcat) already provide ~90% of the primitives needed. External research (DeerFlow, MiroFish, 2026 SOTA) validated architectural choices and added new patterns.
 
-**The big reframe**: STS is not a greenfield project. It's an **orchestration layer** that wires together:
+**The big reframe**: Ambush is not a greenfield project. It's an **orchestration layer** that wires together:
 - **ClawdStrike** = security enforcement, crypto, transport, formal verification
 - **Cyntra** = scheduling, dispatching, verification, memory, sentinels
 - **Hellcat** = the red swarm (autonomous red teaming kernel, 16 attack operators, OPSEC, learning)
 
-Hellcat is the breakthrough finding. **The co-evolutionary arms race already has one side built.** Hellcat IS the red swarm. STS is the blue swarm. They co-evolve against each other.
+Hellcat is the breakthrough finding. **The co-evolutionary arms race already has one side built.** Hellcat IS the red swarm. Ambush is the blue swarm. They co-evolve against each other.
 
 ---
 
@@ -60,7 +60,7 @@ Each kernel owns a distinct concern:
 | **Hellcat** | "How to attack" -- red team operators, evasion, OPSEC, proof gates | Python | ~70% as red swarm |
 | **ClawdStrike** | "Is it safe" -- policy enforcement, crypto, transport, formal proofs | Rust | ~90% direct |
 
-STS itself is thin glue: pheromone substrate, archetype routing, co-evolutionary fitness, and the blue swarm agent implementations.
+Ambush itself is thin glue: pheromone substrate, archetype routing, co-evolutionary fitness, and the blue swarm agent implementations.
 
 ---
 
@@ -69,7 +69,7 @@ STS itself is thin glue: pheromone substrate, archetype routing, co-evolutionary
 This was theoretical in v1. With Hellcat, it's implementable:
 
 ```
-BLUE SWARM (STS)                    RED SWARM (Hellcat)
+BLUE SWARM (Ambush)                    RED SWARM (Hellcat)
 ================                    ===================
 Whiskers detect anomalies    <--->  Operators probe targets
 Stalkers investigate leads   <--->  Evasion engine adapts
@@ -93,7 +93,7 @@ Tom governs                  <--->  StealthBudget constrains
 - Prompt genome evolution (Pareto selection, curriculum-based)
 - AttackPatternDB (cross-engagement technique outcome tracking)
 
-**What STS adds (the blue side):**
+**What Ambush adds (the blue side):**
 - Detection strategy evolution (mirroring Hellcat's prompt evolution)
 - Pheromone-based threat signal aggregation
 - Multi-agent consensus on response actions
@@ -146,7 +146,7 @@ Tom governs                  <--->  StealthBudget constrains
 
 ### From DeerFlow: Agent Construction
 
-**Ordered Middleware Pipeline.** DeerFlow's 14-middleware pattern for cross-cutting concerns. Proposed STS middleware:
+**Ordered Middleware Pipeline.** DeerFlow's 14-middleware pattern for cross-cutting concerns. Proposed Ambush middleware:
 
 ```
 1. IdentityVerification    (Ed25519 delegation token)
@@ -162,7 +162,7 @@ Tom governs                  <--->  StealthBudget constrains
 
 **Config-Driven Agent Assembly.** Hunt missions defined in YAML -- which archetypes participate, autonomy tiers, allowed tools, pheromone subscriptions, escalation rules. The swarm assembles from config, not code.
 
-**Harness, Not Framework.** STS is a complete threat hunting runtime you extend, not a library of primitives you assemble. Provides isolation, transport, verification, and coordination out of the box.
+**Harness, Not Framework.** Ambush is a complete threat hunting runtime you extend, not a library of primitives you assemble. Provides isolation, transport, verification, and coordination out of the box.
 
 **Harness/App Layer Separation.** `swarm-core` (reusable) never imports from `swarm-deployment` (environment-specific). Strict unidirectional dependency.
 
@@ -272,11 +272,10 @@ Validated by both devil's advocate analysis and external research:
 
 | Context | Name |
 |---------|------|
-| Internal codename | **Swarm Team Six** |
-| Product name | **ClawdStrike Ambush** |
+| Project name | **Ambush** |
 | Community name | **The Clowder** |
-| Crate prefix | `clawdstrike-swarm-*` |
-| CLI subcommand | `clawdstrike hunt swarm` |
+| Crate prefix | `swarm-*` |
+| CLI binary | `swarmctl` |
 | NATS subject prefix | `swarm.*` |
 
 Agent log format:

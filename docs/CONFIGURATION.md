@@ -1,4 +1,4 @@
-# Swarm Team Six: Configuration Reference
+# Ambush: Configuration Reference
 
 > Canonical runtime configuration surface, tuning parameters, and environment
 > variables.  
@@ -2290,7 +2290,7 @@ nats:
 
 ## Environment Variables
 
-Environment variables override YAML config for deployment flexibility. They are prefixed with `STS_` (Swarm Team Six).
+Environment variables override YAML config for deployment flexibility. They are prefixed with `STS_` (Ambush).
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|

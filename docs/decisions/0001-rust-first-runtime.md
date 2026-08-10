@@ -18,7 +18,7 @@ That architecture was too wide for the first proof point. The product goal is no
 
 ## Decision
 
-STS will adopt a Rust-first production runtime.
+Ambush will adopt a Rust-first production runtime.
 
 ### This means
 

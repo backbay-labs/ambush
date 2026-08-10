@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 620" width="560" height="620" role="img" aria-label="The three lanes of Swarm Team Six: Swarm detection, Governance, and Evolution, all resolving to one signed receipt chain.">
+  <defs>
+    <linearGradient id="pm-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#070a09"/>
+      <stop offset="1" stop-color="#0d1512"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="560" height="620" fill="url(#pm-bg)"/>
+
+  <text x="280" y="42" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="3.4" fill="#7f9c8d" fill-opacity="0.8">ONE SUBSTRATE, THREE LANES</text>
+
+  <g>
+    <rect x="40" y="70" width="480" height="140" rx="10" fill="#0c1613" stroke="#1e3a2e"/>
+    <rect x="40" y="70" width="480" height="2.5" rx="1.2" fill="#4ade80"/>
+    <text x="66" y="112" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2.4" fill="#eaf3ee">SWARM</text>
+    <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#9db3a8">
+      <text x="66" y="142">Twelve detector families</text>
+      <text x="66" y="166">Signed pheromone deposits</text>
+      <text x="66" y="190">Concentration and escalation</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="40" y="228" width="480" height="140" rx="10" fill="#0c1613" stroke="#3a3020"/>
+    <rect x="40" y="228" width="480" height="2.5" rx="1.2" fill="#f59e0b"/>
+    <text x="66" y="270" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2.4" fill="#eaf3ee">GOVERNANCE</text>
+    <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#9db3a8">
+      <text x="66" y="300">Deterministic policy gate</text>
+      <text x="66" y="324">Receipt-backed destructive action</text>
+      <text x="66" y="348">Quorum and partition contract</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="40" y="386" width="480" height="140" rx="10" fill="#0c1613" stroke="#1d3740"/>
+    <rect x="40" y="386" width="480" height="2.5" rx="1.2" fill="#22d3ee"/>
+    <text x="66" y="428" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2.4" fill="#eaf3ee">EVOLUTION</text>
+    <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#9db3a8">
+      <text x="66" y="458">Adversarial pressure</text>
+      <text x="66" y="482">Proof, canary, promotion</text>
+      <text x="66" y="506">Durable evidence per stage</text>
+    </g>
+  </g>
+
+  <path d="M280 526 V552" stroke="#4ade80" stroke-opacity="0.5" stroke-width="1.3" stroke-dasharray="3 4"/>
+
+  <rect x="40" y="552" width="480" height="48" rx="9" fill="#132a23" stroke="#26463a"/>
+  <text x="280" y="575" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="600" letter-spacing="1.8" fill="#cfe3d8">SIGNED RECEIPT CHAIN</text>
+  <text x="280" y="592" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" letter-spacing="0.8" fill="#7f9c8d">Ed25519 &#183; canonical JSON &#183; Merkle checkpoints</text>
+</svg>

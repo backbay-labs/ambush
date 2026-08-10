@@ -4,7 +4,7 @@ series: Swarm Hardening (2 of 8)
 version: "0.3"
 date: 2026-04-08
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # 02 -- MITRE ATT&CK Coverage Analysis
@@ -49,7 +49,7 @@ authors: Swarm Team Six Research
 
 ## 1. Abstract
 
-ClawdStrike Ambush currently ships eight detection strategy modules in the
+Ambush currently ships eight detection strategy modules in the
 `swarm-whisker` crate: `SuspiciousProcessTreeDetector`, `SuspiciousScriptingDetector`,
 `CredentialAccessDetector`, `DnsExfiltrationDetector`, `LateralMovementDetector`,
 `PersistenceDetector`, `SupplyChainDetector`, and `NetworkConnectDetector`, unified

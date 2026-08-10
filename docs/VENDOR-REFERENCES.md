@@ -1,6 +1,6 @@
 # Vendor References
 
-STS currently keeps a temporary local copy of selected upstream code in `vendor/reference/`.
+Ambush currently keeps a temporary local copy of selected upstream code in `vendor/reference/`.
 
 These copies exist for:
 
@@ -52,5 +52,5 @@ Used for scheduling, dispatcher, verifier, workcell, and memory concepts.
 ## Rules
 
 1. Do not import from `vendor/reference/` as a build dependency.
-2. If a concept is promoted into STS proper, rewrite it in local crates and local terminology.
+2. If a concept is promoted into Ambush proper, rewrite it in local crates and local terminology.
 3. Preserve provenance when lifting ideas or code into active crates.

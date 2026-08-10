@@ -4,12 +4,12 @@ series: Sentinel Convergence (8 of 8)
 version: "0.2"
 date: 2026-04-07
 status: Draft
-authors: Swarm Team Six Research
+authors: Ambush Research
 ---
 
 # 08 -- Resilience Patterns for Distributed Agent Systems
 
-> Cross-project analysis: Sentinel (Go, edge Kubernetes) and Swarm Team Six (Rust, EDR/detection).
+> Cross-project analysis: Sentinel (Go, edge Kubernetes) and Ambush (Rust, EDR/detection).
 > Audience: systems engineers building fault-tolerant autonomous agent pipelines.
 
 > **Series Note**
@@ -58,7 +58,7 @@ This document analyzes concrete implementations from two codebases:
   and three-tier health probes. Designed for small clusters (3--10 nodes) that must
   survive network partitions from the control plane.
 
-- **Swarm Team Six** (`standalone/swarm-team-six`): A Rust-first EDR runtime with a
+- **Ambush** (`standalone/swarm-team-six`): A Rust-first EDR runtime with a
   guard pipeline, deterministic policy gate, capability-scoped leases, resilient response
   adapters (retry + circuit breaker + dead-letter journal), and dual execution modes
   (`DryRun` vs `Enforced`). Designed to detect threats and optionally execute live response
@@ -132,7 +132,7 @@ maliciously.
 | Swarm | Tampered audit trail | Cryptographic envelope signing (`ed25519-dalek`); chain verification via `swarm-spine` |
 
 Byzantine tolerance is where the two systems diverge most sharply. Sentinel's Raft-lite
-tolerates crash faults only (requires simple majority). Swarm Team Six's consensus design
+tolerates crash faults only (requires simple majority). Ambush's consensus design
 (documented in `swarm-consensus/src/lib.rs`) targets full BFT with `2f+1` agreement out of
 `3f+1` voters, though the implementation is still in progress.
 
@@ -228,7 +228,7 @@ func (c *Client) GetNode(ctx context.Context) (*corev1.Node, error) {
 }
 ```
 
-### 3.3 Swarm Team Six Implementation (Rust)
+### 3.3 Ambush Implementation (Rust)
 
 Swarm's circuit breaker (`crates/swarm-response/src/resilience.rs`) is integrated into a
 `ResilientExecutor<E>` wrapper that decorates any `ResponseExecutor` with retry and
@@ -579,7 +579,7 @@ not sink the entire vessel.
 
 ### 7.2 Natural Bulkheads in Swarm Architecture
 
-Swarm Team Six implements structural bulkheads through crate boundaries:
+Ambush implements structural bulkheads through crate boundaries:
 
 ```
 Detection Bulkhead       Response Bulkhead       Audit Bulkhead
@@ -1158,7 +1158,7 @@ act" on uncertainty.
 
 ### 14.4 Implementation Priorities
 
-For Swarm Team Six, the following enhancements are ordered by impact:
+For Ambush, the following enhancements are ordered by impact:
 
 Items 1-4 below are compatible with the current single-node roadmap and do not
 depend on distributed consensus landing first.
@@ -1195,7 +1195,7 @@ depend on distributed consensus landing first.
 | `pkg/health/health.go` | `Checker`, `Check`, `CheckResult`, `LivenessHandler()`, `ReadinessHandler()`, `HealthHandler()`, `CollectorCheck`, `ConsensusCheck`, `PredictorCheck` |
 | `pkg/k8s/client.go` | `Client` (circuit breaker integration), `GetNode()`, `DrainNode()` |
 
-### Swarm Team Six Files
+### Ambush Files
 
 | File | Key Constructs |
 |------|----------------|

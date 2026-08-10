@@ -1,6 +1,5 @@
-# Swarm Team Six: Rust-First Roadmap
+# Ambush: Rust-First Roadmap
 
-> Product name: ClawdStrike Ambush  
 > Last updated: 2026-04-03
 
 This roadmap replaces the earlier Python-first swarm plan with a Rust-first implementation sequence centered on fast detection and safe live response.
@@ -43,7 +42,7 @@ This roadmap replaces the earlier Python-first swarm plan with a Rust-first impl
 
 ## Phase 2: Safe Live Response Slice
 
-**Goal:** prove that STS can take live action safely.
+**Goal:** prove that Ambush can take live action safely.
 
 ### Deliverables
 

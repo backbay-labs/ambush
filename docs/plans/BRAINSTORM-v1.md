@@ -1,4 +1,4 @@
-# Swarm Team Six: Brainstorm Synthesis
+# Ambush: Brainstorm Synthesis
 
 > Autonomous, self-evolving threat hunting swarm built on ClawdStrike
 
@@ -8,7 +8,7 @@
 
 Turn ClawdStrike's security enforcement engine *outward*. Instead of guarding agents, **deploy** agents. A swarm of specialized autonomous hunters that share threat intelligence through cryptographic pheromone trails, coordinate investigations without central command, evolve their detection strategies through adversarial co-evolution, and do it all under the governance of a formally-verified policy engine.
 
-**One sentence:** ClawdStrike already enforces the rules -- Swarm Team Six hunts the rulebreakers.
+**One sentence:** ClawdStrike already enforces the rules -- Ambush hunts the rulebreakers.
 
 ---
 
@@ -25,7 +25,7 @@ The threat hunting landscape has a gap nobody's filled:
 
 **The category "formally-verified autonomous threat hunting" is empty.** No one has an open-source, multi-agent, cryptographically-auditable hunting swarm. DARPA's CHASE program (2020-2023) proved autonomous hunting is feasible. The academic provenance systems (HOLMES, ATLAS, SHADEWATCHER) proved kill-chain reconstruction works. The swarm intelligence literature proves multi-agent coordination outperforms single-detector systems for novel threats. But nobody's assembled the full stack.
 
-ClawdStrike has the pieces: guard pipeline, Ed25519 receipts, Spine transport, delegation tokens, formal verification, Spider Sense embeddings. STS is the orchestration layer that makes them hunt.
+ClawdStrike has the pieces: guard pipeline, Ed25519 receipts, Spine transport, delegation tokens, formal verification, Spider Sense embeddings. Ambush is the orchestration layer that makes them hunt.
 
 ---
 
@@ -264,13 +264,13 @@ The skeptic on the team raised critical concerns that shape the design:
 ### The Verdict
 > Build the swarm for **detection and triage**, not autonomous response. Keep the existing policy engine as the enforcement layer. Use the swarm as an advisory layer that feeds diverse detection signals into the proven decision pipeline. Evolution is constrained: agents evolve *detection heuristics*, not *response actions*.
 
-**The strongest version of STS is a diverse sensor array that makes the existing, verified engine smarter -- with humans making the final call on evolved behavior changes.**
+**The strongest version of Ambush is a diverse sensor array that makes the existing, verified engine smarter -- with humans making the final call on evolved behavior changes.**
 
 ---
 
 ## Naming & Identity
 
-### Project Name: "Swarm Team Six"
+### Project Name: "Ambush"
 Strong codename. Instant recognition from SEAL Team Six. "Swarm" is technically accurate. But it breaks from the cat/claw brand DNA.
 
 ### Product Name Candidates
@@ -283,7 +283,7 @@ Strong codename. Instant recognition from SEAL Team Six. "Swarm" is technically 
 | **NineLife** | Threat hunting that won't die | Great for resilience narrative |
 | **Prowl Pack** | Pack-hunting cats | Action-oriented |
 
-**Recommendation**: Ship as **ClawdStrike Ambush** (or **The Clowder** for the community). Keep "Swarm Team Six" as the internal codename.
+**Recommendation**: Ship as **Ambush** (or **The Clowder** for the community).
 
 ### Core Metaphor: Feline Ambush Predator
 

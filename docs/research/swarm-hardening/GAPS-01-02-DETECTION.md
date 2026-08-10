@@ -1,6 +1,6 @@
 # Gap Report: Detection Robustness and ATT&CK Coverage
 
-**Scope:** Gap analysis of Swarm Team Six detection capabilities in
+**Scope:** Gap analysis of Ambush detection capabilities in
 `swarm-whisker` and `swarm-core`, evaluated against adversarial evasion
 techniques and MITRE ATT&CK framework coverage.
 

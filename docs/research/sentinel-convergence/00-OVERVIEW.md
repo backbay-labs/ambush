@@ -6,7 +6,7 @@ immediate implementation.
 
 ## Current Repo Posture
 
-- The current Swarm Team Six roadmap remains focused on the single-node
+- The current Ambush roadmap remains focused on the single-node
   live-response path. Distributed governance is still deferred to Phase 6.
 - Consequential actions follow the existing design principle from
   `docs/CONSENSUS.md`: the swarm observes freely but acts only with consensus.
@@ -26,7 +26,7 @@ immediate implementation.
 | Doc | Role in the Series | Current Status | Best Use |
 |---|---|---|---|
 | `00` | Overview, reading order, canonical decisions | Active guide | Start here |
-| `01` | BFT consensus design for STS | Proposed, Phase 6+ | Use when governance work starts |
+| `01` | BFT consensus design for Ambush | Proposed, Phase 6+ | Use when governance work starts |
 | `02` | Detector logic and threat mapping for infra signals | Proposed, depends on `05` | Use for detector heuristics and validation design |
 | `03` | Edge binary and deployment exploration | Exploratory, deferred | Use as option space for a later edge initiative |
 | `04` | Partition authority model and bounded autonomy | Proposed, Phase 6+ | Use to shape contingency-lease rules |

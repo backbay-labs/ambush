@@ -8,7 +8,7 @@
 | Version           | 0.2                                                                        |
 | Status            | Draft                                                                      |
 | Date              | 2026-04-07                                                                 |
-| Scope             | Sentinel (Go, raft-lite) + Swarm Team Six (Rust, swarm-spine/swarm-crypto) |
+| Scope             | Sentinel (Go, raft-lite) + Ambush (Rust, swarm-spine/swarm-crypto) |
 | Prerequisites     | [01 -- Distributed Consensus](./01-DISTRIBUTED-CONSENSUS-FOR-AGENT-SWARMS.md), [04 -- Autonomous Response Under Partition](./04-AUTONOMOUS-RESPONSE-UNDER-PARTITION.md) |
 
 > **Series Note**
@@ -25,7 +25,7 @@
 1. [Introduction and Motivation](#1-introduction-and-motivation)
 2. [Requirements for Security Audit Trails](#2-requirements-for-security-audit-trails)
 3. [Sentinel's Decision Log Architecture](#3-sentinels-decision-log-architecture)
-4. [Swarm Team Six Audit Infrastructure](#4-swarm-team-six-audit-infrastructure)
+4. [Ambush Audit Infrastructure](#4-swarm-team-six-audit-infrastructure)
 5. [Merging the Approaches](#5-merging-the-approaches)
 6. [Reconciliation Protocols for Divergent Decision Histories](#6-reconciliation-protocols-for-divergent-decision-histories)
 7. [Cryptographic Audit Chain Design](#7-cryptographic-audit-chain-design)
@@ -53,7 +53,7 @@ domains that this research series bridges:
   consensus within a small partition, producing a term-ordered decision log that exists
   only in local memory until the partition heals.
 
-- **Security incident response** (Swarm Team Six): A swarm of threat-hunting agents
+- **Security incident response** (Ambush): A swarm of threat-hunting agents
   detects suspicious activity, evaluates it against policy, and dispatches automated
   responses (isolate host, deploy decoy, block process). Every step -- detection,
   policy verdict, response execution -- must be captured in a signed, chain-linked
@@ -61,7 +61,7 @@ domains that this research series bridges:
 
 Neither system alone solves the full problem. Sentinel provides causal ordering
 (Raft terms) and partition-aware decision logging but lacks cryptographic integrity.
-Swarm Team Six provides Ed25519 signatures, RFC 6962 Merkle trees, and hash-chained
+Ambush provides Ed25519 signatures, RFC 6962 Merkle trees, and hash-chained
 envelopes but does not model network partitions or divergent decision histories. This
 document designs the convergence: a unified audit architecture that is both
 partition-tolerant and cryptographically verifiable. It builds on the consensus
@@ -179,7 +179,7 @@ The agent (or node) that made a decision must not be able to deny having made it
 requires cryptographic signatures tied to the agent's identity.
 
 Sentinel uses `LeaderID` (a string) for attribution but does not sign decisions.
-Swarm Team Six uses Ed25519 keypairs:
+Ambush uses Ed25519 keypairs:
 
 ```rust
 // From swarm-crypto/src/signing.rs
@@ -300,11 +300,11 @@ telemetry -> prediction -> decision -> action.
 
 ---
 
-## 4. Swarm Team Six Audit Infrastructure
+## 4. Ambush Audit Infrastructure
 
 ### 4.1 Layered Architecture
 
-Swarm Team Six separates audit concerns across four crates:
+Ambush separates audit concerns across four crates:
 
 ```
 swarm-crypto       Primitives: Ed25519, SHA-256, Merkle trees, JCS canonicalization
@@ -846,7 +846,7 @@ Forensic reconstruction proceeds in four phases:
 
 ### 9.2 Replay Validation
 
-Swarm Team Six's `ReplayBundle` and `ReplayPreview` provide replay-safe
+Ambush's `ReplayBundle` and `ReplayPreview` provide replay-safe
 reconstruction:
 
 ```rust
@@ -1176,7 +1176,7 @@ This document designs a unified audit trail architecture that combines:
 1. **Sentinel's strengths**: Term-based causal ordering, partition detection, quorum
    consensus, and lightweight operation suitable for edge deployment.
 
-2. **Swarm Team Six's strengths**: Ed25519 signatures (via `swarm-crypto`),
+2. **Ambush's strengths**: Ed25519 signatures (via `swarm-crypto`),
    RFC 6962-compatible Merkle trees, RFC 8785 canonical JSON serialization,
    per-issuer hash chains (via `swarm-spine`), and checkpoint-based bundling.
 

@@ -9,10 +9,10 @@ authors: Sentinel Convergence Research Team
 
 # Distributed Consensus for Autonomous Agent Swarms
 
-## Cross-Project Research: Sentinel Raft-Lite to Swarm Team Six BFT Consensus
+## Cross-Project Research: Sentinel Raft-Lite to Ambush BFT Consensus
 
 > Research document for the `swarm-consensus` crate.
-> Sources: Sentinel (`playground/sentinel`), Swarm Team Six (`standalone/swarm-team-six`)
+> Sources: Sentinel (`playground/sentinel`), Ambush (`standalone/swarm-team-six`)
 
 > **Series Note**
 > - `swarm-consensus` remains deferred until the single-node live-response path
@@ -29,7 +29,7 @@ authors: Sentinel Convergence Research Team
 1. [Introduction and Motivation](#1-introduction-and-motivation)
 2. [Survey of Consensus Algorithms for Agent Swarms](#2-survey-of-consensus-algorithms-for-agent-swarms)
 3. [Deep Analysis of Sentinel's Raft-Lite Implementation](#3-deep-analysis-of-sentinels-raft-lite-implementation)
-4. [Swarm Team Six Consensus Requirements](#4-swarm-team-six-consensus-requirements)
+4. [Ambush Consensus Requirements](#4-swarm-team-six-consensus-requirements)
 5. [Mapping Sentinel Patterns to Swarm Needs](#5-mapping-sentinel-patterns-to-swarm-needs)
 6. [Porting Considerations: Go to Rust](#6-porting-considerations-go-to-rust)
 7. [Alternative Approaches: CRDTs, Virtual Synchrony, Epidemic Protocols](#7-alternative-approaches-crdts-virtual-synchrony-epidemic-protocols)
@@ -37,7 +37,7 @@ authors: Sentinel Convergence Research Team
 9. [Academic References and Industry Precedents](#9-academic-references-and-industry-precedents)
 10. [Open Questions and Trade-offs](#10-open-questions-and-trade-offs)
 - [Appendix A: Sentinel Source Reference](#appendix-a-sentinel-source-reference)
-- [Appendix B: STS Source Reference](#appendix-b-sts-source-reference)
+- [Appendix B: Ambush Source Reference](#appendix-b-sts-source-reference)
 - [Appendix C: Implementation Priority Matrix](#appendix-c-implementation-priority-matrix)
 - [Appendix D: Glossary](#appendix-d-glossary)
 - [Cross-References](#cross-references)
@@ -56,7 +56,7 @@ edge nodes (3-10) to make autonomous decisions -- pod rescheduling, node cordoni
 service failover -- when partitioned from the Kubernetes control plane. Its threat
 model assumes crash faults and network unreliability, not Byzantine behavior.
 
-**Swarm Team Six (STS)** is a Rust-based autonomous security detection and response
+**Ambush** is a Rust-based autonomous security detection and response
 engine. Its `swarm-consensus` crate is currently a stub (`// TODO: Implement`),
 with a design document (docs/CONSENSUS.md) specifying a Tendermint-style BFT
 protocol for governing response actions, evolution commits, and trust decisions
@@ -66,7 +66,7 @@ unilaterally.
 
 The gap between these two systems is instructive. Sentinel has a working, tested
 implementation of leader-based consensus with practical engineering patterns
-(rate limiting, exponential backoff, partition detection, decision logging). STS
+(rate limiting, exponential backoff, partition detection, decision logging). Ambush
 has a rigorous design for BFT consensus but no implementation. This document
 surveys the consensus landscape, analyzes what Sentinel does well, identifies what
 must change for the BFT swarm context, and proposes a reference architecture that
@@ -74,14 +74,14 @@ draws from both projects.
 
 ### Why This Matters Now
 
-The STS roadmap (docs/ROADMAP.md) lists distributed consensus as Phase 6 --
+The Ambush roadmap (docs/ROADMAP.md) lists distributed consensus as Phase 6 --
 "Optional Advanced Governance." The Rust-first migration document
 (docs/RUST_FIRST_MIGRATION.md) explicitly states: "distributed consensus is
 deferred until the single-node live-response path is real." This is correct
 prioritization. But when Phase 6 arrives, the team will need concrete
 implementation decisions. This document provides the research foundation by asking:
 what can we learn from Sentinel's working consensus, what does the academic
-literature recommend, and what does STS's threat model demand?
+literature recommend, and what does Ambush's threat model demand?
 
 ---
 
@@ -152,7 +152,7 @@ All --> Client: REPLY
 PBFT's message complexity is O(n^2) per decision, which limits scalability to
 approximately 20-30 nodes in practice.
 
-**Applicability to agent swarms:** PBFT provides the Byzantine tolerance STS needs
+**Applicability to agent swarms:** PBFT provides the Byzantine tolerance Ambush needs
 but has high message complexity. For a Tom committee of 4-10 members, O(n^2)
 is acceptable. For larger swarm coordination, it is not.
 
@@ -165,17 +165,17 @@ is acceptable. For larger swarm coordination, it is not.
 | Partition behavior    | Both sides halt                |
 | Byzantine resistance  | Full (up to f faults)          |
 
-### 2.4 Tendermint (What STS Specifies)
+### 2.4 Tendermint (What Ambush Specifies)
 
 Tendermint (Buchman, 2016 thesis; Buchman, Kwon & Milosevic, 2018, "The latest
 gossip on BFT consensus") is a BFT consensus protocol designed for blockchain
 applications. It uses a propose-prevote-precommit three-phase pattern with a
-rotating proposer. STS's docs/CONSENSUS.md specifies this as the target protocol.
+rotating proposer. Ambush's docs/CONSENSUS.md specifies this as the target protocol.
 
-Key Tendermint properties relevant to STS:
+Key Tendermint properties relevant to Ambush:
 
 - **Deterministic proposer rotation.** The proposer for each round is determined
-  by a function of the round number and validator set. STS extends this with VRF
+  by a function of the round number and validator set. Ambush extends this with VRF
   (Verifiable Random Function) rotation for unpredictability.
 - **Locked values.** Once a validator precommits to a value, it is "locked" and
   must prevote for that value in subsequent rounds. This prevents equivocation
@@ -183,7 +183,7 @@ Key Tendermint properties relevant to STS:
 - **Round-based timeout.** If a round does not complete within the timeout, it
   fails and advances to the next round with a new proposer.
 
-**Applicability to agent swarms:** Tendermint is the right choice for STS's Tom
+**Applicability to agent swarms:** Tendermint is the right choice for Ambush's Tom
 committee consensus. It provides BFT with clear round semantics, handles proposer
 failure via round advancement, and the locked-value mechanism prevents split-brain.
 Message complexity is O(n^2) per round, which is acceptable for committee sizes
@@ -221,7 +221,7 @@ HashiCorp's Serf (used by Consul) implements SWIM with extensions:
 
 **Applicability to agent swarms:** Gossip protocols are excellent for membership
 management and failure detection but do not provide consensus on ordered decisions.
-They provide eventual consistency, not linearizability. For STS, gossip is the
+They provide eventual consistency, not linearizability. For Ambush, gossip is the
 right substrate for agent health monitoring and swarm membership (the
 `swarm.gossip.{agent_id}` NATS subjects), but not for response action
 authorization.
@@ -238,7 +238,7 @@ authorization.
 ### 2.6 Stigmergic Consensus (Pheromone-Based)
 
 Stigmergic consensus is an emergent property of the pheromone substrate, not a
-classical consensus protocol. STS already implements this via the pheromone system
+classical consensus protocol. Ambush already implements this via the pheromone system
 documented in docs/PHEROMONES.md (see also
 [06-STIGMERGIC-COORDINATION-AND-SWARM-INTELLIGENCE.md](06-STIGMERGIC-COORDINATION-AND-SWARM-INTELLIGENCE.md)).
 The key mechanism:
@@ -285,7 +285,7 @@ a discrete commitment.
 | Raft            | Crash       | Linearizable   | O(n)          | No  | Yes    | Infra consensus (Sentinel)  |
 | Raft-lite       | Crash       | Linearizable   | O(n)          | No  | Yes    | Small edge clusters         |
 | PBFT            | Byzantine   | Linearizable   | O(n^2)        | Yes | Yes    | Small BFT committees        |
-| Tendermint      | Byzantine   | Linearizable   | O(n^2)        | Yes | Yes    | STS Tom committee           |
+| Tendermint      | Byzantine   | Linearizable   | O(n^2)        | Yes | Yes    | Ambush Tom committee           |
 | Gossip/SWIM     | Crash       | Eventual       | O(log n)      | No  | No     | Membership, health          |
 | Stigmergy       | Byzantine*  | Emergent       | O(1) per agent| Yes*| No     | Detection coordination      |
 | CRDTs           | Byzantine*  | Eventual       | O(n) merge    | Yes*| No     | Shared state (investigation)|
@@ -363,7 +363,7 @@ This is a closed set of well-understood operations, each with bounded blast
 radius.
 
 The `json.RawMessage` payload allows type-specific data without forcing a rigid
-schema. STS should adopt this pattern -- the `ConsensusValue` enum already
+schema. Ambush should adopt this pattern -- the `ConsensusValue` enum already
 mirrors it with variants for response actions, evolution commits, and trust
 decisions (see Section 8.2).
 
@@ -393,7 +393,7 @@ The default configuration (initial: 100ms, max: 30s, multiplier: 2x) is sensible
 for LAN-connected edge nodes. The jitter prevents thundering herd effects when
 multiple nodes attempt to reconnect simultaneously after a partition heals.
 
-This pattern transfers directly to STS. When Tom committee members lose contact
+This pattern transfers directly to Ambush. When Tom committee members lose contact
 with the NATS cluster or each other, exponential backoff with jitter prevents
 reconnection storms that could amplify a partial outage.
 
@@ -431,7 +431,7 @@ func (n *Node) getOrCreateLimiter(addr string) *tokenBucket {
 }
 ```
 
-For STS, rate limiting on NATS subjects is essential. A compromised agent could
+For Ambush, rate limiting on NATS subjects is essential. A compromised agent could
 flood consensus subjects with invalid proposals or votes. The token bucket pattern
 from Sentinel, adapted to per-agent-ID rate limits on NATS message ingestion,
 provides the necessary protection.
@@ -463,7 +463,7 @@ heuristic rather than a strict majority check.
 
 The partition callback system (`PartitionCallback func(partitioned bool)`)
 enables higher-level systems to react to partition state changes. This is
-directly applicable to STS: when the Tom committee is partitioned, the swarm
+directly applicable to Ambush: when the Tom committee is partitioned, the swarm
 should halt response actions (safety) while continuing detection (liveness).
 See [04-AUTONOMOUS-RESPONSE-UNDER-PARTITION.md](04-AUTONOMOUS-RESPONSE-UNDER-PARTITION.md)
 for the full analysis of partition-tolerant response strategies.
@@ -482,7 +482,7 @@ Half-Open --[successes >= threshold]--> Closed
 Half-Open --[any failure]-------------> Open
 ```
 
-STS should apply this pattern to NATS connection management and to the
+Ambush should apply this pattern to NATS connection management and to the
 consensus round initiation path. If repeated consensus rounds fail (timeout
 or insufficient votes), a circuit breaker can prevent the system from
 continuously initiating rounds that have no chance of succeeding.
@@ -513,7 +513,7 @@ vote requests, heartbeats, or decision proposals. For Kubernetes edge
 infrastructure where the network is trusted, this is acceptable. For a
 security agent swarm operating in adversarial environments, it is not.
 
-**STS requirement:** Every message in the consensus protocol must be Ed25519-signed
+**Ambush requirement:** Every message in the consensus protocol must be Ed25519-signed
 and verified before processing. The `swarm-crypto` crate provides the primitives.
 
 #### 3.3.2 No Cryptographic Identity
@@ -523,7 +523,7 @@ cryptographic binding between a node's identity and its network presence.
 An attacker who gains network access can impersonate any node by sending
 messages with a forged `FromID`.
 
-**STS requirement:** Agent identity is Ed25519 keypair-based (`AgentId` bound to
+**Ambush requirement:** Agent identity is Ed25519 keypair-based (`AgentId` bound to
 a public key). The Tom-managed agent registry controls admission. All consensus
 messages must include a signature verifiable against the sender's registered
 public key.
@@ -539,11 +539,11 @@ lastApplied int
 ```
 
 This is lost on process restart. For edge clusters with bounded partition
-durations, this is a pragmatic trade-off. For STS, where audit trail
+durations, this is a pragmatic trade-off. For Ambush, where audit trail
 requirements demand durable, Merkle-anchored receipts of every consensus
 decision, in-memory storage is insufficient.
 
-**STS requirement:** Consensus decisions must be persisted to the spine audit trail
+**Ambush requirement:** Consensus decisions must be persisted to the spine audit trail
 (NATS JetStream + Merkle tree) with signed receipts. See
 [07-AUDIT-TRAILS-AND-DECISION-RECONCILIATION.md](07-AUDIT-TRAILS-AND-DECISION-RECONCILIATION.md)
 for the full audit trail design.
@@ -563,11 +563,11 @@ if err == nil && resp.Success {
 This sequential loop through peers means decision latency scales linearly with
 peer count. In a 10-node cluster with 100ms timeout per peer, worst case
 latency is 1 second. For Sentinel's use case (infrequent autonomous decisions),
-this is acceptable. For STS's Tom committee making time-sensitive security
+this is acceptable. For Ambush's Tom committee making time-sensitive security
 decisions, parallel message dispatch with async acknowledgment collection is
 necessary.
 
-**STS requirement:** Consensus message dispatch must be asynchronous. Tokio tasks
+**Ambush requirement:** Consensus message dispatch must be asynchronous. Tokio tasks
 for each peer connection, with a `select!` over acknowledgment channels and a
 round timeout.
 
@@ -588,7 +588,7 @@ Every heartbeat carries the complete decision list. For a small edge cluster
 with a handful of decisions, this is fine. It would not scale to thousands of
 consensus decisions over the lifetime of a swarm mission.
 
-**STS requirement:** Incremental replication. Heartbeats carry only decisions
+**Ambush requirement:** Incremental replication. Heartbeats carry only decisions
 after the follower's known commit index, similar to Raft's `nextIndex`
 per-follower tracking.
 
@@ -598,13 +598,13 @@ Sentinel relies on Raft's standard election mechanism: when the leader fails,
 followers time out and start a new election. There is no formal view change
 protocol and no deterministic proposer rotation.
 
-**STS requirement:** VRF-based proposer rotation as specified in docs/CONSENSUS.md.
+**Ambush requirement:** VRF-based proposer rotation as specified in docs/CONSENSUS.md.
 The proposer for each round must be deterministically derivable from the VRF
 output and round number, preventing targeted attacks on a known proposer.
 
 ### 3.4 Design Decision Analysis
 
-| Decision                        | Sentinel Choice        | STS Equivalent                    | Assessment      |
+| Decision                        | Sentinel Choice        | Ambush Equivalent                    | Assessment      |
 |---------------------------------|------------------------|-----------------------------------|-----------------|
 | Fault model                     | Crash-fault            | Byzantine                         | Must change     |
 | Identity                        | String ID              | Ed25519 keypair                   | Must change     |
@@ -620,11 +620,11 @@ output and round number, preventing targeted attacks on a known proposer.
 
 ---
 
-## 4. Swarm Team Six Consensus Requirements
+## 4. Ambush Consensus Requirements
 
 ### 4.1 Decision Categories
 
-STS requires consensus for three categories of decisions, each with different
+Ambush requires consensus for three categories of decisions, each with different
 urgency and safety profiles:
 
 **Response Actions** (highest urgency, highest risk):
@@ -734,7 +734,7 @@ TierAuthorization (stage 2) before the pipeline reaches ConsensusGate (stage 7).
 **Sentinel:** The leader proposes decisions and replicates them to followers.
 Only the leader can call `ProposeDecision`.
 
-**STS mapping:** The VRF-selected proposer for each round proposes an action.
+**Ambush mapping:** The VRF-selected proposer for each round proposes an action.
 Unlike Raft where the leader persists across multiple decisions, Tendermint
 rotates the proposer per round.
 
@@ -759,7 +759,7 @@ if acks >= required {
 }
 ```
 
-**STS mapping:**
+**Ambush mapping:**
 
 ```rust
 // Tendermint BFT quorum
@@ -791,7 +791,7 @@ quorum := len(n.peers) / 2
 n.partitioned = healthyPeers < quorum
 ```
 
-**STS mapping:** The Tom committee must detect when it cannot reach quorum.
+**Ambush mapping:** The Tom committee must detect when it cannot reach quorum.
 During a partition, no response actions should be authorized (safety over
 liveness). Detection and investigation continue independently via the pheromone
 substrate.
@@ -808,13 +808,13 @@ partitions trigger human escalation.
 
 **Sentinel:** Per-peer token bucket rate limiting with configurable burst.
 
-**STS mapping:** Per-agent-ID rate limiting on consensus NATS subjects. A
+**Ambush mapping:** Per-agent-ID rate limiting on consensus NATS subjects. A
 compromised Tom could flood the consensus channel with invalid proposals or
 votes. Rate limiting ensures that even a Byzantine agent cannot consume all
 available bandwidth.
 
 ```
-Sentinel:                          STS:
+Sentinel:                          Ambush:
 +-----------+                      +------------------+
 | TCP conn  |                      | NATS subject     |
 | from peer |   token              | swarm.consensus  |   token
@@ -827,12 +827,12 @@ Sentinel:                          STS:
 **Sentinel:** `calculateBackoff(failures, cfg)` with 100ms initial, 30s max,
 2x multiplier, 10% jitter.
 
-**STS mapping:** Apply to NATS connection retry, peer-to-peer consensus channel
+**Ambush mapping:** Apply to NATS connection retry, peer-to-peer consensus channel
 establishment, and failed round retry (when a proposer is repeatedly
 unreachable).
 
 This pattern transfers directly with no modification needed. The default
-parameters are reasonable for both LAN (Sentinel) and NATS-connected (STS)
+parameters are reasonable for both LAN (Sentinel) and NATS-connected (Ambush)
 deployments.
 
 ### 5.6 Pattern: Callback-Driven State Notifications
@@ -846,7 +846,7 @@ type Config struct {
 }
 ```
 
-**STS mapping:**
+**Ambush mapping:**
 
 ```rust
 pub trait ConsensusObserver: Send + Sync {
@@ -905,7 +905,7 @@ impl ConsensusNode {
 
 Key differences:
 
-| Aspect                | Go (Sentinel)               | Rust/tokio (STS)                     |
+| Aspect                | Go (Sentinel)               | Rust/tokio (Ambush)                     |
 |-----------------------|-----------------------------|--------------------------------------|
 | Spawn cost            | ~2KB stack, cheap           | ~256B future, cheaper                |
 | Cancellation          | `context.Context`           | `CancellationToken` or `select!`     |
@@ -963,14 +963,14 @@ async fn consensus_actor(mut rx: mpsc::Receiver<ConsensusCommand>, state: Consen
 Pro: No lock contention, natural serialization of state mutations.
 Con: More boilerplate, indirect call semantics.
 
-**Recommendation for STS:** Use the actor model. Consensus state mutations are
+**Recommendation for Ambush:** Use the actor model. Consensus state mutations are
 inherently sequential (one round at a time, one proposer at a time). The actor
 pattern makes this explicit, avoids async lock deadlocks, and the
 `ConsensusCommand` enum doubles as documentation of the consensus API surface.
 
 ### 6.3 Network Layer: TCP to NATS
 
-For the broader telemetry bridge design between Sentinel and STS, see
+For the broader telemetry bridge design between Sentinel and Ambush, see
 [05-TELEMETRY-BRIDGE-ARCHITECTURE.md](05-TELEMETRY-BRIDGE-ARCHITECTURE.md).
 
 Sentinel uses raw TCP connections with JSON encoding:
@@ -982,7 +982,7 @@ func (n *Node) sendMessage(conn net.Conn, msg *Message) error {
 }
 ```
 
-STS should use NATS subjects for consensus communication:
+Ambush should use NATS subjects for consensus communication:
 
 ```rust
 // Publish proposal to consensus subject
@@ -999,7 +999,7 @@ let mut prevote_sub = nats_client.subscribe(
 
 Advantages of NATS over raw TCP for consensus:
 
-| Aspect              | Raw TCP (Sentinel)           | NATS (STS)                        |
+| Aspect              | Raw TCP (Sentinel)           | NATS (Ambush)                        |
 |---------------------|------------------------------|-----------------------------------|
 | Connection mgmt     | Manual per-peer              | Client handles reconnection       |
 | Message routing     | Point-to-point               | Pub/sub (natural broadcast)       |
@@ -1021,7 +1021,7 @@ type Message struct {
 }
 ```
 
-STS must wrap every consensus message in a signed envelope:
+Ambush must wrap every consensus message in a signed envelope:
 
 ```rust
 pub struct SignedConsensusMessage {
@@ -1068,7 +1068,7 @@ if n.state != Leader {
 }
 ```
 
-STS should use typed errors with `thiserror`:
+Ambush should use typed errors with `thiserror`:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
@@ -1140,11 +1140,11 @@ fn test_prevote_evaluation() {
 ### 7.1 CRDTs for Eventual Consistency
 
 Conflict-Free Replicated Data Types (Shapiro et al., 2011) provide eventual
-consistency without coordination. STS already uses OR-Set CRDTs for
+consistency without coordination. Ambush already uses OR-Set CRDTs for
 investigation lead claiming (docs/AGENTS.md: "Stalkers claim a lead, preventing
 duplication via OR-Set CRDTs").
 
-**Where CRDTs fit in STS:**
+**Where CRDTs fit in Ambush:**
 
 | Use Case                    | CRDT Type   | Why                                         |
 |-----------------------------|-------------|---------------------------------------------|
@@ -1162,7 +1162,7 @@ agreement on a single value.
 
 ```
 +----------------------------------------------+
-|           STS Consistency Spectrum            |
+|           Ambush Consistency Spectrum            |
 |                                              |
 | Eventual (CRDTs)  |  Stigmergic  |  Strong  |
 | - OR-Set claims    |  - Pheromone |  - BFT   |
@@ -1180,11 +1180,11 @@ Virtual synchrony (Birman & Joseph, 1987) provides a membership service with
 the guarantee that all members of a group observe the same sequence of membership
 changes and message deliveries. Systems like Isis2 and JGroups implement this.
 
-**Relevance to STS:** The Tom committee's epoch transitions (VRF-based rotation)
+**Relevance to Ambush:** The Tom committee's epoch transitions (VRF-based rotation)
 are essentially a form of virtual synchrony -- all committee members must agree
 on who is in the current committee and who the proposer is for each round.
 
-**Assessment:** Virtual synchrony is more complex than STS needs. The VRF-based
+**Assessment:** Virtual synchrony is more complex than Ambush needs. The VRF-based
 rotation already provides the "view change" semantics, and Tendermint's round
 mechanism handles the "message ordering within a view" guarantee. Implementing
 full virtual synchrony would add complexity without clear benefit.
@@ -1196,7 +1196,7 @@ peer exchanges. Each node periodically contacts a random peer and exchanges
 state updates. Information spreads like an epidemic -- O(log n) rounds to reach
 all nodes with high probability.
 
-**STS application:** Gossip is ideal for two STS subsystems:
+**Ambush application:** Gossip is ideal for two Ambush subsystems:
 
 1. **Agent health and membership** (`swarm.gossip.{agent_id}`). Each agent
    periodically gossips its health status. SWIM-style failure detection provides
@@ -1225,14 +1225,14 @@ Round 1:  Tom-1 pings Tom-3          Round 2:  Tom-2 pings Tom-4
 After O(log n) rounds, all agents have consistent membership view.
 ```
 
-### 7.4 Hybrid Approach (Recommended for STS)
+### 7.4 Hybrid Approach (Recommended for Ambush)
 
 The recommended architecture uses different consistency mechanisms for
 different concerns:
 
 ```
 +-------------------------------------------------------------------+
-|                     STS Consistency Stack                          |
+|                     Ambush Consistency Stack                          |
 |                                                                   |
 |  Layer 4: BFT Consensus (Tendermint)                              |
 |           - Response action authorization                         |
@@ -1781,7 +1781,7 @@ Pouncer proposes BlockEgress:
 (Ongaro & Ousterhout, 2014, USENIX ATC)
 
 The canonical Raft paper. Sentinel's implementation follows this design with
-simplifications for edge deployment. Key insight for STS: Raft's leader-based
+simplifications for edge deployment. Key insight for Ambush: Raft's leader-based
 approach is efficient but requires trust in the leader. BFT variants (like
 Tendermint) remove this trust assumption at the cost of additional message
 rounds.
@@ -1797,7 +1797,7 @@ is the key scalability constraint inherited by all PBFT-derived protocols.
 **Tendermint: Byzantine Fault Tolerance in the Age of Blockchains**
 (Buchman, 2016, Master's thesis; Buchman, Kwon & Milosevic, 2018)
 
-STS's target protocol. Key innovations over PBFT: deterministic proposer
+Ambush's target protocol. Key innovations over PBFT: deterministic proposer
 rotation (vs. view changes), locked-value mechanism (vs. view-change proofs),
 and round-based progression (vs. sequence-number-based).
 
@@ -1816,7 +1816,7 @@ Protocol**
 
 The foundation for modern membership protocols (used by Consul's Serf, Akka
 Cluster). SWIM combines failure detection with membership dissemination through
-infection-style gossip. For STS, SWIM is the right substrate for the
+infection-style gossip. For Ambush, SWIM is the right substrate for the
 `swarm.gossip.{agent_id}` layer.
 
 **Lifeguard: Local Health Awareness for More Accurate Failure Detection**
@@ -1824,7 +1824,7 @@ infection-style gossip. For STS, SWIM is the right substrate for the
 
 Extends SWIM with local health awareness. A node that suspects its own health
 is degraded adjusts its gossip behavior to avoid being falsely declared dead.
-Relevant for STS agents that may experience temporary resource pressure (e.g.,
+Relevant for Ambush agents that may experience temporary resource pressure (e.g.,
 a Whisker processing a burst of telemetry events).
 
 ### 9.3 CRDTs and Eventual Consistency
@@ -1833,13 +1833,13 @@ a Whisker processing a burst of telemetry events).
 (Shapiro et al., 2011, INRIA Research Report)
 
 The foundational CRDT taxonomy. OR-Sets (observed-remove sets) are directly
-applicable to STS's investigation lead claiming and indicator set management.
+applicable to Ambush's investigation lead claiming and indicator set management.
 
 **Conflict-Free Replicated Data Types: An Overview**
 (Shapiro et al., 2018, Encyclopedia of Database Systems)
 
 Accessible overview of CRDTs with implementation guidance. Key insight for
-STS: CRDTs are composable -- an OR-Set of `AgentId` for membership combined
+Ambush: CRDTs are composable -- an OR-Set of `AgentId` for membership combined
 with a G-Counter per agent for pheromone deposits creates a conflict-free
 pheromone substrate.
 
@@ -1849,13 +1849,13 @@ pheromone substrate.
 (arXiv 2504.14668, 2025)
 
 Formalizes the treatment of unreliable AI agents as Byzantine nodes. Directly
-supports STS's design decision to use BFT consensus for response actions.
+supports Ambush's design decision to use BFT consensus for response actions.
 Demonstrates that standard BFT mechanisms apply to multi-agent AI systems.
 
 **Formal Verification Properties for Agent Systems**
 (arXiv 2510.14133, 2025)
 
-Defines temporal logic properties for multi-agent systems. STS's safety
+Defines temporal logic properties for multi-agent systems. Ambush's safety
 property ("Pouncer never acts without 2/3 Tom consensus") is expressible in
 LTL and verifiable by Z3.
 
@@ -1873,20 +1873,20 @@ operate in environments where the adversary may control infrastructure.
 Consul uses Raft for service discovery consensus and SWIM (via Serf) for
 membership and failure detection. This two-layer approach -- strong consistency
 for coordination decisions, eventual consistency for membership -- maps directly
-to STS's architecture (BFT consensus for response actions, gossip for agent
+to Ambush's architecture (BFT consensus for response actions, gossip for agent
 health).
 
 **CockroachDB**
 
 Uses Raft groups per range for distributed SQL consensus. CockroachDB's
 experience shows that Raft performance degrades significantly beyond ~10 nodes
-per group, validating STS's decision to keep the Tom committee small (4-10
+per group, validating Ambush's decision to keep the Tom committee small (4-10
 members) and use gossip for broader membership.
 
 **Tendermint/CometBFT (Cosmos SDK)**
 
 Production implementation of Tendermint consensus for blockchain applications.
-The CometBFT codebase (Go) is a reference implementation for STS's Rust port.
+The CometBFT codebase (Go) is a reference implementation for Ambush's Rust port.
 Key lessons: the locked-value mechanism is essential for safety across rounds;
 evidence collection (detecting and proving equivocation) is necessary for
 accountability.
@@ -1895,7 +1895,7 @@ accountability.
 
 DAG-based BFT consensus that separates data availability from consensus
 ordering. Achieves higher throughput than traditional BFT protocols.
-Potentially relevant for future STS versions where consensus throughput
+Potentially relevant for future Ambush versions where consensus throughput
 becomes a bottleneck (e.g., many concurrent evolution proposals).
 
 ---
@@ -1904,7 +1904,7 @@ becomes a bottleneck (e.g., many concurrent evolution proposals).
 
 ### 10.1 When to Implement Consensus
 
-The STS roadmap places consensus at Phase 6 ("Optional Advanced Governance").
+The Ambush roadmap places consensus at Phase 6 ("Optional Advanced Governance").
 The Rust-first migration doc explicitly defers it: "distributed consensus is
 deferred until the single-node live-response path is real."
 
@@ -1986,15 +1986,15 @@ reconnect, they exchange their current round and lock state. The agent in the
 higher round "catches up" the agent in the lower round. Committed values are
 propagated through the gossip layer.
 
-**Open question:** How does STS handle decisions made during partition that
+**Open question:** How does Ambush handle decisions made during partition that
 need reconciliation with the control plane? Sentinel has
 `GetUnreconciledDecisions()` for this, but it pushes reconciliation to the
-caller. STS may need a formal reconciliation protocol for post-partition
+caller. Ambush may need a formal reconciliation protocol for post-partition
 recovery.
 
 ### 10.6 Consensus vs. Policy Gate
 
-A key trade-off in the STS architecture:
+A key trade-off in the Ambush architecture:
 
 ```
 Policy Gate (deterministic, single-node)
@@ -2020,11 +2020,11 @@ consensus (Phase 6) when operationally justified.
 
 ### 10.7 Async Runtime Coupling
 
-STS's `Cargo.toml` already specifies `tokio.workspace = true` for
+Ambush's `Cargo.toml` already specifies `tokio.workspace = true` for
 swarm-consensus. This couples the consensus implementation to tokio.
 
 **Trade-off:**
-- Pro: Consistency with the rest of the STS runtime. Tokio's `select!`,
+- Pro: Consistency with the rest of the Ambush runtime. Tokio's `select!`,
   `JoinSet`, `mpsc`, and `Interval` are natural fits for consensus protocol
   implementation.
 - Con: Testing requires a tokio test runtime. Deterministic testing (simulated
@@ -2062,7 +2062,7 @@ engineering patterns for building reliable distributed systems:
 5. **Decision callback system.** Simple, effective. The callback pattern lets
    higher-level systems react to consensus events without polling.
 
-These patterns should be ported to STS regardless of which consensus algorithm
+These patterns should be ported to Ambush regardless of which consensus algorithm
 is chosen. They represent production engineering wisdom that is orthogonal to
 the theoretical consensus guarantees. For a comprehensive catalog of these
 resilience patterns, see
@@ -2112,7 +2112,7 @@ Timeout:          30s
 
 ---
 
-## Appendix B: STS Source Reference
+## Appendix B: Ambush Source Reference
 
 ### Consensus-Related Files
 
@@ -2128,7 +2128,7 @@ Timeout:          30s
 | `docs/ROADMAP.md`                             | Complete | Rust-first implementation roadmap  |
 | `.planning/research/ARCHITECTURE.md`          | Complete | Component boundaries               |
 
-### STS Consensus Configuration (from docs/CONSENSUS.md)
+### Ambush Consensus Configuration (from docs/CONSENSUS.md)
 
 ```yaml
 consensus:
@@ -2200,7 +2200,7 @@ is online.
 | Round                  | A single attempt to reach consensus on a value                       |
 | Stigmergy              | Indirect coordination through environmental modification            |
 | SWIM                   | Scalable Weakly-consistent Infection-style Membership protocol       |
-| Tom committee          | The BFT consensus committee in STS                                   |
+| Tom committee          | The BFT consensus committee in Ambush                                   |
 | VRF                    | Verifiable Random Function -- deterministic, unpredictable selection  |
 
 ---
@@ -2209,14 +2209,14 @@ is online.
 
 This document is part 1 of the 8-part Sentinel Convergence research series. Each
 document explores a different facet of the integration between Sentinel's
-infrastructure-level patterns and STS's security-focused agent architecture.
+infrastructure-level patterns and Ambush's security-focused agent architecture.
 
 | # | Document | Relevance to This Document |
 |---|----------|---------------------------|
-| 02 | [Predictive Failure as Threat Signal](02-PREDICTIVE-FAILURE-AS-THREAT-SIGNAL.md) | How Sentinel's health-score predictor feeds threat signals into the STS detection pipeline -- the upstream data that consensus decisions act upon. |
-| 03 | [Edge-Native Security Detection](03-EDGE-NATIVE-SECURITY-DETECTION.md) | Adapting Sentinel's edge-optimized detection patterns (resource constraints, intermittent connectivity) for STS Whisker agents. |
+| 02 | [Predictive Failure as Threat Signal](02-PREDICTIVE-FAILURE-AS-THREAT-SIGNAL.md) | How Sentinel's health-score predictor feeds threat signals into the Ambush detection pipeline -- the upstream data that consensus decisions act upon. |
+| 03 | [Edge-Native Security Detection](03-EDGE-NATIVE-SECURITY-DETECTION.md) | Adapting Sentinel's edge-optimized detection patterns (resource constraints, intermittent connectivity) for Ambush Whisker agents. |
 | 04 | [Autonomous Response Under Partition](04-AUTONOMOUS-RESPONSE-UNDER-PARTITION.md) | The safety/liveness trade-offs when the Tom committee is partitioned -- directly extends Section 5.3 (Partition Detection) and Section 10.5 (Recovery After Partition). |
-| 05 | [Telemetry Bridge Architecture](05-TELEMETRY-BRIDGE-ARCHITECTURE.md) | Design of `swarm-ingest-sentinel`, the bridge crate connecting Sentinel telemetry to STS. Defines the transport layer that consensus messages may share. |
+| 05 | [Telemetry Bridge Architecture](05-TELEMETRY-BRIDGE-ARCHITECTURE.md) | Design of `swarm-ingest-sentinel`, the bridge crate connecting Sentinel telemetry to Ambush. Defines the transport layer that consensus messages may share. |
 | 06 | [Stigmergic Coordination and Swarm Intelligence](06-STIGMERGIC-COORDINATION-AND-SWARM-INTELLIGENCE.md) | Deep analysis of the pheromone substrate as a complement to BFT consensus -- extends Section 2.6 and the hybrid approach in Section 7.4. |
 | 07 | [Audit Trails and Decision Reconciliation](07-AUDIT-TRAILS-AND-DECISION-RECONCILIATION.md) | Merkle-anchored receipt chains for consensus decisions -- the durability layer that replaces Sentinel's in-memory decision log (Section 3.3.3). |
 | 08 | [Resilience Patterns for Distributed Agents](08-RESILIENCE-PATTERNS-FOR-DISTRIBUTED-AGENTS.md) | Comprehensive catalog of the engineering patterns identified in Section 10.8 (rate limiting, backoff, circuit breakers, partition detection). |

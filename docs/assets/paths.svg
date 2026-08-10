@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="Six ways in: watch a hunt, bring your own telemetry, write a detector, shape the response playbook, deploy to a cluster, or audit a decision.">
+  <defs>
+    <linearGradient id="w-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#070a09"/>
+      <stop offset="1" stop-color="#0d1512"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="320" fill="url(#w-bg)"/>
+
+  <text x="600" y="44" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" letter-spacing="4.2" fill="#7f9c8d" fill-opacity="0.8">SIX WAYS IN</text>
+
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <g>
+      <rect x="70" y="76" width="320" height="92" rx="9" fill="#0c1613" stroke="#1e3a2e"/>
+      <rect x="70" y="76" width="3" height="92" rx="1.5" fill="#4ade80"/>
+      <text x="96" y="112" font-size="15" font-weight="600" fill="#e9f3ed">Watch a hunt</text>
+      <text x="96" y="136" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#7f9c8d">swarmctl first-run</text>
+    </g>
+    <g>
+      <rect x="440" y="76" width="320" height="92" rx="9" fill="#0c1613" stroke="#1e3a2e"/>
+      <rect x="440" y="76" width="3" height="92" rx="1.5" fill="#4ade80"/>
+      <text x="466" y="112" font-size="15" font-weight="600" fill="#e9f3ed">Bring your telemetry</text>
+      <text x="466" y="136" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#7f9c8d">tetragon, cloudtrail, generic_json</text>
+    </g>
+    <g>
+      <rect x="810" y="76" width="320" height="92" rx="9" fill="#0c1613" stroke="#1e3a2e"/>
+      <rect x="810" y="76" width="3" height="92" rx="1.5" fill="#4ade80"/>
+      <text x="836" y="112" font-size="15" font-weight="600" fill="#e9f3ed">Write a detector</text>
+      <text x="836" y="136" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#7f9c8d">crates/swarm-whisker</text>
+    </g>
+
+    <g>
+      <rect x="70" y="192" width="320" height="92" rx="9" fill="#0c1613" stroke="#3a3020"/>
+      <rect x="70" y="192" width="3" height="92" rx="1.5" fill="#f59e0b"/>
+      <text x="96" y="228" font-size="15" font-weight="600" fill="#e9f3ed">Shape the playbook</text>
+      <text x="96" y="252" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#c99a45">rulesets/default.yaml</text>
+    </g>
+    <g>
+      <rect x="440" y="192" width="320" height="92" rx="9" fill="#0c1613" stroke="#3a3020"/>
+      <rect x="440" y="192" width="3" height="92" rx="1.5" fill="#f59e0b"/>
+      <text x="466" y="228" font-size="15" font-weight="600" fill="#e9f3ed">Deploy to a cluster</text>
+      <text x="466" y="252" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#c99a45">deploy/helm/swarm-team-six</text>
+    </g>
+    <g>
+      <rect x="810" y="192" width="320" height="92" rx="9" fill="#0c1613" stroke="#1d3740"/>
+      <rect x="810" y="192" width="3" height="92" rx="1.5" fill="#22d3ee"/>
+      <text x="836" y="228" font-size="15" font-weight="600" fill="#e9f3ed">Audit a decision</text>
+      <text x="836" y="252" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#63b9c9">swarmctl evidence-verify</text>
+    </g>
+  </g>
+</svg>

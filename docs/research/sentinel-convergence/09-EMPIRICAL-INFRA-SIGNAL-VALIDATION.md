@@ -4,7 +4,7 @@ series: Sentinel Convergence (supplemental)
 version: "0.1"
 date: 2026-04-07
 status: Draft
-authors: Swarm Team Six Research / AQ Stack
+authors: Ambush Research / AQ Stack
 ---
 
 # 09 -- Empirical Infrastructure Signal Validation
