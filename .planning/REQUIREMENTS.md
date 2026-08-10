@@ -760,6 +760,330 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [ ] **E2EPROOF-02**: The deployment proof includes a scripted scenario that injects attack telemetry, observes detection, triggers a policy-gated response action through the CrowdStrike adapter, and verifies finding delivery to the Splunk adapter with correct CIM field mapping
 - [ ] **E2EPROOF-03**: The deployment proof documents the telemetry-to-finding-to-response-to-SIEM flow in a repo-owned integration architecture diagram and validates that all adapter metrics, health endpoints, and audit receipts are populated correctly
 
+### Runtime Decomposition And TCB Boundary (v1.78)
+
+#### Verification Gate Repair
+
+- [ ] **GATEFIX-01**: The clippy gate is verified green on the v1.74-v1.77 branch tip in a cold-cache run and the result recorded; the ~41 violations reported against `main` are absent on the branch because `crates/swarm-core/src/lib.rs:1`, `crates/swarm-runtime/src/lib.rs`, and `crates/swarm-runtime/src/bin/swarm_detect.rs` each carry a crate-wide `#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]`.
+- [ ] **GATEFIX-02**: The crate-wide test-code `allow` introduced by the branch is replaced with reviewed per-call-site `#[allow(clippy::unwrap_used)]` attributes, matching the convention Chio's workspace manifest states explicitly ("exceptions get a reviewed allow at the call site, never a crate-wide opt-out"); a blanket crate-level opt-out silently permits every future unwrap in test code, including in the crates that gate destructive response.
+- [ ] **GATEFIX-03**: `tools/check-runtime-panic-contract.sh` is extended beyond `crates/swarm-runtime/src` to cover every workspace crate's production code, closing the gap where it reports success while clippy fails elsewhere; the script documents in-file exactly which surfaces it does and does not scan.
+- [ ] **GATEFIX-04**: `tools/check-supply-chain.sh` stops suppressing its own findings: the `-A duplicate` flag is removed from `cargo deny check bans`, and `deny.toml`'s `[bans] multiple-versions`, `[sources] unknown-registry`, and `[sources] unknown-git` are raised from `warn` to `deny`, with a dated `[[bans.skip]]` entry for every duplicate currently surfaced by `cargo tree -d --workspace --all-features`.
+
+#### core.inc Elimination
+
+- [ ] **INCFIX-01**: The four `#[path = "core.inc"]` include files totalling 22,762 lines (`crates/swarm-cli/src/core.inc` 5,315, `crates/swarm-runtime/src/http/core.inc` 8,139, `crates/swarm-runtime/src/replay/core.inc` 5,406, `crates/swarm-runtime/src/workbench/core.inc` 3,902) are replaced by ordinary `.rs` modules, so `cargo fmt`, clippy, rust-analyzer, and LOC tooling all see the code they currently skip.
+- [ ] **INCFIX-02**: The CLI surface is decomposed into one module per command domain following Chio's `crates/products/chio-cli/src/cli/chio/dispatch/` convention (20 files averaging ~540 LOC), with no resulting file exceeding 800 lines; the ~49 `Evolution*` command variants become their own `dispatch/evolution/` submodule tree rather than one flat enum arm list.
+- [ ] **INCFIX-03**: A CI check fails the build if any new `#[path = "*.inc"]` directive or any non-`.rs` Rust source file is introduced under `crates/`, so the pattern cannot silently return.
+
+#### Crate Extraction From swarm-runtime
+
+- [ ] **SPLIT-01**: `swarm-runtime-http` is extracted from `crates/swarm-runtime/src/http/`, `serve.rs`, and `operator_http.rs`, taking the `axum`, `hyper`, `hyper-util`, `tokio-rustls`, `rustls-pemfile`, and `x509-parser` dependencies out of `swarm-runtime`'s manifest. `service/` (10 files, ~5,498 LOC, zero transport references) stays in the remainder: `replay` imports `crate::service::{EventExecutionContext, RuntimeService, ...}` in non-test code, so moving `service/` into the HTTP crate would drag transport dependencies into replay.
+- [ ] **SPLIT-02**: `swarm-runtime-replay` is extracted from `crates/swarm-runtime/src/replay/`, and `swarm-runtime-workbench` from `crates/swarm-runtime/src/workbench/` plus `review_workbench.rs`. `OperatorSurfacePaths` (defined in `http/core.inc`) is relocated to a shared location first: `http` imports `crate::review_workbench` types and `workbench` imports `crate::operator_http::OperatorSurfacePaths`, both in non-test code, so extracting the two as-is produces a Cargo circular dependency and a build failure.
+- [ ] **SPLIT-03**: `swarm-agents` is extracted, containing the eight role implementations, satisfying the intent of v1.74's undelivered `EXTRACT-01..03`. This requires a trait boundary in `swarm_core::agent` first: the coupling is bidirectional, with `dispatcher.rs` importing `crate::tom_agent` and `lib.rs` importing `crate::sphinx_agent`/`crate::stalker_agent` while the agent files import back into config, correlation, investigation, replay, and the evolution cluster. No extraction order resolves this; the composition root must stop naming concrete agent types.
+- [ ] **SPLIT-04**: The evolution code the v1.74-v1.77 branch collapsed into `swarm-runtime` is re-extracted into `swarm-evolution` as a real crate with its own source, replacing the 8-line facade, so the workspace has one honest crate boundary rather than a facade plus a monolith.
+- [ ] **SPLIT-05**: `swarm-ingest-runtime` is extracted from `ingest/` plus `bridge_runtime.rs` (~13,959 LOC), which no other phase claims; its non-test imports of `crate::http::rate_limit::HttpRateLimiter` and `crate::tom_agent::GovernancePolicy` are resolved so the remainder does not retain forward dependencies on the HTTP and agent crates purely to keep ingest compiling.
+- [ ] **SPLIT-06**: After all extractions `crates/swarm-runtime` is a composition root under 25,000 LOC and no workspace crate exceeds 20,000 LOC, measured and recorded. Baseline for the target: `swarm-runtime/src` is 115,156 LOC on the branch counting `.inc` files (97,709 excluding them); the five originally-planned extractions remove roughly 66,000, leaving about 48,800 before `service/` and ingest placement are decided.
+
+#### TCB Boundary And Layering Enforcement
+
+- [ ] **TCBOUND-01**: `docs/adr/ADR-0001-trusted-computing-base.md` names `swarm-policy` + `swarm-crypto` + `swarm-spine` as the trusted base (deterministic gate, signing, receipt chain) and states, in Chio `ADR-0009` negative-space style, exactly what those crates must never depend on and why adding transport or CLI dependencies to them widens the attack surface.
+- [ ] **TCBOUND-02**: Each trust-sensitive crate (`swarm-policy`, `swarm-pheromone`, `swarm-response`, `swarm-guard`, `swarm-crypto`, `swarm-spine`) gains an "Owns / does not own" section in its crate-level doc comment, so the boundary survives contributor turnover.
+- [ ] **TCBOUND-03**: `scripts/check-workspace-layering.sh`, modeled on Chio's, fails the build if any TCB crate gains a path dependency on a product crate (`swarm-cli`, `swarm-runtime`, `swarm-runtime-http`) or a direct `clap`/`axum`/`reqwest`/`hyper` dependency; it is wired into `.github/workflows/ci.yml` as a required step.
+- [ ] **TCBOUND-04**: The layering script additionally fails if `swarm-policy` or `swarm-response` gains a dependency on the memory or correlation modules, converting v1.82's advisory-lane boundary from a runtime integration test into a build-time guarantee; a deliberately-broken fixture proves the check fires rather than passing vacuously.
+### Assurance Foundation (v1.79)
+
+#### Fixture Determinism And Suite Health
+
+- [ ] **FIXTURE-01**: A deterministic fixture generator (`tools/regen-kitten-fixtures.sh`) regenerates every `experiments/*.yaml` consumed by `crates/swarm-runtime/src/kitten_agent.rs` tests from a pinned schema version.
+- [ ] **FIXTURE-02**: The 161 `experiments/*.yaml` files carrying the `command_line_normalization` field that `SuspiciousProcessTreeProfile` rejects under `deny_unknown_fields` are regenerated or removed; `cargo test -p swarm-runtime kitten_agent` passes with zero failures.
+- [ ] **FIXTURE-03**: `tools/check-fixture-freshness.sh` regenerates fixtures into a scratch directory, diffs against the checked-in copies, and fails CI on drift, so a "sync generated artifacts" commit can never again check in fixtures the parser rejects.
+- [ ] **FIXTURE-04**: Tests read fixtures from an isolated copy rather than the live repo-root `experiments/` directory, and no test or tool writes into the repository working tree during a run (closing the 48 untracked droppings under `crates/*/data/`).
+
+#### Assumption Registry And Invariant Mapping
+
+- [ ] **MAPPING-01**: `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants.
+- [ ] **MAPPING-02**: `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and an assumption ID.
+- [ ] **MAPPING-03**: A `// INVARIANT: <Name>` source-marker convention annotates every Rust call site named in MAPPING.md.
+- [ ] **MAPPING-04**: `scripts/check-mapping.sh` fails the build when a marker has no MAPPING.md row, or a MAPPING.md row names a Rust path that no longer exists.
+- [ ] **MAPPING-05**: `scripts/check-mapping.sh` runs as a required step in `.github/workflows/ci.yml`.
+
+#### Negative Falsifiability
+
+- [ ] **FALSIFY-01**: `docs/assurance/negative-registry.toml` maps each MAPPING.md invariant to a `crates/*/tests/negative_*.rs` test and the production function it targets.
+- [ ] **FALSIFY-02**: Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous.
+- [ ] **FALSIFY-03**: `scripts/check-negative-registry.sh` fails if any MAPPING.md row lacks a registry entry or names an absent test.
+- [ ] **FALSIFY-04**: `scripts/check-negative-registry.sh` is a required CI step.
+
+#### Deterministic Simulation Testing
+
+- [ ] **DST-01**: `crates/swarm-runtime/tests/dst_fault_injection.rs` drives the real `SwarmRuntime::authorize_and_execute` (`crates/swarm-runtime/src/lib.rs:753`), a real approval gate, and the real pheromone substrate, with no mocks.
+- [ ] **DST-02**: Seeded fault injection covers dropping the future mid-poll before dispatch, dropping it after dispatch but before receipt persistence, and closing/reopening the substrate between policy-allow and receipt-persist.
+- [ ] **DST-03**: Three oracles assert receipt-before-action ordering, exact disposition against the deterministic policy verdict, and no double-dispatch per request.
+- [ ] **DST-04**: A 64-seed corpus runs on every PR; a >=5,000-seed corpus runs in `.github/workflows/dst-nightly.yml`.
+- [ ] **DST-05**: `SWARM_DST_SEED=<n>` replays one episode's exact fault plan for one-command reproduction.
+- [ ] **DST-06**: `docs/assurance/MAPPING.md` gains a harness section stating the evidence boundary: single-process, single-substrate-instance, not distributed JetStream failover.
+
+#### Fuzz And Loom Coverage
+
+- [ ] **FUZZ-01**: A `fuzz/` cargo-fuzz workspace ships targets for `ingest_json_decode`, `ingest_sentinel_decode`, `ingest_tetragon_decode`, and `ruleset_yaml_parse`, each calling a real parse entry point.
+- [ ] **FUZZ-02**: `tools/seed-fuzz-corpus.sh` seeds each target from `scenarios/*.yaml` and `rulesets/*.yaml`.
+- [ ] **FUZZ-03**: `.github/workflows/fuzz-nightly.yml` runs each target for 600s nightly, failing on crash and uploading the crashing input.
+- [ ] **FUZZ-04**: A 30s smoke pass per target is a required PR step so harness breakage is caught immediately.
+- [ ] **LOOM-01**: `crates/swarm-pheromone/tests/loom_concurrent_write.rs` models concurrent deposit and decay-eviction.
+- [ ] **LOOM-02**: `crates/swarm-policy/tests/loom_concurrent_decision.rs` models concurrent decision evaluation against ruleset reload.
+- [ ] **LOOM-03**: `.github/workflows/loom-nightly.yml` runs both harnesses with a documented bounded preemption budget.
+- [ ] **LOOM-04**: MAPPING.md labels each Loom harness `scope = "bounded_abstract_model"`.
+
+#### Supply-Chain Hardening
+
+- [ ] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition.
+- [ ] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, and the `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift.
+
+### Red Swarm (v1.80)
+
+#### Red Operator Genome And Target Graph
+
+- [ ] **OPFOR-01**: Six red operator roles (`ReconOperator`, `InjectionOperator`, `AuthOperator`, `EvasionOperator`, `ChainOperator`, `OpsecOperator`) implement a shared `RedOperator` trait with `propose_steps(&self, graph, rng) -> Vec<GeneStep>`.
+- [ ] **OPFOR-02**: `TargetGraph` is built from `rulesets/evasion/attack-technique-catalog.yaml` and every scenario's `metadata.techniques`; nodes are the 11 catalogued detectors, techniques, and `ThreatClass` values.
+- [ ] **OPFOR-03**: `RedGenomeRng` is a deterministic `rand_core::RngCore` + `SeedableRng` PRNG with zero OS-entropy paths.
+- [ ] **OPFOR-04**: `RedGenome::plan(seed, generation, campaign)` resolves every `GeneStep.technique` only to techniques already in the `TargetGraph` (no invented techniques or payload shapes); `swarmctl red-swarm plan` prints the plan with a `determinism` object (`rng_seed`, `virtual_clock_start_ms`, `scheduler`).
+
+#### Attack Scoring, Stealth Budget And Pattern Memory
+
+- [ ] **ATKSCORE-01**: `AttackScorer` computes `AttackFitness { evasion_rate, stealth, red_fitness }` from an adversarial sequence and an `EvasionCoverageSnapshot`, where `evasion_rate = 1.0 - detector-weighted catch_rate`.
+- [ ] **ATKSCORE-02**: `StealthBudget` (`max_events_per_generation`, `max_distinct_hosts`, `max_technique_repeats`) deterministically truncates proposed steps once exhausted, so red cannot win by volume.
+- [ ] **ATKSCORE-03**: `AttackPatternDb` is an append-only JSON-lines store recording `{generation, technique, detector, detected}` with `technique_success_rate` biasing later generations.
+- [ ] **ATKSCORE-04**: `swarmctl red-swarm score --json` prints `red_fitness`, `evasion_rate`, `stealth`, and `events_emitted`.
+
+#### Bidirectional Co-Evolution And Convergence
+
+- [ ] **COEVOLVE-01**: `RedSwarmCampaign::run` plans, materializes events, runs them through the real detector pipeline, records outcomes, and computes both red fitness and blue catch rate per generation.
+- [ ] **COEVOLVE-02**: A bounded stopping rule terminates every run on `max_generations`, fitness plateau within `convergence.min_delta` for `convergence.patience` generations, or full blue coverage; `stop_reason` is recorded.
+- [ ] **COEVOLVE-03**: `GenomeRedSwarm` implements the existing `RedSwarmAdapter` trait alongside `SuiteRedSwarmAdapter`.
+- [ ] **COEVOLVE-04**: `EvolutionAdversarialSummary.corpus_sequence_id` may reference a campaign generation without changing its public shape; campaign reports persist under `data/red-swarm/campaigns/`.
+
+#### CI Arms Race Gate And Structural Isolation
+
+- [ ] **ARMSCI-01**: CI runs a bounded campaign and fails the build if `final_blue_catch_rate` regresses below a checked-in threshold; the gate ships in the same phase as its executor.
+- [ ] **ARMSCI-02**: `scripts/check-red-swarm-no-execution-authority.sh` fails if any forbidden symbol (`execute_response`, `ResponseAdapter`, `PolicyDecision::Authorize`, `live_response`) appears in red-swarm sources.
+- [ ] **ARMSCI-03**: A Rust-side companion test performs the same check at `cargo test` time, with a documented counterexample fixture proving the check is not vacuous.
+- [ ] **ARMSCI-04**: `swarmctl evolution status --json` includes a `red_swarm_campaign` object sourced from the on-disk report, reporting `null` rather than a stale value when absent.
+- [ ] **ARMSCI-05**: A wall-clock budget guard fails the CI step loudly rather than silently inflating build time.
+
+### Machine-Checked Decision Core (v1.81)
+
+#### Pure Decision Core Extraction
+
+- [ ] **DCORE-01**: `crates/swarm-policy/src/formal_core.rs` holds the approval and rate-limit logic as pure total functions taking window state and `now_ms: i64` explicitly, returning updated state instead of mutating `Arc<Mutex<HashMap<..>>>` in place.
+- [ ] **DCORE-02**: The partition and governance predicates (`GovernancePolicy::can_act`, `ContingencyLease::verify`/`can_redeem`/`redeem`, `governance_quorum_threshold`) are ported into `formal_core.rs` with no `Mutex`, no `fs`, and no direct clock; the internal `now_ms()` call at `tom_agent.rs:508` becomes an explicit parameter.
+- [ ] **DCORE-03**: `cargo tree -p swarm-policy` contains no `axum`, `hyper`, `tokio-rustls`, `reqwest`, `opentelemetry*`, `clap`, or `x509-parser`.
+- [ ] **DCORE-04**: `docs/adr/ADR-0002-decision-core-boundary.md` plus `scripts/check-decision-core-boundary.sh` enforce the forbidden-dependency list in CI.
+- [ ] **DCORE-05**: Every pre-existing `static_gate`, `configurable_gate`, and `tom_agent` governance test passes unchanged against the new call paths.
+
+#### Kani Bounded Model Checking
+
+- [ ] **KANI-01**: An optional `kani` feature and `crates/swarm-policy/src/kani_public_harnesses.rs` hold `#[kani::proof]` functions calling the real `pub fn`s from `formal_core.rs`.
+- [ ] **KANI-02**: Harnesses prove fail-closed evaluation, severity-gate soundness, and rate-limit boundedness within a 60,000ms trailing window.
+- [ ] **KANI-03**: Harnesses prove lease integrity: invalid signature, non-approve decision, and hash-mismatched proposal always deny; redemption never exceeds `blast_radius_cap`; expiry always denies. Model-only harnesses are labeled `MODEL-ONLY`.
+- [ ] **KANI-04**: `formal/kani/swarm-policy-harnesses.toml` enumerates every harness; a unit test fails the build if a `#[kani::proof]` function is missing from the manifest.
+- [ ] **KANI-05**: `scripts/run-kani-swarm-policy.sh` runs every PR-lane harness in CI.
+
+#### Named Safety Properties And Partition-Lease Model
+
+- [ ] **SAFEP-01**: `formal/PROPERTIES.md` defines P1-P6 (fail-closed evaluation, severity-gate soundness, partition-override receipt integrity, blast-radius conservation, quorum-transition soundness, rate-limit boundedness), each naming exact symbols and checking harnesses.
+- [ ] **SAFEP-02**: P1-P6 gain rows in `docs/assurance/MAPPING.md` following its existing schema.
+- [ ] **SAFEP-03**: `ASSUME-INJECTED-CLOCK` and `ASSUME-GOVERNOR-KEY-CUSTODY` are registered in `assumptions.toml` with owners and dependent properties.
+- [ ] **SAFEP-04**: `formal/tla/PartitionContingency.tla` models the four partition states, lease issuance and redemption with blast-radius cap, and reconciliation on heal, with named invariants.
+- [ ] **SAFEP-05**: At least 3 negative-falsifiability entries produce Apalache violations, each naming the runtime regression test pinning the same defect.
+
+#### Z3-Backed Promotion Gate
+
+- [ ] **ZGATE-01**: `require_solver_result_for_promotion` is added to config, distinct from `evolution.assurance.require_solver_summary`, defaulting to `true` in the curated ruleset.
+- [ ] **ZGATE-02**: `crates/swarm-evolution/src/promotion.rs` rejects a candidate whose `solver_summary` is `None` when the gate is enabled; today `promotion.rs` never references `solver_summary` at all (verified: 0 occurrences).
+- [ ] **ZGATE-03**: A `CustomZ3` bundle evaluated through the `z3`-feature-off path counts as no solver result, so a build without the feature fails closed rather than promoting on an unverified stub.
+- [ ] **ZGATE-04**: The promotion report prints the solver proof id and attestation hash, or an explicit "NO SOLVER RESULT RECORDED" line.
+- [ ] **ZGATE-05**: `crates/swarm-evolution/tests/promotion_solver_gate.rs` covers denied-missing-summary, denied-feature-disabled, and allowed-with-proof, asserting on concrete variants rather than log lines.
+
+### Provenance Memory And Correlation (v1.82)
+
+#### Provenance Graph Substrate
+
+- [ ] **GRAPH-01**: `KnowledgeGraphNode` gains `Process`, `File`, and `NetworkFlow` variants carrying raw telemetry identifiers, distinct from the existing detection-level `EngagementNode`.
+- [ ] **GRAPH-02**: `CausalRelation` (today only `ProcessParentChild` and `NetworkFlowOrigin`) gains `FileWrite`, `FileExecute`, `DnsResolution`, and `CredentialAccess`, emitted from every processed observation.
+- [ ] **GRAPH-03**: `KnowledgeGraphSnapshot::provenance_paths(from, to, max_hops)` returns bounded-hop paths and becomes the single read path `CorrelationEngine` uses, with a hub-degree cap so high-degree nodes cannot connect unrelated hunts.
+- [ ] **GRAPH-04**: A property test over 200+ randomized `prune_stale` sequences proves GC never orphans an edge, never deletes a retention-window-protected record, and is idempotent.
+- [ ] **GRAPH-05**: A soak test replays 100k synthetic events and asserts post-GC node+edge count stays under a fixed ceiling.
+- [ ] **GRAPH-06**: Config validation rejects or loudly warns on `knowledge_retention_days == 0` while `memory.enabled` is true, closing the silent-no-op GC footgun at `sphinx_agent.rs:1097`.
+
+#### Kill-Chain Reconstruction
+
+- [ ] **CHAIN-01**: `chain_reconstruction.rs` walks causal, temporal, and semantic edges and maps observed paths onto the stage ordering in `sequences/kill-chain-v1.yaml`.
+- [ ] **CHAIN-02**: `KillChainSequenceDetector` matches are written into the graph as semantic kill-chain-stage edges, making ephemeral detections durable evidence.
+- [ ] **CHAIN-03**: Incidents referencing disjoint `hunt_id`s connected by a causal path emit a `ReconstructedKillChain` persisted alongside `IncidentRecord`.
+- [ ] **CHAIN-04**: `narrate()` produces a stage-by-stage narrative, tested against at least two existing multi-stage fixtures with stage order matching each fixture's declared chain.
+
+#### Cross-Hunt Correlation
+
+- [ ] **XHUNT-01**: `CorrelationEngine`'s pairwise heuristics are replaced by graph traversal; all four `IncidentGraphDimension` tags come from real graph edges rather than string overlap.
+- [ ] **XHUNT-02**: `IncidentEvidenceLink` gains an optional `graph_path` so a reopened incident is re-explainable without recomputation; pre-existing JSON still deserializes.
+- [ ] **XHUNT-03**: An integration test disables `correlation.enabled` and `memory.enabled` together and asserts identical policy decisions, proving the optional lanes never gate the critical path.
+- [ ] **XHUNT-04**: A restart-simulation test proves incidents reload with identical dimensions and evidence.
+
+#### Dependency-Aware Triage
+
+- [ ] **TRIAGE-01**: `triage_score.rs` implements NODOZE-style path-rarity scoring with at least 5 unit-tested scenarios.
+- [ ] **TRIAGE-02**: The score suppresses `CorrelatedIncident.confidence_score`, gated by `correlation.enabled`, with no access from `swarm-policy`.
+- [ ] **TRIAGE-03**: Measured false-positive rate across `benign-baseline.yaml`, `benign-dns-baseline.yaml`, and `python-maintenance-benign.yaml` drops at least 50% relative to the pre-triage baseline, and no benign scenario crosses the escalation threshold.
+- [ ] **TRIAGE-04**: `FalsePositiveMeasurementReport` gains a dependency-score summary; a test asserts mean true-positive score exceeds mean false-positive score.
+- [ ] **TRIAGE-05**: New signed record types go through the existing agent signing paths, with signature round-trip coverage.
+### Distributed Governance (v1.83)
+
+#### BFT Correctness Repair
+
+- [ ] **BFT-01**: `recommended_max_faulty` in `crates/swarm-consensus/src/lib.rs:65` is corrected from `(committee_size - 1) / 2` to `(committee_size - 1) / 3` to match the module's own documented 2f+1-of-3f+1 model; a regression table asserts `recommended_max_faulty(4)==1`, `(7)==2`, `(10)==3`, `(13)==4`.
+- [ ] **BFT-02**: A round with a correctly sized `3f+1` committee still reaches `commits.len() == committee.threshold()` after excluding the maximum tolerable number of Byzantine members; today `ConsensusCommittee::threshold()` never shrinks after `exclude_sender`, so ejecting one bad actor can strand a round below its own threshold, and the existing Byzantine test never asserts the round still commits.
+- [ ] **BFT-03**: `simulate_governance_commit` (which today takes `governors: &BTreeMap<AgentId, SigningKey>`, holding every governor's private key in one process) is removed from the production path; governors exchange `ConsensusSignedEnvelope` over the pheromone substrate, and no production path holds more than one governor's key in memory.
+- [ ] **BFT-04**: `GovernancePolicy::can_act` drives authorization through the networked round while preserving the existing `GovernanceDecision::{Allow, Veto}` API and receipt shape, so `dispatcher.rs` and the documented receipt-backed flow are unchanged for callers.
+- [ ] **BFT-05**: A seeded message-loss and delay harness proves commit completes within `round_timeout_ms * (max_faulty + 1)` in the common case, and the phase states explicitly which fault classes it did not exercise.
+
+#### VRF Committee Selection
+
+- [ ] **VRF-01**: `crates/swarm-consensus/src/vrf.rs` implements ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381) over the existing Ed25519 keys, with prove and verify.
+- [ ] **VRF-02**: An eligible-governor pool sourced from the identity registry computes each epoch's committee by VRF output, replacing "every registered governor is permanently seated"; today `proposer_for` derives the leader from `sha256` over the public previous-commit hash and public member list, so the entire future schedule is precomputable by anyone.
+- [ ] **VRF-03**: An epoch-scoped committee wraps `ConsensusCommittee`, and the governance receipt payload gains an `epoch` field recording which committee authorized each commit.
+- [ ] **VRF-04**: `runtime.governance_epoch_duration_ms` drives rotation; a test proves epoch N+1 membership cannot be derived from public data alone without candidate private keys.
+- [ ] **VRF-05**: Single-governor bootstrap mode degenerates to a no-op selection and existing single-instance governance tests pass unmodified.
+
+#### Key Rotation And Revocation
+
+- [ ] **REVOKE-01**: `revoke_identity(agent_id, evidence, quorum_receipt)` is authorized by a quorum-signed receipt and does not require the revoked identity's cooperation, unlike `rotate_identity` which requires the retiring key to co-sign its own continuity proof.
+- [ ] **REVOKE-02**: `is_admitted` returns false immediately after revocation while historical signature verification against the retired key still succeeds.
+- [ ] **REVOKE-03**: `swarmctl identity revoke` fails closed with no partial registry mutation when quorum co-signature cannot be obtained.
+- [ ] **REVOKE-04**: An in-protocol exclusion receipt updates the identity registry mid-epoch; a test proves an excluded member cannot be VRF-selected into the next epoch.
+- [ ] **REVOKE-05**: Interleaved rotate and revoke calls keep the continuity-proof and retired-identity history consistent.
+
+#### Fail-Closed Contract Preservation
+
+- [ ] **DISTGOV-01**: Every row of the documented partition and recovery rules table has a passing integration test against the new VRF-rotated networked committee; the single-operator boundary language is preserved.
+- [ ] **DISTGOV-02**: Leases and reconciliation reports gain epoch provenance; a lease issued by epoch N remains redeemable after epoch N+1 rotates the signers, without weakening blast-radius or TTL checks.
+- [ ] **DISTGOV-03**: Quorum loss mid-epoch-transition falls back to the last-confirmed committee rather than seating a half-formed one; the scenario is handed to v1.81's TLA+ model as an extension rather than modeled twice.
+- [ ] **DISTGOV-04**: Governance status and the health endpoints report current epoch, committee size, and time to next rotation, including eligible-pool exhaustion below `3f+1`.
+
+### Herd Immunity (v1.84)
+
+#### Reversible Quarantine Execution
+
+- [ ] **QRT-01**: `crates/swarm-response` gains a real executor for `QuarantineFile`, `SuspendProcess`, `IsolateHost`, and `TerminateUserSession` that persists a quarantine lease carrying blast radius, rollback plan, governance receipt, and expiry; today `ResponseBlastRadiusPreview` and `ResponseRollbackPreview` exist and are surfaced over HTTP, but no rollback executor exists anywhere in `swarm-response` (verified: zero non-preview rollback references).
+- [ ] **QRT-02**: `execute_rollback` performs the concrete inverse action per rollback step kind and emits a rollback receipt chained to the original governance receipt id.
+- [ ] **QRT-03**: Every quarantine lease carries a mandatory expiry mirroring the existing contingency-lease TTL pattern; a background sweep rolls back automatically on expiry with zero operator action.
+- [ ] **QRT-04**: `swarmctl quarantine release <lease_id>` performs manual early rollback through the same governance signing path; an integration test executes containment, verifies effect, rolls back both manually and by TTL, and verifies both receipts.
+
+#### Information-Flow Control
+
+- [ ] **IFC-01**: The knowledge graph gains a data-flow edge kind and a taint label carrying source indicator, confidence, first-observed timestamp, and provenance chain.
+- [ ] **IFC-02**: `propagate_taint` walks causal and data-flow edges computing a decaying taint score whose half-life mirrors the pheromone default, reusing Sphinx's existing GC rather than adding a second retention path.
+- [ ] **IFC-03**: Detector confidence is boosted by an active taint label's decayed score, capped at 1.0, with the propagation chain recorded on the finding.
+- [ ] **IFC-04**: The policy gate fails closed on any containment proposal whose target has taint provenance but no independent detection corroboration, so taint raises scrutiny but never singlehandedly authorizes destructive response.
+
+#### Cross-Instance Immunity Sharing
+
+- [ ] **HERD-01**: An immunity record carrying threat class, indicator pattern, confirming instance, evidence, and signature publishes to the existing JetStream substrate, reusing proven multi-instance replication rather than inventing gossip.
+- [ ] **HERD-02**: A receiving instance never auto-applies a peer's record; adoption requires the indicator to independently match a locally observed finding or replay-corpus entry, with the no-single-publisher invariant stated in the module doc.
+- [ ] **HERD-03**: Adopted updates stage through a per-instance canary soak; a false-positive spike reverts that instance only, affecting neither the publisher nor other subscribers.
+- [ ] **HERD-04**: A three-instance integration test proves a corroborating peer adopts, a non-corroborating peer does not, and a fabricated record injected directly is rejected by both.
+
+#### Adaptive Deception Depth
+
+- [ ] **DECOY-01**: Deception playbook entries gain a fidelity tier; interactive and stateful decoys return believable payloads rather than bare tripwires.
+- [ ] **DECOY-02**: Decoy placement adapts toward zones adjacent to recently tainted entities, with the repo-owned playbook remaining the floor so placement never leaves operator-approved zones.
+- [ ] **DECOY-03**: Higher-fidelity decoy engagement seeds proportionally stronger taint, producing higher-confidence containment candidates.
+- [ ] **DECOY-04**: A full-loop integration test proves decoy interaction to taint propagation to receipt-backed quarantine to automatic rollback to immunity publication to corroborated peer adoption, serving as the milestone's executor rather than an attested claim.
+
+### The Detection Commons (v1.85)
+
+#### Normative Spec
+
+- [ ] **SPEC-01**: `spec/README.md` gives three named reading orders (Implementer, Auditor, SDK author), each citing `spec/PROTOCOL.md`, `spec/PHEROMONE.md`, `spec/RECEIPT-CHAIN.md`, and `spec/WIRE.md` by path, under one shared v1 banner.
+- [ ] **SPEC-02**: `spec/PHEROMONE.md` normatively specifies every `PheromoneDeposit` field including the schema-version compatibility window; `spec/RECEIPT-CHAIN.md` specifies the envelope, chain linkage, checkpoint, and Merkle proof; `spec/WIRE.md` specifies only the stable external HTTP subset, explicitly excluding operator-internal routes.
+- [ ] **SPEC-03**: `spec/schemas/` ships JSON Schema for the deposit, envelope, chain-link verdict, and one wire body; a CI test serializes real runtime-produced values and validates them against the checked-in schemas so schema and Rust type cannot drift.
+
+#### External Conformance Suite
+
+- [ ] **CONFORM-01**: `swarmctl conformance-package` bundles all 19 scenarios, all 3 suites, the default ruleset, and pinned expected verdicts into a checksummed archive an external implementer can verify without cloning the monorepo.
+- [ ] **CONFORM-02**: `swarmctl conformance-verify <package>` drives replay and evaluation for every packaged scenario and exits non-zero on verdict mismatch; `--evidence` additionally verifies every exported receipt and fails closed.
+- [ ] **CONFORM-03**: A CI job builds the package and verifies against that fresh build as a round-trip self-check; `docs/CONFORMANCE.md` documents the flow in commands runnable without repo access.
+
+#### Detector-Authoring SDK
+
+- [ ] **SDK-01**: `crates/swarm-detector-sdk` exposes the minimal detector-authoring surface depending only on `swarm-core`, with a CI dependency check proving no `swarm-runtime`, axum, hyper, reqwest, or OpenTelemetry entry.
+- [ ] **SDK-02**: `examples/hello-detector/` ships a detector authored purely against the SDK, a ruleset entry, and a smoke script that runs `swarmctl first-run` and prints an emitted deposit and a verified receipt id.
+- [ ] **SDK-03**: `tools/run-hello-smokes.sh` is the single CI entry point for the hello-example family; `spec/SDK.md` states SDK-to-schema-version compatibility.
+
+#### Generated Coverage And Adopter IA
+
+- [ ] **COVDOC-01**: `tools/gen-coverage-doc` generates `docs/security/detection-coverage.md` from `rulesets/evasion/attack-technique-catalog.yaml`, reproducing each intentionally-uncovered technique and rationale verbatim, idempotent and stamped as generated.
+- [ ] **COVDOC-02**: A `--check` mode fails CI when the generated doc is stale, wired into the documented contributor gate.
+- [ ] **COVDOC-03**: `docs/README.md` provides four role-indexed reading orders; `README.md` and `spec/README.md` each point at `docs/REFERENCE-STATUS.md` as the qualified-claims gate separating aspirational narrative from shipped contract.
+
+### Federation (v1.86)
+
+#### Cross-Operator Evidence Exchange
+
+- [ ] **FEDX-01**: `crates/swarm-federation` defines an evidence-exchange envelope wrapping one existing signed spine envelope plus exporting-operator provenance, with no embedded local paths, hostnames, or store internals.
+- [ ] **FEDX-02**: Verification uses only signature checking plus existing chain and checkpoint verification with zero network calls, returning the same verdict taxonomy so import fails closed exactly like local verification.
+- [ ] **FEDX-03**: `swarmctl federation export` and `import` round-trip a self-contained directory with no server; the format conforms to the v1.85 normative spec rather than inventing its own.
+- [ ] **FEDX-04**: Federation config defaults to disabled so the feature is strictly opt-in per operator.
+
+#### Local Activation Boundary
+
+- [ ] **LOCACT-01**: Deposits gain federated-peer provenance with a distinct lower base weight, so every deposit is tagged by origin.
+- [ ] **LOCACT-02**: An audited proof plus named test establishes that no code path lets federated evidence alone satisfy the conditions checked before issuing a governance receipt.
+- [ ] **LOCACT-03**: An integration test imports a maximal-severity federated envelope with zero corroborating local telemetry and asserts no dispatch, no signed receipt, and only an advisory-received audit event; this is the regression test for the anti-single-publisher property.
+- [ ] **LOCACT-04**: The architecture and consensus docs replace the blanket "multi-operator governance plane is deferred" line with the precise new boundary: exchange exists, activation stays local, and the governance-mode table gains no new row.
+
+#### Reputation And Anti-Equivocation
+
+- [ ] **FEDREP-01**: Peer reputation is computed purely locally from that peer's own prior-import outcomes, with no shared registry or global score.
+- [ ] **FEDREP-02**: Peer admission is bilateral and locally signed; a peer below the configured minimum reputation is demoted to advisory-only weight zero without deleting history, producing a signed audit event.
+- [ ] **EQUIV-01**: Conflicting checkpoint statements for the same log and sequence from the same issuer produce independently re-verifiable equivocation evidence, detectable from locally held imports with no central witness.
+- [ ] **EQUIV-02**: Confirmed equivocation revokes the issuer locally and is exportable so other operators can verify the same proof independently.
+
+#### Privacy-Preserving Sharing
+
+- [ ] **FEDPRIV-01**: A redaction layer pseudonymizes hostnames, usernames, and internal addresses with keyed pseudonyms stable within one export relationship but not reversible by the receiver.
+- [ ] **FEDPRIV-02**: An explicit allowlist defines which detection-relevant fields may cross the boundary; export fails closed on any field not on the list.
+- [ ] **FEDPRIV-03**: `--dry-run` prints the exact redacted payload for operator review before any signed package is written; the docs enumerate every infrastructure-identifying field class and its handling.
+- [ ] **FEDPRIV-04**: A CI test exports a fixture containing known hostnames, usernames, and internal CIDRs and asserts none of those literal byte strings appear anywhere in the exported package, plus a documented pseudonym rotation path bounding long-term linkability.
+
+### Fleet Scale (v1.87)
+
+#### Sharded Substrate And Horizontal Scale
+
+- [ ] **SHARD-01**: The JetStream backend gains a documented deterministic shard function mapping telemetry onto one of N streams, replacing the current single-bucket design, with stable assignment across restarts.
+- [ ] **SHARD-02**: The Helm chart supports N runtime pods each claiming a disjoint shard set via a startup lease, with per-shard readiness shedding so one hot shard sheds independently.
+- [ ] **SHARD-03**: A fleet benchmark reruns the existing fixed and ramp-to-shed profiles at N=1, 3, and 10 concurrent instances, publishing measured throughput and first shed point per N; no capacity number is asserted without a rerun.
+
+#### Fleet-Wide Blast Radius And Tenant Isolation
+
+- [ ] **FCAP-01**: `runtime.fleet_blast_radius_cap` is added, distinct from the existing per-instance `partition_contingency_blast_radius_cap`, and fails config validation fail-closed at zero.
+- [ ] **FCAP-02**: A durable fleet ledger tracks cumulative destructive actions across instances and denies further action once the cap is reached, even when an individual instance's own quorum would approve; ledger unavailability fails closed for response while health endpoints stay observable.
+- [ ] **TENANT-01**: Config resolves per-tenant policy and detector thresholds with no cross-tenant leakage, proven by a test that tenant A's resolved policy never reflects tenant B's values.
+- [ ] **TENANT-02**: Identity admission and receipt persistence are partitioned per tenant with separate chain roots; a replay or query scoped to one tenant never returns another's records on the shared substrate.
+
+#### Fleet Operational Maturity
+
+- [ ] **FLEETOPS-01**: Fleet-scale alert baselines are added, every threshold traceable to a measured row in the fleet benchmark rather than assumed.
+- [ ] **FLEETOPS-02**: The DR runbook gains a fleet upgrade and rollback drill preserving shard assignment and ledger state across a rolling upgrade.
+- [ ] **FLEETOPS-03**: A capacity-model doc states the fleet-sizing method and requires a benchmark rerun on the target host before any capacity number is treated as valid.
+- [ ] **FLEETOPS-04**: Metrics series gain instance and shard labels so fleet-wide aggregation works without a new metrics system.
+
+#### Signed Release Supply Chain
+
+- [ ] **RELSIGN-01**: The release workflow inherited from the v1.74-v1.77 branch is extended to publish multi-arch container images on tag push, and its coverage is reconciled against the `RELEASE-01` requirement currently marked Complete.
+- [ ] **RELSIGN-02**: Published images are signed with keyless signing, and a required check verifies the signature before the release is marked complete.
+- [ ] **RELSIGN-03**: SBOM and provenance attestation attach to the release artifact and become required fields in the recovery evidence packet for any live-response deployment.
+- [ ] **RELSIGN-04**: Signature verification blocks deployment mechanically for fleets running live response, extending the existing startup attestation to the container supply chain rather than relying on a runbook instruction an operator can skip.
+
 ## Traceability
 
 | Requirement | Phase | Status |
@@ -1088,6 +1412,186 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | E2EPROOF-01 | Phase 278 | Pending |
 | E2EPROOF-02 | Phase 278 | Pending |
 | E2EPROOF-03 | Phase 279 | Pending |
+| GATEFIX-01 | Phase 280 | Pending |
+| GATEFIX-02 | Phase 280 | Pending |
+| GATEFIX-03 | Phase 280 | Pending |
+| GATEFIX-04 | Phase 280 | Pending |
+| INCFIX-01 | Phase 281 | Pending |
+| INCFIX-02 | Phase 281 | Pending |
+| INCFIX-03 | Phase 281 | Pending |
+| SPLIT-01 | Phase 282 | Pending |
+| SPLIT-02 | Phase 282 | Pending |
+| SPLIT-03 | Phase 282 | Pending |
+| SPLIT-04 | Phase 282 | Pending |
+| SPLIT-05 | Phase 282 | Pending |
+| SPLIT-06 | Phase 282 | Pending |
+| TCBOUND-01 | Phase 283 | Pending |
+| TCBOUND-02 | Phase 283 | Pending |
+| TCBOUND-03 | Phase 283 | Pending |
+| TCBOUND-04 | Phase 283 | Pending |
+| FIXTURE-01 | Phase 284 | Pending |
+| FIXTURE-02 | Phase 284 | Pending |
+| FIXTURE-03 | Phase 284 | Pending |
+| FIXTURE-04 | Phase 284 | Pending |
+| MAPPING-01 | Phase 285 | Pending |
+| MAPPING-02 | Phase 285 | Pending |
+| MAPPING-03 | Phase 285 | Pending |
+| MAPPING-04 | Phase 285 | Pending |
+| MAPPING-05 | Phase 285 | Pending |
+| FALSIFY-01 | Phase 285 | Pending |
+| FALSIFY-02 | Phase 285 | Pending |
+| FALSIFY-03 | Phase 285 | Pending |
+| FALSIFY-04 | Phase 285 | Pending |
+| DST-01 | Phase 286 | Pending |
+| DST-02 | Phase 286 | Pending |
+| DST-03 | Phase 286 | Pending |
+| DST-04 | Phase 286 | Pending |
+| DST-05 | Phase 286 | Pending |
+| DST-06 | Phase 286 | Pending |
+| FUZZ-01 | Phase 287 | Pending |
+| FUZZ-02 | Phase 287 | Pending |
+| FUZZ-03 | Phase 287 | Pending |
+| FUZZ-04 | Phase 287 | Pending |
+| LOOM-01 | Phase 287 | Pending |
+| LOOM-02 | Phase 287 | Pending |
+| LOOM-03 | Phase 287 | Pending |
+| LOOM-04 | Phase 287 | Pending |
+| SUPPLY-01 | Phase 287 | Pending |
+| SUPPLY-02 | Phase 287 | Pending |
+| OPFOR-01 | Phase 288 | Pending |
+| OPFOR-02 | Phase 288 | Pending |
+| OPFOR-03 | Phase 288 | Pending |
+| OPFOR-04 | Phase 288 | Pending |
+| ATKSCORE-01 | Phase 289 | Pending |
+| ATKSCORE-02 | Phase 289 | Pending |
+| ATKSCORE-03 | Phase 289 | Pending |
+| ATKSCORE-04 | Phase 289 | Pending |
+| COEVOLVE-01 | Phase 290 | Pending |
+| COEVOLVE-02 | Phase 290 | Pending |
+| COEVOLVE-03 | Phase 290 | Pending |
+| COEVOLVE-04 | Phase 290 | Pending |
+| ARMSCI-01 | Phase 291 | Pending |
+| ARMSCI-02 | Phase 291 | Pending |
+| ARMSCI-03 | Phase 291 | Pending |
+| ARMSCI-04 | Phase 291 | Pending |
+| ARMSCI-05 | Phase 291 | Pending |
+| DCORE-01 | Phase 292 | Pending |
+| DCORE-02 | Phase 292 | Pending |
+| DCORE-03 | Phase 292 | Pending |
+| DCORE-04 | Phase 292 | Pending |
+| DCORE-05 | Phase 292 | Pending |
+| KANI-01 | Phase 293 | Pending |
+| KANI-02 | Phase 293 | Pending |
+| KANI-03 | Phase 293 | Pending |
+| KANI-04 | Phase 293 | Pending |
+| KANI-05 | Phase 293 | Pending |
+| SAFEP-01 | Phase 294 | Pending |
+| SAFEP-02 | Phase 294 | Pending |
+| SAFEP-03 | Phase 294 | Pending |
+| SAFEP-04 | Phase 294 | Pending |
+| SAFEP-05 | Phase 294 | Pending |
+| ZGATE-01 | Phase 322 | Pending |
+| ZGATE-02 | Phase 322 | Pending |
+| ZGATE-03 | Phase 322 | Pending |
+| ZGATE-04 | Phase 322 | Pending |
+| ZGATE-05 | Phase 322 | Pending |
+| GRAPH-01 | Phase 296 | Pending |
+| GRAPH-02 | Phase 296 | Pending |
+| GRAPH-03 | Phase 296 | Pending |
+| GRAPH-04 | Phase 296 | Pending |
+| GRAPH-05 | Phase 296 | Pending |
+| GRAPH-06 | Phase 296 | Pending |
+| CHAIN-01 | Phase 297 | Pending |
+| CHAIN-02 | Phase 297 | Pending |
+| CHAIN-03 | Phase 297 | Pending |
+| CHAIN-04 | Phase 297 | Pending |
+| XHUNT-01 | Phase 298 | Pending |
+| XHUNT-02 | Phase 298 | Pending |
+| XHUNT-03 | Phase 298 | Pending |
+| XHUNT-04 | Phase 298 | Pending |
+| TRIAGE-01 | Phase 299 | Pending |
+| TRIAGE-02 | Phase 299 | Pending |
+| TRIAGE-03 | Phase 299 | Pending |
+| TRIAGE-04 | Phase 299 | Pending |
+| TRIAGE-05 | Phase 299 | Pending |
+| BFT-01 | Phase 321 | Pending |
+| BFT-02 | Phase 321 | Pending |
+| BFT-03 | Phase 321 | Pending |
+| BFT-04 | Phase 321 | Pending |
+| BFT-05 | Phase 321 | Pending |
+| VRF-01 | Phase 301 | Pending |
+| VRF-02 | Phase 301 | Pending |
+| VRF-03 | Phase 301 | Pending |
+| VRF-04 | Phase 301 | Pending |
+| VRF-05 | Phase 301 | Pending |
+| REVOKE-01 | Phase 302 | Pending |
+| REVOKE-02 | Phase 302 | Pending |
+| REVOKE-03 | Phase 302 | Pending |
+| REVOKE-04 | Phase 302 | Pending |
+| REVOKE-05 | Phase 302 | Pending |
+| DISTGOV-01 | Phase 303 | Pending |
+| DISTGOV-02 | Phase 303 | Pending |
+| DISTGOV-03 | Phase 303 | Pending |
+| DISTGOV-04 | Phase 303 | Pending |
+| QRT-01 | Phase 320 | Pending |
+| QRT-02 | Phase 320 | Pending |
+| QRT-03 | Phase 320 | Pending |
+| QRT-04 | Phase 320 | Pending |
+| IFC-01 | Phase 305 | Pending |
+| IFC-02 | Phase 305 | Pending |
+| IFC-03 | Phase 305 | Pending |
+| IFC-04 | Phase 305 | Pending |
+| HERD-01 | Phase 306 | Pending |
+| HERD-02 | Phase 306 | Pending |
+| HERD-03 | Phase 306 | Pending |
+| HERD-04 | Phase 306 | Pending |
+| DECOY-01 | Phase 307 | Pending |
+| DECOY-02 | Phase 307 | Pending |
+| DECOY-03 | Phase 307 | Pending |
+| DECOY-04 | Phase 307 | Pending |
+| SPEC-01 | Phase 308 | Pending |
+| SPEC-02 | Phase 308 | Pending |
+| SPEC-03 | Phase 308 | Pending |
+| CONFORM-01 | Phase 309 | Pending |
+| CONFORM-02 | Phase 309 | Pending |
+| CONFORM-03 | Phase 309 | Pending |
+| SDK-01 | Phase 310 | Pending |
+| SDK-02 | Phase 310 | Pending |
+| SDK-03 | Phase 310 | Pending |
+| COVDOC-01 | Phase 311 | Pending |
+| COVDOC-02 | Phase 311 | Pending |
+| COVDOC-03 | Phase 311 | Pending |
+| FEDX-01 | Phase 312 | Pending |
+| FEDX-02 | Phase 312 | Pending |
+| FEDX-03 | Phase 312 | Pending |
+| FEDX-04 | Phase 312 | Pending |
+| LOCACT-01 | Phase 313 | Pending |
+| LOCACT-02 | Phase 313 | Pending |
+| LOCACT-03 | Phase 313 | Pending |
+| LOCACT-04 | Phase 313 | Pending |
+| FEDREP-01 | Phase 314 | Pending |
+| FEDREP-02 | Phase 314 | Pending |
+| EQUIV-01 | Phase 314 | Pending |
+| EQUIV-02 | Phase 314 | Pending |
+| FEDPRIV-01 | Phase 315 | Pending |
+| FEDPRIV-02 | Phase 315 | Pending |
+| FEDPRIV-03 | Phase 315 | Pending |
+| FEDPRIV-04 | Phase 315 | Pending |
+| SHARD-01 | Phase 316 | Pending |
+| SHARD-02 | Phase 316 | Pending |
+| SHARD-03 | Phase 316 | Pending |
+| FCAP-01 | Phase 317 | Pending |
+| FCAP-02 | Phase 317 | Pending |
+| TENANT-01 | Phase 317 | Pending |
+| TENANT-02 | Phase 317 | Pending |
+| FLEETOPS-01 | Phase 318 | Pending |
+| FLEETOPS-02 | Phase 318 | Pending |
+| FLEETOPS-03 | Phase 318 | Pending |
+| FLEETOPS-04 | Phase 318 | Pending |
+| RELSIGN-01 | Phase 319 | Pending |
+| RELSIGN-02 | Phase 319 | Pending |
+| RELSIGN-03 | Phase 319 | Pending |
+| RELSIGN-04 | Phase 319 | Pending |
 
 **Coverage:**
 - v1.30-v1.37.1: 56 requirements satisfied across 10 milestones
@@ -1131,7 +1635,18 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.75 active: 10 requirements across phases 268-271 (DEFAULTS-01-02, OPEXP-01-02 -> Phase 268; DEPLOY-01-02 -> Phase 269; EMULATION-01-03 -> Phase 270; DEPLOY-03 -> Phase 271)
 - v1.76 queued: 9 requirements across phases 272-275 (THREATINTEL-01-03 -> Phase 272; CLOUDBR-01-03 -> Phase 273; CLOUDDET-01 -> Phase 274; CLOUDDET-02-03 -> Phase 275)
 - v1.77 queued: 9 requirements across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
+- v1.78 queued: 17 requirements across phases 280-283 (GATEFIX-01-04 -> Phase 280; INCFIX-01-03 -> Phase 281; SPLIT-01-06 -> Phase 282; TCBOUND-01-04 -> Phase 283)
+- v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
+- v1.79 queued: 25 requirements across phases 284-287 (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
+- v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
+- v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
+- v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
+- v1.83 queued: 14 requirements across phases 301-303 (VRF-01-05 -> Phase 301; REVOKE-01-05 -> Phase 302; DISTGOV-01-04 -> Phase 303)
+- v1.84 queued: 12 requirements across phases 305-307 (IFC-01-04 -> Phase 305; HERD-01-04 -> Phase 306; DECOY-01-04 -> Phase 307)
+- v1.85 queued: 12 requirements across phases 308-311 (SPEC-01-03 -> Phase 308; CONFORM-01-03 -> Phase 309; SDK-01-03 -> Phase 310; COVDOC-01-03 -> Phase 311)
+- v1.86 queued: 16 requirements across phases 312-315 (FEDX-01-04 -> Phase 312; LOCACT-01-04 -> Phase 313; FEDREP-01-02, EQUIV-01-02 -> Phase 314; FEDPRIV-01-04 -> Phase 315)
+- v1.87 queued: 15 requirements across phases 316-319 (SHARD-01-03 -> Phase 316; FCAP-01-02, TENANT-01-02 -> Phase 317; FLEETOPS-01-04 -> Phase 318; RELSIGN-01-04 -> Phase 319)
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-04-13 — Defined v1.77 Integration Proof requirements and mapped 9 requirements to phases 276-279*
+*Last updated: 2026-08-10 - Defined v1.78 through v1.87 requirements and mapped 180 requirements to phases 280-319*

@@ -911,6 +911,632 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 3. The integration proof as a whole is executable as a single scripted validation step (`make integration-proof` or equivalent) that passes in CI without live vendor credentials.
 
 
+### v1.78 Runtime Decomposition And TCB Boundary
+
+**Goal:** Green the verification gates, eliminate the `core.inc` include pattern, split the 97,709-LOC `swarm-runtime` crate along its existing module seams, and name and enforce a trusted computing base, so every later milestone builds on real crate boundaries instead of a monolith.
+**Executable phases:** 280-283
+
+- [ ] **Phase 280: Verification Gate Repair** - Replace crate-wide clippy opt-outs with reviewed per-call-site allows, widen the panic contract beyond swarm-runtime, and stop the supply-chain check suppressing its own findings. (GATEFIX-02, GATEFIX-03, GATEFIX-04)
+- [ ] **Phase 281: core.inc Elimination** - Replace the four 22,762-line `.inc` include files with ordinary modules and decompose the CLI into one module per command domain. (INCFIX-01, INCFIX-02, INCFIX-03)
+- [ ] **Phase 282: Crate Extraction From swarm-runtime** - Break three known dependency cycles, then extract HTTP, replay, workbench, agents, ingest, and the evolution lane into real crates. (SPLIT-01, SPLIT-03, SPLIT-06)
+- [ ] **Phase 283: TCB Boundary And Layering Enforcement** - Name `swarm-policy` + `swarm-crypto` + `swarm-spine` as the trusted base and enforce the boundary in CI. (TCBOUND-01, TCBOUND-02, TCBOUND-03, TCBOUND-04)
+
+### Phase 280: Verification Gate Repair
+
+**Goal:** Ambush's supply-chain gate suppresses its own findings and its panic contract covers a narrower surface than it appears to. Refactoring on top of gates that do not enforce is unsafe, so this phase runs before any structural change.
+**Requirements:** GATEFIX-01, GATEFIX-02, GATEFIX-03, GATEFIX-04
+**Depends on:** v1.77 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `cargo clippy --workspace --all-targets -- -D warnings` is verified exit-0 on the branch tip in an isolated worktree with an empty target directory, and the result is recorded; the ~41 violations reported against `main` are confirmed absent on the branch.
+2. The crate-wide `#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]` opt-outs in `swarm-core/src/lib.rs`, `swarm-runtime/src/lib.rs`, and `swarm_detect.rs` are replaced by reviewed per-call-site allows, so future unwraps in test code are not silently permitted workspace-wide.
+3. `bash tools/check-runtime-panic-contract.sh` scans every workspace crate's production code, and its in-file documentation states exactly which surfaces it does and does not cover.
+4. `cargo deny check advisories licenses bans sources` passes with no `-A duplicate` suppression (present at `tools/check-supply-chain.sh:8` on both main and the branch), and `deny.toml` raises `[bans] multiple-versions`, `[sources] unknown-registry`, and `[sources] unknown-git` from `warn` to `deny`.
+5. `cargo test --workspace` passes with zero failures on a clean checkout.
+
+### Phase 281: core.inc Elimination
+
+**Goal:** Four `#[path = "core.inc"]` files hold 22,762 lines that `cargo fmt`, clippy, rust-analyzer, and every LOC tool skip. Removing the pattern is a prerequisite for splitting the crate, since the includes cross crate boundaries.
+**Requirements:** INCFIX-01, INCFIX-02, INCFIX-03
+**Depends on:** Phase 280
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. No `.inc` file remains under `crates/`; `find crates -name '*.inc'` returns empty.
+2. No Rust source file under `crates/` exceeds 800 lines, and the CLI is organized as one module per command domain with the evolution commands in their own submodule tree.
+3. `cargo fmt --all -- --check` passes over code that was previously invisible to it.
+4. A CI check fails the build if a new `#[path = "*.inc"]` directive or non-`.rs` Rust source file is added.
+
+### Phase 282: Crate Extraction From swarm-runtime
+
+**Goal:** Turn one 115,156-LOC crate (97,709 excluding `.inc`) into several. The seams exist as modules but three of them are cyclically coupled, so this phase breaks the cycles before cutting the crates.
+**Requirements:** SPLIT-01, SPLIT-02, SPLIT-03, SPLIT-04, SPLIT-05, SPLIT-06
+**Depends on:** Phase 281
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. The three known cycles are broken before any crate is cut: `service/` stays in the remainder rather than moving into the HTTP crate, `OperatorSurfacePaths` is relocated out of `http`, and a `swarm_core::agent` trait boundary replaces `dispatcher.rs`/`lib.rs` imports of concrete `crate::*_agent` types.
+2. `swarm-runtime-http`, `swarm-runtime-replay`, `swarm-runtime-workbench`, `swarm-agents`, and `swarm-ingest-runtime` exist as workspace crates, and `swarm-evolution` contains real source rather than an 8-line facade.
+3. `crates/swarm-runtime/Cargo.toml` no longer depends on `axum`, `hyper`, `hyper-util`, `tokio-rustls`, `rustls-pemfile`, or `x509-parser`.
+4. `crates/swarm-runtime` is under 25,000 LOC and no workspace crate exceeds 20,000 LOC, measured with a method that counts `.inc` files and recorded in the completion notes.
+5. `cargo build --workspace`, `cargo test --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings` all pass at each phase boundary, not only at the end.
+
+### Phase 283: TCB Boundary And Layering Enforcement
+
+**Goal:** `swarm-policy` is already dependency-clean and nothing enforces that it stays that way. Name the trusted base and make the boundary a build-time guarantee before six later milestones add code around it.
+**Requirements:** TCBOUND-01, TCBOUND-02, TCBOUND-03, TCBOUND-04
+**Depends on:** Phase 282
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `docs/adr/ADR-0001-trusted-computing-base.md` names `swarm-policy` + `swarm-crypto` + `swarm-spine` as the TCB and states in negative-space form what they must never depend on.
+2. Each of the six trust-sensitive crates carries an "Owns / does not own" section in its crate-level doc comment.
+3. `scripts/check-workspace-layering.sh` runs as a required CI step and fails when a TCB crate gains a product or transport dependency, proven by a deliberately-broken fixture.
+4. The same script fails if `swarm-policy` or `swarm-response` gains a dependency on the memory or correlation modules, making v1.82's advisory-lane boundary a build-time guarantee.
+
+### v1.78.1 Critical Defect Repair
+
+**Goal:** Repair three defects reachable in the running system today before thirty-five phases of capability are built on top of them: containment with no undo, a Byzantine threshold that can deadlock governance, and a promotion gate that ignores its own solver results.
+**Executable phases:** 320-322
+
+- [ ] **Phase 320: Reversible Quarantine Execution** - Promote the preview-only blast-radius and rollback model into a real executor with TTL auto-revert and a receipt-chained undo path. (QRT-01, QRT-02, QRT-03, QRT-04)
+- [ ] **Phase 321: BFT Correctness Repair** - Fix the `(n-1)/2` sizing bug and prove a round still commits after ejecting the tolerable number of Byzantine members. (BFT-01, BFT-02, BFT-03, BFT-04, BFT-05)
+- [ ] **Phase 322: Promotion Solver Gate** - Make the production promotion path read the solver results the Z3 lane already produces. (ZGATE-01, ZGATE-02, ZGATE-03, ZGATE-04, ZGATE-05)
+
+### Phase 320: Reversible Quarantine Execution
+
+**Goal:** `QuarantineFile` dispatches to real EDR adapters while no rollback executor exists anywhere in `swarm-response` (verified: zero non-preview rollback references). The system can contain a host and cannot un-contain it. This is the highest-blast-radius gap in the codebase.
+**Requirements:** QRT-01, QRT-02, QRT-03, QRT-04
+**Depends on:** v1.78 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Execute-and-rollback coverage exists for quarantine, suspend, isolate, and session-terminate, persisting a lease carrying blast radius, rollback plan, governance receipt, and expiry.
+2. A lease past its TTL is auto-rolled-back by the background sweep within one sweep interval with no operator action.
+3. `swarmctl quarantine release <lease_id>` performs manual early rollback through the same governance signing path, and a tampered rollback receipt fails verification.
+4. An end-to-end test executes containment then both manual and TTL rollback and asserts the target resource is fully restored to its pre-containment state.
+
+### Phase 321: BFT Correctness Repair
+
+**Goal:** `recommended_max_faulty` returns `(n-1)/2` instead of `(n-1)/3` at `crates/swarm-consensus/src/lib.rs:65`, and committee threshold never shrinks after exclusion, so ejecting one Byzantine member can strand a round below its own threshold. This is a live liveness defect in the path that gates destructive response.
+**Requirements:** BFT-01, BFT-02, BFT-03, BFT-04, BFT-05
+**Depends on:** Phase 320
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `recommended_max_faulty` computes `(n-1)/3`, with a regression table asserting 4->1, 7->2, 10->3, 13->4.
+2. A correctly sized committee still reaches its threshold after excluding the maximum tolerable number of Byzantine members, asserted directly rather than in prose.
+3. `simulate_governance_commit`'s co-located-key path is removed from production; no production path holds more than one governor signing key in memory.
+4. A seeded message-loss and delay harness proves commit completes within the documented bound, and the phase states which fault classes it did not exercise.
+
+### Phase 322: Promotion Solver Gate
+
+**Goal:** `crates/swarm-evolution/src/promotion.rs` never references `solver_summary` (verified: zero occurrences), so an evolved detector can reach production with no recorded solver result while the Z3 lane runs and is ignored.
+**Requirements:** ZGATE-01, ZGATE-02, ZGATE-03, ZGATE-04, ZGATE-05
+**Depends on:** Phase 321
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `require_solver_result_for_promotion` exists, defaults true in the curated ruleset, and is read by `promotion.rs`.
+2. A promotion whose solver summary is absent is rejected with a named, matchable variant when the gate is enabled.
+3. A build without the `z3` feature carrying a custom-Z3 bundle is rejected identically, so a disabled-solver stub never counts as a passed proof.
+4. The promotion report prints the solver proof id and attestation hash, or an explicit no-solver-result line, for every run.
+
+### v1.79 Assurance Foundation
+
+**Goal:** Make Ambush's fail-closed claim checkable rather than asserted: green and isolate the test fixtures, map every invariant to its enforcing function and assumption, prove each mapping is falsifiable, and add deterministic-simulation, fuzz, and interleaving executors over the policy and response path.
+**Executable phases:** 284-287
+
+- [ ] **Phase 284: Fixture Determinism And Suite Health** - Regenerate the 161 schema-drifted fixtures, isolate tests from the live repo tree, and stop test runs mutating the working directory. (FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04)
+- [ ] **Phase 285: Assumption Registry And Invariant Mapping** - Build the invariant-to-function-to-assumption map with grep enforcement and a negative-falsifiability registry proving no row is vacuous. (MAPPING-01, FALSIFY-02)
+- [ ] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
+- [ ] **Phase 287: Fuzz, Loom, And Supply-Chain Hardening** - Adversarial coverage for the untrusted parse boundaries and concurrent write paths, plus dated and justified dependency policy. (FUZZ-01, LOOM-01, SUPPLY-01)
+
+### Phase 284: Fixture Determinism And Suite Health
+
+**Goal:** 7 tests fail today against 161 checked-in fixtures carrying a field the parser rejects, and test runs write into the repository. Every later assurance signal is unreadable until the baseline is green and isolated.
+**Requirements:** FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04
+**Depends on:** v1.78 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `cargo test -p swarm-runtime kitten_agent` passes with zero failures and zero schema-drift skips.
+2. `grep -rl command_line_normalization experiments/` returns empty.
+3. `tools/check-fixture-freshness.sh` regenerates into a scratch directory, diffs against checked-in copies, fails on drift, and runs as a required CI step.
+4. A full `cargo test --workspace` run leaves `git status --porcelain` empty.
+
+### Phase 285: Assumption Registry And Invariant Mapping
+
+**Goal:** Convert fail-closed from a README assertion into an auditable table linking each invariant to the exact function enforcing it and the assumption beneath it, with broken variants proving each check actually fires.
+**Requirements:** MAPPING-01, MAPPING-02, MAPPING-03, MAPPING-04, MAPPING-05, FALSIFY-01, FALSIFY-02, FALSIFY-03, FALSIFY-04
+**Depends on:** Phase 284
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `docs/assurance/assumptions.toml` parses and enumerates at least 8 named assumptions, each with an owner and dependent invariants.
+2. `docs/assurance/MAPPING.md` carries at least 12 invariant rows spanning `swarm-policy`, `swarm-response`, `swarm-runtime`, and `swarm-spine`, each naming an existing `crate::module::function` path.
+3. `scripts/check-mapping.sh` is a required CI step and demonstrably fails against a deliberately unmapped `// INVARIANT:` marker.
+4. Every MAPPING.md row has a `negative_*.rs` test asserting a broken variant permits what the real function denies; `scripts/check-negative-registry.sh` fails on any missing entry.
+
+### Phase 286: Deterministic Simulation Testing
+
+**Goal:** Prove receipt-before-action ordering and no-double-dispatch hold under adversarial scheduling and mid-operation crashes, not only on the happy path.
+**Requirements:** DST-01, DST-02, DST-03, DST-04, DST-05, DST-06
+**Depends on:** Phase 285
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. The harness drives the real `SwarmRuntime::authorize_and_execute`, a real approval gate, and the real substrate, with no mocks.
+2. At least three fault classes are injected: future-drop before dispatch, future-drop after dispatch but before receipt persistence, and substrate close/reopen between policy-allow and receipt-persist.
+3. A 64-seed corpus runs on every PR and a 5,000-seed corpus nightly, naming the failing seed on any oracle violation.
+4. `SWARM_DST_SEED=<n>` reproduces one episode's exact fault plan, and MAPPING.md states the evidence boundary as single-process and single-substrate-instance.
+
+### Phase 287: Fuzz, Loom, And Supply-Chain Hardening
+
+**Goal:** Give the untrusted telemetry-parse boundary and the concurrent write paths executable adversarial coverage, and bring dependency policy to a dated, justified, deny-by-default shape.
+**Requirements:** FUZZ-01, FUZZ-02, FUZZ-03, FUZZ-04, LOOM-01, LOOM-02, LOOM-03, LOOM-04, SUPPLY-01, SUPPLY-02
+**Depends on:** Phase 286
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Four cargo-fuzz targets call real parse entry points, seeded from existing fixtures, with a 30s smoke pass on every PR and a 600s nightly run that uploads any crashing input.
+2. Loom harnesses over the pheromone and policy concurrent paths pass nightly with a documented preemption budget, labeled `bounded_abstract_model` in MAPPING.md.
+3. Every `deny.toml` ignore entry carries a date, blast-radius note, and clearing condition, enforced by `tools/check-supply-chain.sh`.
+4. The `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift apart.
+### v1.80 Red Swarm
+
+**Goal:** Land an adversary as a first-class, deterministic, catalog-bounded in-tree lane so detectors are scored against something that adapts generation over generation, with fitness measured on the existing evasion-coverage infrastructure and a bounded arms race running in CI.
+**Executable phases:** 288-291
+
+- [ ] **Phase 288: Red Operator Genome And Target Graph** - Six operator roles recombine already-catalogued techniques into deterministic sequences, replacing verbatim suite replay. (OPFOR-01, OPFOR-04)
+- [ ] **Phase 289: Attack Scoring, Stealth Budget And Pattern Memory** - Score plans against the real catch-rate surface, cap noise, and remember per-technique outcomes. (ATKSCORE-01, ATKSCORE-03)
+- [ ] **Phase 290: Bidirectional Co-Evolution And Convergence** - Close the loop against real detector outcomes with a bounded stopping rule. (COEVOLVE-01, COEVOLVE-02)
+- [ ] **Phase 291: CI Arms Race Gate And Structural Isolation** - Wire a real executed gate and enforce that the red lane can never reach response authority. (ARMSCI-01, ARMSCI-02)
+
+### Phase 288: Red Operator Genome And Target Graph
+
+**Goal:** `red_swarm.rs` today replays static suites verbatim. Give the red lane a bounded mutation engine that recombines catalogued techniques rather than inventing payload shapes, keeping the arms race classical and maintainable.
+**Requirements:** OPFOR-01, OPFOR-02, OPFOR-03, OPFOR-04
+**Depends on:** v1.79 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Six operator roles implement a shared trait, and the target graph's technique-node set equals the union of the catalog's declared techniques and every suite scenario's declared techniques.
+2. `RedGenome::plan` is proven pure: identical arguments produce byte-identical output, and a 20-seed sweep produces at least one differing step per seed.
+3. A test fails if any generated step names a technique absent from the target graph.
+4. `swarmctl red-swarm plan` prints a `determinism` object with `rng_seed`, `virtual_clock_start_ms`, and `scheduler`, and no code path reads wall-clock for output bytes.
+
+### Phase 289: Attack Scoring, Stealth Budget And Pattern Memory
+
+**Goal:** Turn plans into scored, resource-bounded telemetry so red cannot win by volume, and give each generation real memory of what the previous one survived.
+**Requirements:** ATKSCORE-01, ATKSCORE-02, ATKSCORE-03, ATKSCORE-04
+**Depends on:** Phase 288
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. A fully caught plan scores `red_fitness == 0.0`; a plan built only from declared-uncovered techniques scores above 0.5.
+2. A manifest capping events per generation bounds emitted events accordingly, with identical truncation order across runs at the same seed.
+3. The pattern store round-trips: an unrecorded technique returns success rate 1.0, an always-detected technique returns 0.0.
+4. `swarmctl red-swarm score --json` prints `red_fitness`, `evasion_rate`, `stealth`, and `events_emitted` as top-level fields.
+
+### Phase 290: Bidirectional Co-Evolution And Convergence
+
+**Goal:** Make both sides actually move, measured against real detector runs rather than self-play estimates, and guarantee every campaign terminates.
+**Requirements:** COEVOLVE-01, COEVOLVE-02, COEVOLVE-03, COEVOLVE-04
+**Depends on:** Phase 289
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. A campaign configured for 6 generations never executes a 7th, for a fixed seed.
+2. A campaign whose fitness plateaus stops early with `stop_reason == "plateau"`.
+3. Over at least 4 generations, blue catch rate is non-decreasing on average and red technique weights measurably shift away from generation-zero favourites once recorded as caught.
+4. Two invocations at the same seed produce byte-identical campaign reports except for a generated-at timestamp.
+
+### Phase 291: CI Arms Race Gate And Structural Isolation
+
+**Goal:** Ship an executed gate rather than an attested one, and enforce structurally that the red lane generates telemetry and scores detectors without ever reaching response authority.
+**Requirements:** ARMSCI-01, ARMSCI-02, ARMSCI-03, ARMSCI-04, ARMSCI-05
+**Depends on:** Phase 290
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. CI runs the bounded campaign and fails if final blue catch rate regresses below the checked-in threshold, reading the file the executor actually writes.
+2. The isolation script exits 0 on the real tree and exits 1 against a fixture with an injected response-execution call, proving it is not vacuous.
+3. A Rust-side companion test performs the same check at test time, with a documented counterexample.
+4. `swarmctl evolution status --json` reports the campaign object, and reports null rather than a stale value when the report file is absent; a wall-clock guard fails a runaway campaign loudly.
+
+### v1.81 Machine-Checked Decision Core
+
+**Goal:** Extract an IO-free decision core from the policy gate and the governance predicates, bind it to Kani bounded model checking and named safety properties, model the partition-contingency-lease state machine in TLA+, and make the existing Z3 lane actually gate promotion.
+**Executable phases:** 292-294
+
+- [ ] **Phase 292: Pure Decision Core Extraction** - Carve out total, clock-injected, lock-free decision functions, enforced by a dependency-boundary script. (DCORE-01, DCORE-02)
+- [ ] **Phase 293: Kani Bounded Model Checking** - Bounded-check fail-closed evaluation, severity gating, rate-limit bounds, and lease integrity. (KANI-01, KANI-03)
+- [ ] **Phase 294: Named Safety Properties And Partition-Lease Model** - Name P1-P6, map them, and model-check the highest-risk concurrent protocol with negative falsifiability. (SAFEP-01, SAFEP-04)
+
+### Phase 292: Pure Decision Core Extraction
+
+**Goal:** Chio's proof apparatus exists only because an IO-free decision surface exists. `can_act` currently reads the OS clock internally and the gates hold state in a mutex. This phase is the prerequisite for everything after it.
+**Requirements:** DCORE-01, DCORE-02, DCORE-03, DCORE-04, DCORE-05
+**Depends on:** v1.80 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `crates/swarm-policy/src/formal_core.rs` holds the approval, severity, rate-limit, and lease predicates as pure functions with no mutex, filesystem, clock, or network call in their bodies.
+2. `GovernancePolicy::can_act` no longer calls `now_ms()` internally; the clock is caller-supplied at every entry into `formal_core`.
+3. `cargo tree -p swarm-policy` contains no transport, telemetry, or CLI crate, enforced by `scripts/check-decision-core-boundary.sh` in CI.
+4. Every pre-existing gate and governance test passes unchanged against the new call paths.
+
+### Phase 293: Kani Bounded Model Checking
+
+**Goal:** Catch regressions in fail-closed behavior, blast-radius conservation, and lease-forgery rejection in CI rather than in an incident.
+**Requirements:** KANI-01, KANI-02, KANI-03, KANI-04, KANI-05
+**Depends on:** Phase 292
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. At least 8 `#[kani::proof]` harnesses call the real public functions from `formal_core.rs`.
+2. Every harness that models an abstraction rather than the literal production symbol is labeled `MODEL-ONLY`, naming the runtime test that provides complementary coverage.
+3. A manifest lists every harness, and a unit test fails the build when a harness is missing from it.
+4. The PR-lane runner completes within configured timeouts and is wired into CI.
+
+### Phase 294: Named Safety Properties And Partition-Lease Model
+
+**Goal:** State the decision core's guarantees as named, mapped, falsifiable properties, and model-check the partition-contingency-lease protocol, the highest-risk concurrent logic in the system.
+**Requirements:** SAFEP-01, SAFEP-02, SAFEP-03, SAFEP-04, SAFEP-05
+**Depends on:** Phase 293
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. P1-P6 are each defined with exact symbols and the harnesses that check them, and appear as rows in `docs/assurance/MAPPING.md` with valid existing Rust paths.
+2. `ASSUME-INJECTED-CLOCK` and `ASSUME-GOVERNOR-KEY-CUSTODY` are registered with owners and dependent properties.
+3. Apalache model-checks the lease state machine clean in CI for its named invariants.
+4. At least 3 negative-falsifiability entries produce the expected violation, each naming the runtime regression test pinning the same defect.
+
+### v1.82 Provenance Memory And Correlation
+
+**Goal:** Deepen the existing four-graph knowledge substrate into real OS-level provenance, reconstruct kill chains across hunts, migrate correlation off pairwise heuristics onto graph traversal, and cut false positives with dependency-aware scoring, without either lane ever gating the critical path.
+**Executable phases:** 296-299
+
+- [ ] **Phase 296: Provenance Graph Substrate** - Add real causal nodes and edges, bounded-hop path queries with a hub-degree cap, and proven retention bounds. (GRAPH-01, GRAPH-04)
+- [ ] **Phase 297: Kill-Chain Reconstruction** - Reconstruct multi-stage chains mapped to declared kill-chain stages, with narration. (CHAIN-01, CHAIN-03)
+- [ ] **Phase 298: Cross-Hunt Correlation** - Migrate correlation onto graph traversal and make incidents restart-durable. (XHUNT-01, XHUNT-03)
+- [ ] **Phase 299: Dependency-Aware Triage** - Path-rarity scoring hitting a measured false-positive reduction target. (TRIAGE-01, TRIAGE-03)
+
+### Phase 296: Provenance Graph Substrate
+
+**Goal:** The four-graph model already exists but `CausalRelation` has only two variants, so the causal graph cannot express file writes, execution, DNS, or credential access. Deepen it, and bound its growth before anything traverses it.
+**Requirements:** GRAPH-01, GRAPH-02, GRAPH-03, GRAPH-04, GRAPH-05, GRAPH-06
+**Depends on:** v1.81 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Node and causal-relation variants are added with at least 7 new unit tests, and serialization round-trips for the extended enums.
+2. Bounded-hop path queries return correct paths on a 10k-node fixture within a fixed wall-clock ceiling, with a hub-degree cap preventing high-degree nodes from linking unrelated hunts.
+3. A property test over 200+ randomized prune sequences proves no orphaned edges, no premature deletion, and idempotence.
+4. A 100k-event soak keeps post-GC node and edge count under a fixed ceiling, and config validation rejects a zero retention window while memory is enabled.
+
+### Phase 297: Kill-Chain Reconstruction
+
+**Goal:** Turn ephemeral sequence detections into durable graph evidence and reconstruct chains that span hunts, producing operator-auditable narratives.
+**Requirements:** CHAIN-01, CHAIN-02, CHAIN-03, CHAIN-04
+**Depends on:** Phase 296
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. All sequence-detector matches are written as semantic kill-chain-stage edges in a new integration test.
+2. At least two existing multi-stage fixtures reconstruct with stage order exactly matching each fixture's declared chain.
+3. Narration produces a non-empty stage-by-stage string for every reconstructed chain.
+4. Two investigations from different hunts sharing a causal path reconstruct into one chain, not two disjoint incidents.
+
+### Phase 298: Cross-Hunt Correlation
+
+**Goal:** Retire pairwise heuristics in favour of graph-native traversal, make incidents durable across restarts, and prove the optional lanes never gate detection or response.
+**Requirements:** XHUNT-01, XHUNT-02, XHUNT-03, XHUNT-04
+**Depends on:** Phase 297
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Candidate selection uses graph traversal rather than recent-investigation scanning, and all pre-existing correlation tests still pass.
+2. Evidence links carry a graph path for every newly created link, and pre-existing JSON still deserializes.
+3. Disabling correlation and memory together yields policy decisions identical to the enabled case.
+4. Incidents assembled before a simulated restart reload with identical dimensions and evidence.
+
+### Phase 299: Dependency-Aware Triage
+
+**Goal:** Implement NODOZE's actual contribution, dependency-aware suppression of common causal paths, and prove it cuts false positives against the project's own benign corpus.
+**Requirements:** TRIAGE-01, TRIAGE-02, TRIAGE-03, TRIAGE-04, TRIAGE-05
+**Depends on:** Phase 298
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Path-rarity scoring has at least 5 unit-tested scenarios where common chains score low and rare chains score high.
+2. Measured false-positive rate across the three benign scenarios drops at least 50% relative to the post-phase-298 baseline, with before and after numbers in the assertion.
+3. No benign scenario crosses the incident-escalation threshold after scoring.
+4. The false-positive measurement report carries a dependency-score summary, and mean true-positive score exceeds mean false-positive score.
+### v1.83 Distributed Governance
+
+**Goal:** Repair the shipped BFT sizing defect, then stop anchoring destructive authority to a fixed, publicly predictable set of long-lived keys: VRF-selected epoch committees, real networked rounds with per-instance keys, and quorum-authorized revocation, with every documented fail-closed guarantee re-verified against the new model.
+**Executable phases:** 301-303
+
+- [ ] **Phase 301: VRF Committee Selection** - Replace the publicly precomputable proposer schedule with RFC 9381 VRF epoch rotation. (VRF-01, VRF-02)
+- [ ] **Phase 302: Governance Key Rotation And Revocation** - Add quorum-authorized ejection that does not need the compromised key's cooperation. (REVOKE-01, REVOKE-04)
+- [ ] **Phase 303: Fail-Closed Contract Preservation** - Re-verify every partition and recovery guarantee against the new committee model. (DISTGOV-01, DISTGOV-02)
+
+### Phase 301: VRF Committee Selection
+
+**Goal:** `proposer_for` derives the leader from public data alone, so anyone can precompute the entire future schedule. Make membership unpredictable and untargetable in advance.
+**Requirements:** VRF-01, VRF-02, VRF-03, VRF-04, VRF-05
+**Depends on:** v1.82 milestone complete and v1.78.1 complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. RFC 9381 ECVRF prove and verify are implemented over the existing Ed25519 keys, with tests rejecting forged proofs and wrong-seed proofs.
+2. Committees are VRF-selected from the eligible pool and sized to exactly `3f+1`, replacing permanent seating of every registered governor.
+3. A test proves next-epoch membership cannot be derived from public data alone without candidate private keys.
+4. Single-governor bootstrap degenerates to a no-op selection and existing single-instance governance tests pass unmodified.
+
+### Phase 302: Governance Key Rotation And Revocation
+
+**Goal:** `rotate_identity` requires the retiring key to co-sign its own handoff, so there is no way to eject a key that will not cooperate. Add quorum-authorized revocation.
+**Requirements:** REVOKE-01, REVOKE-02, REVOKE-03, REVOKE-04, REVOKE-05
+**Depends on:** Phase 301
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Revocation succeeds using only a quorum-signed receipt, proven by a test where the revoked key is never consulted.
+2. Admission returns false immediately after revocation while historical signature verification against the retired key still succeeds.
+3. `swarmctl identity revoke` fails closed with no partial registry mutation when quorum cannot be obtained.
+4. An in-protocol exclusion updates the registry mid-epoch, and the excluded member cannot be VRF-selected into the next epoch.
+
+### Phase 303: Fail-Closed Contract Preservation
+
+**Goal:** Prove the new committee model weakened nothing operators were already promised, and extend leases and reconciliation to remain verifiable across rotations.
+**Requirements:** DISTGOV-01, DISTGOV-02, DISTGOV-03, DISTGOV-04
+**Depends on:** Phase 302
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Every documented partition and recovery rule has a passing integration test against the VRF-rotated networked committee, with single-operator boundary language preserved.
+2. A lease issued by one epoch remains redeemable after rotation replaces its signers, without weakening blast-radius or TTL checks.
+3. Quorum loss mid-transition falls back to the last-confirmed committee rather than seating a half-formed one, handed to the v1.81 model as an extension rather than modeled twice.
+4. Governance status and health endpoints report epoch, committee size, time to rotation, and eligible-pool exhaustion below `3f+1`.
+
+### v1.84 Herd Immunity
+
+**Goal:** Give containment a real undo before deepening it, then compose taint-aware information-flow control, no-single-publisher cross-instance immunity, and adaptive deception into a fleet response where one instance's confirmed threat makes peers resistant without any instance trusting another blindly.
+**Executable phases:** 305-307
+
+- [ ] **Phase 305: Information-Flow Control** - Taint propagation sharpening detection and gating containment, never authorizing it alone. (IFC-02, IFC-04)
+- [ ] **Phase 306: Cross-Instance Immunity Sharing** - Immunity records requiring independent local corroboration and canary-staged adoption. (HERD-01, HERD-02)
+- [ ] **Phase 307: Adaptive Deception And Integration Proof** - Higher-fidelity taint-informed decoys and the full-loop executable proof. (DECOY-01, DECOY-04)
+
+### Phase 305: Information-Flow Control
+
+**Goal:** Trace how attacker-influenced data propagates and use it to sharpen detection and raise containment scrutiny, while guaranteeing taint alone never authorizes a destructive action.
+**Requirements:** IFC-01, IFC-02, IFC-03, IFC-04
+**Depends on:** v1.83 milestone complete and v1.78.1 complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Taint labels and data-flow edges extend the existing knowledge graph and reuse its GC rather than adding a second retention path.
+2. Detector confidence is boosted by a decayed taint score capped at 1.0, with the propagation chain recorded on the finding.
+3. The policy gate denies a taint-only containment proposal and approves a taint-plus-corroboration proposal, proven by integration test.
+4. The taint model, its half-life, and the never-authorizes-alone invariant are documented in the agent and configuration docs.
+
+### Phase 306: Cross-Instance Immunity Sharing
+
+**Goal:** Let one instance's confirmed threat make the fleet resistant in real time without any instance blindly trusting a peer, which is the direct answer to the single-publisher failure mode.
+**Requirements:** HERD-01, HERD-02, HERD-03, HERD-04
+**Depends on:** Phase 305
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Immunity records replicate across three in-process instances over one shared substrate.
+2. No record is adopted without independent local corroboration, including a fabricated record injected directly at a subscriber.
+3. A forced false-positive spike during canary soak reverts that instance only, leaving publisher and peers unaffected.
+4. The module documentation names the no-single-publisher invariant, and the configuration surface documents soak window, corroboration requirement, and canary scope.
+
+### Phase 307: Adaptive Deception And Integration Proof
+
+**Goal:** Deepen decoy fidelity and taint-informed placement, then prove the whole loop end to end as the single executable artifact backing this milestone's claims.
+**Requirements:** DECOY-01, DECOY-02, DECOY-03, DECOY-04
+**Depends on:** Phase 306
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Interactive and stateful decoys return distinct non-empty payloads across repeated interactions.
+2. Placement biases toward taint-adjacent zones versus a no-taint control run, never leaving operator-approved zones.
+3. Higher-fidelity engagement seeds measurably stronger taint than static decoys.
+4. The full-loop test runs in CI: decoy interaction, taint propagation, receipt-backed quarantine, automatic rollback, immunity publication, corroborated peer adoption.
+
+### v1.85 The Detection Commons
+
+**Goal:** Publish a normative spec for the deposit format, receipt chain, and wire surface with JSON Schema; package the existing scenario corpus into an externally verifiable conformance suite; ship a dependency-light detector-authoring SDK; and generate the coverage claim from the catalog so it cannot drift from the detectors.
+**Executable phases:** 308-311
+
+- [ ] **Phase 308: Normative Spec** - Role-indexed spec with schemas validated against real runtime output. (SPEC-01, SPEC-03)
+- [ ] **Phase 309: External Conformance Suite** - A checksummed package and verifier an outside implementer can run without the monorepo. (CONFORM-01, CONFORM-02)
+- [ ] **Phase 310: Detector-Authoring SDK** - The smallest unit needed to extend rather than run, plus a hello-detector example. (SDK-01, SDK-02)
+- [ ] **Phase 311: Generated Coverage And Adopter IA** - Coverage generated from the catalog, role-indexed docs, and an epistemic fence. (COVDOC-01, COVDOC-03)
+
+### Phase 308: Normative Spec
+
+**Goal:** Give Federation and any external implementer one normative artifact instead of reverse-engineering the crates. This ships before Federation because Federation consumes it.
+**Requirements:** SPEC-01, SPEC-02, SPEC-03
+**Depends on:** v1.84 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `spec/README.md` gives three named reading orders each citing the four normative docs by path.
+2. The deposit spec documents every field including the schema-version compatibility window; the receipt spec covers envelope through Merkle proof; the wire spec covers only the stable external subset.
+3. At least four JSON Schema files exist and are independently valid under a draft 2020-12 validator.
+4. A CI test serializes real runtime-produced values, validates them against the checked-in schemas, and fails on an intentionally malformed fixture.
+
+### Phase 309: External Conformance Suite
+
+**Goal:** The raw material already exists as 19 scenarios, 3 suites, and replay and evidence tooling. The gap is packaging it for someone without repo access.
+**Requirements:** CONFORM-01, CONFORM-02, CONFORM-03
+**Depends on:** Phase 308
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. The package command produces a versioned archive containing all 19 scenarios, all 3 suites, the default ruleset, and a checksum manifest.
+2. The verify command exits non-zero on any verdict mismatch against the pinned expectations inside the package.
+3. Evidence mode additionally verifies every exported receipt and fails closed on any that does not verify.
+4. A CI job builds the package, unpacks it into a scratch directory, verifies against that fresh build, and fails if any scenario is silently absent from the manifest.
+
+### Phase 310: Detector-Authoring SDK
+
+**Goal:** Let a third party write a detector without inheriting the runtime's dependency graph.
+**Requirements:** SDK-01, SDK-02, SDK-03
+**Depends on:** Phase 309
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `crates/swarm-detector-sdk` depends only on `swarm-core`; a CI check proves no runtime, transport, or telemetry crate appears in its dependency tree.
+2. `examples/hello-detector/` implements a detector purely against the SDK with a ruleset entry and a README following the read, write, deny, allow, receipt, smoke shape.
+3. The example's smoke script runs `swarmctl first-run`, prints an emitted deposit and a verified receipt id, and exits 0.
+4. `tools/run-hello-smokes.sh` is the CI entry point for the hello family, and the SDK doc states version-to-schema compatibility.
+
+### Phase 311: Generated Coverage And Adopter IA
+
+**Goal:** Make the coverage claim generated rather than asserted, and give adopters one role-indexed door, with narrative explicitly fenced off from load-bearing claims.
+**Requirements:** COVDOC-01, COVDOC-02, COVDOC-03
+**Depends on:** Phase 310
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. The generator reproduces the coverage doc byte-for-byte identically on repeated runs, stamped as generated and naming its source YAML.
+2. Running with `--check` against a stale doc exits non-zero, and the mode is wired into the documented contributor gate.
+3. The generated doc enumerates every catalogued detector with its uncovered techniques and rationale reproduced verbatim.
+4. `docs/README.md` provides four role-indexed reading orders, and both `README.md` and `spec/README.md` point at `docs/REFERENCE-STATUS.md` as the qualified-claims gate.
+
+### v1.86 Federation
+
+**Goal:** Let operators exchange verifiable threat evidence across operator boundaries with no shared server and no auto-authorization of local action, so trust spreads without creating a single point of centralized failure.
+**Executable phases:** 312-315
+
+- [ ] **Phase 312: Cross-Operator Evidence Exchange** - Offline-verifiable evidence packages built on the receipt chain and the v1.85 spec. (FEDX-01, FEDX-02)
+- [ ] **Phase 313: Local Activation Boundary** - Guarantee a peer signal can never by itself authorize local destructive response. (LOCACT-02, LOCACT-03)
+- [ ] **Phase 314: Reputation And Anti-Equivocation** - Locally computed peer standing and detectable equivocation with no central registry. (FEDREP-01, EQUIV-01)
+- [ ] **Phase 315: Privacy-Preserving Sharing** - Share detection evidence without leaking topology, hostnames, or identities. (FEDPRIV-01, FEDPRIV-04)
+
+### Phase 312: Cross-Operator Evidence Exchange
+
+**Goal:** Establish the exchange envelope and offline verification path, conforming to the spec published in v1.85 rather than inventing a competing format.
+**Requirements:** FEDX-01, FEDX-02, FEDX-03, FEDX-04
+**Depends on:** v1.85 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. `crates/swarm-federation` builds and is registered in the workspace.
+2. Verification completes with zero outbound network calls, confirmed by a test asserting the crate carries no network client dependency.
+3. Export and import round-trip a real signed envelope and checkpoint through one integration test, using the v1.85 normative format.
+4. Federation config defaults to disabled and a test asserts no federation surface starts when disabled.
+
+### Phase 313: Local Activation Boundary
+
+**Goal:** Ship the anti-single-publisher property as code and as a named CI-enforced regression test, not a design claim.
+**Requirements:** LOCACT-01, LOCACT-02, LOCACT-03, LOCACT-04
+**Depends on:** Phase 312
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Federated-peer provenance exists on deposits with a distinct lower weight, and all existing pheromone tests pass unmodified.
+2. A maximal-severity zero-corroboration import produces no dispatch and no signed governance receipt.
+3. A named policy test guards the property against regression.
+4. The architecture and consensus docs state the precise new boundary, and the governance-mode table gains no new row.
+
+### Phase 314: Reputation And Anti-Equivocation
+
+**Goal:** Let operators weight peers without a central registry, and make it possible to prove offline that a peer told two operators different things.
+**Requirements:** FEDREP-01, FEDREP-02, EQUIV-01, EQUIV-02
+**Depends on:** Phase 313
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Peer reputation is influenced only by that peer's own history, proven by a test asserting no cross-peer read.
+2. Admission requires the local operator's signature, and an unadmitted peer's evidence is rejected at import.
+3. A peer driven below the configured minimum is demoted to advisory-only weight zero with retained history and a signed audit event.
+4. Two conflicting checkpoint statements produce equivocation evidence independently re-verifiable by a third party holding only the artifact.
+
+### Phase 315: Privacy-Preserving Sharing
+
+**Goal:** Make cross-operator sharing safe to adopt by construction, proven with a byte-level test rather than a policy statement.
+**Requirements:** FEDPRIV-01, FEDPRIV-02, FEDPRIV-03, FEDPRIV-04
+**Depends on:** Phase 314
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. A fixture containing literal hostnames, usernames, and internal CIDRs produces zero byte-string matches in the exported package, enforced in CI.
+2. Export of a payload carrying an out-of-allowlist field fails closed with nothing written.
+3. Dry-run output matches the actual written package byte for byte.
+4. Pseudonyms are stable within one export relationship, and a documented rotation path bounds long-term linkability.
+
+### v1.87 Fleet Scale
+
+**Goal:** Scale from a single-node runtime to a multi-instance fleet within one operator, where horizontal capacity, cross-instance blast-radius authorization, tenant isolation, and release provenance all stay fail-closed and are backed by rerun measurements rather than assumed numbers.
+**Executable phases:** 316-319
+
+- [ ] **Phase 316: Sharded Substrate And Horizontal Scale** - Partition telemetry across shards owned by disjoint instances with measured capacity at N=1, 3, 10. (SHARD-01, SHARD-03)
+- [ ] **Phase 317: Fleet Blast Radius And Tenant Isolation** - A fleet-level cap enforced across instances, and per-tenant policy, identity, and receipt chains. (FCAP-02, TENANT-02)
+- [ ] **Phase 318: Fleet Operational Maturity** - Fleet SLOs, drills, and a capacity model sourced from reruns, not assumption. (FLEETOPS-01, FLEETOPS-03)
+- [ ] **Phase 319: Signed Release Supply Chain** - Signed, attested releases that a live-response fleet must verify before deploying. (RELSIGN-02, RELSIGN-04)
+
+### Phase 316: Sharded Substrate And Horizontal Scale
+
+**Goal:** Move from one runtime process to a horizontally scaled fleet over shared JetStream, with a real partitioning scheme and measured capacity rather than an assumed multiple.
+**Requirements:** SHARD-01, SHARD-02, SHARD-03
+**Depends on:** v1.86 milestone complete
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. A deterministic shard function replaces the single-bucket design, with stable assignment across restarts.
+2. The chart supports N pods each claiming a disjoint shard set via a startup lease, with the shard count documented in production values.
+3. An integration test with at least 3 concurrent instances proves disjoint ownership and zero duplicate or lost deposits.
+4. A fleet benchmark reruns the fixed and ramp-to-shed profiles at N=1, 3, and 10, recording measured throughput and first shed point per N.
+
+### Phase 317: Fleet Blast Radius And Tenant Isolation
+
+**Goal:** Apply the single-publisher lesson to our own autonomy: containment spanning many hosts needs a fleet-level cap, and one operator serving several tenants must not leak across them.
+**Requirements:** FCAP-01, FCAP-02, TENANT-01, TENANT-02
+**Depends on:** Phase 316
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. The fleet cap exists, is distinct from the per-instance cap, and fails config validation at zero.
+2. A durable ledger denies further destructive action once the fleet cap is reached, proven with 3 concurrent instances whose combined volume no single instance would have crossed.
+3. Ledger unavailability fails closed for destructive response while health endpoints remain reachable.
+4. A replay or query scoped to one tenant never returns another tenant's records on the shared substrate.
+
+### Phase 318: Fleet Operational Maturity
+
+**Goal:** Give operators the same SLO, alerting, upgrade, and capacity discipline for a fleet that already exists for one instance, sourced from measurement.
+**Requirements:** FLEETOPS-01, FLEETOPS-02, FLEETOPS-03, FLEETOPS-04
+**Depends on:** Phase 317
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. Every fleet alert threshold is traceable to a specific measured row in the fleet benchmark.
+2. The DR runbook carries a fleet upgrade and rollback drill preserving shard assignment and ledger state, verified by a recorded runthrough.
+3. The capacity-model doc requires a benchmark rerun on the target host before any capacity number is treated as valid.
+4. Metrics carry instance and shard labels, verified by a scrape test.
+
+### Phase 319: Signed Release Supply Chain
+
+**Goal:** A binary that can execute destructive containment across a fleet needs enforced release provenance, and verification must block deployment mechanically rather than by runbook instruction.
+**Requirements:** RELSIGN-01, RELSIGN-02, RELSIGN-03, RELSIGN-04
+**Depends on:** Phase 318
+**Status:** Not started
+**Plans:** TBD
+**Success Criteria**:
+1. The release workflow publishes multi-arch images on tag push, and its coverage is reconciled against the `RELEASE-01` requirement currently marked Complete.
+2. Published images are signed, and a required check verifies the signature before the release is marked complete.
+3. SBOM and provenance attach to the release artifact and are required fields in the recovery evidence packet for live-response deployments.
+4. Signature verification blocks deployment mechanically for live-response fleets, extending the existing startup attestation to the container supply chain.
+
 ## Progress
 
 **v1.38 execution order:** 120 -> 121 || 122 -> 123
@@ -990,6 +1616,17 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **v1.76 execution order:** 272 -> 273 -> 274 -> 275
 
 **v1.77 execution order:** 276 -> 277 -> 278 -> 279
+**v1.78 execution order:** 280 -> 281 -> 282 -> 283
+**v1.78.1 execution order:** 320 -> 321 -> 322
+**v1.79 execution order:** 284 -> 285 -> 286 -> 287
+**v1.80 execution order:** 288 -> 289 -> 290 -> 291
+**v1.81 execution order:** 292 -> 293 -> 294 -> 295
+**v1.82 execution order:** 296 -> 297 -> 298 -> 299
+**v1.83 execution order:** 300 -> 301 -> 302 -> 303
+**v1.84 execution order:** 304 -> 305 -> 306 -> 307
+**v1.85 execution order:** 308 -> 309 -> 310 -> 311
+**v1.86 execution order:** 312 -> 313 -> 314 -> 315
+**v1.87 execution order:** 316 -> 317 -> 318 -> 319
 
 | Phase | Milestone | Plans | Status | Completed |
 |-------|-----------|-------|--------|-----------|
@@ -1161,9 +1798,53 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 277. Splunk HEC Adapter | v1.77 | 0/TBD | Not started | - |
 | 278. E2E Deployment Proof Compose Stack | v1.77 | 0/TBD | Not started | - |
 | 279. Integration Architecture Validation | v1.77 | 0/TBD | Not started | - |
+| 280. Verification Gate Repair | v1.78 | 0/TBD | Not started | - |
+| 281. core.inc Elimination | v1.78 | 0/TBD | Not started | - |
+| 282. Crate Extraction From swarm-runtime | v1.78 | 0/TBD | Not started | - |
+| 283. TCB Boundary And Layering Enforcement | v1.78 | 0/TBD | Not started | - |
+| 284. Fixture Determinism And Suite Health | v1.79 | 0/TBD | Not started | - |
+| 285. Assumption Registry And Invariant Mapping | v1.79 | 0/TBD | Not started | - |
+| 286. Deterministic Simulation Testing | v1.79 | 0/TBD | Not started | - |
+| 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 0/TBD | Not started | - |
+| 288. Red Operator Genome And Target Graph | v1.80 | 0/TBD | Not started | - |
+| 289. Attack Scoring, Stealth Budget And Pattern Memory | v1.80 | 0/TBD | Not started | - |
+| 290. Bidirectional Co-Evolution And Convergence | v1.80 | 0/TBD | Not started | - |
+| 291. CI Arms Race Gate And Structural Isolation | v1.80 | 0/TBD | Not started | - |
+| 292. Pure Decision Core Extraction | v1.81 | 0/TBD | Not started | - |
+| 293. Kani Bounded Model Checking | v1.81 | 0/TBD | Not started | - |
+| 294. Named Safety Properties And Partition-Lease Model | v1.81 | 0/TBD | Not started | - |
+| 295. Z3-Backed Promotion Gate | v1.81 | 0/TBD | Not started | - |
+| 296. Provenance Graph Substrate | v1.82 | 0/TBD | Not started | - |
+| 297. Kill-Chain Reconstruction | v1.82 | 0/TBD | Not started | - |
+| 298. Cross-Hunt Correlation | v1.82 | 0/TBD | Not started | - |
+| 299. Dependency-Aware Triage | v1.82 | 0/TBD | Not started | - |
+| 300. BFT Correctness Repair | v1.83 | 0/TBD | Not started | - |
+| 301. VRF Committee Selection | v1.83 | 0/TBD | Not started | - |
+| 302. Governance Key Rotation And Revocation | v1.83 | 0/TBD | Not started | - |
+| 303. Fail-Closed Contract Preservation | v1.83 | 0/TBD | Not started | - |
+| 304. Reversible Quarantine Execution | v1.84 | 0/TBD | Not started | - |
+| 305. Information-Flow Control | v1.84 | 0/TBD | Not started | - |
+| 306. Cross-Instance Immunity Sharing | v1.84 | 0/TBD | Not started | - |
+| 307. Adaptive Deception And Integration Proof | v1.84 | 0/TBD | Not started | - |
+| 308. Normative Spec | v1.85 | 0/TBD | Not started | - |
+| 309. External Conformance Suite | v1.85 | 0/TBD | Not started | - |
+| 310. Detector-Authoring SDK | v1.85 | 0/TBD | Not started | - |
+| 311. Generated Coverage And Adopter IA | v1.85 | 0/TBD | Not started | - |
+| 312. Cross-Operator Evidence Exchange | v1.86 | 0/TBD | Not started | - |
+| 313. Local Activation Boundary | v1.86 | 0/TBD | Not started | - |
+| 314. Reputation And Anti-Equivocation | v1.86 | 0/TBD | Not started | - |
+| 315. Privacy-Preserving Sharing | v1.86 | 0/TBD | Not started | - |
+| 316. Sharded Substrate And Horizontal Scale | v1.87 | 0/TBD | Not started | - |
+| 317. Fleet Blast Radius And Tenant Isolation | v1.87 | 0/TBD | Not started | - |
+| 318. Fleet Operational Maturity | v1.87 | 0/TBD | Not started | - |
+| 319. Signed Release Supply Chain | v1.87 | 0/TBD | Not started | - |
+| 320. Reversible Quarantine Execution | v1.78.1 | 0/TBD | Not started | - |
+| 321. BFT Correctness Repair | v1.78.1 | 0/TBD | Not started | - |
+| 322. Promotion Solver Gate | v1.78.1 | 0/TBD | Not started | - |
 
 ---
 *Active milestone: v1.75 Operator Packaging*
+*v1.78 through v1.87 queued: 40 phases (280-319) defined 2026-08-10. Run `/gsd:plan-phase 280` after v1.77 completes.*
 *v1.77 queued: Run `/gsd:plan-phase 276` after v1.76 completes.*
 *v1.76 queued: Run `/gsd:plan-phase 272` after v1.75 completes.*
 *v1.74 deferred: Run `/gsd:plan-phase 264` when structural-integrity work is reactivated.*

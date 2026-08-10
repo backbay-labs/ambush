@@ -32,6 +32,66 @@
 **Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
 **Progress:** Phases 272-275 defined; ready to activate after v1.75 completes
 
+### v1.78 Runtime Decomposition And TCB Boundary
+**Executable phases:** 280-283
+**Status:** Queued
+**Goal:** Green the verification gates, eliminate the core.inc pattern, split the 97,709-LOC swarm-runtime crate, and name and enforce a trusted computing base.
+**Progress:** Phases 280-283 defined 2026-08-10; ready to activate in sequence
+
+### v1.79 Assurance Foundation
+**Executable phases:** 284-287
+**Status:** Queued
+**Goal:** Make the fail-closed claim checkable: green fixtures, an invariant-to-function-to-assumption map with negative falsifiability, and DST, fuzz, and Loom executors.
+**Progress:** Phases 284-287 defined 2026-08-10; ready to activate in sequence
+
+### v1.80 Red Swarm
+**Executable phases:** 288-291
+**Status:** Queued
+**Goal:** Land a deterministic, catalog-bounded adversarial lane so detectors are scored against something that adapts, with a bounded arms race in CI.
+**Progress:** Phases 288-291 defined 2026-08-10; ready to activate in sequence
+
+### v1.81 Machine-Checked Decision Core
+**Executable phases:** 292-295
+**Status:** Queued
+**Goal:** Extract an IO-free decision core and bind it to Kani, named safety properties, a TLA+ lease model, and a Z3-gated promotion path.
+**Progress:** Phases 292-295 defined 2026-08-10; ready to activate in sequence
+
+### v1.82 Provenance Memory And Correlation
+**Executable phases:** 296-299
+**Status:** Queued
+**Goal:** Deepen the four-graph substrate into real provenance, reconstruct kill chains across hunts, and cut false positives with dependency-aware scoring.
+**Progress:** Phases 296-299 defined 2026-08-10; ready to activate in sequence
+
+### v1.83 Distributed Governance
+**Executable phases:** 300-303
+**Status:** Queued
+**Goal:** Repair the BFT sizing defect, then move to VRF-selected epoch committees, networked rounds with per-instance keys, and quorum-authorized revocation.
+**Progress:** Phases 300-303 defined 2026-08-10; ready to activate in sequence
+
+### v1.84 Herd Immunity
+**Executable phases:** 304-307
+**Status:** Queued
+**Goal:** Give containment a real undo, then compose taint-aware flow control, no-single-publisher cross-instance immunity, and adaptive deception.
+**Progress:** Phases 304-307 defined 2026-08-10; ready to activate in sequence
+
+### v1.85 The Detection Commons
+**Executable phases:** 308-311
+**Status:** Queued
+**Goal:** Publish a normative spec with schemas, package an external conformance suite, ship a detector-authoring SDK, and generate the coverage claim.
+**Progress:** Phases 308-311 defined 2026-08-10; ready to activate in sequence
+
+### v1.86 Federation
+**Executable phases:** 312-315
+**Status:** Queued
+**Goal:** Exchange verifiable evidence across operator boundaries with no shared server and no auto-authorization of local action.
+**Progress:** Phases 312-315 defined 2026-08-10; ready to activate in sequence
+
+### v1.87 Fleet Scale
+**Executable phases:** 316-319
+**Status:** Queued
+**Goal:** Scale to a multi-instance fleet with fleet-wide blast-radius control, tenant isolation, measured capacity, and enforced release provenance.
+**Progress:** Phases 316-319 defined 2026-08-10; ready to activate in sequence
+
 ### v1.77 Integration Proof
 **Executable phases:** 276-279
 **Status:** Queued
