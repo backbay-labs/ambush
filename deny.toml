@@ -45,13 +45,62 @@ highlight = "all"
 # Reviewed 2026-08-11 (phase 280 / GATEFIX-04). Re-review whenever any named
 # pinning dependency is upgraded.
 #
-# MEASURED LIMITATION of this gate, recorded so nobody mistakes it for coverage:
-# a duplicate introduced solely through a workspace member's DEV-dependency is
+# THIS GATE HAS TWO MEASURED LIMITATIONS, NOT ONE. Both are recorded here so the
+# duplicate coverage is not read as complete.
+#
+# MEASURED LIMITATION 1 -- DEV-DEPENDENCY DUPLICATES ARE NOT REPORTED.
+# A duplicate introduced solely through a workspace member's DEV-dependency is
 # not reported by cargo-deny 0.19.4, with or without `[graph] exclude-dev = false`.
 # Verified by adding `base64 = "0.21"` to swarm-crypto: as a `[dependencies]` entry
 # the gate fails (`found 2 duplicate entries for crate 'base64'`, exit 2); as a
 # `[dev-dependencies]` entry it reports `bans ok` even though Cargo.lock carries
 # both 0.21.7 and 0.22.1. Normal-dependency duplicates ARE caught.
+#
+# MEASURED LIMITATION 2 -- OPTIONAL-FEATURE SUBGRAPHS ARE NOT SCANNED.
+# `[graph] all-features = false` above means the resolved graph is the DEFAULT
+# feature set. `z3` (swarm-evolution and swarm-runtime, `z3 = ["dep:z3"]`,
+# default-off) is the only non-default feature in the workspace -- swarm-pheromone's
+# `nats` is on by default -- so everything reachable only through `--features z3` is
+# invisible to every check in this file, duplicates included.
+#
+# Measured 2026-08-11 on the pristine tree by flipping ONLY `all-features` to true:
+#
+#   cargo deny check bans
+#   error[duplicate]: found 2 duplicate entries for crate 'block-buffer'   (0.10.4 / 0.12.0)
+#   error[duplicate]: found 2 duplicate entries for crate 'const-oid'      (0.9.6  / 0.10.2)
+#   error[duplicate]: found 2 duplicate entries for crate 'cpufeatures'    (0.2.17 / 0.3.0)
+#   error[duplicate]: found 2 duplicate entries for crate 'crypto-common'  (0.1.7  / 0.2.1)
+#   error[duplicate]: found 2 duplicate entries for crate 'digest'         (0.10.7 / 0.11.3)
+#   bans FAILED
+#   EXIT=2
+#
+# Five duplicates, and NO `[[bans.skip]]` entry below accounts for any of them.
+# All five are one RustCrypto generation split, pulled in on a single path:
+#   z3 0.20 -> (build) z3-sys 0.11 -> zip 8.6 -> {hmac 0.13, pbkdf2 0.13, sha1 0.11}
+#   -> digest 0.11 / crypto-common 0.2 / block-buffer 0.12 / const-oid 0.10,
+# against the digest 0.10 generation the rest of the workspace uses via sha2 0.10 /
+# ed25519-dalek 2.x. The 19 skips below all still match under all-features (zero
+# `unmatched-skip` warnings), so this is purely additional, uncovered surface.
+#
+# WHY IT IS NOT CLOSED HERE BY WIDENING THE GRAPH. `all-features = true` also
+# fails the LICENSE check on the same z3 build subgraph, for two crates that are
+# not in `[licenses] allow` above:
+#
+#   cargo deny check advisories licenses sources
+#   error[rejected]: libbz2-rs-sys v0.2.4 -- "bzip2-1.0.6" is not explicitly allowed
+#     bzip2 0.6.1 -> zip 8.6.0 -> (build) z3-sys 0.11.0 -> z3 0.20.0
+#   error[rejected]: zlib-rs v0.6.3 -- "Zlib" is not explicitly allowed
+#     flate2 1.1.9 -> zip 8.6.0 -> (build) z3-sys 0.11.0 -> z3 0.20.0
+#   advisories ok, licenses FAILED, sources ok
+#   EXIT=4
+#
+# So widening the graph requires widening `[licenses] allow` or carrying license
+# exceptions -- the SAME governance decision, and the same Zlib blocker, that the
+# tonic/prost 0.14 migration was reverted for below. Making it as a side effect of
+# a duplicate-dependency cleanup is exactly the move this file refuses elsewhere,
+# so it is disclosed rather than taken. Closing it means one decision about what
+# the project will ship under, after which `all-features = true` plus five
+# version-pinned skips for the crates named above is a mechanical follow-up.
 #
 # ATTEMPTED AND DELIBERATELY REVERTED: migrating our own swarm-ingest-tetragon
 # from tonic/prost 0.13 to 0.14 (plus tonic-prost / tonic-prost-build) does
