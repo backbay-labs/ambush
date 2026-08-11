@@ -56,13 +56,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         let source = source_dir.join(name);
         let raw = std::fs::read_to_string(&source)
             .map_err(|error| format!("failed to read {}: {error}", source.display()))?;
-        let manifest: DetectorExperimentManifest = serde_yaml::from_str(&raw).map_err(|error| {
-            format!(
-                "{} does not match the current schema: {error}",
-                source.display()
-            )
-        })?;
-        let rendered = serde_yaml::to_string(&manifest)?;
+        // The schema gate. `DetectorExperimentManifest` is
+        // `#[serde(deny_unknown_fields)]`, so a fixture carrying a field the
+        // current detector types no longer accept fails HERE.
+        let _validated: DetectorExperimentManifest =
+            serde_yaml::from_str(&raw).map_err(|error| {
+                format!(
+                    "{} does not match the current schema: {error}",
+                    source.display()
+                )
+            })?;
+
+        // The canonical form is rendered from the YAML VALUE, not from the typed
+        // struct. Serializing the struct would materialize every
+        // `#[serde(default)]` field the author deliberately omitted -- including
+        // `candidate.profile.command_line_normalization`, whose absence from
+        // these fixtures FIXTURE-02 asserts. Value round-tripping normalizes
+        // formatting (indentation, key quoting) and nothing else.
+        let value: serde_yaml::Value = serde_yaml::from_str(&raw)?;
+        let rendered = serde_yaml::to_string(&value)?;
         std::fs::write(out_dir.join(name), rendered)?;
     }
 
