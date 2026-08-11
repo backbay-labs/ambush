@@ -1,7 +1,7 @@
 use super::auth::{AuthenticatedOperatorPrincipal, require_operator_api_scope};
-use super::core::OperatorHttpState;
 use super::error::{OperatorApiError, map_maintenance_error};
 use super::helpers::{limit_maintenance_list, maintenance_service, parse_maintenance_status};
+use super::state::OperatorHttpState;
 use crate::operator_maintenance::{
     OperatorMaintenanceExecution, OperatorMaintenanceList, OperatorMaintenanceRecord,
     OperatorMaintenanceRequest,

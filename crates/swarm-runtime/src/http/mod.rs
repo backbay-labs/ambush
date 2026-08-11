@@ -1,5 +1,3 @@
-mod core;
-
 pub mod approval;
 pub mod auth;
 pub mod control;
@@ -14,4 +12,7 @@ pub mod render;
 pub mod review;
 pub mod state;
 
-pub use core::*;
+#[cfg(test)]
+mod tests;
+
+pub use state::{LocalOperatorSurface, OperatorHttpError, OperatorSurfacePaths};

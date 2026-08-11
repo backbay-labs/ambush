@@ -1,6 +1,6 @@
-use super::core::OperatorHttpState;
 use super::error::{OperatorApiError, map_evidence_api_error};
 use super::helpers::{evidence_service, limit_evidence_bundle_list, parse_evidence_subject_kind};
+use super::state::OperatorHttpState;
 use crate::evidence::{
     EvidenceBundle, EvidenceBundleList, EvidenceVerificationReport, PromotionEvidencePacket,
 };

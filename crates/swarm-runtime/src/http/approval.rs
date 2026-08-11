@@ -1,7 +1,7 @@
 use super::auth::{AuthenticatedOperatorPrincipal, require_operator_api_scope};
-use super::core::OperatorHttpState;
 use super::error::{OperatorApiError, map_approval_error};
 use super::helpers::{approval_harness, limit_approval_ledger_list, limit_approval_set_list};
+use super::state::OperatorHttpState;
 use crate::approval::{
     ApprovalLedgerList, ApprovalLedgerLookup, ApprovalSetList, ApprovalSetReport,
     ApprovalVerdictStatus, ThresholdRule,
