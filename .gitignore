@@ -92,3 +92,8 @@ data/evolution-portfolio-history/
 *.keystore
 id_rsa
 id_ed25519
+
+# Subagent-driven-development scratch workspace (ledgers, briefs, review packages).
+# The skill assumes this is git-ignored; it was not, so an SDD run left an empty
+# directory that the CI drift gate counts as residue.
+.superpowers/
