@@ -1717,6 +1717,11 @@ pub struct DefaultReplayHarness {
     result_store: FileReplayRunStore,
 }
 
+/// Fixed seed for the replay lane's in-memory simulation identity. Documented at the
+/// use site; deliberately constant so two replay runs of the same scenario produce
+/// comparable `agent_id`s.
+const REPLAY_SIMULATION_SIGNING_SEED: [u8; 32] = [42u8; 32];
+
 impl DefaultReplayHarness {
     /// Build the harness from repository config plus a durable replay-results directory.
     pub fn from_path(
@@ -2390,7 +2395,14 @@ impl DefaultReplayHarness {
         let steps = self.materialize_steps(loaded)?;
         let service = self.build_service()?;
         let substrate = InMemoryPheromoneSubstrate::new(self.config.pheromone.clone());
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
+        // Deterministic simulation identity, NOT a credential. Replay runs entirely
+        // in memory (`InMemoryPheromoneSubstrate`, `MemoryInvestigationBundleStore`)
+        // with `live_mode: false`, and comparing two replay runs requires a stable
+        // `agent_id`, so this seed is fixed on purpose. Receipts it signs attest to a
+        // simulation and must never be treated as authentic operational evidence.
+        // Contrast `evolution_mutation_signing_key` in the CLI, which had a fixed seed
+        // by mistake and now loads the persisted Kitten identity.
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&REPLAY_SIMULATION_SIGNING_SEED);
         let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
 
         let mut replay_bundles = Vec::new();

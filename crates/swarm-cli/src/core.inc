@@ -2922,6 +2922,23 @@ fn run_identity_rotate_command(
     Ok(())
 }
 
+/// Signing key the CLI uses for evolution mutation artifacts.
+///
+/// This is the same persisted identity the runtime's evolution agent uses
+/// (`AgentRole::Kitten`, slot `primary`, see `swarm_detect.rs`), so an artifact
+/// signed by `swarmctl` verifies against the same `AgentId` as one signed by the
+/// running daemon. `load_or_create` generates from `OsRng` and persists on first
+/// use; it never returns a compiled-in constant.
+fn evolution_mutation_signing_key(
+    config_path: &std::path::Path,
+    identity: &swarm_core::config::IdentityConfig,
+) -> Result<ed25519_dalek::SigningKey, Box<dyn std::error::Error>> {
+    let key_store = FileAgentKeyStore::open(resolve_agent_key_dir(config_path, identity))?;
+    Ok(key_store
+        .load_or_create(AgentRole::Kitten, "primary")?
+        .signing_key)
+}
+
 pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Command::Validate(args) => return run_validate_command(&cli.config, args, cli.json).await,
@@ -2985,7 +3002,7 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         &cli.evolution_mutation_materialization_batch_results_dir,
         &cli.evolution_mutation_validation_batch_results_dir,
         &cli.evolution_ranking_results_dir,
-        ed25519_dalek::SigningKey::from_bytes(&[85u8; 32]),
+        evolution_mutation_signing_key(&cli.config, &repo_config.identity)?,
     )?;
     let evolution_selection_harness = DefaultEvolutionSelectionHarness::from_path(
         &cli.evolution_ranking_results_dir,
@@ -5036,8 +5053,9 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, build_validate_report,
-        parse_review_artifact_ref_arg, render_init_template, run_init_command,
-        run_playbook_preview_command, run_quickstart_command, run_readiness_command,
+        evolution_mutation_signing_key, parse_review_artifact_ref_arg, render_init_template,
+        run_init_command, run_playbook_preview_command, run_quickstart_command,
+        run_readiness_command,
     };
     use crate::config::write_debug_test_config_signature;
     use clap::Parser;
@@ -5323,5 +5341,54 @@ mod tests {
         assert!(rendered.contains("mode: live_response"));
         assert!(rendered.contains("kind: local_journal"));
         assert!(rendered.contains("response_adapter:\n  # Replace the placeholder URL and token before deploying to production."));
+    }
+
+    /// The CLI signed every evolution mutation artifact with a compiled-in
+    /// constant (`SigningKey::from_bytes(&[85u8; 32])`) in `pub async fn run`,
+    /// so any two deployments shared one signer identity that is public in the
+    /// source. These assertions fail against that constant.
+    #[test]
+    fn evolution_mutation_signing_key_is_per_deployment_and_persisted() {
+        fn config_with_key_dir(root: &std::path::Path) -> swarm_core::config::IdentityConfig {
+            swarm_core::config::IdentityConfig {
+                agent_key_dir: root.join("agent-keys").display().to_string(),
+                ..Default::default()
+            }
+        }
+
+        let base = std::env::temp_dir().join(format!(
+            "swarm-cli-evolution-key-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let deployment_a = base.join("a");
+        let deployment_b = base.join("b");
+        fs::create_dir_all(&deployment_a).unwrap();
+        fs::create_dir_all(&deployment_b).unwrap();
+        let config_path_a = deployment_a.join("rulesets/default.yaml");
+        let config_path_b = deployment_b.join("rulesets/default.yaml");
+
+        let key_a =
+            evolution_mutation_signing_key(&config_path_a, &config_with_key_dir(&deployment_a))
+                .unwrap();
+        let key_b =
+            evolution_mutation_signing_key(&config_path_b, &config_with_key_dir(&deployment_b))
+                .unwrap();
+
+        // Not the compiled-in constant.
+        assert_ne!(key_a.to_bytes(), [85u8; 32]);
+        assert_ne!(key_b.to_bytes(), [85u8; 32]);
+        // Distinct deployments do not share a signer.
+        assert_ne!(key_a.to_bytes(), key_b.to_bytes());
+        // Stable across invocations within one deployment, so receipts stay verifiable.
+        let key_a_again =
+            evolution_mutation_signing_key(&config_path_a, &config_with_key_dir(&deployment_a))
+                .unwrap();
+        assert_eq!(key_a.to_bytes(), key_a_again.to_bytes());
+
+        fs::remove_dir_all(&base).ok();
     }
 }
