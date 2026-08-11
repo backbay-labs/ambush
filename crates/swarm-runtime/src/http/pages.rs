@@ -1,4 +1,3 @@
-use super::core::ReviewHomeContext;
 use super::helpers::ReviewEvidenceVerificationFilter;
 use super::render::{
     escape_html, render_demo_dashboard_panel, render_maintenance_status_pill,
@@ -7,6 +6,7 @@ use super::render::{
     render_related_ref_link, render_review_layout, render_status_pill, render_subject_kind_options,
     render_verification_filter_options, review_link, subject_api_path,
 };
+use super::review::ReviewHomeContext;
 use crate::evidence::{
     EvidenceBundle, EvidenceBundleList, EvidenceVerificationReport, EvidenceVerificationStatus,
     PromotionEvidencePacket, PromotionEvidencePacketList, PromotionEvidenceRecommendation,

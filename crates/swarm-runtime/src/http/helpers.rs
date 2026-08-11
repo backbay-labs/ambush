@@ -1,7 +1,5 @@
-use super::core::{
-    IncidentLookupQuery, InvestigationLookupQuery, OperatorHttpState, OperatorSurfacePaths,
-    ReplayLookupQuery,
-};
+use super::control::{IncidentLookupQuery, InvestigationLookupQuery, ReplayLookupQuery};
+use super::core::{OperatorHttpState, OperatorSurfacePaths};
 use super::error::{OperatorApiError, OperatorReviewError};
 use crate::approval::{ApprovalLedgerList, ApprovalSetList, DefaultApprovalHarness};
 use crate::control::{IncidentLookupSelector, InvestigationLookupSelector, ReplayLookupSelector};
