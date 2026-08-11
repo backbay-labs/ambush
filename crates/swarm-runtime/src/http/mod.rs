@@ -1,4 +1,3 @@
-#[path = "core.inc"]
 mod core;
 
 pub mod approval;
