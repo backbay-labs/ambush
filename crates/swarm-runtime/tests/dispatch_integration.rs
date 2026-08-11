@@ -323,6 +323,25 @@ fn repo_config_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../rulesets/default.yaml")
 }
 
+/// A per-run dead-letter journal outside the repository.
+///
+/// `dead_letter_path` defaults to the cwd-relative `./dead-letter.jsonl`, and
+/// `cargo test`'s cwd is the crate root, so a test that takes the default
+/// appends to the checked-out `crates/swarm-runtime/dead-letter.jsonl`.
+fn temp_jsonl_path(label: &str) -> String {
+    std::env::temp_dir()
+        .join(format!(
+            "swarm-runtime-dispatch-{label}-{}-{}.jsonl",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ))
+        .display()
+        .to_string()
+}
+
 fn sample_config() -> Result<SwarmConfig, Box<dyn Error>> {
     Ok(load_config(repo_config_path())?)
 }
@@ -900,7 +919,7 @@ async fn timeout_from_dispatched_webhook_records_failure() -> Result<(), Box<dyn
                     auth_token: None,
                     retry: RetryConfig::default(),
                     circuit_breaker: CircuitBreakerConfig::default(),
-                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                    dead_letter_path: temp_jsonl_path("webhook"),
                 },
             },
             None,
@@ -973,7 +992,7 @@ async fn unsupported_webhook_action_fails_closed_in_runtime_audit() -> Result<()
                     auth_token: None,
                     retry: RetryConfig::default(),
                     circuit_breaker: CircuitBreakerConfig::default(),
-                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                    dead_letter_path: temp_jsonl_path("webhook"),
                 },
             },
             None,

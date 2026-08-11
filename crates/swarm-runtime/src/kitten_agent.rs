@@ -2894,6 +2894,11 @@ mod tests {
         let config_path = config_path();
         let mut config = load_config(&config_path).unwrap();
         configure_paths(&mut config, &root);
+        // Materialized mutation manifests are written NEXT TO the base
+        // experiment (`mutation::helpers::materialized_experiment_path`), so a
+        // base left to `infer_base_experiment_path` drops `mutation-*.yaml`
+        // into the checked-out `experiments/` directory.
+        let staged_baseline = stage_baseline_experiment(&root);
 
         let paths = resolve_evolution_paths(&config_path, &config.evolution.paths);
         let replay = DefaultReplayHarness::from_config(
@@ -2976,7 +2981,7 @@ mod tests {
                     strategy_root: baseline_draft.report.strategy_id.clone(),
                     rationale: baseline_draft.report.lineage_rationale.clone(),
                     max_variants: config.evolution.max_variants_per_cycle,
-                    base_experiment_path: None,
+                    base_experiment_path: Some(staged_baseline.clone()),
                     evasion_pressure: None,
                 },
             )
@@ -2990,7 +2995,7 @@ mod tests {
                     strategy_root: pressured_draft.report.strategy_id.clone(),
                     rationale: pressured_draft.report.lineage_rationale.clone(),
                     max_variants: config.evolution.max_variants_per_cycle,
-                    base_experiment_path: None,
+                    base_experiment_path: Some(staged_baseline.clone()),
                     evasion_pressure: Some(pressure.clone()),
                 },
             )
@@ -3249,6 +3254,7 @@ mod tests {
         let config_path = config_path();
         let mut config = load_config(&config_path).unwrap();
         configure_paths(&mut config, &root);
+        let staged_baseline = stage_baseline_experiment(&root);
 
         let agent = KittenAgent::new(
             AgentId::new("kitten", "primary"),
@@ -3328,7 +3334,7 @@ mod tests {
                     strategy_root: draft.report.strategy_id.clone(),
                     rationale: draft.report.lineage_rationale.clone(),
                     max_variants: config.evolution.max_variants_per_cycle,
-                    base_experiment_path: None,
+                    base_experiment_path: Some(staged_baseline.clone()),
                     evasion_pressure: Some(evasion_input.clone()),
                 },
             )
@@ -3600,6 +3606,11 @@ mod tests {
         config.evolution.paths.evolution_population_results_dir =
             root.join("evolution-population").display().to_string();
         config.evolution.paths.canary_results_dir = root.join("canaries").display().to_string();
+        // The assurance harvest store is NOT under `evolution.paths`, so it is
+        // easy to miss here; left on its repo-relative default it writes into
+        // the checked-out crate root.
+        config.evolution.assurance.harvest.results_dir =
+            root.join("assurance-cases").display().to_string();
     }
 
     fn configure_memory(config: &mut swarm_core::config::SwarmConfig, root: &Path) {
@@ -3670,13 +3681,15 @@ mod tests {
         let root = temp_root("drift-detector");
         let now = 1_800_000_000_i64;
         let now_ms = now * 1000;
-        let mut config = load_config(config_path()).unwrap();
+        let staged_config_path = stage_config(&root);
+        let _staged_baseline = stage_baseline_experiment(&root);
+        let mut config = load_config(&staged_config_path).unwrap();
         configure_paths(&mut config, &root);
         seed_failed_verifications(&root, now_ms, 2);
 
         let mut agent = KittenAgent::new(
             AgentId::new("kitten", "primary"),
-            config_path(),
+            &staged_config_path,
             config.clone(),
             substrate(&config),
         );
@@ -3722,13 +3735,19 @@ mod tests {
         let root = temp_root("proposal");
         let now = 1_800_100_000_i64;
         let now_ms = now * 1000;
-        let mut config = load_config(config_path()).unwrap();
+        // The agent's own mutation path passes `base_experiment_path: None`
+        // (correct for an operator running from a deployment root), so the base
+        // experiment is inferred from the CONFIG PATH's repo root. Stage both so
+        // the inferred root is the temp dir and not the checked-out tree.
+        let staged_config_path = stage_config(&root);
+        let _staged_baseline = stage_baseline_experiment(&root);
+        let mut config = load_config(&staged_config_path).unwrap();
         configure_paths(&mut config, &root);
         seed_failed_verifications(&root, now_ms, 3);
 
         let mut agent = KittenAgent::new(
             AgentId::new("kitten", "primary"),
-            config_path(),
+            &staged_config_path,
             config.clone(),
             substrate(&config),
         );
@@ -3792,6 +3811,7 @@ mod tests {
         let config_path = config_path();
         let mut config = load_config(&config_path).unwrap();
         configure_paths(&mut config, &root);
+        let staged_baseline = stage_baseline_experiment(&root);
         seed_failed_verifications(&root, now_ms, 3);
 
         let _agent = KittenAgent::new(
@@ -3852,7 +3872,7 @@ mod tests {
                     strategy_root: draft.report.strategy_id.clone(),
                     rationale: draft.report.lineage_rationale.clone(),
                     max_variants: config.evolution.max_variants_per_cycle,
-                    base_experiment_path: None,
+                    base_experiment_path: Some(staged_baseline.clone()),
                     evasion_pressure: None,
                 },
             )
@@ -3892,6 +3912,7 @@ mod tests {
         let config_path = config_path();
         let mut config = load_config(&config_path).unwrap();
         configure_paths(&mut config, &root);
+        let staged_baseline = stage_baseline_experiment(&root);
 
         let _seed_agent = KittenAgent::new_with_signing_key(
             AgentId::new("kitten", "seed"),
@@ -3972,7 +3993,7 @@ mod tests {
                     strategy_root: draft.report.strategy_id.clone(),
                     rationale: draft.report.lineage_rationale.clone(),
                     max_variants: config.evolution.max_variants_per_cycle,
-                    base_experiment_path: None,
+                    base_experiment_path: Some(staged_baseline.clone()),
                     evasion_pressure: None,
                 },
             )

@@ -581,7 +581,12 @@ async fn evolution_queue_blocks_when_assurance_coverage_floor_is_not_met() {
     let scorecard_dir = root.join("scorecards");
     let proofs_dir = root.join("proofs");
     let queue_dir = root.join("queue");
+    let harvest_dir = root.join("assurance-cases");
     let mut config = sample_config();
+    // `sample_config()` leaves the harvest store on its repo-relative default,
+    // which `resolve_config_relative_path` degenerates to cwd for an inline
+    // config path -- i.e. the checked-out crate root.
+    config.evolution.assurance.harvest.results_dir = harvest_dir.display().to_string();
     config.evolution.assurance.coverage_overrides = vec![
         swarm_core::config::EvolutionAssuranceCoverageOverrideConfig {
             detector: "suspicious_process_tree".to_string(),

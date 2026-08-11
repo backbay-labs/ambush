@@ -114,6 +114,34 @@ fn temp_root(label: &str) -> PathBuf {
     root
 }
 
+/// Copy an experiment manifest into `root`, rewriting its relative `../` corpus
+/// and verification references to absolute paths in the checked-out tree.
+///
+/// Materialized mutation manifests are written NEXT TO their base experiment, so
+/// a test that passes the checked-out `experiments/office-baseline-control.yaml`
+/// as the base drops `mutation-*.yaml` into the repository's `experiments/`.
+///
+/// The corpora are ABSOLUTIZED rather than copied: `rulesets/safety/
+/// office-detector-admission.yaml` pins the admission invariants to the
+/// repository's `verifications/office-detector-safety-v1.yaml`, and a candidate
+/// verified against a copy is rejected as a different corpus.
+fn stage_experiment(root: &Path, source: &Path) -> PathBuf {
+    let experiments_dir = root.join("experiments");
+    fs::create_dir_all(&experiments_dir).unwrap();
+    let destination = experiments_dir.join(source.file_name().unwrap());
+    let source_dir = source.parent().unwrap();
+
+    let raw = fs::read_to_string(source).unwrap();
+    let mut manifest: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
+    for (section, key) in [("corpus", "suite"), ("verification", "corpus")] {
+        let relative = manifest[section][key].as_str().unwrap().to_string();
+        let absolute = source_dir.join(&relative).canonicalize().unwrap();
+        manifest[section][key] = serde_yaml::Value::String(absolute.display().to_string());
+    }
+    fs::write(&destination, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    destination
+}
+
 fn configure_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.enabled = true;
     config.canary.enabled = true;
@@ -652,7 +680,7 @@ async fn evasion_to_canary_routes_gap_driven_candidate_into_existing_lane()
         EvolutionMutationSpecCreateRequest {
             draft_id: Some(draft.report.draft_id.clone()),
             materialization_id: None,
-            base_experiment_path: Some(office_control_experiment()),
+            base_experiment_path: Some(stage_experiment(&root, &office_control_experiment())),
             rationale: "carry measured evasion pressure into canary admission".to_string(),
         },
     )?;

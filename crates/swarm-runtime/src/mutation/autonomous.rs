@@ -99,13 +99,14 @@ pub(crate) fn load_source_seed(
     pressure: &EvolutionPressureReport,
     base_experiment_path_override: Option<&Path>,
 ) -> Result<AutonomousGenerationSeed, EvolutionMutationError> {
-    let base_experiment_path = base_experiment_path_override
-        .map(Path::to_path_buf)
-        .unwrap_or(infer_base_experiment_path(
-            &drafting.config_path,
-            &draft.draft_id,
-            pressure,
-        )?);
+    // `Option::unwrap_or` evaluates its argument eagerly, so the previous form
+    // ran `infer_base_experiment_path` -- which scans and parses EVERY manifest
+    // under the repo's `experiments/` directory -- even when the caller supplied
+    // an override, and propagated that scan's `?` out of this function.
+    let base_experiment_path = match base_experiment_path_override {
+        Some(path) => path.to_path_buf(),
+        None => infer_base_experiment_path(&drafting.config_path, &draft.draft_id, pressure)?,
+    };
     let manifest = load_detector_experiment_manifest(&base_experiment_path)?;
     let genome = EvolutionDetectorGenome::from_candidate(&manifest.candidate)?;
     Ok(AutonomousGenerationSeed {
