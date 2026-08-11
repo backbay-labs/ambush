@@ -302,12 +302,19 @@ where
                         );
                     }
                 }
-                if let Some(forwarder) = &self.siem_forwarder {
-                    // Spawn the SIEM forward as fire-and-forget so a slow or
-                    // retrying Splunk/ELK/Chronicle endpoint cannot delay the
-                    // live-response action selected just below. Receipts are
-                    // observed in the spawned task; failures degrade reporting,
-                    // not isolation/quarantine timing.
+                // Spawn the SIEM forward CONCURRENTLY so a slow or retrying
+                // Splunk/ELK/Chronicle endpoint cannot delay the live-response action
+                // selected just below -- but keep the JoinHandle and await it on every
+                // exit path from this function. It is concurrent, not detached.
+                //
+                // A dropped JoinHandle is not fire-and-forget: the task is aborted when
+                // the runtime shuts down. `swarm_detect` in scenario mode is a one-shot
+                // CLI, so every in-flight forward was being cancelled mid-POST with no
+                // dead-letter entry, no receipt and no counter -- defeating the exact
+                // durability contract `SiemFindingForwarder` exists to provide. It also
+                // left the two reporting sinks with inconsistent delivery semantics,
+                // since the `NotificationRouter` immediately below is awaited.
+                let siem_forward = self.siem_forwarder.as_ref().map(|forwarder| {
                     let forwarder = forwarder.clone();
                     let prometheus = self.prometheus.clone();
                     let event_id = event.event_id.clone();
@@ -346,8 +353,8 @@ where
                                 );
                             }
                         }
-                    });
-                }
+                    })
+                });
                 if let Some(router) = &self.notification_router {
                     for finding in &findings {
                         router.route_finding(finding).await;
@@ -361,6 +368,7 @@ where
                         module = module_path!(),
                         "no findings emitted for event"
                     );
+                    join_siem_forward(siem_forward).await;
                     return Ok(None);
                 }
 
@@ -375,6 +383,7 @@ where
                         finding_count = findings.len(),
                         "no playbook action proposed for any finding on event"
                     );
+                    join_siem_forward(siem_forward).await;
                     return Ok(None);
                 };
 
@@ -409,6 +418,7 @@ where
                             module = module_path!(),
                             "authorization or response execution failed"
                         );
+                        join_siem_forward(siem_forward).await;
                         return Err(error.into());
                     }
                 };
@@ -440,6 +450,8 @@ where
                         prometheus.observe_response(response_elapsed_us as f64);
                     }
                 }
+
+                join_siem_forward(siem_forward).await;
 
                 Ok(Some(ReplayBundle {
                     bundle_id: format!(
@@ -1276,6 +1288,25 @@ fn observe_siem_forward_receipt_with(
         swarm_response::ResponseStatus::Failed => "failure",
     };
     prometheus.observe_delivery_batch(transport, outcome, event_count, payload_bytes);
+}
+
+/// Await the concurrently-spawned SIEM forward before returning from
+/// `process_event_with_finding_observer`.
+///
+/// A dropped `JoinHandle` is aborted when the tokio runtime shuts down, so a
+/// detached forward is silently lost on a one-shot run. Joining keeps the forward
+/// concurrent with action selection and `audit_authorize_and_execute_instrumented`
+/// while guaranteeing the receipt/dead-letter path has run before the caller
+/// continues.
+async fn join_siem_forward(handle: Option<tokio::task::JoinHandle<()>>) {
+    if let Some(handle) = handle
+        && let Err(error) = handle.await
+    {
+        tracing::error!(
+            reason = %error,
+            "siem finding forward task did not complete"
+        );
+    }
 }
 
 fn operator_bearer_token_statuses(
