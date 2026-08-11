@@ -59,10 +59,12 @@
 #
 # EXCEPTION MARKER
 #   A production `.unwrap(`/`.expect(` may be kept by putting
-#       // SAFETY: runtime panic contract exception
-#   on the line above it (blank lines are skipped, up to 3 lines back), with a
-#   justification of the invariant. The marker means "a human established this
-#   cannot fail"; it is not a mute button. Exceptions are counted and reported.
+#       // SAFETY: runtime panic contract exception -- <why it cannot fail>
+#   on the line above it (blank lines are skipped, up to 3 lines back). The marker
+#   must be the NEAREST non-blank line above the call, so put the justification on
+#   the marker line itself or on lines above it, not between it and the call. The
+#   marker means "a human established this cannot fail"; it is not a mute button.
+#   Exceptions are counted and reported on the OK line.
 #
 set -euo pipefail
 
@@ -384,7 +386,16 @@ def sanitize_runtime_source(text: str) -> str:
 
 
 def has_allowed_marker(lines: list[str], line_number: int) -> bool:
-    for index in range(line_number - 1, max(-1, line_number - 4), -1):
+    """True when the marker is the nearest non-blank line ABOVE the call site.
+
+    `line_number` is 1-based and `lines` is 0-based, so the call site itself is
+    `lines[line_number - 1]` and the line above it is `lines[line_number - 2]`.
+    Starting the walk at `line_number - 1` inspected the CALL LINE first; a line
+    holding a `.unwrap(`/`.expect(` is never blank, so the loop returned on its
+    first iteration and this function could never return True. The marker was
+    unimplementable and the `allowed` reporting branch was dead code.
+    """
+    for index in range(line_number - 2, max(-1, line_number - 5), -1):
         stripped = lines[index].strip()
         if not stripped:
             continue
@@ -532,6 +543,58 @@ SELF_TEST_CASES: list[tuple[str, dict[str, str], tuple[int, int, int, int]]] = [
         "`#[cfg(not(test))]` is production and is scanned",
         {
             "crates/probe/src/lib.rs": "#[cfg(not(test))]\n" + PANIC_BODY,
+        },
+        (1, 0, 1, 0),
+    ),
+    (
+        "marker on the line directly above is an allowed exception",
+        {
+            "crates/probe/src/lib.rs": (
+                "pub fn probe() -> u32 {\n"
+                f"    // {ALLOWED_MARKER} -- literal Some, cannot be None\n"
+                "    Some(1u32).unwrap()\n"
+                "}\n"
+            ),
+        },
+        (1, 0, 0, 1),
+    ),
+    (
+        "marker still counts across a blank line",
+        {
+            "crates/probe/src/lib.rs": (
+                "pub fn probe() -> u32 {\n"
+                f"    // {ALLOWED_MARKER} -- literal Some, cannot be None\n"
+                "\n"
+                "    Some(1u32).unwrap()\n"
+                "}\n"
+            ),
+        },
+        (1, 0, 0, 1),
+    ),
+    (
+        "a non-marker comment above the call does NOT excuse it",
+        {
+            "crates/probe/src/lib.rs": (
+                "pub fn probe() -> u32 {\n"
+                "    // this is fine, trust me\n"
+                "    Some(1u32).unwrap()\n"
+                "}\n"
+            ),
+        },
+        (1, 0, 1, 0),
+    ),
+    (
+        "marker further than 3 lines back does NOT excuse the call",
+        {
+            "crates/probe/src/lib.rs": (
+                "pub fn probe() -> u32 {\n"
+                f"    // {ALLOWED_MARKER} -- stale, four lines up\n"
+                "    let a = 1u32;\n"
+                "    let b = a;\n"
+                "    let c = Some(b);\n"
+                "    c.unwrap()\n"
+                "}\n"
+            ),
         },
         (1, 0, 1, 0),
     ),
