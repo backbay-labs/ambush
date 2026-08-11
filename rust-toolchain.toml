@@ -1,0 +1,17 @@
+# Pin the toolchain so the verification gates are reproducible.
+#
+# CI runs `cargo clippy --workspace --all-targets -- -D warnings`. With no pin,
+# `dtolnay/rust-toolchain@stable` floats to whatever stable is that day, so a
+# clean tree goes red the moment a new release adds a lint -- with zero code
+# changes and no way to reproduce it locally. That happened: phase 280 verified
+# "clippy exit 0, zero warnings" on 1.93.0 while CI ran 1.97.1 and found 21
+# violations across swarm-spine, swarm-pheromone, and swarm-runtime.
+#
+# Pinning also fixes rustfmt, whose output differs between releases, so
+# `cargo fmt --all -- --check` is stable across machines.
+#
+# Upgrading is now a deliberate, reviewable commit: bump `channel`, run the
+# gates, fix what the new release surfaces, in one changeset.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]

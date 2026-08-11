@@ -707,7 +707,7 @@ impl IncidentStore for FileIncidentStore {
 
     fn load_by_hunt_id(&self, hunt_id: &str) -> Result<Option<IncidentLookup>, IncidentStoreError> {
         let mut entries = self.read_index()?.entries;
-        entries.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         if let Some(record) = entries.into_iter().find(|entry| {
             entry
                 .included_hunt_ids
@@ -721,7 +721,7 @@ impl IncidentStore for FileIncidentStore {
 
     fn recent(&self, limit: usize) -> Result<Vec<IncidentRecord>, IncidentStoreError> {
         let mut entries = self.read_index()?.entries;
-        entries.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         entries.truncate(limit);
         Ok(entries)
     }
@@ -749,7 +749,7 @@ struct IncidentIndex {
 
 fn sorted_recent_incidents(incidents: &[CorrelatedIncident]) -> Vec<CorrelatedIncident> {
     let mut ordered = incidents.to_vec();
-    ordered.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+    ordered.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
     ordered
 }
 

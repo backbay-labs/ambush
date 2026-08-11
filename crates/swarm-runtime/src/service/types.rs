@@ -589,11 +589,7 @@ impl StageMetricsSnapshot {
             failures: metrics.failures,
             total_latency_us: metrics.total_latency_us,
             max_latency_us: metrics.max_latency_us,
-            average_latency_us: if total == 0 {
-                0
-            } else {
-                metrics.total_latency_us / total
-            },
+            average_latency_us: metrics.total_latency_us.checked_div(total).unwrap_or(0),
             latency_buckets: LATENCY_BUCKETS_US
                 .iter()
                 .zip(metrics.bucket_counts.iter())

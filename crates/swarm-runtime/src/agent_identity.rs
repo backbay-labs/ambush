@@ -467,12 +467,10 @@ impl FileAgentIdentityRegistry {
             continuity_proof_id: proof.proof_id.clone(),
         });
         snapshot.continuity_proofs.push(proof.clone());
-        snapshot
-            .retired
-            .sort_by(|left, right| left.retired_at_ms.cmp(&right.retired_at_ms));
+        snapshot.retired.sort_by_key(|entry| entry.retired_at_ms);
         snapshot
             .continuity_proofs
-            .sort_by(|left, right| left.payload.signed_at_ms.cmp(&right.payload.signed_at_ms));
+            .sort_by_key(|entry| entry.payload.signed_at_ms);
         self.persist_snapshot(&snapshot)?;
 
         Ok(IdentityRotationOutcome {

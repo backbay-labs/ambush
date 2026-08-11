@@ -1326,7 +1326,7 @@ pub(crate) fn filter_deposits(
         })
         .cloned()
         .collect::<Vec<_>>();
-    filtered.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+    filtered.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp));
     if query.limit > 0 {
         filtered.truncate(query.limit);
     }
@@ -1437,7 +1437,7 @@ pub(crate) fn filter_escalations(
         .filter(|record| record.timestamp >= since_timestamp)
         .cloned()
         .collect::<Vec<_>>();
-    filtered.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    filtered.sort_by_key(|entry| entry.timestamp);
     filtered
 }
 

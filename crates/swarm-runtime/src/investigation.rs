@@ -866,14 +866,10 @@ pub(crate) fn decide_outcome(
     let selected_interpretation_id = top.as_ref().map(|(id, _)| id.clone());
     let top_votes = top.as_ref().map(|(_, total)| *total).unwrap_or_default();
     let second_votes = second.as_ref().map(|(_, total)| *total).unwrap_or_default();
-    let final_confidence_basis_points = if total_votes == 0 {
-        if interpretations.len() == 1 {
-            10_000
-        } else {
-            5_000
-        }
-    } else {
-        ((top_votes * 10_000) / total_votes).min(10_000) as u16
+    let final_confidence_basis_points = match (top_votes * 10_000).checked_div(total_votes) {
+        Some(scaled) => scaled.min(10_000) as u16,
+        None if interpretations.len() == 1 => 10_000,
+        None => 5_000,
     };
     let ambiguous = interpretations.len() > 1
         && top_votes.saturating_sub(second_votes) <= u32::from(ambiguity_margin_basis_points);

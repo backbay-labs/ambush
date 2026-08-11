@@ -608,7 +608,7 @@ pub(super) fn build_providence_notification_payload(
     let hunt_id = aggregate.sample_finding.event_id.clone();
     let incident_key = format!(
         "{}:{}:{}",
-        &aggregate.strategy_id, threat_class, &aggregate.sample_finding.finding_id,
+        aggregate.strategy_id, threat_class, aggregate.sample_finding.finding_id,
     );
     let links = build_scoped_providence_links(
         operator,
@@ -626,7 +626,7 @@ pub(super) fn build_providence_notification_payload(
         channel: aggregate.channel.clone(),
         incident_key: incident_key.clone(),
         create_incident: ProvidenceCreateIncidentBody {
-            title: format!("{threat_class} detection from {}", &aggregate.strategy_id),
+            title: format!("{threat_class} detection from {}", aggregate.strategy_id),
             severity: aggregate.highest_severity,
             status: ProvidenceIncidentStatus::Open,
             source: "swarm-team-six".to_string(),
@@ -731,7 +731,7 @@ Audit Trail: {audit_trail}\n\
 Incident View: {incident}\n\
 Review Home: {review_home}",
         threat_class = super::threat_class_slug(&aggregate.threat_class),
-        strategy_id = &aggregate.strategy_id,
+        strategy_id = aggregate.strategy_id,
         incident_key = incident_key,
         severity = severity_label(aggregate.highest_severity),
         confidence = aggregate.sample_finding.confidence,

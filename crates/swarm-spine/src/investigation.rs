@@ -652,7 +652,7 @@ impl InvestigationBundleStore for FileInvestigationBundleStore {
         hunt_id: &str,
     ) -> Result<Option<InvestigationBundleLookup>, InvestigationStoreError> {
         let mut entries = self.read_index()?.entries;
-        entries.sort_by(|left, right| right.last_updated_ms.cmp(&left.last_updated_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_updated_ms));
         if let Some(record) = entries.into_iter().find(|entry| entry.hunt_id == hunt_id) {
             return self.read_bundle(record).map(Some);
         }
@@ -664,7 +664,7 @@ impl InvestigationBundleStore for FileInvestigationBundleStore {
         receipt_id: &str,
     ) -> Result<Option<InvestigationBundleLookup>, InvestigationStoreError> {
         let mut entries = self.read_index()?.entries;
-        entries.sort_by(|left, right| right.last_updated_ms.cmp(&left.last_updated_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_updated_ms));
         if let Some(record) = entries.into_iter().find(|entry| {
             entry
                 .related_receipt_ids
@@ -681,7 +681,7 @@ impl InvestigationBundleStore for FileInvestigationBundleStore {
         limit: usize,
     ) -> Result<Vec<InvestigationBundleRecord>, InvestigationStoreError> {
         let mut entries = self.read_index()?.entries;
-        entries.sort_by(|left, right| right.last_updated_ms.cmp(&left.last_updated_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_updated_ms));
         entries.truncate(limit);
         Ok(entries)
     }

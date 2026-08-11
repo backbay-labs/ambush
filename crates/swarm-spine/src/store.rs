@@ -435,7 +435,7 @@ impl ReplayBundleStore for FileReplayBundleStore {
         hunt_id: &str,
     ) -> Result<Option<ReplayBundleLookup>, ReplayStoreError> {
         let mut entries = self.read_index()?.entries;
-        entries.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         if let Some(record) = entries.into_iter().find(|entry| entry.hunt_id == hunt_id) {
             return self.read_bundle(record).map(Some);
         }
@@ -447,7 +447,7 @@ impl ReplayBundleStore for FileReplayBundleStore {
         receipt_id: &str,
     ) -> Result<Option<ReplayBundleLookup>, ReplayStoreError> {
         let mut entries = self.read_index()?.entries;
-        entries.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         if let Some(record) = entries.into_iter().find(|entry| {
             entry
                 .related_receipt_ids
@@ -461,7 +461,7 @@ impl ReplayBundleStore for FileReplayBundleStore {
 
     fn recent(&self, limit: usize) -> Result<Vec<ReplayBundleRecord>, ReplayStoreError> {
         let mut entries = self.read_index()?.entries;
-        entries.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
         entries.truncate(limit);
         Ok(entries)
     }
@@ -489,7 +489,7 @@ struct ReplayIndex {
 
 fn sorted_recent_bundles(bundles: &[ReplayBundle]) -> Vec<ReplayBundle> {
     let mut ordered = bundles.to_vec();
-    ordered.sort_by(|left, right| right.audit.created_at_ms.cmp(&left.audit.created_at_ms));
+    ordered.sort_by_key(|entry| std::cmp::Reverse(entry.audit.created_at_ms));
     ordered
 }
 

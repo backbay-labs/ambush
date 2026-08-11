@@ -388,7 +388,7 @@ impl ProvidenceIncidentAdapter {
         let mut recent = incident_store
             .recent(limit)
             .map_err(|error| format!("failed to list recent incidents: {error}"))?;
-        recent.sort_by(|left, right| right.created_at_ms.cmp(&left.created_at_ms));
+        recent.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
 
         {
             let mut state = self
