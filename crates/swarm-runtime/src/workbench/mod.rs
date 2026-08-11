@@ -7,4 +7,5 @@ pub mod stores;
 pub mod types;
 
 pub use core::*;
+pub use stores::*;
 pub use types::*;
