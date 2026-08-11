@@ -75,6 +75,15 @@ jobs:
       - name: Check for committed key material
         run: bash tools/check-no-committed-keys.sh
 
+      # INCFIX-03. No toolchain needed; another fast static check. `#[path =
+      # "x.inc"]` pulls real Rust into a crate that rustfmt, rust-analyzer and
+      # every LOC tool skip, which is how crates/swarm-cli/src/core.inc reached
+      # 5,394 unformatted lines. Phase 281 converted the single-owner ones; this
+      # keeps new ones out. core.inc itself is a single dated allowlist entry,
+      # deferred to phase 282.
+      - name: Check for non-.rs Rust source
+        run: bash tools/check-no-include-files.sh
+
   build:
     runs-on: ubuntu-latest
     steps:
