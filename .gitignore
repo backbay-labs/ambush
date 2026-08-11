@@ -24,16 +24,12 @@ Thumbs.db
 .ephemeral_state.json
 experiments/materialized-*.yaml
 experiments/mutation-*.yaml
-crates/swarm-runtime/data/evolution-assurance-cases/reports/
-crates/swarm-runtime/data/evolution-assurance-cases/scenarios/
-crates/swarm-cli/data/approval-ledgers/
-crates/swarm-cli/data/approval-receipt-packs/
-crates/swarm-cli/data/approval-sets/
-crates/swarm-cli/data/approval-verdicts/
-crates/swarm-runtime/data/approval-ledgers/
-crates/swarm-runtime/data/approval-receipt-packs/
-crates/swarm-runtime/data/approval-sets/
-crates/swarm-runtime/data/approval-verdicts/
+# Store roots created under a crate directory when a test or a `swarmctl` run
+# takes a cwd-relative `data/...` default. The previous per-store list named 10
+# of the 21 such defaults that have no root-level rule, and named none of
+# `incidents/`, `investigations/` or `replay/`.
+crates/*/data/
+crates/*/dead-letter.jsonl
 .claude/
 data/replay-runs/
 data/experiments/
@@ -63,4 +59,3 @@ data/evolution-portfolios/
 data/evolution-governance-review-packets/
 data/evolution-packet-sets/
 data/evolution-portfolio-history/
-experiments/mutation-*.yaml
