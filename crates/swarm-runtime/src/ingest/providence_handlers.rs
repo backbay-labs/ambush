@@ -39,7 +39,7 @@ use super::IngestState;
 use super::health::active_agent_counts;
 
 #[derive(Debug)]
-pub(super) struct ProvidenceFeedbackError {
+pub(crate) struct ProvidenceFeedbackError {
     pub(super) status: StatusCode,
     pub(super) error: String,
 }
@@ -111,9 +111,9 @@ pub(super) struct ProvidenceCallbackResponse {
 }
 
 #[derive(Debug)]
-struct ProvidenceFeedbackApplicationResult {
-    outcome: Value,
-    evidence: ProvidenceFeedbackEvidence,
+pub(crate) struct ProvidenceFeedbackApplicationResult {
+    pub(crate) outcome: Value,
+    pub(crate) evidence: ProvidenceFeedbackEvidence,
 }
 
 pub(crate) async fn providence_feedback_handler(
@@ -161,6 +161,7 @@ pub(crate) async fn providence_feedback_handler(
         reason: request.reason.clone(),
         request_signature: signature,
         evidence: Some(applied.evidence),
+        soar_lineage: None,
         payload: payload_value,
         outcome: applied.outcome.clone(),
     };
@@ -255,7 +256,7 @@ pub(super) fn providence_feedback_channel(
         })
 }
 
-pub(super) fn verify_providence_feedback_signature(
+pub(crate) fn verify_providence_feedback_signature(
     channel: &swarm_core::config::NotificationChannelConfig,
     headers: &axum::http::HeaderMap,
     body: &[u8],
@@ -290,7 +291,7 @@ pub(super) fn verify_providence_feedback_signature(
     Ok(provided)
 }
 
-async fn apply_providence_feedback(
+pub(crate) async fn apply_providence_feedback(
     state: &IngestState,
     request: &SwarmProvidenceFeedbackRequest,
     target: &ProvidenceFeedbackTarget,
@@ -452,7 +453,7 @@ async fn apply_providence_feedback(
     }
 }
 
-fn enrich_feedback_target(
+pub(crate) fn enrich_feedback_target(
     state: &IngestState,
     _lookup: &IncidentLookup,
     target: &ProvidenceFeedbackTarget,
@@ -469,7 +470,7 @@ fn enrich_feedback_target(
     Ok(enriched)
 }
 
-fn false_positive_measurement(
+pub(crate) fn false_positive_measurement(
     request: &SwarmProvidenceFeedbackRequest,
     target: &ProvidenceFeedbackTarget,
     feedback_id: &str,
@@ -488,6 +489,7 @@ fn false_positive_measurement(
         analyst_id: request.analyst_id.clone(),
         action: request.action,
         reason: request.reason.clone(),
+        soar_lineage: None,
         false_positive: matches!(request.action, ProvidenceFeedbackAction::Dismiss),
     }
 }

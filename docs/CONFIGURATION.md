@@ -2,7 +2,7 @@
 
 > Canonical runtime configuration surface, tuning parameters, and environment
 > variables.  
-> Last updated: 2026-04-12
+> Last updated: 2026-04-13
 
 ---
 
@@ -17,6 +17,12 @@ pheromone policy, response and notification adapters, async lanes, identity,
 operator surfaces, and rollout paths are all declared in repo-owned YAML.
 
 The config is loaded at startup and validated fail-closed: invalid configuration rejects at load time, not at runtime. Unknown fields are rejected (`deny_unknown_fields`).
+
+Operator packaging references:
+
+- [docs/QUICKSTART.md](QUICKSTART.md) for the first-run Docker Compose path
+- [docs/DEPLOYMENT.md](DEPLOYMENT.md) for Docker, Compose with NATS, Helm, and
+  bare-metal packaging
 
 ## Canonical Runtime Configuration Surface
 
@@ -79,6 +85,27 @@ detection:
       min_host_observations: 6
       baseline_half_life_secs: 7200
       rare_role_tools: [powershell.exe, wmic.exe]
+    suspicious_process_tree:
+      office_parents: [winword, excel, outlook]
+    dns_exfiltration:
+      suspicious_query_patterns: ["*.evil.invalid"]
+    lateral_movement:
+      monitored_tools: [wmic.exe, psexec.exe]
+    credential_access:
+      suspicious_targets: [lsass, sam]
+    suspicious_scripting:
+      suspicious_interpreters: [powershell.exe, pwsh.exe]
+    persistence:
+      monitored_registry_roots: [HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run]
+    supply_chain:
+      monitored_parent_processes: [msbuild.exe, installutil.exe]
+    network_connect:
+      suspicious_ports: [4444, 5555]
+    infrastructure_anomaly:
+      min_sustained_high_cpu_samples: 2
+      correlation_window_secs: 120
+    kill_chain_sequence:
+      rules_path: sequences/kill-chain-v1.yaml
 
 pheromone:
   default_half_life_secs: 3600.0
@@ -215,6 +242,27 @@ deception:
 - `candidate_limit`: how many recent investigation bundles to scan when assembling one incident.
 - `incident_store`: where correlated incidents are persisted for operator review.
 
+### Shipped Detector Profile Matrix
+
+The signed `rulesets/default.yaml` bootstrap bundle must stay byte-for-byte
+stable to preserve its checked-in signature, so the full shipped detector
+profile matrix is documented here as the canonical operator reference.
+
+| Strategy | Representative profile keys |
+| --- | --- |
+| `suspicious_process_tree` | `office_parents` |
+| `dns_exfiltration` | `suspicious_query_patterns` |
+| `lateral_movement` | `monitored_tools` |
+| `credential_access` | `suspicious_targets` |
+| `suspicious_scripting` | `suspicious_interpreters` |
+| `persistence` | `monitored_registry_roots` |
+| `supply_chain` | `monitored_parent_processes` |
+| `network_connect` | `suspicious_ports`, `process_port_allowlist` |
+| `infrastructure_anomaly` | `min_sustained_high_cpu_samples`, `correlation_window_secs` |
+| `fileless_execution` | `min_region_size_bytes`, `privileged_target_processes` |
+| `behavioral_anomaly` | `min_host_observations`, `baseline_half_life_secs`, `rare_role_tools` |
+| `kill_chain_sequence` | `rules_path` |
+
 ### Pheromone Response Playbooks
 
 - `pheromone.response_playbook.rules[*]` defines the top-level match band. A
@@ -331,14 +379,18 @@ The repository now treats dependency hygiene and release inventory as part of th
 - `Cargo.toml` now pins every first-party workspace dependency to an explicit internal version instead of inheriting wildcard path requirements through `[workspace.dependencies]`
 - `deny.toml` now denies wildcard dependency requirements, broadens the explicit license allowlist to match the shipped transitive graph, and documents the two currently accepted RustSec advisories that do not yet have safe upstream replacements in the current shipped stack
 - `tools/check-supply-chain.sh` runs `cargo deny check advisories licenses sources`, then `cargo deny check bans -A duplicate`, plus a hard `cargo audit --deny warnings` gate with three repo-owned temporary advisory exceptions, including the transitive `rand` advisory currently pinned by `async-nats` and `opentelemetry_sdk`
-- `.github/workflows/ci.yml` installs both `cargo-deny` and `cargo-audit`, then fails the build through that shared supply-chain check
+- `.github/workflows/ci.yml` now fans out repo CI into parallel `fmt`, `panic-contract`, `build`, `clippy`, `test`, `jetstream`, `benchmark`, and `supply-chain` jobs while reusing a shared target cache for the commit under test
+- the `jetstream` CI lane uses the repo-owned `tools/with-nats-jetstream.sh` harness so the ignored JetStream substrate tests run against a real containerized NATS instance instead of remaining a local-only proof surface
+- `tools/check-hot-path-regression.sh` runs the Criterion hot-path benchmark in CI, compares the emitted p99 sample against `docs/benchmarks/fast-detection-baseline.json`, and fails when the regression threshold is exceeded
 - `tools/generate-sbom.sh` generates one CycloneDX JSON SBOM per workspace crate and stages the files into a chosen output directory
-- `.github/workflows/release-sbom.yml` runs that script on version-tag pushes and uploads the resulting `*.cdx.json` files as the release SBOM artifact set
+- `tools/generate-changelog.sh` renders a release changelog from conventional commit history for the tagged release range
+- `.github/workflows/release.yml` now handles tagged releases end to end: it generates the changelog, publishes the multi-arch GHCR image, signs the image with keyless Cosign, pushes build provenance attestation, and attaches the generated `*.cdx.json` SBOM set plus `CHANGELOG.md` to the GitHub release
 
 Operator workflow:
 
-- before shipping a release candidate locally, run `bash tools/check-supply-chain.sh` and `bash tools/generate-sbom.sh artifacts/sbom`
-- publish the generated `artifacts/sbom/*.cdx.json` files alongside the tagged build so operators can compare the shipped dependency inventory with startup attestation, config signatures, and any downstream approval requirements
+- before shipping a release candidate locally, run `bash tools/check-supply-chain.sh`, `bash tools/check-hot-path-regression.sh`, and `bash tools/generate-sbom.sh artifacts/sbom`
+- generate the release notes preview with `bash tools/generate-changelog.sh --tag vX.Y --to HEAD --output artifacts/CHANGELOG.md` before cutting a tag if you want to review the conventional-commit rendering locally
+- tagged releases publish the generated `artifacts/sbom/*.cdx.json` files and `CHANGELOG.md` alongside the signed multi-arch image so operators can compare the shipped dependency inventory with startup attestation, config signatures, and any downstream approval requirements
 - treat the SBOM artifact set as release metadata; it complements binary and config attestation, but it does not replace those runtime verification contracts
 
 ### Bridge-Backed Telemetry Sources
@@ -363,6 +415,8 @@ For Providence-native delivery, configure the `providence_webhook` notification 
 Swarm signs the canonical JSON request body as `X-Swarm-Signature: sha256=<hex>`, and Providence verifies that header before accepting the request.
 
 That same `providence_webhook.request_signature` configuration now covers Swarm's signed Providence ingress: `POST /v1/providence/feedback` and `POST /v1/providence/callback` both require the canonical-body HMAC header. Feedback persists a durable summary of the Swarm-signed evidence deposit on the incident audit trail, while callbacks persist reconciliation state and can pause outbound lifecycle sync when Providence and Swarm require manual review.
+
+For bidirectional SOAR sync, configure a separate `soar_verdict_webhook` notification channel with a request-signature secret. `POST /v1/soar/verdicts` uses the same canonical-body HMAC scheme, accepts bounded Splunk SOAR, Sentinel SOAR, and Chronicle SOAR verdict payloads, and routes them onto the existing false-positive and evolution-feedback path while persisting durable source-system lineage on the incident audit trail.
 
 Phase 152 extends that integration with an embeddable `/v1/demo/widget` surface and short-lived context tokens. Swarm signs those read-only drilldown tokens with the dedicated context-token secret from `operator_surface.auth.context_token_env`, embeds them in Providence links, and accepts them as an alternative to bearer+API-key auth only for scoped `GET /v2/api/findings` and `GET /v2/api/incidents` reads.
 
@@ -467,6 +521,7 @@ Deployment bootstrap commands:
 - `swarmctl init --mode detect_only|live_response` writes a complete `rulesets/custom.yaml` template with inline comments and prints the matching `swarmctl readiness --config ...` follow-up command. The live-response template defaults to a durable local-journal pheromone backend.
 - `swarmctl readiness` runs the first-run readiness diagnostic and fails non-zero when telemetry sources, detector activation, or substrate readiness are not good enough for onboarding. Subject-backed telemetry sources are reported as configuration-validated, while bridge-backed sources are probed or validated according to their transport.
 - `swarmctl first-run` reruns the readiness gate, then launches one sandboxed synthetic walkthrough that forces the approval path, exports a signed receipt pack, and emits a proof bundle for the resulting incident. It requires `SWARM_VOTER_SIGNING_KEY` plus the normal evidence-signing env (default `SWARM_EVIDENCE_SIGNING_KEY`) and can take `--scenario path/to/custom.yaml` when the built-in process-start sample is not appropriate for the active detector mix.
+- `swarmctl quickstart` collapses validate, readiness, built-in telemetry injection, and first-finding proof into one command. The signed detect-only bootstrap uses in-memory incident state, so quickstart prints the finding summary directly and only suggests `swarmctl incident` follow-ups when the active config already has durable incident storage enabled.
 - `swarmctl playbook-preview` evaluates the checked-in `pheromone.response_playbook` config with one explicit `--threat-class`, `--severity`, `--confidence`, and `--mode` tuple, then returns the matched rule or branch, typed rehearsal blast-radius and rollback metadata for each ordered action, and the approval verdict summary that would govern the live path. The command is side-effect free: it does not call live executors, mint governance receipts, or mutate durable runtime state.
 - `swarmctl status` now carries `false_positive_tracking` in JSON and prints the recent reviewed-finding count plus the top detector and host false-positive rates in text mode. The rollup is bounded to the same recent-incident window used by the operator review surface.
 - `swarmctl status` now also carries `alert_tuning` in JSON and prints the current recommendation count plus the highest-priority advisory recommendation in text mode. These recommendations remain advisory; the CLI does not write exclusions or detector thresholds automatically.

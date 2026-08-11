@@ -7,10 +7,11 @@ use crate::control::{
 };
 use crate::escalation::standard_threat_classes;
 use crate::evasion_coverage::EvasionCoverageSnapshot;
+use crate::http::rate_limit::HttpRateLimitRejection;
 use crate::providence::verify_providence_context_token;
 use crate::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
 use crate::serve::TlsClientIdentity;
-use crate::service::RuntimeDegradationStatus;
+use crate::service::{HttpRateLimitStatus, OperatorBearerTokenStatus, RuntimeDegradationStatus};
 use axum::Router;
 use axum::extract::{Extension, Json, Path as AxumPath, Query, State};
 use axum::http::{StatusCode, header};
@@ -41,6 +42,7 @@ use swarm_spine::{
 };
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
+use zeroize::Zeroizing;
 
 use super::IngestState;
 
@@ -58,9 +60,25 @@ pub(super) struct PlatformApiKeyRecord {
 #[derive(Debug, Clone)]
 pub(super) struct PlatformApiAuthState {
     pub(super) keys: Arc<Vec<PlatformApiKeyRecord>>,
-    pub(super) bearer_principals: Arc<Vec<ResolvedPlatformApiBearerPrincipal>>,
+    pub(super) bearer_principals: Arc<Vec<ConfiguredPlatformApiBearerPrincipal>>,
     pub(super) context_token_env: Arc<str>,
-    pub(super) context_token_secret: Option<Arc<str>>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum PlatformApiBearerAuthFailure {
+    Invalid,
+    Expired {
+        operator_id: Arc<str>,
+        expires_at_ms: i64,
+    },
+}
+
+fn read_platform_api_token_from_env(env_name: &str) -> Option<Zeroizing<String>> {
+    let mut token = std::env::var(env_name).ok().map(Zeroizing::new)?;
+    while matches!(token.as_bytes().last(), Some(b'\n' | b'\r')) {
+        token.pop();
+    }
+    (!token.is_empty()).then_some(token)
 }
 
 impl PlatformApiAuthState {
@@ -77,37 +95,30 @@ impl PlatformApiAuthState {
                 scopes: key.scopes.clone(),
             })
             .collect();
-        let bearer_principals: Vec<ResolvedPlatformApiBearerPrincipal> = operator
+        let bearer_principals: Vec<ConfiguredPlatformApiBearerPrincipal> = operator
             .auth
             .effective_principals()
             .into_iter()
             .filter_map(|principal| {
-                let expected_token = std::env::var(&principal.token_env)
-                    .ok()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty());
-                if expected_token.is_none() {
+                if read_platform_api_token_from_env(&principal.token_env).is_none() {
                     tracing::warn!(
                         operator_id = %principal.operator_id,
                         token_env = %principal.token_env,
                         "platform API operator bearer token env is missing or empty"
                     );
+                    return None;
                 }
-                expected_token.map(|expected_token| ResolvedPlatformApiBearerPrincipal {
+                Some(ConfiguredPlatformApiBearerPrincipal {
                     principal: PlatformApiBearerPrincipal {
                         operator_id: Arc::from(principal.operator_id),
                         scopes: principal.scopes,
                     },
-                    expected_token: Arc::from(expected_token),
+                    token_env: Arc::from(principal.token_env),
+                    token_expires_at_ms: principal.token_expires_at_ms,
                 })
             })
             .collect();
         let context_token_env = Arc::from(operator.auth.context_token_env().to_string());
-        let context_token_secret = std::env::var(operator.auth.context_token_env())
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .map(Arc::from);
         if config.keys.is_empty() {
             tracing::debug!("platform API auth disabled because no API keys are configured");
         } else if bearer_principals.is_empty() {
@@ -115,7 +126,7 @@ impl PlatformApiAuthState {
                 "platform API operator bearer auth is unavailable because no readable bearer principals were resolved"
             );
         }
-        if context_token_secret.is_none() {
+        if read_platform_api_token_from_env(&context_token_env).is_none() {
             tracing::warn!(
                 token_env = %context_token_env,
                 "platform API Providence context token env is missing or empty"
@@ -125,7 +136,6 @@ impl PlatformApiAuthState {
             keys: Arc::new(keys),
             bearer_principals: Arc::new(bearer_principals),
             context_token_env,
-            context_token_secret,
         }
     }
 
@@ -139,10 +149,37 @@ impl PlatformApiAuthState {
         })
     }
 
-    pub(super) fn authenticate_bearer(&self, token: &str) -> Option<PlatformApiBearerPrincipal> {
-        self.bearer_principals.iter().find_map(|principal| {
-            (principal.expected_token.as_ref() == token).then(|| principal.principal.clone())
-        })
+    pub(super) fn context_token_secret(&self) -> Option<Zeroizing<String>> {
+        read_platform_api_token_from_env(&self.context_token_env)
+    }
+
+    pub(super) fn authenticate_bearer(
+        &self,
+        token: &str,
+        now_ms: i64,
+    ) -> Result<PlatformApiBearerPrincipal, PlatformApiBearerAuthFailure> {
+        let mut expired = None;
+        for principal in self.bearer_principals.iter() {
+            let Some(expected_token) =
+                read_platform_api_token_from_env(principal.token_env.as_ref())
+            else {
+                continue;
+            };
+            if expected_token.as_str() != token {
+                continue;
+            }
+            if let Some(expires_at_ms) = principal.token_expires_at_ms
+                && now_ms > expires_at_ms
+            {
+                expired = Some(PlatformApiBearerAuthFailure::Expired {
+                    operator_id: principal.principal.operator_id.clone(),
+                    expires_at_ms,
+                });
+                continue;
+            }
+            return Ok(principal.principal.clone());
+        }
+        Err(expired.unwrap_or(PlatformApiBearerAuthFailure::Invalid))
     }
 }
 
@@ -162,9 +199,10 @@ impl PlatformApiBearerPrincipal {
 pub(super) struct PlatformApiContextTokenPrincipal;
 
 #[derive(Debug, Clone)]
-pub(super) struct ResolvedPlatformApiBearerPrincipal {
+pub(super) struct ConfiguredPlatformApiBearerPrincipal {
     pub(super) principal: PlatformApiBearerPrincipal,
-    pub(super) expected_token: Arc<str>,
+    pub(super) token_env: Arc<str>,
+    pub(super) token_expires_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -264,6 +302,8 @@ pub(super) struct PlatformRuntimeStatus {
     pub(super) async_lane: AsyncLaneStatusSnapshot,
     pub(super) false_positive_tracking: FalsePositiveMeasurementReport,
     pub(super) alert_tuning: AlertTuningReport,
+    pub(super) bearer_tokens: Vec<OperatorBearerTokenStatus>,
+    pub(super) rate_limit: HttpRateLimitStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) bridge_health: Option<crate::bridge_runtime::BridgeStatusReport>,
 }
@@ -367,6 +407,7 @@ impl PlatformCursorKey {
 pub(super) struct PlatformApiError {
     pub(super) status: StatusCode,
     pub(super) error: String,
+    pub(super) retry_after_seconds: Option<u64>,
 }
 
 impl PlatformApiError {
@@ -374,6 +415,7 @@ impl PlatformApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             error: error.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -381,6 +423,7 @@ impl PlatformApiError {
         Self {
             status: StatusCode::UNAUTHORIZED,
             error: error.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -388,6 +431,7 @@ impl PlatformApiError {
         Self {
             status: StatusCode::FORBIDDEN,
             error: error.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -395,6 +439,7 @@ impl PlatformApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             error: error.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -402,19 +447,34 @@ impl PlatformApiError {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             error: error.into(),
+            retry_after_seconds: None,
+        }
+    }
+
+    pub(super) fn too_many_requests(error: impl Into<String>, retry_after_seconds: u64) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            error: error.into(),
+            retry_after_seconds: Some(retry_after_seconds),
         }
     }
 }
 
 impl IntoResponse for PlatformApiError {
     fn into_response(self) -> Response {
-        (
+        let mut response = (
             self.status,
             ResponseJson(json!({
                 "error": self.error,
             })),
         )
-            .into_response()
+            .into_response();
+        if let Some(retry_after_seconds) = self.retry_after_seconds
+            && let Ok(value) = retry_after_seconds.to_string().parse()
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        response
     }
 }
 
@@ -457,12 +517,16 @@ fn parse_requested_schema_version_header(
 }
 
 pub(super) fn request_query_param(request: &axum::extract::Request, key: &str) -> Option<String> {
+    // Standard HTTP clients (the generated Python client, the demo widget,
+    // axum's own Query extractor) percent-encode `:` in finding/incident IDs
+    // as `%3A`. Decoding here ensures scoped values match the unencoded token
+    // scope; without it, valid context-token requests are rejected with 403.
     request.uri().query().and_then(|query| {
         query.split('&').find_map(|pair| {
             let mut parts = pair.splitn(2, '=');
             let candidate = parts.next()?;
             if candidate == key {
-                Some(parts.next().unwrap_or_default().to_string())
+                Some(percent_decode_query_value(parts.next().unwrap_or_default()))
             } else {
                 None
             }
@@ -470,12 +534,48 @@ pub(super) fn request_query_param(request: &axum::extract::Request, key: &str) -
     })
 }
 
+fn percent_decode_query_value(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                match (hi, lo) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi * 16 + lo) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub(super) fn context_token_matches_platform_request(
     request: &axum::extract::Request,
     scope: &crate::providence::ProvidenceContextScope,
 ) -> bool {
+    // Context tokens are scoped to the finding/incident the operator was
+    // shown — they MUST NOT grant access to runtime health, bridge state, or
+    // configured bearer-token metadata exposed by /runtime/status. That route
+    // requires the bearer token + x-api-key path.
     match request.uri().path() {
-        "/v2/api/runtime/status" | "/runtime/status" => true,
         "/v2/api/findings" | "/findings" => {
             !scope.finding_id.as_deref().is_some_and(|value| {
                 request_query_param(request, "finding_id").as_deref() != Some(value)
@@ -707,9 +807,6 @@ pub(super) fn is_active_investigation_status(status: InvestigationStatus) -> boo
 // --- Router builders ---
 
 pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
-    let config = state.stack.load_full().service.config.clone();
-    let auth_state = PlatformApiAuthState::from_config(&config.platform_api, &config.operator);
-
     Router::new()
         .route("/findings", get(platform_findings_handler))
         .route("/incidents", get(platform_incidents_handler))
@@ -721,12 +818,12 @@ pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
         .route("/stream/findings", get(platform_findings_stream_handler))
         .route("/runtime/status", get(platform_runtime_status_handler))
         .layer(middleware::from_fn_with_state(
-            auth_state,
-            require_platform_api_key_auth,
+            state.clone(),
+            require_platform_api_key_auth_resolved,
         ))
         .layer(middleware::from_fn_with_state(
-            PlatformApiAuthState::from_config(&config.platform_api, &config.operator),
-            require_platform_api_bearer_auth,
+            state.clone(),
+            require_platform_api_bearer_auth_resolved,
         ))
         .layer(middleware::from_fn(
             require_supported_platform_api_schema_version,
@@ -734,18 +831,15 @@ pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
 }
 
 pub(super) fn legacy_evasion_api_router(state: &IngestState) -> Router<IngestState> {
-    let config = state.stack.load_full().service.config.clone();
-    let auth_state = PlatformApiAuthState::from_config(&config.platform_api, &config.operator);
-
     Router::new()
         .route("/evasion/coverage", get(platform_evasion_coverage_handler))
         .layer(middleware::from_fn_with_state(
-            auth_state,
-            require_platform_api_key_auth,
+            state.clone(),
+            require_platform_api_key_auth_resolved,
         ))
         .layer(middleware::from_fn_with_state(
-            PlatformApiAuthState::from_config(&config.platform_api, &config.operator),
-            require_platform_api_bearer_auth,
+            state.clone(),
+            require_platform_api_bearer_auth_resolved,
         ))
         .layer(middleware::from_fn(
             require_supported_platform_api_schema_version,
@@ -764,12 +858,13 @@ async fn require_supported_platform_api_schema_version(
     Ok(next.run(request).await)
 }
 
-async fn require_platform_api_key_auth(
-    State(auth): State<PlatformApiAuthState>,
+async fn require_platform_api_key_auth_resolved(
+    State(state): State<IngestState>,
     headers: axum::http::HeaderMap,
     mut request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, PlatformApiError> {
+    let auth = state.platform_api_auth();
     if request
         .extensions()
         .get::<PlatformApiContextTokenPrincipal>()
@@ -817,23 +912,33 @@ async fn require_platform_api_key_auth(
     Ok(next.run(request).await)
 }
 
-async fn require_platform_api_bearer_auth(
-    State(auth): State<PlatformApiAuthState>,
+async fn require_platform_api_bearer_auth_resolved(
+    State(state): State<IngestState>,
     headers: axum::http::HeaderMap,
     mut request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, PlatformApiError> {
+    let auth = state.platform_api_auth();
+    let peer_addr = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0);
+    state
+        .platform_api_rate_limiter()
+        .check_request(&headers, peer_addr, request.uri().path(), now_ms())
+        .map_err(map_platform_rate_limit_rejection)?;
     if request.method() == axum::http::Method::GET
         && let Some(raw_token) = request_query_param(&request, "context_token")
     {
-        let secret_material = auth.context_token_secret.as_deref().ok_or_else(|| {
+        let secret_material = auth.context_token_secret().ok_or_else(|| {
             PlatformApiError::service_unavailable(format!(
                 "platform API Providence context token env `{}` is missing or empty",
                 auth.context_token_env
             ))
         })?;
-        let claims = verify_providence_context_token(secret_material, &raw_token, now_ms())
-            .map_err(PlatformApiError::unauthorized)?;
+        let claims =
+            verify_providence_context_token(secret_material.as_str(), &raw_token, now_ms())
+                .map_err(PlatformApiError::unauthorized)?;
         if !context_token_matches_platform_request(&request, &claims.scope) {
             return Err(PlatformApiError::forbidden(
                 "context token scope does not match requested platform API resource",
@@ -852,8 +957,18 @@ async fn require_platform_api_bearer_auth(
         .strip_prefix("Bearer ")
         .ok_or_else(|| PlatformApiError::unauthorized("expected Authorization: Bearer <token>"))?;
     let principal = auth
-        .authenticate_bearer(token)
-        .ok_or_else(|| PlatformApiError::unauthorized("invalid bearer token"))?;
+        .authenticate_bearer(token, now_ms())
+        .map_err(|error| match error {
+            PlatformApiBearerAuthFailure::Invalid => {
+                PlatformApiError::unauthorized("invalid bearer token")
+            }
+            PlatformApiBearerAuthFailure::Expired {
+                operator_id,
+                expires_at_ms,
+            } => PlatformApiError::unauthorized(format!(
+                "bearer token for operator `{operator_id}` expired at {expires_at_ms}"
+            )),
+        })?;
     if !principal.has_scope(OperatorScope::Read) {
         return Err(PlatformApiError::forbidden(
             "operator bearer token does not grant read scope",
@@ -862,6 +977,30 @@ async fn require_platform_api_bearer_auth(
 
     request.extensions_mut().insert(principal);
     Ok(next.run(request).await)
+}
+
+fn map_platform_rate_limit_rejection(rejection: HttpRateLimitRejection) -> PlatformApiError {
+    PlatformApiError::too_many_requests(
+        format!(
+            "{} rate limit exceeded for source `{}` on `{}`; retry after {}ms",
+            rate_limit_threshold_label(rejection.threshold),
+            rejection.source,
+            rejection.path,
+            rejection.retry_after_ms
+        ),
+        retry_after_seconds(rejection.retry_after_ms),
+    )
+}
+
+fn rate_limit_threshold_label(threshold: crate::service::HttpRateLimitThreshold) -> &'static str {
+    match threshold {
+        crate::service::HttpRateLimitThreshold::Burst => "burst",
+        crate::service::HttpRateLimitThreshold::Sustained => "sustained",
+    }
+}
+
+fn retry_after_seconds(retry_after_ms: u64) -> u64 {
+    retry_after_ms.max(1).div_ceil(1_000)
 }
 
 // --- Handlers ---
@@ -1141,8 +1280,29 @@ async fn platform_runtime_status_handler(
         .await
         .map_err(|error| PlatformApiError::internal(error.to_string()))?;
     let degradation = state.current_runtime_degradation().await;
+    let captured_at_ms = now_ms();
+    let rate_limit = state.platform_api_rate_limiter.status();
+    let bearer_tokens = state
+        .stack
+        .load_full()
+        .service
+        .config
+        .operator
+        .auth
+        .effective_principals()
+        .into_iter()
+        .map(|principal| {
+            let expired = principal.token_is_expired(captured_at_ms);
+            OperatorBearerTokenStatus {
+                operator_id: principal.operator_id,
+                token_env: principal.token_env,
+                expires_at_ms: principal.token_expires_at_ms,
+                expired,
+            }
+        })
+        .collect();
     let status = PlatformRuntimeStatus {
-        captured_at_ms: now_ms(),
+        captured_at_ms,
         mode_state: state.current_mode_state(),
         degradation,
         agent_health: state.current_agent_health(),
@@ -1159,6 +1319,8 @@ async fn platform_runtime_status_handler(
         async_lane,
         false_positive_tracking: summarize_false_positive_measurements(&incidents),
         alert_tuning: build_alert_tuning_report(&incidents),
+        bearer_tokens,
+        rate_limit,
         bridge_health,
     };
 
@@ -1253,4 +1415,38 @@ pub(crate) async fn platform_findings_stream_handler(
     Ok(Sse::new(stream)
         .keep_alive(KeepAlive::default().interval(Duration::from_secs(15)))
         .into_response())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod query_decoding_tests {
+    use super::percent_decode_query_value;
+
+    #[test]
+    fn decodes_percent_encoded_colons() {
+        // Finding/incident IDs commonly contain `:` which clients encode as
+        // `%3A`. Without decoding, scope comparison rejects valid requests.
+        assert_eq!(
+            percent_decode_query_value("finding%3Aevt-1%3Ahost-a"),
+            "finding:evt-1:host-a"
+        );
+    }
+
+    #[test]
+    fn decodes_plus_as_space() {
+        assert_eq!(percent_decode_query_value("a+b"), "a b");
+    }
+
+    #[test]
+    fn passes_through_unencoded_text() {
+        assert_eq!(percent_decode_query_value("plain-id-123"), "plain-id-123");
+    }
+
+    #[test]
+    fn leaves_malformed_percent_sequences_intact() {
+        // Trailing `%` with no hex digits or non-hex follow-up: don't panic;
+        // emit the byte as-is.
+        assert_eq!(percent_decode_query_value("a%"), "a%");
+        assert_eq!(percent_decode_query_value("a%ZZ"), "a%ZZ");
+    }
 }

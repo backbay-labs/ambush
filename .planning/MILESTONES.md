@@ -2,21 +2,21 @@
 
 ## Latest Completed Milestone
 
-### v1.73 Stigmergic Feedback Loops And Baseline Resistance
-**Executable phases:** 260-263
+### v1.76 External Signal Ingestion
+**Executable phases:** 272-275
 **Status:** Complete
 **Shipped:** 2026-04-13
-**Goal:** Implement real pheromone recruitment and quantify baseline poisoning resistance.
-**Progress:** Phases 260-263 complete
+**Goal:** Ingest external threat intelligence feeds and cloud audit logs to move detection beyond host-only telemetry.
+**Progress:** Phases 272-275 complete
 
 ## Active Milestone
 
-### v1.75 Operator Packaging
-**Executable phases:** 268-271
+### v1.77 Integration Proof
+**Executable phases:** 276-279
 **Status:** Active
 **Started:** 2026-04-13
-**Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and validation against a public adversary emulation corpus.
-**Progress:** Phases 268-271 defined; Phase 268 ready to execute
+**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
+**Progress:** Phases 276-279 complete; milestone is active pending v1.78 definition or archive/promotion
 
 ## Queued Milestones
 
@@ -24,7 +24,7 @@
 **Executable phases:** 264-267
 **Status:** Deferred
 **Goal:** Stabilize the codebase by fixing failing tests, removing dead code, decomposing oversized files, and beginning swarm-runtime crate extraction.
-**Progress:** Phases 264-267 remain defined; deferred while v1.75 executes
+**Progress:** Phases 264-267 remain defined; deferred while v1.76 executes
 
 ### v1.76 External Signal Ingestion
 **Executable phases:** 272-275

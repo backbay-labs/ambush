@@ -24,6 +24,8 @@ pub struct NetworkConnectProfile {
     pub beacon_min_interval_ms: i64,
     #[serde(default = "default_beacon_max_jitter_ratio")]
     pub beacon_max_jitter_ratio: f64,
+    #[serde(default)]
+    pub recruitment: NetworkBeaconRecruitmentProfile,
     #[serde(default = "default_high_confidence_threshold")]
     pub high_confidence_threshold: f64,
     #[serde(default = "default_medium_confidence_threshold")]
@@ -39,10 +41,45 @@ impl Default for NetworkConnectProfile {
             beacon_window_ms: default_beacon_window_ms(),
             beacon_min_interval_ms: default_beacon_min_interval_ms(),
             beacon_max_jitter_ratio: default_beacon_max_jitter_ratio(),
+            recruitment: NetworkBeaconRecruitmentProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NetworkBeaconRecruitmentProfile {
+    pub enabled: bool,
+    pub activation_strength_ratio: f64,
+    pub min_distinct_sources: usize,
+    pub reduced_beacon_min_sample_count: usize,
+}
+
+impl Default for NetworkBeaconRecruitmentProfile {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            activation_strength_ratio: default_recruitment_activation_strength_ratio(),
+            min_distinct_sources: default_recruitment_min_distinct_sources(),
+            reduced_beacon_min_sample_count: default_reduced_beacon_min_sample_count(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetworkBeaconRecruitmentContext {
+    pub total_strength: f64,
+    pub distinct_sources: usize,
+    pub peak_confidence: f64,
+    pub activation_threshold: f64,
+    pub alert_threshold: f64,
+    pub baseline_beacon_min_sample_count: usize,
+    pub effective_beacon_min_sample_count: usize,
+    pub inhibited_by_resolution: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_resolution_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,9 +90,11 @@ pub struct NetworkConnectDetector {
     beacon_window_ms: i64,
     beacon_min_interval_ms: i64,
     beacon_max_jitter_ratio: f64,
+    recruitment: NetworkBeaconRecruitmentProfile,
     high_confidence_threshold: f64,
     medium_confidence_threshold: f64,
     beacon_tracker: Arc<Mutex<HashMap<BeaconKey, VecDeque<i64>>>>,
+    beacon_recruitment: Arc<Mutex<Option<NetworkBeaconRecruitmentContext>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -84,9 +123,11 @@ impl Default for NetworkConnectDetector {
             beacon_window_ms: default_beacon_window_ms(),
             beacon_min_interval_ms: default_beacon_min_interval_ms(),
             beacon_max_jitter_ratio: default_beacon_max_jitter_ratio(),
+            recruitment: NetworkBeaconRecruitmentProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
             beacon_tracker: Arc::default(),
+            beacon_recruitment: Arc::default(),
         }
     }
 }
@@ -102,9 +143,11 @@ impl NetworkConnectDetector {
             beacon_window_ms: profile.beacon_window_ms,
             beacon_min_interval_ms: profile.beacon_min_interval_ms,
             beacon_max_jitter_ratio: profile.beacon_max_jitter_ratio,
+            recruitment: profile.recruitment.clone(),
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
             beacon_tracker: Arc::default(),
+            beacon_recruitment: Arc::default(),
         })
     }
 
@@ -116,9 +159,25 @@ impl NetworkConnectDetector {
             beacon_window_ms: self.beacon_window_ms,
             beacon_min_interval_ms: self.beacon_min_interval_ms,
             beacon_max_jitter_ratio: self.beacon_max_jitter_ratio,
+            recruitment: self.recruitment.clone(),
             high_confidence_threshold: self.high_confidence_threshold,
             medium_confidence_threshold: self.medium_confidence_threshold,
         }
+    }
+
+    pub fn update_beacon_recruitment(&self, context: Option<NetworkBeaconRecruitmentContext>) {
+        let mut guard = self
+            .beacon_recruitment
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *guard = context;
+    }
+
+    pub fn beacon_recruitment(&self) -> Option<NetworkBeaconRecruitmentContext> {
+        self.beacon_recruitment
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
     }
 
     fn evaluate_connect(
@@ -187,6 +246,23 @@ impl NetworkConnectDetector {
                         "jitter_ratio": stats.jitter_ratio,
                     }),
                 );
+                if let Some(recruitment) = self.beacon_recruitment() {
+                    object.insert(
+                        "recruitment".to_string(),
+                        json!({
+                            "threat_class": "command_and_control",
+                            "total_strength": recruitment.total_strength,
+                            "distinct_sources": recruitment.distinct_sources,
+                            "peak_confidence": recruitment.peak_confidence,
+                            "activation_threshold": recruitment.activation_threshold,
+                            "alert_threshold": recruitment.alert_threshold,
+                            "baseline_beacon_min_sample_count": recruitment.baseline_beacon_min_sample_count,
+                            "effective_beacon_min_sample_count": recruitment.effective_beacon_min_sample_count,
+                            "inhibited_by_resolution": recruitment.inhibited_by_resolution,
+                            "last_resolution_at": recruitment.last_resolution_at,
+                        }),
+                    );
+                }
             }
             if let Some(allowed_ports) = allowed_ports {
                 object.insert(
@@ -212,7 +288,7 @@ impl NetworkConnectDetector {
 
     fn evaluate_beaconing(&self, key: BeaconKey, timestamp_ms: i64) -> Option<BeaconStats> {
         let timestamps = self.record_connection(key, timestamp_ms);
-        self.analyze_beaconing(&timestamps)
+        self.analyze_beaconing(&timestamps, self.effective_beacon_min_sample_count())
     }
 
     fn record_connection(&self, key: BeaconKey, timestamp_ms: i64) -> Vec<i64> {
@@ -232,8 +308,12 @@ impl NetworkConnectDetector {
         entries.iter().copied().collect()
     }
 
-    fn analyze_beaconing(&self, timestamps: &[i64]) -> Option<BeaconStats> {
-        if timestamps.len() < self.beacon_min_sample_count {
+    fn analyze_beaconing(
+        &self,
+        timestamps: &[i64],
+        effective_beacon_min_sample_count: usize,
+    ) -> Option<BeaconStats> {
+        if timestamps.len() < effective_beacon_min_sample_count {
             return None;
         }
 
@@ -271,6 +351,12 @@ impl NetworkConnectDetector {
             mean_interval_ms,
             jitter_ratio,
         })
+    }
+
+    fn effective_beacon_min_sample_count(&self) -> usize {
+        self.beacon_recruitment()
+            .map(|context| context.effective_beacon_min_sample_count)
+            .unwrap_or(self.beacon_min_sample_count)
     }
 }
 
@@ -328,6 +414,7 @@ impl NetworkConnectProfile {
                 reason: "contains an empty process name".to_string(),
             });
         }
+        self.recruitment.validate(self.beacon_min_sample_count)?;
 
         validate_confidence_thresholds(
             "NetworkConnectProfile",
@@ -358,6 +445,8 @@ impl DetectionStrategy for NetworkConnectDetector {
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
             | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
@@ -383,6 +472,18 @@ fn default_beacon_min_interval_ms() -> i64 {
 
 fn default_beacon_max_jitter_ratio() -> f64 {
     0.20
+}
+
+fn default_recruitment_activation_strength_ratio() -> f64 {
+    0.75
+}
+
+fn default_recruitment_min_distinct_sources() -> usize {
+    2
+}
+
+fn default_reduced_beacon_min_sample_count() -> usize {
+    3
 }
 
 fn default_high_confidence_threshold() -> f64 {
@@ -427,6 +528,46 @@ fn normalized_timestamp_ms(timestamp: i64) -> i64 {
         timestamp.saturating_mul(1_000)
     } else {
         timestamp
+    }
+}
+
+impl NetworkBeaconRecruitmentProfile {
+    fn validate(
+        &self,
+        baseline_beacon_min_sample_count: usize,
+    ) -> Result<(), ProfileValidationError> {
+        if !(0.0..=1.0).contains(&self.activation_strength_ratio)
+            || self.activation_strength_ratio == 0.0
+        {
+            return Err(ProfileValidationError {
+                profile: "NetworkConnectProfile",
+                field: "recruitment.activation_strength_ratio",
+                reason: "must be greater than 0.0 and less than or equal to 1.0".to_string(),
+            });
+        }
+        if self.min_distinct_sources == 0 {
+            return Err(ProfileValidationError {
+                profile: "NetworkConnectProfile",
+                field: "recruitment.min_distinct_sources",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.reduced_beacon_min_sample_count < 3 {
+            return Err(ProfileValidationError {
+                profile: "NetworkConnectProfile",
+                field: "recruitment.reduced_beacon_min_sample_count",
+                reason: "must be greater than or equal to 3".to_string(),
+            });
+        }
+        if self.reduced_beacon_min_sample_count > baseline_beacon_min_sample_count {
+            return Err(ProfileValidationError {
+                profile: "NetworkConnectProfile",
+                field: "recruitment.reduced_beacon_min_sample_count",
+                reason: "must be less than or equal to beacon_min_sample_count".to_string(),
+            });
+        }
+
+        Ok(())
     }
 }
 

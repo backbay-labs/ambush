@@ -1,0 +1,20 @@
+name: command_line_deobfuscation_v1
+description: Command-line normalization corpus covering caret, environment-variable, homoglyph, and encoded-argument evasions with benign controls
+corpus_version: 2026-04-13
+metadata:
+  campaign: adversarial.robustness
+  techniques:
+    - T1059.001
+    - T1105
+    - T1218.005
+    - T1218.011
+  tags:
+    - adversarial
+    - evasion
+    - command-line
+    - normalization
+
+scenarios:
+  - ../scenarios/command-line-deobfuscation-execution.yaml
+  - ../scenarios/command-line-deobfuscation-defense-evasion.yaml
+  - ../scenarios/command-line-deobfuscation-benign.yaml

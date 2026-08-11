@@ -5,6 +5,7 @@ use crate::detection::metrics::encode_metrics;
 use crate::evasion_coverage::publish_snapshot_to_metrics;
 use crate::providence::ProvidenceHealthStatus;
 use crate::startup_attestation::StartupAttestationReport;
+use crate::threat_intel_runtime::threat_intel_feed_health_report;
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
@@ -192,6 +193,11 @@ pub(crate) async fn livez_handler(State(state): State<IngestState>) -> impl Into
                 "response": {
                     "ready": true,
                     "adapter": response_adapter_kind(&stack.service.config.response_adapter),
+                },
+                "siem_forward": {
+                    "ready": true,
+                    "enabled": stack.service.config.siem_forward.is_some(),
+                    "transport": stack.service.config.siem_forward.as_ref().map(siem_forward_kind),
                 }
             }
         })),
@@ -325,7 +331,12 @@ pub(super) async fn readiness_response(
         .iter()
         .filter(|source| source.bridge.is_some())
         .count();
+    let threat_intel_feed_count = stack.service.config.runtime.threat_intel_feeds.len();
     let bridge_report = state.bridge_health.as_ref().map(bridge_health_report);
+    let threat_intel_report = state
+        .threat_intel_feed_health
+        .as_ref()
+        .map(threat_intel_feed_health_report);
     let degradation = state.current_runtime_degradation().await;
     if let Some(metrics) = stack.service.prometheus_metrics()
         && let Some(snapshot) = &heap_snapshot
@@ -436,6 +447,16 @@ pub(super) async fn readiness_response(
             "ready": true,
             "adapter": response_adapter_kind(&stack.service.config.response_adapter),
         },
+        "siem_forward": {
+            "ready": true,
+            "enabled": stack.service.config.siem_forward.is_some(),
+            "transport": stack.service.config.siem_forward.as_ref().map(siem_forward_kind),
+            "status": if stack.service.config.siem_forward.is_some() {
+                "configured"
+            } else {
+                "disabled"
+            },
+        },
         "startup_attestation": startup_attestation_payload(
             startup_attestation.as_ref(),
             stack.service.mode(),
@@ -463,6 +484,31 @@ pub(super) async fn readiness_response(
                 )
             } else {
                 "telemetry sources are configured; bridge runtime status is unavailable on this surface".to_string()
+            },
+        },
+        "threat_intel_feeds": {
+            "ready": !threat_intel_report.as_ref().is_some_and(|report| report.has_degraded()),
+            "status": if threat_intel_feed_count == 0 {
+                "disabled"
+            } else if let Some(report) = &threat_intel_report {
+                report.status()
+            } else {
+                "configured"
+            },
+            "configured": threat_intel_feed_count,
+            "ok": threat_intel_report.as_ref().map(|report| report.ok).unwrap_or_default(),
+            "degraded": threat_intel_report.as_ref().map(|report| report.degraded).unwrap_or_default(),
+            "idle": threat_intel_report.as_ref().map(|report| report.idle).unwrap_or_default(),
+            "details": if threat_intel_feed_count == 0 {
+                "no external threat-intel feeds are configured".to_string()
+            } else if let Some(report) = &threat_intel_report {
+                format!(
+                    "{} configured feed(s); feed status={}",
+                    threat_intel_feed_count,
+                    report.status()
+                )
+            } else {
+                "threat-intel feeds are configured; runtime feed health is unavailable on this surface".to_string()
             },
         },
         "lifecycle": {
@@ -564,6 +610,40 @@ pub(super) async fn readiness_response(
         if let Some(object) = components.as_object_mut() {
             object.insert(
                 "bridges".to_string(),
+                json!({
+                    "ready": !report.has_degraded(),
+                    "status": report.status(),
+                    "configured": report.configured,
+                    "ok": report.ok,
+                    "degraded": report.degraded,
+                    "idle": report.idle,
+                    "entries": entry_payload,
+                }),
+            );
+        }
+    }
+
+    if include_agents && let Some(health) = &state.threat_intel_feed_health {
+        let report = threat_intel_feed_health_report(health);
+        let entry_payload = report
+            .entries
+            .iter()
+            .map(|entry| {
+                json!({
+                    "name": entry.name,
+                    "kind": entry.kind,
+                    "status": entry.status(),
+                    "ready": entry.ready,
+                    "last_poll_at_ms": entry.last_poll_at_ms,
+                    "indicators_ingested": entry.indicators_ingested,
+                    "error_count": entry.error_count,
+                    "last_error": entry.last_error,
+                })
+            })
+            .collect::<Vec<_>>();
+        if let Some(object) = components.as_object_mut() {
+            object.insert(
+                "threat_intel_feed_entries".to_string(),
                 json!({
                     "ready": !report.has_degraded(),
                     "status": report.status(),
@@ -681,6 +761,15 @@ pub(crate) fn response_adapter_kind(config: &ResponseAdapterConfig) -> &'static 
     match config {
         ResponseAdapterConfig::Sandbox => "sandbox",
         ResponseAdapterConfig::HttpEdr { .. } => "http_edr",
+        ResponseAdapterConfig::CrowdStrikeRtr { .. } => "crowdstrike_rtr",
         ResponseAdapterConfig::Webhook { .. } => "webhook",
+    }
+}
+
+pub(crate) fn siem_forward_kind(config: &swarm_core::config::SiemForwardConfig) -> &'static str {
+    match config {
+        swarm_core::config::SiemForwardConfig::SplunkHec { .. } => "splunk_hec",
+        swarm_core::config::SiemForwardConfig::ElkBulk { .. } => "elk_bulk",
+        swarm_core::config::SiemForwardConfig::Chronicle { .. } => "chronicle",
     }
 }

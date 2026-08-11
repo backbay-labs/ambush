@@ -1,0 +1,94 @@
+name: command_line_deobfuscation_defense_evasion
+description: Defense-evasion PowerShell launches whose encoded or obfuscated deobfuscation hints only appear after normalization
+seed_time_ms: 1702000100000
+requested_by: replay-whisker
+receipt_chain:
+  - seed-receipt
+metadata:
+  class: adversarial
+  threat_class: defense_evasion
+  campaign: adversarial.robustness
+  techniques:
+    - T1059.001
+    - T1027
+    - T1140
+  tags:
+    - defense-evasion
+    - command-line
+    - normalization
+
+input:
+  kind: events
+  events:
+    - action: { type: escalate, summary: encoded PowerShell with decoded IEX payload, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: deobf-def-1
+        timestamp: 1702000100100
+        host_id: host-deobf-def
+        payload:
+          kind: process_start
+          parent_process: explorer.exe
+          process_name: powershell.exe
+          command_line: powershell.exe -enc SQBFAFgA
+          user: alice
+    - action: { type: escalate, summary: fullwidth encoded PowerShell with decoded IEX payload, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: deobf-def-2
+        timestamp: 1702000100200
+        host_id: host-deobf-def
+        payload:
+          kind: process_start
+          parent_process: explorer.exe
+          process_name: powershell.exe
+          command_line: powershell.exe －ＥＮＣ SQBFAFgA
+          user: alice
+    - action: { type: escalate, summary: caret-obfuscated encoded flag with decoded IEX payload, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: deobf-def-3
+        timestamp: 1702000100300
+        host_id: host-deobf-def
+        payload:
+          kind: process_start
+          parent_process: explorer.exe
+          process_name: powershell.exe
+          command_line: powershell.exe -^enc SQBFAFgA
+          user: alice
+    - action: { type: escalate, summary: encoded command alias with decoded new-object payload, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: deobf-def-4
+        timestamp: 1702000100400
+        host_id: host-deobf-def
+        payload:
+          kind: process_start
+          parent_process: explorer.exe
+          process_name: pwsh.exe
+          command_line: pwsh.exe -encodedcommand SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ==
+          user: alice
+    - action: { type: escalate, summary: encoded command with nested FromBase64String decode, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: deobf-def-5
+        timestamp: 1702000100500
+        host_id: host-deobf-def
+        payload:
+          kind: process_start
+          parent_process: explorer.exe
+          process_name: powershell.exe
+          command_line: powershell.exe -enc QQBBAEEA; [Convert]::FromBase64String('SQBFAFgA')
+          user: alice
+    - action: { type: escalate, summary: fullwidth encodedcommand token with decoded payload, urgency: HIGH }
+      event:
+        source: synthetic
+        event_id: deobf-def-6
+        timestamp: 1702000100600
+        host_id: host-deobf-def
+        payload:
+          kind: process_start
+          parent_process: explorer.exe
+          process_name: powershell.exe
+          command_line: powershell.exe －ＥＮＣＯＤＥＤＣＯＭＭＡＮＤ SQBFAFgA
+          user: alice

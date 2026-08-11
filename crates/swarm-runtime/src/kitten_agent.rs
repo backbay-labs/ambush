@@ -1,3 +1,4 @@
+use crate::agent_identity::{FileAgentKeyStore, resolve_agent_key_dir};
 use crate::calico_agent::parse_calico_deception_interaction;
 use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
 use crate::evasion_coverage::{
@@ -19,8 +20,8 @@ use crate::replay::{
     DetectorVerificationReport, load_detector_experiment_manifest,
 };
 use crate::strategy::{
-    DefaultStrategyScorecardHarness, StrategyAdvisoryRecommendation, StrategyMemoryOutcomeKind,
-    StrategyMemoryRecord, StrategyScorecard, StrategyScorecardRecord,
+    DefaultStrategyScorecardHarness, StrategyAdvisorError, StrategyAdvisoryRecommendation,
+    StrategyMemoryOutcomeKind, StrategyMemoryRecord, StrategyScorecard, StrategyScorecardRecord,
 };
 use async_trait::async_trait;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
@@ -377,10 +378,30 @@ pub fn route_feedback_signal(
         });
     };
 
-    let population_store =
-        FileEvolutionPopulationStore::open(&paths.evolution_population_results_dir)
-            .map_err(|error| error.to_string())?;
-    let Some(mut state) = population_store.load().map_err(|error| error.to_string())? else {
+    // The Kitten population is signed by Kitten's persisted identity, not by
+    // the ingest signing_key passed in here. Load Kitten's identity from the
+    // configured agent_key_dir so `load_trusted` verifies against the actual
+    // persisting signer; otherwise a Providence dismiss can fail signature
+    // verification after the suppression deposit is already written.
+    let kitten_identity = {
+        let agent_key_dir = resolve_agent_key_dir(config_path, &runtime_config.identity);
+        let store = FileAgentKeyStore::open(&agent_key_dir)
+            .map_err(|error: crate::agent_identity::AgentIdentityError| error.to_string())?;
+        store
+            .load_or_create(AgentRole::Kitten, "primary")
+            .map_err(|error: crate::agent_identity::AgentIdentityError| error.to_string())?
+    };
+    let signer_agent_id = kitten_identity.id.clone();
+    let population_store = FileEvolutionPopulationStore::open_signed(
+        &paths.evolution_population_results_dir,
+        signer_agent_id.clone(),
+        kitten_identity.signing_key.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+    let Some(mut state) = population_store
+        .load_trusted(&signer_agent_id)
+        .map_err(|error| error.to_string())?
+    else {
         record.details =
             "no durable kitten population exists yet; feedback persisted as pending".to_string();
         store.append(&record)?;
@@ -537,6 +558,7 @@ impl KittenAgent {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            self.signing_key.clone(),
         )
         .map_err(|error| error.to_string())?;
 
@@ -627,8 +649,16 @@ impl KittenAgent {
         let runtime_config = self.runtime_config.clone();
         let task_paths = paths.clone();
         let batch_id = batch.report.batch_id.clone();
+        let signing_key = self.signing_key.clone();
         let validation_task = tokio::spawn(async move {
-            run_validation_task(config_path, runtime_config, task_paths, batch_id).await
+            run_validation_task(
+                config_path,
+                runtime_config,
+                signing_key,
+                task_paths,
+                batch_id,
+            )
+            .await
         });
 
         Ok(KittenState::Evaluating(RunningValidationCycle {
@@ -669,6 +699,7 @@ impl KittenAgent {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            self.signing_key.clone(),
         )
         .map_err(|error| error.to_string())?;
 
@@ -729,6 +760,7 @@ impl KittenAgent {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            self.signing_key.clone(),
         )
         .map_err(|error| error.to_string())?;
         let Some(candidate) = mutation
@@ -785,6 +817,10 @@ impl KittenAgent {
         let replay_fitness = candidate.baseline_fitness.unwrap_or(candidate.fitness);
         let evasion_adjusted_fitness = candidate.fitness;
         let evasion_pressure = candidate.evasion_pressure.clone();
+        let profile_value = materialization
+            .report
+            .profile_json()
+            .map_err(|error| format!("failed to encode materialized detector profile: {error}"))?;
 
         let mut strategy = json!({
             "source": "kitten_population_candidate",
@@ -799,7 +835,6 @@ impl KittenAgent {
             "experiment_path": materialization.report.experiment_path,
             "strategy_description": materialization.report.strategy_description,
             "lineage": materialization.report.lineage,
-            "profile": materialization.report.profile,
             "proof_status": validation.report.proof_status,
             "advisory": validation.report.advisory,
             "summary": candidate.summary,
@@ -809,6 +844,17 @@ impl KittenAgent {
             "population_fitness_evasion": evasion_adjusted_fitness,
             "fitness_objectives": candidate.objectives,
         });
+        if let Some(strategy_object) = strategy.as_object_mut() {
+            if let Some(detector_genome) = materialization.report.detector_genome() {
+                strategy_object.insert(
+                    "detector".to_string(),
+                    serde_json::Value::from(detector_genome.strategy()),
+                );
+            }
+            if let Some(profile_value) = profile_value {
+                strategy_object.insert("profile".to_string(), profile_value);
+            }
+        }
         if let Some(cycle) = cycle
             && let Some(strategy_object) = strategy.as_object_mut()
         {
@@ -1150,6 +1196,7 @@ impl KittenAgent {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            self.signing_key.clone(),
         )
         .map_err(|error| error.to_string())?;
         let corpus = SuiteRedSwarmAdapter
@@ -1317,6 +1364,7 @@ impl KittenAgent {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            self.signing_key.clone(),
         )
         .map_err(|error| error.to_string())?;
         mutation
@@ -1908,6 +1956,7 @@ fn signed_memory_pheromone_deposit(
 async fn run_validation_task(
     config_path: PathBuf,
     runtime_config: SwarmConfig,
+    signing_key: SigningKey,
     paths: ResolvedEvolutionPaths,
     batch_id: String,
 ) -> Result<ValidationTaskOutput, String> {
@@ -1946,6 +1995,7 @@ async fn run_validation_task(
         &paths.evolution_mutation_materialization_batch_results_dir,
         &paths.evolution_mutation_validation_batch_results_dir,
         &paths.evolution_ranking_results_dir,
+        signing_key,
     )
     .map_err(|error| error.to_string())?;
 
@@ -2013,6 +2063,36 @@ fn build_benchmark_evasion_pressure_input(
                 profile.medium_confidence_threshold;
             "suspicious_process_tree".to_string()
         }
+        DetectorCandidateManifest::BehavioralAnomaly { profile, .. } => {
+            benchmark_config.detection.strategy = "behavioral_anomaly".to_string();
+            benchmark_config.detection.profiles.behavioral_anomaly =
+                Some(serde_json::to_value(profile).map_err(|error| error.to_string())?);
+            benchmark_config.detection.high_confidence_threshold =
+                profile.high_confidence_threshold;
+            benchmark_config.detection.medium_confidence_threshold =
+                profile.medium_confidence_threshold;
+            "behavioral_anomaly".to_string()
+        }
+        DetectorCandidateManifest::FilelessExecution { profile, .. } => {
+            benchmark_config.detection.strategy = "fileless_execution".to_string();
+            benchmark_config.detection.profiles.fileless_execution =
+                Some(serde_json::to_value(profile).map_err(|error| error.to_string())?);
+            benchmark_config.detection.high_confidence_threshold =
+                profile.high_confidence_threshold;
+            benchmark_config.detection.medium_confidence_threshold =
+                profile.medium_confidence_threshold;
+            "fileless_execution".to_string()
+        }
+        DetectorCandidateManifest::DnsExfiltration { profile, .. } => {
+            benchmark_config.detection.strategy = "dns_exfiltration".to_string();
+            benchmark_config.detection.profiles.dns_exfiltration =
+                Some(serde_json::to_value(profile).map_err(|error| error.to_string())?);
+            benchmark_config.detection.high_confidence_threshold =
+                profile.high_confidence_threshold;
+            benchmark_config.detection.medium_confidence_threshold =
+                profile.medium_confidence_threshold;
+            "dns_exfiltration".to_string()
+        }
         other => {
             return Err(format!(
                 "benchmark evasion pressure is not yet supported for detector `{}`",
@@ -2045,6 +2125,7 @@ fn build_benchmark_evasion_pressure_input(
 pub async fn run_bounded_evolution_benchmark(
     config_path: impl AsRef<Path>,
     runtime_config: SwarmConfig,
+    signing_key: SigningKey,
     request: EvolutionBenchmarkRequest,
 ) -> Result<EvolutionBenchmarkRunLookup, EvolutionBenchmarkError> {
     if !runtime_config.evolution.enabled {
@@ -2099,6 +2180,7 @@ pub async fn run_bounded_evolution_benchmark(
         &paths.evolution_mutation_materialization_batch_results_dir,
         &paths.evolution_mutation_validation_batch_results_dir,
         &paths.evolution_ranking_results_dir,
+        signing_key.clone(),
     )?;
     let benchmark_store = FileEvolutionBenchmarkStore::open(
         paths.evolution_population_results_dir.join("benchmarks"),
@@ -2115,6 +2197,12 @@ pub async fn run_bounded_evolution_benchmark(
             &paths.verification_results_dir,
         )
         .await?;
+    let experiment = replay
+        .evaluate_experiment_path(
+            &request.baseline_experiment_path,
+            &paths.experiment_results_dir,
+        )
+        .await?;
     let scorecard = scorecards
         .create_scorecard(
             &replay,
@@ -2123,20 +2211,32 @@ pub async fn run_bounded_evolution_benchmark(
             &paths.verification_results_dir,
             &verification.report.verification_id,
         )
-        .await?;
-    let pressure =
-        drafting.create_pressure_from_scorecard(&scorecards, &scorecard.report.scorecard_id)?;
-    let experiment = replay
-        .load_experiment(
-            &paths.experiment_results_dir,
-            &scorecard.report.experiment_id,
-        )?
-        .ok_or_else(|| EvolutionBenchmarkError::InvalidRequest {
-            reason: format!(
-                "experiment `{}` was not found after scorecard creation",
-                scorecard.report.experiment_id
-            ),
-        })?;
+        .await;
+    let (pressure, created_at_ms) = match scorecard {
+        Ok(scorecard) => (
+            drafting
+                .create_pressure_from_scorecard(&scorecards, &scorecard.report.scorecard_id)
+                .or_else(|error| match error {
+                    crate::drafting::EvolutionDraftingError::NoSelectionPressure { .. } => drafting
+                        .create_pressure_from_verification(
+                            &replay,
+                            &paths.verification_results_dir,
+                            &verification.report.verification_id,
+                        ),
+                    other => Err(other),
+                })?,
+            scorecard.report.created_at_ms,
+        ),
+        Err(StrategyAdvisorError::VerificationFailed { .. }) => (
+            drafting.create_pressure_from_verification(
+                &replay,
+                &paths.verification_results_dir,
+                &verification.report.verification_id,
+            )?,
+            experiment.report.created_at_ms,
+        ),
+        Err(error) => return Err(error.into()),
+    };
     let mut report = EvolutionBenchmarkRunReport {
         benchmark_id: request.benchmark_id.clone(),
         label: if request.label.trim().is_empty() {
@@ -2153,8 +2253,8 @@ pub async fn run_bounded_evolution_benchmark(
             &runtime_config.evolution.fitness_weights,
             Some(&evasion_pressure),
         )?,
-        created_at_ms: scorecard.report.created_at_ms,
-        updated_at_ms: scorecard.report.created_at_ms,
+        created_at_ms,
+        updated_at_ms: created_at_ms,
         requested_generation_count: request.generation_count,
         completed_generation_count: 0,
         max_variants_per_generation: runtime_config.evolution.max_variants_per_cycle.max(1),
@@ -2197,6 +2297,7 @@ pub async fn run_bounded_evolution_benchmark(
         let validation = run_validation_task(
             config_path.clone(),
             runtime_config.clone(),
+            signing_key.clone(),
             paths.clone(),
             batch.report.batch_id.clone(),
         )
@@ -2215,7 +2316,7 @@ pub async fn run_bounded_evolution_benchmark(
             &validation_batch.report.validation_batch_id,
             runtime_config.evolution.shortlist_count,
         )?;
-        let population = mutation.refresh_population(
+        let population = mutation.refresh_benchmark_population(
             &paths.evolution_population_results_dir,
             &drafting,
             &paths.experiment_results_dir,
@@ -2462,8 +2563,8 @@ mod tests {
         FileEvolutionEpisodeStore,
     };
     use crate::replay::{
-        DefaultReplayHarness, DetectorVerificationRecord, DetectorVerificationReport,
-        ExperimentLineage, VerificationInvariantResult,
+        DefaultReplayHarness, DetectorCandidateManifest, DetectorVerificationRecord,
+        DetectorVerificationReport, ExperimentLineage, VerificationInvariantResult,
     };
     use crate::sphinx_agent::SphinxAgent;
     use crate::strategy::DefaultStrategyScorecardHarness;
@@ -2475,6 +2576,9 @@ mod tests {
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::AgentId;
     use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+    use swarm_whisker::{
+        BehavioralAnomalyProfile, DnsExfiltrationProfile, FilelessExecutionProfile,
+    };
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -2490,6 +2594,10 @@ mod tests {
 
     fn office_conservative_experiment() -> PathBuf {
         repo_root().join("experiments/office-conservative-control.yaml")
+    }
+
+    fn test_signing_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[24u8; 32])
     }
 
     fn copy_dir_recursive(source: &Path, destination: &Path) {
@@ -2531,6 +2639,101 @@ mod tests {
 
     fn stage_baseline_experiment(root: &Path) -> PathBuf {
         stage_experiment(root, &office_control_experiment())
+    }
+
+    fn stage_config(root: &Path) -> PathBuf {
+        let rulesets_dir = root.join("rulesets");
+        fs::create_dir_all(&rulesets_dir).unwrap();
+        let staged = rulesets_dir.join("default.yaml");
+        fs::copy(config_path(), &staged).unwrap();
+        let source_signature = config_path().with_extension("yaml.sig.json");
+        let staged_signature = staged.with_extension("yaml.sig.json");
+        if source_signature.exists() {
+            fs::copy(source_signature, staged_signature).unwrap();
+        }
+        staged
+    }
+
+    fn stage_candidate_experiment(
+        root: &Path,
+        name: &str,
+        candidate: DetectorCandidateManifest,
+    ) -> PathBuf {
+        let destination = stage_baseline_experiment(root);
+        let raw = fs::read_to_string(&destination).unwrap();
+        let mut manifest: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
+        manifest["name"] = serde_yaml::Value::String(name.to_string());
+        manifest["candidate"] = serde_yaml::to_value(&candidate).unwrap();
+        manifest["lineage"]["parent_strategy_id"] = serde_yaml::Value::String(match &candidate {
+            DetectorCandidateManifest::SuspiciousProcessTree { .. } => {
+                "suspicious_process_tree".to_string()
+            }
+            DetectorCandidateManifest::BehavioralAnomaly { .. } => "behavioral_anomaly".to_string(),
+            DetectorCandidateManifest::FilelessExecution { .. } => "fileless_execution".to_string(),
+            DetectorCandidateManifest::DnsExfiltration { .. } => "dns_exfiltration".to_string(),
+            other => other.strategy_id().to_string(),
+        });
+        fs::write(&destination, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+        destination
+    }
+
+    fn stage_conservative_behavioral_experiment(root: &Path) -> PathBuf {
+        stage_candidate_experiment(
+            root,
+            "behavioral-conservative-benchmark",
+            DetectorCandidateManifest::BehavioralAnomaly {
+                strategy_id: "behavioral_conservative".to_string(),
+                description: "Behavioral anomaly conservative benchmark control".to_string(),
+                profile: BehavioralAnomalyProfile {
+                    min_host_observations: 6,
+                    min_identity_observations: 6,
+                    min_peer_group_observations: 6,
+                    distribution_min_observations: 6,
+                    min_feature_weight: 0.20,
+                    high_confidence_z_score: 3.5,
+                    high_confidence_threshold: 0.95,
+                    medium_confidence_threshold: 0.82,
+                    ..BehavioralAnomalyProfile::default()
+                },
+            },
+        )
+    }
+
+    fn stage_conservative_fileless_experiment(root: &Path) -> PathBuf {
+        stage_candidate_experiment(
+            root,
+            "fileless-conservative-benchmark",
+            DetectorCandidateManifest::FilelessExecution {
+                strategy_id: "fileless_conservative".to_string(),
+                description: "Fileless execution conservative benchmark control".to_string(),
+                profile: FilelessExecutionProfile {
+                    min_region_size_bytes: 30_000,
+                    high_confidence_threshold: 0.96,
+                    medium_confidence_threshold: 0.84,
+                    ..FilelessExecutionProfile::default()
+                },
+            },
+        )
+    }
+
+    fn stage_conservative_dns_exfiltration_experiment(root: &Path) -> PathBuf {
+        stage_candidate_experiment(
+            root,
+            "dns-conservative-benchmark",
+            DetectorCandidateManifest::DnsExfiltration {
+                strategy_id: "dns_conservative".to_string(),
+                description: "DNS exfiltration conservative benchmark control".to_string(),
+                profile: DnsExfiltrationProfile {
+                    entropy_threshold: 4.2,
+                    min_subdomain_length: 28,
+                    query_burst_threshold: 12,
+                    burst_window_ms: 30_000,
+                    high_confidence_threshold: 0.95,
+                    medium_confidence_threshold: 0.82,
+                    ..DnsExfiltrationProfile::default()
+                },
+            },
+        )
     }
 
     fn sample_evasion_pressure_input(detector: &str) -> EvolutionEvasionPressureInput {
@@ -2736,6 +2939,7 @@ mod tests {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            test_signing_key(),
         )
         .unwrap();
         let pressure = drafting
@@ -2844,6 +3048,7 @@ mod tests {
         let run = run_bounded_evolution_benchmark(
             &config_path,
             config.clone(),
+            test_signing_key(),
             EvolutionBenchmarkRequest {
                 benchmark_id: "benchmark:test".to_string(),
                 label: "office benchmark".to_string(),
@@ -2896,6 +3101,7 @@ mod tests {
         let run = run_bounded_evolution_benchmark(
             &config_path,
             config,
+            test_signing_key(),
             EvolutionBenchmarkRequest {
                 benchmark_id: "benchmark:conservative".to_string(),
                 label: "office conservative".to_string(),
@@ -2924,6 +3130,111 @@ mod tests {
         assert!(
             generation.leader_catch_rate > baseline.catch_rate,
             "generation leader should close the conservative execution gap"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn measured_evolution_benchmark_supports_non_process_tree_detectors() {
+        let cases: [(&str, &str, fn(&Path) -> PathBuf); 3] = [
+            (
+                "behavioral",
+                "behavioral_anomaly",
+                stage_conservative_behavioral_experiment,
+            ),
+            (
+                "fileless",
+                "fileless_execution",
+                stage_conservative_fileless_experiment,
+            ),
+            (
+                "dns",
+                "dns_exfiltration",
+                stage_conservative_dns_exfiltration_experiment,
+            ),
+        ];
+
+        for (label, detector, stage_experiment_fn) in cases {
+            let root = temp_root(&format!("measured-benchmark-{label}"));
+            let staged_config_path = stage_config(&root);
+            let mut config = load_config(&staged_config_path).unwrap();
+            configure_paths(&mut config, &root);
+            config.detection.strategy = detector.to_string();
+            config.detection.strategies.clear();
+            config.evolution.max_variants_per_cycle = 2;
+            let baseline_experiment_path = stage_experiment_fn(&root);
+
+            let run = run_bounded_evolution_benchmark(
+                &staged_config_path,
+                config,
+                test_signing_key(),
+                EvolutionBenchmarkRequest {
+                    benchmark_id: format!("benchmark:{label}"),
+                    label: format!("{label} benchmark"),
+                    generation_count: 1,
+                    baseline_experiment_path,
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(run.report.completed_generation_count, 1, "{label}");
+            assert_eq!(run.report.detector, detector, "{label}");
+            assert!(run.report.baseline.is_some(), "{label}");
+            assert_eq!(run.report.generations.len(), 1, "{label}");
+            assert!(
+                !run.report.generations[0].leader_strategy_id.is_empty(),
+                "{label}"
+            );
+
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[tokio::test]
+    async fn measured_fileless_evolution_benchmark_improves_over_conservative_seed() {
+        let root = temp_root("measured-benchmark-fileless-conservative");
+        let staged_config_path = stage_config(&root);
+        let mut config = load_config(&staged_config_path).unwrap();
+        configure_paths(&mut config, &root);
+        config.detection.strategy = "fileless_execution".to_string();
+        config.detection.strategies.clear();
+        config.evolution.max_variants_per_cycle = 2;
+        let conservative_experiment = stage_conservative_fileless_experiment(&root);
+
+        let run = run_bounded_evolution_benchmark(
+            &staged_config_path,
+            config,
+            test_signing_key(),
+            EvolutionBenchmarkRequest {
+                benchmark_id: "benchmark:fileless-conservative".to_string(),
+                label: "fileless conservative".to_string(),
+                generation_count: 1,
+                baseline_experiment_path: conservative_experiment,
+            },
+        )
+        .await
+        .unwrap();
+
+        let baseline = run
+            .report
+            .baseline
+            .as_ref()
+            .expect("benchmark run should persist baseline metrics");
+        let generation = run
+            .report
+            .generations
+            .first()
+            .expect("benchmark run should persist generation one");
+
+        assert!(
+            generation.leader_measured_fitness > baseline.measured_fitness,
+            "fileless perturbation should outperform the conservative seed baseline"
+        );
+        assert!(
+            generation.leader_catch_rate > baseline.catch_rate,
+            "generation leader should close the conservative fileless gap"
         );
 
         let _ = fs::remove_dir_all(root);
@@ -2989,6 +3300,7 @@ mod tests {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            test_signing_key(),
         )
         .unwrap();
         let pressure = drafting
@@ -3024,6 +3336,7 @@ mod tests {
         let validation = run_validation_task(
             config_path.clone(),
             config.clone(),
+            test_signing_key(),
             paths.clone(),
             batch.report.batch_id.clone(),
         )
@@ -3507,6 +3820,7 @@ mod tests {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            test_signing_key(),
         )
         .unwrap();
 
@@ -3547,6 +3861,7 @@ mod tests {
         let validation = match run_validation_task(
             config_path.clone(),
             config.clone(),
+            test_signing_key(),
             paths.clone(),
             batch.report.batch_id.clone(),
         )
@@ -3575,8 +3890,9 @@ mod tests {
         let mut config = load_config(&config_path).unwrap();
         configure_paths(&mut config, &root);
 
-        let _seed_agent = KittenAgent::new(
+        let _seed_agent = KittenAgent::new_with_signing_key(
             AgentId::new("kitten", "seed"),
+            test_signing_key(),
             &config_path,
             config.clone(),
             substrate(&config),
@@ -3628,6 +3944,7 @@ mod tests {
             &paths.evolution_mutation_materialization_batch_results_dir,
             &paths.evolution_mutation_validation_batch_results_dir,
             &paths.evolution_ranking_results_dir,
+            test_signing_key(),
         )
         .unwrap();
         let pressure = drafting
@@ -3663,6 +3980,7 @@ mod tests {
         let validation = run_validation_task(
             config_path.clone(),
             config.clone(),
+            test_signing_key(),
             paths.clone(),
             batch.report.batch_id.clone(),
         )
@@ -3697,8 +4015,9 @@ mod tests {
             "population should contain at least one ready candidate"
         );
 
-        let mut restored_agent = KittenAgent::new(
+        let mut restored_agent = KittenAgent::new_with_signing_key(
             AgentId::new("kitten", "restore"),
+            test_signing_key(),
             &config_path,
             config.clone(),
             substrate(&config),

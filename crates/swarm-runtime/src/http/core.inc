@@ -20,6 +20,7 @@ use crate::governance_prep::{
     DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePacketSetList,
     EvolutionGovernancePrepError, EvolutionPortfolioHistoryList,
 };
+use crate::http::rate_limit::{HttpRateLimitRejection, HttpRateLimiter};
 use crate::operator_maintenance::{
     OperatorMaintenanceError, OperatorMaintenanceExecution, OperatorMaintenanceList,
     OperatorMaintenanceRecord, OperatorMaintenanceRequest, OperatorMaintenanceService,
@@ -57,6 +58,7 @@ use swarm_core::types::{
     ProvidenceIncidentStatus, ProvidenceReconciliationOutcome, ResponseRehearsalPreview,
 };
 use swarm_crypto::DetachedSignature;
+use zeroize::Zeroizing;
 
 /// Result directories required to expose authenticated operator artifacts through HTTP.
 #[derive(Debug, Clone)]
@@ -147,6 +149,7 @@ pub struct LocalOperatorSurface {
 #[derive(Clone)]
 struct OperatorHttpState {
     auth: OperatorAuthState,
+    rate_limiter: HttpRateLimiter,
     control: Arc<DefaultControlPlane>,
     portfolio: Option<Arc<DefaultEvolutionPortfolioHarness>>,
     governance_prep: Option<Arc<DefaultEvolutionGovernancePrepHarness>>,
@@ -163,6 +166,12 @@ struct OperatorHttpState {
 }
 
 #[derive(Debug, Clone)]
+struct OperatorRequestGuardState {
+    auth: OperatorAuthState,
+    rate_limiter: HttpRateLimiter,
+}
+
+#[derive(Debug, Clone)]
 struct AuthenticatedOperatorPrincipal {
     operator_id: Arc<str>,
     scopes: Vec<OperatorScope>,
@@ -175,14 +184,32 @@ impl AuthenticatedOperatorPrincipal {
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedOperatorPrincipal {
+struct ConfiguredOperatorPrincipal {
     principal: AuthenticatedOperatorPrincipal,
-    expected_token: Arc<str>,
+    token_env: Arc<str>,
+    token_expires_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
 struct OperatorAuthState {
-    principals: Arc<Vec<ResolvedOperatorPrincipal>>,
+    principals: Arc<Vec<ConfiguredOperatorPrincipal>>,
+}
+
+#[derive(Debug, Clone)]
+enum OperatorBearerAuthFailure {
+    Invalid,
+    Expired {
+        operator_id: Arc<str>,
+        expires_at_ms: i64,
+    },
+}
+
+fn read_operator_token_from_env(env_name: &str) -> Option<Zeroizing<String>> {
+    let mut token = std::env::var(env_name).ok().map(Zeroizing::new)?;
+    while matches!(token.as_bytes().last(), Some(b'\n' | b'\r')) {
+        token.pop();
+    }
+    (!token.is_empty()).then_some(token)
 }
 
 impl OperatorAuthState {
@@ -193,19 +220,18 @@ impl OperatorAuthState {
             .effective_principals()
             .into_iter()
             .map(|principal| {
-                let expected_token = std::env::var(&principal.token_env)
-                    .ok()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| OperatorHttpError::MissingTokenEnv {
+                if read_operator_token_from_env(&principal.token_env).is_none() {
+                    return Err(OperatorHttpError::MissingTokenEnv {
                         env_name: principal.token_env.clone(),
-                    })?;
-                Ok(ResolvedOperatorPrincipal {
+                    });
+                }
+                Ok(ConfiguredOperatorPrincipal {
                     principal: AuthenticatedOperatorPrincipal {
                         operator_id: Arc::from(principal.operator_id),
                         scopes: principal.scopes,
                     },
-                    expected_token: Arc::from(expected_token),
+                    token_env: Arc::from(principal.token_env),
+                    token_expires_at_ms: principal.token_expires_at_ms,
                 })
             })
             .collect::<Result<Vec<_>, OperatorHttpError>>()?;
@@ -214,10 +240,32 @@ impl OperatorAuthState {
         })
     }
 
-    fn authenticate(&self, token: &str) -> Option<AuthenticatedOperatorPrincipal> {
-        self.principals.iter().find_map(|principal| {
-            (principal.expected_token.as_ref() == token).then(|| principal.principal.clone())
-        })
+    fn authenticate(
+        &self,
+        token: &str,
+        now_ms: i64,
+    ) -> Result<AuthenticatedOperatorPrincipal, OperatorBearerAuthFailure> {
+        let mut expired = None;
+        for principal in self.principals.iter() {
+            let Some(expected_token) = read_operator_token_from_env(principal.token_env.as_ref())
+            else {
+                continue;
+            };
+            if expected_token.as_str() != token {
+                continue;
+            }
+            if let Some(expires_at_ms) = principal.token_expires_at_ms
+                && now_ms > expires_at_ms
+            {
+                expired = Some(OperatorBearerAuthFailure::Expired {
+                    operator_id: principal.principal.operator_id.clone(),
+                    expires_at_ms,
+                });
+                continue;
+            }
+            return Ok(principal.principal.clone());
+        }
+        Err(expired.unwrap_or(OperatorBearerAuthFailure::Invalid))
     }
 
     fn operator_has_scope(&self, operator_id: &str, scope: OperatorScope) -> bool {
@@ -375,6 +423,7 @@ struct OperatorApiError {
     status: StatusCode,
     error: &'static str,
     message: String,
+    retry_after_seconds: Option<u64>,
 }
 
 struct OperatorReviewError {
@@ -397,6 +446,7 @@ impl OperatorApiError {
             status: StatusCode::UNAUTHORIZED,
             error: "unauthorized",
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -405,6 +455,7 @@ impl OperatorApiError {
             status: StatusCode::BAD_REQUEST,
             error: "bad_request",
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -413,6 +464,7 @@ impl OperatorApiError {
             status: StatusCode::BAD_GATEWAY,
             error: "bad_gateway",
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -421,6 +473,7 @@ impl OperatorApiError {
             status: StatusCode::FORBIDDEN,
             error: "forbidden",
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -429,6 +482,7 @@ impl OperatorApiError {
             status: StatusCode::NOT_FOUND,
             error: "not_found",
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 
@@ -437,20 +491,36 @@ impl OperatorApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             error: "internal_error",
             message: message.into(),
+            retry_after_seconds: None,
+        }
+    }
+
+    fn too_many_requests(message: impl Into<String>, retry_after_seconds: u64) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            error: "too_many_requests",
+            message: message.into(),
+            retry_after_seconds: Some(retry_after_seconds),
         }
     }
 }
 
 impl IntoResponse for OperatorApiError {
     fn into_response(self) -> Response {
-        (
+        let mut response = (
             self.status,
             Json(OperatorApiErrorBody {
                 error: self.error,
                 message: self.message,
             }),
         )
-            .into_response()
+            .into_response();
+        if let Some(retry_after_seconds) = self.retry_after_seconds
+            && let Ok(value) = retry_after_seconds.to_string().parse()
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        response
     }
 }
 
@@ -569,6 +639,7 @@ impl LocalOperatorSurface {
                     },
                 })?;
         let auth = OperatorAuthState::from_config(&config)?;
+        let rate_limiter = HttpRateLimiter::new("operator", config.operator.rate_limit.clone());
 
         let config_path = config_path.into();
         let control = Arc::new(DefaultControlPlane::from_config(
@@ -640,6 +711,7 @@ impl LocalOperatorSurface {
             bind_addr,
             state: OperatorHttpState {
                 auth,
+                rate_limiter,
                 control,
                 portfolio,
                 governance_prep,
@@ -855,7 +927,10 @@ impl LocalOperatorSurface {
             )
             .with_state(self.state.clone())
             .layer(middleware::from_fn_with_state(
-                self.state.auth.clone(),
+                OperatorRequestGuardState {
+                    auth: self.state.auth.clone(),
+                    rate_limiter: self.state.rate_limiter.clone(),
+                },
                 require_bearer_auth,
             ))
             .layer(middleware::from_fn(
@@ -890,7 +965,8 @@ impl LocalOperatorSurface {
 async fn status_handler(
     State(state): State<OperatorHttpState>,
 ) -> Result<Json<ControlEnvelope<OperatorStatusReport>>, OperatorApiError> {
-    let status = state.control.status().await.map_err(map_control_error)?;
+    let mut status = state.control.status().await.map_err(map_control_error)?;
+    status.data.rate_limit = state.rate_limiter.status();
     Ok(Json(status))
 }
 
@@ -2044,11 +2120,19 @@ async fn maintenance_action_list_handler(
 }
 
 async fn require_bearer_auth(
-    State(auth): State<OperatorAuthState>,
+    State(state): State<OperatorRequestGuardState>,
     headers: HeaderMap,
     mut request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, OperatorApiError> {
+    let peer_addr = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0);
+    state
+        .rate_limiter
+        .check_request(&headers, peer_addr, request.uri().path(), now_ms())
+        .map_err(map_operator_rate_limit_rejection)?;
     let value = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok())
@@ -2056,12 +2140,47 @@ async fn require_bearer_auth(
     let token = value
         .strip_prefix("Bearer ")
         .ok_or_else(|| OperatorApiError::unauthorized("expected Authorization: Bearer <token>"))?;
-    let principal = auth
-        .authenticate(token)
-        .ok_or_else(|| OperatorApiError::unauthorized("invalid bearer token"))?;
+    let principal = state
+        .auth
+        .authenticate(token, now_ms())
+        .map_err(|error| match error {
+            OperatorBearerAuthFailure::Invalid => {
+                OperatorApiError::unauthorized("invalid bearer token")
+            }
+            OperatorBearerAuthFailure::Expired {
+                operator_id,
+                expires_at_ms,
+            } => OperatorApiError::unauthorized(format!(
+                "bearer token for operator `{operator_id}` expired at {expires_at_ms}"
+            )),
+        })?;
     request.extensions_mut().insert(principal);
 
     Ok(next.run(request).await)
+}
+
+fn map_operator_rate_limit_rejection(rejection: HttpRateLimitRejection) -> OperatorApiError {
+    OperatorApiError::too_many_requests(
+        format!(
+            "{} rate limit exceeded for source `{}` on `{}`; retry after {}ms",
+            rate_limit_threshold_label(rejection.threshold),
+            rejection.source,
+            rejection.path,
+            rejection.retry_after_ms
+        ),
+        retry_after_seconds(rejection.retry_after_ms),
+    )
+}
+
+fn rate_limit_threshold_label(threshold: crate::service::HttpRateLimitThreshold) -> &'static str {
+    match threshold {
+        crate::service::HttpRateLimitThreshold::Burst => "burst",
+        crate::service::HttpRateLimitThreshold::Sustained => "sustained",
+    }
+}
+
+fn retry_after_seconds(retry_after_ms: u64) -> u64 {
+    retry_after_ms.max(1).div_ceil(1_000)
 }
 
 fn parse_replay_selector(
@@ -5082,6 +5201,7 @@ mod tests {
                     subject: "telemetry.synthetic".to_string(),
                     bridge: None,
                 }],
+                threat_intel_feeds: vec![],
                 max_in_flight_actions: 2,
                 drain_timeout_ms: 30_000,
                 require_durable_live_response: false,
@@ -5156,11 +5276,13 @@ mod tests {
                 allowed_embed_origins: Vec::new(),
                 max_list_results: 2,
                 widget_token_ttl_secs: 900,
+                rate_limit: Default::default(),
                 auth: OperatorAuthConfig {
                     context_token_env: "SWARM_OPERATOR_TEST_TOKEN".to_string(),
                     principals: Vec::new(),
                     operator_id: "local-operator".to_string(),
                     token_env: "SWARM_OPERATOR_TEST_TOKEN".to_string(),
+                    token_expires_at_ms: None,
                 },
             },
             tls: None,
@@ -5328,7 +5450,7 @@ mod tests {
             "pager".to_string(),
             NotificationChannelConfig {
                 target_url,
-                auth_token: Some("notify-secret".to_string()),
+                auth_token: Some("notify-secret".into()),
                 request_signature: None,
                 timeout_ms: 500,
                 rate_limit: NotificationRateLimitConfig {
@@ -5974,6 +6096,210 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn status_route_allows_configured_burst_before_rate_limit_rejection() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+        let mut config = operator_config();
+        config.operator.rate_limit.burst_max_requests = 2;
+        config.operator.rate_limit.burst_window_ms = 1_000;
+        config.operator.rate_limit.sustained_max_requests = 10;
+        config.operator.rate_limit.sustained_window_ms = 60_000;
+        config.operator.rate_limit.trust_forwarded_headers = true;
+        let surface = LocalOperatorSurface::from_config("inline", config).unwrap();
+        let app = surface.router();
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/operator/status")
+                        .header(axum::http::header::AUTHORIZATION, "Bearer secret-token")
+                        .header("x-forwarded-for", "198.51.100.10")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let rejected = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer secret-token")
+                    .header("x-forwarded-for", "198.51.100.10")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(rejected.headers().get(header::RETRY_AFTER).unwrap(), "1");
+        let body = to_bytes(rejected.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("burst rate limit exceeded"),
+            "expected burst limiter rejection context: {json:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_route_recovers_after_rate_limit_window_refills() {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+        let mut config = operator_config();
+        config.operator.rate_limit.burst_max_requests = 1;
+        config.operator.rate_limit.burst_window_ms = 20;
+        config.operator.rate_limit.sustained_max_requests = 10;
+        config.operator.rate_limit.sustained_window_ms = 1_000;
+        config.operator.rate_limit.trust_forwarded_headers = true;
+        let surface = LocalOperatorSurface::from_config("inline", config).unwrap();
+        let app = surface.router();
+
+        let initial = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer secret-token")
+                    .header("x-forwarded-for", "198.51.100.11")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(initial.status(), StatusCode::OK);
+
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer secret-token")
+                    .header("x-forwarded-for", "198.51.100.11")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        let recovered = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer secret-token")
+                    .header("x-forwarded-for", "198.51.100.11")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(recovered.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn status_route_reloads_rotated_bearer_token_without_rebuild() {
+        let token_env = "SWARM_OPERATOR_ROTATION_TEST_TOKEN";
+        unsafe {
+            std::env::set_var(token_env, "initial-token");
+        }
+        let mut config = operator_config();
+        config.operator.auth.token_env = token_env.to_string();
+        config.operator.auth.context_token_env = token_env.to_string();
+        let surface = LocalOperatorSurface::from_config("inline", config).unwrap();
+        let app = surface.router();
+
+        let initial = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer initial-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(initial.status(), StatusCode::OK);
+
+        unsafe {
+            std::env::set_var(token_env, "rotated-token");
+        }
+
+        let stale = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer initial-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+
+        let rotated = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer rotated-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rotated.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn status_route_rejects_expired_bearer_token_with_context() {
+        let token_env = "SWARM_OPERATOR_EXPIRED_TEST_TOKEN";
+        unsafe {
+            std::env::set_var(token_env, "expired-token");
+        }
+        let mut config = operator_config();
+        config.operator.auth.token_env = token_env.to_string();
+        config.operator.auth.context_token_env = token_env.to_string();
+        config.operator.auth.token_expires_at_ms = Some(1);
+        let surface = LocalOperatorSurface::from_config("inline", config).unwrap();
+        let app = surface.router();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/status")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer expired-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("expired at"),
+            "expected expiry context in operator auth error: {json:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn status_route_returns_json_when_authorized() {
         unsafe {
             std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
@@ -6098,6 +6424,8 @@ mod tests {
         let request = serde_json::to_vec(&ThreatIntelEntry {
             indicator_type: ThreatIntelIndicatorType::Domain,
             value: " Example.COM. ".to_string(),
+            source: "operator".to_string(),
+            indicator_id: None,
             confidence: 0.91,
             expires_at: 1_700_000_000_100,
         })
@@ -7162,26 +7490,31 @@ mod tests {
                 OperatorPrincipalConfig {
                     operator_id: "reader-1".to_string(),
                     token_env: READ_ENV.to_string(),
+                    token_expires_at_ms: None,
                     scopes: vec![OperatorScope::Read],
                 },
                 OperatorPrincipalConfig {
                     operator_id: "rehearser-1".to_string(),
                     token_env: REHEARSE_ENV.to_string(),
+                    token_expires_at_ms: None,
                     scopes: vec![OperatorScope::Rehearse],
                 },
                 OperatorPrincipalConfig {
                     operator_id: approver_id.clone(),
                     token_env: APPROVE_ENV.to_string(),
+                    token_expires_at_ms: None,
                     scopes: vec![OperatorScope::Approve],
                 },
                 OperatorPrincipalConfig {
                     operator_id: second_approver_id.clone(),
                     token_env: APPROVE2_ENV.to_string(),
+                    token_expires_at_ms: None,
                     scopes: vec![OperatorScope::Approve],
                 },
                 OperatorPrincipalConfig {
                     operator_id: maintainer_id.clone(),
                     token_env: MAINT_ENV.to_string(),
+                    token_expires_at_ms: None,
                     scopes: vec![OperatorScope::Maintenance],
                 },
             ],

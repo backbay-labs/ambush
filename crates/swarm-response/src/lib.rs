@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 //! Execution layer for live response actions.
 //!
 //! The first milestone is intentionally small: expose a single trait for
@@ -5,6 +6,7 @@
 
 pub mod adapters;
 pub mod config;
+pub mod crowdstrike_rtr;
 pub mod dead_letter;
 pub mod dispatch;
 pub mod http_edr;
@@ -12,6 +14,7 @@ pub mod notification;
 pub mod resilience;
 pub mod rollback;
 pub mod siem;
+pub mod splunk_hec;
 pub mod webhook;
 
 use async_trait::async_trait;
@@ -20,10 +23,11 @@ use swarm_core::types::AgentId;
 use swarm_policy::{ActionRequest, CapabilityLease, PolicyVerdict};
 
 pub use config::{
-    CircuitBreakerConfig, HttpEdrConfig, NotificationChannelConfig, NotificationRateLimitConfig,
-    NotificationRoutingConfig, QuietHoursConfig, ResponseAdapterConfig, RetryConfig, RoutingRule,
-    SiemForwardConfig, WebhookConfig,
+    CircuitBreakerConfig, CrowdStrikeRtrConfig, HttpEdrConfig, NotificationChannelConfig,
+    NotificationRateLimitConfig, NotificationRoutingConfig, QuietHoursConfig,
+    ResponseAdapterConfig, RetryConfig, RoutingRule, SiemForwardConfig, WebhookConfig,
 };
+pub use crowdstrike_rtr::CrowdStrikeRtrAdapter;
 pub use dead_letter::{DeadLetterEntry, DeadLetterJournal};
 pub use dispatch::DispatchingExecutor;
 pub use http_edr::HttpEdrAdapter;
@@ -34,6 +38,7 @@ pub use rollback::{
     RollbackTrigger, SandboxRollbackExecutor,
 };
 pub use siem::{SiemFindingForwarder, SiemForwardAdapter, SwarmFindingEnvelope};
+pub use splunk_hec::{SplunkHecAdapter, SwarmFindingBatchEnvelope};
 pub use webhook::WebhookAdapter;
 
 /// Whether a response adapter should act or simulate execution.

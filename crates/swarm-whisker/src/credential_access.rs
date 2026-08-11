@@ -273,6 +273,8 @@ impl DetectionStrategy for CredentialAccessDetector {
             | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::NetworkConnect(_)
             | TelemetryPayload::DnsQuery(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),

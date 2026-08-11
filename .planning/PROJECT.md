@@ -10,34 +10,34 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.75 Operator Packaging` active (phases 268-271). `v1.74 Structural Integrity` deferred.
+`v1.77 Integration Proof` active with phases 276-279 complete. `v1.74 Structural Integrity` deferred.
 
 **Goal:**
-- Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and adversary-emulation validation.
+- Prove one real EDR adapter, one real SIEM adapter, and one compose-backed detect-to-respond-to-deliver loop on the shipped runtime.
 
 **Delivered:**
-- The repo already ships `swarmctl init`, `swarmctl validate`, `swarmctl readiness`, `swarmctl first-run`, and `swarmctl status` scaffolding that can be turned into an operator-facing first-run path.
-- The runtime already has a checked-in default ruleset, a shared bridge-health/status surface, and replayable scenario infrastructure that can support external-operator packaging.
-- The next milestone will harden those surfaces into curated defaults, deployment guidance, an adversary-emulation corpus, and a one-command quickstart proof.
+- `v1.76` closed the external-signal loop with bounded STIX/TAXII ingestion, runtime threat-intel enrichment, CloudTrail and Kubernetes audit bridge normalization, and cloud-detector proof through the signed runtime path.
+- The next milestone can now assume a broader signal base and focus on proving outbound integration rather than adding more ingest breadth first.
+- `v1.74` remains deferred rather than lost; the structural-integrity phases stay available for later re-activation.
 
 **Supporting foundation:**
-- `v1.70` expanded telemetry-source breadth across Windows Event Log, Sysmon, and auditd so the packaging work can target more than one ingest source.
-- `v1.71` hardened CI, JetStream coverage, hot-path benchmark gating, and tagged releases so operator-packaged flows can rely on reproducible build and validation paths.
-- `v1.72` added a checked-in OpenAPI contract plus generated Python client proof, which broadens the operator-facing integration surface that packaging must document clearly.
+- `v1.75` packaged the runtime for first external operator use with validated Docker, Helm, quickstart, and adversary-emulation proof surfaces.
+- `v1.76` broadened the runtime signal base with external threat intelligence and cloud audit telemetry on the shared ingest and detector paths.
+- `v1.72` added a checked-in OpenAPI contract plus generated Python client proof, which remains relevant for the upcoming integration-architecture validation work.
 
-## Current Milestone: v1.75 Operator Packaging
+## Current Milestone: v1.77 Integration Proof
 
-**Goal:** Package the runtime for first external operator use with curated defaults, deployment docs, quickstart workflow, and adversary-emulation validation.
+**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic wrappers with tested adapters and a compose-backed deployment proof.
 
 **Target features:**
-- Curated `detect_only` defaults that let an operator run `swarmctl init`, `swarmctl validate`, and boot the runtime without hand-editing config
-- A one-screen `swarmctl status` summary and remediation-grade startup or bridge errors that keep first-run diagnosis self-serve
-- Deployment documentation covering Docker single-container, Docker Compose with NATS, Helm, and bare-metal paths
-- A mapped adversary-emulation corpus plus a one-command quickstart that proves time-to-first-detection end-to-end
+- A `CrowdStrikeRtrAdapter` that executes bounded host isolation, process kill, and file quarantine actions through the shipped response lane
+- A `SplunkHecAdapter` that delivers detection findings with CIM-aligned mapping, batching, and bounded resilience
+- A repo-owned Docker Compose proof showing detect -> respond -> deliver with mocked CrowdStrike RTR and Splunk HEC dependencies
+- One integration architecture validation pass that checks health, metrics, and audit surfaces on the deployed compose stack
 
 ## Current State
 
-`v1.75` is active. The repo has completed the contiguous milestone run from `v1.52` through `v1.73`, covering Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, large-file decomposition, runtime/evolution crate-boundary cleanup, config and service monolith decomposition, learned-state integrity signing, secret zeroization, release-build hardening, restart-free bearer lifecycle handling, shipped HTTP request throttling, multi-detector evolution breadth, command-line deobfuscation hardening, telemetry-source breadth across Windows Event Log, Sysmon, and auditd, hardened CI plus repo-owned versioned release automation, a machine-readable platform API contract with generated client proof plus inbound SOAR verdict sync and lineage, and stigmergic feedback plus baseline-resistance proof. `v1.74` structural-integrity work remains deferred while operator packaging executes.
+`v1.77` is complete but remains the active milestone because `v1.78` is not defined yet. The repo has now completed the contiguous milestone run from `v1.52` through `v1.77`, covering Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, large-file decomposition, runtime/evolution crate-boundary cleanup, config and service monolith decomposition, learned-state integrity signing, secret zeroization, release-build hardening, restart-free bearer lifecycle handling, shipped HTTP request throttling, multi-detector evolution breadth, command-line deobfuscation hardening, telemetry-source breadth across Windows Event Log, Sysmon, and auditd, hardened CI plus repo-owned versioned release automation, a machine-readable platform API contract with generated client proof plus inbound SOAR verdict sync and lineage, stigmergic feedback plus baseline-resistance proof, operator packaging with deployment docs plus quickstart validation, external-signal ingestion across TAXII plus cloud audit telemetry, and one repo-owned end-to-end integration proof spanning CrowdStrike RTR plus Splunk HEC mocks. `v1.74` structural-integrity work remains deferred while the next milestone is prepared.
 
 **What is now real:**
 - The live runtime can detect, investigate, correlate, rehearse, review, and export signed evidence through one Rust-first operator workflow.

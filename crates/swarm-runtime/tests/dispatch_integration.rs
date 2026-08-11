@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use axum::{Json, Router, routing::post};

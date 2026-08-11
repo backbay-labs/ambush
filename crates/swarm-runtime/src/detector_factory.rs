@@ -1,15 +1,17 @@
 use crate::config::{
-    DetectorProfileError, behavioral_anomaly_profile, credential_access_profile,
-    dns_exfiltration_profile, fileless_execution_profile, infrastructure_anomaly_profile,
-    lateral_movement_profile, network_connect_profile, persistence_profile, supply_chain_profile,
+    DetectorProfileError, behavioral_anomaly_profile, cloudtrail_profile,
+    credential_access_profile, dns_exfiltration_profile, fileless_execution_profile,
+    infrastructure_anomaly_profile, kubernetes_audit_profile, lateral_movement_profile,
+    network_connect_profile, persistence_profile, supply_chain_profile,
     suspicious_process_tree_profile, suspicious_scripting_profile,
 };
 use crate::replay::DetectorCandidateManifest;
 use swarm_core::config::DetectionConfig;
 use swarm_whisker::{
-    BehavioralAnomalyDetector, CredentialAccessDetector, DetectionFinding, DetectionStrategy,
-    DnsExfiltrationDetector, FilelessExecutionDetector, InfrastructureAnomalyDetector,
-    LateralMovementDetector, NetworkConnectDetector, PersistenceDetector, SupplyChainDetector,
+    BehavioralAnomalyDetector, CloudTrailDetector, CredentialAccessDetector, DetectionFinding,
+    DetectionStrategy, DnsExfiltrationDetector, FilelessExecutionDetector,
+    InfrastructureAnomalyDetector, KubernetesAuditDetector, LateralMovementDetector,
+    NetworkConnectDetector, PersistenceDetector, SupplyChainDetector,
     SuspiciousProcessTreeDetector, SuspiciousScriptingDetector, TelemetryEvent,
 };
 
@@ -70,6 +72,14 @@ pub enum RuntimeDetector {
     InfrastructureAnomaly {
         strategy_id: String,
         detector: InfrastructureAnomalyDetector,
+    },
+    CloudTrail {
+        strategy_id: String,
+        detector: CloudTrailDetector,
+    },
+    KubernetesAudit {
+        strategy_id: String,
+        detector: KubernetesAuditDetector,
     },
 }
 
@@ -245,6 +255,36 @@ impl RuntimeDetector {
         })
     }
 
+    fn cloudtrail(
+        strategy_id: impl Into<String>,
+        profile: swarm_whisker::CloudTrailProfile,
+    ) -> Result<Self, DetectorFactoryError> {
+        Ok(Self::CloudTrail {
+            strategy_id: strategy_id.into(),
+            detector: CloudTrailDetector::from_profile(profile).map_err(|source| {
+                DetectorProfileError::Validation {
+                    strategy: "cloudtrail",
+                    source,
+                }
+            })?,
+        })
+    }
+
+    fn kubernetes_audit(
+        strategy_id: impl Into<String>,
+        profile: swarm_whisker::KubernetesAuditProfile,
+    ) -> Result<Self, DetectorFactoryError> {
+        Ok(Self::KubernetesAudit {
+            strategy_id: strategy_id.into(),
+            detector: KubernetesAuditDetector::from_profile(profile).map_err(|source| {
+                DetectorProfileError::Validation {
+                    strategy: "kubernetes_audit",
+                    source,
+                }
+            })?,
+        })
+    }
+
     fn scoped_findings(
         strategy_id: &str,
         findings: Vec<DetectionFinding>,
@@ -253,7 +293,11 @@ impl RuntimeDetector {
             .into_iter()
             .map(|mut finding| {
                 finding.strategy_id = strategy_id.to_string();
-                finding.finding_id = format!("{strategy_id}:{}", finding.event_id);
+                let suffix = match finding.finding_id.split_once(':') {
+                    Some((_, rest)) => rest.to_string(),
+                    None => finding.finding_id.clone(),
+                };
+                finding.finding_id = format!("{strategy_id}:{suffix}");
                 finding
             })
             .collect()
@@ -262,6 +306,16 @@ impl RuntimeDetector {
     pub fn behavioral_anomaly_detector(&self) -> Option<(&str, &BehavioralAnomalyDetector)> {
         match self {
             Self::BehavioralAnomaly {
+                strategy_id,
+                detector,
+            } => Some((strategy_id.as_str(), detector)),
+            _ => None,
+        }
+    }
+
+    pub fn network_connect_detector(&self) -> Option<(&str, &NetworkConnectDetector)> {
+        match self {
+            Self::NetworkConnect {
                 strategy_id,
                 detector,
             } => Some((strategy_id.as_str(), detector)),
@@ -289,6 +343,8 @@ impl DetectionStrategy for RuntimeDetector {
             Self::SupplyChain { strategy_id, .. } => strategy_id.as_str(),
             Self::NetworkConnect { strategy_id, .. } => strategy_id.as_str(),
             Self::InfrastructureAnomaly { strategy_id, .. } => strategy_id.as_str(),
+            Self::CloudTrail { strategy_id, .. } => strategy_id.as_str(),
+            Self::KubernetesAudit { strategy_id, .. } => strategy_id.as_str(),
         }
     }
 
@@ -339,6 +395,14 @@ impl DetectionStrategy for RuntimeDetector {
                 strategy_id,
                 detector,
             } => Self::scoped_findings(strategy_id, detector.evaluate(event)),
+            Self::CloudTrail {
+                strategy_id,
+                detector,
+            } => Self::scoped_findings(strategy_id, detector.evaluate(event)),
+            Self::KubernetesAudit {
+                strategy_id,
+                detector,
+            } => Self::scoped_findings(strategy_id, detector.evaluate(event)),
         }
     }
 }
@@ -381,6 +445,10 @@ pub fn build_detector_from_strategy(
             strategy_id,
             infrastructure_anomaly_profile(config)?,
         ),
+        "cloudtrail" => RuntimeDetector::cloudtrail(strategy_id, cloudtrail_profile(config)?),
+        "kubernetes_audit" => {
+            RuntimeDetector::kubernetes_audit(strategy_id, kubernetes_audit_profile(config)?)
+        }
         other => Err(DetectorFactoryError::UnsupportedDetector {
             strategy: other.to_string(),
         }),

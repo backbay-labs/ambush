@@ -153,9 +153,26 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
         if events.is_empty() {
             if self.mode_state.current != SwarmMode::Normal {
                 let quiet_since = self.below_threshold_since.get_or_insert(now);
+                let resolved_threat_class = self.mode_state.triggering_threat_class.clone();
                 if now - *quiet_since >= self.config.deescalation_cooldown_secs
                     && self.mode_state.transition_down(SwarmMode::Normal, now)
                 {
+                    if let Some(threat_class) = resolved_threat_class {
+                        let concentration = self
+                            .substrate
+                            .query_concentration(&threat_class, now)
+                            .await?;
+                        self.substrate
+                            .record_escalation(EscalationRecord {
+                                mode: SwarmMode::Normal,
+                                threat_class,
+                                total_strength: concentration.total_strength,
+                                distinct_sources: concentration.distinct_sources,
+                                peak_confidence: concentration.peak_confidence,
+                                timestamp: now,
+                            })
+                            .await?;
+                    }
                     mode_changed = true;
                     self.publish_mode_transition(
                         starting_mode,

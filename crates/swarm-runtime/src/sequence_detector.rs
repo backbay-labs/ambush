@@ -270,6 +270,13 @@ fn evaluate_rule(
     window: &TemporalEventWindow,
     current_event: &TelemetryEvent,
 ) -> Option<DetectionFinding> {
+    // Sequence stitching requires a known host so we never combine steps from
+    // different assets into a fictitious kill chain. host_matches treats None
+    // as a wildcard, so a hostless current_event would otherwise accept every
+    // retained event regardless of its host.
+    let host_id = current_event.host_id.clone()?;
+    let current_event_id = current_event.event_id.clone();
+
     let max_prefix_len = rule
         .steps
         .iter()
@@ -284,15 +291,31 @@ fn evaluate_rule(
                 return None;
             }
 
-            let host_id = current_event.host_id.clone();
+            let last_step_index = prefix_len - 1;
             let predicates = rule.steps[..prefix_len]
                 .iter()
-                .map(|step| {
+                .enumerate()
+                .map(|(step_index, step)| {
                     let step = step.clone();
                     let host_id = host_id.clone();
+                    let current_event_id = current_event_id.clone();
+                    let is_last = step_index == last_step_index;
+                    // Without anchoring the final step to current_event, an
+                    // earlier completed match on the same host (e.g. a prior
+                    // A->B that is still in the retention window) would be
+                    // returned and then dropped by the post-check, masking
+                    // every later B in a repeated A->B pattern.
                     let predicate = move |event: &TelemetryEvent| {
-                        host_matches(host_id.as_deref(), event.host_id.as_deref())
-                            && step.matches(event)
+                        if !host_matches(Some(host_id.as_str()), event.host_id.as_deref()) {
+                            return false;
+                        }
+                        if !step.matches(event) {
+                            return false;
+                        }
+                        if is_last && event.event_id != current_event_id {
+                            return false;
+                        }
+                        true
                     };
                     Box::new(predicate) as Box<dyn TelemetryEventPredicate>
                 })
@@ -305,15 +328,15 @@ fn evaluate_rule(
                 .match_ordered(&predicate_refs, Some(rule.max_span_ms))
                 .ok()
                 .flatten()?;
-            if matched
-                .matched_events
-                .last()
-                .is_some_and(|event| event.event_id == current_event.event_id)
-            {
-                Some((prefix_len, matched))
-            } else {
-                None
-            }
+            // Anchored predicate already guarantees the last matched event is
+            // current_event; this debug_assert documents the invariant.
+            debug_assert!(
+                matched
+                    .matched_events
+                    .last()
+                    .is_some_and(|event| event.event_id == current_event_id)
+            );
+            Some((prefix_len, matched))
         })?;
 
     let (prefix_len, matched) = max_prefix_len;
@@ -384,6 +407,8 @@ fn payload_kind(payload: &TelemetryPayload) -> &'static str {
         TelemetryPayload::ProcessMemoryAccess(_) => "process_memory_access",
         TelemetryPayload::NetworkConnect(_) => "network_connect",
         TelemetryPayload::DnsQuery(_) => "dns_query",
+        TelemetryPayload::CloudTrail(_) => "cloudtrail",
+        TelemetryPayload::KubernetesAudit(_) => "kubernetes_audit",
         TelemetryPayload::RegistryAccess(_) => "registry_access",
         TelemetryPayload::RegistryPersistence(_) => "registry_persistence",
         TelemetryPayload::FilePersistence(_) => "file_persistence",
@@ -659,6 +684,87 @@ rules:
         assert_eq!(findings[0].event_id, "evt-3");
         assert_eq!(findings[0].strategy_id, KILL_CHAIN_SEQUENCE_STRATEGY_ID);
         assert_eq!(findings[0].evidence["match_kind"], "full");
+    }
+
+    #[test]
+    fn sequence_detector_emits_match_for_each_repeated_terminal_event() {
+        // Regression: an earlier full A->B->C match left in the retention
+        // window must not mask later events that complete the same sequence.
+        let path = write_rules();
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::DetectOnly,
+            StaticApprovalGate::default(),
+            SandboxExecutor,
+        );
+        let detector = KillChainSequenceDetector::from_profile(
+            KILL_CHAIN_SEQUENCE_STRATEGY_ID,
+            KillChainSequenceProfile {
+                rules_path: path.display().to_string(),
+            },
+            runtime.temporal_event_window(),
+        )
+        .unwrap();
+
+        runtime.record_temporal_event(&process_event(
+            "evt-1",
+            1_700_000_000,
+            "winword",
+            "powershell",
+        ));
+        runtime.record_temporal_event(&process_event("evt-2", 1_700_000_030, "powershell", "cmd"));
+        let first_terminal = network_event("evt-3", 1_700_000_060, "cmd");
+        runtime.record_temporal_event(&first_terminal);
+        let first_findings = detector.evaluate(&first_terminal);
+        assert_eq!(first_findings.len(), 1);
+        assert_eq!(first_findings[0].event_id, "evt-3");
+
+        let second_terminal = network_event("evt-4", 1_700_000_090, "cmd");
+        runtime.record_temporal_event(&second_terminal);
+        let second_findings = detector.evaluate(&second_terminal);
+        assert_eq!(
+            second_findings.len(),
+            1,
+            "second terminal must produce its own finding, not be masked by evt-3"
+        );
+        assert_eq!(second_findings[0].event_id, "evt-4");
+    }
+
+    #[test]
+    fn sequence_detector_does_not_emit_for_hostless_event() {
+        // Regression: hostless events used to combine with prior events from
+        // unrelated hosts via host_matches(None, ...) wildcard semantics,
+        // emitting kill chains that never occurred on a single asset.
+        let path = write_rules();
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::DetectOnly,
+            StaticApprovalGate::default(),
+            SandboxExecutor,
+        );
+        let detector = KillChainSequenceDetector::from_profile(
+            KILL_CHAIN_SEQUENCE_STRATEGY_ID,
+            KillChainSequenceProfile {
+                rules_path: path.display().to_string(),
+            },
+            runtime.temporal_event_window(),
+        )
+        .unwrap();
+
+        runtime.record_temporal_event(&process_event(
+            "evt-1",
+            1_700_000_000,
+            "winword",
+            "powershell",
+        ));
+        runtime.record_temporal_event(&process_event("evt-2", 1_700_000_030, "powershell", "cmd"));
+        let mut hostless = network_event("evt-3", 1_700_000_060, "cmd");
+        hostless.host_id = None;
+        runtime.record_temporal_event(&hostless);
+
+        let findings = detector.evaluate(&hostless);
+        assert!(
+            findings.is_empty(),
+            "hostless event must not stitch a sequence across unrelated hosts; got {findings:?}"
+        );
     }
 
     #[test]

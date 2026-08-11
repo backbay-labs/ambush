@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use async_trait::async_trait;
 use serde_json::json;
 use std::fs;
@@ -431,7 +433,9 @@ fn composite_detector_factory_covers_all_runtime_strategies()
 -> Result<(), Box<dyn std::error::Error>> {
     for strategy in [
         "suspicious_process_tree",
+        "cloudtrail",
         "dns_exfiltration",
+        "kubernetes_audit",
         "lateral_movement",
         "credential_access",
         "suspicious_scripting",
@@ -574,7 +578,12 @@ async fn evasion_to_canary_routes_gap_driven_candidate_into_existing_lane()
             .collect(),
     };
 
-    let state = IngestState::from_config(&config_path, config.clone())?;
+    let (_, _, signing_key) = execution_context();
+    let state = IngestState::from_config_with_signing_key(
+        &config_path,
+        config.clone(),
+        signing_key.clone(),
+    )?;
     let replay = DefaultReplayHarness::from_config(
         &config_path,
         config.clone(),
@@ -622,6 +631,7 @@ async fn evasion_to_canary_routes_gap_driven_candidate_into_existing_lane()
             .paths
             .evolution_mutation_validation_batch_results_dir,
         &config.evolution.paths.evolution_ranking_results_dir,
+        signing_key,
     )?;
     let proofs = DefaultEvolutionProofHarness::from_config(
         &config_path,
@@ -659,6 +669,7 @@ async fn evasion_to_canary_routes_gap_driven_candidate_into_existing_lane()
                 medium_confidence_threshold: Some("0.48".to_string()),
                 ..EvolutionMutationProfileOverrides::default()
             },
+            target_genome: None,
         },
     )?;
     let batch = mutation.materialize_batch(&drafting, &spec.report.mutation_spec_id)?;

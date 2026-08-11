@@ -1,0 +1,123 @@
+schema_version: 1
+name: integration-proof
+description: Compose-backed integration proof for CrowdStrike RTR and Splunk HEC
+
+runtime:
+  mode: live_response
+  telemetry_sources:
+    - name: proof-process-bridge
+      bridge:
+        kind: generic_json
+        path: /runtime-data/input/attack-process.jsonl
+        mapping:
+          event_id_path: /event_id
+          timestamp_path: /timestamp
+          host_id_path: /host_id
+          payload:
+            kind: process_start
+            parent_process_path: /parent_process
+            process_name_path: /process_name
+            command_line_path: /command_line
+            user_path: /user
+  max_in_flight_actions: 4
+  drain_timeout_ms: 30000
+  require_durable_live_response: false
+  max_heap_pressure: 0.90
+  governance_degraded_tick_threshold: 3
+  partition_contingency_lease_ttl_ms: 300000
+  partition_contingency_blast_radius_cap: 1
+  secret_dir:
+
+detection:
+  strategy: suspicious_process_tree
+  high_confidence_threshold: 0.90
+  medium_confidence_threshold: 0.70
+
+pheromone:
+  default_half_life_secs: 3600.0
+  evaporation_threshold: 0.01
+  min_sources_for_escalation: 2
+  alert_threshold: 2.0
+  incident_threshold: 5.0
+  deescalation_cooldown_secs: 300
+  backend:
+    kind: in_memory
+  response_playbook:
+    rules:
+      - threat_class: execution
+        severity: CRITICAL
+        min_confidence: 0.90
+        max_confidence: 1.0
+        actions:
+          - type: isolate_host
+            host_id: host-1
+
+policy:
+  human_gate_severity: HIGH
+  lease_ttl_ms: 60000
+  max_actions_per_scope_per_minute: 5
+  rules:
+    - name: integration-proof-execution-isolation
+      decision: allow
+      threat_class: execution
+      actions: [isolate_host]
+      min_severity: HIGH
+      max_severity: CRITICAL
+      time_window_utc:
+        start_hour_utc: 0
+        end_hour_utc: 24
+      max_actions_per_agent_per_minute: 4
+      reason: integration proof allows direct isolation for encoded suspicious execution telemetry
+
+response_adapter:
+  kind: crowd_strike_rtr
+  base_url: http://crowdstrike-rtr-mock:8080
+  client_id: proof-client-id
+  client_secret: proof-client-secret
+  timeout_ms: 2000
+  retry:
+    max_retries: 1
+    initial_backoff_ms: 50
+    backoff_multiplier: 1.0
+  circuit_breaker:
+    threshold: 2
+    cooldown_ms: 250
+  dead_letter_path: /runtime-data/dead-letter/response.jsonl
+
+siem_forward:
+  kind: splunk_hec
+  endpoint: http://splunk-hec-mock:8088/services/collector/event
+  auth_token: proof-splunk-token
+  timeout_ms: 2000
+  batch_max_events: 32
+  batch_max_bytes: 131072
+  retry:
+    max_retries: 1
+    initial_backoff_ms: 50
+    backoff_multiplier: 1.0
+  circuit_breaker:
+    threshold: 2
+    cooldown_ms: 250
+  dead_letter_path: /runtime-data/dead-letter/siem.jsonl
+
+audit:
+  bundle_store:
+    kind: local_files
+    directory: /runtime-data/replay
+  recent_decisions_limit: 20
+
+investigation:
+  enabled: false
+  worker_count: 1
+  max_pending_jobs: 16
+  time_budget_ms: 250
+  bundle_store:
+    kind: memory
+
+correlation:
+  enabled: false
+  time_window_ms: 300000
+  min_shared_keys: 1
+  candidate_limit: 32
+  incident_store:
+    kind: memory

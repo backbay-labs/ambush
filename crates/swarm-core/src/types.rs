@@ -117,6 +117,14 @@ pub enum ProvidenceFeedbackAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum SoarSourceSystem {
+    SplunkSoar,
+    SentinelSoar,
+    ChronicleSoar,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProvidenceCallbackEvent {
     Created,
     Updated,
@@ -141,6 +149,35 @@ pub struct SwarmProvidenceFeedbackRequest {
     pub analyst_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SwarmSoarVerdictRequest {
+    pub source_system: SoarSourceSystem,
+    pub source_verdict_id: String,
+    pub verdict_at_ms: i64,
+    pub action: ProvidenceFeedbackAction,
+    pub incident_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding_id: Option<String>,
+    pub analyst_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_case_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_case_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SoarVerdictLineage {
+    pub source_system: SoarSourceSystem,
+    pub source_verdict_id: String,
+    pub verdict_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_case_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_case_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

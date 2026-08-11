@@ -1,5 +1,6 @@
 use crate::adapters::SandboxExecutor;
 use crate::config::ResponseAdapterConfig;
+use crate::crowdstrike_rtr::CrowdStrikeRtrAdapter;
 use crate::dead_letter::DeadLetterJournal;
 use crate::http_edr::HttpEdrAdapter;
 use crate::resilience::ResilientExecutor;
@@ -12,6 +13,7 @@ use swarm_policy::{ActionRequest, CapabilityLease};
 enum AdapterInner {
     Sandbox(SandboxExecutor),
     HttpEdr(ResilientExecutor<HttpEdrAdapter>),
+    CrowdStrikeRtr(ResilientExecutor<CrowdStrikeRtrAdapter>),
     Webhook(ResilientExecutor<WebhookAdapter>),
 }
 
@@ -46,6 +48,26 @@ impl DispatchingExecutor {
                     Some(journal),
                 ))
             }
+            ResponseAdapterConfig::CrowdStrikeRtr { config } => {
+                let journal = Arc::new(
+                    DeadLetterJournal::new(&config.dead_letter_path, max_dead_letter_bytes)
+                        .map_err(|error| {
+                            ResponseError::unavailable(
+                                "crowdstrike_rtr",
+                                ExecutionMode::Enforced,
+                                format!("failed to initialize dead-letter journal: {error}"),
+                            )
+                        })?,
+                );
+                let adapter = CrowdStrikeRtrAdapter::new(config.clone())?;
+                AdapterInner::CrowdStrikeRtr(ResilientExecutor::new(
+                    adapter,
+                    "crowdstrike_rtr",
+                    config.retry.clone(),
+                    config.circuit_breaker.clone(),
+                    Some(journal),
+                ))
+            }
             ResponseAdapterConfig::Webhook { config } => {
                 let journal = Arc::new(
                     DeadLetterJournal::new(&config.dead_letter_path, max_dead_letter_bytes)
@@ -74,6 +96,7 @@ impl DispatchingExecutor {
         match &self.inner {
             AdapterInner::Sandbox(_) => "sandbox",
             AdapterInner::HttpEdr(_) => "http_edr",
+            AdapterInner::CrowdStrikeRtr(_) => "crowdstrike_rtr",
             AdapterInner::Webhook(_) => "webhook",
         }
     }
@@ -117,6 +140,7 @@ impl ResponseExecutor for DispatchingExecutor {
         match &self.inner {
             AdapterInner::Sandbox(executor) => executor.execute(request, lease, mode).await,
             AdapterInner::HttpEdr(executor) => executor.execute(request, lease, mode).await,
+            AdapterInner::CrowdStrikeRtr(executor) => executor.execute(request, lease, mode).await,
             AdapterInner::Webhook(executor) => executor.execute(request, lease, mode).await,
         }
     }
@@ -228,7 +252,7 @@ mod tests {
             ResponseAdapterConfig::HttpEdr {
                 config: HttpEdrConfig {
                     endpoint,
-                    auth_token: "secret".to_string(),
+                    auth_token: "secret".to_string().into(),
                     timeout_ms: 500,
                     retry: RetryConfig::default(),
                     circuit_breaker: CircuitBreakerConfig::default(),
@@ -280,7 +304,7 @@ mod tests {
             ResponseAdapterConfig::HttpEdr {
                 config: HttpEdrConfig {
                     endpoint,
-                    auth_token: "secret".to_string(),
+                    auth_token: "secret".to_string().into(),
                     timeout_ms: 500,
                     retry: RetryConfig::default(),
                     circuit_breaker: CircuitBreakerConfig::default(),
@@ -331,7 +355,7 @@ mod tests {
                     url,
                     timeout_ms: 500,
                     channel: Some("#soc".to_string()),
-                    auth_token: Some("secret".to_string()),
+                    auth_token: Some("secret".to_string().into()),
                     retry: RetryConfig::default(),
                     circuit_breaker: CircuitBreakerConfig::default(),
                     dead_letter_path: "./dead-letter.jsonl".to_string(),

@@ -16,6 +16,8 @@ tokio.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 hex.workspace = true
+swarm-crypto.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

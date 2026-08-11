@@ -1,4 +1,7 @@
-use crate::config::RuntimeConfigError;
+use crate::config::{
+    DetectorProfileError, RuntimeConfigError, fileless_execution_profile, lateral_movement_profile,
+    supply_chain_profile, suspicious_process_tree_profile, suspicious_scripting_profile,
+};
 use crate::detection::metrics::CriticalPathMetrics;
 use crate::detector_factory::{DetectorFactoryError, build_detector_from_strategy};
 use crate::replay::{
@@ -13,10 +16,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::SwarmConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::telemetry::{TelemetryEvent, TelemetryPayload};
-use swarm_whisker::DetectionStrategy;
+use swarm_whisker::{CommandLineNormalizationProfile, DetectionStrategy};
 
 pub const REPO_EVASION_SUITE_PATH: &str = "scenario-suites/evasion-breadth-v1.yaml";
 pub const REPO_EVASION_CATALOG_PATH: &str = "rulesets/evasion/attack-technique-catalog.yaml";
+pub const REPO_COMMAND_LINE_DEOBF_SUITE_PATH: &str =
+    "scenario-suites/command-line-deobfuscation-v1.yaml";
+pub const REPO_COMMAND_LINE_DEOBF_CATALOG_PATH: &str =
+    "rulesets/evasion/command-line-deobfuscation-catalog.yaml";
 
 const EVASION_COVERAGE_DETECTORS: [&str; 11] = [
     "suspicious_process_tree",
@@ -31,6 +38,14 @@ const EVASION_COVERAGE_DETECTORS: [&str; 11] = [
     "network_connect",
     "infrastructure_anomaly",
 ];
+const COMMAND_LINE_NORMALIZATION_DETECTORS: [&str; 5] = [
+    "suspicious_process_tree",
+    "fileless_execution",
+    "lateral_movement",
+    "suspicious_scripting",
+    "supply_chain",
+];
+const COMMAND_LINE_BENCHMARK_DETECTORS: [&str; 2] = ["suspicious_scripting", "fileless_execution"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum EvasionCoverageError {
@@ -39,6 +54,9 @@ pub enum EvasionCoverageError {
 
     #[error(transparent)]
     DetectorFactory(#[from] DetectorFactoryError),
+
+    #[error(transparent)]
+    DetectorProfile(#[from] DetectorProfileError),
 
     #[error("failed to read evasion catalog `{path}`: {source}")]
     CatalogRead {
@@ -99,12 +117,23 @@ pub struct EvasionThreatClassCoverage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvasionScenarioCoverage {
+    pub scenario_name: String,
+    pub threat_class: ThreatClass,
+    pub total_payloads: usize,
+    pub detected_payloads: usize,
+    pub catch_rate: f64,
+    pub techniques: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectorEvasionCoverageReport {
     pub detector: String,
     pub total_payloads: usize,
     pub detected_payloads: usize,
     pub catch_rate: f64,
     pub threat_classes: Vec<EvasionThreatClassCoverage>,
+    pub scenarios: Vec<EvasionScenarioCoverage>,
     pub intentionally_uncovered: Vec<EvasionTechniqueGap>,
 }
 
@@ -115,6 +144,89 @@ pub struct EvasionCoverageSnapshot {
     pub suite_path: String,
     pub corpus_version: String,
     pub detectors: Vec<DetectorEvasionCoverageReport>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdversaryTechniqueStatus {
+    Detected,
+    Partial,
+    NotCovered,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdversaryTechniqueOccurrenceReport {
+    pub scenario_name: String,
+    pub threat_class: ThreatClass,
+    pub mapped_detectors: Vec<String>,
+    pub catch_rate: f64,
+    pub status: AdversaryTechniqueStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdversaryTechniqueCoverageReport {
+    pub technique: String,
+    pub mapped_detectors: Vec<String>,
+    pub status: AdversaryTechniqueStatus,
+    pub occurrences: Vec<AdversaryTechniqueOccurrenceReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdversaryEmulationCoverageReport {
+    pub generated_at_ms: i64,
+    pub suite_name: String,
+    pub suite_path: String,
+    pub corpus_version: String,
+    pub scenario_count: usize,
+    pub technique_count: usize,
+    pub detected_technique_count: usize,
+    pub partial_technique_count: usize,
+    pub not_covered_technique_count: usize,
+    pub coverage_percent: f64,
+    pub techniques: Vec<AdversaryTechniqueCoverageReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandLineNormalizationCatchRateDelta {
+    pub detector: String,
+    pub threat_class: ThreatClass,
+    pub total_payloads: usize,
+    pub baseline_detected_payloads: usize,
+    pub normalized_detected_payloads: usize,
+    pub baseline_catch_rate: f64,
+    pub normalized_catch_rate: f64,
+    pub catch_rate_delta: f64,
+    pub scenario_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandLineNormalizationBenchmark {
+    pub generated_at_ms: i64,
+    pub suite_name: String,
+    pub suite_path: String,
+    pub corpus_version: String,
+    pub scenario_names: Vec<String>,
+    pub detector_deltas: Vec<CommandLineNormalizationCatchRateDelta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandLineNormalizationFalsePositiveDelta {
+    pub detector: String,
+    pub total_benign_payloads: usize,
+    pub baseline_false_positive_payloads: usize,
+    pub normalized_false_positive_payloads: usize,
+    pub false_positive_delta: isize,
+    pub scenario_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandLineNormalizationFalsePositiveReport {
+    pub generated_at_ms: i64,
+    pub suite_name: String,
+    pub suite_path: String,
+    pub corpus_version: String,
+    pub scenario_names: Vec<String>,
+    pub detector_results: Vec<CommandLineNormalizationFalsePositiveDelta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,6 +255,12 @@ struct LoadedAdversarialScenario {
     events: Vec<TelemetryEvent>,
 }
 
+#[derive(Debug)]
+struct LoadedBenignScenario {
+    name: String,
+    events: Vec<TelemetryEvent>,
+}
+
 pub fn evaluate_repo_evasion_coverage(
     config: &SwarmConfig,
     repo_root: &Path,
@@ -152,6 +270,162 @@ pub fn evaluate_repo_evasion_coverage(
         repo_root,
         &repo_root.join(REPO_EVASION_SUITE_PATH),
         &repo_root.join(REPO_EVASION_CATALOG_PATH),
+    )
+}
+
+pub fn summarize_repo_adversary_emulation_coverage(
+    config: &SwarmConfig,
+    repo_root: &Path,
+) -> Result<AdversaryEmulationCoverageReport, EvasionCoverageError> {
+    let snapshot = evaluate_repo_evasion_coverage(config, repo_root)?;
+    let scenarios = load_adversarial_scenarios(&repo_root.join(REPO_EVASION_SUITE_PATH))?;
+    let mut techniques = BTreeMap::<String, Vec<AdversaryTechniqueOccurrenceReport>>::new();
+
+    for scenario in scenarios {
+        let mapped_detectors = mapped_detectors_for_adversary_scenario(&scenario.name)?;
+        let best_catch_rate = mapped_detectors
+            .iter()
+            .filter_map(|detector| {
+                scenario_coverage(&snapshot, detector, &scenario.name).map(|entry| entry.catch_rate)
+            })
+            .fold(0.0f64, f64::max);
+        let all_intentionally_uncovered = mapped_detectors.iter().all(|detector| {
+            detector_intentionally_uncovered(
+                &snapshot,
+                detector,
+                &scenario.threat_class,
+                &scenario.techniques,
+            )
+        });
+        let status = if all_intentionally_uncovered {
+            if best_catch_rate > 0.0 {
+                AdversaryTechniqueStatus::Partial
+            } else {
+                AdversaryTechniqueStatus::NotCovered
+            }
+        } else if best_catch_rate >= 0.999_999 {
+            AdversaryTechniqueStatus::Detected
+        } else if best_catch_rate > 0.0 {
+            AdversaryTechniqueStatus::Partial
+        } else {
+            AdversaryTechniqueStatus::NotCovered
+        };
+
+        for technique in scenario.techniques {
+            techniques
+                .entry(technique)
+                .or_default()
+                .push(AdversaryTechniqueOccurrenceReport {
+                    scenario_name: scenario.name.clone(),
+                    threat_class: scenario.threat_class.clone(),
+                    mapped_detectors: mapped_detectors
+                        .iter()
+                        .map(|detector| detector.to_string())
+                        .collect(),
+                    catch_rate: best_catch_rate,
+                    status,
+                });
+        }
+    }
+
+    let mut reports = techniques
+        .into_iter()
+        .map(|(technique, mut occurrences)| {
+            occurrences.sort_by(|left, right| {
+                left.scenario_name
+                    .cmp(&right.scenario_name)
+                    .then_with(|| left.mapped_detectors.cmp(&right.mapped_detectors))
+            });
+            let status = if occurrences
+                .iter()
+                .all(|entry| entry.status == AdversaryTechniqueStatus::Detected)
+            {
+                AdversaryTechniqueStatus::Detected
+            } else if occurrences
+                .iter()
+                .any(|entry| entry.status != AdversaryTechniqueStatus::NotCovered)
+            {
+                AdversaryTechniqueStatus::Partial
+            } else {
+                AdversaryTechniqueStatus::NotCovered
+            };
+            let mapped_detectors = occurrences
+                .iter()
+                .flat_map(|entry| entry.mapped_detectors.iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            AdversaryTechniqueCoverageReport {
+                technique,
+                mapped_detectors,
+                status,
+                occurrences,
+            }
+        })
+        .collect::<Vec<_>>();
+    reports.sort_by(|left, right| left.technique.cmp(&right.technique));
+
+    let detected_technique_count = reports
+        .iter()
+        .filter(|entry| entry.status == AdversaryTechniqueStatus::Detected)
+        .count();
+    let partial_technique_count = reports
+        .iter()
+        .filter(|entry| entry.status == AdversaryTechniqueStatus::Partial)
+        .count();
+    let not_covered_technique_count = reports
+        .iter()
+        .filter(|entry| entry.status == AdversaryTechniqueStatus::NotCovered)
+        .count();
+    let technique_count = reports.len();
+
+    Ok(AdversaryEmulationCoverageReport {
+        generated_at_ms: snapshot.generated_at_ms,
+        suite_name: snapshot.suite_name,
+        suite_path: snapshot.suite_path,
+        corpus_version: snapshot.corpus_version,
+        scenario_count: reports
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .occurrences
+                    .iter()
+                    .map(|occurrence| occurrence.scenario_name.clone())
+            })
+            .collect::<BTreeSet<_>>()
+            .len(),
+        technique_count,
+        detected_technique_count,
+        partial_technique_count,
+        not_covered_technique_count,
+        coverage_percent: ratio(
+            detected_technique_count + partial_technique_count,
+            technique_count,
+        ),
+        techniques: reports,
+    })
+}
+
+pub fn evaluate_repo_command_line_normalization_benchmark(
+    config: &SwarmConfig,
+    repo_root: &Path,
+) -> Result<CommandLineNormalizationBenchmark, EvasionCoverageError> {
+    evaluate_command_line_normalization_benchmark(
+        config,
+        repo_root,
+        &repo_root.join(REPO_COMMAND_LINE_DEOBF_SUITE_PATH),
+        &repo_root.join(REPO_COMMAND_LINE_DEOBF_CATALOG_PATH),
+    )
+}
+
+pub fn evaluate_repo_command_line_normalization_false_positive_regression(
+    config: &SwarmConfig,
+    repo_root: &Path,
+) -> Result<CommandLineNormalizationFalsePositiveReport, EvasionCoverageError> {
+    evaluate_command_line_normalization_false_positive_regression(
+        config,
+        repo_root,
+        &repo_root.join(REPO_COMMAND_LINE_DEOBF_SUITE_PATH),
     )
 }
 
@@ -223,6 +497,7 @@ pub fn evaluate_evasion_coverage(
     for detector_id in EVASION_COVERAGE_DETECTORS {
         let detector = build_detector_from_strategy(detector_id, &config.detection)?;
         let mut by_threat_class = BTreeMap::<ThreatClass, ThreatClassAccumulator>::new();
+        let mut scenario_reports = Vec::with_capacity(scenarios.len());
 
         for scenario in &scenarios {
             let entry = by_threat_class
@@ -232,6 +507,7 @@ pub fn evaluate_evasion_coverage(
             for technique in &scenario.techniques {
                 entry.techniques.insert(technique.clone());
             }
+            let mut scenario_detected_payloads = 0usize;
             for event in &scenario.events {
                 entry.total_payloads += 1;
                 let detected = detector
@@ -240,8 +516,17 @@ pub fn evaluate_evasion_coverage(
                     .any(|finding| finding.threat_class == scenario.threat_class);
                 if detected {
                     entry.detected_payloads += 1;
+                    scenario_detected_payloads += 1;
                 }
             }
+            scenario_reports.push(EvasionScenarioCoverage {
+                scenario_name: scenario.name.clone(),
+                threat_class: scenario.threat_class.clone(),
+                total_payloads: scenario.events.len(),
+                detected_payloads: scenario_detected_payloads,
+                catch_rate: ratio(scenario_detected_payloads, scenario.events.len()),
+                techniques: scenario.techniques.clone(),
+            });
         }
 
         let threat_classes = by_threat_class
@@ -269,6 +554,7 @@ pub fn evaluate_evasion_coverage(
             detected_payloads,
             catch_rate: ratio(detected_payloads, total_payloads),
             threat_classes,
+            scenarios: scenario_reports,
             intentionally_uncovered: catalog_by_detector
                 .get(detector_id)
                 .cloned()
@@ -282,6 +568,132 @@ pub fn evaluate_evasion_coverage(
         suite_path: suite_path.display().to_string(),
         corpus_version: suite.corpus_version,
         detectors,
+    })
+}
+
+pub fn evaluate_command_line_normalization_benchmark(
+    config: &SwarmConfig,
+    repo_root: &Path,
+    suite_path: &Path,
+    catalog_path: &Path,
+) -> Result<CommandLineNormalizationBenchmark, EvasionCoverageError> {
+    let baseline_config = config_without_command_line_normalization(config)?;
+    let baseline =
+        evaluate_evasion_coverage(&baseline_config, repo_root, suite_path, catalog_path)?;
+    let normalized = evaluate_evasion_coverage(config, repo_root, suite_path, catalog_path)?;
+    let scenarios = load_adversarial_scenarios(suite_path)?;
+    let scenario_names = scenarios
+        .iter()
+        .map(|scenario| scenario.name.clone())
+        .collect::<Vec<_>>();
+    let scenario_names_by_threat = scenarios.iter().fold(
+        BTreeMap::<ThreatClass, BTreeSet<String>>::new(),
+        |mut acc, scenario| {
+            acc.entry(scenario.threat_class.clone())
+                .or_default()
+                .insert(scenario.name.clone());
+            acc
+        },
+    );
+
+    let mut detector_deltas = Vec::new();
+    for detector in COMMAND_LINE_BENCHMARK_DETECTORS {
+        for threat_class in [ThreatClass::Execution, ThreatClass::DefenseEvasion] {
+            let baseline_entry = threat_class_coverage(&baseline, detector, &threat_class);
+            let normalized_entry = threat_class_coverage(&normalized, detector, &threat_class);
+            let total_payloads = baseline_entry
+                .map(|entry| entry.total_payloads)
+                .or_else(|| normalized_entry.map(|entry| entry.total_payloads))
+                .unwrap_or_default();
+            if total_payloads == 0 {
+                continue;
+            }
+
+            let baseline_detected_payloads = baseline_entry
+                .map(|entry| entry.detected_payloads)
+                .unwrap_or_default();
+            let normalized_detected_payloads = normalized_entry
+                .map(|entry| entry.detected_payloads)
+                .unwrap_or_default();
+            detector_deltas.push(CommandLineNormalizationCatchRateDelta {
+                detector: detector.to_string(),
+                threat_class: threat_class.clone(),
+                total_payloads,
+                baseline_detected_payloads,
+                normalized_detected_payloads,
+                baseline_catch_rate: ratio(baseline_detected_payloads, total_payloads),
+                normalized_catch_rate: ratio(normalized_detected_payloads, total_payloads),
+                catch_rate_delta: ratio(normalized_detected_payloads, total_payloads)
+                    - ratio(baseline_detected_payloads, total_payloads),
+                scenario_names: scenario_names_by_threat
+                    .get(&threat_class)
+                    .map(|names| names.iter().cloned().collect())
+                    .unwrap_or_default(),
+            });
+        }
+    }
+
+    Ok(CommandLineNormalizationBenchmark {
+        generated_at_ms: now_ms(),
+        suite_name: normalized.suite_name.clone(),
+        suite_path: normalized.suite_path.clone(),
+        corpus_version: normalized.corpus_version.clone(),
+        scenario_names,
+        detector_deltas,
+    })
+}
+
+pub fn evaluate_command_line_normalization_false_positive_regression(
+    config: &SwarmConfig,
+    _repo_root: &Path,
+    suite_path: &Path,
+) -> Result<CommandLineNormalizationFalsePositiveReport, EvasionCoverageError> {
+    let suite = load_replay_suite_manifest(suite_path)?;
+    let benign_scenarios = load_benign_scenarios(suite_path)?;
+    let baseline_config = config_without_command_line_normalization(config)?;
+
+    let mut detector_results = Vec::new();
+    for detector in COMMAND_LINE_NORMALIZATION_DETECTORS {
+        let baseline_detector = build_detector_from_strategy(detector, &baseline_config.detection)?;
+        let normalized_detector = build_detector_from_strategy(detector, &config.detection)?;
+        let total_benign_payloads = benign_scenarios
+            .iter()
+            .map(|scenario| scenario.events.len())
+            .sum::<usize>();
+        let baseline_false_positive_payloads = benign_scenarios
+            .iter()
+            .flat_map(|scenario| scenario.events.iter())
+            .filter(|event| !baseline_detector.evaluate(event).is_empty())
+            .count();
+        let normalized_false_positive_payloads = benign_scenarios
+            .iter()
+            .flat_map(|scenario| scenario.events.iter())
+            .filter(|event| !normalized_detector.evaluate(event).is_empty())
+            .count();
+        detector_results.push(CommandLineNormalizationFalsePositiveDelta {
+            detector: detector.to_string(),
+            total_benign_payloads,
+            baseline_false_positive_payloads,
+            normalized_false_positive_payloads,
+            false_positive_delta: normalized_false_positive_payloads as isize
+                - baseline_false_positive_payloads as isize,
+            scenario_names: benign_scenarios
+                .iter()
+                .map(|scenario| scenario.name.clone())
+                .collect(),
+        });
+    }
+
+    Ok(CommandLineNormalizationFalsePositiveReport {
+        generated_at_ms: now_ms(),
+        suite_name: suite.name,
+        suite_path: suite_path.display().to_string(),
+        corpus_version: suite.corpus_version,
+        scenario_names: benign_scenarios
+            .iter()
+            .map(|scenario| scenario.name.clone())
+            .collect(),
+        detector_results,
     })
 }
 
@@ -374,6 +786,45 @@ pub fn actionable_gaps_for_detector(
             })
     });
     gaps
+}
+
+fn mapped_detectors_for_adversary_scenario(
+    scenario_name: &str,
+) -> Result<&'static [&'static str], EvasionCoverageError> {
+    match scenario_name {
+        "evasion_execution_office_chains" => {
+            Ok(&["suspicious_process_tree", "suspicious_scripting"])
+        }
+        "evasion_defense_evasion_fileless" => Ok(&["fileless_execution", "suspicious_scripting"]),
+        "evasion_command_and_control_network" => Ok(&["network_connect"]),
+        "evasion_data_exfiltration_dns" => Ok(&["dns_exfiltration"]),
+        "evasion_lateral_movement_remote_admin" => Ok(&["lateral_movement"]),
+        "evasion_credential_access_harvest" => Ok(&["credential_access"]),
+        "evasion_persistence_autostart" => Ok(&["persistence"]),
+        other => Err(EvasionCoverageError::InvalidRequest(format!(
+            "no mapped detector set for adversarial scenario `{other}`"
+        ))),
+    }
+}
+
+fn detector_intentionally_uncovered(
+    snapshot: &EvasionCoverageSnapshot,
+    detector: &str,
+    threat_class: &ThreatClass,
+    techniques: &[String],
+) -> bool {
+    snapshot
+        .detectors
+        .iter()
+        .find(|entry| entry.detector == detector)
+        .is_some_and(|entry| {
+            techniques.iter().all(|technique| {
+                entry
+                    .intentionally_uncovered
+                    .iter()
+                    .any(|gap| gap.technique == *technique && gap.threat_class == *threat_class)
+            })
+        })
 }
 
 fn load_catalog(
@@ -505,6 +956,120 @@ fn load_adversarial_scenarios(
     Ok(scenarios)
 }
 
+fn load_benign_scenarios(
+    suite_path: &Path,
+) -> Result<Vec<LoadedBenignScenario>, EvasionCoverageError> {
+    let suite = load_replay_suite_manifest(suite_path)?;
+    let mut scenarios = Vec::new();
+    for scenario_ref in &suite.scenarios {
+        let path = resolve_manifest_relative_path(suite_path, scenario_ref);
+        let loaded = load_scenario_manifest(&path)?;
+        if loaded.manifest.metadata.class != ReplayScenarioClass::Benign {
+            continue;
+        }
+        let events = match loaded.manifest.input {
+            ReplayScenarioInput::Events { events } => events
+                .into_iter()
+                .map(|step| step.event)
+                .collect::<Vec<_>>(),
+            ReplayScenarioInput::ReplayBundles { .. } => {
+                return Err(EvasionCoverageError::InvalidRequest(format!(
+                    "scenario `{}` uses replay bundles; benign regression requires event-backed scenarios",
+                    loaded.manifest.name
+                )));
+            }
+        };
+        scenarios.push(LoadedBenignScenario {
+            name: loaded.manifest.name,
+            events,
+        });
+    }
+    Ok(scenarios)
+}
+
+fn config_without_command_line_normalization(
+    config: &SwarmConfig,
+) -> Result<SwarmConfig, EvasionCoverageError> {
+    let mut baseline = config.clone();
+    let disabled = CommandLineNormalizationProfile {
+        strip_caret_escapes: false,
+        expand_environment_variables: false,
+        normalize_unicode_homoglyphs: false,
+        decode_encoded_arguments: false,
+    };
+
+    let mut profile = suspicious_process_tree_profile(&baseline.detection)?;
+    profile.command_line_normalization = disabled.clone();
+    baseline.detection.profiles.suspicious_process_tree =
+        Some(serialize_profile(profile, "suspicious_process_tree")?);
+
+    let mut profile = fileless_execution_profile(&baseline.detection)?;
+    profile.command_line_normalization = disabled.clone();
+    baseline.detection.profiles.fileless_execution =
+        Some(serialize_profile(profile, "fileless_execution")?);
+
+    let mut profile = lateral_movement_profile(&baseline.detection)?;
+    profile.command_line_normalization = disabled.clone();
+    baseline.detection.profiles.lateral_movement =
+        Some(serialize_profile(profile, "lateral_movement")?);
+
+    let mut profile = suspicious_scripting_profile(&baseline.detection)?;
+    profile.command_line_normalization = disabled.clone();
+    baseline.detection.profiles.suspicious_scripting =
+        Some(serialize_profile(profile, "suspicious_scripting")?);
+
+    let mut profile = supply_chain_profile(&baseline.detection)?;
+    profile.command_line_normalization = disabled;
+    baseline.detection.profiles.supply_chain = Some(serialize_profile(profile, "supply_chain")?);
+
+    Ok(baseline)
+}
+
+fn serialize_profile<T: Serialize>(
+    profile: T,
+    strategy: &'static str,
+) -> Result<serde_json::Value, EvasionCoverageError> {
+    serde_json::to_value(profile).map_err(|source| {
+        EvasionCoverageError::InvalidRequest(format!(
+            "failed to serialize detector profile `{strategy}`: {source}"
+        ))
+    })
+}
+
+fn threat_class_coverage<'a>(
+    snapshot: &'a EvasionCoverageSnapshot,
+    detector: &str,
+    threat_class: &ThreatClass,
+) -> Option<&'a EvasionThreatClassCoverage> {
+    snapshot
+        .detectors
+        .iter()
+        .find(|entry| entry.detector == detector)
+        .and_then(|report| {
+            report
+                .threat_classes
+                .iter()
+                .find(|entry| &entry.threat_class == threat_class)
+        })
+}
+
+fn scenario_coverage<'a>(
+    snapshot: &'a EvasionCoverageSnapshot,
+    detector: &str,
+    scenario_name: &str,
+) -> Option<&'a EvasionScenarioCoverage> {
+    snapshot
+        .detectors
+        .iter()
+        .find(|entry| entry.detector == detector)
+        .and_then(|report| {
+            report
+                .scenarios
+                .iter()
+                .find(|entry| entry.scenario_name == scenario_name)
+        })
+}
+
 fn threat_class_from_payload(payload: &TelemetryPayload) -> ThreatClass {
     match payload {
         TelemetryPayload::ProcessStart(_) => ThreatClass::Execution,
@@ -521,6 +1086,8 @@ fn threat_class_from_payload(payload: &TelemetryPayload) -> ThreatClass {
         }
         TelemetryPayload::NetworkConnect(_) => ThreatClass::CommandAndControl,
         TelemetryPayload::DnsQuery(_) => ThreatClass::DataExfiltration,
+        TelemetryPayload::CloudTrail(_) => ThreatClass::CredentialAccess,
+        TelemetryPayload::KubernetesAudit(_) => ThreatClass::PrivilegeEscalation,
         TelemetryPayload::RegistryPersistence(_) | TelemetryPayload::FilePersistence(_) => {
             ThreatClass::Persistence
         }
@@ -558,11 +1125,16 @@ fn now_ms() -> i64 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
+        REPO_COMMAND_LINE_DEOBF_CATALOG_PATH, REPO_COMMAND_LINE_DEOBF_SUITE_PATH,
         REPO_EVASION_CATALOG_PATH, REPO_EVASION_SUITE_PATH, actionable_gaps_for_detector,
+        evaluate_repo_command_line_normalization_benchmark,
+        evaluate_repo_command_line_normalization_false_positive_regression,
         evaluate_repo_evasion_coverage, resolve_repo_root,
+        summarize_repo_adversary_emulation_coverage,
     };
     use crate::config::load_config;
     use std::path::{Path, PathBuf};
+    use swarm_core::pheromone::ThreatClass;
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -628,6 +1200,105 @@ mod tests {
             gaps.iter()
                 .flat_map(|gap| gap.actionable_techniques.iter())
                 .all(|technique| technique != "T1620")
+        );
+    }
+
+    #[test]
+    fn command_line_normalization_benchmark_improves_execution_and_defense_evasion() {
+        let root = repo_root();
+        let config = load_config(root.join("rulesets/default.yaml")).unwrap();
+        let benchmark = evaluate_repo_command_line_normalization_benchmark(&config, &root).unwrap();
+
+        assert!(
+            benchmark
+                .suite_path
+                .ends_with(REPO_COMMAND_LINE_DEOBF_SUITE_PATH)
+        );
+        let execution = benchmark
+            .detector_deltas
+            .iter()
+            .find(|delta| {
+                delta.detector == "suspicious_scripting"
+                    && delta.threat_class == ThreatClass::Execution
+            })
+            .expect("execution benchmark delta");
+        assert!(
+            execution.catch_rate_delta >= 0.15,
+            "expected execution catch-rate improvement >= 0.15, got {}",
+            execution.catch_rate_delta
+        );
+        assert!(
+            execution
+                .scenario_names
+                .iter()
+                .any(|name| { name == "command_line_deobfuscation_execution" })
+        );
+
+        let defense_evasion = benchmark
+            .detector_deltas
+            .iter()
+            .find(|delta| {
+                delta.detector == "fileless_execution"
+                    && delta.threat_class == ThreatClass::DefenseEvasion
+            })
+            .expect("defense evasion benchmark delta");
+        assert!(
+            defense_evasion.catch_rate_delta >= 0.15,
+            "expected defense-evasion catch-rate improvement >= 0.15, got {}",
+            defense_evasion.catch_rate_delta
+        );
+        assert!(root.join(REPO_COMMAND_LINE_DEOBF_CATALOG_PATH).exists());
+    }
+
+    #[test]
+    fn command_line_normalization_regression_stays_zero_on_benign_controls() {
+        let root = repo_root();
+        let config = load_config(root.join("rulesets/default.yaml")).unwrap();
+        let regression =
+            evaluate_repo_command_line_normalization_false_positive_regression(&config, &root)
+                .unwrap();
+
+        assert!(
+            regression
+                .suite_path
+                .ends_with(REPO_COMMAND_LINE_DEOBF_SUITE_PATH)
+        );
+        assert!(
+            regression
+                .scenario_names
+                .iter()
+                .any(|name| name == "command_line_deobfuscation_benign")
+        );
+        assert!(regression.detector_results.iter().all(|result| {
+            result.baseline_false_positive_payloads == 0
+                && result.normalized_false_positive_payloads == 0
+                && result.false_positive_delta == 0
+        }));
+    }
+
+    #[test]
+    fn repo_adversary_emulation_coverage_report_meets_floor() {
+        let root = repo_root();
+        let config = load_config(root.join("rulesets/default.yaml")).unwrap();
+        let report = summarize_repo_adversary_emulation_coverage(&config, &root).unwrap();
+
+        assert_eq!(report.scenario_count, 7);
+        assert!(
+            report.technique_count >= 20,
+            "expected at least twenty mapped techniques, got {}",
+            report.technique_count
+        );
+        assert!(
+            report.coverage_percent >= 0.60,
+            "expected coverage floor >= 0.60, got {}",
+            report.coverage_percent
+        );
+        assert!(
+            report
+                .techniques
+                .iter()
+                .any(|entry| entry.technique == "T1047"),
+            "expected WMI lateral movement technique mapping"
         );
     }
 }

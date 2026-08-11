@@ -1356,6 +1356,7 @@ mod tests {
     };
     use crate::replay::ExperimentLineage;
     use crate::selection::EvolutionRankedCandidateSelectionRecord;
+    use ed25519_dalek::SigningKey;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1647,7 +1648,9 @@ mod tests {
             })
             .unwrap();
 
-        FileEvolutionEpisodeStore::open(&episode_dir)
+        let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+        let signer_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+        FileEvolutionEpisodeStore::open_signed(&episode_dir, signer_agent_id, signing_key)
             .unwrap()
             .persist(&EvolutionEpisodeReport {
                 episode_id: "episode-1".to_string(),

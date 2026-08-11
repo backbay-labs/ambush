@@ -21,6 +21,7 @@ swarm-core.workspace = true
 swarm-consensus.workspace = true
 swarm-ingest-json.workspace = true
 swarm-ingest-sentinel.workspace = true
+swarm-ingest-taxii.workspace = true
 swarm-ingest-tetragon.workspace = true
 swarm-policy.workspace = true
 swarm-response.workspace = true
@@ -50,6 +51,7 @@ opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
 tracing-opentelemetry.workspace = true
+zeroize.workspace = true
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["server", "http1", "tokio"] }
 rustls-pemfile = "2"

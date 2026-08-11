@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use ed25519_dalek::SigningKey;
 use serde_json::json;

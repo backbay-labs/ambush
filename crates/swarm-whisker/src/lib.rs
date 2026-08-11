@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 //! Whisker agents — streaming detection on the hot path.
 //!
 //! Whiskers are long-running, stateful stream processors.
@@ -8,12 +9,15 @@
 //! No LLM per signal. LLM only for ambiguous signals routed to Stalkers.
 
 pub mod behavioral_anomaly;
+pub mod cloudtrail;
+pub mod command_line;
 pub mod composite;
 pub mod credential_access;
 pub mod detector;
 pub mod dns_exfiltration;
 pub mod fileless_execution;
 pub mod infrastructure_anomaly;
+pub mod kubernetes_audit;
 pub mod lateral_movement;
 pub mod network_connect;
 pub mod persistence;
@@ -66,20 +70,29 @@ pub(crate) fn validate_confidence_thresholds(
 }
 
 pub use behavioral_anomaly::{BehavioralAnomalyDetector, BehavioralAnomalyProfile};
+pub use cloudtrail::{CloudTrailDetector, CloudTrailProfile};
+pub use command_line::{
+    CommandLineAnalysis, CommandLineNormalizationProfile, analyze_command_line,
+};
 pub use composite::CompositeDetector;
 pub use credential_access::{CredentialAccessDetector, CredentialAccessProfile};
 pub use detector::{
-    AuthenticationEventData, DetectionFinding, DetectionStrategy, DnsQueryEvent, ExhaustedResource,
-    FilePersistenceEvent, InfrastructureHealthEvent, NetworkConnectEvent, ProcessMemoryAccessEvent,
-    ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent,
-    SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile, TelemetryEvent,
-    TelemetryEventPredicate, TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity,
+    AuthenticationEventData, CloudTrailEvent, DetectionFinding, DetectionStrategy, DnsQueryEvent,
+    ExhaustedResource, FilePersistenceEvent, InfrastructureHealthEvent, KubernetesAuditEvent,
+    NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent, RegistryAccessEvent,
+    RegistryPersistenceEvent, ResourceExhaustionEvent, SuspiciousProcessTreeDetector,
+    SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryEventPredicate, TelemetryPayload,
+    ThermalAnomalyEvent, ThermalSeverity,
 };
 pub use dns_exfiltration::{DnsExfiltrationDetector, DnsExfiltrationProfile};
 pub use fileless_execution::{FilelessExecutionDetector, FilelessExecutionProfile};
 pub use infrastructure_anomaly::{InfrastructureAnomalyDetector, InfrastructureAnomalyProfile};
+pub use kubernetes_audit::{KubernetesAuditDetector, KubernetesAuditProfile};
 pub use lateral_movement::{LateralMovementDetector, LateralMovementProfile};
-pub use network_connect::{NetworkConnectDetector, NetworkConnectProfile};
+pub use network_connect::{
+    NetworkBeaconRecruitmentContext, NetworkBeaconRecruitmentProfile, NetworkConnectDetector,
+    NetworkConnectProfile,
+};
 pub use persistence::{PersistenceDetector, PersistenceProfile};
 pub use supply_chain::{SupplyChainDetector, SupplyChainProfile};
 pub use suspicious_scripting::{SuspiciousScriptingDetector, SuspiciousScriptingProfile};
@@ -87,10 +100,11 @@ pub use suspicious_scripting::{SuspiciousScriptingDetector, SuspiciousScriptingP
 #[cfg(test)]
 mod tests {
     use super::{
-        BehavioralAnomalyDetector, CredentialAccessDetector, DnsExfiltrationDetector,
-        FilelessExecutionDetector, InfrastructureAnomalyDetector, LateralMovementDetector,
-        NetworkConnectDetector, PersistenceDetector, SupplyChainDetector,
-        SuspiciousProcessTreeDetector, SuspiciousScriptingDetector,
+        BehavioralAnomalyDetector, CloudTrailDetector, CredentialAccessDetector,
+        DnsExfiltrationDetector, FilelessExecutionDetector, InfrastructureAnomalyDetector,
+        KubernetesAuditDetector, LateralMovementDetector, NetworkConnectDetector,
+        PersistenceDetector, SupplyChainDetector, SuspiciousProcessTreeDetector,
+        SuspiciousScriptingDetector,
     };
 
     #[test]
@@ -106,5 +120,7 @@ mod tests {
         let _ = SupplyChainDetector::default();
         let _ = NetworkConnectDetector::default();
         let _ = InfrastructureAnomalyDetector::default();
+        let _ = CloudTrailDetector::default();
+        let _ = KubernetesAuditDetector::default();
     }
 }

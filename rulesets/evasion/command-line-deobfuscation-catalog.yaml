@@ -1,0 +1,5 @@
+schema_version: 1
+suite: scenario-suites/command-line-deobfuscation-v1.yaml
+detectors:
+  - detector: suspicious_scripting
+  - detector: fileless_execution

@@ -42,6 +42,7 @@ fn base_config() -> SwarmConfig {
                 subject: "telemetry.synthetic.process".to_string(),
                 bridge: None,
             }],
+            threat_intel_feeds: vec![],
             max_in_flight_actions: 4,
             drain_timeout_ms: 30_000,
             require_durable_live_response: false,
@@ -137,7 +138,7 @@ fn secret_rotation_and_dead_letter_rotation_cycle_without_data_loss() {
         response_adapter: ResponseAdapterConfig::HttpEdr {
             config: HttpEdrConfig {
                 endpoint: "https://edr.example".to_string(),
-                auth_token: "@secret:edr-token".to_string(),
+                auth_token: "@secret:edr-token".to_string().into(),
                 timeout_ms: 1_000,
                 retry: RetryConfig::default(),
                 circuit_breaker: CircuitBreakerConfig::default(),
@@ -159,7 +160,8 @@ fn secret_rotation_and_dead_letter_rotation_cycle_without_data_loss() {
     match state.current_response_adapter_config() {
         ResponseAdapterConfig::HttpEdr { config: edr } => {
             assert_eq!(
-                edr.auth_token, "initial-token",
+                edr.auth_token,
+                "initial-token".into(),
                 "initial secret should be resolved on construction"
             );
         }
@@ -175,7 +177,8 @@ fn secret_rotation_and_dead_letter_rotation_cycle_without_data_loss() {
     match state.current_response_adapter_config() {
         ResponseAdapterConfig::HttpEdr { config: edr } => {
             assert_eq!(
-                edr.auth_token, "rotated-token",
+                edr.auth_token,
+                "rotated-token".into(),
                 "auth_token must reflect rotated secret after reload_secrets_only"
             );
         }
@@ -279,7 +282,8 @@ fn secret_rotation_and_dead_letter_rotation_cycle_without_data_loss() {
     match state.current_response_adapter_config() {
         ResponseAdapterConfig::HttpEdr { config: edr } => {
             assert_eq!(
-                edr.auth_token, "rotated-token",
+                edr.auth_token,
+                "rotated-token".into(),
                 "secret rotation must persist after dead-letter rotation"
             );
         }

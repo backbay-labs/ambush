@@ -1,0 +1,15 @@
+# Phase 236 Plan 01 Summary
+
+## Delivered
+
+- Added a shared zeroizing `SecretString` wrapper in [crates/swarm-core/src/config/secrets.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-core/src/config/secrets.rs) and re-exported it through [crates/swarm-core/src/config/mod.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-core/src/config/mod.rs) so secret-bearing config can stay serde-compatible while redacting `Debug` output and zeroizing on drop.
+- Converted outbound and signing config seams in [crates/swarm-core/src/config/response.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-core/src/config/response.rs) from raw `String` storage to `SecretString` or `Option<SecretString>` for HTTP EDR, webhook, SIEM forwarders, notification channels, and request-signature secrets.
+- Updated [crates/swarm-runtime/src/config.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/config.rs) so `@secret:` resolution now uses `Zeroizing<String>` temporaries, trims trailing newline material in-place, and hands the resolved plaintext into `SecretString` before scrubbing the transient heap buffer.
+- Reworked operator and platform bearer-auth state in [crates/swarm-runtime/src/http/core.inc](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/http/core.inc) and [crates/swarm-runtime/src/ingest/platform_api.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/ingest/platform_api.rs) so expected bearer tokens and Providence context-token secrets no longer persist as raw heap strings.
+- Updated outbound secret consumers in [crates/swarm-response/src/http_edr.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-response/src/http_edr.rs), [crates/swarm-response/src/webhook.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-response/src/webhook.rs), [crates/swarm-response/src/siem.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-response/src/siem.rs), [crates/swarm-response/src/notification.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-response/src/notification.rs), and [crates/swarm-runtime/src/providence.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-runtime/src/providence.rs) to borrow secret material via `expose_secret()` instead of assuming raw `String` access.
+- Added focused unit coverage in [crates/swarm-core/src/config/tests.rs](/Users/connor/Medica/backbay/standalone/swarm-team-six/crates/swarm-core/src/config/tests.rs) for zeroization and debug redaction, and fixed the runtime test fixtures that construct secret-bearing config so the lib test targets compile cleanly with the new shared wrapper.
+
+## Notes
+
+- This phase intentionally stops at zeroizing storage and temporary-buffer scrubbing. Token expiry, rotation, and live lifecycle semantics remain deferred to Phase 238.
+- Release panic strategy and overflow-check hardening remain deferred to Phase 237.

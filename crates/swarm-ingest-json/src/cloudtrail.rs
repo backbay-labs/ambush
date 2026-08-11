@@ -4,14 +4,13 @@ use chrono::DateTime;
 use serde_json::Value;
 use swarm_core::config::CloudTrailBridgeConfig;
 use swarm_core::{
-    AuthenticationEventData, BridgeHealth, NetworkConnectEvent, TelemetryBridge,
-    TelemetryBridgeError, TelemetryBridgeResult, TelemetryEvent, TelemetryPayload,
+    BridgeHealth, CloudTrailEvent, TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult,
+    TelemetryEvent, TelemetryPayload,
 };
 
 use crate::source::JsonRecordSource;
 
 const SOURCE_ID: &str = "cloudtrail";
-const HTTPS_PORT: u16 = 443;
 
 #[derive(Debug)]
 pub struct CloudTrailBridge {
@@ -38,34 +37,35 @@ impl CloudTrailBridge {
         let event_source =
             required_string(record, "/eventSource", "eventSource", &mut self.health)?;
         let timestamp = parse_timestamp(record, "/eventTime", &mut self.health)?;
-        let host_id = optional_string(record, "/recipientAccountId");
-        let source_ip = optional_string(record, "/sourceIPAddress");
-        let user_agent = optional_string(record, "/userAgent");
+        let aws_account_id = optional_string(record, "/recipientAccountId");
 
-        let payload = if is_auth_event(&event_source, &event_name) {
-            TelemetryPayload::AuthenticationEvent(AuthenticationEventData {
-                auth_type: event_name.clone(),
-                source_host: source_ip.clone(),
-                target_host: host_id.clone(),
-                target_service: Some(event_source.clone()),
-                process_name: user_agent,
-                success: auth_success(record),
-                user: cloudtrail_user(record),
-            })
-        } else {
-            TelemetryPayload::NetworkConnect(NetworkConnectEvent {
-                process_name: user_agent.unwrap_or_else(|| event_name.clone()),
-                destination_ip: cloudtrail_endpoint(record, &event_source),
-                destination_port: HTTPS_PORT,
-                protocol: "aws_api".to_string(),
-            })
-        };
+        let payload = TelemetryPayload::CloudTrail(CloudTrailEvent {
+            event_name,
+            event_source,
+            aws_account_id: aws_account_id.clone(),
+            principal_arn: optional_string(record, "/userIdentity/arn"),
+            principal_id: optional_string(record, "/userIdentity/principalId"),
+            principal_name: cloudtrail_user(record),
+            principal_type: optional_string(record, "/userIdentity/type"),
+            source_ip_address: optional_string(record, "/sourceIPAddress"),
+            aws_region: optional_string(record, "/awsRegion"),
+            user_agent: optional_string(record, "/userAgent"),
+            mfa_authenticated: optional_bool(
+                record,
+                "/userIdentity/sessionContext/attributes/mfaAuthenticated",
+            )
+            .or_else(|| optional_yes_no(record, "/additionalEventData/MFAUsed")),
+            request_parameters: object_or_default(record.pointer("/requestParameters")),
+            response_elements: object_or_default(record.pointer("/responseElements")),
+            error_code: optional_string(record, "/errorCode"),
+            error_message: optional_string(record, "/errorMessage"),
+        });
 
         let event = TelemetryEvent {
             source: SOURCE_ID.to_string(),
             event_id,
             timestamp,
-            host_id,
+            host_id: aws_account_id,
             payload,
         };
 
@@ -129,6 +129,35 @@ fn optional_string(record: &Value, pointer: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+fn optional_bool(record: &Value, pointer: &str) -> Option<bool> {
+    match record.pointer(pointer) {
+        Some(Value::Bool(value)) => Some(*value),
+        Some(Value::String(value)) if value.eq_ignore_ascii_case("true") => Some(true),
+        Some(Value::String(value)) if value.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
+    }
+}
+
+fn optional_yes_no(record: &Value, pointer: &str) -> Option<bool> {
+    record.pointer(pointer).and_then(|value| match value {
+        Value::Bool(value) => Some(*value),
+        Value::String(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "yes" | "true" | "1" => Some(true),
+            "no" | "false" | "0" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+fn object_or_default(value: Option<&Value>) -> Value {
+    match value {
+        Some(Value::Object(object)) => Value::Object(object.clone()),
+        Some(Value::Null) | None => Value::Object(Default::default()),
+        Some(other) => other.clone(),
+    }
+}
+
 fn parse_timestamp(
     record: &Value,
     pointer: &str,
@@ -152,34 +181,6 @@ fn cloudtrail_user(record: &Value) -> Option<String> {
         .or_else(|| optional_string(record, "/userIdentity/principalId"))
 }
 
-fn auth_success(record: &Value) -> bool {
-    if let Some(status) = optional_string(record, "/responseElements/ConsoleLogin") {
-        return status.eq_ignore_ascii_case("success");
-    }
-    optional_string(record, "/errorCode").is_none()
-        && optional_string(record, "/errorMessage").is_none()
-}
-
-fn is_auth_event(event_source: &str, event_name: &str) -> bool {
-    matches!(
-        event_source,
-        "signin.amazonaws.com" | "sts.amazonaws.com" | "iam.amazonaws.com"
-    ) || matches!(
-        event_name,
-        "ConsoleLogin"
-            | "AssumeRole"
-            | "AssumeRoleWithSAML"
-            | "AssumeRoleWithWebIdentity"
-            | "GetSessionToken"
-    )
-}
-
-fn cloudtrail_endpoint(record: &Value, event_source: &str) -> String {
-    optional_string(record, "/requestParameters/bucketName")
-        .or_else(|| optional_string(record, "/requestParameters/host"))
-        .unwrap_or_else(|| event_source.to_string())
-}
-
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
@@ -189,7 +190,7 @@ mod tests {
     use swarm_core::{TelemetryBridge, TelemetryPayload};
 
     #[tokio::test]
-    async fn console_login_maps_to_authentication_event() {
+    async fn console_login_maps_to_cloudtrail_payload() {
         let mut bridge = CloudTrailBridge::new(JsonRecordSource::new([json!({
             "eventID": "evt-1",
             "eventName": "ConsoleLogin",
@@ -198,10 +199,18 @@ mod tests {
             "recipientAccountId": "123456789012",
             "sourceIPAddress": "198.51.100.10",
             "userAgent": "signin.amazonaws.com",
+            "awsRegion": "us-east-1",
             "responseElements": { "ConsoleLogin": "Success" },
             "userIdentity": {
                 "type": "IAMUser",
-                "userName": "alice"
+                "userName": "alice",
+                "arn": "arn:aws:iam::123456789012:user/alice",
+                "principalId": "AIDAEXAMPLE",
+                "sessionContext": {
+                    "attributes": {
+                        "mfaAuthenticated": "true"
+                    }
+                }
             }
         })]));
 
@@ -213,28 +222,43 @@ mod tests {
         assert_eq!(event.source, "cloudtrail");
 
         match &event.payload {
-            TelemetryPayload::AuthenticationEvent(auth) => {
-                assert_eq!(auth.auth_type, "ConsoleLogin");
-                assert_eq!(auth.user.as_deref(), Some("alice"));
-                assert!(auth.success);
-                assert_eq!(auth.target_service.as_deref(), Some("signin.amazonaws.com"));
+            TelemetryPayload::CloudTrail(cloudtrail) => {
+                assert_eq!(cloudtrail.event_name, "ConsoleLogin");
+                assert_eq!(cloudtrail.event_source, "signin.amazonaws.com");
+                assert_eq!(cloudtrail.aws_account_id.as_deref(), Some("123456789012"));
+                assert_eq!(
+                    cloudtrail.principal_arn.as_deref(),
+                    Some("arn:aws:iam::123456789012:user/alice")
+                );
+                assert_eq!(cloudtrail.principal_name.as_deref(), Some("alice"));
+                assert_eq!(
+                    cloudtrail.source_ip_address.as_deref(),
+                    Some("198.51.100.10")
+                );
+                assert_eq!(cloudtrail.aws_region.as_deref(), Some("us-east-1"));
+                assert_eq!(cloudtrail.mfa_authenticated, Some(true));
             }
-            _ => panic!("expected authentication payload"),
+            _ => panic!("expected cloudtrail payload"),
         }
     }
 
     #[tokio::test]
-    async fn s3_access_maps_to_network_connect_event() {
+    async fn request_and_response_elements_are_preserved() {
         let mut bridge = CloudTrailBridge::new(JsonRecordSource::new([json!({
             "eventID": "evt-2",
-            "eventName": "GetObject",
-            "eventSource": "s3.amazonaws.com",
+            "eventName": "RunInstances",
+            "eventSource": "ec2.amazonaws.com",
             "eventTime": "2026-04-06T12:01:00Z",
             "recipientAccountId": "123456789012",
             "sourceIPAddress": "198.51.100.11",
-            "userAgent": "aws-cli/2.15.0",
             "requestParameters": {
-                "bucketName": "incident-bucket"
+                "imageId": "ami-evilminer",
+                "instanceType": "p4d.24xlarge"
+            },
+            "responseElements": {
+                "instancesSet": {
+                    "items": [{"instanceId": "i-123"}]
+                }
             }
         })]));
 
@@ -245,13 +269,51 @@ mod tests {
         let event = events.first().expect("one event should be returned");
 
         match &event.payload {
-            TelemetryPayload::NetworkConnect(connect) => {
-                assert_eq!(connect.process_name, "aws-cli/2.15.0");
-                assert_eq!(connect.destination_ip, "incident-bucket");
-                assert_eq!(connect.destination_port, 443);
-                assert_eq!(connect.protocol, "aws_api");
+            TelemetryPayload::CloudTrail(cloudtrail) => {
+                assert_eq!(cloudtrail.event_name, "RunInstances");
+                assert_eq!(cloudtrail.event_source, "ec2.amazonaws.com");
+                assert_eq!(cloudtrail.request_parameters["imageId"], "ami-evilminer");
+                assert_eq!(
+                    cloudtrail.response_elements["instancesSet"]["items"][0]["instanceId"],
+                    "i-123"
+                );
             }
-            _ => panic!("expected network connect payload"),
+            _ => panic!("expected cloudtrail payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn console_login_falls_back_to_additional_event_data_mfa() {
+        let mut bridge = CloudTrailBridge::new(JsonRecordSource::new([json!({
+            "eventID": "evt-mfa-aed",
+            "eventName": "ConsoleLogin",
+            "eventSource": "signin.amazonaws.com",
+            "eventTime": "2026-04-06T12:00:00Z",
+            "recipientAccountId": "123456789012",
+            "sourceIPAddress": "198.51.100.10",
+            "userAgent": "signin.amazonaws.com",
+            "awsRegion": "us-east-1",
+            "responseElements": { "ConsoleLogin": "Success" },
+            "additionalEventData": { "MFAUsed": "No" },
+            "userIdentity": {
+                "type": "IAMUser",
+                "userName": "alice",
+                "arn": "arn:aws:iam::123456789012:user/alice",
+                "principalId": "AIDAEXAMPLE"
+            }
+        })]));
+
+        let event = bridge
+            .poll()
+            .await
+            .expect("cloudtrail event should map")
+            .pop()
+            .expect("one event");
+        match event.payload {
+            TelemetryPayload::CloudTrail(cloudtrail) => {
+                assert_eq!(cloudtrail.mfa_authenticated, Some(false));
+            }
+            _ => panic!("expected cloudtrail payload"),
         }
     }
 

@@ -21,6 +21,8 @@ pub enum TelemetryPayload {
     ProcessMemoryAccess(ProcessMemoryAccessEvent),
     NetworkConnect(NetworkConnectEvent),
     DnsQuery(DnsQueryEvent),
+    CloudTrail(CloudTrailEvent),
+    KubernetesAudit(KubernetesAuditEvent),
     RegistryAccess(RegistryAccessEvent),
     RegistryPersistence(RegistryPersistenceEvent),
     FilePersistence(FilePersistenceEvent),
@@ -74,6 +76,54 @@ pub struct DnsQueryEvent {
     pub source_ip: Option<String>,
     pub process_name: Option<String>,
     pub response_code: Option<String>,
+}
+
+/// Normalized AWS CloudTrail API activity event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudTrailEvent {
+    pub event_name: String,
+    pub event_source: String,
+    pub aws_account_id: Option<String>,
+    pub principal_arn: Option<String>,
+    pub principal_id: Option<String>,
+    pub principal_name: Option<String>,
+    pub principal_type: Option<String>,
+    pub source_ip_address: Option<String>,
+    pub aws_region: Option<String>,
+    pub user_agent: Option<String>,
+    pub mfa_authenticated: Option<bool>,
+    #[serde(default)]
+    pub request_parameters: serde_json::Value,
+    #[serde(default)]
+    pub response_elements: serde_json::Value,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+/// Normalized Kubernetes audit webhook event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KubernetesAuditEvent {
+    pub verb: String,
+    pub stage: Option<String>,
+    pub username: Option<String>,
+    #[serde(default)]
+    pub user_groups: Vec<String>,
+    #[serde(default)]
+    pub source_ips: Vec<String>,
+    pub user_agent: Option<String>,
+    pub namespace: Option<String>,
+    pub resource: String,
+    pub subresource: Option<String>,
+    pub resource_name: Option<String>,
+    pub api_group: Option<String>,
+    pub response_code: Option<u16>,
+    #[serde(default)]
+    pub annotations: serde_json::Value,
+    #[serde(default)]
+    pub request_object: serde_json::Value,
+    pub impersonated_username: Option<String>,
 }
 
 /// Normalized registry or protected-process access event.

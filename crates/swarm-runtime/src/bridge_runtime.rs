@@ -4,7 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use swarm_core::config::{SwarmConfig, TelemetryBridgeConfig, TetragonBridgeConfig};
 use swarm_core::{BridgeHealth, TelemetryBridge, TelemetryEvent};
-use swarm_ingest_json::{CloudTrailBridge, GenericJsonBridge, JsonBridgeConfigError};
+use swarm_ingest_json::{
+    AuditdBridge, CloudTrailBridge, GenericJsonBridge, JsonBridgeConfigError,
+    KubernetesAuditBridge, SysmonBridge, WindowsEventLogBridge,
+};
 use swarm_ingest_sentinel::SentinelBridge;
 use swarm_ingest_tetragon::{BridgeConfig as TetragonRuntimeConfig, TetragonBridge};
 use tokio::sync::{mpsc, watch};
@@ -289,6 +292,15 @@ fn build_bridge(
         TelemetryBridgeConfig::Tetragon { config } => Ok(Box::new(TetragonBridge::new(
             tetragon_runtime_config(config),
         ))),
+        TelemetryBridgeConfig::WindowsEventLog { config } => {
+            let bridge = WindowsEventLogBridge::from_config(config).map_err(|source| {
+                BridgeRuntimeError::Build {
+                    name: name.to_string(),
+                    source,
+                }
+            })?;
+            Ok(Box::new(bridge))
+        }
         TelemetryBridgeConfig::CloudTrail { config } => {
             let bridge = CloudTrailBridge::from_config(config).map_err(|source| {
                 BridgeRuntimeError::Build {
@@ -296,6 +308,31 @@ fn build_bridge(
                     source,
                 }
             })?;
+            Ok(Box::new(bridge))
+        }
+        TelemetryBridgeConfig::KubernetesAudit { config } => {
+            let bridge = KubernetesAuditBridge::from_config(config).map_err(|source| {
+                BridgeRuntimeError::Build {
+                    name: name.to_string(),
+                    source,
+                }
+            })?;
+            Ok(Box::new(bridge))
+        }
+        TelemetryBridgeConfig::Sysmon { config } => {
+            let bridge =
+                SysmonBridge::from_config(config).map_err(|source| BridgeRuntimeError::Build {
+                    name: name.to_string(),
+                    source,
+                })?;
+            Ok(Box::new(bridge))
+        }
+        TelemetryBridgeConfig::Auditd { config } => {
+            let bridge =
+                AuditdBridge::from_config(config).map_err(|source| BridgeRuntimeError::Build {
+                    name: name.to_string(),
+                    source,
+                })?;
             Ok(Box::new(bridge))
         }
         TelemetryBridgeConfig::GenericJson { config } => {

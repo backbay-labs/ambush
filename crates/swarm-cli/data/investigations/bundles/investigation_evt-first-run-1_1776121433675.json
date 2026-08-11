@@ -1,0 +1,38 @@
+{
+  "investigation_id": "investigation:evt-first-run-1:1776121433675",
+  "source_bundle_id": "bundle:evt-first-run-1:1700000000000",
+  "hunt_id": "evt-first-run-1",
+  "trail_id": "trail:evt-first-run-1:1700000000000",
+  "event_id": "evt-first-run-1",
+  "finding_id": "suspicious_process_tree:evt-first-run-1",
+  "threat_class": "execution",
+  "severity": "CRITICAL",
+  "strategy_id": "suspicious_process_tree",
+  "response_kind": "skipped",
+  "related_receipt_ids": [],
+  "host_id": "host-first-run",
+  "user": "alice",
+  "process_name": "powershell",
+  "queued_at_ms": 1776121433675,
+  "started_at_ms": null,
+  "completed_at_ms": null,
+  "status": "queued",
+  "priority": {
+    "class": "critical",
+    "severity_basis_points": 5000,
+    "freshness_basis_points": 2000,
+    "learned_value_basis_points": 2300,
+    "starvation_boost_basis_points": 0,
+    "total_basis_points": 9300
+  },
+  "summary": null,
+  "evidence_points": [],
+  "correlation_keys": [],
+  "candidate_interpretations": [],
+  "vote_lineage": [],
+  "decision": {
+    "final_confidence_basis_points": 0,
+    "ambiguous": false
+  },
+  "failure_reason": null
+}

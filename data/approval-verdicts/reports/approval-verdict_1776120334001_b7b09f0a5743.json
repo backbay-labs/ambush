@@ -1,0 +1,13 @@
+{
+  "verdict_id": "approval-verdict:1776120334001:b7b09f0a5743",
+  "approval_set_id": "approval-set:1776120333994:65566cc8656b",
+  "ledger_id": "approval-ledger:1776120333994:b27b2559bc52",
+  "status": "approved",
+  "approve_count": 1,
+  "reject_count": 0,
+  "threshold_required": "at least 1",
+  "threshold_required_count": 1,
+  "eligible_count": 1,
+  "missing_voters": [],
+  "evaluated_at_ms": 1776120334001
+}

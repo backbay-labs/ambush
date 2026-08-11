@@ -23,7 +23,10 @@ use swarm_core::config::{DetectionConfig, RuntimeMode, SwarmConfig, TelemetryBri
 use swarm_core::pheromone::{ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType};
 use swarm_core::types::Severity;
 use swarm_crypto::Ed25519Signer;
-use swarm_ingest_json::{CloudTrailBridge, GenericJsonBridge};
+use swarm_ingest_json::{
+    AuditdBridge, CloudTrailBridge, GenericJsonBridge, KubernetesAuditBridge, SysmonBridge,
+    WindowsEventLogBridge,
+};
 use swarm_pheromone::{PheromoneSubstrate, SubstrateError};
 use swarm_response::{
     DeadLetterEntry, DispatchingExecutor, NotificationError, NotificationReplayResult,
@@ -752,12 +755,42 @@ fn guided_first_run_config(
 
 fn render_status(envelope: &ControlEnvelope<OperatorStatusReport>) -> String {
     let report = &envelope.data;
+    let bridge_summary = report.bridges.as_ref().map_or_else(
+        || "disabled".to_string(),
+        |bridges| {
+            format!(
+                "{} (configured={} ok={} degraded={} idle={})",
+                bridges.status(),
+                bridges.configured,
+                bridges.ok,
+                bridges.degraded,
+                bridges.idle
+            )
+        },
+    );
+    let escalation_summary = report.latest_escalation.as_ref().map_or_else(
+        || "normal".to_string(),
+        |escalation| {
+            format!(
+                "{} via {} at {} (sources={} strength={:.2})",
+                serialized_value_label(&escalation.mode),
+                serialized_value_label(&escalation.threat_class),
+                escalation.timestamp,
+                escalation.distinct_sources,
+                escalation.total_strength
+            )
+        },
+    );
     let mut lines = vec![
         "Ambush Operator Status".to_string(),
         format!("Schema version: {}", envelope.schema_version),
         format!("Origin: {}", origin_label(envelope.origin)),
         format!("Config: {}", envelope.config_name),
-        format!("Mode: {:?}", report.mode),
+        format!("Mode: {}", runtime_mode_label(report.mode)),
+        format!("Active detectors: {}", report.active_detectors.join(", ")),
+        format!("Bridge health: {bridge_summary}"),
+        format!("Recent findings: {}", report.recent_finding_count),
+        format!("Escalation state: {escalation_summary}"),
         format!(
             "Degradation: level={} ingest={} detection={} live_response={} writes={}",
             report.degradation.level.as_str(),
@@ -770,6 +803,14 @@ fn render_status(envelope: &ControlEnvelope<OperatorStatusReport>) -> String {
             "Recent decisions: {} | warnings: {}",
             report.recent_decisions.len(),
             report.warnings.len()
+        ),
+        format!(
+            "HTTP rate limit: burst={}/{}ms sustained={}/{}ms recent_violations={}",
+            report.rate_limit.config.burst_max_requests,
+            report.rate_limit.config.burst_window_ms,
+            report.rate_limit.config.sustained_max_requests,
+            report.rate_limit.config.sustained_window_ms,
+            report.rate_limit.recent_violations.len()
         ),
         format!(
             "Latest hot-path decision: {}",
@@ -1180,6 +1221,13 @@ fn origin_label(origin: ControlDataOrigin) -> &'static str {
     }
 }
 
+fn runtime_mode_label(mode: RuntimeMode) -> &'static str {
+    match mode {
+        RuntimeMode::DetectOnly => "detect_only",
+        RuntimeMode::LiveResponse => "live_response",
+    }
+}
+
 fn serialized_value_label<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value)
         .unwrap_or_else(|_| "\"unknown\"".to_string())
@@ -1216,7 +1264,8 @@ async fn probe_telemetry_source(
                     transport: "subject".to_string(),
                     ready: false,
                     status: "missing".to_string(),
-                    details: "telemetry source must define either a subject or bridge".to_string(),
+                    details: "telemetry source must define either a subject or bridge; remediation: set `runtime.telemetry_sources[].subject` for NATS input or add a `bridge` block"
+                        .to_string(),
                 }
             } else {
                 TelemetrySourceReadiness {
@@ -1242,7 +1291,52 @@ async fn probe_telemetry_source(
                     transport: "cloud_trail".to_string(),
                     ready: false,
                     status: "invalid".to_string(),
-                    details: error.to_string(),
+                    details: format!(
+                        "{error}; remediation: create `{}` or update `runtime.telemetry_sources[].bridge.path` to a readable CloudTrail JSON file",
+                        config.source.path
+                    ),
+                },
+            }
+        }
+        Some(TelemetryBridgeConfig::KubernetesAudit { config }) => {
+            match KubernetesAuditBridge::from_config(config) {
+                Ok(_) => TelemetrySourceReadiness {
+                    name: source.name.clone(),
+                    transport: "kubernetes_audit".to_string(),
+                    ready: true,
+                    status: "validated".to_string(),
+                    details: format!("readable Kubernetes audit source `{}`", config.source.path),
+                },
+                Err(error) => TelemetrySourceReadiness {
+                    name: source.name.clone(),
+                    transport: "kubernetes_audit".to_string(),
+                    ready: false,
+                    status: "invalid".to_string(),
+                    details: format!(
+                        "{error}; remediation: create `{}` or update `runtime.telemetry_sources[].bridge.path` to a readable Kubernetes audit JSON file",
+                        config.source.path
+                    ),
+                },
+            }
+        }
+        Some(TelemetryBridgeConfig::WindowsEventLog { config }) => {
+            match WindowsEventLogBridge::from_config(config) {
+                Ok(_) => TelemetrySourceReadiness {
+                    name: source.name.clone(),
+                    transport: "windows_event_log".to_string(),
+                    ready: true,
+                    status: "validated".to_string(),
+                    details: format!("readable Windows Event Log source `{}`", config.source.path),
+                },
+                Err(error) => TelemetrySourceReadiness {
+                    name: source.name.clone(),
+                    transport: "windows_event_log".to_string(),
+                    ready: false,
+                    status: "invalid".to_string(),
+                    details: format!(
+                        "{error}; remediation: create `{}` or update `runtime.telemetry_sources[].bridge.path` to a readable Windows Event Log export",
+                        config.source.path
+                    ),
                 },
             }
         }
@@ -1263,10 +1357,51 @@ async fn probe_telemetry_source(
                     transport: "generic_json".to_string(),
                     ready: false,
                     status: "invalid".to_string(),
-                    details: error.to_string(),
+                    details: format!(
+                        "{error}; remediation: verify `{}` exists and that the JSON field mapping matches the source payload shape",
+                        config.source.path
+                    ),
                 },
             }
         }
+        Some(TelemetryBridgeConfig::Sysmon { config }) => match SysmonBridge::from_config(config) {
+            Ok(_) => TelemetrySourceReadiness {
+                name: source.name.clone(),
+                transport: "sysmon".to_string(),
+                ready: true,
+                status: "validated".to_string(),
+                details: format!("readable Sysmon source `{}`", config.source.path),
+            },
+            Err(error) => TelemetrySourceReadiness {
+                name: source.name.clone(),
+                transport: "sysmon".to_string(),
+                ready: false,
+                status: "invalid".to_string(),
+                details: format!(
+                    "{error}; remediation: create `{}` or update `runtime.telemetry_sources[].bridge.path` to a readable Sysmon export",
+                    config.source.path
+                ),
+            },
+        },
+        Some(TelemetryBridgeConfig::Auditd { config }) => match AuditdBridge::from_config(config) {
+            Ok(_) => TelemetrySourceReadiness {
+                name: source.name.clone(),
+                transport: "auditd".to_string(),
+                ready: true,
+                status: "validated".to_string(),
+                details: format!("readable auditd source `{}`", config.source.path),
+            },
+            Err(error) => TelemetrySourceReadiness {
+                name: source.name.clone(),
+                transport: "auditd".to_string(),
+                ready: false,
+                status: "invalid".to_string(),
+                details: format!(
+                    "{error}; remediation: create `{}` or update `runtime.telemetry_sources[].bridge.path` to a readable auditd export",
+                    config.source.path
+                ),
+            },
+        },
         Some(TelemetryBridgeConfig::Sentinel { config }) => {
             match probe_http_endpoint(http_client, &config.endpoint, config.scrape_timeout_ms).await
             {
@@ -1282,7 +1417,10 @@ async fn probe_telemetry_source(
                     transport: "sentinel".to_string(),
                     ready: false,
                     status: "unreachable".to_string(),
-                    details,
+                    details: format!(
+                        "{details}; remediation: verify `{}` is reachable from this host and the Sentinel bridge service is running",
+                        config.endpoint
+                    ),
                 },
             }
         }
@@ -1300,7 +1438,10 @@ async fn probe_telemetry_source(
                     transport: "tetragon".to_string(),
                     ready: false,
                     status: "unreachable".to_string(),
-                    details,
+                    details: format!(
+                        "{details}; remediation: verify `{}` is reachable from this host and the Tetragon bridge is serving gRPC",
+                        config.endpoint
+                    ),
                 },
             }
         }
@@ -1587,6 +1728,7 @@ mod tests {
                     subject: "telemetry.synthetic.process".to_string(),
                     bridge: None,
                 }],
+                threat_intel_feeds: vec![],
                 max_in_flight_actions: 4,
                 drain_timeout_ms: 30_000,
                 require_durable_live_response: false,
@@ -1755,6 +1897,7 @@ mod tests {
                     ProvidenceFeedbackAction::Confirm
                 },
                 reason: Some("operator review fixture".to_string()),
+                soar_lineage: None,
                 false_positive,
             }],
         }
@@ -2281,6 +2424,8 @@ mod tests {
             .store_threat_intel_entry(ThreatIntelEntry {
                 indicator_type: ThreatIntelIndicatorType::Domain,
                 value: " Example.COM. ".to_string(),
+                source: "operator".to_string(),
+                indicator_id: None,
                 confidence: 0.94,
                 expires_at: 1_700_000_000_100,
             })

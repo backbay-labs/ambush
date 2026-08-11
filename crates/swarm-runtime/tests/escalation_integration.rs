@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use ed25519_dalek::SigningKey;
 use std::sync::Arc;
@@ -413,6 +413,8 @@ async fn threat_intel_enriched_dns_detection_triggers_alert_escalation() {
         .store_threat_intel_entry(ThreatIntelEntry {
             indicator_type: ThreatIntelIndicatorType::Domain,
             value: "evil.com".to_string(),
+            source: "operator".to_string(),
+            indicator_id: None,
             confidence: 0.25,
             expires_at: 1_700_000_000_500,
         })

@@ -264,6 +264,7 @@ impl TelemetryBridge for TetragonBridge {
             }
             TelemetryPayload::AuthenticationEvent(auth) => !auth.auth_type.trim().is_empty(),
             TelemetryPayload::ProcessMemoryAccess(_) => false,
+            TelemetryPayload::CloudTrail(_) | TelemetryPayload::KubernetesAudit(_) => false,
             TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => false,

@@ -1,15 +1,17 @@
 //! Detection strategies that Whiskers execute on each telemetry event.
 
+use crate::command_line::{CommandLineNormalizationProfile, analyze_command_line};
 use crate::{ProfileValidationError, validate_confidence_thresholds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::any::Any;
 use swarm_core::pheromone::ThreatClass;
 pub use swarm_core::telemetry::{
-    AuthenticationEventData, DnsQueryEvent, ExhaustedResource, FilePersistenceEvent,
-    InfrastructureHealthEvent, NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent,
-    RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent, TelemetryEvent,
-    TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity,
+    AuthenticationEventData, CloudTrailEvent, DnsQueryEvent, ExhaustedResource,
+    FilePersistenceEvent, InfrastructureHealthEvent, KubernetesAuditEvent, NetworkConnectEvent,
+    ProcessMemoryAccessEvent, ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent,
+    ResourceExhaustionEvent, TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent,
+    ThermalSeverity,
 };
 use swarm_core::types::Severity;
 
@@ -64,6 +66,8 @@ pub struct SuspiciousProcessTreeProfile {
     pub suspicious_parents: Vec<String>,
     #[serde(default = "default_suspicious_children")]
     pub suspicious_children: Vec<String>,
+    #[serde(default)]
+    pub command_line_normalization: CommandLineNormalizationProfile,
     #[serde(default = "default_high_confidence_threshold")]
     pub high_confidence_threshold: f64,
     #[serde(default = "default_medium_confidence_threshold")]
@@ -75,6 +79,7 @@ impl Default for SuspiciousProcessTreeProfile {
         Self {
             suspicious_parents: default_suspicious_parents(),
             suspicious_children: default_suspicious_children(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
         }
@@ -86,6 +91,7 @@ impl Default for SuspiciousProcessTreeProfile {
 pub struct SuspiciousProcessTreeDetector {
     suspicious_parents: Vec<String>,
     suspicious_children: Vec<String>,
+    command_line_normalization: CommandLineNormalizationProfile,
     high_confidence_threshold: f64,
     medium_confidence_threshold: f64,
 }
@@ -101,6 +107,7 @@ impl Default for SuspiciousProcessTreeDetector {
                 .into_iter()
                 .map(|value| value.to_ascii_lowercase())
                 .collect(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             high_confidence_threshold: default_high_confidence_threshold(),
             medium_confidence_threshold: default_medium_confidence_threshold(),
         }
@@ -123,6 +130,7 @@ impl SuspiciousProcessTreeDetector {
                 .into_iter()
                 .map(|value| value.to_ascii_lowercase())
                 .collect(),
+            command_line_normalization: profile.command_line_normalization,
             high_confidence_threshold: profile.high_confidence_threshold,
             medium_confidence_threshold: profile.medium_confidence_threshold,
         })
@@ -132,6 +140,7 @@ impl SuspiciousProcessTreeDetector {
         Self {
             suspicious_parents: default_suspicious_parents(),
             suspicious_children: default_suspicious_children(),
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             high_confidence_threshold,
             medium_confidence_threshold,
         }
@@ -141,6 +150,7 @@ impl SuspiciousProcessTreeDetector {
         SuspiciousProcessTreeProfile {
             suspicious_parents: self.suspicious_parents.clone(),
             suspicious_children: self.suspicious_children.clone(),
+            command_line_normalization: self.command_line_normalization.clone(),
             high_confidence_threshold: self.high_confidence_threshold,
             medium_confidence_threshold: self.medium_confidence_threshold,
         }
@@ -153,7 +163,8 @@ impl SuspiciousProcessTreeDetector {
     ) -> Option<DetectionFinding> {
         let parent = process.parent_process.to_ascii_lowercase();
         let child = process.process_name.to_ascii_lowercase();
-        let command_line = process.command_line.to_ascii_lowercase();
+        let command_line =
+            analyze_command_line(&process.command_line, &self.command_line_normalization);
 
         if !self.suspicious_parents.contains(&parent) {
             return None;
@@ -162,12 +173,12 @@ impl SuspiciousProcessTreeDetector {
             return None;
         }
 
-        let has_encoded_flag = command_line.contains("-enc")
-            || command_line.contains("base64")
-            || command_line.contains("frombase64string");
-        let has_download_hint = command_line.contains("http://")
-            || command_line.contains("https://")
-            || command_line.contains("downloadstring");
+        let has_encoded_flag = command_line.match_text.contains("-enc")
+            || command_line.match_text.contains("base64")
+            || command_line.match_text.contains("frombase64string");
+        let has_download_hint = command_line.match_text.contains("http://")
+            || command_line.match_text.contains("https://")
+            || command_line.match_text.contains("downloadstring");
 
         let confidence = if has_encoded_flag || has_download_hint {
             self.high_confidence_threshold
@@ -191,6 +202,9 @@ impl SuspiciousProcessTreeDetector {
                 "parent_process": process.parent_process,
                 "process_name": process.process_name,
                 "command_line": process.command_line,
+                "normalized_command_line": command_line.normalized,
+                "decoded_command_segments": command_line.decoded_segments,
+                "command_line_transforms": command_line.transforms,
                 "user": process.user,
                 "host_id": event.host_id,
                 "heuristics": {
@@ -234,6 +248,8 @@ impl DetectionStrategy for SuspiciousProcessTreeDetector {
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)
             | TelemetryPayload::AuthenticationEvent(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::InfrastructureHealth(_)
             | TelemetryPayload::ThermalAnomaly(_)
             | TelemetryPayload::ResourceExhaustion(_) => Vec::new(),
@@ -270,6 +286,7 @@ mod tests {
         DetectionStrategy, ProcessStartEvent, SuspiciousProcessTreeDetector,
         SuspiciousProcessTreeProfile, TelemetryEvent, TelemetryPayload,
     };
+    use crate::command_line::CommandLineNormalizationProfile;
     use swarm_core::types::Severity;
 
     fn suspicious_event(command_line: &str) -> TelemetryEvent {
@@ -330,6 +347,7 @@ mod tests {
         let detector = SuspiciousProcessTreeDetector::from_profile(SuspiciousProcessTreeProfile {
             suspicious_parents: vec!["python".to_string()],
             suspicious_children: vec!["curl".to_string()],
+            command_line_normalization: CommandLineNormalizationProfile::default(),
             high_confidence_threshold: 0.9,
             medium_confidence_threshold: 0.7,
         })
@@ -351,5 +369,20 @@ mod tests {
         };
 
         assert_eq!(detector.evaluate(&event).len(), 1);
+    }
+
+    #[test]
+    fn suspicious_process_tree_normalizes_fullwidth_encoded_flag() {
+        let detector = SuspiciousProcessTreeDetector::default();
+        let findings = detector.evaluate(&suspicious_event(
+            "powershell.exe －ｅｎｃ SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ==",
+        ));
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert_eq!(
+            findings[0].evidence["normalized_command_line"].as_str(),
+            Some("powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAKQ==")
+        );
     }
 }

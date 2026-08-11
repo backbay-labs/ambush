@@ -1,0 +1,272 @@
+{
+  "bundle_id": "bundle:evt-first-run-1:1700000000000",
+  "event": {
+    "source": "synthetic",
+    "event_id": "evt-first-run-1",
+    "timestamp": 1700000000000,
+    "host_id": "host-first-run",
+    "payload": {
+      "kind": "process_start",
+      "parent_process": "WINWORD",
+      "process_name": "powershell",
+      "command_line": "powershell.exe -enc AAA=",
+      "user": "alice",
+      "executable_path": null,
+      "signer": null,
+      "signature_valid": null
+    }
+  },
+  "findings": [
+    {
+      "finding_id": "suspicious_process_tree:evt-first-run-1",
+      "event_id": "evt-first-run-1",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "evidence": {
+        "command_line": "powershell.exe -enc AAA=",
+        "command_line_transforms": [],
+        "decoded_command_segments": [],
+        "heuristics": {
+          "download_hint": false,
+          "encoded_flag": true
+        },
+        "host_id": "host-first-run",
+        "host_metadata": {
+          "event_id": "evt-first-run-1",
+          "event_timestamp": 1700000000000,
+          "host_id": "host-first-run",
+          "source": "synthetic"
+        },
+        "normalized_command_line": "powershell.exe -enc AAA=",
+        "parent_process": "WINWORD",
+        "parent_process_ancestry": [
+          "WINWORD",
+          "powershell"
+        ],
+        "process_name": "powershell",
+        "source": "synthetic",
+        "time_to_detect_ms": 0,
+        "user": "alice"
+      },
+      "strategy_id": "suspicious_process_tree"
+    }
+  ],
+  "deposits": [
+    {
+      "schema_version": 2,
+      "indicator": {
+        "event_id": "evt-first-run-1",
+        "evidence": {
+          "command_line": "powershell.exe -enc AAA=",
+          "command_line_transforms": [],
+          "decoded_command_segments": [],
+          "heuristics": {
+            "download_hint": false,
+            "encoded_flag": true
+          },
+          "host_id": "host-first-run",
+          "normalized_command_line": "powershell.exe -enc AAA=",
+          "parent_process": "WINWORD",
+          "process_name": "powershell",
+          "source": "synthetic",
+          "user": "alice"
+        },
+        "host_id": "host-first-run",
+        "source": "synthetic"
+      },
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "timestamp": 1700000000000,
+      "decay_half_life": 3600.0,
+      "agent_id": "swarm:ed25519:4b0e5020b3618d88029bf30a5527307529fe5633732268c9f6a6b28d49aeb28f:suspicious_process_tree",
+      "agent_identity": "swarm:ed25519:4b0e5020b3618d88029bf30a5527307529fe5633732268c9f6a6b28d49aeb28f",
+      "signature": [
+        200,
+        160,
+        95,
+        142,
+        145,
+        54,
+        131,
+        168,
+        72,
+        157,
+        212,
+        197,
+        55,
+        231,
+        200,
+        33,
+        191,
+        222,
+        33,
+        174,
+        146,
+        174,
+        172,
+        84,
+        148,
+        75,
+        113,
+        159,
+        149,
+        136,
+        128,
+        195,
+        85,
+        82,
+        227,
+        48,
+        196,
+        229,
+        187,
+        144,
+        45,
+        36,
+        184,
+        173,
+        87,
+        138,
+        189,
+        201,
+        19,
+        152,
+        155,
+        69,
+        104,
+        38,
+        104,
+        109,
+        5,
+        138,
+        73,
+        101,
+        125,
+        1,
+        81,
+        10
+      ],
+      "agent_key": [
+        75,
+        14,
+        80,
+        32,
+        179,
+        97,
+        141,
+        136,
+        2,
+        155,
+        243,
+        10,
+        85,
+        39,
+        48,
+        117,
+        41,
+        254,
+        86,
+        51,
+        115,
+        34,
+        104,
+        201,
+        246,
+        166,
+        178,
+        141,
+        73,
+        174,
+        178,
+        143
+      ]
+    }
+  ],
+  "action_request": {
+    "hunt_id": "evt-first-run-1",
+    "requested_by": "swarm:ed25519:4b0e5020b3618d88029bf30a5527307529fe5633732268c9f6a6b28d49aeb28f",
+    "action": {
+      "type": "isolate_host",
+      "host_id": "host-first-run"
+    },
+    "severity": "CRITICAL",
+    "evidence": {
+      "command_line": "powershell.exe -enc AAA=",
+      "command_line_transforms": [],
+      "decoded_command_segments": [],
+      "heuristics": {
+        "download_hint": false,
+        "encoded_flag": true
+      },
+      "host_id": "host-first-run",
+      "host_metadata": {
+        "event_id": "evt-first-run-1",
+        "event_timestamp": 1700000000000,
+        "host_id": "host-first-run",
+        "source": "synthetic"
+      },
+      "normalized_command_line": "powershell.exe -enc AAA=",
+      "parent_process": "WINWORD",
+      "parent_process_ancestry": [
+        "WINWORD",
+        "powershell"
+      ],
+      "process_name": "powershell",
+      "source": "synthetic",
+      "time_to_detect_ms": 0,
+      "user": "alice"
+    }
+  },
+  "audit": {
+    "trail_id": "trail:evt-first-run-1:1700000000000",
+    "hunt_id": "evt-first-run-1",
+    "related_receipt_ids": [],
+    "detection": {
+      "finding_id": "suspicious_process_tree:evt-first-run-1",
+      "event_id": "evt-first-run-1",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "evidence": {
+        "command_line": "powershell.exe -enc AAA=",
+        "command_line_transforms": [],
+        "decoded_command_segments": [],
+        "heuristics": {
+          "download_hint": false,
+          "encoded_flag": true
+        },
+        "host_id": "host-first-run",
+        "host_metadata": {
+          "event_id": "evt-first-run-1",
+          "event_timestamp": 1700000000000,
+          "host_id": "host-first-run",
+          "source": "synthetic"
+        },
+        "normalized_command_line": "powershell.exe -enc AAA=",
+        "parent_process": "WINWORD",
+        "parent_process_ancestry": [
+          "WINWORD",
+          "powershell"
+        ],
+        "process_name": "powershell",
+        "source": "synthetic",
+        "time_to_detect_ms": 0,
+        "user": "alice"
+      },
+      "strategy_id": "suspicious_process_tree"
+    },
+    "policy": {
+      "verdict": "require_human",
+      "rule_name": "static.human_gate",
+      "reason": "authorized but held for human approval",
+      "lease": null
+    },
+    "response": {
+      "kind": "skipped",
+      "reason": "authorized but held for human approval"
+    },
+    "created_at_ms": 1700000000000
+  }
+}

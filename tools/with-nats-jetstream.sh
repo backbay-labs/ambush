@@ -18,6 +18,13 @@ compose() {
 
 cleanup() {
   local exit_code=$?
+
+  if (( exit_code != 0 )); then
+    echo "JetStream harness failed for project $PROJECT_NAME; dumping service logs" >&2
+    compose ps >&2 || true
+    compose logs nats >&2 || true
+  fi
+
   if [[ "$KEEP_STACK" == "1" ]]; then
     echo "Keeping JetStream harness stack running for project $PROJECT_NAME" >&2
     exit "$exit_code"

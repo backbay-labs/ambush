@@ -173,6 +173,8 @@ impl TelemetryBridge for SentinelBridge {
             | TelemetryPayload::ProcessMemoryAccess(_)
             | TelemetryPayload::NetworkConnect(_)
             | TelemetryPayload::DnsQuery(_)
+            | TelemetryPayload::CloudTrail(_)
+            | TelemetryPayload::KubernetesAudit(_)
             | TelemetryPayload::RegistryAccess(_)
             | TelemetryPayload::RegistryPersistence(_)
             | TelemetryPayload::FilePersistence(_)

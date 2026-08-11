@@ -206,7 +206,7 @@ impl ResponseExecutor for WebhookAdapter {
         let started = Instant::now();
         let mut outbound_request = self.client.post(&self.config.url).json(&payload);
         if let Some(auth_token) = &self.config.auth_token {
-            outbound_request = outbound_request.bearer_auth(auth_token);
+            outbound_request = outbound_request.bearer_auth(auth_token.expose_secret());
         }
         let result = outbound_request.send().await;
         let elapsed_ms = started.elapsed().as_millis() as u64;

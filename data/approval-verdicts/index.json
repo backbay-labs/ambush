@@ -1,6 +1,26 @@
 {
   "entries": [
     {
+      "verdict_id": "approval-verdict:1776122359221:ff6daff22332",
+      "approval_set_id": "approval-set:1776122359216:1824e5b42c88",
+      "ledger_id": "approval-ledger:1776122359216:21df91cf4051",
+      "status": "approved",
+      "approve_count": 1,
+      "reject_count": 0,
+      "created_at_ms": 1776122359221,
+      "bundle_path": "data/approval-verdicts/reports/approval-verdict_1776122359221_ff6daff22332.json"
+    },
+    {
+      "verdict_id": "approval-verdict:1776120334001:b7b09f0a5743",
+      "approval_set_id": "approval-set:1776120333994:65566cc8656b",
+      "ledger_id": "approval-ledger:1776120333994:b27b2559bc52",
+      "status": "approved",
+      "approve_count": 1,
+      "reject_count": 0,
+      "created_at_ms": 1776120334001,
+      "bundle_path": "data/approval-verdicts/reports/approval-verdict_1776120334001_b7b09f0a5743.json"
+    },
+    {
       "verdict_id": "approval-verdict:1775999669108:ddaf2fede53b",
       "approval_set_id": "approval-set:1775999669082:8115c0109f59",
       "ledger_id": "approval-ledger:1775999669082:b4154e22f68c",

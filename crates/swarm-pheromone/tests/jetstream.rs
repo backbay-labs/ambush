@@ -181,6 +181,8 @@ fn sample_threat_intel_entry(
     ThreatIntelEntry {
         indicator_type,
         value: value.to_string(),
+        source: "operator".to_string(),
+        indicator_id: None,
         confidence,
         expires_at,
     }
