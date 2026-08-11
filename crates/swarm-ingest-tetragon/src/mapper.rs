@@ -49,6 +49,7 @@ fn current_unix_timestamp() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::map_process_exec;
     use crate::client::proto;
