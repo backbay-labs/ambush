@@ -1,4 +1,3 @@
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 //! Whisker agents — streaming detection on the hot path.
 //!
 //! Whiskers are long-running, stateful stream processors.
