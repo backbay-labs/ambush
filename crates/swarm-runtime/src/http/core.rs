@@ -1,3 +1,30 @@
+use super::auth::{
+    AuthenticatedOperatorPrincipal, OperatorAuthState, require_bearer_auth,
+    require_operator_api_scope, require_operator_review_scope,
+    require_supported_operator_api_schema_version,
+};
+use super::error::{
+    OperatorApiError, OperatorReviewError, map_approval_error, map_control_error,
+    map_control_review_error, map_evidence_api_error, map_governance_prep_error,
+    map_maintenance_error, map_portfolio_error, map_review_evidence_error,
+    map_review_workbench_error,
+};
+use super::helpers::{
+    ReviewEvidenceVerificationFilter, approval_harness, effective_limit, evidence_harness_paths,
+    evidence_service, filter_review_evidence_list, filter_review_promotion_packet_list,
+    governance_harness, limit_approval_ledger_list, limit_approval_set_list,
+    limit_evidence_bundle_list, limit_maintenance_list, limit_packet_set_list,
+    limit_portfolio_history_list, limit_portfolio_list, limit_promotion_packet_list,
+    limit_review_capsule_import_list, limit_review_capsule_list, limit_review_delegation_list,
+    limit_review_session_export_list, limit_review_session_handoff_list, limit_review_session_list,
+    limit_review_session_promotion_readiness_list, maintenance_service,
+    normalize_form_optional_text, now_ms, parse_evidence_subject_kind, parse_incident_selector,
+    parse_investigation_selector, parse_maintenance_status, parse_portfolio_review_state,
+    parse_replay_selector, parse_review_artifact_refs_text, parse_review_evidence_subject_kind,
+    parse_review_evidence_verification_status, parse_review_promotion_recommendation,
+    portfolio_harness, review_evidence_harness, review_evidence_secret_material,
+    review_evidence_service, review_workbench_service,
+};
 use crate::approval::{
     ApprovalError, ApprovalLedgerList, ApprovalLedgerLookup, ApprovalSetList, ApprovalSetReport,
     ApprovalVerdictStatus, DefaultApprovalHarness, ThresholdRule,
@@ -5,49 +32,43 @@ use crate::approval::{
 use crate::config::{RuntimeConfigError, load_config};
 use crate::control::{
     ControlEnvelope, ControlError, DefaultControlPlane, IncidentArtifactView,
-    IncidentLookupSelector, InvestigationArtifactView, InvestigationLookupSelector,
-    OPERATOR_API_SCHEMA_VERSION_HEADER, ReplayArtifactView, ReplayLookupSelector,
-    resolve_operator_api_schema_version,
+    IncidentLookupSelector, InvestigationArtifactView, ReplayArtifactView, ReplayLookupSelector,
 };
 use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use crate::evidence::{
-    DefaultEvidenceHarness, EvidenceBundle, EvidenceBundleList, EvidenceError,
-    EvidenceExportRequest, EvidenceHarnessPaths, EvidenceSubjectKind, EvidenceVerificationReport,
-    EvidenceVerificationStatus, OperatorEvidenceReadService, PromotionEvidencePacket,
-    PromotionEvidencePacketList, PromotionEvidenceRecommendation,
+    DefaultEvidenceHarness, EvidenceBundle, EvidenceBundleList, EvidenceExportRequest,
+    EvidenceSubjectKind, EvidenceVerificationReport, EvidenceVerificationStatus,
+    OperatorEvidenceReadService, PromotionEvidencePacket, PromotionEvidencePacketList,
+    PromotionEvidenceRecommendation,
 };
 use crate::governance_prep::{
     DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePacketSetList,
-    EvolutionGovernancePrepError, EvolutionPortfolioHistoryList,
+    EvolutionPortfolioHistoryList,
 };
-use crate::http::rate_limit::{HttpRateLimitRejection, HttpRateLimiter};
+use crate::http::rate_limit::HttpRateLimiter;
 use crate::operator_maintenance::{
     OperatorMaintenanceError, OperatorMaintenanceExecution, OperatorMaintenanceList,
     OperatorMaintenanceRecord, OperatorMaintenanceRequest, OperatorMaintenanceService,
     OperatorMaintenanceStatus,
 };
-use crate::portfolio::{
-    DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioError,
-    EvolutionPortfolioList,
-};
+use crate::portfolio::{DefaultEvolutionPortfolioHarness, EvolutionPortfolioList};
 use crate::review_workbench::{
-    DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind, ReviewCapsule,
-    ReviewCapsuleImport, ReviewCapsuleImportList, ReviewCapsuleImportRequest, ReviewCapsuleList,
-    ReviewDelegationCreateRequest, ReviewDelegationPacket, ReviewDelegationPacketList,
-    ReviewSessionCreateRequest, ReviewSessionExport, ReviewSessionList,
-    ReviewSessionMaintenanceHandoff, ReviewSessionMaintenanceHandoffList,
-    ReviewSessionPromotionReadiness, ReviewSessionPromotionReadinessList, ReviewSessionResolved,
-    ReviewSessionReverifyRequest, ReviewWorkbenchError,
+    DefaultReviewWorkbenchHarness, ReviewCapsule, ReviewCapsuleImport, ReviewCapsuleImportList,
+    ReviewCapsuleImportRequest, ReviewCapsuleList, ReviewDelegationCreateRequest,
+    ReviewDelegationPacket, ReviewDelegationPacketList, ReviewSessionCreateRequest,
+    ReviewSessionExport, ReviewSessionList, ReviewSessionMaintenanceHandoff,
+    ReviewSessionPromotionReadiness, ReviewSessionResolved, ReviewSessionReverifyRequest,
+    ReviewWorkbenchError,
 };
 use crate::serve::{ServeError, serve_with_listener};
-use crate::service::{OperatorStatusReport, ReadinessError, ServiceError};
+use crate::service::OperatorStatusReport;
 use axum::extract::{Extension, Form, Path as RoutePath, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::middleware::{self, Next};
+use axum::http::{StatusCode, header};
+use axum::middleware;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -58,7 +79,6 @@ use swarm_core::types::{
     ProvidenceIncidentStatus, ProvidenceReconciliationOutcome, ResponseRehearsalPreview,
 };
 use swarm_crypto::DetachedSignature;
-use zeroize::Zeroizing;
 
 /// Result directories required to expose authenticated operator artifacts through HTTP.
 #[derive(Debug, Clone)]
@@ -147,159 +167,48 @@ pub struct LocalOperatorSurface {
 }
 
 #[derive(Clone)]
-struct OperatorHttpState {
+pub(super) struct OperatorHttpState {
     auth: OperatorAuthState,
     rate_limiter: HttpRateLimiter,
     control: Arc<DefaultControlPlane>,
-    portfolio: Option<Arc<DefaultEvolutionPortfolioHarness>>,
-    governance_prep: Option<Arc<DefaultEvolutionGovernancePrepHarness>>,
-    maintenance: Option<Arc<OperatorMaintenanceService>>,
-    evidence: Option<Arc<OperatorEvidenceReadService>>,
-    evidence_harness: Option<Arc<DefaultEvidenceHarness>>,
-    workbench: Option<Arc<DefaultReviewWorkbenchHarness>>,
-    approval: Option<Arc<DefaultApprovalHarness>>,
+    pub(super) portfolio: Option<Arc<DefaultEvolutionPortfolioHarness>>,
+    pub(super) governance_prep: Option<Arc<DefaultEvolutionGovernancePrepHarness>>,
+    pub(super) maintenance: Option<Arc<OperatorMaintenanceService>>,
+    pub(super) evidence: Option<Arc<OperatorEvidenceReadService>>,
+    pub(super) evidence_harness: Option<Arc<DefaultEvidenceHarness>>,
+    pub(super) workbench: Option<Arc<DefaultReviewWorkbenchHarness>>,
+    pub(super) approval: Option<Arc<DefaultApprovalHarness>>,
     prometheus: Option<CriticalPathMetrics>,
     runtime_base_url: String,
     max_list_results: usize,
     approval_receipt_signer_id: String,
-    approval_receipt_signing_key_env: String,
+    pub(super) approval_receipt_signing_key_env: String,
 }
 
 #[derive(Debug, Clone)]
-struct OperatorRequestGuardState {
-    auth: OperatorAuthState,
-    rate_limiter: HttpRateLimiter,
-}
-
-#[derive(Debug, Clone)]
-struct AuthenticatedOperatorPrincipal {
-    operator_id: Arc<str>,
-    scopes: Vec<OperatorScope>,
-}
-
-impl AuthenticatedOperatorPrincipal {
-    fn has_scope(&self, scope: OperatorScope) -> bool {
-        self.scopes.contains(&scope)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ConfiguredOperatorPrincipal {
-    principal: AuthenticatedOperatorPrincipal,
-    token_env: Arc<str>,
-    token_expires_at_ms: Option<i64>,
-}
-
-#[derive(Debug, Clone)]
-struct OperatorAuthState {
-    principals: Arc<Vec<ConfiguredOperatorPrincipal>>,
-}
-
-#[derive(Debug, Clone)]
-enum OperatorBearerAuthFailure {
-    Invalid,
-    Expired {
-        operator_id: Arc<str>,
-        expires_at_ms: i64,
-    },
-}
-
-fn read_operator_token_from_env(env_name: &str) -> Option<Zeroizing<String>> {
-    let mut token = std::env::var(env_name).ok().map(Zeroizing::new)?;
-    while matches!(token.as_bytes().last(), Some(b'\n' | b'\r')) {
-        token.pop();
-    }
-    (!token.is_empty()).then_some(token)
-}
-
-impl OperatorAuthState {
-    fn from_config(config: &SwarmConfig) -> Result<Self, OperatorHttpError> {
-        let principals = config
-            .operator
-            .auth
-            .effective_principals()
-            .into_iter()
-            .map(|principal| {
-                if read_operator_token_from_env(&principal.token_env).is_none() {
-                    return Err(OperatorHttpError::MissingTokenEnv {
-                        env_name: principal.token_env.clone(),
-                    });
-                }
-                Ok(ConfiguredOperatorPrincipal {
-                    principal: AuthenticatedOperatorPrincipal {
-                        operator_id: Arc::from(principal.operator_id),
-                        scopes: principal.scopes,
-                    },
-                    token_env: Arc::from(principal.token_env),
-                    token_expires_at_ms: principal.token_expires_at_ms,
-                })
-            })
-            .collect::<Result<Vec<_>, OperatorHttpError>>()?;
-        Ok(Self {
-            principals: Arc::new(principals),
-        })
-    }
-
-    fn authenticate(
-        &self,
-        token: &str,
-        now_ms: i64,
-    ) -> Result<AuthenticatedOperatorPrincipal, OperatorBearerAuthFailure> {
-        let mut expired = None;
-        for principal in self.principals.iter() {
-            let Some(expected_token) = read_operator_token_from_env(principal.token_env.as_ref())
-            else {
-                continue;
-            };
-            if expected_token.as_str() != token {
-                continue;
-            }
-            if let Some(expires_at_ms) = principal.token_expires_at_ms
-                && now_ms > expires_at_ms
-            {
-                expired = Some(OperatorBearerAuthFailure::Expired {
-                    operator_id: principal.principal.operator_id.clone(),
-                    expires_at_ms,
-                });
-                continue;
-            }
-            return Ok(principal.principal.clone());
-        }
-        Err(expired.unwrap_or(OperatorBearerAuthFailure::Invalid))
-    }
-
-    fn operator_has_scope(&self, operator_id: &str, scope: OperatorScope) -> bool {
-        self.principals.iter().any(|principal| {
-            principal.principal.operator_id.as_ref() == operator_id
-                && principal.principal.has_scope(scope)
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct OperatorApiErrorBody {
-    error: &'static str,
-    message: String,
+pub(super) struct OperatorRequestGuardState {
+    pub(super) auth: OperatorAuthState,
+    pub(super) rate_limiter: HttpRateLimiter,
 }
 
 #[derive(Debug, Deserialize)]
-struct ReplayLookupQuery {
-    bundle_id: Option<String>,
-    hunt_id: Option<String>,
-    receipt_id: Option<String>,
+pub(super) struct ReplayLookupQuery {
+    pub(super) bundle_id: Option<String>,
+    pub(super) hunt_id: Option<String>,
+    pub(super) receipt_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct InvestigationLookupQuery {
-    investigation_id: Option<String>,
-    hunt_id: Option<String>,
-    receipt_id: Option<String>,
+pub(super) struct InvestigationLookupQuery {
+    pub(super) investigation_id: Option<String>,
+    pub(super) hunt_id: Option<String>,
+    pub(super) receipt_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct IncidentLookupQuery {
-    incident_id: Option<String>,
-    hunt_id: Option<String>,
+pub(super) struct IncidentLookupQuery {
+    pub(super) incident_id: Option<String>,
+    pub(super) hunt_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -419,174 +328,12 @@ struct ApprovalVoteAppendRequest {
     signature: DetachedSignature,
 }
 
-struct OperatorApiError {
-    status: StatusCode,
-    error: &'static str,
-    message: String,
-    retry_after_seconds: Option<u64>,
-}
-
-struct OperatorReviewError {
-    status: StatusCode,
-    title: &'static str,
-    message: String,
-}
-
 #[derive(Debug, Clone)]
 struct ReviewHomeContext {
     selected_bundle: Option<ReplayArtifactView>,
     latest_rehearsal_bundle: Option<ReplayArtifactView>,
     incident: Option<IncidentArtifactView>,
     signed_rehearsal_bundle_id: Option<String>,
-}
-
-impl OperatorApiError {
-    fn unauthorized(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            error: "unauthorized",
-            message: message.into(),
-            retry_after_seconds: None,
-        }
-    }
-
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            error: "bad_request",
-            message: message.into(),
-            retry_after_seconds: None,
-        }
-    }
-
-    fn bad_gateway(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_GATEWAY,
-            error: "bad_gateway",
-            message: message.into(),
-            retry_after_seconds: None,
-        }
-    }
-
-    fn forbidden(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::FORBIDDEN,
-            error: "forbidden",
-            message: message.into(),
-            retry_after_seconds: None,
-        }
-    }
-
-    fn not_found(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            error: "not_found",
-            message: message.into(),
-            retry_after_seconds: None,
-        }
-    }
-
-    fn internal(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            error: "internal_error",
-            message: message.into(),
-            retry_after_seconds: None,
-        }
-    }
-
-    fn too_many_requests(message: impl Into<String>, retry_after_seconds: u64) -> Self {
-        Self {
-            status: StatusCode::TOO_MANY_REQUESTS,
-            error: "too_many_requests",
-            message: message.into(),
-            retry_after_seconds: Some(retry_after_seconds),
-        }
-    }
-}
-
-impl IntoResponse for OperatorApiError {
-    fn into_response(self) -> Response {
-        let mut response = (
-            self.status,
-            Json(OperatorApiErrorBody {
-                error: self.error,
-                message: self.message,
-            }),
-        )
-            .into_response();
-        if let Some(retry_after_seconds) = self.retry_after_seconds
-            && let Ok(value) = retry_after_seconds.to_string().parse()
-        {
-            response.headers_mut().insert(header::RETRY_AFTER, value);
-        }
-        response
-    }
-}
-
-impl OperatorReviewError {
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            title: "Bad Request",
-            message: message.into(),
-        }
-    }
-
-    fn not_found(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            title: "Not Found",
-            message: message.into(),
-        }
-    }
-
-    fn forbidden(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::FORBIDDEN,
-            title: "Forbidden",
-            message: message.into(),
-        }
-    }
-
-    fn internal(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            title: "Review Surface Error",
-            message: message.into(),
-        }
-    }
-}
-
-impl IntoResponse for OperatorReviewError {
-    fn into_response(self) -> Response {
-        (
-            self.status,
-            Html(render_review_layout(
-                self.title,
-                "",
-                &format!(
-                    "<section class=\"card\"><p>{}</p></section>",
-                    escape_html(&self.message)
-                ),
-            )),
-        )
-            .into_response()
-    }
-}
-
-fn evidence_harness_paths(paths: &OperatorSurfacePaths) -> EvidenceHarnessPaths {
-    EvidenceHarnessPaths {
-        verification_results_dir: paths.verification_results_dir.clone(),
-        shadow_results_dir: paths.shadow_results_dir.clone(),
-        promotion_review_results_dir: paths.promotion_review_results_dir.clone(),
-        canary_results_dir: paths.canary_results_dir.clone(),
-        promotion_results_dir: paths.promotion_results_dir.clone(),
-        operator_maintenance_results_dir: paths.operator_maintenance_results_dir.clone(),
-        evidence_results_dir: paths.evidence_results_dir.clone(),
-        evidence_verification_results_dir: paths.evidence_verification_results_dir.clone(),
-        promotion_evidence_results_dir: paths.promotion_evidence_results_dir.clone(),
-    }
 }
 
 impl LocalOperatorSurface {
@@ -1080,75 +827,6 @@ async fn metrics_handler(State(state): State<OperatorHttpState>) -> impl IntoRes
             .into_response(),
         None => (StatusCode::NOT_FOUND, "metrics not enabled").into_response(),
     }
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
-
-fn parse_requested_operator_api_schema_version(
-    headers: &HeaderMap,
-) -> Result<Option<u32>, OperatorApiError> {
-    headers
-        .get(OPERATOR_API_SCHEMA_VERSION_HEADER)
-        .map(|value| {
-            value
-                .to_str()
-                .map_err(|_| {
-                    OperatorApiError::bad_request(format!(
-                        "{OPERATOR_API_SCHEMA_VERSION_HEADER} header must be valid UTF-8"
-                    ))
-                })?
-                .trim()
-                .parse::<u32>()
-                .map_err(|_| {
-                    OperatorApiError::bad_request(format!(
-                        "{OPERATOR_API_SCHEMA_VERSION_HEADER} header must be an unsigned integer"
-                    ))
-                })
-        })
-        .transpose()
-}
-
-async fn require_supported_operator_api_schema_version(
-    headers: HeaderMap,
-    request: axum::extract::Request,
-    next: Next,
-) -> Result<Response, OperatorApiError> {
-    let requested = parse_requested_operator_api_schema_version(&headers)?;
-    resolve_operator_api_schema_version(requested).map_err(OperatorApiError::bad_request)?;
-    Ok(next.run(request).await)
-}
-
-fn require_operator_api_scope(
-    principal: &AuthenticatedOperatorPrincipal,
-    scope: OperatorScope,
-    action: &str,
-) -> Result<(), OperatorApiError> {
-    if principal.has_scope(scope) {
-        return Ok(());
-    }
-    Err(OperatorApiError::forbidden(format!(
-        "operator `{}` does not grant `{}` access",
-        principal.operator_id, action
-    )))
-}
-
-fn require_operator_review_scope(
-    principal: &AuthenticatedOperatorPrincipal,
-    scope: OperatorScope,
-    action: &str,
-) -> Result<(), OperatorReviewError> {
-    if principal.has_scope(scope) {
-        return Ok(());
-    }
-    Err(OperatorReviewError::forbidden(format!(
-        "operator `{}` does not grant `{}` access",
-        principal.operator_id, action
-    )))
 }
 
 async fn replay_handler(
@@ -2119,416 +1797,6 @@ async fn maintenance_action_list_handler(
     )))
 }
 
-async fn require_bearer_auth(
-    State(state): State<OperatorRequestGuardState>,
-    headers: HeaderMap,
-    mut request: axum::extract::Request,
-    next: Next,
-) -> Result<Response, OperatorApiError> {
-    let peer_addr = request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0);
-    state
-        .rate_limiter
-        .check_request(&headers, peer_addr, request.uri().path(), now_ms())
-        .map_err(map_operator_rate_limit_rejection)?;
-    let value = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok())
-        .ok_or_else(|| OperatorApiError::unauthorized("missing Authorization header"))?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| OperatorApiError::unauthorized("expected Authorization: Bearer <token>"))?;
-    let principal = state
-        .auth
-        .authenticate(token, now_ms())
-        .map_err(|error| match error {
-            OperatorBearerAuthFailure::Invalid => {
-                OperatorApiError::unauthorized("invalid bearer token")
-            }
-            OperatorBearerAuthFailure::Expired {
-                operator_id,
-                expires_at_ms,
-            } => OperatorApiError::unauthorized(format!(
-                "bearer token for operator `{operator_id}` expired at {expires_at_ms}"
-            )),
-        })?;
-    request.extensions_mut().insert(principal);
-
-    Ok(next.run(request).await)
-}
-
-fn map_operator_rate_limit_rejection(rejection: HttpRateLimitRejection) -> OperatorApiError {
-    OperatorApiError::too_many_requests(
-        format!(
-            "{} rate limit exceeded for source `{}` on `{}`; retry after {}ms",
-            rate_limit_threshold_label(rejection.threshold),
-            rejection.source,
-            rejection.path,
-            rejection.retry_after_ms
-        ),
-        retry_after_seconds(rejection.retry_after_ms),
-    )
-}
-
-fn rate_limit_threshold_label(threshold: crate::service::HttpRateLimitThreshold) -> &'static str {
-    match threshold {
-        crate::service::HttpRateLimitThreshold::Burst => "burst",
-        crate::service::HttpRateLimitThreshold::Sustained => "sustained",
-    }
-}
-
-fn retry_after_seconds(retry_after_ms: u64) -> u64 {
-    retry_after_ms.max(1).div_ceil(1_000)
-}
-
-fn parse_replay_selector(
-    query: &ReplayLookupQuery,
-) -> Result<ReplayLookupSelector<'_>, OperatorApiError> {
-    let set = count_set(&[
-        query.bundle_id.as_deref(),
-        query.hunt_id.as_deref(),
-        query.receipt_id.as_deref(),
-    ]);
-    if set != 1 {
-        return Err(OperatorApiError::bad_request(
-            "exactly one replay selector must be supplied",
-        ));
-    }
-    if let Some(bundle_id) = query.bundle_id.as_deref() {
-        Ok(ReplayLookupSelector::BundleId(bundle_id))
-    } else if let Some(hunt_id) = query.hunt_id.as_deref() {
-        Ok(ReplayLookupSelector::HuntId(hunt_id))
-    } else if let Some(receipt_id) = query.receipt_id.as_deref() {
-        Ok(ReplayLookupSelector::ReceiptId(receipt_id))
-    } else {
-        Err(OperatorApiError::bad_request(
-            "exactly one replay selector must be supplied",
-        ))
-    }
-}
-
-fn parse_investigation_selector(
-    query: &InvestigationLookupQuery,
-) -> Result<InvestigationLookupSelector<'_>, OperatorApiError> {
-    let set = count_set(&[
-        query.investigation_id.as_deref(),
-        query.hunt_id.as_deref(),
-        query.receipt_id.as_deref(),
-    ]);
-    if set != 1 {
-        return Err(OperatorApiError::bad_request(
-            "exactly one investigation selector must be supplied",
-        ));
-    }
-    if let Some(investigation_id) = query.investigation_id.as_deref() {
-        Ok(InvestigationLookupSelector::InvestigationId(
-            investigation_id,
-        ))
-    } else if let Some(hunt_id) = query.hunt_id.as_deref() {
-        Ok(InvestigationLookupSelector::HuntId(hunt_id))
-    } else if let Some(receipt_id) = query.receipt_id.as_deref() {
-        Ok(InvestigationLookupSelector::ReceiptId(receipt_id))
-    } else {
-        Err(OperatorApiError::bad_request(
-            "exactly one investigation selector must be supplied",
-        ))
-    }
-}
-
-fn parse_incident_selector(
-    query: &IncidentLookupQuery,
-) -> Result<IncidentLookupSelector<'_>, OperatorApiError> {
-    let set = count_set(&[query.incident_id.as_deref(), query.hunt_id.as_deref()]);
-    if set != 1 {
-        return Err(OperatorApiError::bad_request(
-            "exactly one incident selector must be supplied",
-        ));
-    }
-    if let Some(incident_id) = query.incident_id.as_deref() {
-        Ok(IncidentLookupSelector::IncidentId(incident_id))
-    } else if let Some(hunt_id) = query.hunt_id.as_deref() {
-        Ok(IncidentLookupSelector::HuntId(hunt_id))
-    } else {
-        Err(OperatorApiError::bad_request(
-            "exactly one incident selector must be supplied",
-        ))
-    }
-}
-
-fn parse_portfolio_review_state(
-    value: &str,
-) -> Result<EvolutionPortfolioEntryReviewState, OperatorApiError> {
-    match value {
-        "pending_review" => Ok(EvolutionPortfolioEntryReviewState::PendingReview),
-        "included" => Ok(EvolutionPortfolioEntryReviewState::Included),
-        "deferred" => Ok(EvolutionPortfolioEntryReviewState::Deferred),
-        "dropped" => Ok(EvolutionPortfolioEntryReviewState::Dropped),
-        "blocked" => Ok(EvolutionPortfolioEntryReviewState::Blocked),
-        other => Err(OperatorApiError::bad_request(format!(
-            "unsupported portfolio review_state `{other}`"
-        ))),
-    }
-}
-
-fn parse_maintenance_status(value: &str) -> Result<OperatorMaintenanceStatus, OperatorApiError> {
-    match value {
-        "applied" => Ok(OperatorMaintenanceStatus::Applied),
-        "blocked" => Ok(OperatorMaintenanceStatus::Blocked),
-        "failed" => Ok(OperatorMaintenanceStatus::Failed),
-        other => Err(OperatorApiError::bad_request(format!(
-            "unsupported maintenance status `{other}`"
-        ))),
-    }
-}
-
-fn parse_evidence_subject_kind(value: &str) -> Result<EvidenceSubjectKind, OperatorApiError> {
-    value.parse::<EvidenceSubjectKind>().map_err(|_| {
-        OperatorApiError::bad_request(format!("unsupported evidence subject_kind `{value}`"))
-    })
-}
-
-fn map_service_api_error(error: ServiceError) -> OperatorApiError {
-    match error {
-        ServiceError::Readiness {
-            component,
-            source: ReadinessError::SubstrateNotReady { backend },
-        } => OperatorApiError::internal(format!(
-            "runtime readiness check failed for {component}: backend `{backend}` is not ready"
-        )),
-        ServiceError::Readiness {
-            component,
-            source: ReadinessError::SubstrateNotDurable { backend },
-        } => OperatorApiError::internal(format!(
-            "runtime readiness check failed for {component}: backend `{backend}` is not durable but live response requires durability"
-        )),
-        other => OperatorApiError::internal(other.to_string()),
-    }
-}
-
-fn map_service_review_error(error: ServiceError) -> OperatorReviewError {
-    match error {
-        ServiceError::Readiness {
-            component,
-            source: ReadinessError::SubstrateNotReady { backend },
-        } => OperatorReviewError::internal(format!(
-            "runtime readiness check failed for {component}: backend `{backend}` is not ready"
-        )),
-        ServiceError::Readiness {
-            component,
-            source: ReadinessError::SubstrateNotDurable { backend },
-        } => OperatorReviewError::internal(format!(
-            "runtime readiness check failed for {component}: backend `{backend}` is not durable but live response requires durability"
-        )),
-        other => OperatorReviewError::internal(other.to_string()),
-    }
-}
-
-fn map_control_error(error: ControlError) -> OperatorApiError {
-    match error {
-        ControlError::NotFound { entity, lookup } => {
-            OperatorApiError::not_found(format!("{entity} `{lookup}` was not found"))
-        }
-        ControlError::Service(error) => map_service_api_error(error),
-        other => OperatorApiError::internal(other.to_string()),
-    }
-}
-
-fn map_evidence_api_error(error: EvidenceError) -> OperatorApiError {
-    match error {
-        EvidenceError::ArtifactNotFound { kind, id } => {
-            OperatorApiError::not_found(format!("artifact `{kind}` with id `{id}` was not found"))
-        }
-        EvidenceError::Control(error) => map_control_error(error),
-        other => OperatorApiError::internal(other.to_string()),
-    }
-}
-
-fn map_portfolio_error(error: EvolutionPortfolioError) -> OperatorApiError {
-    match error {
-        EvolutionPortfolioError::SelectionNotFound { selection_id } => OperatorApiError::not_found(
-            format!("ranked-candidate selection `{selection_id}` was not found"),
-        ),
-        EvolutionPortfolioError::RankingNotFound { ranking_id } => {
-            OperatorApiError::not_found(format!("candidate ranking `{ranking_id}` was not found"))
-        }
-        EvolutionPortfolioError::PortfolioNotFound { portfolio_id } => {
-            OperatorApiError::not_found(format!("portfolio `{portfolio_id}` was not found"))
-        }
-        EvolutionPortfolioError::PortfolioEntryNotFound {
-            portfolio_id,
-            entry_id,
-        } => OperatorApiError::not_found(format!(
-            "portfolio entry `{entry_id}` was not found in portfolio `{portfolio_id}`"
-        )),
-        EvolutionPortfolioError::GovernancePacketNotFound { packet_id } => {
-            OperatorApiError::not_found(format!(
-                "governance review packet `{packet_id}` was not found"
-            ))
-        }
-        EvolutionPortfolioError::InvalidPortfolioRequest { .. }
-        | EvolutionPortfolioError::InvalidDecision { .. } => {
-            OperatorApiError::bad_request(error.to_string())
-        }
-        other => OperatorApiError::internal(other.to_string()),
-    }
-}
-
-fn map_governance_prep_error(error: EvolutionGovernancePrepError) -> OperatorApiError {
-    match error {
-        EvolutionGovernancePrepError::GovernancePacketNotFound { packet_id } => {
-            OperatorApiError::not_found(format!(
-                "governance review packet `{packet_id}` was not found"
-            ))
-        }
-        EvolutionGovernancePrepError::PacketSetNotFound { packet_set_id } => {
-            OperatorApiError::not_found(format!(
-                "governance packet set `{packet_set_id}` was not found"
-            ))
-        }
-        EvolutionGovernancePrepError::PortfolioHistoryNotFound { history_id } => {
-            OperatorApiError::not_found(format!("portfolio history `{history_id}` was not found"))
-        }
-        EvolutionGovernancePrepError::InvalidPacketSetRequest { .. }
-        | EvolutionGovernancePrepError::PacketNotInSet { .. }
-        | EvolutionGovernancePrepError::InconsistentPacketEvidence { .. } => {
-            OperatorApiError::bad_request(error.to_string())
-        }
-        other => OperatorApiError::internal(other.to_string()),
-    }
-}
-
-fn portfolio_harness(
-    state: &OperatorHttpState,
-) -> Result<&DefaultEvolutionPortfolioHarness, OperatorApiError> {
-    state
-        .portfolio
-        .as_deref()
-        .ok_or_else(|| OperatorApiError::internal("portfolio stores are not configured"))
-}
-
-fn governance_harness(
-    state: &OperatorHttpState,
-) -> Result<&DefaultEvolutionGovernancePrepHarness, OperatorApiError> {
-    state
-        .governance_prep
-        .as_deref()
-        .ok_or_else(|| OperatorApiError::internal("governance-prep stores are not configured"))
-}
-
-fn approval_harness(
-    state: &OperatorHttpState,
-) -> Result<&DefaultApprovalHarness, OperatorApiError> {
-    state
-        .approval
-        .as_deref()
-        .ok_or_else(|| OperatorApiError::internal("approval stores are not configured"))
-}
-
-fn maintenance_service(
-    state: &OperatorHttpState,
-) -> Result<&OperatorMaintenanceService, OperatorApiError> {
-    state
-        .maintenance
-        .as_deref()
-        .ok_or_else(|| OperatorApiError::internal("maintenance stores are not configured"))
-}
-
-fn evidence_service(
-    state: &OperatorHttpState,
-) -> Result<&OperatorEvidenceReadService, OperatorApiError> {
-    state
-        .evidence
-        .as_deref()
-        .ok_or_else(|| OperatorApiError::internal("evidence stores are not configured"))
-}
-
-fn review_evidence_harness(
-    state: &OperatorHttpState,
-) -> Result<&DefaultEvidenceHarness, OperatorReviewError> {
-    state
-        .evidence_harness
-        .as_deref()
-        .ok_or_else(|| OperatorReviewError::internal("evidence export stores are not configured"))
-}
-
-fn review_workbench_service(
-    state: &OperatorHttpState,
-) -> Result<&DefaultReviewWorkbenchHarness, OperatorReviewError> {
-    state
-        .workbench
-        .as_deref()
-        .ok_or_else(|| OperatorReviewError::internal("review workbench stores are not configured"))
-}
-
-fn review_evidence_secret_material(
-    state: &OperatorHttpState,
-) -> Result<String, OperatorReviewError> {
-    std::env::var(&state.approval_receipt_signing_key_env)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            OperatorReviewError::internal(format!(
-                "evidence signing key env `{}` is missing or empty",
-                state.approval_receipt_signing_key_env
-            ))
-        })
-}
-
-fn map_review_workbench_error(error: ReviewWorkbenchError) -> OperatorReviewError {
-    match error {
-        ReviewWorkbenchError::InvalidRequest(message) => OperatorReviewError::bad_request(message),
-        ReviewWorkbenchError::SessionNotFound { session_id } => {
-            OperatorReviewError::not_found(format!("review session `{session_id}` was not found"))
-        }
-        ReviewWorkbenchError::ExportNotFound { export_id } => OperatorReviewError::not_found(
-            format!("review session export `{export_id}` was not found"),
-        ),
-        ReviewWorkbenchError::CapsuleNotFound { capsule_id } => {
-            OperatorReviewError::not_found(format!("review capsule `{capsule_id}` was not found"))
-        }
-        ReviewWorkbenchError::CapsuleImportNotFound { import_id } => {
-            OperatorReviewError::not_found(format!(
-                "review capsule import `{import_id}` was not found"
-            ))
-        }
-        ReviewWorkbenchError::DelegationNotFound { delegation_id } => {
-            OperatorReviewError::not_found(format!(
-                "review delegation `{delegation_id}` was not found"
-            ))
-        }
-        ReviewWorkbenchError::HandoffNotFound { handoff_id } => OperatorReviewError::not_found(
-            format!("review session handoff `{handoff_id}` was not found"),
-        ),
-        ReviewWorkbenchError::ReadinessNotFound { readiness_id } => OperatorReviewError::not_found(
-            format!("review session readiness `{readiness_id}` was not found"),
-        ),
-        other => OperatorReviewError::internal(other.to_string()),
-    }
-}
-
-fn map_control_review_error(error: ControlError) -> OperatorReviewError {
-    match error {
-        ControlError::NotFound { entity, lookup } => {
-            OperatorReviewError::not_found(format!("{entity} `{lookup}` was not found"))
-        }
-        ControlError::Service(error) => map_service_review_error(error),
-        other => OperatorReviewError::internal(other.to_string()),
-    }
-}
-
-fn map_review_evidence_error(error: EvidenceError) -> OperatorReviewError {
-    match error {
-        EvidenceError::ArtifactNotFound { kind, id } => OperatorReviewError::not_found(format!(
-            "artifact `{kind}` with id `{id}` was not found"
-        )),
-        EvidenceError::Control(error) => map_control_review_error(error),
-        other => OperatorReviewError::internal(other.to_string()),
-    }
-}
-
 fn resolve_review_home_context(
     state: &OperatorHttpState,
     query: &ReviewHomeQuery,
@@ -2635,373 +1903,7 @@ fn resolve_review_home_context(
     }))
 }
 
-fn map_approval_error(error: ApprovalError) -> OperatorApiError {
-    match error {
-        ApprovalError::ApprovalSetNotFound { set_id } => {
-            OperatorApiError::not_found(format!("approval set `{set_id}` was not found"))
-        }
-        ApprovalError::ApprovalLedgerNotFound { ledger_id } => {
-            OperatorApiError::not_found(format!("approval ledger `{ledger_id}` was not found"))
-        }
-        ApprovalError::ApprovalVerdictNotFound { verdict_id } => {
-            OperatorApiError::not_found(format!("approval verdict `{verdict_id}` was not found"))
-        }
-        ApprovalError::ApprovalReceiptPackNotFound { pack_id } => {
-            OperatorApiError::not_found(format!("approval receipt pack `{pack_id}` was not found"))
-        }
-        ApprovalError::MissingLedgerForSet { set_id } => {
-            OperatorApiError::not_found(format!("approval set `{set_id}` does not have a ledger"))
-        }
-        ApprovalError::AmbiguousLedgerForSet { .. }
-        | ApprovalError::InvalidApprovalSetRequest { .. }
-        | ApprovalError::InvalidVerdictRequest { .. }
-        | ApprovalError::InvalidReceiptPack { .. }
-        | ApprovalError::DuplicateVoter { .. }
-        | ApprovalError::IneligibleVoter { .. }
-        | ApprovalError::InvalidSignature { .. } => {
-            OperatorApiError::bad_request(error.to_string())
-        }
-        ApprovalError::VerdictStoreNotConfigured | ApprovalError::ReceiptPackStoreNotConfigured => {
-            OperatorApiError::internal(error.to_string())
-        }
-        ApprovalError::MissingSigningKey { .. } => OperatorApiError::bad_request(error.to_string()),
-        ApprovalError::SetStore(_)
-        | ApprovalError::LedgerStore(_)
-        | ApprovalError::VerdictStore(_)
-        | ApprovalError::ReceiptPackStore(_)
-        | ApprovalError::Crypto(_)
-        | ApprovalError::Spine(_) => OperatorApiError::internal(error.to_string()),
-    }
-}
-
-fn map_maintenance_error(error: OperatorMaintenanceError) -> OperatorApiError {
-    match error {
-        OperatorMaintenanceError::Store(_) => OperatorApiError::internal(error.to_string()),
-        OperatorMaintenanceError::Portfolio(error) => map_portfolio_error(error),
-        OperatorMaintenanceError::GovernancePrep(error) => map_governance_prep_error(error),
-        OperatorMaintenanceError::Evidence(error) => map_evidence_api_error(error),
-    }
-}
-
-fn count_set(values: &[Option<&str>]) -> usize {
-    values.iter().filter(|value| value.is_some()).count()
-}
-
-fn effective_limit(requested_limit: Option<usize>, max_limit: usize) -> usize {
-    requested_limit.unwrap_or(max_limit).min(max_limit)
-}
-
-fn limit_portfolio_list(
-    mut list: EvolutionPortfolioList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> EvolutionPortfolioList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.portfolios = list.portfolios.into_iter().take(limit).collect();
-    list.total_count = list.portfolios.len();
-    list
-}
-
-fn limit_packet_set_list(
-    mut list: EvolutionGovernancePacketSetList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> EvolutionGovernancePacketSetList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.packet_sets = list.packet_sets.into_iter().take(limit).collect();
-    list.total_count = list.packet_sets.len();
-    list
-}
-
-fn limit_portfolio_history_list(
-    mut list: EvolutionPortfolioHistoryList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> EvolutionPortfolioHistoryList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.histories = list.histories.into_iter().take(limit).collect();
-    list.total_count = list.histories.len();
-    list
-}
-
-fn limit_evidence_bundle_list(
-    mut list: EvidenceBundleList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> EvidenceBundleList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.bundles = list.bundles.into_iter().take(limit).collect();
-    list.total_count = list.bundles.len();
-    list
-}
-
-fn limit_maintenance_list(
-    mut list: OperatorMaintenanceList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> OperatorMaintenanceList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.actions = list.actions.into_iter().take(limit).collect();
-    list.total_count = list.actions.len();
-    list
-}
-
-fn limit_approval_set_list(
-    mut list: ApprovalSetList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> ApprovalSetList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.sets = list.sets.into_iter().take(limit).collect();
-    list.total_count = list.sets.len();
-    list
-}
-
-fn limit_approval_ledger_list(
-    mut list: ApprovalLedgerList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> ApprovalLedgerList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.ledgers = list.ledgers.into_iter().take(limit).collect();
-    list.total_count = list.ledgers.len();
-    list
-}
-
-fn limit_review_session_list(
-    mut list: ReviewSessionList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> ReviewSessionList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.sessions = list.sessions.into_iter().take(limit).collect();
-    list.total_count = list.sessions.len();
-    list
-}
-
-fn limit_review_session_export_list(
-    mut list: crate::review_workbench::ReviewSessionExportList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> crate::review_workbench::ReviewSessionExportList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.exports = list.exports.into_iter().take(limit).collect();
-    list.total_count = list.exports.len();
-    list
-}
-
-fn limit_review_capsule_list(
-    mut list: ReviewCapsuleList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> ReviewCapsuleList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.capsules = list.capsules.into_iter().take(limit).collect();
-    list.total_count = list.capsules.len();
-    list
-}
-
-fn limit_review_capsule_import_list(
-    mut list: ReviewCapsuleImportList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> ReviewCapsuleImportList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.imports = list.imports.into_iter().take(limit).collect();
-    list.total_count = list.imports.len();
-    list
-}
-
-fn limit_review_session_handoff_list(
-    mut list: ReviewSessionMaintenanceHandoffList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> ReviewSessionMaintenanceHandoffList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.handoffs = list.handoffs.into_iter().take(limit).collect();
-    list.total_count = list.handoffs.len();
-    list
-}
-
-fn limit_review_delegation_list(
-    mut list: ReviewDelegationPacketList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> ReviewDelegationPacketList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.delegations = list.delegations.into_iter().take(limit).collect();
-    list.total_count = list.delegations.len();
-    list
-}
-
-fn limit_review_session_promotion_readiness_list(
-    mut list: ReviewSessionPromotionReadinessList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> ReviewSessionPromotionReadinessList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.readiness_reports = list.readiness_reports.into_iter().take(limit).collect();
-    list.total_count = list.readiness_reports.len();
-    list
-}
-
-fn parse_review_artifact_refs_text(
-    raw: &str,
-) -> Result<Vec<ReviewArtifactRef>, OperatorReviewError> {
-    let mut refs = Vec::new();
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let (kind, id) = trimmed.split_once(':').ok_or_else(|| {
-            OperatorReviewError::bad_request(format!(
-                "invalid artifact ref `{trimmed}`; expected kind:id"
-            ))
-        })?;
-        let kind = kind.parse::<ReviewArtifactRefKind>().map_err(|_| {
-            OperatorReviewError::bad_request(format!("unsupported review artifact kind `{kind}`"))
-        })?;
-        let id = id.trim();
-        if id.is_empty() {
-            return Err(OperatorReviewError::bad_request(format!(
-                "invalid artifact ref `{trimmed}`; missing id"
-            )));
-        }
-        refs.push(ReviewArtifactRef {
-            kind,
-            id: id.to_string(),
-        });
-    }
-    Ok(refs)
-}
-
-fn normalize_form_optional_text(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReviewEvidenceVerificationFilter {
-    Passed,
-    Failed,
-    Unverified,
-}
-
-impl ReviewEvidenceVerificationFilter {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Passed => "passed",
-            Self::Failed => "failed",
-            Self::Unverified => "unverified",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Passed => "Passed",
-            Self::Failed => "Failed",
-            Self::Unverified => "Unverified",
-        }
-    }
-}
-
-fn parse_review_evidence_subject_kind(
-    value: &str,
-) -> Result<EvidenceSubjectKind, OperatorReviewError> {
-    value.parse::<EvidenceSubjectKind>().map_err(|_| {
-        OperatorReviewError::bad_request(format!("unsupported review subject_kind `{value}`"))
-    })
-}
-
-fn parse_review_evidence_verification_status(
-    value: &str,
-) -> Result<ReviewEvidenceVerificationFilter, OperatorReviewError> {
-    match value {
-        "passed" => Ok(ReviewEvidenceVerificationFilter::Passed),
-        "failed" => Ok(ReviewEvidenceVerificationFilter::Failed),
-        "unverified" => Ok(ReviewEvidenceVerificationFilter::Unverified),
-        other => Err(OperatorReviewError::bad_request(format!(
-            "unsupported review verification_status `{other}`"
-        ))),
-    }
-}
-
-fn parse_review_promotion_recommendation(
-    value: &str,
-) -> Result<PromotionEvidenceRecommendation, OperatorReviewError> {
-    match value {
-        "ready_for_external_review" | "ready" => {
-            Ok(PromotionEvidenceRecommendation::ReadyForExternalReview)
-        }
-        "blocked" => Ok(PromotionEvidenceRecommendation::Blocked),
-        other => Err(OperatorReviewError::bad_request(format!(
-            "unsupported promotion recommendation `{other}`"
-        ))),
-    }
-}
-
-fn review_evidence_service(
-    state: &OperatorHttpState,
-) -> Result<&OperatorEvidenceReadService, OperatorReviewError> {
-    state
-        .evidence
-        .as_deref()
-        .ok_or_else(|| OperatorReviewError::internal("evidence stores are not configured"))
-}
-
-fn filter_review_evidence_list(
-    mut list: EvidenceBundleList,
-    verification_status: Option<ReviewEvidenceVerificationFilter>,
-) -> EvidenceBundleList {
-    if let Some(filter) = verification_status {
-        list.bundles.retain(|entry| match filter {
-            ReviewEvidenceVerificationFilter::Passed => {
-                entry.latest_verification_status == Some(EvidenceVerificationStatus::Passed)
-            }
-            ReviewEvidenceVerificationFilter::Failed => {
-                entry.latest_verification_status == Some(EvidenceVerificationStatus::Failed)
-            }
-            ReviewEvidenceVerificationFilter::Unverified => {
-                entry.latest_verification_status.is_none()
-            }
-        });
-        list.total_count = list.bundles.len();
-    }
-    list
-}
-
-fn filter_review_promotion_packet_list(
-    mut list: PromotionEvidencePacketList,
-    recommendation: Option<PromotionEvidenceRecommendation>,
-) -> PromotionEvidencePacketList {
-    if let Some(recommendation) = recommendation {
-        let ready = recommendation == PromotionEvidenceRecommendation::ReadyForExternalReview;
-        list.packets
-            .retain(|entry| entry.ready_for_external_review == ready);
-        list.total_count = list.packets.len();
-    }
-    list
-}
-
-fn limit_promotion_packet_list(
-    mut list: PromotionEvidencePacketList,
-    requested_limit: Option<usize>,
-    max_limit: usize,
-) -> PromotionEvidencePacketList {
-    let limit = effective_limit(requested_limit, max_limit);
-    list.packets = list.packets.into_iter().take(limit).collect();
-    list.total_count = list.packets.len();
-    list
-}
-
-fn escape_html(input: &str) -> String {
+pub(super) fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -3018,7 +1920,7 @@ fn review_link(path: &str, label: &str) -> String {
     )
 }
 
-fn render_review_layout(title: &str, subtitle: &str, body: &str) -> String {
+pub(super) fn render_review_layout(title: &str, subtitle: &str, body: &str) -> String {
     let subtitle_html = if subtitle.is_empty() {
         String::new()
     } else {
@@ -5340,49 +4242,6 @@ mod tests {
             correlation_id: None,
             now_ms,
         }
-    }
-
-    #[test]
-    fn control_service_readiness_error_maps_to_internal_api_error() {
-        let error = super::map_control_error(crate::control::ControlError::Service(
-            crate::service::ServiceError::Readiness {
-                component: "substrate",
-                source: crate::service::ReadinessError::SubstrateNotDurable {
-                    backend: "in_memory".to_string(),
-                },
-            },
-        ));
-
-        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(error.error, "internal_error");
-        assert!(error.message.contains("substrate"));
-        assert!(error.message.contains("not durable"));
-    }
-
-    #[test]
-    fn portfolio_invalid_request_maps_to_bad_request() {
-        let error = super::map_portfolio_error(
-            crate::portfolio::EvolutionPortfolioError::InvalidPortfolioRequest {
-                reason: "missing cohort".to_string(),
-            },
-        );
-
-        assert_eq!(error.status, StatusCode::BAD_REQUEST);
-        assert_eq!(error.error, "bad_request");
-        assert!(error.message.contains("missing cohort"));
-    }
-
-    #[test]
-    fn review_evidence_artifact_not_found_maps_to_not_found() {
-        let error =
-            super::map_review_evidence_error(crate::evidence::EvidenceError::ArtifactNotFound {
-                kind: "replay_bundle",
-                id: "bundle:missing".to_string(),
-            });
-
-        assert_eq!(error.status, StatusCode::NOT_FOUND);
-        assert_eq!(error.title, "Not Found");
-        assert!(error.message.contains("bundle:missing"));
     }
 
     #[derive(Clone, Default)]
