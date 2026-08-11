@@ -29,12 +29,77 @@ confidence-threshold = 0.8
 exceptions = []
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
 
+# WHY THESE ARE `skip` ENTRIES AND NOT `-A duplicate`
+#
+# `cargo deny check bans -A duplicate`, which tools/check-supply-chain.sh used to
+# pass, suppresses EVERY duplicate forever -- including ones that do not exist
+# yet. It cannot be made to fail, so it is not a gate. A version-pinned
+# `[[bans.skip]]` breaks the moment a NEW duplicate appears or a skipped one moves
+# version, which is the entire point of the check. Each entry names the dependency
+# that pins the old major so it can be retired when that dependency moves.
+#
+# Reviewed 2026-08-11 (phase 280 / GATEFIX-04). Re-review whenever any named
+# pinning dependency is upgraded.
+#
+# MEASURED LIMITATION of this gate, recorded so nobody mistakes it for coverage:
+# a duplicate introduced solely through a workspace member's DEV-dependency is
+# not reported by cargo-deny 0.19.4, with or without `[graph] exclude-dev = false`.
+# Verified by adding `base64 = "0.21"` to swarm-crypto: as a `[dependencies]` entry
+# the gate fails (`found 2 duplicate entries for crate 'base64'`, exit 2); as a
+# `[dev-dependencies]` entry it reports `bans ok` even though Cargo.lock carries
+# both 0.21.7 and 0.22.1. Normal-dependency duplicates ARE caught.
+#
+# ATTEMPTED AND DELIBERATELY REVERTED: migrating our own swarm-ingest-tetragon
+# from tonic/prost 0.13 to 0.14 (plus tonic-prost / tonic-prost-build) does
+# collapse prost, prost-derive, tonic and socket2 -- 19 duplicates down to 16 --
+# and it compiles and passes the suite. It was reverted because prost-build 0.14
+# pulls petgraph 0.8 -> hashbrown 0.15 -> foldhash 0.1.5, which is Zlib-licensed
+# and NOT in `[licenses] allow` above. The only ways to land it are to widen the
+# license allow-list or to carry a license exception, and neither is a decision to
+# make as a side effect of a duplicate-dependency cleanup. Filed as follow-up
+# work, with the exact blocker recorded here.
+skip = [
+  # --- Transitive on the runtime graph, pinned by an upstream crate's old major ---
+  { crate = "thiserror@1.0.69", reason = "async-nats 0.47 and x509-parser 0.16 (asn1-rs 0.6) still pin thiserror 1.x" },
+  { crate = "thiserror-impl@1.0.69", reason = "proc-macro half of thiserror 1.x above" },
+  { crate = "rand@0.8.6", reason = "async-nats 0.47 (nkeys, nuid, tokio-websockets) pins the rand 0.8 family" },
+  { crate = "rand_chacha@0.3.1", reason = "rand 0.8 family above" },
+  { crate = "rand_core@0.6.4", reason = "ed25519-dalek 2.x pins rand_core 0.6; our workspace pin matches it deliberately" },
+  { crate = "getrandom@0.2.17", reason = "backs rand_core 0.6 above" },
+  { crate = "getrandom@0.3.4", reason = "backs the rand 0.9 family pulled in by quinn-proto 0.11.16" },
+
+  # SECURITY REVIEW ITEM -- escalated rather than silently skipped.
+  # Two independent sets of TLS trust anchors are on the graph: webpki-roots 1.0.7
+  # (our reqwest/rustls stack) and 0.26.11 (async-nats 0.47 -> tokio-websockets
+  # 0.10). Trust roots are not an ordinary duplicate: the two crates ship different
+  # snapshots of the Mozilla root program, so the NATS client and the HTTP client
+  # can disagree about which CAs are trusted. Accepted for now only because
+  # collapsing it requires an async-nats upgrade. This is a standing action item.
+  { crate = "webpki-roots@0.26.11", reason = "SECURITY REVIEW ITEM: second TLS trust-anchor set, pinned by async-nats 0.47 -> tokio-websockets 0.10; collapse when async-nats moves to webpki-roots 1.x" },
+
+  # --- Target-gated: Windows / wasm / UEFI support that does not build on the CI target ---
+  { crate = "windows-core@0.57.0", reason = "target-gated; older windows-* stack held by a transitive dependency" },
+  { crate = "windows-implement@0.57.0", reason = "target-gated; windows-core 0.57 family" },
+  { crate = "windows-interface@0.57.0", reason = "target-gated; windows-core 0.57 family" },
+  { crate = "windows-result@0.1.2", reason = "target-gated; windows-core 0.57 family" },
+  { crate = "windows-sys@0.52.0", reason = "target-gated; older windows-sys major held by a transitive dependency" },
+  { crate = "wit-bindgen@0.51.0", reason = "target-gated; wasm32-wasi bindings only" },
+  { crate = "r-efi@5.3.0", reason = "target-gated; UEFI target support only" },
+  { crate = "bitflags@1.3.2", reason = "target-gated; transitive dependency on bitflags 1.x" },
+
+  # --- Our own old major, collapsible but blocked; see the note above ---
+  { crate = "prost@0.13.5", reason = "swarm-ingest-tetragon pins prost/tonic 0.13; opentelemetry-otlp 0.31 brings 0.14. Collapsible, blocked on the Zlib-licensed foldhash that prost-build 0.14 pulls in" },
+  { crate = "prost-derive@0.13.5", reason = "proc-macro half of prost 0.13 above" },
+  { crate = "tonic@0.13.1", reason = "swarm-ingest-tetragon pins tonic 0.13; opentelemetry-proto 0.31 brings 0.14. Same blocker as prost above" },
+  { crate = "socket2@0.5.10", reason = "held by tonic 0.13's transport stack; collapses with the tonic 0.14 migration above" },
+]
+
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
