@@ -86,8 +86,24 @@ fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
     }]
 }
 
+/// A throwaway store root for `test_config`.
+///
+/// Not created on disk: every harness that needs one calls `create_dir_all`
+/// itself. Building the path lazily keeps `test_config` free of filesystem
+/// side effects while still keeping the repo-relative defaults out of play.
+fn test_config_store_root() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "swarm-runtime-ingest-config-{}-{nanos}",
+        std::process::id()
+    ))
+}
+
 fn test_config(strategy: &str) -> SwarmConfig {
-    SwarmConfig {
+    let mut config = SwarmConfig {
         schema_version: 1,
         name: "ingest-test".to_string(),
         description: "ingest test config".to_string(),
@@ -155,7 +171,9 @@ fn test_config(strategy: &str) -> SwarmConfig {
         platform_api: PlatformApiConfig::default(),
         operator: OperatorSurfaceConfig::default(),
         tls: None,
-    }
+    };
+    redirect_evolution_paths(&mut config, &test_config_store_root());
+    config
 }
 
 const TEST_PLATFORM_API_KEY: &str = "platform-read-secret";
@@ -579,6 +597,17 @@ fn temp_dir(label: &str) -> PathBuf {
 fn configure_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.enabled = true;
     config.canary.enabled = true;
+    redirect_evolution_paths(config, root);
+}
+
+/// Point every evolution store at `root`.
+///
+/// `EvolutionConfig::default()` leaves these on repo-relative `data/...`
+/// defaults, and `resolve_repo_relative_path` degenerates those to cwd for an
+/// inline config path -- i.e. the checked-out crate root. Any harness built
+/// from such a config creates its store eagerly, so the default has to be
+/// overwritten even by tests that never intend to read the store back.
+fn redirect_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.paths.replay_results_dir = root.join("replay").display().to_string();
     config.evolution.paths.experiment_results_dir = root.join("experiments").display().to_string();
     config.evolution.paths.verification_results_dir =
@@ -639,6 +668,11 @@ fn configure_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.paths.evolution_population_results_dir =
         root.join("evolution-population").display().to_string();
     config.evolution.paths.canary_results_dir = root.join("canaries").display().to_string();
+    // The assurance harvest store is NOT under `evolution.paths`, so it is easy
+    // to miss here; left on its repo-relative default it writes into the
+    // checked-out crate root.
+    config.evolution.assurance.harvest.results_dir =
+        root.join("assurance-cases").display().to_string();
 }
 
 fn test_ingest_state() -> IngestState {

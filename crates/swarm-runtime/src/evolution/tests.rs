@@ -661,7 +661,12 @@ async fn evolution_queue_blocks_when_solver_summary_is_required() {
     let scorecard_dir = root.join("scorecards");
     let proofs_dir = root.join("proofs");
     let queue_dir = root.join("queue");
+    let harvest_dir = root.join("assurance-cases");
     let mut config = sample_config();
+    // `sample_config()` leaves the harvest store on its repo-relative default,
+    // which `resolve_config_relative_path` degenerates to cwd for an inline
+    // config path -- i.e. the checked-out crate root.
+    config.evolution.assurance.harvest.results_dir = harvest_dir.display().to_string();
     config.evolution.assurance.require_solver_summary = true;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
