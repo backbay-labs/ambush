@@ -10,20 +10,20 @@ candidate:
   description: Add python as a suspicious parent to probe downloader coverage
   profile:
     suspicious_parents:
-      - winword
-      - excel
-      - outlook
-      - acrord32
-      - teams
-      - python
+    - winword
+    - excel
+    - outlook
+    - acrord32
+    - teams
+    - python
     suspicious_children:
-      - powershell
-      - pwsh
-      - cmd
-      - sh
-      - bash
-      - curl
-      - wget
+    - powershell
+    - pwsh
+    - cmd
+    - sh
+    - bash
+    - curl
+    - wget
     high_confidence_threshold: 0.9
     medium_confidence_threshold: 0.7
 lineage:

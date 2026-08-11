@@ -171,6 +171,27 @@ mod tests {
         status: StatusCode,
     }
 
+    /// A per-run dead-letter journal outside the repository.
+    ///
+    /// `DispatchingExecutor::from_config` opens the journal eagerly, so a test
+    /// that takes the cwd-relative `./dead-letter.jsonl` default creates
+    /// `crates/swarm-response/dead-letter.jsonl` in the checked-out tree. The
+    /// file stays zero-byte on the success path, which is why `git status` never
+    /// reported it.
+    fn temp_jsonl_path(label: &str) -> String {
+        std::env::temp_dir()
+            .join(format!(
+                "swarm-response-dispatch-{label}-{}-{}.jsonl",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ))
+            .display()
+            .to_string()
+    }
+
     async fn handler(
         State(state): State<CaptureState>,
         headers: HeaderMap,
@@ -256,7 +277,7 @@ mod tests {
                     timeout_ms: 500,
                     retry: RetryConfig::default(),
                     circuit_breaker: CircuitBreakerConfig::default(),
-                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                    dead_letter_path: temp_jsonl_path("adapter"),
                 },
             },
             None,
@@ -308,7 +329,7 @@ mod tests {
                     timeout_ms: 500,
                     retry: RetryConfig::default(),
                     circuit_breaker: CircuitBreakerConfig::default(),
-                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                    dead_letter_path: temp_jsonl_path("adapter"),
                 },
             },
             None,
@@ -358,7 +379,7 @@ mod tests {
                     auth_token: Some("secret".to_string().into()),
                     retry: RetryConfig::default(),
                     circuit_breaker: CircuitBreakerConfig::default(),
-                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                    dead_letter_path: temp_jsonl_path("adapter"),
                 },
             },
             None,

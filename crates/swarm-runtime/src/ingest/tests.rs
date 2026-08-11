@@ -86,8 +86,24 @@ fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
     }]
 }
 
+/// A throwaway store root for `test_config`.
+///
+/// Not created on disk: every harness that needs one calls `create_dir_all`
+/// itself. Building the path lazily keeps `test_config` free of filesystem
+/// side effects while still keeping the repo-relative defaults out of play.
+fn test_config_store_root() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "swarm-runtime-ingest-config-{}-{nanos}",
+        std::process::id()
+    ))
+}
+
 fn test_config(strategy: &str) -> SwarmConfig {
-    SwarmConfig {
+    let mut config = SwarmConfig {
         schema_version: 1,
         name: "ingest-test".to_string(),
         description: "ingest test config".to_string(),
@@ -155,7 +171,9 @@ fn test_config(strategy: &str) -> SwarmConfig {
         platform_api: PlatformApiConfig::default(),
         operator: OperatorSurfaceConfig::default(),
         tls: None,
-    }
+    };
+    redirect_evolution_paths(&mut config, &test_config_store_root());
+    config
 }
 
 const TEST_PLATFORM_API_KEY: &str = "platform-read-secret";
@@ -535,6 +553,34 @@ fn office_control_experiment() -> PathBuf {
     repo_root().join("experiments/office-baseline-control.yaml")
 }
 
+/// Copy an experiment manifest into `root`, rewriting its relative `../` corpus
+/// and verification references to absolute paths in the checked-out tree.
+///
+/// Materialized mutation manifests are written NEXT TO their base experiment, so
+/// a test that passes the checked-out `experiments/office-baseline-control.yaml`
+/// as the base drops `mutation-*.yaml` into the repository's `experiments/`.
+///
+/// The corpora are ABSOLUTIZED rather than copied: `rulesets/safety/
+/// office-detector-admission.yaml` pins the admission invariants to the
+/// repository's `verifications/office-detector-safety-v1.yaml`, and a candidate
+/// verified against a copy is rejected as a different corpus.
+fn stage_experiment(root: &Path, source: &Path) -> PathBuf {
+    let experiments_dir = root.join("experiments");
+    fs::create_dir_all(&experiments_dir).unwrap();
+    let destination = experiments_dir.join(source.file_name().unwrap());
+    let source_dir = source.parent().unwrap();
+
+    let raw = fs::read_to_string(source).unwrap();
+    let mut manifest: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
+    for (section, key) in [("corpus", "suite"), ("verification", "corpus")] {
+        let relative = manifest[section][key].as_str().unwrap().to_string();
+        let absolute = source_dir.join(&relative).canonicalize().unwrap();
+        manifest[section][key] = serde_yaml::Value::String(absolute.display().to_string());
+    }
+    fs::write(&destination, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    destination
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -551,6 +597,17 @@ fn temp_dir(label: &str) -> PathBuf {
 fn configure_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.enabled = true;
     config.canary.enabled = true;
+    redirect_evolution_paths(config, root);
+}
+
+/// Point every evolution store at `root`.
+///
+/// `EvolutionConfig::default()` leaves these on repo-relative `data/...`
+/// defaults, and `resolve_repo_relative_path` degenerates those to cwd for an
+/// inline config path -- i.e. the checked-out crate root. Any harness built
+/// from such a config creates its store eagerly, so the default has to be
+/// overwritten even by tests that never intend to read the store back.
+fn redirect_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.paths.replay_results_dir = root.join("replay").display().to_string();
     config.evolution.paths.experiment_results_dir = root.join("experiments").display().to_string();
     config.evolution.paths.verification_results_dir =
@@ -611,6 +668,11 @@ fn configure_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.paths.evolution_population_results_dir =
         root.join("evolution-population").display().to_string();
     config.evolution.paths.canary_results_dir = root.join("canaries").display().to_string();
+    // The assurance harvest store is NOT under `evolution.paths`, so it is easy
+    // to miss here; left on its repo-relative default it writes into the
+    // checked-out crate root.
+    config.evolution.assurance.harvest.results_dir =
+        root.join("assurance-cases").display().to_string();
 }
 
 fn test_ingest_state() -> IngestState {
@@ -798,7 +860,7 @@ async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_l
             EvolutionMutationSpecCreateRequest {
                 draft_id: Some(draft.report.draft_id.clone()),
                 materialization_id: None,
-                base_experiment_path: Some(office_control_experiment()),
+                base_experiment_path: Some(stage_experiment(&root, &office_control_experiment())),
                 rationale: "materialize a proposal-ready control candidate".to_string(),
             },
         )
@@ -2649,6 +2711,12 @@ async fn generated_python_client_smoke_tests_live_platform_router() {
     let base_url = format!("http://{address}");
     let output = tokio::task::spawn_blocking(move || {
         std::process::Command::new("uv")
+            // The script imports the generated client package from
+            // `clients/python/swarm-platform-client/` IN THE CHECKED-OUT TREE,
+            // and CPython writes a `__pycache__/` directory next to every module
+            // it imports. Gitignored, so `git status --porcelain` never showed
+            // it -- but it is still the suite writing into the repository.
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .arg("run")
             .arg("--isolated")
             .arg("--no-project")
@@ -5745,7 +5813,9 @@ fn test_config_with_secret_token(secret_dir: &Path) -> SwarmConfig {
                 timeout_ms: 1_000,
                 retry: RetryConfig::default(),
                 circuit_breaker: CircuitBreakerConfig::default(),
-                dead_letter_path: "./dead-letter.jsonl".to_string(),
+                // Live adapter config: the cwd-relative default would append to
+                // the checked-out `crates/swarm-runtime/dead-letter.jsonl`.
+                dead_letter_path: temp_path("http-edr-dead-letter").display().to_string(),
             },
         },
         runtime: swarm_core::config::RuntimeSettings {

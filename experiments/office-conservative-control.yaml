@@ -10,12 +10,12 @@ candidate:
   description: Candidate profile keeps the office safety corpus covered but omits broader office and collaboration execution branches
   profile:
     suspicious_parents:
-      - winword
-      - outlook
-      - acrord32
+    - winword
+    - outlook
+    - acrord32
     suspicious_children:
-      - powershell
-      - cmd
+    - powershell
+    - cmd
     high_confidence_threshold: 0.9
     medium_confidence_threshold: 0.7
 lineage:

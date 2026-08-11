@@ -233,7 +233,13 @@ pub(crate) fn find_experiment_manifest_path(
             if !matches!(extension, "yaml" | "yml") {
                 continue;
             }
-            let manifest = load_detector_experiment_manifest(&path)?;
+            // This is a SEARCH over a directory the caller does not control:
+            // `experiments/` accumulates generated manifests and unrelated YAML.
+            // A file we cannot read or parse is simply not the one we are looking
+            // for, so skip it rather than failing the whole lookup.
+            let Ok(manifest) = load_detector_experiment_manifest(&path) else {
+                continue;
+            };
             if manifest.name == experiment_name {
                 return Ok(Some(path));
             }

@@ -2659,7 +2659,13 @@ fn find_experiment_manifest_path(
             if !matches!(extension, "yaml" | "yml") {
                 continue;
             }
-            let manifest = load_detector_experiment_manifest(&path)?;
+            // This is a SEARCH over a directory the caller does not control:
+            // `experiments/` accumulates generated manifests and unrelated YAML.
+            // A file we cannot read or parse is simply not the one we are looking
+            // for, so skip it rather than failing the whole lookup.
+            let Ok(manifest) = load_detector_experiment_manifest(&path) else {
+                continue;
+            };
             if manifest.name == experiment_name {
                 return Ok(Some(path));
             }
@@ -3153,7 +3159,7 @@ mod tests {
     use crate::replay::DefaultReplayHarness;
     use crate::strategy::DefaultStrategyScorecardHarness;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     use swarm_core::ThreatClass;
     use swarm_core::config::{PolicyRuleConfig, PolicyRuleDecision, SwarmConfig};
@@ -3251,6 +3257,49 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    fn copy_dir_recursive(source: &Path, destination: &Path) {
+        if !source.exists() {
+            return;
+        }
+        fs::create_dir_all(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let entry_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_dir_recursive(&entry_path, &destination_path);
+            } else {
+                fs::copy(&entry_path, &destination_path).unwrap();
+            }
+        }
+    }
+
+    /// Copy an experiment manifest, and the sibling trees its relative `../`
+    /// corpus and verification paths reach, into `root`.
+    ///
+    /// `materialized_experiment_path` writes the materialized manifest NEXT TO
+    /// its base, so a test that passes the checked-out
+    /// `experiments/office-baseline-control.yaml` as the base drops
+    /// `materialized-*.yaml` into the repository's `experiments/` directory.
+    fn stage_experiment(root: &Path, source: &Path) -> PathBuf {
+        let experiments_dir = root.join("experiments");
+        fs::create_dir_all(&experiments_dir).unwrap();
+        let destination = experiments_dir.join(source.file_name().unwrap());
+        fs::copy(source, &destination).unwrap();
+        if let Some(source_root) = source.parent().and_then(Path::parent) {
+            copy_dir_recursive(
+                &source_root.join("scenario-suites"),
+                &root.join("scenario-suites"),
+            );
+            copy_dir_recursive(
+                &source_root.join("verifications"),
+                &root.join("verifications"),
+            );
+            copy_dir_recursive(&source_root.join("scenarios"), &root.join("scenarios"));
+        }
+        destination
     }
 
     #[tokio::test]
@@ -3540,7 +3589,7 @@ mod tests {
         let materialization = harness
             .materialize_draft(EvolutionDraftMaterializationRequest {
                 draft_id: draft.report.draft_id.clone(),
-                base_experiment_path: Some(office_control_experiment()),
+                base_experiment_path: Some(stage_experiment(&root, &office_control_experiment())),
                 ..EvolutionDraftMaterializationRequest::default()
             })
             .unwrap();
@@ -3718,7 +3767,7 @@ mod tests {
         let materialization = harness
             .materialize_draft(EvolutionDraftMaterializationRequest {
                 draft_id: draft.report.draft_id.clone(),
-                base_experiment_path: Some(office_control_experiment()),
+                base_experiment_path: Some(stage_experiment(&root, &office_control_experiment())),
                 add_suspicious_parents: vec!["python".to_string()],
                 ..EvolutionDraftMaterializationRequest::default()
             })

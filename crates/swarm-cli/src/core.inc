@@ -5219,6 +5219,10 @@ mod tests {
             std::env::set_var(evidence_env, "quickstart-evidence-key");
         }
 
+        // The four approval stores default to REPO-RELATIVE `data/approval-*`
+        // paths (see the `#[arg(long, global = true, default_value = ...)]`
+        // declarations above), and `cargo test`'s cwd is the crate root, so a
+        // quickstart run that omits them writes into the checked-out tree.
         let cli = Cli::parse_from([
             "swarmctl",
             "--config",
@@ -5226,6 +5230,14 @@ mod tests {
             "--json",
             "--evidence-signing-key-env",
             evidence_env,
+            "--approval-set-results-dir",
+            dir.join("approval-sets").to_str().unwrap(),
+            "--approval-ledger-results-dir",
+            dir.join("approval-ledgers").to_str().unwrap(),
+            "--approval-verdict-results-dir",
+            dir.join("approval-verdicts").to_str().unwrap(),
+            "--approval-receipt-pack-results-dir",
+            dir.join("approval-receipt-packs").to_str().unwrap(),
             "quickstart",
             "--voter-signing-key-env",
             voter_env,

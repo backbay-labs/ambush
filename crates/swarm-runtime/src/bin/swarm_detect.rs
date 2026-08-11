@@ -1375,6 +1375,12 @@ mod tests {
         config.deception.enabled = true;
         config.identity.agent_key_dir = root.join("agent-keys").display().to_string();
         config.identity.registry_dir = root.join("agent-identity").display().to_string();
+        // Without this, `resolve_deception_root` joins the repo-relative default to
+        // `config_path.parent()` and `FileCalicoLifecycleStore::open` create_dir_all's
+        // `rulesets/data/deception-lifecycle` inside the checkout. The sibling helper at
+        // `calico_agent.rs:991` already redirects it; this call site was missed.
+        config.deception.lifecycle_results_dir =
+            root.join("deception-lifecycle").display().to_string();
 
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let health_state = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));

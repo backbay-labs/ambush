@@ -24,16 +24,31 @@ Thumbs.db
 .ephemeral_state.json
 experiments/materialized-*.yaml
 experiments/mutation-*.yaml
-crates/swarm-runtime/data/evolution-assurance-cases/reports/
-crates/swarm-runtime/data/evolution-assurance-cases/scenarios/
-crates/swarm-cli/data/approval-ledgers/
-crates/swarm-cli/data/approval-receipt-packs/
-crates/swarm-cli/data/approval-sets/
-crates/swarm-cli/data/approval-verdicts/
-crates/swarm-runtime/data/approval-ledgers/
-crates/swarm-runtime/data/approval-receipt-packs/
-crates/swarm-runtime/data/approval-sets/
-crates/swarm-runtime/data/approval-verdicts/
+# Store roots created under a crate directory when a test or a `swarmctl` run
+# takes a cwd-relative `data/...` default.
+#
+# These are ENUMERATED on purpose. The blanket `crates/*/data/` that replaced
+# the previous list also swallowed every store root that has NEVER leaked, and
+# `git rm --cached` had already removed the tracked copies -- so a fresh leak at
+# e.g. `crates/swarm-runtime/data/evolution-population/` stopped showing up as
+# `?? crates/swarm-runtime/data/` and the CI drift gate went quiet. The
+# instruction that produced 2b25bc8 was to untrack, not to ignore; doing both is
+# what blinds the gate. Only the roots that 2b25bc8 actually untracked are
+# listed, so any NEW leak path stays visible to `git status --porcelain`.
+#
+# This list is a convenience, not the gate. The binding check is the
+# `find crates -maxdepth 2 -name data -type d` assertion in
+# `.github/workflows/ci.yml`, which is immune to .gitignore and also catches
+# the EMPTY directories `git status` never reports.
+crates/*/data/approval-ledgers/
+crates/*/data/approval-receipt-packs/
+crates/*/data/approval-sets/
+crates/*/data/approval-verdicts/
+crates/*/data/evolution-assurance-cases/
+crates/*/data/incidents/
+crates/*/data/investigations/
+crates/*/data/replay/
+crates/*/dead-letter.jsonl
 .claude/
 data/replay-runs/
 data/experiments/
@@ -63,4 +78,3 @@ data/evolution-portfolios/
 data/evolution-governance-review-packets/
 data/evolution-packet-sets/
 data/evolution-portfolio-history/
-experiments/mutation-*.yaml
