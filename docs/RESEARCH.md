@@ -355,6 +355,6 @@ The key insight from Hellcat analysis: **the co-evolutionary arms race already h
 
 ### Internal Systems
 
-- ClawdStrike. Guard pipeline, Spider Sense, Spine transport, delegation tokens, broker subsystem, Logos/Z3, Lean 4 specification. `/Users/connor/Medica/backbay/standalone/clawdstrike/`
-- Cyntra Kernel. Scheduler, Dispatcher, Verifier, Memory, Sentinels, Ralph. `/Users/connor/Medica/backbay/platform/kernel/`
+- ClawdStrike. Guard pipeline, Spider Sense, Spine transport, delegation tokens, broker subsystem, Logos/Z3, Lean 4 specification. Internal reference; not publicly available.
+- Cyntra Kernel. Scheduler, Dispatcher, Verifier, Memory, Sentinels, Ralph. Internal reference; not publicly available.
 - Hellcat. TargetGraph, AttackPlanner, 16 Operators, OPSEC/NoiseMonitor, Proof gates, Prompt evolution, AttackPatternDB, Evasion engine.

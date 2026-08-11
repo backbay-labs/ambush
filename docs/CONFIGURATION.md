@@ -363,8 +363,8 @@ File-backed runtime config now also requires an adjacent detached-signature side
 
 This applies to the shipped repo config too:
 
-- [default.yaml](/Users/connor/Medica/backbay/standalone/swarm-team-six/rulesets/default.yaml)
-- [default.yaml.sig.json](/Users/connor/Medica/backbay/standalone/swarm-team-six/rulesets/default.yaml.sig.json)
+- [default.yaml](../rulesets/default.yaml)
+- [default.yaml.sig.json](../rulesets/default.yaml.sig.json)
 
 Operationally:
 
