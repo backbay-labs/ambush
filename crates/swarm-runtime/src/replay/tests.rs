@@ -1354,3 +1354,170 @@ fn replay_suite_manifest_round_trips_through_yaml() {
     assert_eq!(decoded.metadata, manifest.metadata);
     assert_eq!(decoded.scenarios.len(), 2);
 }
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .unwrap()
+        .to_path_buf()
+}
+
+fn office_control_experiment() -> PathBuf {
+    repo_root().join("experiments/office-baseline-control.yaml")
+}
+
+/// Canonical digest over the VERDICT-BEARING fields of a verification report:
+/// the overall `passed` flag, every invariant's name and `passed` flag, and
+/// every counterexample. Deliberately excludes `expected`/`actual`/`details`,
+/// which is where the latency measurement is recorded -- the digest has to be
+/// blind to the observation and sensitive to the verdict.
+fn verdict_digest(report: &super::DetectorVerificationReport) -> (String, String) {
+    use sha2::{Digest, Sha256};
+
+    let canonical = serde_json::json!({
+        "passed": report.passed,
+        "invariants": report
+            .invariants
+            .iter()
+            .map(|invariant| {
+                serde_json::json!({
+                    "name": invariant.name,
+                    "passed": invariant.passed,
+                    "counterexamples": invariant
+                        .counterexamples
+                        .iter()
+                        .map(|counterexample| {
+                            serde_json::json!({
+                                "subject": counterexample.subject,
+                                "reference": counterexample.reference,
+                                "details": counterexample.details,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>(),
+    });
+    let canonical_text = serde_json::to_string(&canonical).unwrap();
+    let digest = hex::encode(Sha256::digest(canonical_text.as_bytes()));
+    (digest, canonical_text)
+}
+
+/// Every detect-latency measurement the report records, wherever it lives.
+/// Shape-tolerant on purpose: the fix may move the observation out of the
+/// invariant list, but it must keep recording it somewhere.
+fn recorded_detect_latencies(value: &Value, out: &mut Vec<u64>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(name)) = map.get("name")
+                && name.contains("detect_latency")
+            {
+                for key in [
+                    "actual",
+                    "observed",
+                    "observed_us",
+                    "value",
+                    "worst_case_us",
+                    "max_detect_latency_us",
+                ] {
+                    if let Some(number) = map.get(key).and_then(Value::as_u64) {
+                        out.push(number);
+                    }
+                }
+            }
+            for (key, child) in map {
+                if (key.contains("detect_latency") || key.contains("latency_us"))
+                    && let Some(number) = child.as_u64()
+                {
+                    out.push(number);
+                }
+                recorded_detect_latencies(child, out);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                recorded_detect_latencies(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn latency_observations(report: &super::DetectorVerificationReport) -> Vec<u64> {
+    let mut observations = Vec::new();
+    recorded_detect_latencies(&serde_json::to_value(report).unwrap(), &mut observations);
+    observations.sort_unstable();
+    observations
+}
+
+/// Same machine, same process, same inputs, two runs -- the second one with the
+/// detect stage deliberately stalled far past the corpus latency budget.
+///
+/// The verdict a verification report reaches must be a function of the fixture
+/// content, not of how busy the machine was while it was measured. So:
+///   (1) the digest of the verdict-bearing fields must be byte-identical, and
+///   (2) the recorded latency observation must differ, proving the load
+///       differential really landed and that the report still carries the
+///       signal. Without (2) this test could pass by measuring nothing at all.
+#[tokio::test]
+async fn verification_verdict_is_invariant_under_detect_stage_load() {
+    let root = unique_temp_dir("verification-load-differential");
+    let results_dir = root.join("results");
+    let nominal_dir = root.join("verification-results-nominal");
+    let stalled_dir = root.join("verification-results-stalled");
+
+    let harness =
+        DefaultReplayHarness::from_config("inline", sample_config(), &results_dir).unwrap();
+
+    // Pass 1: nominal. Also warms every cache the second pass will reuse, so any
+    // difference the second pass shows is attributable to the injected stall.
+    let nominal = harness
+        .evaluate_verification_path(office_control_experiment(), &nominal_dir)
+        .await
+        .unwrap()
+        .report;
+
+    // Pass 2: identical inputs, one detect-stage evaluation stalled by 20ms.
+    // The corpus budget is 10_000us, so this measurement blows through it while
+    // staying under the 50_000us per-scenario replay expectations, which keeps
+    // the differential confined to the verification-level latency invariant.
+    let stalled = {
+        let _stall =
+            super::detect_stall::DetectStallGuard::arm(1, std::time::Duration::from_millis(20));
+        harness
+            .evaluate_verification_path(office_control_experiment(), &stalled_dir)
+            .await
+            .unwrap()
+            .report
+    };
+
+    // (2) Vacuity check first: prove the load differential actually landed and
+    // that latency is still a recorded signal in both reports.
+    let nominal_latencies = latency_observations(&nominal);
+    let stalled_latencies = latency_observations(&stalled);
+    assert!(
+        !nominal_latencies.is_empty() && !stalled_latencies.is_empty(),
+        "report must still RECORD a detect-latency observation; \
+         nominal={nominal_latencies:?} stalled={stalled_latencies:?}"
+    );
+    assert!(
+        stalled_latencies.iter().copied().max().unwrap_or(0) > 10_000,
+        "stalled run must measure past the 10_000us corpus budget, got {stalled_latencies:?}"
+    );
+    assert_ne!(
+        nominal_latencies, stalled_latencies,
+        "the two runs must differ in the measured latency observation, \
+         otherwise this test proves nothing about the verdict"
+    );
+
+    // (1) The verdict must be identical across the two runs.
+    let (nominal_digest, nominal_canonical) = verdict_digest(&nominal);
+    let (stalled_digest, stalled_canonical) = verdict_digest(&stalled);
+    assert_eq!(
+        nominal_digest, stalled_digest,
+        "verdict digest changed with machine load.\n  nominal: {nominal_canonical}\n  stalled: {stalled_canonical}"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}

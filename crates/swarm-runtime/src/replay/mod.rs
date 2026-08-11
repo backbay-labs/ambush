@@ -1,3 +1,5 @@
+#[cfg(test)]
+pub(crate) mod detect_stall;
 pub mod harness;
 pub mod helpers;
 mod metrics;

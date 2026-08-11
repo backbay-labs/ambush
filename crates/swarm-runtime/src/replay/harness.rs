@@ -738,6 +738,15 @@ impl DefaultReplayHarness {
         loaded: &LoadedReplayScenario,
     ) -> Result<ReplayRunBundle, ReplayHarnessError> {
         let steps = self.materialize_steps(loaded)?;
+        // TEST-ONLY SEAM (compiled out entirely by `#[cfg(test)]`): substitute a
+        // delegating detector that can burn wall-clock time inside the detect
+        // stage, so the load-differential regression test can drive the real
+        // measurement without a hook in the live critical lane. See
+        // `replay::detect_stall`. Inert unless a `DetectStallGuard` is armed.
+        #[cfg(test)]
+        let stalling_detector = super::detect_stall::StallingDetector::new(detector.clone());
+        #[cfg(test)]
+        let detector = &stalling_detector;
         let service = self.build_service()?;
         let substrate = InMemoryPheromoneSubstrate::new(self.config.pheromone.clone());
         // Deterministic simulation identity, NOT a credential. Replay runs entirely
