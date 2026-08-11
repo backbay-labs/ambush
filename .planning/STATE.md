@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.78
 milestone_name: Runtime Decomposition And TCB Boundary
-current_phase: 280
-current_phase_name: Verification Gate Repair
+current_phase: 284
+current_phase_name: Fixture Determinism And Suite Health
 current_plan: null
 status: active
 last_updated: "2026-08-10T00:00:00Z"
 last_activity: 2026-08-10
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 25
 ---
 
 # State
@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 ## Current Position
 
-**Current Phase:** 280 — Verification Gate Repair (owns the 7 genuine test failures via criterion 5)
+**Current Phase:** 284 — Fixture Determinism And Suite Health (pulled forward from v1.79)
 **Total Phases:** 4 (280-283), plus 320-322 in v1.78.1
 **Current Plan:** None started yet
 **Total Plans in Phase:** TBD
@@ -61,6 +61,9 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Issues
 
+- Phase 280 COMPLETE 2026-08-11 (GATEFIX-01..04). All 9 baseline swarm-runtime failures fixed (roadmap said 7; fail-fast undercount). Two real product defects repaired: the guided first-run wizard never reached its own human gate, and the SIEM forward task was detached rather than owned. The panic-contract gate needed its own repair after the first pass made every `include!`d file silently unscanned.
+- OPEN, unowned by any requirement: `crates/swarm-cli/src/core.inc:2988` hard-codes `ed25519_dalek::SigningKey::from_bytes(&[85u8; 32])` inside `pub async fn run(cli: Cli)` with no `#[cfg(test)]` above it. This is shipping production code keyed on a public constant.
+- OPEN: a second intermittent `kitten_agent` benchmark flake, `measured_evolution_benchmark_improves_over_conservative_seed`, distinct from `..._persists_generation_deltas`. Both belong to phase 284.
 - BLOCKER: the test suite is not deterministic and writes into the repository working tree. `crates/swarm-core/src/config/defaults.rs` returns 28 repo-relative `data/...` paths, so any test building a default config writes into the crate root. Phase 284 must land, serially, before any parallel phase work.
 - Phase 320 is 2/4: QRT-01 and QRT-02 shipped in 4d03543. QRT-03 (TTL sweep) and QRT-04 (`swarmctl quarantine release`) remain.
 - Phase 321 is 2/5, NOT complete: f55c3bd's own message says "Implements BFT-01 and BFT-02". BFT-03 (remove `simulate_governance_commit`'s co-located-key path, still live at `crates/swarm-runtime/src/tom_agent.rs:1147`), BFT-04, and BFT-05 remain.
@@ -72,4 +75,4 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Next Command
 
-Plan and execute Phase 280 (Verification Gate Repair) serially. Execution order: 280 -> 284 -> 281 -> 282 -> 283.
+Plan and execute Phase 284 (Fixture Determinism And Suite Health) serially. Remaining order: 284 -> 281 -> 282 -> 283.

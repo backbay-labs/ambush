@@ -107,6 +107,15 @@ proptest = "1"
 #              justifying the invariant. See
 #              `tools/check-runtime-panic-contract.sh`.
 #
+#              ORDER MATTERS. The marker must be the nearest non-blank line above
+#              the call, so the attribute goes ABOVE the marker:
+#                  #[allow(clippy::unwrap_used)]
+#                  // SAFETY: runtime panic contract exception -- <why it cannot fail>
+#                  let out = value.unwrap();
+#              Putting the attribute BETWEEN the marker and the call is still a
+#              contract violation, because the attribute then displaces the marker
+#              as the nearest line above.
+#
 #   NOT allowed: a crate-wide `#![cfg_attr(test, allow(...))]` prologue. It covers
 #              every current AND future test module in the crate, including ones
 #              nobody reviewed, and it silently widens over time. All eight of

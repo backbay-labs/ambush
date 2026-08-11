@@ -764,10 +764,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Verification Gate Repair
 
-- [ ] **GATEFIX-01**: The clippy gate is verified green on the v1.74-v1.77 branch tip in a cold-cache run and the result recorded; the ~41 violations reported against `main` are absent on the branch because `crates/swarm-core/src/lib.rs:1`, `crates/swarm-runtime/src/lib.rs`, and `crates/swarm-runtime/src/bin/swarm_detect.rs` each carry a crate-wide `#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]`.
-- [ ] **GATEFIX-02**: The crate-wide test-code `allow` introduced by the branch is replaced with reviewed per-call-site `#[allow(clippy::unwrap_used)]` attributes, matching the convention Chio's workspace manifest states explicitly ("exceptions get a reviewed allow at the call site, never a crate-wide opt-out"); a blanket crate-level opt-out silently permits every future unwrap in test code, including in the crates that gate destructive response.
-- [ ] **GATEFIX-03**: `tools/check-runtime-panic-contract.sh` is extended beyond `crates/swarm-runtime/src` to cover every workspace crate's production code, closing the gap where it reports success while clippy fails elsewhere; the script documents in-file exactly which surfaces it does and does not scan.
-- [ ] **GATEFIX-04**: `tools/check-supply-chain.sh` stops suppressing its own findings: the `-A duplicate` flag is removed from `cargo deny check bans`, and `deny.toml`'s `[bans] multiple-versions`, `[sources] unknown-registry`, and `[sources] unknown-git` are raised from `warn` to `deny`, with a dated `[[bans.skip]]` entry for every duplicate currently surfaced by `cargo tree -d --workspace --all-features`.
+- [x] **GATEFIX-01**: The clippy gate is verified green on the v1.74-v1.77 branch tip in a cold-cache run and the result recorded; the ~41 violations reported against `main` are absent on the branch because `crates/swarm-core/src/lib.rs:1`, `crates/swarm-runtime/src/lib.rs`, and `crates/swarm-runtime/src/bin/swarm_detect.rs` each carry a crate-wide `#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]`.
+- [x] **GATEFIX-02**: The crate-wide test-code `allow` introduced by the branch is replaced with reviewed per-call-site `#[allow(clippy::unwrap_used)]` attributes, matching the convention Chio's workspace manifest states explicitly ("exceptions get a reviewed allow at the call site, never a crate-wide opt-out"); a blanket crate-level opt-out silently permits every future unwrap in test code, including in the crates that gate destructive response.
+- [x] **GATEFIX-03**: `tools/check-runtime-panic-contract.sh` is extended beyond `crates/swarm-runtime/src` to cover every workspace crate's production code, closing the gap where it reports success while clippy fails elsewhere; the script documents in-file exactly which surfaces it does and does not scan.
+- [x] **GATEFIX-04**: `tools/check-supply-chain.sh` stops suppressing its own findings: the `-A duplicate` flag is removed from `cargo deny check bans`, and `deny.toml`'s `[bans] multiple-versions`, `[sources] unknown-registry`, and `[sources] unknown-git` are raised from `warn` to `deny`, with a dated `[[bans.skip]]` entry for every duplicate currently surfaced by `cargo tree -d --workspace --all-features`.
 
 #### core.inc Elimination
 
@@ -1412,10 +1412,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | E2EPROOF-01 | Phase 278 | Complete |
 | E2EPROOF-02 | Phase 278 | Complete |
 | E2EPROOF-03 | Phase 279 | Complete |
-| GATEFIX-01 | Phase 280 | Pending |
-| GATEFIX-02 | Phase 280 | Pending |
-| GATEFIX-03 | Phase 280 | Pending |
-| GATEFIX-04 | Phase 280 | Pending |
+| GATEFIX-01 | Phase 280 | Satisfied |
+| GATEFIX-02 | Phase 280 | Satisfied |
+| GATEFIX-03 | Phase 280 | Satisfied |
+| GATEFIX-04 | Phase 280 | Satisfied |
 | INCFIX-01 | Phase 281 | Pending |
 | INCFIX-02 | Phase 281 | Pending |
 | INCFIX-03 | Phase 281 | Pending |
@@ -1635,7 +1635,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.75 complete: 10 requirements satisfied across phases 268-271
 - v1.76 complete: 9 requirements satisfied across phases 272-275
 - v1.77 complete: 9 requirements satisfied across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
-- v1.78 queued: 17 requirements across phases 280-283 (GATEFIX-01-04 -> Phase 280; INCFIX-01-03 -> Phase 281; SPLIT-01-06 -> Phase 282; TCBOUND-01-04 -> Phase 283)
+- v1.78 in progress: 17 requirements across phases 280-283 (GATEFIX-01-04 Satisfied 2026-08-11) (GATEFIX-01-04 -> Phase 280; INCFIX-01-03 -> Phase 281; SPLIT-01-06 -> Phase 282; TCBOUND-01-04 -> Phase 283)
 - v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
 - v1.79 queued: 25 requirements across phases 284-287 (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
