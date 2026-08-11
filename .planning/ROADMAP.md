@@ -979,8 +979,9 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Status:** Not started
 **Plans:** TBD
 **Success Criteria**:
-1. No `.inc` file remains under `crates/`; `find crates -name '*.inc'` returns empty.
-2. No Rust source file under `crates/` exceeds 800 lines, and the CLI is organized as one module per command domain with the evolution commands in their own submodule tree.
+1. SCOPED 2026-08-11: the three single-owner `.inc` files are replaced by ordinary `.rs` modules -- `swarm-runtime/src/{http,replay,workbench}/core.inc` (8,153 + 5,425 + 3,902 = 17,480 lines). `crates/swarm-cli/src/core.inc` (5,394) is DEFERRED to phase 282: it is included by TWO crates (`swarm-cli/src/lib.rs:79` and `swarm-runtime/src/cli/mod.rs:1` via `../../../`), so eliminating it decides which crate owns the CLI, which is SPLIT-01..06 territory -- and 282 criterion 1 requires cycles be broken before any crate is cut. `find crates -name '*.inc'` therefore returns 1, not 0, at the end of 281.
+   NOTE FOR 282's PLANNER: eliminating it may not require deciding ownership at all. Splitting it into `swarm-cli/src/cli/` modules and repointing the cross-crate include at `#[path = "../../../swarm-cli/src/cli/mod.rs"]` keeps the include working while removing the `.inc`, since nested `mod` declarations resolve relative to the included file. INCFIX-03 forbids new `#[path = "*.inc"]`, not `#[path]` itself.
+2. SCOPED 2026-08-11: the 800-line limit applies to the CLI decomposition's resulting files, per INCFIX-02's actual wording ("with no resulting file exceeding 800 lines"), NOT workspace-wide. Taken literally the original wording covered 66 files and 129,032 LOC -- milestone scale, and already assigned elsewhere: deferred v1.74 phases 265 and 266 name `kitten_agent.rs` (4,516), `drafting.rs` (3,812), and `ingest/tests.rs` (5,991) explicitly, and phase 282 splits the remainder by crate. Because the CLI surface IS `swarm-cli/src/core.inc`, INCFIX-02 defers to 282 with it; phase 281 delivers INCFIX-01 (3 of 4 files) and INCFIX-03.
 3. `cargo fmt --all -- --check` passes over code that was previously invisible to it.
 4. A CI check fails the build if a new `#[path = "*.inc"]` directive or non-`.rs` Rust source file is added.
 
