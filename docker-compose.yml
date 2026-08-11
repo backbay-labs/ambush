@@ -6,7 +6,13 @@ services:
     ports:
       - "9090:9090"
     volumes:
+      # Config stays read-only. `data/` is layered writable on top because
+      # identity.agent_key_dir resolves to <config parent>/data/agent-keys and
+      # FileAgentKeyStore::load_or_create must WRITE a per-deployment key there
+      # on first start. A named volume also keeps that identity stable across
+      # restarts; an anonymous or tmpfs mount would mint a new AgentId each boot.
       - ./rulesets:/app/rulesets:ro
+      - swarm-identity:/app/rulesets/data
     environment:
       RUST_LOG: info
     restart: unless-stopped
@@ -35,3 +41,4 @@ services:
 
 volumes:
   nats-data:
+  swarm-identity:

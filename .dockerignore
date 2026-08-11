@@ -5,6 +5,10 @@ target/
 vendor/reference/
 kernel/
 data/
+# Agent keys and runtime state must never be baked into an image. The repo-root
+# `data/` rule above does NOT cover rulesets/data/, which is how the Sphinx key
+# reached /app/rulesets/data/agent-keys/ via `COPY rulesets/`.
+rulesets/data/
 experiments/
 __pycache__/
 .venv/
