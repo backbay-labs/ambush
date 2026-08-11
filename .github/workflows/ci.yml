@@ -69,6 +69,12 @@ jobs:
       - name: Check runtime panic contract
         run: bash tools/check-runtime-panic-contract.sh
 
+      # No toolchain needed; kept in this job because it is a fast static check.
+      # A live Ed25519 seed sat tracked at rulesets/data/agent-keys/ from 69814a4
+      # until the repo went public, and no gate looked for it.
+      - name: Check for committed key material
+        run: bash tools/check-no-committed-keys.sh
+
   build:
     runs-on: ubuntu-latest
     steps:

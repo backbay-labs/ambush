@@ -78,3 +78,17 @@ data/evolution-portfolios/
 data/evolution-governance-review-packets/
 data/evolution-packet-sets/
 data/evolution-portfolio-history/
+
+# Agent signing keys. rulesets/data/agent-keys/sphinx-primary.ed25519 was committed
+# from 69814a4 until the repo went public, so FileAgentKeyStore::load_or_create
+# loaded one shared, world-readable identity instead of minting a per-deployment
+# key. Never commit key material; `tools/check-no-committed-keys.sh` enforces this.
+**/data/agent-keys/
+*.ed25519
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
