@@ -6889,6 +6889,20 @@ mod tests {
         runtime_config.runtime.mode = crate::RuntimeMode::LiveResponse;
         runtime_config.runtime.demo_mode = true;
         runtime_config.policy.human_gate_severity = swarm_core::types::Severity::Low;
+        // Lowering `human_gate_severity` is not sufficient on its own. `operator_config()`
+        // inherits `permissive_policy_rules()`, whose sole rule has an empty `actions`
+        // selector -- a wildcard that matches `IsolateHost`, returns Allow, and short
+        // circuits the static human gate (the first matching rule decides outright; see
+        // docs/CONSENSUS.md "Human Approval Boundary"). Without this, no approval set is
+        // ever registered and `total_count` below is 0.
+        //
+        // Scope the inherited allow off destructive actions so `IsolateHost` reaches
+        // `static.human_gate`, mirroring the fixture shape already used in
+        // `ingest/tests.rs` `permissive_policy_rules`. Scoped to this test's own
+        // `runtime_config`: `operator_config()` has dozens of consumers in this module.
+        for rule in &mut runtime_config.policy.rules {
+            rule.actions = vec![swarm_core::config::PolicyActionSelector::Escalate];
+        }
         runtime_config.operator.runtime_base_url = runtime_base_url.clone();
         runtime_config.operator.auth.operator_id = operator_voter_id.clone();
         let runtime_harness = DefaultApprovalHarness::from_path(
