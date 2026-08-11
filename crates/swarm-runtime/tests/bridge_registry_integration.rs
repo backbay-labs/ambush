@@ -118,6 +118,11 @@ fn config_with_concurrent_bridges(
 ) -> Result<SwarmConfig, Box<dyn std::error::Error>> {
     let mut config = load_config(default_config_path())?;
     config.detection.strategy = "credential_access".to_string();
+    // The CloudTrail bridge normalizes into `TelemetryPayload::CloudTrail`, which
+    // `CredentialAccessDetector` deliberately ignores; the dedicated CloudTrail
+    // detector is what turns AWS credential-access activity into a finding. Both
+    // strategies must be active for a two-bridge pipeline to deposit from both.
+    config.detection.strategies = vec!["credential_access".to_string(), "cloudtrail".to_string()];
     config.runtime.telemetry_sources = vec![
         TelemetrySourceConfig {
             name: "cloudtrail-primary".to_string(),
@@ -215,21 +220,45 @@ async fn concurrent_bridge_registry_feeds_shared_whisker_pipeline()
     let cloudtrail_path = temp_fixture_path("cloudtrail");
     let generic_json_path = temp_fixture_path("generic");
 
+    // A baseline read of `prod/db-password` by the owning IAM user, followed by the
+    // same secret being read by a different principal. The second record is what the
+    // CloudTrail detector reports as `secret_read_by_unusual_caller`
+    // (ThreatClass::CredentialAccess). One record alone only seeds the baseline.
     fs::write(
         &cloudtrail_path,
-        serde_json::to_string(&serde_json::json!({
-            "eventID": "evt-cloudtrail-1",
-            "eventName": "kerberos_tgs",
-            "eventSource": "signin.amazonaws.com",
-            "eventTime": "2026-04-07T12:00:00Z",
-            "recipientAccountId": "123456789012",
-            "sourceIPAddress": "198.51.100.10",
-            "userAgent": "powershell.exe",
-            "userIdentity": {
-                "type": "IAMUser",
-                "userName": "alice"
-            }
-        }))?,
+        [
+            serde_json::to_string(&serde_json::json!({
+                "eventID": "evt-cloudtrail-baseline",
+                "eventName": "GetSecretValue",
+                "eventSource": "secretsmanager.amazonaws.com",
+                "eventTime": "2026-04-07T11:59:30Z",
+                "recipientAccountId": "123456789012",
+                "sourceIPAddress": "198.51.100.10",
+                "userAgent": "aws-cli/2.15.0",
+                "userIdentity": {
+                    "type": "IAMUser",
+                    "arn": "arn:aws:iam::123456789012:user/alice",
+                    "userName": "alice"
+                },
+                "requestParameters": { "secretId": "prod/db-password" }
+            }))?,
+            serde_json::to_string(&serde_json::json!({
+                "eventID": "evt-cloudtrail-1",
+                "eventName": "GetSecretValue",
+                "eventSource": "secretsmanager.amazonaws.com",
+                "eventTime": "2026-04-07T12:00:00Z",
+                "recipientAccountId": "123456789012",
+                "sourceIPAddress": "198.51.100.11",
+                "userAgent": "powershell.exe",
+                "userIdentity": {
+                    "type": "AssumedRole",
+                    "arn": "arn:aws:iam::123456789012:role/analytics",
+                    "userName": "analytics"
+                },
+                "requestParameters": { "secretId": "prod/db-password" }
+            }))?,
+        ]
+        .join("\n"),
     )?;
     fs::write(
         &generic_json_path,
@@ -473,6 +502,11 @@ async fn host_log_bridge_registry_feeds_detectors_and_reports_metrics()
             "timestamp": "2026-04-13T18:00:30Z",
             "host": "linux-a",
             "syscall": "openat",
+            // auditd records raw syscall args as PREFIXLESS HEX; for openat the flags
+            // sit at a2. 241 = O_WRONLY|O_CREAT|O_TRUNC, i.e. a write. Without it the
+            // bridge correctly classifies this as a read-only open and emits nothing
+            // (see AuditdBridge::map_file_persistence / open_is_write).
+            "a2": "241",
             "exe": "/bin/bash",
             "comm": "bash",
             "path": "/etc/cron.d/evil",

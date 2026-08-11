@@ -4113,6 +4113,12 @@ mod providence_feedback {
         let applied_root = temp_dir("feedback-applied");
         let mut applied_config = super::test_config("suspicious_process_tree");
         configure_feedback_channel(&mut applied_config);
+        // Pin the agent key directory into this test's own root. `route_feedback_signal`
+        // resolves Kitten's identity through `resolve_agent_key_dir`, so the fixture and
+        // the handler must agree on where that key lives; without this they would share
+        // the process-wide default under the config path's parent.
+        applied_config.identity.agent_key_dir =
+            applied_root.join("agent-keys").display().to_string();
         applied_config.evolution.enabled = true;
         applied_config
             .evolution
@@ -4142,11 +4148,22 @@ mod providence_feedback {
             "suspicious_process_tree",
             1_700_120_000_000,
         );
+        // Sign the population fixture with the identity the handler verifies against.
+        // `route_feedback_signal` loads Kitten/primary from `identity.agent_key_dir` and
+        // calls `load_trusted(&kitten_identity.id)`; signing with the ingest key makes
+        // `SignedStateEnvelope::verify` return `SignerMismatch` -> `InvalidSignature` ->
+        // HTTP 500. That signer pinning is a deliberate product property (966bae0), so
+        // the fixture is what has to change.
+        let kitten_identity =
+            crate::agent_identity::FileAgentKeyStore::open(applied_root.join("agent-keys"))
+                .unwrap()
+                .load_or_create(AgentRole::Kitten, "primary")
+                .unwrap();
         persist_population_candidate(
             &applied_root.join("population"),
             "suspicious_process_tree",
             0.80,
-            &applied_state.signing_key,
+            &kitten_identity.signing_key,
         );
 
         let applied_app = detect_http_router(applied_state.clone());
@@ -5123,6 +5140,51 @@ async fn readyz_reports_jetstream_unreachable_detect_only_transition() {
     assert_eq!(
         json["components"]["degradation"]["capabilities"]["allows_live_response"],
         false
+    );
+}
+
+/// Narrowness guard for the tolerant `query_escalations` branch in
+/// `RuntimeService::operator_status`. Tolerating a substrate escalation-read
+/// failure must not disable async-lane gating in general: a genuine async-lane
+/// fault still has to fail `/readyz`.
+#[tokio::test]
+async fn readyz_still_fails_for_a_genuine_async_lane_store_fault() {
+    let investigation_root = temp_path("async-lane-store-fault").with_extension("dir");
+    let mut config = live_response_config("suspicious_process_tree");
+    config.investigation.enabled = true;
+    config.investigation.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: investigation_root.display().to_string(),
+    };
+    let state = IngestState::from_config(temp_path("async-lane-store-fault-config"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report());
+    let bundles_dir = investigation_root.join("bundles");
+    fs::remove_dir_all(&bundles_dir).unwrap();
+    fs::write(&bundles_dir, b"blocked").unwrap();
+    let app = detect_http_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["components"]["async_lane"]["ready"], false);
+    assert_eq!(json["components"]["async_lane"]["status"], "degraded");
+    assert!(
+        json["components"]["async_lane"]["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("investigation store"),
+        "async lane must name the investigation store fault: {}",
+        json["components"]["async_lane"]
     );
 }
 

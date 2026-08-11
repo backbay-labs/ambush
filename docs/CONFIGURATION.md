@@ -696,7 +696,13 @@ The active governance contract is defined by a small set of repo-owned config
 keys rather than a broad abstract autonomy schema:
 
 - `policy.human_gate_severity`: severity threshold where destructive actions
-  must stop for human approval even after runtime authorization.
+  must stop for human approval. It applies to the static fallback gate only.
+  `policy.rules` is evaluated first, in file order, and the first matching rule
+  decides `allow` or `deny` outright; the human gate is reached only when no rule
+  matches. A matching `allow` rule therefore authorizes a destructive action
+  without human confirmation - which is exactly what the shipped
+  `command-and-control-emergency-block` rule relies on. See
+  `docs/CONSENSUS.md` "Human Approval Boundary".
 - `policy.lease_ttl_ms`: lifetime of ordinary capability leases minted by the
   policy gate.
 - `runtime.governance_degraded_tick_threshold`: number of degraded-health

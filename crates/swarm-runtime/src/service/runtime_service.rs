@@ -302,12 +302,19 @@ where
                         );
                     }
                 }
-                if let Some(forwarder) = &self.siem_forwarder {
-                    // Spawn the SIEM forward as fire-and-forget so a slow or
-                    // retrying Splunk/ELK/Chronicle endpoint cannot delay the
-                    // live-response action selected just below. Receipts are
-                    // observed in the spawned task; failures degrade reporting,
-                    // not isolation/quarantine timing.
+                // Spawn the SIEM forward CONCURRENTLY so a slow or retrying
+                // Splunk/ELK/Chronicle endpoint cannot delay the live-response action
+                // selected just below -- but keep the JoinHandle and await it on every
+                // exit path from this function. It is concurrent, not detached.
+                //
+                // A dropped JoinHandle is not fire-and-forget: the task is aborted when
+                // the runtime shuts down. `swarm_detect` in scenario mode is a one-shot
+                // CLI, so every in-flight forward was being cancelled mid-POST with no
+                // dead-letter entry, no receipt and no counter -- defeating the exact
+                // durability contract `SiemFindingForwarder` exists to provide. It also
+                // left the two reporting sinks with inconsistent delivery semantics,
+                // since the `NotificationRouter` immediately below is awaited.
+                let siem_forward = self.siem_forwarder.as_ref().map(|forwarder| {
                     let forwarder = forwarder.clone();
                     let prometheus = self.prometheus.clone();
                     let event_id = event.event_id.clone();
@@ -346,8 +353,8 @@ where
                                 );
                             }
                         }
-                    });
-                }
+                    })
+                });
                 if let Some(router) = &self.notification_router {
                     for finding in &findings {
                         router.route_finding(finding).await;
@@ -361,6 +368,7 @@ where
                         module = module_path!(),
                         "no findings emitted for event"
                     );
+                    join_siem_forward(siem_forward).await;
                     return Ok(None);
                 }
 
@@ -375,6 +383,7 @@ where
                         finding_count = findings.len(),
                         "no playbook action proposed for any finding on event"
                     );
+                    join_siem_forward(siem_forward).await;
                     return Ok(None);
                 };
 
@@ -409,6 +418,7 @@ where
                             module = module_path!(),
                             "authorization or response execution failed"
                         );
+                        join_siem_forward(siem_forward).await;
                         return Err(error.into());
                     }
                 };
@@ -440,6 +450,8 @@ where
                         prometheus.observe_response(response_elapsed_us as f64);
                     }
                 }
+
+                join_siem_forward(siem_forward).await;
 
                 Ok(Some(ReplayBundle {
                     bundle_id: format!(
@@ -983,18 +995,36 @@ where
             warnings.push("durable replay store is not ready".to_string());
         }
         let recent_decisions = store.recent(self.config.audit.recent_decisions_limit)?;
-        let latest_escalation = substrate
-            .query_escalations(0)
-            .await?
-            .into_iter()
-            .max_by_key(|record| record.timestamp)
-            .map(|record| OperatorEscalationSummary {
-                mode: record.mode,
-                threat_class: record.threat_class,
-                timestamp: record.timestamp,
-                distinct_sources: record.distinct_sources,
-                total_strength: record.total_strength,
-            });
+        // Read the substrate with the same tolerance twice. `substrate.health()` above is
+        // deliberately tolerant -- an unreachable JetStream returns `Ok(ready: false)` and
+        // is downgraded to a `warnings` entry -- but a hard `?` here would abort the whole
+        // operator-status computation on the very same fault. That makes
+        // `current_async_lane_status()` return `Err`, which `ingest/health.rs` reports as
+        // async-lane degradation, double-counting a substrate fault that
+        // `components.substrate` and `components.degradation` already report and overriding
+        // the degradation ladder's contract that `DetectOnly` is a serving state
+        // (`RuntimeDegradationLevel::operator_read_surfaces_ready()` is true at every level).
+        //
+        // Degrade the field, not the surface -- but push a warning so the outage stays
+        // loud. Turning a noisy failure into a silent one would be the same class of bug.
+        let latest_escalation = match substrate.query_escalations(0).await {
+            Ok(records) => records
+                .into_iter()
+                .max_by_key(|record| record.timestamp)
+                .map(|record| OperatorEscalationSummary {
+                    mode: record.mode,
+                    threat_class: record.threat_class,
+                    timestamp: record.timestamp,
+                    distinct_sources: record.distinct_sources,
+                    total_strength: record.total_strength,
+                }),
+            Err(error) => {
+                warnings.push(format!(
+                    "substrate escalation history is unavailable: {error}"
+                ));
+                None
+            }
+        };
         let degradation = derive_runtime_degradation_status(RuntimeDegradationSignals {
             configured_mode: self.runtime.mode(),
             detector_ready: true,
@@ -1258,6 +1288,25 @@ fn observe_siem_forward_receipt_with(
         swarm_response::ResponseStatus::Failed => "failure",
     };
     prometheus.observe_delivery_batch(transport, outcome, event_count, payload_bytes);
+}
+
+/// Await the concurrently-spawned SIEM forward before returning from
+/// `process_event_with_finding_observer`.
+///
+/// A dropped `JoinHandle` is aborted when the tokio runtime shuts down, so a
+/// detached forward is silently lost on a one-shot run. Joining keeps the forward
+/// concurrent with action selection and `audit_authorize_and_execute_instrumented`
+/// while guaranteeing the receipt/dead-letter path has run before the caller
+/// continues.
+async fn join_siem_forward(handle: Option<tokio::task::JoinHandle<()>>) {
+    if let Some(handle) = handle
+        && let Err(error) = handle.await
+    {
+        tracing::error!(
+            reason = %error,
+            "siem finding forward task did not complete"
+        );
+    }
 }
 
 fn operator_bearer_token_statuses(

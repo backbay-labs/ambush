@@ -401,11 +401,18 @@ impl SiemFindingForwarder {
                 let mut receipts = Vec::new();
                 for (batch_index, batch) in adapter.build_batches(findings).into_iter().enumerate()
                 {
-                    #[allow(clippy::expect_used)]
-                    let first = batch
-                        .findings
-                        .first()
-                        .expect("batch contains at least one finding");
+                    // An empty batch is representable, so reaching this line at all
+                    // means `build_batches` broke its own invariant. Skip the batch
+                    // loudly instead of panicking: there is nothing to forward, and a
+                    // reporting-path panic must not take down the response lane.
+                    let Some(first) = batch.findings.first() else {
+                        tracing::warn!(
+                            batch_index,
+                            transport = "siem_forward",
+                            "siem batch adapter produced an empty batch; skipping"
+                        );
+                        continue;
+                    };
                     let hunt_id = first.event_id.clone();
                     let first_finding_id = first.finding_id.clone();
                     let first_strategy_id = first.strategy_id.clone();

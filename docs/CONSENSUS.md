@@ -81,13 +81,36 @@ Human approval is a separate boundary layered on top of receipt-backed
 governance.
 
 `policy.human_gate_severity` defines the severity at or above which destructive
-actions are held for human confirmation even when the runtime has otherwise
-authorized the request.
+actions are held for human confirmation even when receipt-backed governance has
+otherwise authorized the request.
+
+It governs the *fallback* leg of response authorization, not every leg.
+`ConfigurableApprovalGate` evaluates `policy.rules` in file order; the first rule
+whose threat class, severity band, action selector, time window, and per-agent
+rate limit all match decides the request outright. Only when no configured rule
+matches does evaluation reach `StaticApprovalGate`, which is the sole producer of
+`RequireHuman` (`static.human_gate`). The precedence is therefore:
+
+1. first matching `policy.rules` entry -> `allow` or `deny`, immediately
+2. no rule matched -> static gate -> `static.human_gate` for destructive actions
+   at or above `policy.human_gate_severity`, otherwise `static.default_allow`
+
+This is deliberate, and the shipped `rulesets/default.yaml` depends on it: the
+`command-and-control-emergency-block` rule allows `block_egress` at CRITICAL
+while `human_gate_severity` is HIGH, so its own stated purpose ("critical C2
+traffic can trigger immediate containment and escalation") is only reachable
+because a matching rule outranks the human gate. An operator who wants a
+destructive action human-gated must not write a matching `allow` rule for it.
+`configurable_gate_allow_rule_outranks_static_human_gate` and
+`configurable_gate_human_gates_destructive_action_when_no_rule_matches` in
+`crates/swarm-policy/src/configurable_gate.rs` pin both halves of this.
 
 Current implications:
 
-- a destructive request can be policy-authorized and still stop at the human
-  gate
+- a destructive request can be governance-authorized and still stop at the human
+  gate, when no configured rule matches it
+- a matching configured `allow` rule authorizes a destructive action outright;
+  the human gate does not re-open a decision a rule already made
 - human approval does not replace the governance receipt
 - demo approval and live operator approval reuse the same bounded approval
   vocabulary rather than defining a second governance model

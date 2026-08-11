@@ -280,6 +280,7 @@ impl TelemetryBridge for TetragonBridge {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{BridgeConfig, TetragonBridge};
     use crate::client::proto;

@@ -1,5 +1,3 @@
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-
 use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::BTreeMap;
@@ -546,6 +544,7 @@ fn current_unix_seconds() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         SOURCE_ID, SentinelBridge, SentinelBridgeConfig, SentinelSnapshot, TelemetryBridge,

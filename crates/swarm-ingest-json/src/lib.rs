@@ -1,5 +1,3 @@
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-
 mod auditd;
 mod host_common;
 mod kubernetes_audit;

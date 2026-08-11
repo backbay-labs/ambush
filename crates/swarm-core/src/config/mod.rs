@@ -44,4 +44,5 @@ pub use storage::*;
 pub use validation::ConfigValidationError;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests;

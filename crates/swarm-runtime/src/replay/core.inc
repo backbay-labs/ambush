@@ -4064,7 +4064,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
     use swarm_core::ThreatClass;
-    use swarm_core::config::{PolicyRuleConfig, PolicyRuleDecision};
+    use swarm_core::config::{PolicyActionSelector, PolicyRuleConfig, PolicyRuleDecision};
     use swarm_core::types::{ResponseAction, Severity};
     use swarm_whisker::{
         DetectionStrategy, NetworkConnectProfile, ProcessStartEvent, TelemetryEvent,
@@ -4097,7 +4097,14 @@ mod tests {
             name: format!("replay-test-allow-{threat_class:?}"),
             decision: PolicyRuleDecision::Allow,
             threat_class,
-            actions: Vec::new(),
+            // Non-destructive selectors only. An empty `actions` list is a wildcard
+            // that matches every action kind, including destructive ones, and a
+            // matching rule decides outright -- so a wildcard here silently strips
+            // the `static.human_gate` verdict these scenarios are written to assert.
+            actions: vec![
+                PolicyActionSelector::Escalate,
+                PolicyActionSelector::DeployDecoy,
+            ],
             min_severity: Severity::Low,
             max_severity: Severity::Critical,
             time_window_utc: None,

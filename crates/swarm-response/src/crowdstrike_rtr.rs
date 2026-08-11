@@ -515,8 +515,15 @@ impl ResponseExecutor for CrowdStrikeRtrAdapter {
             };
         }
 
-        #[allow(clippy::expect_used)]
-        let host_id = session_host.expect("session_host set for command-backed actions");
+        // Both are Some for exactly the command-backed arms of the match above, and the
+        // IsolateHost arm has already returned. Enforce that STRUCTURALLY rather than
+        // asserting it: the invariant is maintained 60 lines away in a different match,
+        // so a future action arm that forgets to populate them would otherwise panic on
+        // the live-response lane. Fail closed with the same unsupported receipt the
+        // catch-all arm produces.
+        let (Some(host_id), Some((command_name, argument_value))) = (session_host, command) else {
+            return Ok(self.unsupported_receipt(request, lease, mode));
+        };
         let session_id = match self
             .create_session(request, lease, &token, host_id, &payload, mode)
             .await
@@ -524,9 +531,6 @@ impl ResponseExecutor for CrowdStrikeRtrAdapter {
             Ok(session_id) => session_id,
             Err(receipt) => return Ok(*receipt),
         };
-        #[allow(clippy::expect_used)]
-        let (command_name, argument_value) =
-            command.expect("command set for command-backed actions");
         // Falcon's RTR Admin API takes a flat command_string, not an arguments object.
         // Map our internal kill_process/quarantine_file actions to the Falcon command
         // shape: `kill <pid_or_name>` and `cs.fil quarantine <path>` are accepted

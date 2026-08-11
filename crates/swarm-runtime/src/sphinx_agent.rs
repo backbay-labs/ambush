@@ -2066,6 +2066,7 @@ fn internal_runtime_error(error: impl Into<SphinxAgentTickError>) -> SwarmError 
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 fn signed_memory_query_deposit(
     query: &SphinxMemoryQuery,
     config: &swarm_core::config::SwarmConfig,

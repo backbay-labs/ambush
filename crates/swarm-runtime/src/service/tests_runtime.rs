@@ -369,6 +369,92 @@
         let _ = std::fs::remove_file(dead_letter_path);
     }
 
+    /// The durability half of the SIEM forward contract, and the reason
+    /// `join_siem_forward` exists rather than a bare `tokio::spawn`.
+    ///
+    /// A dropped `JoinHandle` is not fire-and-forget: tokio aborts the task when the
+    /// runtime shuts down. `swarm_detect` in scenario mode is a one-shot CLI, so a
+    /// detached forward is cancelled mid-POST on exit with no dead-letter entry, no
+    /// receipt and no counter. This drives `process_event` on a runtime that is
+    /// dropped the instant it returns, and asserts the forward already landed.
+    ///
+    /// The capture server deliberately lives on a SEPARATE runtime so that dropping
+    /// the service runtime models process shutdown without also killing the sink.
+    #[test]
+    fn process_event_completes_the_siem_forward_before_its_runtime_shuts_down() {
+        let server_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (endpoint, state, shutdown_tx, handle) =
+            server_runtime.block_on(spawn_forward_capture_server());
+        let dead_letter_path = temp_jsonl_path("siem-forward-shutdown");
+        let mut config = service_config(
+            RuntimeMode::LiveResponse,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+        config.siem_forward = Some(SiemForwardConfig::SplunkHec {
+            endpoint,
+            auth_token: "splunk-secret".into(),
+            timeout_ms: 500,
+            batch_max_events: 32,
+            batch_max_bytes: 131_072,
+            retry: RetryConfig::default(),
+            circuit_breaker: CircuitBreakerConfig::default(),
+            dead_letter_path: dead_letter_path.clone(),
+        });
+        let service = RuntimeService::new(
+            config,
+            SwarmRuntime::new(
+                RuntimeMode::LiveResponse,
+                StaticApprovalGate::default(),
+                SandboxExecutor,
+            ),
+        );
+
+        let service_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        service_runtime.block_on(async {
+            let detector = SuspiciousProcessTreeDetector::default();
+            let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+            let event = suspicious_event("evt-siem-shutdown-1", "powershell.exe -enc AAA=");
+            let context = approval_context(1_700_000_000_031, "corr-siem-shutdown");
+            let agent_id = test_agent_id();
+            service
+                .process_event(
+                    &detector,
+                    &substrate,
+                    &event,
+                    EventExecutionContext {
+                        agent_id: &agent_id,
+                        approval: &context,
+                        signing_key: &test_signing_key(),
+                    },
+                    |_finding| None,
+                )
+                .await
+                .unwrap()
+        });
+        // Process shutdown. Anything still detached dies here.
+        drop(service_runtime);
+
+        let payloads = server_runtime.block_on(async { state.payloads.lock().await.clone() });
+        assert_eq!(
+            payloads.len(),
+            1,
+            "SIEM forward must complete before process_event returns, not race runtime shutdown"
+        );
+        assert_eq!(payloads[0]["event"]["event_id"], "evt-siem-shutdown-1");
+
+        let _ = shutdown_tx.send(());
+        handle.abort();
+        let _ = std::fs::remove_file(dead_letter_path);
+    }
+
     #[tokio::test]
     async fn process_event_records_success_metrics_in_prometheus() {
         let service = runtime_service_with_prometheus();

@@ -2580,6 +2580,9 @@ mod tests {
         BehavioralAnomalyProfile, DnsExfiltrationProfile, FilelessExecutionProfile,
     };
 
+    /// Stages a detector-specific experiment under the given root and returns its path.
+    type StageExperimentFn = fn(&Path) -> PathBuf;
+
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
@@ -2622,7 +2625,7 @@ mod tests {
         let experiments_dir = root.join("experiments");
         fs::create_dir_all(&experiments_dir).unwrap();
         let destination = experiments_dir.join(source.file_name().unwrap());
-        fs::copy(&source, &destination).unwrap();
+        fs::copy(source, &destination).unwrap();
         if let Some(source_root) = source.parent().and_then(Path::parent) {
             copy_dir_recursive(
                 &source_root.join("scenario-suites"),
@@ -3137,7 +3140,7 @@ mod tests {
 
     #[tokio::test]
     async fn measured_evolution_benchmark_supports_non_process_tree_detectors() {
-        let cases: [(&str, &str, fn(&Path) -> PathBuf); 3] = [
+        let cases: [(&str, &str, StageExperimentFn); 3] = [
             (
                 "behavioral",
                 "behavioral_anomaly",

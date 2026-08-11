@@ -370,4 +370,88 @@ mod tests {
         assert_eq!(decision.verdict, PolicyVerdict::Allow);
         assert_eq!(decision.rule_name, "static.default_allow");
     }
+
+    /// Pins the precedence that `ConfigurableApprovalGate::evaluate` actually
+    /// implements: the first matching configured rule decides outright, and the
+    /// static human gate only governs the no-rule-matched fallback.
+    ///
+    /// This mirrors `rulesets/default.yaml` `command-and-control-emergency-block`
+    /// (allow / command_and_control / [block_egress, escalate] / CRITICAL..CRITICAL)
+    /// evaluated under the shipped `human_gate_severity: HIGH`. `block_egress` is
+    /// destructive and CRITICAL >= HIGH, so if the static human gate outranked a
+    /// matching allow rule that rule could never authorize `block_egress` under any
+    /// input: its containment half would be permanently inert, contradicting its own
+    /// stated reason ("critical C2 traffic can trigger immediate containment and
+    /// escalation").
+    #[test]
+    fn configurable_gate_allow_rule_outranks_static_human_gate() {
+        let mut config = PolicyConfig::default();
+        assert_eq!(config.human_gate_severity, Severity::High);
+        config.rules.push(PolicyRuleConfig {
+            name: "command-and-control-emergency-block".to_string(),
+            decision: PolicyRuleDecision::Allow,
+            threat_class: ThreatClass::CommandAndControl,
+            actions: vec![
+                PolicyActionSelector::BlockEgress,
+                PolicyActionSelector::Escalate,
+            ],
+            min_severity: Severity::Critical,
+            max_severity: Severity::Critical,
+            time_window_utc: None,
+            max_actions_per_agent_per_minute: None,
+            reason: Some(
+                "critical C2 traffic can trigger immediate containment and escalation".to_string(),
+            ),
+        });
+        let gate = ConfigurableApprovalGate::from_config(&config);
+        let request = sample_request(
+            ResponseAction::BlockEgress {
+                target: "198.51.100.20".to_string(),
+            },
+            Severity::Critical,
+            ThreatClass::CommandAndControl,
+        );
+
+        let decision = gate
+            .evaluate(&request, &sample_context(1_700_000_000_000))
+            .unwrap();
+        assert_eq!(decision.verdict, PolicyVerdict::Allow);
+        assert_eq!(decision.rule_name, "command-and-control-emergency-block");
+    }
+
+    /// The other half of the same contract, and what keeps the test above from
+    /// being vacuous: an identically destructive request at an identical severity
+    /// still reaches `static.human_gate` the moment no configured rule matches it.
+    #[test]
+    fn configurable_gate_human_gates_destructive_action_when_no_rule_matches() {
+        let mut config = PolicyConfig::default();
+        config.rules.push(PolicyRuleConfig {
+            name: "command-and-control-emergency-block".to_string(),
+            decision: PolicyRuleDecision::Allow,
+            threat_class: ThreatClass::CommandAndControl,
+            actions: vec![
+                PolicyActionSelector::BlockEgress,
+                PolicyActionSelector::Escalate,
+            ],
+            min_severity: Severity::Critical,
+            max_severity: Severity::Critical,
+            time_window_utc: None,
+            max_actions_per_agent_per_minute: None,
+            reason: None,
+        });
+        let gate = ConfigurableApprovalGate::from_config(&config);
+        let request = sample_request(
+            ResponseAction::IsolateHost {
+                host_id: "host-ops-1".to_string(),
+            },
+            Severity::Critical,
+            ThreatClass::CommandAndControl,
+        );
+
+        let decision = gate
+            .evaluate(&request, &sample_context(1_700_000_000_000))
+            .unwrap();
+        assert_eq!(decision.verdict, PolicyVerdict::RequireHuman);
+        assert_eq!(decision.rule_name, "static.human_gate");
+    }
 }

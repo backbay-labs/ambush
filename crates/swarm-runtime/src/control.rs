@@ -19,8 +19,13 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use swarm_core::config::{DetectionConfig, RuntimeMode, SwarmConfig, TelemetryBridgeConfig};
-use swarm_core::pheromone::{ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType};
+use swarm_core::config::{
+    DetectionConfig, PolicyActionSelector, PolicyRuleConfig, PolicyRuleDecision, RuntimeMode,
+    SwarmConfig, TelemetryBridgeConfig,
+};
+use swarm_core::pheromone::{
+    ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
+};
 use swarm_core::types::Severity;
 use swarm_crypto::Ed25519Signer;
 use swarm_ingest_json::{
@@ -746,6 +751,41 @@ fn guided_first_run_config(
     guided.runtime.mode = RuntimeMode::LiveResponse;
     guided.runtime.require_durable_live_response = false;
     guided.policy.human_gate_severity = Severity::Low;
+    // Lowering `human_gate_severity` alone does not establish the invariant the
+    // walkthrough depends on. `ConfigurableApprovalGate` evaluates `policy.rules`
+    // first and the first matching rule decides outright; the static human gate is
+    // only reached when no rule matches (see docs/CONSENSUS.md "Human Approval
+    // Boundary"). An operator ruleset that broadly allows a destructive action --
+    // for example any rule with an empty `actions` selector -- therefore short
+    // circuits the gate, no approval is ever registered, and the wizard aborts with
+    // `FirstRunWizardError::MissingApproval`.
+    //
+    // Normalize the derived ruleset instead: keep every operator Deny authoritative
+    // (ordered evaluation means a matching Deny still wins, and dropping them would
+    // let a non-destructive denial fall through to `static.default_allow` inside a
+    // LiveResponse config), then append one non-destructive Allow so the ruleset is
+    // never empty -- an empty ruleset fails closed with `Deny` at
+    // `configurable.fail_closed.empty_ruleset`, which also registers no approval.
+    // Every destructive action now falls through to `static.human_gate`, which the
+    // forced `human_gate_severity = Low` above turns into `RequireHuman`.
+    guided
+        .policy
+        .rules
+        .retain(|rule| rule.decision == PolicyRuleDecision::Deny);
+    guided.policy.rules.push(PolicyRuleConfig {
+        name: "guided_first_run.escalate_only".to_string(),
+        decision: PolicyRuleDecision::Allow,
+        threat_class: ThreatClass::Execution,
+        actions: vec![PolicyActionSelector::Escalate],
+        min_severity: Severity::Low,
+        max_severity: Severity::Critical,
+        time_window_utc: None,
+        max_actions_per_agent_per_minute: None,
+        reason: Some(
+            "guided first-run permits non-destructive escalation only; destructive responses are human-gated"
+                .to_string(),
+        ),
+    });
     guided.response_adapter = swarm_core::config::ResponseAdapterConfig::Sandbox;
     guided.investigation.enabled = true;
     guided.correlation.enabled = true;
@@ -1981,6 +2021,33 @@ mod tests {
         assert!(json.contains("\"level\":\"detect_only\""));
     }
 
+    /// A substrate whose escalation history cannot be read must degrade the field,
+    /// not the whole operator read surface -- and must still say so out loud.
+    /// Guards the tolerant `query_escalations` branch in
+    /// `RuntimeService::operator_status` against silently swallowing the outage.
+    #[tokio::test]
+    async fn status_warns_when_substrate_escalation_history_is_unreadable() {
+        let mut config = control_config();
+        config.pheromone.backend = PheromoneBackendConfig::JetStream {
+            url: "nats://127.0.0.1:65535".to_string(),
+            connect_timeout_ms: 10,
+            gc_page_size: 64,
+        };
+        let plane = DefaultControlPlane::from_config("inline", config).unwrap();
+
+        let status = plane.status().await.unwrap();
+        assert!(
+            status
+                .data
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("substrate escalation history is unavailable")),
+            "operator status must surface the substrate outage: {:?}",
+            status.data.warnings
+        );
+        assert!(status.data.latest_escalation.is_none());
+    }
+
     #[tokio::test]
     async fn status_output_surfaces_false_positive_tracking() {
         let plane = DefaultControlPlane::from_config("inline", control_config()).unwrap();
@@ -2315,6 +2382,109 @@ mod tests {
         assert!(json.contains("\"kind\":\"first_run\""));
         assert!(json.contains("\"schema_version\":1"));
         assert!(json.contains("\"status\":\"completed\""));
+    }
+
+    /// `guided_first_run_config` declares "this run pauses at a human gate" by
+    /// forcing `human_gate_severity = Low`. That declaration is only true if the
+    /// derived ruleset actually lets destructive actions reach the static gate.
+    /// This asserts the derived config establishes the invariant it declares, and
+    /// that it does so without discarding operator denials.
+    #[test]
+    fn guided_first_run_config_human_gates_destructive_actions_and_keeps_denials() {
+        unsafe {
+            std::env::set_var("SWARM_FIRST_RUN_TEST_VOTER_KEY", "first-run-vote-key");
+        }
+        let mut config = control_config();
+        // A blanket operator allow: empty `actions` matches every action kind.
+        config.policy.rules = vec![
+            PolicyRuleConfig {
+                name: "operator-blanket-execution-allow".to_string(),
+                decision: PolicyRuleDecision::Allow,
+                threat_class: ThreatClass::Execution,
+                actions: Vec::new(),
+                min_severity: Severity::Low,
+                max_severity: Severity::Critical,
+                time_window_utc: None,
+                max_actions_per_agent_per_minute: None,
+                reason: None,
+            },
+            PolicyRuleConfig {
+                name: "operator-credential-deny".to_string(),
+                decision: PolicyRuleDecision::Deny,
+                threat_class: ThreatClass::CredentialAccess,
+                actions: Vec::new(),
+                min_severity: Severity::Low,
+                max_severity: Severity::Critical,
+                time_window_utc: None,
+                max_actions_per_agent_per_minute: None,
+                reason: None,
+            },
+        ];
+
+        let guided =
+            super::guided_first_run_config(&config, "SWARM_FIRST_RUN_TEST_VOTER_KEY").unwrap();
+
+        // The operator's denial survives verbatim.
+        assert!(
+            guided
+                .policy
+                .rules
+                .iter()
+                .any(|rule| rule.name == "operator-credential-deny"
+                    && rule.decision == PolicyRuleDecision::Deny),
+            "guided first-run must not discard operator denials: {:?}",
+            guided
+                .policy
+                .rules
+                .iter()
+                .map(|rule| rule.name.as_str())
+                .collect::<Vec<_>>()
+        );
+        // The blanket allow does not.
+        assert!(
+            !guided
+                .policy
+                .rules
+                .iter()
+                .any(|rule| rule.name == "operator-blanket-execution-allow")
+        );
+        // And the ruleset is never empty, which would fail closed with Deny.
+        assert!(!guided.policy.rules.is_empty());
+
+        let gate =
+            swarm_policy::configurable_gate::ConfigurableApprovalGate::from_config(&guided.policy);
+        let context = ApprovalContext {
+            live_mode: true,
+            receipt_chain: vec!["seed-receipt".to_string()],
+            correlation_id: None,
+            now_ms: 1_700_000_000_000,
+        };
+        let destructive = swarm_policy::ActionRequest {
+            hunt_id: swarm_core::types::HuntId("hunt-guided-1".to_string()),
+            requested_by: AgentId("pounce-1".to_string()),
+            action: ResponseAction::IsolateHost {
+                host_id: "host-ops-1".to_string(),
+            },
+            severity: Severity::Critical,
+            evidence: serde_json::json!({
+                "escalation": { "threat_class": ThreatClass::Execution, "severity": Severity::Critical }
+            }),
+        };
+        let decision = swarm_policy::ApprovalGate::evaluate(&gate, &destructive, &context).unwrap();
+        assert_eq!(decision.verdict, swarm_policy::PolicyVerdict::RequireHuman);
+        assert_eq!(decision.rule_name, "static.human_gate");
+
+        // Non-destructive escalation stays immediate, so the walkthrough still runs.
+        let escalate = swarm_policy::ActionRequest {
+            action: ResponseAction::Escalate {
+                summary: "review".to_string(),
+                urgency: Severity::High,
+            },
+            ..destructive.clone()
+        };
+        let decision = swarm_policy::ApprovalGate::evaluate(&gate, &escalate, &context).unwrap();
+        assert_eq!(decision.verdict, swarm_policy::PolicyVerdict::Allow);
+        assert_eq!(decision.rule_name, "guided_first_run.escalate_only");
     }
 
     #[tokio::test]

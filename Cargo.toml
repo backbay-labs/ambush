@@ -92,6 +92,28 @@ zeroize = { version = "1", features = ["zeroize_derive"] }
 # Testing
 proptest = "1"
 
+# Panic-safety lints for the live-response critical lane.
+#
+# CONVENTION FOR TEST-CODE EXCEPTIONS (one convention, written down here so the
+# tree does not carry two):
+#
+#   Allowed:   `#[allow(clippy::unwrap_used, clippy::expect_used)]` on a
+#              `#[cfg(test)] mod tests` declaration, or the inner `#![allow(...)]`
+#              form at the top of a file that is itself only compiled under
+#              `cfg(test)`. This is the shape already used at ~92 sites.
+#
+#   Allowed:   a per-call-site `#[allow(clippy::expect_used)]` in PRODUCTION code,
+#              paired with a `// SAFETY: runtime panic contract exception` comment
+#              justifying the invariant. See
+#              `tools/check-runtime-panic-contract.sh`.
+#
+#   NOT allowed: a crate-wide `#![cfg_attr(test, allow(...))]` prologue. It covers
+#              every current AND future test module in the crate, including ones
+#              nobody reviewed, and it silently widens over time. All eight of
+#              these were removed in phase 280.
+#
+#   NOT allowed: allowing a STYLE lint (needless_borrow, type_complexity, ...)
+#              under cover of a panic-safety exception. Fix the style lint.
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"

@@ -519,6 +519,7 @@ pub fn write_debug_test_binary_attestation(path: impl AsRef<Path>) -> Result<(),
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         AttestationTrustRoot, BinaryAttestationStatement, RulesetAttestationFile,
