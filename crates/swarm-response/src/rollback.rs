@@ -95,10 +95,12 @@ impl RollbackReceipt {
     /// Whether every inverse step reached a terminal success state.
     pub fn fully_reversed(&self) -> bool {
         !self.steps.is_empty()
-            && self
-                .steps
-                .iter()
-                .all(|step| matches!(step.status, ResponseStatus::Executed | ResponseStatus::Simulated))
+            && self.steps.iter().all(|step| {
+                matches!(
+                    step.status,
+                    ResponseStatus::Executed | ResponseStatus::Simulated
+                )
+            })
     }
 }
 

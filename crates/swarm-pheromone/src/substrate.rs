@@ -1793,7 +1793,9 @@ mod tests {
 
     #[test]
     fn normalize_url_value_lowercases_scheme_authority_only() {
-        let out = super::normalize_url_value("HTTPS://Evil.Example/Path/Mixed?Q=Keep&Slash=/Admin/#Frag/");
+        let out = super::normalize_url_value(
+            "HTTPS://Evil.Example/Path/Mixed?Q=Keep&Slash=/Admin/#Frag/",
+        );
         assert_eq!(
             out,
             "https://evil.example/Path/Mixed?Q=Keep&Slash=/Admin/#Frag/"
@@ -1802,14 +1804,8 @@ mod tests {
 
     #[test]
     fn normalize_url_value_strips_one_path_slash_only() {
-        assert_eq!(
-            super::normalize_url_value("https://x/p/"),
-            "https://x/p"
-        );
-        assert_eq!(
-            super::normalize_url_value("https://x/p//"),
-            "https://x/p/"
-        );
+        assert_eq!(super::normalize_url_value("https://x/p/"), "https://x/p");
+        assert_eq!(super::normalize_url_value("https://x/p//"), "https://x/p/");
     }
 
     #[test]

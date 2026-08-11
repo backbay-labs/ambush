@@ -34,7 +34,7 @@ pub use http_edr::HttpEdrAdapter;
 pub use notification::{NotificationError, NotificationReplayResult, NotificationRouter};
 pub use resilience::{CircuitBreakerState, ResilientExecutor};
 pub use rollback::{
-    ContainmentLedger, ContainmentLease, RollbackExecutor, RollbackReceipt, RollbackStepOutcome,
+    ContainmentLease, ContainmentLedger, RollbackExecutor, RollbackReceipt, RollbackStepOutcome,
     RollbackTrigger, SandboxRollbackExecutor,
 };
 pub use siem::{SiemFindingForwarder, SiemForwardAdapter, SwarmFindingEnvelope};
