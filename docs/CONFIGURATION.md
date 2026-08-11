@@ -757,6 +757,72 @@ Read these keys as one state machine:
 The config does not imply automatic fleet rollout or review-surface authority.
 It defines where the bounded runtime stores and surfaces each stage.
 
+#### `evolution.fitness_weights`
+
+Multi-objective weights used to rank evolved detector candidates.
+
+```yaml
+evolution:
+  fitness_weights:
+    detection_rate: 0.40
+    false_positive_cost: 0.30
+    speed: 0.15
+    threat_class_coverage: 0.15
+```
+
+Three of these four are applied:
+
+- `detection_rate`: candidate catch rate over the pinned corpus
+- `false_positive_cost`: `1 - false_positive_rate` against the benign controls
+- `threat_class_coverage`: fraction of canonical threat-class templates matched
+
+Each is a count or a rate over fixture content, so the ranking a bundle produces
+is the same on every machine.
+
+`speed` is **accepted for compatibility and no longer contributes**. It weighted
+an objective computed as `1 / (1 + measured_detect_latency_us / budget)`, where
+the measurement is a wall-clock `Instant` delta around the detect stage. That
+made a candidate's rank a function of the machine and build profile that happened
+to measure it: two operators replaying the identical bundle on different hardware
+ranked the same population differently and could promote different detectors,
+with a green suite on both.
+
+The objective was removed outright rather than weighted to zero. Fitness is not
+the only consumer of the objective vector -- Pareto dominance compares the
+objectives component-wise, with no weights at all, to decide which candidates
+survive selection. A zero weight would have removed latency from the score while
+leaving it deciding survivorship.
+
+Compatibility and behavior:
+
+- a `speed:` entry in an existing weights block still loads and is still
+  validated as finite and non-negative; the field is not removable because the
+  weights block is `deny_unknown_fields` and `rulesets/default.yaml` carries the
+  key under the signed `rulesets/attestation.json`
+- the configured `speed` share is **redistributed proportionally** across the
+  three applied weights, so the total weight -- and the scale that `fitness` is
+  compared and blended on, including the evasion-pressure blend against a 0..1
+  closure rate -- is whatever you configured. Only the split changes.
+- **rankings change** relative to releases that scored `speed`. That is the
+  intent: they stop depending on the machine. A candidate that is perfect on
+  every fixture-determined objective now scores the full configured weight total
+  instead of being held short of it by a clock reading.
+- a weights block whose only non-zero entry is `speed` is now **rejected at
+  config validation**. It used to pass and produce a working ranking; under the
+  applied weights it would produce a fitness of exactly zero for every candidate,
+  a silent total tie. It fails closed at load instead.
+
+The latency measurement is still taken and still recorded. Each population
+candidate carries a non-gating `observations` block with the measured
+`max_detect_latency_us`, the corpus `advisory_detect_latency_budget_us`, and
+`within_advisory_detect_latency_budget` as a recorded fact rather than a verdict.
+The autonomous benchmark reports likewise keep `max_detect_latency_us`,
+`latency_budget_us`, and `latency_fitness`; the last of these is now a recorded
+normalized measurement that no longer feeds `measured_fitness`.
+
+A fitness term for cost that can be trusted has to count work rather than read a
+clock. That is a cost model, and it is not this change.
+
 ### Authenticated Local Operator Surface
 
 The repo now ships a scoped authenticated operator HTTP surface above the existing CLI.
@@ -1591,6 +1657,17 @@ Scorecards compare the current production baseline and the verified candidate us
 - durable live rollout memories when they exist
 - replay-fitness fallback when live memory is sparse
 - per-memory explanations with outcome weights, recency decay, context matches, and weighted contribution
+
+The replay-fitness fallback is `detection_rate - false_positive_rate`, clamped to
+`[-1.0, 1.0]`. It used to subtract a further penalty of up to 0.25 derived from
+the experiment's measured `max_detect_latency_us` -- a wall-clock `Instant`
+delta. Against a recommendation epsilon of 0.05 that let the machine, not the
+candidate, flip `CandidatePreferred` to `RetainBaseline`, and the fallback is the
+path every candidate takes until it has two matching live rollout memories, so a
+brand new candidate was always scored this way. Both remaining terms are counts
+over fixture content, so the fallback is now identical wherever the same bundle
+is replayed. The latency measurement is unchanged and still recorded on the
+experiment report the scorecard is derived from.
 
 This lane is advisory only. The scorecard does not approve, deploy, or promote a detector by itself.
 

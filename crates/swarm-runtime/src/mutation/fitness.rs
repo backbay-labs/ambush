@@ -184,10 +184,27 @@ pub(crate) fn candidate_summary(
     )
 }
 
+/// Ranking objectives plus the non-gating measurements recorded beside them.
+///
+/// Returned together because both are derived from the same experiment and
+/// verification pair, and loading the verification manifest twice to split them
+/// would be the only alternative.
+pub(crate) struct PopulationMeasurement {
+    pub(crate) objectives: EvolutionPopulationFitnessObjectives,
+    pub(crate) observations: EvolutionPopulationObservations,
+}
+
+/// Build the ranking vector for one validated candidate, together with the
+/// latency measurement that used to be part of it.
+///
+/// Every objective returned here is a count or a rate over fixture content, so
+/// two operators replaying the identical bundle on different hardware compute
+/// the identical vector. The detect-latency measurement is still read, still
+/// compared to the corpus budget, and still returned -- as an observation.
 pub(crate) fn population_objectives(
     experiment: &StrategyExperimentReport,
     verification: &DetectorVerificationReport,
-) -> Result<EvolutionPopulationFitnessObjectives, EvolutionMutationError> {
+) -> Result<PopulationMeasurement, EvolutionMutationError> {
     let verification_manifest = load_verification_manifest(&verification.corpus_path)?;
     let template_count = verification_manifest.canonical_templates.len();
     let missed_templates = verification
@@ -214,29 +231,42 @@ pub(crate) fn population_objectives(
             .false_positive_rate
             .clamp(0.0, 1.0))
     .clamp(0.0, 1.0);
-    let latency_budget = verification_manifest
-        .resource_budgets
-        .max_detect_latency_us
-        .max(1) as f64;
-    let latency_ratio =
-        experiment.comparison.candidate.max_detect_latency_us as f64 / latency_budget;
-    let speed = (1.0 / (1.0 + latency_ratio.max(0.0))).clamp(0.0, 1.0);
+    // Measured, recorded, not ranked. `max_detect_latency_us` is the widest
+    // wall-clock `Instant` delta the experiment saw around the detect stage, so
+    // it reports the machine and the build profile as much as the candidate.
+    // The budget is the corpus's advisory reference point for it.
+    let advisory_detect_latency_budget_us =
+        verification_manifest.resource_budgets.max_detect_latency_us;
+    let max_detect_latency_us = experiment.comparison.candidate.max_detect_latency_us;
 
-    Ok(EvolutionPopulationFitnessObjectives {
-        detection_rate,
-        false_positive_cost,
-        speed,
-        threat_class_coverage,
+    Ok(PopulationMeasurement {
+        objectives: EvolutionPopulationFitnessObjectives {
+            detection_rate,
+            false_positive_cost,
+            threat_class_coverage,
+        },
+        observations: EvolutionPopulationObservations {
+            max_detect_latency_us,
+            advisory_detect_latency_budget_us,
+            within_advisory_detect_latency_budget: max_detect_latency_us
+                <= advisory_detect_latency_budget_us,
+        },
     })
 }
 
+/// Collapse the ranking objectives into the scalar that orders the population.
+///
+/// Uses [`EvolutionFitnessWeightsConfig::applied`] rather than the raw config:
+/// the configured `speed` weight no longer has an objective to multiply, and its
+/// share is redistributed across the three that remain so the total weight and
+/// therefore the scale of `fitness` are unchanged.
 pub(crate) fn population_fitness(
     objectives: &EvolutionPopulationFitnessObjectives,
     weights: &EvolutionFitnessWeightsConfig,
 ) -> f64 {
+    let weights = weights.applied();
     objectives.detection_rate * weights.detection_rate
         + objectives.false_positive_cost * weights.false_positive_cost
-        + objectives.speed * weights.speed
         + objectives.threat_class_coverage * weights.threat_class_coverage
 }
 
@@ -281,10 +311,10 @@ pub fn summarize_evolution_benchmark_baseline(
     weights: &EvolutionFitnessWeightsConfig,
     evasion_pressure: Option<&EvolutionEvasionPressureInput>,
 ) -> Result<Option<EvolutionBenchmarkBaselineReport>, EvolutionMutationError> {
-    let objectives = population_objectives(experiment, verification)?;
+    let measurement = population_objectives(experiment, verification)?;
     Ok(measure_benchmark_fitness(
         experiment_path,
-        &objectives,
+        &measurement.objectives,
         experiment,
         verification,
         weights,
@@ -347,6 +377,8 @@ pub(crate) fn measure_benchmark_fitness(
         .false_positive_rate
         .clamp(0.0, 1.0);
     let false_positive_fitness = (1.0 - false_positive_rate).clamp(0.0, 1.0);
+    // Still measured, still recorded on the returned report -- and no longer an
+    // input to `measured_fitness`, which is what ranks autonomous generations.
     let latency_budget_us = load_verification_manifest(&verification.corpus_path)?
         .resource_budgets
         .max_detect_latency_us
@@ -358,7 +390,6 @@ pub(crate) fn measure_benchmark_fitness(
         &EvolutionPopulationFitnessObjectives {
             detection_rate: catch_rate,
             false_positive_cost: false_positive_fitness,
-            speed: latency_fitness,
             threat_class_coverage: objectives.threat_class_coverage,
         },
         weights,
@@ -765,16 +796,17 @@ pub(crate) fn population_candidate_dominates(
     left: &EvolutionPopulationCandidate,
     right: &EvolutionPopulationCandidate,
 ) -> bool {
+    // Unweighted, component-wise: a zero weight would not have removed a
+    // latency-derived objective from this comparison, which is why `speed` had
+    // to leave the objective vector outright rather than be weighted to nothing.
     let left_values = [
         left.objectives.detection_rate,
         left.objectives.false_positive_cost,
-        left.objectives.speed,
         left.objectives.threat_class_coverage,
     ];
     let right_values = [
         right.objectives.detection_rate,
         right.objectives.false_positive_cost,
-        right.objectives.speed,
         right.objectives.threat_class_coverage,
     ];
     left_values

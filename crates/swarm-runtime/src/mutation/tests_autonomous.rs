@@ -926,9 +926,9 @@ fn sample_population_state(now_ms: i64) -> EvolutionPopulationState {
                 objectives: EvolutionPopulationFitnessObjectives {
                     detection_rate: 1.0,
                     false_positive_cost: 1.0,
-                    speed: 0.8,
                     threat_class_coverage: 1.0,
                 },
+                observations: None,
                 summary: "candidate-a".to_string(),
             },
             EvolutionPopulationCandidate {
@@ -959,9 +959,9 @@ fn sample_population_state(now_ms: i64) -> EvolutionPopulationState {
                 objectives: EvolutionPopulationFitnessObjectives {
                     detection_rate: 0.9,
                     false_positive_cost: 1.0,
-                    speed: 0.8,
                     threat_class_coverage: 1.0,
                 },
+                observations: None,
                 summary: "candidate-b".to_string(),
             },
         ],

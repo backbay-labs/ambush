@@ -34,7 +34,6 @@ const CORPUS_MATCH_BONUS: f64 = 0.20;
 const REFERENCE_MATCH_BONUS: f64 = 0.15;
 const PARENT_MATCH_BONUS: f64 = 0.10;
 const SCORE_RECOMMENDATION_EPSILON: f64 = 0.05;
-const LATENCY_PENALTY_CAP_US: f64 = 10_000.0;
 
 /// Errors surfaced by the strategy-memory and advisory-scoring flows.
 #[derive(Debug, thiserror::Error)]
@@ -1234,10 +1233,25 @@ fn recency_decay(observed_at_ms: i64, now_ms: i64) -> f64 {
     0.5_f64.powf(age_hours / RECENCY_HALF_LIFE_HOURS)
 }
 
+/// Replay-derived stand-in for live rollout evidence, used when a strategy has
+/// fewer than `MIN_LIVE_MEMORIES` matching memories -- which is every candidate
+/// that has never shipped.
+///
+/// This used to subtract a penalty of up to 0.25 derived from
+/// `max_detect_latency_us`, a wall-clock `Instant` delta captured while the
+/// experiment ran. On a score clamped to [-1.0, 1.0] and compared against a
+/// `SCORE_RECOMMENDATION_EPSILON` of 0.05, that let the machine, not the
+/// candidate, flip `CandidatePreferred` to `RetainBaseline`: two operators
+/// replaying the identical bundle on different hardware got different advice,
+/// with a green suite on both.
+///
+/// What remains is detection rate net of false-positive rate. Both are counts
+/// over fixture content, so the score is now identical everywhere the same
+/// bundle is replayed. The latency measurement is not lost -- it stays recorded
+/// on the experiment report's `comparison`, which every scorecard is derived
+/// from and which the scorecard's `experiment_id` points back to.
 fn replay_fallback_score(metrics: &StrategyExperimentMetrics) -> f64 {
-    let latency_penalty =
-        (metrics.max_detect_latency_us as f64 / LATENCY_PENALTY_CAP_US).min(1.0) * 0.25;
-    (metrics.detection_rate - metrics.false_positive_rate - latency_penalty).clamp(-1.0, 1.0)
+    (metrics.detection_rate - metrics.false_positive_rate).clamp(-1.0, 1.0)
 }
 
 fn choose_recommendation(
@@ -1924,5 +1938,57 @@ mod tests {
         assert!(lookup.report.candidate.fallback_applied);
         assert_eq!(lookup.report.candidate.matching_memory_count, 0);
         assert!(lookup.report.baseline.fallback_applied);
+    }
+
+    fn fallback_metrics(max_detect_latency_us: u64) -> StrategyExperimentMetrics {
+        StrategyExperimentMetrics {
+            total_scenarios: 2,
+            adversarial_scenarios: 1,
+            benign_scenarios: 1,
+            true_positive_scenarios: 1,
+            false_negative_scenarios: 0,
+            true_negative_scenarios: 1,
+            false_positive_scenarios: 0,
+            detection_rate: 0.86,
+            false_positive_rate: 0.02,
+            max_detect_latency_us,
+        }
+    }
+
+    /// `replay_fallback_score` subtracts a penalty derived from
+    /// `max_detect_latency_us`, which is a wall-clock `Instant` delta captured
+    /// while the experiment ran. That score decides `CandidatePreferred` vs
+    /// `RetainBaseline` whenever live rollout memory is sparse -- which is
+    /// always true for a fresh candidate, since `MIN_LIVE_MEMORIES` is 2 and a
+    /// candidate that has never shipped has none.
+    ///
+    /// So two operators replaying the identical bundle on different hardware
+    /// get different advisory scores from identical fixture content, and past
+    /// `SCORE_RECOMMENDATION_EPSILON` a different recommendation -- with a green
+    /// suite on both. The penalty spans a full 0.25 of a score clamped to
+    /// [-1.0, 1.0], five times the epsilon.
+    ///
+    /// `detection_rate` and `false_positive_rate` are counts over fixture
+    /// content and are identical on every machine. The score must be a function
+    /// of those alone.
+    #[test]
+    fn replay_fallback_score_is_invariant_to_measured_detect_latency() {
+        let fast = fallback_metrics(600);
+        let slow = fallback_metrics(60_000);
+
+        // Everything the fixtures determine is identical; only the clock differs.
+        assert_eq!(fast.detection_rate, slow.detection_rate);
+        assert_eq!(fast.false_positive_rate, slow.false_positive_rate);
+        assert_ne!(fast.max_detect_latency_us, slow.max_detect_latency_us);
+
+        let fast_score = super::replay_fallback_score(&fast);
+        let slow_score = super::replay_fallback_score(&slow);
+
+        assert_eq!(
+            fast_score, slow_score,
+            "replay fallback score moved from {fast_score} to {slow_score} because the detect \
+             stage was measured at {}us instead of {}us over identical fixtures",
+            slow.max_detect_latency_us, fast.max_detect_latency_us
+        );
     }
 }

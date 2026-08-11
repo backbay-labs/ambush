@@ -3831,9 +3831,9 @@ mod providence_feedback {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.95,
                         false_positive_cost: 0.05,
-                        speed: 0.8,
                         threat_class_coverage: 1.0,
                     },
+                    observations: None,
                     summary: "feedback candidate".to_string(),
                 }],
             })
