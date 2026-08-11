@@ -259,6 +259,28 @@ jobs:
             echo "clean"
           fi
 
+          echo "== stray empty directories anywhere in the tree =="
+          # git cannot track an empty directory, so a fresh checkout has exactly
+          # zero of them (verified on 4fdcd22). Any empty directory is therefore
+          # residue by construction. This is the only check of the four that is
+          # not scoped to a path list: `rulesets/data/deception-lifecycle` slipped
+          # past the other three because they look under `crates/` (and because
+          # `git status` never reports an empty directory, ignored or not).
+          # Do NOT replace this with `find crates rulesets -name data`: `rulesets/data`
+          # is a tracked directory and would fail the gate permanently.
+          empty_dirs="$(
+            find . -type d -empty \
+              -not -path './.git/*' -not -path './target/*' \
+              -print | sort
+          )"
+          if [ -n "$empty_dirs" ]; then
+            echo "::error::the test run created empty directories in the checkout"
+            printf '%s\n' "$empty_dirs"
+            status=1
+          else
+            echo "clean"
+          fi
+
           exit "$status"
 
   fixture-freshness:
