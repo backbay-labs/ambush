@@ -655,7 +655,7 @@ mod tests {
 
         assert_eq!(receipt.status, ResponseStatus::Executed);
         let payload = state.payload.lock().await.clone().unwrap();
-        assert_eq!(payload[0]["event"]["finding_id"], "finding-1");
+        assert_eq!(payload["event"]["finding_id"], "finding-1");
 
         let _ = shutdown_tx.send(());
         handle.abort();
