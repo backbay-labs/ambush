@@ -4,11 +4,20 @@
 #
 # WHY THIS EXISTS
 #   `#[path = "core.inc"] mod core;` pulls a file of real Rust into the crate.
-#   rustc and clippy read it; rustfmt, rust-analyzer, tokei/scc and every other
-#   `*.rs`-globbing tool do not. A `.inc` file is therefore permanently
-#   unformatted, has no editor support, and is invisible to every LOC and
-#   complexity measurement -- which is how one grew to 5,394 lines unnoticed.
-#   Phase 281 eliminated the single-owner ones; this gate stops new ones.
+#   rustc, clippy AND rustfmt all follow `#[path]`, so a `.inc` file is compiled,
+#   linted, and formatted like any other source. What skips it is every tool that
+#   finds code by globbing `*.rs`: rust-analyzer (no editor support -- no
+#   go-to-definition, no rename, no inline diagnostics) and every LOC/complexity
+#   tool (tokei, scc), which is how one grew to 5,394 lines without appearing in
+#   any size measurement. Two tools of four, not three.
+#
+#   Phase 281's commit messages and an earlier version of this header claimed
+#   `.inc` files were "permanently unformatted". That was WRONG and was disproved
+#   by a two-sided control: appending a formatting violation to a still-`.inc`
+#   file makes `cargo fmt --all -- --check` exit 1, and `rustfmt --check` on the
+#   pristine core.inc files exits 0 -- they were already formatted. Recorded here
+#   so phases 282 and 283 do not inherit the claim. The gate is worth keeping on
+#   the rust-analyzer and LOC-visibility grounds alone.
 #
 # WHAT IS COVERED
 #   Every `.rs` and `.inc` file under `crates/` (any depth: `src/`, `tests/`,
@@ -542,10 +551,10 @@ if violations:
     for _, message in sorted(violations):
         print(f"- {message}", file=sys.stderr)
     print(
-        "\nRust source must live in a `.rs` file. rustc and clippy read a `.inc`, "
-        "but rustfmt, rust-analyzer and every LOC/complexity tool skip it, so the "
-        "file is permanently unformatted, has no editor support, and is invisible "
-        "to review metrics.\n"
+        "\nRust source must live in a `.rs` file. rustc, clippy and rustfmt all "
+        "follow `#[path]`, but rust-analyzer and every LOC/complexity tool find "
+        "code by globbing `*.rs`, so a `.inc` file has no editor support and is "
+        "invisible to size and complexity metrics.\n"
         "\nFix: rename the file to `.rs` and either drop the `#[path]` (a plain "
         "`mod name;` next to `name.rs`) or point it at the `.rs` name. Then run "
         "`cargo fmt --all` -- the file has never been formatted, so expect a diff.\n"
