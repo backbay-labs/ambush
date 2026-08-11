@@ -1064,17 +1064,17 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** Make Ambush's fail-closed claim checkable rather than asserted: green and isolate the test fixtures, map every invariant to its enforcing function and assumption, prove each mapping is falsifiable, and add deterministic-simulation, fuzz, and interleaving executors over the policy and response path.
 **Executable phases:** 284-287
 
-- [ ] **Phase 284: Fixture Determinism And Suite Health** - Regenerate the 161 schema-drifted fixtures, isolate tests from the live repo tree, and stop test runs mutating the working directory. (FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04)
+- [x] **Phase 284: Fixture Determinism And Suite Health** - Regenerate the 161 schema-drifted fixtures, isolate tests from the live repo tree, and stop test runs mutating the working directory. (FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04)
 - [ ] **Phase 285: Assumption Registry And Invariant Mapping** - Build the invariant-to-function-to-assumption map with grep enforcement and a negative-falsifiability registry proving no row is vacuous. (MAPPING-01, FALSIFY-02)
 - [ ] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
 - [ ] **Phase 287: Fuzz, Loom, And Supply-Chain Hardening** - Adversarial coverage for the untrusted parse boundaries and concurrent write paths, plus dated and justified dependency policy. (FUZZ-01, LOOM-01, SUPPLY-01)
 
 ### Phase 284: Fixture Determinism And Suite Health
 
-**Goal:** 7 tests fail today against 161 checked-in fixtures carrying a field the parser rejects, and test runs write into the repository. Every later assurance signal is unreadable until the baseline is green and isolated.
+**Goal:** NOTE (2026-08-11): the "7 tests fail against 161 checked-in fixtures" premise did NOT reproduce - e93d521 had already removed 137 of them and the grep returned 0 before this phase began. The real work was isolation, the generator, and the freshness gate. Test runs write into the repository. Every later assurance signal is unreadable until the baseline is green and isolated.
 **Requirements:** FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04
 **Depends on:** v1.78 milestone complete
-**Status:** Not started
+**Status:** Complete 2026-08-11 (executed out of order, ahead of v1.78, as a prerequisite for parallel work)
 **Plans:** TBD
 **Success Criteria**:
 1. `cargo test -p swarm-runtime kitten_agent` passes with zero failures and zero schema-drift skips.
@@ -1838,7 +1838,7 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 281. core.inc Elimination | v1.78 | 0/TBD | Not started | - |
 | 282. Crate Extraction From swarm-runtime | v1.78 | 0/TBD | Not started | - |
 | 283. TCB Boundary And Layering Enforcement | v1.78 | 0/TBD | Not started | - |
-| 284. Fixture Determinism And Suite Health | v1.79 | 0/TBD | Not started | - |
+| 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |
 | 285. Assumption Registry And Invariant Mapping | v1.79 | 0/TBD | Not started | - |
 | 286. Deterministic Simulation Testing | v1.79 | 0/TBD | Not started | - |
 | 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 0/TBD | Not started | - |

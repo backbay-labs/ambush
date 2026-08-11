@@ -794,10 +794,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Fixture Determinism And Suite Health
 
-- [ ] **FIXTURE-01**: A deterministic fixture generator (`tools/regen-kitten-fixtures.sh`) regenerates every `experiments/*.yaml` consumed by `crates/swarm-runtime/src/kitten_agent.rs` tests from a pinned schema version.
-- [ ] **FIXTURE-02**: The 161 `experiments/*.yaml` files carrying the `command_line_normalization` field that `SuspiciousProcessTreeProfile` rejects under `deny_unknown_fields` are regenerated or removed; `cargo test -p swarm-runtime kitten_agent` passes with zero failures.
-- [ ] **FIXTURE-03**: `tools/check-fixture-freshness.sh` regenerates fixtures into a scratch directory, diffs against the checked-in copies, and fails CI on drift, so a "sync generated artifacts" commit can never again check in fixtures the parser rejects.
-- [ ] **FIXTURE-04**: Tests read fixtures from an isolated copy rather than the live repo-root `experiments/` directory, and no test or tool writes into the repository working tree during a run (closing the 48 untracked droppings under `crates/*/data/`).
+- [x] **FIXTURE-01**: A deterministic fixture generator (`tools/regen-kitten-fixtures.sh`) regenerates every `experiments/*.yaml` consumed by `crates/swarm-runtime/src/kitten_agent.rs` tests from a pinned schema version.
+- [x] **FIXTURE-02**: The 161 `experiments/*.yaml` files carrying the `command_line_normalization` field that `SuspiciousProcessTreeProfile` rejects under `deny_unknown_fields` are regenerated or removed; `cargo test -p swarm-runtime kitten_agent` passes with zero failures.
+- [x] **FIXTURE-03**: `tools/check-fixture-freshness.sh` regenerates fixtures into a scratch directory, diffs against the checked-in copies, and fails CI on drift, so a "sync generated artifacts" commit can never again check in fixtures the parser rejects.
+- [x] **FIXTURE-04**: Tests read fixtures from an isolated copy rather than the live repo-root `experiments/` directory, and no test or tool writes into the repository working tree during a run (closing the 48 untracked droppings under `crates/*/data/`).
 
 #### Assumption Registry And Invariant Mapping
 
@@ -1429,10 +1429,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | TCBOUND-02 | Phase 283 | Pending |
 | TCBOUND-03 | Phase 283 | Pending |
 | TCBOUND-04 | Phase 283 | Pending |
-| FIXTURE-01 | Phase 284 | Pending |
-| FIXTURE-02 | Phase 284 | Pending |
-| FIXTURE-03 | Phase 284 | Pending |
-| FIXTURE-04 | Phase 284 | Pending |
+| FIXTURE-01 | Phase 284 | Satisfied |
+| FIXTURE-02 | Phase 284 | Satisfied |
+| FIXTURE-03 | Phase 284 | Satisfied |
+| FIXTURE-04 | Phase 284 | Satisfied |
 | MAPPING-01 | Phase 285 | Pending |
 | MAPPING-02 | Phase 285 | Pending |
 | MAPPING-03 | Phase 285 | Pending |
