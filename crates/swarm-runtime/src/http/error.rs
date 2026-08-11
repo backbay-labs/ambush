@@ -1,4 +1,4 @@
-use super::core::{escape_html, render_review_layout};
+use super::render::{escape_html, render_review_layout};
 use crate::approval::ApprovalError;
 use crate::control::ControlError;
 use crate::evidence::EvidenceError;
