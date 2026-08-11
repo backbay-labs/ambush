@@ -940,8 +940,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### BFT Correctness Repair
 
-- [ ] **BFT-01**: `recommended_max_faulty` in `crates/swarm-consensus/src/lib.rs:65` is corrected from `(committee_size - 1) / 2` to `(committee_size - 1) / 3` to match the module's own documented 2f+1-of-3f+1 model; a regression table asserts `recommended_max_faulty(4)==1`, `(7)==2`, `(10)==3`, `(13)==4`.
-- [ ] **BFT-02**: A round with a correctly sized `3f+1` committee still reaches `commits.len() == committee.threshold()` after excluding the maximum tolerable number of Byzantine members; today `ConsensusCommittee::threshold()` never shrinks after `exclude_sender`, so ejecting one bad actor can strand a round below its own threshold, and the existing Byzantine test never asserts the round still commits.
+- [x] **BFT-01**: `recommended_max_faulty` in `crates/swarm-consensus/src/lib.rs:65` is corrected from `(committee_size - 1) / 2` to `(committee_size - 1) / 3` to match the module's own documented 2f+1-of-3f+1 model; a regression table asserts `recommended_max_faulty(4)==1`, `(7)==2`, `(10)==3`, `(13)==4`.
+- [x] **BFT-02**: A round with a correctly sized `3f+1` committee still reaches `commits.len() == committee.threshold()` after excluding the maximum tolerable number of Byzantine members; today `ConsensusCommittee::threshold()` never shrinks after `exclude_sender`, so ejecting one bad actor can strand a round below its own threshold, and the existing Byzantine test never asserts the round still commits.
 - [ ] **BFT-03**: `simulate_governance_commit` (which today takes `governors: &BTreeMap<AgentId, SigningKey>`, holding every governor's private key in one process) is removed from the production path; governors exchange `ConsensusSignedEnvelope` over the pheromone substrate, and no production path holds more than one governor's key in memory.
 - [ ] **BFT-04**: `GovernancePolicy::can_act` drives authorization through the networked round while preserving the existing `GovernanceDecision::{Allow, Veto}` API and receipt shape, so `dispatcher.rs` and the documented receipt-backed flow are unchanged for callers.
 - [ ] **BFT-05**: A seeded message-loss and delay harness proves commit completes within `round_timeout_ms * (max_faulty + 1)` in the common case, and the phase states explicitly which fault classes it did not exercise.
@@ -973,8 +973,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Reversible Quarantine Execution
 
-- [ ] **QRT-01**: `crates/swarm-response` gains a real executor for `QuarantineFile`, `SuspendProcess`, `IsolateHost`, and `TerminateUserSession` that persists a quarantine lease carrying blast radius, rollback plan, governance receipt, and expiry; today `ResponseBlastRadiusPreview` and `ResponseRollbackPreview` exist and are surfaced over HTTP, but no rollback executor exists anywhere in `swarm-response` (verified: zero non-preview rollback references).
-- [ ] **QRT-02**: `execute_rollback` performs the concrete inverse action per rollback step kind and emits a rollback receipt chained to the original governance receipt id.
+- [x] **QRT-01**: `crates/swarm-response` gains a real executor for `QuarantineFile`, `SuspendProcess`, `IsolateHost`, and `TerminateUserSession` that persists a quarantine lease carrying blast radius, rollback plan, governance receipt, and expiry; today `ResponseBlastRadiusPreview` and `ResponseRollbackPreview` exist and are surfaced over HTTP, but no rollback executor exists anywhere in `swarm-response` (verified: zero non-preview rollback references).
+- [x] **QRT-02**: `execute_rollback` performs the concrete inverse action per rollback step kind and emits a rollback receipt chained to the original governance receipt id.
 - [ ] **QRT-03**: Every quarantine lease carries a mandatory expiry mirroring the existing contingency-lease TTL pattern; a background sweep rolls back automatically on expiry with zero operator action.
 - [ ] **QRT-04**: `swarmctl quarantine release <lease_id>` performs manual early rollback through the same governance signing path; an integration test executes containment, verifies effect, rolls back both manually and by TTL, and verifies both receipts.
 
@@ -1514,8 +1514,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | TRIAGE-03 | Phase 299 | Pending |
 | TRIAGE-04 | Phase 299 | Pending |
 | TRIAGE-05 | Phase 299 | Pending |
-| BFT-01 | Phase 321 | Pending |
-| BFT-02 | Phase 321 | Pending |
+| BFT-01 | Phase 321 | Satisfied |
+| BFT-02 | Phase 321 | Satisfied |
 | BFT-03 | Phase 321 | Pending |
 | BFT-04 | Phase 321 | Pending |
 | BFT-05 | Phase 321 | Pending |
@@ -1533,8 +1533,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | DISTGOV-02 | Phase 303 | Pending |
 | DISTGOV-03 | Phase 303 | Pending |
 | DISTGOV-04 | Phase 303 | Pending |
-| QRT-01 | Phase 320 | Pending |
-| QRT-02 | Phase 320 | Pending |
+| QRT-01 | Phase 320 | Satisfied |
+| QRT-02 | Phase 320 | Satisfied |
 | QRT-03 | Phase 320 | Pending |
 | QRT-04 | Phase 320 | Pending |
 | IFC-01 | Phase 305 | Pending |

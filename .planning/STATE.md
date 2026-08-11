@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.77
-milestone_name: Integration Proof
-current_phase: null
-current_phase_name: null
+milestone: v1.78
+milestone_name: Runtime Decomposition And TCB Boundary
+current_phase: 284
+current_phase_name: Fixture Determinism And Suite Health
 current_plan: null
 status: active
-last_updated: "2026-04-14T03:50:49Z"
-last_activity: 2026-04-13
+last_updated: "2026-08-10T00:00:00Z"
+last_activity: 2026-08-10
 progress:
   total_phases: 4
-  completed_phases: 4
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State
@@ -23,19 +23,19 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.77 Integration Proof` — completed on the shipped runtime and waiting for `v1.78` definition or milestone archive/promotion.
+**Current focus:** `v1.78 Runtime Decomposition And TCB Boundary` — green the verification gates, eliminate `core.inc`, split `swarm-runtime`, and enforce a TCB boundary. Phase 284 (test isolation) is pulled forward from v1.79 as a hard prerequisite for parallel work.
 
 ## Current Position
 
-**Current Phase:** None active
-**Total Phases:** 4 (276-279)
-**Current Plan:** None active
-**Total Plans in Milestone:** 4
-**Status:** Active milestone, all phases complete
-**Last Activity:** 2026-04-13
-**Last Activity Description:** Completed phases 276-279 with a passing compose-backed integration proof, repo-owned architecture validation, and 9/9 mapped requirements satisfied.
+**Current Phase:** 284 — Fixture Determinism And Suite Health (pulled forward from v1.79)
+**Total Phases:** 4 (280-283), plus 320-322 in v1.78.1
+**Current Plan:** None started yet
+**Total Plans in Phase:** TBD
+**Status:** Ready to plan
+**Last Activity:** 2026-08-10
+**Last Activity Description:** Merged PR #1 (feat/milestones-v1.74-v1.77, 29 commits) into main, making one authoritative ref carrying both the shipped v1.75-v1.77 implementation and the v1.78-v1.87 plan.
 
-Progress: [██████████] 100%
+Progress: [░░░░░░░░░░] 0%
 
 ## Memory
 
@@ -56,13 +56,20 @@ Progress: [██████████] 100%
 - v1.76 completed bounded STIX/TAXII feed ingestion, threat-intel finding enrichment, CloudTrail and Kubernetes audit bridge normalization, and cross-cloud signed-deposit proof on the shared runtime path.
 - v1.77 completed CrowdStrike RTR execution, Splunk HEC finding delivery, the compose-backed detect -> respond -> deliver proof, and the integration architecture validation pass.
 - The repo-owned proof now passes end-to-end through `bash tools/run-integration-proof.sh`, producing a replay bundle plus mocked CrowdStrike RTR and Splunk HEC delivery artifacts.
+- 2026-08-10: PR #1 merged into main. The v1.78-v1.87 roadmap was authored against the branch tree, not main's - its LOC premises (97,709 .rs / 22,762 .inc / 115,156 combined) match the branch exactly and main not at all. The merge preserves main's two shipped fixes: BFT (n-1)/3 (f55c3bd) and ContainmentLease/RollbackExecutor (4d03543).
+- Merged tree gates: `cargo build --workspace` exit 0, `cargo fmt --all -- --check` exit 0 (after one style commit), `cargo clippy --workspace --all-targets -- -D warnings` exit 0 with zero warnings.
 
 ## Issues
 
-- No active blockers on v1.77. The milestone is complete and waiting on `v1.78` definition or explicit archive/promotion.
+- BLOCKER: the test suite is not deterministic and writes into the repository working tree. `crates/swarm-core/src/config/defaults.rs` returns 28 repo-relative `data/...` paths, so any test building a default config writes into the crate root. Phase 284 must land, serially, before any parallel phase work.
+- Phase 320 is 2/4: QRT-01 and QRT-02 shipped in 4d03543. QRT-03 (TTL sweep) and QRT-04 (`swarmctl quarantine release`) remain.
+- Phase 321 is 2/5, NOT complete: f55c3bd's own message says "Implements BFT-01 and BFT-02". BFT-03 (remove `simulate_governance_commit`'s co-located-key path, still live at `crates/swarm-runtime/src/tom_agent.rs:1147`), BFT-04, and BFT-05 remain.
+- Phase 322 cannot run where it is sequenced: it gates `crates/swarm-evolution/src/promotion.rs`, which does not exist on the merged tree (`swarm-evolution` is the 8-line facade). Phase 282 must restore real source first.
+- BFT-04 has no matching success criterion in the phase 321 ROADMAP block; criteria 1-4 cover BFT-01, BFT-02, BFT-03, BFT-05 only.
+- Phases 295, 300, and 304 are orphan roadmap rows with no body block and no mapped requirements; they are superseded by 322, 321, and 320 respectively.
+- `.gitignore` covers `crates/swarm-runtime/data/evolution-assurance-cases/reports/` but not the `crates/swarm-evolution/` twin, and the tracked `index.json` points at gitignored directories, so it dangles on a clean clone.
 - v1.74 remains deferred rather than completed; its structural-integrity work is preserved for later re-activation.
-- The next milestone starts from a stable external-signal base with bounded TAXII ingestion, cloud bridge normalization, and cloud-detector runtime proof already in place.
 
 ## Next Command
 
-Define `v1.78` or run the milestone archive/promotion flow once the next milestone is ready.
+Plan and execute Phase 284 (Fixture Determinism And Suite Health) serially, as the hard prerequisite for all parallel phase work.

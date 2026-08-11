@@ -1014,7 +1014,7 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** `QuarantineFile` dispatches to real EDR adapters while no rollback executor exists anywhere in `swarm-response` (verified: zero non-preview rollback references). The system can contain a host and cannot un-contain it. This is the highest-blast-radius gap in the codebase.
 **Requirements:** QRT-01, QRT-02, QRT-03, QRT-04
 **Depends on:** v1.78 milestone complete
-**Status:** Not started
+**Status:** In progress - QRT-01/QRT-02 shipped in 4d03543; QRT-03/QRT-04 open
 **Plans:** TBD
 **Success Criteria**:
 1. Execute-and-rollback coverage exists for quarantine, suspend, isolate, and session-terminate, persisting a lease carrying blast radius, rollback plan, governance receipt, and expiry.
@@ -1027,7 +1027,7 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** `recommended_max_faulty` returns `(n-1)/2` instead of `(n-1)/3` at `crates/swarm-consensus/src/lib.rs:65`, and committee threshold never shrinks after exclusion, so ejecting one Byzantine member can strand a round below its own threshold. This is a live liveness defect in the path that gates destructive response.
 **Requirements:** BFT-01, BFT-02, BFT-03, BFT-04, BFT-05
 **Depends on:** Phase 320
-**Status:** Not started
+**Status:** In progress - BFT-01/BFT-02 shipped in f55c3bd; BFT-03/BFT-04/BFT-05 open
 **Plans:** TBD
 **Success Criteria**:
 1. `recommended_max_faulty` computes `(n-1)/3`, with a regression table asserting 4->1, 7->2, 10->3, 13->4.
@@ -1838,16 +1838,16 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 292. Pure Decision Core Extraction | v1.81 | 0/TBD | Not started | - |
 | 293. Kani Bounded Model Checking | v1.81 | 0/TBD | Not started | - |
 | 294. Named Safety Properties And Partition-Lease Model | v1.81 | 0/TBD | Not started | - |
-| 295. Z3-Backed Promotion Gate | v1.81 | 0/TBD | Not started | - |
+| 295. Z3-Backed Promotion Gate | v1.81 | - | Superseded by 322 | - |
 | 296. Provenance Graph Substrate | v1.82 | 0/TBD | Not started | - |
 | 297. Kill-Chain Reconstruction | v1.82 | 0/TBD | Not started | - |
 | 298. Cross-Hunt Correlation | v1.82 | 0/TBD | Not started | - |
 | 299. Dependency-Aware Triage | v1.82 | 0/TBD | Not started | - |
-| 300. BFT Correctness Repair | v1.83 | 0/TBD | Not started | - |
+| 300. BFT Correctness Repair | v1.83 | - | Superseded by 321 | - |
 | 301. VRF Committee Selection | v1.83 | 0/TBD | Not started | - |
 | 302. Governance Key Rotation And Revocation | v1.83 | 0/TBD | Not started | - |
 | 303. Fail-Closed Contract Preservation | v1.83 | 0/TBD | Not started | - |
-| 304. Reversible Quarantine Execution | v1.84 | 0/TBD | Not started | - |
+| 304. Reversible Quarantine Execution | v1.84 | - | Superseded by 320 | - |
 | 305. Information-Flow Control | v1.84 | 0/TBD | Not started | - |
 | 306. Cross-Instance Immunity Sharing | v1.84 | 0/TBD | Not started | - |
 | 307. Adaptive Deception And Integration Proof | v1.84 | 0/TBD | Not started | - |
@@ -1863,8 +1863,8 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 317. Fleet Blast Radius And Tenant Isolation | v1.87 | 0/TBD | Not started | - |
 | 318. Fleet Operational Maturity | v1.87 | 0/TBD | Not started | - |
 | 319. Signed Release Supply Chain | v1.87 | 0/TBD | Not started | - |
-| 320. Reversible Quarantine Execution | v1.78.1 | 0/TBD | Not started | - |
-| 321. BFT Correctness Repair | v1.78.1 | 0/TBD | Not started | - |
+| 320. Reversible Quarantine Execution | v1.78.1 | 2/4 | In progress | - |
+| 321. BFT Correctness Repair | v1.78.1 | 2/5 | In progress | - |
 | 322. Promotion Solver Gate | v1.78.1 | 0/TBD | Not started | - |
 
 ---
