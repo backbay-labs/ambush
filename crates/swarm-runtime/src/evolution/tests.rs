@@ -1763,7 +1763,7 @@ fn gate_block_reason_present_when_blocked_without_waiver() {
 fn validate_waiver_rejects_empty_reason() {
     let config = waiver_config();
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut wconfig = config.clone();
     wconfig.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let mut assurance = blocked_assurance_summary(2);
@@ -1778,7 +1778,7 @@ fn validate_waiver_rejects_empty_reason() {
 #[test]
 fn validate_waiver_rejects_expired_waiver() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let mut assurance = blocked_assurance_summary(2);
@@ -1793,7 +1793,7 @@ fn validate_waiver_rejects_expired_waiver() {
 #[test]
 fn validate_waiver_rejects_unauthorized_operator() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let config = waiver_config(); // allowed_operator_ids doesn't include our signer
     let mut assurance = blocked_assurance_summary(2);
     let waiver = build_valid_waiver(&assurance, &operator_id, "waiver-key", 1000, 3600);
@@ -1806,7 +1806,7 @@ fn validate_waiver_rejects_unauthorized_operator() {
 #[test]
 fn validate_waiver_rejects_gap_count_above_limit() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     config.evolution.assurance.waiver.max_actionable_gap_count = 1; // limit is 1
@@ -1825,7 +1825,7 @@ fn validate_waiver_rejects_gap_count_above_limit() {
 #[test]
 fn validate_waiver_rejects_mismatched_gap_count() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let assurance_at_sign_time = blocked_assurance_summary(2);
@@ -1848,7 +1848,7 @@ fn validate_waiver_rejects_mismatched_gap_count() {
 #[test]
 fn validate_waiver_rejects_tampered_signature() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let mut assurance = blocked_assurance_summary(2);
@@ -1868,7 +1868,7 @@ fn validate_waiver_rejects_tampered_signature() {
 #[test]
 fn validate_waiver_accepts_valid_waiver_within_window() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let mut assurance = blocked_assurance_summary(2);
@@ -1881,7 +1881,7 @@ fn validate_waiver_accepts_valid_waiver_within_window() {
 #[test]
 fn rollout_state_waived_when_blocked_with_valid_waiver() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let mut assurance = blocked_assurance_summary(2);
@@ -1894,7 +1894,7 @@ fn rollout_state_waived_when_blocked_with_valid_waiver() {
 #[test]
 fn gate_allows_when_blocked_with_valid_waiver() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let mut assurance = blocked_assurance_summary(2);
@@ -1907,7 +1907,7 @@ fn gate_allows_when_blocked_with_valid_waiver() {
 #[test]
 fn gate_blocks_when_waiver_expired() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let mut assurance = blocked_assurance_summary(2);
@@ -1921,7 +1921,7 @@ fn gate_blocks_when_waiver_expired() {
 #[test]
 fn validate_waiver_rejects_not_yet_active() {
     let signer = Ed25519Signer::from_secret_material("waiver-key");
-    let operator_id = AgentId::from_public_key_hex(&signer.public_key_hex()).to_string();
+    let operator_id = AgentId::from_public_key_hex(signer.public_key_hex()).to_string();
     let mut config = waiver_config();
     config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.clone()];
     let mut assurance = blocked_assurance_summary(2);

@@ -1,13 +1,3 @@
-#![cfg_attr(
-    test,
-    allow(
-        clippy::expect_used,
-        clippy::needless_borrow,
-        clippy::needless_borrows_for_generic_args,
-        clippy::type_complexity,
-        clippy::unwrap_used,
-    )
-)]
 //! Rust-first runtime orchestration for Ambush.
 //!
 //! This crate is the intended composition root for the production runtime:

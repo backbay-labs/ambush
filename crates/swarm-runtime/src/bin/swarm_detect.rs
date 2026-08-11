@@ -1,5 +1,3 @@
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-
 use clap::Parser;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde_json::json;
@@ -1252,6 +1250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         register_optional_calico_agent, register_optional_sphinx_agent, watch_paths_differ,

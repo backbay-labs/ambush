@@ -264,6 +264,7 @@ fn client_identity_from_certificate(cert: &CertificateDer<'_>) -> Option<String>
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{ServeError, serve_with_listener};
     use axum::Router;

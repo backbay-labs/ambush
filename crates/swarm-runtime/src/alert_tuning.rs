@@ -311,6 +311,7 @@ fn max_optional_timestamp(current: Option<i64>, candidate: Option<i64>) -> Optio
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         AlertTuningRecommendationKind, AlertTuningRecommendationPriority, build_alert_tuning_report,

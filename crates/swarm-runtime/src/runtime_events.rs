@@ -364,6 +364,7 @@ pub fn parse_runtime_event_filter(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{RuntimeEventKind, parse_runtime_event_filter};
 

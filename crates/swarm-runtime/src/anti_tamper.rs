@@ -345,6 +345,7 @@ fn collect_mapped_libraries(raw: &str) -> BTreeSet<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         AntiTamperFailure, AntiTamperMonitor, AntiTamperProbe, AntiTamperSnapshot,

@@ -319,6 +319,7 @@ fn current_unix_seconds() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         BridgeHealth, ExhaustedResource, InfrastructureHealthEvent, ProcessMemoryAccessEvent,
