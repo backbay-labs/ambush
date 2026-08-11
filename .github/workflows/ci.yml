@@ -196,21 +196,70 @@ jobs:
       # one, and the gate would be inert on exactly the runs most likely to
       # leave the tree dirty.
       #
-      # `--porcelain` (tracked files) is the binding assertion. Ignored
-      # droppings are REPORTED, not enforced: `experiments/mutation-*.yaml` and
-      # friends are gitignored, so hundreds can accumulate while `--porcelain`
-      # stays empty -- which is exactly how 715 of them went unnoticed.
+      # This step used to compute `ignored_count`, echo it, and then assert ONLY
+      # on `git status --porcelain`. That made it inert for the regression it
+      # exists to catch, for two independent reasons:
+      #
+      #   1. the leaked store roots had been `git rm --cached`-ed AND added to
+      #      .gitignore, so a recurrence is ignored and `--porcelain` stays
+      #      empty;
+      #   2. `git status` NEVER reports an empty directory, ignored or not, and
+      #      the two leaks that survived phase 284 created only empty
+      #      directories -- `crates/swarm-runtime/data/evolution-population/`
+      #      and `.../evolution-assurance-cases/{reports,scenarios}/`.
+      #
+      # So the assertions below are on things that actually change when the
+      # suite dirties the tree. `find` is used for the store roots precisely
+      # because it is immune to .gitignore and does see empty directories.
       - name: Assert the suite left the working tree clean
         if: always()
         run: |
-          ignored_count="$(git status --porcelain --ignored | grep -c '^!!' || true)"
-          echo "ignored entries after the suite: $ignored_count"
-          git status --porcelain --ignored | grep '^!!' || true
+          status=0
+
+          echo "== tracked files =="
           if [ -n "$(git status --porcelain)" ]; then
             echo "::error::the test run mutated tracked files"
             git status --porcelain
-            exit 1
+            status=1
+          else
+            echo "clean"
           fi
+
+          echo "== crate-local store roots (ignore-proof, sees empty dirs) =="
+          crate_residue="$(
+            find crates -maxdepth 2 \
+              \( -name data -type d -o -name dead-letter.jsonl -type f \) \
+              -print | sort
+          )"
+          if [ -n "$crate_residue" ]; then
+            echo "::error::the test run created store roots inside crates/"
+            printf '%s\n' "$crate_residue" | while IFS= read -r path; do
+              find "$path" -print | sort
+            done
+            status=1
+          else
+            echo "clean"
+          fi
+
+          echo "== untracked and ignored residue outside target/ =="
+          # `--ignored=matching -uall` is required: the default `--ignored`
+          # collapses to the ignored DIRECTORY and omits empty ones entirely.
+          # Restricted to `??`/`!!` so it reports residue only; modified tracked
+          # files are the first check's business.
+          tree_residue="$(
+            git status --porcelain --ignored=matching -uall \
+              | grep -E '^(\?\?|!!) ' \
+              | grep -v '^!! target/' || true
+          )"
+          if [ -n "$tree_residue" ]; then
+            echo "::error::the test run left files in the working tree"
+            echo "$tree_residue"
+            status=1
+          else
+            echo "clean"
+          fi
+
+          exit "$status"
 
   fixture-freshness:
     runs-on: ubuntu-latest
