@@ -942,7 +942,7 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Executable phases:** 280-283
 
 - [x] **Phase 280: Verification Gate Repair** - Replace crate-wide clippy opt-outs with reviewed per-call-site allows, widen the panic contract beyond swarm-runtime, and stop the supply-chain check suppressing its own findings. (GATEFIX-02, GATEFIX-03, GATEFIX-04)
-- [ ] **Phase 281: core.inc Elimination** - Replace the four 22,762-line `.inc` include files with ordinary modules and decompose the CLI into one module per command domain. (INCFIX-01, INCFIX-02, INCFIX-03)
+- [x] **Phase 281: core.inc Elimination** - Replace the four 22,762-line `.inc` include files with ordinary modules and decompose the CLI into one module per command domain. (INCFIX-01, INCFIX-02, INCFIX-03)
 - [ ] **Phase 282: Crate Extraction From swarm-runtime** - Break three known dependency cycles, then extract HTTP, replay, workbench, agents, ingest, and the evolution lane into real crates. (SPLIT-01, SPLIT-03, SPLIT-06)
 - [ ] **Phase 283: TCB Boundary And Layering Enforcement** - Name `swarm-policy` + `swarm-crypto` + `swarm-spine` as the trusted base and enforce the boundary in CI. (TCBOUND-01, TCBOUND-02, TCBOUND-03, TCBOUND-04)
 
@@ -976,13 +976,13 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** Four `#[path = "core.inc"]` files hold 22,762 lines that `cargo fmt`, clippy, rust-analyzer, and every LOC tool skip. Removing the pattern is a prerequisite for splitting the crate, since the includes cross crate boundaries.
 **Requirements:** INCFIX-01, INCFIX-02, INCFIX-03
 **Depends on:** Phase 280
-**Status:** Not started
+**Status:** Complete 2026-08-11 (INCFIX-01 for the 3 single-owner files, INCFIX-03; INCFIX-02 deferred to 282 with the two-owner CLI file)
 **Plans:** TBD
 **Success Criteria**:
 1. SCOPED 2026-08-11: the three single-owner `.inc` files are replaced by ordinary `.rs` modules -- `swarm-runtime/src/{http,replay,workbench}/core.inc` (8,153 + 5,425 + 3,902 = 17,480 lines). `crates/swarm-cli/src/core.inc` (5,394) is DEFERRED to phase 282: it is included by TWO crates (`swarm-cli/src/lib.rs:79` and `swarm-runtime/src/cli/mod.rs:1` via `../../../`), so eliminating it decides which crate owns the CLI, which is SPLIT-01..06 territory -- and 282 criterion 1 requires cycles be broken before any crate is cut. `find crates -name '*.inc'` therefore returns 1, not 0, at the end of 281.
    NOTE FOR 282's PLANNER: eliminating it may not require deciding ownership at all. Splitting it into `swarm-cli/src/cli/` modules and repointing the cross-crate include at `#[path = "../../../swarm-cli/src/cli/mod.rs"]` keeps the include working while removing the `.inc`, since nested `mod` declarations resolve relative to the included file. INCFIX-03 forbids new `#[path = "*.inc"]`, not `#[path]` itself.
 2. SCOPED 2026-08-11: the 800-line limit applies to the CLI decomposition's resulting files, per INCFIX-02's actual wording ("with no resulting file exceeding 800 lines"), NOT workspace-wide. Taken literally the original wording covered 66 files and 129,032 LOC -- milestone scale, and already assigned elsewhere: deferred v1.74 phases 265 and 266 name `kitten_agent.rs` (4,516), `drafting.rs` (3,812), and `ingest/tests.rs` (5,991) explicitly, and phase 282 splits the remainder by crate. Because the CLI surface IS `swarm-cli/src/core.inc`, INCFIX-02 defers to 282 with it; phase 281 delivers INCFIX-01 (3 of 4 files) and INCFIX-03.
-3. `cargo fmt --all -- --check` passes over code that was previously invisible to it.
+3. SUPERSEDED 2026-08-11: this criterion's premise is FALSE and cannot be satisfied as written. rustfmt DOES follow `#[path]` into `.inc` files, disproved two-sided: a formatting violation appended to a still-`.inc` file makes `cargo fmt --all -- --check` exit 1, and `rustfmt --check` on the pristine `core.inc` files exits 0 (they were already formatted). clippy reads them too. Only rust-analyzer and `*.rs`-globbing LOC/complexity tools skip a `.inc` -- two tools of the four INCFIX-01 names. The conversion is still worth having on those grounds; the fmt-coverage claim is not. Do not inherit it in 282/283.
 4. A CI check fails the build if a new `#[path = "*.inc"]` directive or non-`.rs` Rust source file is added.
 
 ### Phase 282: Crate Extraction From swarm-runtime
@@ -1836,7 +1836,7 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 | 278. E2E Deployment Proof Compose Stack | v1.77 | 1/1 | Complete | 2026-04-13 |
 | 279. Integration Architecture Validation | v1.77 | 1/1 | Complete | 2026-04-13 |
 | 280. Verification Gate Repair | v1.78 | 4/4 | Complete | 2026-08-11 |
-| 281. core.inc Elimination | v1.78 | 0/TBD | Not started | - |
+| 281. core.inc Elimination | v1.78 | 2/3 | Complete | 2026-08-11 |
 | 282. Crate Extraction From swarm-runtime | v1.78 | 0/TBD | Not started | - |
 | 283. TCB Boundary And Layering Enforcement | v1.78 | 0/TBD | Not started | - |
 | 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |

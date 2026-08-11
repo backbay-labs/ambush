@@ -771,9 +771,9 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### core.inc Elimination
 
-- [ ] **INCFIX-01**: The four `#[path = "core.inc"]` include files totalling 22,762 lines (`crates/swarm-cli/src/core.inc` 5,315, `crates/swarm-runtime/src/http/core.inc` 8,139, `crates/swarm-runtime/src/replay/core.inc` 5,406, `crates/swarm-runtime/src/workbench/core.inc` 3,902) are replaced by ordinary `.rs` modules, so `cargo fmt`, clippy, rust-analyzer, and LOC tooling all see the code they currently skip.
+- [x] **INCFIX-01**: The four `#[path = "core.inc"]` include files totalling 22,762 lines (`crates/swarm-cli/src/core.inc` 5,315, `crates/swarm-runtime/src/http/core.inc` 8,139, `crates/swarm-runtime/src/replay/core.inc` 5,406, `crates/swarm-runtime/src/workbench/core.inc` 3,902) are replaced by ordinary `.rs` modules, so `cargo fmt`, clippy, rust-analyzer, and LOC tooling all see the code they currently skip.
 - [ ] **INCFIX-02** (DEFERRED to phase 282 on 2026-08-11 -- the CLI surface is `swarm-cli/src/core.inc`, which two crates include; see phase 281 criterion 1): The CLI surface is decomposed into one module per command domain following Chio's `crates/products/chio-cli/src/cli/chio/dispatch/` convention (20 files averaging ~540 LOC), with no resulting file exceeding 800 lines; the ~49 `Evolution*` command variants become their own `dispatch/evolution/` submodule tree rather than one flat enum arm list.
-- [ ] **INCFIX-03**: A CI check fails the build if any new `#[path = "*.inc"]` directive or any non-`.rs` Rust source file is introduced under `crates/`, so the pattern cannot silently return.
+- [x] **INCFIX-03**: A CI check fails the build if any new `#[path = "*.inc"]` directive or any non-`.rs` Rust source file is introduced under `crates/`, so the pattern cannot silently return.
 
 #### Crate Extraction From swarm-runtime
 
@@ -1416,9 +1416,9 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | GATEFIX-02 | Phase 280 | Satisfied |
 | GATEFIX-03 | Phase 280 | Satisfied |
 | GATEFIX-04 | Phase 280 | Satisfied |
-| INCFIX-01 | Phase 281 | Pending |
-| INCFIX-02 | Phase 281 | Pending |
-| INCFIX-03 | Phase 281 | Pending |
+| INCFIX-01 | Phase 281 | Satisfied |
+| INCFIX-02 | Phase 282 | Pending |
+| INCFIX-03 | Phase 281 | Satisfied |
 | SPLIT-01 | Phase 282 | Pending |
 | SPLIT-02 | Phase 282 | Pending |
 | SPLIT-03 | Phase 282 | Pending |

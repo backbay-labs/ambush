@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.78
 milestone_name: Runtime Decomposition And TCB Boundary
-current_phase: 281
-current_phase_name: core.inc Elimination
+current_phase: 282
+current_phase_name: Crate Extraction From swarm-runtime
 current_plan: null
 status: active
 last_updated: "2026-08-10T00:00:00Z"
 last_activity: 2026-08-10
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 0
   completed_plans: 0
-  percent: 50
+  percent: 75
 ---
 
 # State
@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 ## Current Position
 
-**Current Phase:** 281 — core.inc Elimination
+**Current Phase:** 282 — Crate Extraction From swarm-runtime
 **Total Phases:** 4 (280-283), plus 320-322 in v1.78.1
 **Current Plan:** None started yet
 **Total Plans in Phase:** TBD
@@ -64,6 +64,9 @@ Progress: [░░░░░░░░░░] 0%
 - Phase 280 COMPLETE 2026-08-11 (GATEFIX-01..04). All 9 baseline swarm-runtime failures fixed (roadmap said 7; fail-fast undercount). Two real product defects repaired: the guided first-run wizard never reached its own human gate, and the SIEM forward task was detached rather than owned. The panic-contract gate needed its own repair after the first pass made every `include!`d file silently unscanned.
 - OPEN, unowned by any requirement: `crates/swarm-cli/src/core.inc:2988` hard-codes `ed25519_dalek::SigningKey::from_bytes(&[85u8; 32])` inside `pub async fn run(cli: Cli)` with no `#[cfg(test)]` above it. This is shipping production code keyed on a public constant.
 - OPEN: a second intermittent `kitten_agent` benchmark flake, `measured_evolution_benchmark_improves_over_conservative_seed`, distinct from `..._persists_generation_deltas`. Both belong to phase 284.
+- Phase 281 COMPLETE 2026-08-11 (INCFIX-01, INCFIX-03). 17,480 lines across http/replay/workbench converted from `.inc` to ordinary modules; 4 tasks, 4 approved first time, 0 fix rounds. Purity proven with a token-level per-item comparator: 643 items, 0 missing, 0 added, 311 inserted visibility tokens all `pub(super)`.
+- CORRECTION carried forward: INCFIX-01's rationale is half wrong. rustc, clippy AND rustfmt all follow `#[path]`; only rust-analyzer and `*.rs`-globbing LOC tools skip a `.inc`. Phase 281 criterion 3 is unsatisfiable as written and is marked superseded. Do not repeat the claim in 282/283.
+- OPEN, filed from phase 281's final review: a vacuous-verification bug in replay, proven pre-existing. `ReplayScenarioClass` derives `Default` with `#[default] Mixed` and `ReplayScenarioMetadata.class` is `#[serde(default)]`, while `verify_known_bad_coverage` requires `class == Adversarial` and `verify_false_positive_bound` filters on `scenario_is_benign`. A manifest omitting `class:` is exempt from BOTH invariants and passes vacuously.
 - Phase 284 COMPLETE 2026-08-11 (FIXTURE-01..04). The suite no longer writes into the repository: a full G1+G2 leaves all four drift assertions clean. Parallel phase work is now unblocked.
 - The kitten_agent flake was NOT prior-run state. `Option::unwrap_or` evaluates eagerly, so `load_source_seed` scanned every manifest under `experiments/` even when given an override, racing four `mutation::tests_autonomous` tests that write transient files there. 11 failures in 107 runs.
 - The CI drift gate now carries four assertions; the fourth (no empty directories anywhere) is unscoped and is what catches leaks the path-scoped checks miss.
@@ -77,4 +80,4 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Next Command
 
-Plan and execute Phase 281 (core.inc Elimination). Remaining v1.78 order: 281 -> 282 -> 283, each serial (they change crate boundaries and must compile at every step).
+Plan and execute Phase 282 (Crate Extraction From swarm-runtime). It now also owns INCFIX-02 and crates/swarm-cli/src/core.inc.
