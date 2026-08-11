@@ -13,21 +13,31 @@
 //! of the parsed value, so `tools/check-fixture-freshness.sh` can diff a
 //! regeneration against the committed bytes.
 //!
-//! Usage: `cargo run -p swarm-runtime --example regen_experiment_fixtures -- <out-dir>`
+//! # Which fixtures
+//!
+//! This binary does NOT decide. It used to carry a hardcoded
+//! `const FIXTURES: [&str; 3]`, which made the freshness gate see three named
+//! files instead of the directory -- so a fourth, parser-rejected fixture
+//! dropped into `experiments/` was invisible to it. That is the precise failure
+//! mode FIXTURE-03 exists to prevent ("a 'sync generated artifacts' commit can
+//! never again check in fixtures the parser rejects"), and the historic
+//! incident `a840fd8` checked in 137 NEW files, none of which any such array
+//! would have named.
+//!
+//! The caller passes the fixture list, and the single caller
+//! (`tools/regen-kitten-fixtures.sh`) derives it from git, which is the
+//! authority on what is actually committed.
+//!
+//! Usage:
+//!   `cargo run -p swarm-runtime --example regen_experiment_fixtures -- <out-dir> <fixture>...`
+//! where each `<fixture>` is a path relative to the repository root.
 
 use std::error::Error;
 use std::path::PathBuf;
 use swarm_runtime::replay::DetectorExperimentManifest;
 
-/// Every `experiments/*.yaml` reachable from a `swarm-runtime` test.
-///
-/// Measured with:
-/// `grep -rn 'join("experiments' crates/swarm-runtime/src | grep -o 'experiments/[a-z-]*\.yaml' | sort -u`
-const FIXTURES: [&str; 3] = [
-    "office-baseline-control.yaml",
-    "office-conservative-control.yaml",
-    "office-python-parent-broadening.yaml",
-];
+const USAGE: &str = "usage: cargo run -p swarm-runtime --example regen_experiment_fixtures -- \
+<out-dir> <repo-relative-fixture-path>...";
 
 fn repo_root() -> PathBuf {
     // `crates/swarm-runtime` -> `crates` -> repo root.
@@ -39,21 +49,29 @@ fn repo_root() -> PathBuf {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let out_dir = match std::env::args().nth(1) {
+    let mut args = std::env::args().skip(1);
+    let out_dir = match args.next() {
         Some(value) => PathBuf::from(value),
-        None => {
-            return Err(
-                "usage: cargo run -p swarm-runtime --example regen_experiment_fixtures -- <out-dir>"
-                    .into(),
-            );
-        }
+        None => return Err(USAGE.into()),
     };
 
-    let source_dir = repo_root().join("experiments");
+    let fixtures: Vec<String> = args.collect();
+    // An empty list is drift, not a no-op: the caller enumerates a directory
+    // that is never legitimately empty, so "nothing to check" means the
+    // enumeration broke and the gate would silently pass.
+    if fixtures.is_empty() {
+        return Err(format!("no fixtures given; {USAGE}").into());
+    }
+
+    let root = repo_root();
     std::fs::create_dir_all(&out_dir)?;
 
-    for name in FIXTURES {
-        let source = source_dir.join(name);
+    for relative in &fixtures {
+        let source = root.join(relative);
+        let name = source
+            .file_name()
+            .ok_or_else(|| format!("{relative} has no file name"))?
+            .to_owned();
         let raw = std::fs::read_to_string(&source)
             .map_err(|error| format!("failed to read {}: {error}", source.display()))?;
         // The schema gate. `DetectorExperimentManifest` is
