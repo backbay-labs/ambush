@@ -5143,6 +5143,51 @@ async fn readyz_reports_jetstream_unreachable_detect_only_transition() {
     );
 }
 
+/// Narrowness guard for the tolerant `query_escalations` branch in
+/// `RuntimeService::operator_status`. Tolerating a substrate escalation-read
+/// failure must not disable async-lane gating in general: a genuine async-lane
+/// fault still has to fail `/readyz`.
+#[tokio::test]
+async fn readyz_still_fails_for_a_genuine_async_lane_store_fault() {
+    let investigation_root = temp_path("async-lane-store-fault").with_extension("dir");
+    let mut config = live_response_config("suspicious_process_tree");
+    config.investigation.enabled = true;
+    config.investigation.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: investigation_root.display().to_string(),
+    };
+    let state = IngestState::from_config(temp_path("async-lane-store-fault-config"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report());
+    let bundles_dir = investigation_root.join("bundles");
+    fs::remove_dir_all(&bundles_dir).unwrap();
+    fs::write(&bundles_dir, b"blocked").unwrap();
+    let app = detect_http_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["components"]["async_lane"]["ready"], false);
+    assert_eq!(json["components"]["async_lane"]["status"], "degraded");
+    assert!(
+        json["components"]["async_lane"]["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("investigation store"),
+        "async lane must name the investigation store fault: {}",
+        json["components"]["async_lane"]
+    );
+}
+
 #[tokio::test]
 async fn readyz_reports_replay_store_write_failure_read_only_transition() {
     let replay_root = temp_path("replay-store-read-only").with_extension("dir");

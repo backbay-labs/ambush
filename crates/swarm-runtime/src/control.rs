@@ -2021,6 +2021,33 @@ mod tests {
         assert!(json.contains("\"level\":\"detect_only\""));
     }
 
+    /// A substrate whose escalation history cannot be read must degrade the field,
+    /// not the whole operator read surface -- and must still say so out loud.
+    /// Guards the tolerant `query_escalations` branch in
+    /// `RuntimeService::operator_status` against silently swallowing the outage.
+    #[tokio::test]
+    async fn status_warns_when_substrate_escalation_history_is_unreadable() {
+        let mut config = control_config();
+        config.pheromone.backend = PheromoneBackendConfig::JetStream {
+            url: "nats://127.0.0.1:65535".to_string(),
+            connect_timeout_ms: 10,
+            gc_page_size: 64,
+        };
+        let plane = DefaultControlPlane::from_config("inline", config).unwrap();
+
+        let status = plane.status().await.unwrap();
+        assert!(
+            status
+                .data
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("substrate escalation history is unavailable")),
+            "operator status must surface the substrate outage: {:?}",
+            status.data.warnings
+        );
+        assert!(status.data.latest_escalation.is_none());
+    }
+
     #[tokio::test]
     async fn status_output_surfaces_false_positive_tracking() {
         let plane = DefaultControlPlane::from_config("inline", control_config()).unwrap();

@@ -983,18 +983,36 @@ where
             warnings.push("durable replay store is not ready".to_string());
         }
         let recent_decisions = store.recent(self.config.audit.recent_decisions_limit)?;
-        let latest_escalation = substrate
-            .query_escalations(0)
-            .await?
-            .into_iter()
-            .max_by_key(|record| record.timestamp)
-            .map(|record| OperatorEscalationSummary {
-                mode: record.mode,
-                threat_class: record.threat_class,
-                timestamp: record.timestamp,
-                distinct_sources: record.distinct_sources,
-                total_strength: record.total_strength,
-            });
+        // Read the substrate with the same tolerance twice. `substrate.health()` above is
+        // deliberately tolerant -- an unreachable JetStream returns `Ok(ready: false)` and
+        // is downgraded to a `warnings` entry -- but a hard `?` here would abort the whole
+        // operator-status computation on the very same fault. That makes
+        // `current_async_lane_status()` return `Err`, which `ingest/health.rs` reports as
+        // async-lane degradation, double-counting a substrate fault that
+        // `components.substrate` and `components.degradation` already report and overriding
+        // the degradation ladder's contract that `DetectOnly` is a serving state
+        // (`RuntimeDegradationLevel::operator_read_surfaces_ready()` is true at every level).
+        //
+        // Degrade the field, not the surface -- but push a warning so the outage stays
+        // loud. Turning a noisy failure into a silent one would be the same class of bug.
+        let latest_escalation = match substrate.query_escalations(0).await {
+            Ok(records) => records
+                .into_iter()
+                .max_by_key(|record| record.timestamp)
+                .map(|record| OperatorEscalationSummary {
+                    mode: record.mode,
+                    threat_class: record.threat_class,
+                    timestamp: record.timestamp,
+                    distinct_sources: record.distinct_sources,
+                    total_strength: record.total_strength,
+                }),
+            Err(error) => {
+                warnings.push(format!(
+                    "substrate escalation history is unavailable: {error}"
+                ));
+                None
+            }
+        };
         let degradation = derive_runtime_degradation_status(RuntimeDegradationSignals {
             configured_mode: self.runtime.mode(),
             detector_ready: true,
