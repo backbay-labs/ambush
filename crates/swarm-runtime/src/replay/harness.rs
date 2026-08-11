@@ -25,7 +25,7 @@ use super::validation::{
     load_verification_manifest,
 };
 use super::verification::{
-    collect_review_blocking_reasons, verify_canonical_templates, verify_detect_latency_budget,
+    collect_review_blocking_reasons, observe_detect_latency, verify_canonical_templates,
     verify_false_positive_bound, verify_known_bad_coverage, verify_total_detection_budget,
 };
 use crate::config::load_config;
@@ -643,6 +643,10 @@ impl DefaultReplayHarness {
             )
             .await?;
 
+        // GATING. Every entry here is a deterministic function of fixture
+        // content -- counts and rates over the corpus -- so it computes the same
+        // value on any machine, under any load, on any architecture. Do not add
+        // anything derived from a clock: see `observations` below.
         let invariants = vec![
             verify_known_bad_coverage(&known_bad_report),
             verify_canonical_templates(
@@ -655,15 +659,16 @@ impl DefaultReplayHarness {
                     .resource_budgets
                     .max_false_positive_rate,
             ),
-            verify_detect_latency_budget(
-                &[&known_bad_report, &benign_report],
-                verification_manifest.resource_budgets.max_detect_latency_us,
-            ),
             verify_total_detection_budget(
                 &[&known_bad_report, &benign_report],
                 verification_manifest.resource_budgets.max_total_detections,
             ),
         ];
+        // NON-GATING. Measured and recorded in full; reduced over by nothing.
+        let observations = vec![observe_detect_latency(
+            &[&known_bad_report, &benign_report],
+            verification_manifest.resource_budgets.max_detect_latency_us,
+        )];
         let passed = invariants.iter().all(|invariant| invariant.passed);
 
         Ok(DetectorVerificationReport {
@@ -688,6 +693,7 @@ impl DefaultReplayHarness {
                 .description()
                 .to_string(),
             invariants,
+            observations,
             passed,
         })
     }

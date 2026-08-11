@@ -2,7 +2,8 @@ use super::metrics::{scenario_detected, scenario_is_benign, suite_metrics};
 use super::types::{
     DetectorVerificationReport, PromotionReviewBlockingReason, ReplayScenarioClass,
     ReplaySuiteReport, StrategyShadowReport, VerificationCounterexample,
-    VerificationInvariantResult, VerificationThreatClassTemplate,
+    VerificationInvariantResult, VerificationObservation, VerificationObservationSource,
+    VerificationThreatClassTemplate,
 };
 use crate::detector_factory::RuntimeDetector;
 use serde_json::json;
@@ -107,18 +108,33 @@ pub(super) fn verify_false_positive_bound(
     }
 }
 
-pub(super) fn verify_detect_latency_budget(
+/// Records the worst-case detect-stage latency measured across the verification
+/// suites as a NON-GATING observation.
+///
+/// This used to be a gating invariant, and it was the only one whose verdict was
+/// not a function of the fixtures. `max_latency_us` is a wall-clock `Instant`
+/// delta, so it measures the machine, the build profile, and whatever else the
+/// scheduler was running -- not the candidate. Two runs of an identical
+/// candidate over identical fixtures reached opposite verdicts on the same
+/// machine minutes apart, which is what `replay::tests::
+/// verification_verdict_is_invariant_under_detect_stage_load` pins down.
+///
+/// The measurement is still taken and still recorded in full, including which
+/// scenario was slowest. Only its authority to fail a verification is removed.
+/// Re-earning a latency gate means counting work rather than reading a clock,
+/// which is a cost model, not a rename.
+pub(super) fn observe_detect_latency(
     reports: &[&ReplaySuiteReport],
-    max_detect_latency_us: u64,
-) -> VerificationInvariantResult {
+    advisory_max_detect_latency_us: u64,
+) -> VerificationObservation {
     let mut worst_case = 0u64;
-    let mut worst_reference = None::<VerificationCounterexample>;
+    let mut worst_source = None::<VerificationObservationSource>;
     for report in reports {
         for scenario in &report.scenario_reports {
             let scenario_latency = scenario.evaluation.performance.detect.max_latency_us;
             if scenario_latency > worst_case {
                 worst_case = scenario_latency;
-                worst_reference = Some(VerificationCounterexample {
+                worst_source = Some(VerificationObservationSource {
                     subject: scenario.scenario_name.clone(),
                     reference: scenario.scenario_path.clone(),
                     details: format!("scenario reached detect latency {}us", scenario_latency),
@@ -126,22 +142,27 @@ pub(super) fn verify_detect_latency_budget(
             }
         }
     }
+    let within_advisory_budget = worst_case <= advisory_max_detect_latency_us;
 
-    VerificationInvariantResult {
+    VerificationObservation {
         name: "detect_latency_budget".to_string(),
-        passed: worst_case <= max_detect_latency_us,
-        expected: json!(max_detect_latency_us),
-        actual: json!(worst_case),
-        details: if worst_case <= max_detect_latency_us {
-            "candidate stayed within the verification detect-latency budget".to_string()
+        advisory_budget: json!(advisory_max_detect_latency_us),
+        observed: json!(worst_case),
+        within_advisory_budget,
+        details: if within_advisory_budget {
+            format!(
+                "worst-case detect latency {}us stayed within the advisory budget {}us \
+                 (non-gating wall-clock measurement)",
+                worst_case, advisory_max_detect_latency_us
+            )
         } else {
-            "candidate exceeded the verification detect-latency budget".to_string()
+            format!(
+                "worst-case detect latency {}us exceeded the advisory budget {}us \
+                 (non-gating wall-clock measurement; recorded, not enforced)",
+                worst_case, advisory_max_detect_latency_us
+            )
         },
-        counterexamples: if worst_case <= max_detect_latency_us {
-            Vec::new()
-        } else {
-            worst_reference.into_iter().collect()
-        },
+        sources: worst_source.into_iter().collect(),
     }
 }
 

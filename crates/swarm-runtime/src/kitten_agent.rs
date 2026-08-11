@@ -3655,6 +3655,7 @@ mod tests {
                     details: "coverage regressed in the seeded verification artifact".to_string(),
                     counterexamples: Vec::new(),
                 }],
+                observations: Vec::new(),
                 passed: false,
             };
             fs::write(&bundle_path, serde_json::to_string_pretty(&report).unwrap()).unwrap();

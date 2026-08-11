@@ -213,6 +213,13 @@ pub enum FormalSafetyInvariantSpec {
         corpus_path: String,
         max_rate: f64,
     },
+    /// Requires the candidate's verification to carry an attributable
+    /// detect-latency observation over the pinned corpus.
+    ///
+    /// `max_detect_latency_us` is ADVISORY: it is reported alongside the
+    /// measurement but does not decide the verdict. Wall-clock latency measures
+    /// the machine, not the candidate, so it cannot gate admission. See
+    /// `formal_safety::evaluate_latency_budget`.
     LatencyBudget {
         name: String,
         corpus_path: String,

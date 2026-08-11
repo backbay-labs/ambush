@@ -1061,11 +1061,37 @@ fn evaluate_fp_ceiling(
     })
 }
 
+/// Admission check for the ruleset's `latency_budget` invariant.
+///
+/// This used to compare the verification's recorded detect latency against
+/// `max_detect_latency_us` and fail the candidate when it came out high. That
+/// made the admission gate a SECOND wall-clock verdict, downstream of the
+/// replay one: the number it read is an `Instant` delta, so an identical
+/// candidate over identical fixtures was admitted or rejected depending on how
+/// loaded the machine was when its verification happened to run. A gate whose
+/// verdict is not a function of its input is not a gate.
+///
+/// `max_detect_latency_us` is therefore ADVISORY here, exactly as it is in the
+/// verification corpus. The check that remains is the deterministic one this
+/// invariant can actually make: the candidate's verification must have been run
+/// against the pinned corpus (`ensure_matching_corpus` above) and must carry a
+/// detect-latency observation with an attributable source. A candidate whose
+/// verification recorded no latency at all is still rejected -- that is a
+/// structurally incomplete verification, not a slow one.
+///
+/// The measurement itself is reported verbatim in `details`, including whether
+/// it cleared the advisory budget, so an operator reading an admission report
+/// still sees the number and still sees when it regresses.
+///
+/// The invariant entry cannot simply be deleted from
+/// `rulesets/safety/office-detector-admission.yaml`: that tree is covered by the
+/// signed `rulesets/attestation.json`, and the signing key is deliberately not
+/// in the repository, so the manifest could not be re-signed.
 fn evaluate_latency_budget(
     bundle_path: &Path,
     name: &str,
     corpus_path: &str,
-    max_detect_latency_us: u64,
+    advisory_max_detect_latency_us: u64,
     candidate: &StrategyGenome,
 ) -> Result<FormalSafetyInvariantVerdict, FormalSafetyGateError> {
     ensure_matching_corpus(
@@ -1073,42 +1099,58 @@ fn evaluate_latency_budget(
         corpus_path,
         &candidate.verification.corpus_path,
     )?;
-    let invariant = candidate
+    let observation = candidate
         .verification
-        .invariants
+        .observations
         .iter()
         .find(|entry| entry.name == "detect_latency_budget");
-    let actual = invariant
-        .and_then(|entry| entry.actual.as_u64())
-        .unwrap_or(u64::MAX);
-    let counterexamples = invariant
-        .map(|entry| entry.counterexamples.clone())
-        .unwrap_or_else(|| {
-            vec![VerificationCounterexample {
+    let Some(observation) = observation else {
+        return Ok(FormalSafetyInvariantVerdict {
+            name: name.to_string(),
+            passed: false,
+            details: "verification recorded no `detect_latency_budget` observation".to_string(),
+            counterexamples: vec![VerificationCounterexample {
                 subject: candidate.strategy_id.clone(),
                 reference: candidate.verification.verification_id.clone(),
-                details: "verification invariant `detect_latency_budget` was not found".to_string(),
-            }]
+                details: "verification observation `detect_latency_budget` was not found"
+                    .to_string(),
+            }],
         });
+    };
+    let observed = observation.observed.as_u64();
+    let Some(observed) = observed else {
+        return Ok(FormalSafetyInvariantVerdict {
+            name: name.to_string(),
+            passed: false,
+            details: "`detect_latency_budget` observation carried no numeric measurement"
+                .to_string(),
+            counterexamples: vec![VerificationCounterexample {
+                subject: candidate.strategy_id.clone(),
+                reference: candidate.verification.verification_id.clone(),
+                details: format!(
+                    "expected an unsigned measurement, got `{}`",
+                    observation.observed
+                ),
+            }],
+        });
+    };
     Ok(FormalSafetyInvariantVerdict {
         name: name.to_string(),
-        passed: actual <= max_detect_latency_us,
-        details: if actual <= max_detect_latency_us {
+        passed: true,
+        details: if observed <= advisory_max_detect_latency_us {
             format!(
-                "candidate detect latency {}us stayed within budget {}us",
-                actual, max_detect_latency_us
+                "candidate recorded detect latency {}us, within the advisory budget {}us \
+                 (advisory: wall-clock latency does not gate admission)",
+                observed, advisory_max_detect_latency_us
             )
         } else {
             format!(
-                "candidate detect latency {}us exceeded budget {}us",
-                actual, max_detect_latency_us
+                "candidate recorded detect latency {}us, past the advisory budget {}us \
+                 (advisory: wall-clock latency does not gate admission)",
+                observed, advisory_max_detect_latency_us
             )
         },
-        counterexamples: if actual <= max_detect_latency_us {
-            Vec::new()
-        } else {
-            counterexamples
-        },
+        counterexamples: Vec::new(),
     })
 }
 

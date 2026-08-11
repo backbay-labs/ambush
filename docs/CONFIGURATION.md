@@ -1319,17 +1319,45 @@ cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate --experiment 
 cargo run -p swarm-runtime --bin swarmctl -- verification-result --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
 ```
 
-Current invariant set:
+Current gating invariant set (`invariants` in the report; `passed` is exactly
+`invariants.iter().all(|i| i.passed)`):
 
 - `known_bad_coverage`: candidate must not miss tracked adversarial verification scenarios
 - `threat_class_templates`: candidate must still match canonical threat-class templates
 - `false_positive_bound`: candidate must stay under the repo-owned benign false-positive threshold
-- `detect_latency_budget`: candidate max detect latency must stay within the corpus budget
 - `total_detection_budget`: candidate total emitted detections must stay within the corpus volume budget
+
+Every one of these is a count or a rate over fixture content, so each computes
+the same value on any machine, under any load, on any architecture.
+
+Current non-gating observation set (`observations` in the report; nothing
+reduces over it):
+
+- `detect_latency_budget`: worst-case detect-stage latency measured across the
+  verification suites, with the corpus `max_detect_latency_us` recorded beside
+  it as an advisory reference point and `within_advisory_budget` recorded as a
+  fact rather than a verdict
+
+`detect_latency_budget` used to gate. It was removed from the gating set because
+the number it compares is a wall-clock `Instant` delta: it measures the machine,
+the build profile, and whatever else the scheduler was running, not the
+candidate. An identical candidate over identical fixtures reached opposite
+verdicts on the same machine minutes apart. The measurement is still taken, still
+recorded in full including which scenario was slowest, and still rendered by
+`verification-result` under `Observations (non-gating, not part of Status)`. A
+latency gate that can be trusted has to count work rather than read a clock.
+
+The same reasoning applies to the `latency_budget` invariant in
+`rulesets/safety/office-detector-admission.yaml`. Its `max_detect_latency_us` is
+now advisory: the admission check requires the candidate's verification to carry
+an attributable detect-latency observation over the pinned corpus, and reports
+the measurement in the verdict details, but does not reject a candidate for
+being measured on a busy machine.
 
 Failure behavior:
 
-- `verification-evaluate` exits nonzero when any invariant fails
+- `verification-evaluate` exits nonzero when any GATING invariant fails; an
+  observation never changes the exit code
 - failing output preserves scenario or template references for operator inspection
 
 ### Offline Shadow

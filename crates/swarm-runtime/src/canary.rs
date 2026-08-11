@@ -1420,6 +1420,7 @@ mod tests {
             candidate_strategy_id: manifest.candidate.strategy_id().to_string(),
             candidate_description: manifest.candidate.description().to_string(),
             invariants: vec![],
+            observations: Vec::new(),
             passed: true,
         };
         let shadow_report = StrategyShadowReport {

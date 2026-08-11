@@ -1707,6 +1707,7 @@ mod tests {
             candidate_strategy_id: candidate.strategy_id().to_string(),
             candidate_description: candidate.description().to_string(),
             invariants: Vec::new(),
+            observations: Vec::new(),
             passed: true,
         }
     }
