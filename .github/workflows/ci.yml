@@ -188,6 +188,57 @@ jobs:
       - name: Run swarm-runtime tests (serial, env-var race workaround)
         run: cargo test -p swarm-runtime -- --test-threads=1
 
+      # FIXTURE-04. Test call sites, not the production config shape, keep the
+      # suite out of the working tree, so a NEW test can silently reintroduce
+      # drift. This step closes that mechanically.
+      #
+      # `if: always()` is load-bearing: without it a red test step skips this
+      # one, and the gate would be inert on exactly the runs most likely to
+      # leave the tree dirty.
+      #
+      # `--porcelain` (tracked files) is the binding assertion. Ignored
+      # droppings are REPORTED, not enforced: `experiments/mutation-*.yaml` and
+      # friends are gitignored, so hundreds can accumulate while `--porcelain`
+      # stays empty -- which is exactly how 715 of them went unnoticed.
+      - name: Assert the suite left the working tree clean
+        if: always()
+        run: |
+          ignored_count="$(git status --porcelain --ignored | grep -c '^!!' || true)"
+          echo "ignored entries after the suite: $ignored_count"
+          git status --porcelain --ignored | grep '^!!' || true
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the test run mutated tracked files"
+            git status --porcelain
+            exit 1
+          fi
+
+  fixture-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check detector experiment fixture freshness
+        run: bash tools/check-fixture-freshness.sh
+
   jetstream:
     needs:
       - build

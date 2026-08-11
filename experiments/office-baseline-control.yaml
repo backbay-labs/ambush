@@ -10,19 +10,24 @@ candidate:
   description: Candidate profile matches the production suspicious process-tree detector
   profile:
     suspicious_parents:
-      - winword
-      - excel
-      - outlook
-      - acrord32
-      - teams
+    - winword
+    - excel
+    - outlook
+    - acrord32
+    - teams
     suspicious_children:
-      - powershell
-      - pwsh
-      - cmd
-      - sh
-      - bash
-      - curl
-      - wget
+    - powershell
+    - pwsh
+    - cmd
+    - sh
+    - bash
+    - curl
+    - wget
+    command_line_normalization:
+      strip_caret_escapes: true
+      expand_environment_variables: true
+      normalize_unicode_homoglyphs: true
+      decode_encoded_arguments: true
     high_confidence_threshold: 0.9
     medium_confidence_threshold: 0.7
 lineage:
