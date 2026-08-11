@@ -955,10 +955,22 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Plans:** TBD
 **Success Criteria**:
 1. `cargo clippy --workspace --all-targets -- -D warnings` is verified exit-0 on the branch tip in an isolated worktree with an empty target directory, and the result is recorded; the ~41 violations reported against `main` are confirmed absent on the branch.
-2. The crate-wide `#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]` opt-outs in `swarm-core/src/lib.rs`, `swarm-runtime/src/lib.rs`, and `swarm_detect.rs` are replaced by reviewed per-call-site allows, so future unwraps in test code are not silently permitted workspace-wide.
+2. The crate-wide `#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]` opt-outs in 8 files (not the 3 originally named: also `swarm-whisker`, `swarm-response`, `swarm-ingest-json`, `swarm-ingest-sentinel`, `swarm-ingest-tetragon`) are replaced by reviewed per-call-site allows, so future unwraps in test code are not silently permitted workspace-wide.
 3. `bash tools/check-runtime-panic-contract.sh` scans every workspace crate's production code, and its in-file documentation states exactly which surfaces it does and does not cover.
 4. `cargo deny check advisories licenses bans sources` passes with no `-A duplicate` suppression (present at `tools/check-supply-chain.sh:8` on both main and the branch), and `deny.toml` raises `[bans] multiple-versions`, `[sources] unknown-registry`, and `[sources] unknown-git` from `warn` to `deny`.
-5. `cargo test --workspace` passes with zero failures on a clean checkout.
+5. The suite passes with zero failures on a clean checkout, measured with the commands CI actually runs (`cargo test --workspace` is not a supported invocation here; it conflates the known `SWARM_*_TEST_TOKEN` env-var race into false failures):
+   - `cargo test --workspace --exclude swarm-runtime`
+   - `cargo test -p swarm-runtime -- --test-threads=1`
+   - `bash tools/with-nats-jetstream.sh cargo test -p swarm-pheromone --test jetstream --test multi_instance -- --ignored`
+   Baseline measured 2026-08-10 on a pristine clone at b637a11: command 1 exit 0 (476 passed, 0 failed); command 2 exit 101 (506 passed, 7 failed). The 7 failures are genuine - they survive both a pristine clone and serial execution - and this criterion owns fixing them:
+   - `control::tests::first_run_completes_detection_approval_and_proof`
+   - `http::core::tests::approval_vote_endpoint_resumes_demo_runtime_and_proof_export` (0 vs 1)
+   - `ingest::tests::providence_feedback::dismiss_feedback_reaches_kitten_or_pending_fallback` (500 vs 200)
+   - `ingest::tests::readyz_reports_jetstream_unreachable_detect_only_transition` (503 vs 200)
+   - `replay::core::tests::evaluation_report_passes_expected_scenario_and_flags_regressions` (`passed == false`)
+   - `replay::core::tests::named_suite_manifest_runs_with_metadata_and_technique_groups` (`suite.passed == false`)
+   - `service::tests::runtime::process_event_forwards_enriched_findings_to_siem` (auth `None` vs `Some("Splunk splunk-secret")`)
+6. GitHub Actions has never validated this work: every run on `feat/milestones-v1.74-v1.77` failed in 2-4s with zero steps executed, and the `test`, `clippy`, `jetstream`, and `benchmark` jobs were skipped. Local gate runs are the only signal until that is repaired.
 
 ### Phase 281: core.inc Elimination
 
@@ -1067,9 +1079,9 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Plans:** TBD
 **Success Criteria**:
 1. `cargo test -p swarm-runtime kitten_agent` passes with zero failures and zero schema-drift skips.
-2. `grep -rl command_line_normalization experiments/` returns empty.
+2. `grep -rl command_line_normalization experiments/` returns empty. ALREADY SATISFIED as of 2026-08-10 (returns 0); e93d521 removed 137 such fixtures. Verify rather than re-do.
 3. `tools/check-fixture-freshness.sh` regenerates into a scratch directory, diffs against checked-in copies, fails on drift, and runs as a required CI step.
-4. A full `cargo test --workspace` run leaves `git status --porcelain` empty.
+4. A full suite run across all three supported commands (see phase 280 criterion 5) leaves `git status --porcelain` empty. Today each run mutates 10 tracked files; 24 of them live under `crates/swarm-cli/data/approval-*/`, which is already gitignored, so they must be untracked rather than ignored.
 
 ### Phase 285: Assumption Registry And Invariant Mapping
 

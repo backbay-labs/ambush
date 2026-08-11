@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.78
 milestone_name: Runtime Decomposition And TCB Boundary
-current_phase: 284
-current_phase_name: Fixture Determinism And Suite Health
+current_phase: 280
+current_phase_name: Verification Gate Repair
 current_plan: null
 status: active
 last_updated: "2026-08-10T00:00:00Z"
@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 ## Current Position
 
-**Current Phase:** 284 — Fixture Determinism And Suite Health (pulled forward from v1.79)
+**Current Phase:** 280 — Verification Gate Repair (owns the 7 genuine test failures via criterion 5)
 **Total Phases:** 4 (280-283), plus 320-322 in v1.78.1
 **Current Plan:** None started yet
 **Total Plans in Phase:** TBD
@@ -72,4 +72,4 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Next Command
 
-Plan and execute Phase 284 (Fixture Determinism And Suite Health) serially, as the hard prerequisite for all parallel phase work.
+Plan and execute Phase 280 (Verification Gate Repair) serially. Execution order: 280 -> 284 -> 281 -> 282 -> 283.
