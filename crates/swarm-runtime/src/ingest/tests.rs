@@ -2677,6 +2677,12 @@ async fn generated_python_client_smoke_tests_live_platform_router() {
     let base_url = format!("http://{address}");
     let output = tokio::task::spawn_blocking(move || {
         std::process::Command::new("uv")
+            // The script imports the generated client package from
+            // `clients/python/swarm-platform-client/` IN THE CHECKED-OUT TREE,
+            // and CPython writes a `__pycache__/` directory next to every module
+            // it imports. Gitignored, so `git status --porcelain` never showed
+            // it -- but it is still the suite writing into the repository.
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .arg("run")
             .arg("--isolated")
             .arg("--no-project")
