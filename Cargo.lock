@@ -3198,6 +3198,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "swarm-runtime-workbench"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "swarm-core",
+ "swarm-crypto",
+ "swarm-runtime",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "swarm-spine"
 version = "0.1.0"
 dependencies = [
