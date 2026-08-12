@@ -1995,6 +1995,11 @@ canary:
   observation_window_events: 2
   max_candidate_only_rate: 0.25
   max_baseline_miss_rate: 0.25
+  # ADVISORY ONLY: recorded beside the non-gating detect_latency_budget
+  # observation on every canary artifact. Nothing rolls a canary back for
+  # exceeding it -- the value it is compared against is a wall-clock delta that
+  # measures this machine, not the candidate. Alert on
+  # `observations[].within_advisory_budget` instead.
   max_detect_latency_us: 10000
   max_total_detections: 8
 
@@ -2005,6 +2010,9 @@ promotion:
   observation_window_events: 2
   max_promoted_only_rate: 0.20
   max_fallback_recovery_rate: 0.20
+  # ADVISORY ONLY: recorded beside the non-gating detect_latency_budget
+  # observation on every promotion artifact. Nothing rolls a promotion back for
+  # exceeding it.
   max_detect_latency_us: 10000
   max_total_detections: 12
 
@@ -5341,6 +5349,17 @@ mod tests {
         assert!(rendered.contains("mode: live_response"));
         assert!(rendered.contains("kind: local_journal"));
         assert!(rendered.contains("response_adapter:\n  # Replace the placeholder URL and token before deploying to production."));
+        // An operator scaffolding a config must be told at the key itself that
+        // `max_detect_latency_us` no longer gates anything, in both rollout
+        // blocks. `rulesets/default.yaml` -- the detect-only template -- is
+        // covered by the signed attestation and cannot carry the same note.
+        assert_eq!(
+            rendered
+                .matches("# ADVISORY ONLY: recorded beside the non-gating detect_latency_budget")
+                .count(),
+            2,
+            "both the canary and promotion blocks must carry the advisory note:\n{rendered}"
+        );
     }
 
     /// The CLI signed every evolution mutation artifact with a compiled-in

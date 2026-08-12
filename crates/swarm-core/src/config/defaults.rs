@@ -294,6 +294,7 @@ pub(super) const fn default_canary_max_baseline_miss_rate() -> f64 {
     0.25
 }
 
+/// ADVISORY ONLY -- see [`super::CanaryConfig::max_detect_latency_us`].
 pub(super) const fn default_canary_max_detect_latency_us() -> u64 {
     10_000
 }
@@ -318,6 +319,7 @@ pub(super) const fn default_promotion_max_fallback_recovery_rate() -> f64 {
     0.20
 }
 
+/// ADVISORY ONLY -- see [`super::PromotionConfig::max_detect_latency_us`].
 pub(super) const fn default_promotion_max_detect_latency_us() -> u64 {
     10_000
 }

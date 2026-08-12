@@ -493,6 +493,9 @@ impl SwarmConfig {
                     reason: "must be between 0.0 and 1.0".to_string(),
                 });
             }
+            // Still validated even though it is advisory: it is the reference
+            // point recorded next to the non-gating detect-latency observation,
+            // and a zero budget would mark every run as over budget forever.
             if self.canary.max_detect_latency_us == 0 {
                 return Err(ConfigValidationError::InvalidField {
                     field: "canary.max_detect_latency_us",
@@ -541,6 +544,7 @@ impl SwarmConfig {
                     reason: "must be between 0.0 and 1.0".to_string(),
                 });
             }
+            // Advisory, but still validated -- see the canary twin above.
             if self.promotion.max_detect_latency_us == 0 {
                 return Err(ConfigValidationError::InvalidField {
                     field: "promotion.max_detect_latency_us",

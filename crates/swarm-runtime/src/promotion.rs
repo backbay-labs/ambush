@@ -190,12 +190,42 @@ pub struct ProductionPromotionRollbackRecord {
 }
 
 /// One threshold verdict preserved in the production-promotion artifact.
+///
+/// Everything in this list is GATING: `DefaultProductionPromotionHarness::
+/// ingest_event` rolls production back to the retained fallback detector on the
+/// first entry whose `passed` is false. Only bounds that are a deterministic
+/// function of what the promoted detector DID over the observed events belong
+/// here. A measurement of the machine the window happened to run on does not;
+/// see [`ProductionPromotionObservation`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProductionPromotionThresholdResult {
     pub name: String,
     pub passed: bool,
     pub expected: serde_json::Value,
     pub actual: serde_json::Value,
+    pub details: String,
+}
+
+/// One recorded, NON-GATING measurement taken during a production-promotion
+/// window. Twin of [`crate::canary::CanaryObservation`]; see that type for why
+/// this is a separate collection rather than a flag on the threshold list.
+///
+/// `detect_latency_budget` lives here because the number it reports is a
+/// wall-clock `Instant` delta around the promoted detector's detect stage, so
+/// it measures the machine rather than the detector. Rolling production back on
+/// it is a false positive waiting for a busy runner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductionPromotionObservation {
+    pub name: String,
+    /// The configured budget this measurement is compared against. ADVISORY
+    /// ONLY: recorded so a human or a trend tool has a reference point, never
+    /// enforced. See `promotion.max_detect_latency_us` in
+    /// `rulesets/default.yaml`.
+    pub advisory_budget: serde_json::Value,
+    /// The measurement itself.
+    pub observed: serde_json::Value,
+    /// Recorded fact, not a verdict: nothing gates on this.
+    pub within_advisory_budget: bool,
     pub details: String,
 }
 
@@ -361,7 +391,12 @@ pub struct ProductionPromotionReport {
     pub recommendation: ProductionPromotionRecommendation,
     pub assignment: ProductionPromotionAssignment,
     pub metrics: ProductionPromotionMetrics,
+    /// GATING. The window rolls back on the first entry that failed.
     pub threshold_results: Vec<ProductionPromotionThresholdResult>,
+    /// NON-GATING measurements. `#[serde(default)]` so promotion artifacts
+    /// persisted before observations existed still load and render.
+    #[serde(default)]
+    pub observations: Vec<ProductionPromotionObservation>,
     pub recent_promoted_findings: Vec<ProductionPromotionFindingPreview>,
     pub rollback_history: Vec<ProductionPromotionRollbackRecord>,
     pub pending_review: Option<PromotionPendingReviewPacket>,
@@ -689,6 +724,10 @@ impl DefaultProductionPromotionHarness {
             &ProductionPromotionMetrics::default(),
             &assignment.promotion,
         );
+        let observations = vec![observe_detect_latency(
+            &ProductionPromotionMetrics::default(),
+            &assignment.promotion,
+        )];
         let approval_severity =
             severity_override.unwrap_or_else(|| promotion_severity(&canary.report));
         let gated = approval_severity == Severity::Critical;
@@ -710,6 +749,7 @@ impl DefaultProductionPromotionHarness {
             assignment,
             metrics: ProductionPromotionMetrics::default(),
             threshold_results,
+            observations,
             recent_promoted_findings: Vec::new(),
             rollback_history: Vec::new(),
             pending_review: gated.then(|| PromotionPendingReviewPacket {
@@ -773,6 +813,12 @@ impl DefaultProductionPromotionHarness {
         let fallback =
             detector_from_candidate(&lookup.report.assignment.previous_production_candidate)?;
         let promoted = detector_from_candidate(&lookup.report.assignment.promoted_candidate)?;
+        // TEST-ONLY SEAM (compiled out entirely by `#[cfg(test)]`): see the twin
+        // in `canary::DefaultCanaryHarness::ingest_event`. Only the PROMOTED
+        // detector is wrapped, because `max_promoted_detect_latency_us` is the
+        // number the promotion decision used to read.
+        #[cfg(test)]
+        let promoted = crate::replay::detect_stall::StallingDetector::new(promoted);
 
         let fallback_started = Instant::now();
         let fallback_findings = evaluate_event(&fallback, event);
@@ -804,6 +850,10 @@ impl DefaultProductionPromotionHarness {
 
         lookup.report.threshold_results =
             evaluate_thresholds(&lookup.report.metrics, &lookup.report.assignment.promotion);
+        lookup.report.observations = vec![observe_detect_latency(
+            &lookup.report.metrics,
+            &lookup.report.assignment.promotion,
+        )];
         lookup.report.updated_at_ms = now_ms();
 
         if let Some(failure) = lookup
@@ -1066,6 +1116,22 @@ pub fn render_production_promotion_report(report: &ProductionPromotionReport) ->
                 result.name,
                 if result.passed { "pass" } else { "fail" },
                 result.details
+            ));
+        }
+    }
+
+    if report.observations.is_empty() {
+        lines.push("Observations (advisory, non-gating): none".to_string());
+    } else {
+        lines.push("Observations (advisory, non-gating):".to_string());
+        for observation in &report.observations {
+            lines.push(format!(
+                "- {}: observed={} advisory_budget={} within_advisory_budget={} | {}",
+                observation.name,
+                observation.observed,
+                observation.advisory_budget,
+                observation.within_advisory_budget,
+                observation.details
             ));
         }
     }
@@ -1334,6 +1400,9 @@ fn detector_factory_error(error: DetectorFactoryError) -> ProductionPromotionErr
     }
 }
 
+/// GATING. Every entry is a deterministic function of what the promoted
+/// detector did over the observed events. Do not add anything derived from a
+/// clock here: see [`observe_detect_latency`].
 fn evaluate_thresholds(
     metrics: &ProductionPromotionMetrics,
     config: &PromotionConfig,
@@ -1354,13 +1423,6 @@ fn evaluate_thresholds(
             "fallback recovery rate exceeded the configured bound",
         ),
         int_threshold(
-            "detect_latency_threshold",
-            config.max_detect_latency_us as u128,
-            metrics.max_promoted_detect_latency_us as u128,
-            "promoted detect latency stayed within the configured bound",
-            "promoted detect latency exceeded the configured bound",
-        ),
-        int_threshold(
             "total_detection_budget",
             config.max_total_detections as u128,
             metrics.total_promoted_deposits as u128,
@@ -1368,6 +1430,42 @@ fn evaluate_thresholds(
             "promoted detection volume exceeded the configured budget",
         ),
     ]
+}
+
+/// Records the worst promoted detect-stage latency measured over the production
+/// window as a NON-GATING observation.
+///
+/// This used to be the `detect_latency_threshold` entry in
+/// [`evaluate_thresholds`], where a wall-clock `Instant` delta could revert the
+/// detector serving production traffic and write `AutomaticThreshold` into the
+/// rollback history for it. The measurement is still taken and still recorded,
+/// next to the budget it is measured against; only its authority to roll
+/// production back is removed.
+fn observe_detect_latency(
+    metrics: &ProductionPromotionMetrics,
+    config: &PromotionConfig,
+) -> ProductionPromotionObservation {
+    let observed_us = metrics.max_promoted_detect_latency_us;
+    let advisory_budget_us = config.max_detect_latency_us;
+    let within_advisory_budget = observed_us <= advisory_budget_us;
+    ProductionPromotionObservation {
+        name: "detect_latency_budget".to_string(),
+        advisory_budget: serde_json::json!(advisory_budget_us),
+        observed: serde_json::json!(observed_us),
+        within_advisory_budget,
+        details: if within_advisory_budget {
+            format!(
+                "promoted detect latency {observed_us}us stayed within the advisory budget \
+                 {advisory_budget_us}us (non-gating wall-clock measurement)"
+            )
+        } else {
+            format!(
+                "promoted detect latency {observed_us}us exceeded the advisory budget \
+                 {advisory_budget_us}us (non-gating wall-clock measurement; recorded, not \
+                 enforced -- this does not roll the promotion back)"
+            )
+        },
+    }
 }
 
 fn float_threshold(
@@ -1479,11 +1577,11 @@ struct ProductionPromotionIndex {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        DefaultProductionPromotionHarness, ProductionPromotionError,
-        ProductionPromotionRecommendation, ProductionPromotionRollbackTrigger,
-        ProductionPromotionStatus, PromotionApprovalVoteRef, PromotionConsensusReceipt,
-        PromotionQuorumGateConfig, render_production_promotion_report, validate_quorum_gate,
-        verify_consensus_receipt_signature, verify_vote_signature,
+        DefaultProductionPromotionHarness, FileProductionPromotionStore, ProductionPromotionError,
+        ProductionPromotionRecommendation, ProductionPromotionReport,
+        ProductionPromotionRollbackTrigger, ProductionPromotionStatus, PromotionApprovalVoteRef,
+        PromotionConsensusReceipt, PromotionQuorumGateConfig, render_production_promotion_report,
+        validate_quorum_gate, verify_consensus_receipt_signature, verify_vote_signature,
     };
     use crate::canary::{
         CanaryAssignment, CanaryFindingPreview, CanaryRecommendation, CanaryRunReport,
@@ -1831,6 +1929,7 @@ mod tests {
             },
             metrics: Default::default(),
             threshold_results: Vec::new(),
+            observations: Vec::new(),
             recent_candidate_findings: Vec::new(),
             rollback_history: Vec::new(),
         }
@@ -2462,5 +2561,341 @@ mod tests {
             halted.report.rollback_history[0].reason,
             "operator requested stop"
         );
+    }
+
+    /// Canonical text over exactly the VERDICT-bearing fields of one promotion
+    /// report. Twin of `canary::tests::canary_verdict_digest`: excludes each
+    /// threshold's `expected`/`actual`/`details` and every timestamp, because
+    /// that is where measurements live and a measurement may legitimately differ
+    /// between two runs. The verdict may not.
+    fn promotion_verdict_digest(report: &ProductionPromotionReport) -> (String, String) {
+        let canonical = serde_json::json!({
+            "status": format!("{:?}", report.status),
+            "recommendation": format!("{:?}", report.recommendation),
+            "thresholds": report
+                .threshold_results
+                .iter()
+                .map(|threshold| {
+                    serde_json::json!({
+                        "name": threshold.name,
+                        "passed": threshold.passed,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "rollback_history": report
+                .rollback_history
+                .iter()
+                .map(|rollback| {
+                    serde_json::json!({
+                        "trigger": format!("{:?}", rollback.trigger),
+                        "reason": rollback.reason,
+                        "restored_baseline_strategy_id": rollback.restored_baseline_strategy_id,
+                        "observed_events": rollback.observed_events,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        });
+        let canonical_text = serde_json::to_string(&canonical).unwrap();
+        let digest = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+            canonical_text.as_bytes(),
+        ));
+        (digest, canonical_text)
+    }
+
+    /// Every number the persisted artifact records under a detect-latency key,
+    /// wherever it lives. Shape-tolerant: the fix moves the latency entry out of
+    /// the gating threshold list but must keep RECORDING the measurement.
+    fn recorded_detect_latencies(value: &serde_json::Value, out: &mut Vec<u64>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    if key.contains("detect_latency")
+                        && let Some(number) = child.as_u64()
+                    {
+                        out.push(number);
+                    }
+                    recorded_detect_latencies(child, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    recorded_detect_latencies(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn promotion_detect_latencies(report: &ProductionPromotionReport) -> Vec<u64> {
+        let mut recorded = Vec::new();
+        recorded_detect_latencies(&serde_json::to_value(report).unwrap(), &mut recorded);
+        recorded.sort_unstable();
+        recorded
+    }
+
+    fn start_promotion_pass(
+        results_dir: &std::path::Path,
+        canaries_dir: &std::path::Path,
+        canary_run_id: &str,
+    ) -> (DefaultProductionPromotionHarness, String) {
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            promotion_config(),
+            results_dir,
+        )
+        .unwrap();
+        let started = harness.start_run(canaries_dir, canary_run_id).unwrap();
+        let promotion_id = started.record.promotion_id.clone();
+        (harness, promotion_id)
+    }
+
+    /// Same machine, same process, same canary handoff, same events -- two
+    /// production-promotion runs, the second one with the promoted detector's
+    /// detect stage deliberately stalled far past
+    /// `promotion.max_detect_latency_us`.
+    ///
+    /// This decision reverts the detector serving production traffic. It must be
+    /// a function of what the promoted detector DID over the observed events,
+    /// not of how busy the machine was while it was measured. Same two halves as
+    /// the canary twin, vacuity first.
+    #[test]
+    fn promotion_verdict_is_invariant_under_detect_stage_load() {
+        let root = unique_temp_dir("load-differential");
+        let config = promotion_config();
+        let budget_us = config.promotion.max_detect_latency_us;
+        let ready_canary = ready_canary_report(&config, control_candidate());
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        // Pass 1: nominal.
+        let (nominal_harness, nominal_promotion) = start_promotion_pass(
+            &root.join("promotions-nominal"),
+            &canaries_dir,
+            &canary_run_id,
+        );
+        let nominal_first = nominal_harness
+            .ingest_event(&nominal_promotion, &suspicious_event("evt-promotion-1"))
+            .unwrap()
+            .report;
+
+        // Pass 2: identical inputs, one promoted detect-stage evaluation stalled
+        // by 20ms -- twice the 10_000us configured budget.
+        let (stalled_harness, stalled_promotion) = start_promotion_pass(
+            &root.join("promotions-stalled"),
+            &canaries_dir,
+            &canary_run_id,
+        );
+        let stalled_first = {
+            let _stall = crate::replay::detect_stall::DetectStallGuard::arm(
+                1,
+                std::time::Duration::from_millis(20),
+            );
+            stalled_harness
+                .ingest_event(&stalled_promotion, &suspicious_event("evt-promotion-1"))
+                .unwrap()
+                .report
+        };
+
+        // (1) Vacuity: the differential landed and both artifacts still record
+        // the measurement each run took.
+        let nominal_latency = nominal_first.metrics.max_promoted_detect_latency_us;
+        let stalled_latency = stalled_first.metrics.max_promoted_detect_latency_us;
+        assert!(
+            nominal_latency <= budget_us,
+            "precondition: the nominal run must stay within the {budget_us}us budget, \
+             otherwise this machine is too loaded for the differential to mean anything; \
+             measured {nominal_latency}us"
+        );
+        assert!(
+            stalled_latency > budget_us,
+            "the stalled run must measure past the {budget_us}us budget, got {stalled_latency}us"
+        );
+        assert!(
+            promotion_detect_latencies(&nominal_first).contains(&nominal_latency)
+                && promotion_detect_latencies(&stalled_first).contains(&stalled_latency),
+            "both artifacts must still RECORD the measurement they took; \
+             nominal={:?} stalled={:?}",
+            promotion_detect_latencies(&nominal_first),
+            promotion_detect_latencies(&stalled_first)
+        );
+
+        // (2) The verdict must be identical after the first observed event.
+        let (nominal_digest, nominal_canonical) = promotion_verdict_digest(&nominal_first);
+        let (stalled_digest, stalled_canonical) = promotion_verdict_digest(&stalled_first);
+        assert_eq!(
+            nominal_digest, stalled_digest,
+            "promotion verdict changed with machine load after one event.\n  \
+             nominal: {nominal_canonical}\n  stalled: {stalled_canonical}"
+        );
+
+        // ... and identical again when the observation window closes.
+        let nominal_second = nominal_harness
+            .ingest_event(&nominal_promotion, &suspicious_event("evt-promotion-2"))
+            .unwrap()
+            .report;
+        let stalled_second = {
+            let _stall = crate::replay::detect_stall::DetectStallGuard::arm(
+                1,
+                std::time::Duration::from_millis(20),
+            );
+            stalled_harness
+                .ingest_event(&stalled_promotion, &suspicious_event("evt-promotion-2"))
+                .unwrap()
+                .report
+        };
+        let (nominal_digest, nominal_canonical) = promotion_verdict_digest(&nominal_second);
+        let (stalled_digest, stalled_canonical) = promotion_verdict_digest(&stalled_second);
+        assert_eq!(
+            nominal_digest, stalled_digest,
+            "promotion verdict changed with machine load at window close.\n  \
+             nominal: {nominal_canonical}\n  stalled: {stalled_canonical}"
+        );
+        assert_eq!(stalled_second.status, ProductionPromotionStatus::Completed);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// We lose a gate, not the signal. Twin of the canary observation test.
+    #[test]
+    fn promotion_records_detect_latency_as_a_non_gating_observation() {
+        let root = unique_temp_dir("latency-observation");
+        let config = promotion_config();
+        let budget_us = config.promotion.max_detect_latency_us;
+        let ready_canary = ready_canary_report(&config, control_candidate());
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+        let (harness, promotion_id) =
+            start_promotion_pass(&root.join("promotions"), &canaries_dir, &canary_run_id);
+        let report = harness
+            .ingest_event(&promotion_id, &suspicious_event("evt-promotion-1"))
+            .unwrap()
+            .report;
+
+        let gating_names = report
+            .threshold_results
+            .iter()
+            .map(|threshold| threshold.name.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            !gating_names
+                .iter()
+                .any(|name| name.contains("detect_latency")),
+            "no wall-clock latency comparison may sit in the GATING threshold list, got {gating_names:?}"
+        );
+
+        let persisted = serde_json::to_value(&report).unwrap();
+        let observations = persisted
+            .get("observations")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let latency = observations
+            .iter()
+            .find(|observation| {
+                observation.get("name").and_then(serde_json::Value::as_str)
+                    == Some("detect_latency_budget")
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "the promotion artifact must still RECORD the detect-latency measurement as a \
+                     non-gating observation; observations={observations:?}"
+                )
+            });
+        assert_eq!(
+            latency.get("observed").and_then(serde_json::Value::as_u64),
+            Some(report.metrics.max_promoted_detect_latency_us),
+            "the observation must carry the measurement this run took"
+        );
+        assert_eq!(
+            latency
+                .get("advisory_budget")
+                .and_then(serde_json::Value::as_u64),
+            Some(budget_us),
+            "the observation must carry the advisory budget it was compared against"
+        );
+        assert_eq!(
+            latency
+                .get("within_advisory_budget")
+                .and_then(serde_json::Value::as_bool),
+            Some(true),
+            "the budget comparison must survive as a recorded fact"
+        );
+
+        let rendered = render_production_promotion_report(&report);
+        assert!(
+            rendered.contains("Observations (advisory, non-gating)"),
+            "the operator-facing render must say the latency observation does not \
+             gate, at the place the failure used to appear:\n{rendered}"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Twin of `canary::tests::
+    /// canary_artifacts_persisted_before_observations_still_load_and_cannot_regate`.
+    #[test]
+    fn promotion_artifacts_persisted_before_observations_still_load_and_cannot_regate() {
+        let root = unique_temp_dir("legacy-artifact");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary = ready_canary_report(&config, control_candidate());
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+        let (harness, promotion_id) =
+            start_promotion_pass(&results_dir, &canaries_dir, &canary_run_id);
+
+        let stored = harness.load_run(&promotion_id).unwrap().unwrap().report;
+        let mut legacy = serde_json::to_value(&stored).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        object.remove("observations");
+        object
+            .get_mut("threshold_results")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .insert(
+                2,
+                serde_json::json!({
+                    "name": "detect_latency_threshold",
+                    "passed": false,
+                    "expected": 10_000,
+                    "actual": 28_119,
+                    "details": "promoted detect latency exceeded the configured bound"
+                }),
+            );
+        let restored: ProductionPromotionReport = serde_json::from_value(legacy).unwrap();
+        assert!(
+            restored.observations.is_empty(),
+            "a pre-change artifact has no observations and must still deserialize"
+        );
+        assert_eq!(restored.threshold_results.len(), 4);
+        assert!(
+            render_production_promotion_report(&restored)
+                .contains("Observations (advisory, non-gating)")
+        );
+
+        FileProductionPromotionStore::open(&results_dir)
+            .unwrap()
+            .persist(&restored)
+            .unwrap();
+
+        let after = harness
+            .ingest_event(&promotion_id, &suspicious_event("evt-promotion-1"))
+            .unwrap()
+            .report;
+        assert_eq!(
+            after.status,
+            ProductionPromotionStatus::Active,
+            "a persisted legacy latency failure must not roll production back: {:?}",
+            after.rollback_history
+        );
+        assert!(after.rollback_history.is_empty());
+        assert!(
+            !after
+                .threshold_results
+                .iter()
+                .any(|threshold| threshold.name.contains("detect_latency")),
+            "re-evaluation must not carry the retired gate forward: {:?}",
+            after.threshold_results
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }

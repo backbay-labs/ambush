@@ -1527,6 +1527,7 @@ mod tests {
                 total_candidate_deposits: 2,
             },
             threshold_results: Vec::new(),
+            observations: Vec::new(),
             recent_candidate_findings: Vec::new(),
             rollback_history: Vec::new(),
         }
@@ -1593,6 +1594,7 @@ mod tests {
                 total_promoted_deposits: 2,
             },
             threshold_results: Vec::new(),
+            observations: Vec::new(),
             recent_promoted_findings: Vec::new(),
             rollback_history: Vec::new(),
             pending_review: None,

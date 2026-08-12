@@ -1498,10 +1498,35 @@ Current canary inputs and semantics:
 - `observation_window_events`: how many live events the candidate must survive before the run can complete normally
 - `max_candidate_only_rate`: conservative false-positive proxy bound, based on candidate-only detections versus the production baseline
 - `max_baseline_miss_rate`: bound on how often the candidate misses a detection that the baseline still produces
-- `max_detect_latency_us`: maximum candidate detect latency over the canary window
+- `max_detect_latency_us`: **advisory only, not a gate.** The reference point recorded beside the non-gating `detect_latency_budget` observation on the canary artifact. Nothing rolls a canary back for exceeding it
 - `max_total_detections`: resource budget for total candidate detections over the window
 
 Canary artifacts are written under `data/canaries/` by default.
+
+The canary artifact separates the two kinds of entry, and so does
+`canary-result`:
+
+- `threshold_results` is **gating**. Every entry is a count or a rate over what
+  the candidate did across the observed events, so it computes the same value on
+  any machine, under any load, on any architecture. The run rolls back and the
+  candidate is blocked on the first entry that fails.
+- `observations` is **non-gating**. Nothing reduces over it. It carries
+  `detect_latency_budget`: the worst candidate detect latency measured over the
+  window, the advisory budget it was compared against, and
+  `within_advisory_budget` as a recorded fact rather than a verdict.
+
+`detect_latency_threshold` used to be a gating threshold and is gone from
+`threshold_results`. It was the only bound there whose verdict was not a
+function of what the candidate did: `max_candidate_detect_latency_us` is a
+wall-clock `Instant` delta, so a busy runner could roll a healthy candidate out
+of a live lane and record `AutomaticThreshold` against it. **If you tightened
+`canary.max_detect_latency_us` expecting a hard bound, it no longer stops
+anything.** The measurement is still taken and still recorded: it appears in
+every run's `observations` block and under `Observations (advisory,
+non-gating)` in the rendered report, with `within_advisory_budget: false` when
+your budget is exceeded. Alerting on that field is the supported replacement.
+A latency bound that can be enforced has to count work rather than read a
+clock; that is a cost model, and it is not this field.
 
 Example operator flow:
 
@@ -1527,7 +1552,7 @@ cargo run -p swarm-runtime --bin swarmctl -- canary-result --run-id YOUR_CANARY_
 
 Automatic failure behavior:
 
-- `canary-event` exits nonzero when the canary auto-rolls back on a threshold or budget violation
+- `canary-event` exits nonzero when the canary auto-rolls back on a threshold or budget violation. Detect latency is not one of those thresholds; see above
 - rollback history preserves the trigger, reason, slot ID, and reverted baseline strategy
 - the final canary artifact carries an `observing`, `ready_for_promotion_review`, or `blocked` recommendation
 
@@ -1563,10 +1588,21 @@ Current promotion inputs and semantics:
 - `observation_window_events`: how many live events the promoted detector must survive before the promotion can complete normally
 - `max_promoted_only_rate`: divergence bound for promoted-only detections versus the retained fallback baseline
 - `max_fallback_recovery_rate`: bound on how often the retained fallback baseline still detects activity that the promoted detector misses
-- `max_detect_latency_us`: maximum promoted detect latency during the observation window
+- `max_detect_latency_us`: **advisory only, not a gate.** The reference point recorded beside the non-gating `detect_latency_budget` observation on the promotion artifact. Nothing rolls a promotion back for exceeding it
 - `max_total_detections`: resource budget for total promoted detections over the production window
 
 Production-promotion artifacts are written under `data/promotions/` by default.
+
+The promotion artifact makes the same split as the canary artifact:
+`threshold_results` is gating and reverts production to the retained fallback
+detector on the first failure; `observations` is non-gating and carries
+`detect_latency_budget` with its advisory budget and `within_advisory_budget`.
+`detect_latency_threshold` is gone from `threshold_results` for the same reason
+-- `max_promoted_detect_latency_us` is a wall-clock delta, and reverting the
+detector serving production traffic on it is a false positive waiting for a
+busy runner. **If you tightened `promotion.max_detect_latency_us` expecting a
+hard bound, it no longer stops anything;** alert on `within_advisory_budget`
+instead.
 
 Example operator flow:
 
@@ -1589,7 +1625,7 @@ cargo run -p swarm-runtime --bin swarmctl -- promotion-result --promotion-id YOU
 
 Automatic failure behavior:
 
-- `promotion-event` exits nonzero when the promoted detector auto-rolls back on a threshold or budget violation
+- `promotion-event` exits nonzero when the promoted detector auto-rolls back on a threshold or budget violation. Detect latency is not one of those thresholds; see above
 - rollback history preserves the trigger, reason, restored baseline strategy, and observed event count
 - the final promotion artifact carries an `observing`, `stable_in_production`, or `blocked` recommendation
 
