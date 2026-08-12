@@ -1296,7 +1296,7 @@ The durable replay run bundle captures:
 
 ### Replay Evaluation And Gates
 
-Replay evaluation compares replay-run bundles against the expectations embedded in each scenario manifest, including hunt-level policy or response outcomes, incident grouping, and hot-path latency thresholds.
+Replay evaluation compares replay-run bundles against the expectations embedded in each scenario manifest, including hunt-level policy or response outcomes and incident grouping. Hot-path stage latencies are measured and recorded beside the manifest budget, but they are **advisory only and do not gate** -- see below.
 
 Examples:
 
@@ -1309,9 +1309,45 @@ cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --suite scenario-su
 
 Failure behavior:
 
-- `replay-evaluate` exits nonzero when any expectation or latency threshold fails
+- `replay-evaluate` exits nonzero when any expectation over replay output fails: replay bundle, investigation, and incident counts, per-hunt action/policy/response outcomes, and incident hunt grouping. Every one of these is a pure function of the scenario fixture, so the exit code is the same on any machine
+- `replay-evaluate` **does not** exit nonzero for an exceeded latency budget. `max_detect_latency_us`, `max_policy_latency_us`, and `max_response_latency_us` in a scenario `expectations:` block are advisory reference points, not thresholds
 - `--scenarios-dir` evaluates the full tracked corpus and is intended for local or CI gating
 - `--suite` evaluates one named replay suite and aggregates pass/fail status by scenario and technique group
+
+#### Scenario latency budgets are advisory
+
+`expectations.max_detect_latency_us` and its policy and response siblings used to
+gate. `ReplayEvaluationReport.passed` reduced over them, `ReplaySuiteReport.passed`
+reduced over that, and `replay-evaluate` turned the result into
+`std::process::exit(1)`.
+
+The value being compared was a wall-clock `Instant` delta captured in the runtime
+service, so it measured the machine, the build profile, and whatever else the
+scheduler was running -- not the scenario. Eight consecutive runs over the shipped
+corpus on an idle machine spread 658-888us, a 35% swing, and a single stall flipped
+`scenarios/office-dropper-correlation.yaml` from pass to fail on unchanged code.
+`CONTRIBUTING.md` and `README.md` both tell contributors to run this command, so
+the spurious failure landed on people whose only mistake was owning a slow laptop.
+It is the same defect, and the same fix, as the canary and promotion
+`max_detect_latency_us` gates documented under "Rollout" later in this document.
+
+**Nothing is silently ignored.** The thirteen tracked scenario manifests that
+declare `max_detect_latency_us` (eight of which also declare the policy and
+response budgets) keep their keys, and the keys are still read:
+
+- the measurement is recorded on `ReplayEvaluationReport.observations` next to the
+  budget the manifest declared, together with `within_advisory_budget`
+- `replay-evaluate --scenario` prints it under `Observations (non-gating, not part
+  of Status):`
+- `replay-evaluate --suite` and `--scenarios-dir` print an
+  `observation over advisory budget:` line under the scenario, at the exact place
+  the failing check used to appear
+
+**If you set a scenario `max_*_latency_us` expecting a hard bound, it no longer
+stops anything.** You get a recorded breach in the report and a line in the render;
+you do not get a nonzero exit. A performance regression gate has to count work
+rather than read a clock -- that is a cost model, and this repo does not have one
+yet. Until it does, latency is evidence, not a verdict.
 
 End-to-end flow:
 

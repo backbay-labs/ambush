@@ -503,8 +503,45 @@ async fn evaluation_report_passes_expected_scenario_and_flags_regressions() {
         harness.evaluate_scenario_path(&failing_path).await.unwrap();
     assert!(failing_report.passed);
 
+    // An impossible latency budget is an ADVISORY breach, not a regression. It
+    // is recorded against the observation and reported, and the verdict does
+    // not move. This assertion used to read `assert!(!regression_report.passed)`
+    // -- see `ReplayExpectations::advisory_max_detect_latency_us` for why a
+    // wall-clock delta stopped being allowed to decide it.
+    let mut breaching = scenario_manifest();
+    breaching.expectations.advisory_max_detect_latency_us = Some(0);
+    let breaching_path = write_scenario(&root, "advisory-breach.yaml", &breaching);
+    let breach_report = harness
+        .evaluate_scenario_path(&breaching_path)
+        .await
+        .unwrap();
+    assert!(
+        breach_report.passed,
+        "an exceeded advisory latency budget must not fail the evaluation: {:?}",
+        breach_report.checks
+    );
+    assert!(
+        !breach_report
+            .checks
+            .iter()
+            .any(|check| check.name.contains("latency")),
+        "no latency comparison may sit in the GATING check list: {:?}",
+        breach_report.checks
+    );
+    let breach = breach_report
+        .observations
+        .iter()
+        .find(|observation| observation.name == "max_detect_latency_us")
+        .expect("the breach must still be recorded as a non-gating observation");
+    assert!(
+        !breach.within_advisory_budget,
+        "the recorded observation must say the advisory budget was exceeded: {breach:?}"
+    );
+
+    // A regression the fixture DOES decide still fails, so this test is not
+    // just asserting that nothing fails any more.
     let mut mismatched = scenario_manifest();
-    mismatched.expectations.max_detect_latency_us = Some(0);
+    mismatched.expectations.incident_count = Some(99);
     let mismatched_path = write_scenario(&root, "mismatched.yaml", &mismatched);
     let regression_report = harness
         .evaluate_scenario_path(&mismatched_path)
@@ -515,7 +552,7 @@ async fn evaluation_report_passes_expected_scenario_and_flags_regressions() {
         regression_report
             .checks
             .iter()
-            .any(|check| check.name == "max_detect_latency_us" && !check.passed)
+            .any(|check| check.name == "incident_count" && !check.passed)
     );
 
     let _ = fs::remove_dir_all(root);
@@ -2199,4 +2236,297 @@ async fn experiment_records_detect_latency_delta_as_a_non_gating_observation() {
     }
 
     let _ = fs::remove_dir_all(root);
+}
+
+/// Every stage-latency measurement a replay suite report records, wherever it
+/// lives. Shape-tolerant on purpose, because its only job is to prove the
+/// injected stall MEASURABLY landed -- it is satisfied by
+/// `evaluation.performance.detect.max_latency_us` alone and therefore pins
+/// nothing about where the measurement is recorded. The recording contract
+/// lives in `scenario_records_stage_latencies_as_non_gating_observations`.
+fn recorded_stage_latencies(value: &Value, out: &mut Vec<u64>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key.contains("latency_us")
+                    && let Some(number) = child.as_u64()
+                {
+                    out.push(number);
+                }
+                recorded_stage_latencies(child, out);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                recorded_stage_latencies(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn suite_latency_observations(report: &super::ReplaySuiteReport) -> Vec<u64> {
+    let mut observations = Vec::new();
+    recorded_stage_latencies(&serde_json::to_value(report).unwrap(), &mut observations);
+    observations.sort_unstable();
+    observations
+}
+
+/// Canonical digest over the VERDICT-BEARING fields of a replay suite report:
+/// the suite `passed` flag and pass/fail counts, plus every scenario's `passed`
+/// flag and every check's name and `passed` flag. Deliberately excludes
+/// `expected`/`actual`/`details` and the whole `performance` snapshot, which is
+/// where the latency measurement lives -- the digest has to be blind to the
+/// observation and sensitive to the verdict.
+fn suite_verdict_digest(report: &super::ReplaySuiteReport) -> (String, String) {
+    use sha2::{Digest, Sha256};
+
+    let canonical = serde_json::json!({
+        "passed": report.passed,
+        "passed_scenarios": report.passed_scenarios,
+        "failed_scenarios": report.failed_scenarios,
+        "scenarios": report
+            .scenario_reports
+            .iter()
+            .map(|scenario| {
+                serde_json::json!({
+                    "scenario_name": scenario.scenario_name,
+                    "passed": scenario.evaluation.passed,
+                    "checks": scenario
+                        .evaluation
+                        .checks
+                        .iter()
+                        .map(|check| {
+                            serde_json::json!({
+                                "name": check.name,
+                                "passed": check.passed,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "technique_groups": report
+            .technique_groups
+            .iter()
+            .map(|group| {
+                serde_json::json!({
+                    "technique": group.technique,
+                    "failing_scenarios": group.failing_scenarios,
+                })
+            })
+            .collect::<Vec<_>>(),
+    });
+    let canonical_text = serde_json::to_string(&canonical).unwrap();
+    let digest = hex::encode(Sha256::digest(canonical_text.as_bytes()));
+    (digest, canonical_text)
+}
+
+/// Same machine, same process, same shipped fixtures, two runs of the exact
+/// path `swarmctl replay-evaluate --suite` takes -- the second one with the
+/// detect stage deliberately stalled far past the 50_000us budget every tracked
+/// scenario declares.
+///
+/// This is the SEVENTH wall-clock verdict site and the only one an ordinary
+/// contributor hits. `docs/CONFIGURATION.md` documents the nonzero exit as a
+/// local and CI gate, and `CONTRIBUTING.md` and `README.md` tell contributors to
+/// run it, so a slow machine turns fine code into a red gate.
+///
+/// The verdict a replay evaluation reaches must be a function of the fixture
+/// content, not of how busy the machine was while it was measured. So:
+///   (1) the digest of the verdict-bearing fields must be byte-identical --
+///       covering `ReplayEvaluationReport::passed` per scenario and the
+///       `ReplaySuiteReport::passed` the CLI turns into an exit code, and
+///   (2) the recorded latency measurement must differ, proving the stall really
+///       landed. Without (2) this test could pass by measuring nothing at all.
+///       (2) says nothing about WHERE the measurement is recorded; that is
+///       `scenario_records_stage_latencies_as_non_gating_observations`.
+#[tokio::test]
+async fn replay_evaluation_verdict_is_invariant_under_detect_stage_load() {
+    let results_dir = unique_temp_dir("replay-evaluate-load-differential");
+    let config_path = repo_root().join("rulesets/default.yaml");
+    let suite_path = repo_root().join("scenario-suites/hellcat-office-v1.yaml");
+    let harness = DefaultReplayHarness::from_path(&config_path, &results_dir).unwrap();
+
+    // Pass 1: nominal. Also warms every cache the second pass will reuse, so any
+    // difference the second pass shows is attributable to the injected stall.
+    let nominal = harness.evaluate_suite_path(&suite_path).await.unwrap();
+    assert!(
+        nominal.passed,
+        "the shipped suite must pass nominally, otherwise this test is not measuring \
+         what a stall does to a passing verdict: {}",
+        render_suite_report(&nominal)
+    );
+
+    // Pass 2: identical inputs, one detect-stage evaluation stalled by 120ms.
+    // Every tracked scenario declares `max_detect_latency_us: 50000`, so this
+    // measurement blows through it. Only the detect stage is stalled, which
+    // keeps the differential off the policy and response expectations.
+    let stalled = {
+        let _stall =
+            super::detect_stall::DetectStallGuard::arm(1, std::time::Duration::from_millis(120));
+        harness.evaluate_suite_path(&suite_path).await.unwrap()
+    };
+
+    // (2) Vacuity check first: prove the stall actually landed as a measurable
+    // difference the report still carries.
+    let nominal_latencies = suite_latency_observations(&nominal);
+    let stalled_latencies = suite_latency_observations(&stalled);
+    assert!(
+        !nominal_latencies.is_empty() && !stalled_latencies.is_empty(),
+        "both runs must record a stage-latency measurement, otherwise the stall \
+         cannot be shown to have landed"
+    );
+    assert!(
+        stalled_latencies.iter().copied().max().unwrap_or(0) > 50_000,
+        "stalled run must measure past the shipped 50_000us scenario budget, \
+         got max {:?}",
+        stalled_latencies.iter().copied().max()
+    );
+    assert_ne!(
+        nominal_latencies, stalled_latencies,
+        "the two runs must differ in the measured latency, otherwise this test \
+         proves nothing about the verdict"
+    );
+
+    // (1) The verdict must be identical across the two runs.
+    let (nominal_digest, nominal_canonical) = suite_verdict_digest(&nominal);
+    let (stalled_digest, stalled_canonical) = suite_verdict_digest(&stalled);
+    assert_eq!(
+        nominal_digest, stalled_digest,
+        "replay evaluation verdict digest changed with machine load.\n  \
+         nominal: {nominal_canonical}\n  stalled: {stalled_canonical}"
+    );
+    assert!(
+        stalled.passed,
+        "a stalled machine must not turn `swarmctl replay-evaluate` red on fixtures \
+         that pass nominally:\n{}",
+        render_suite_report(&stalled)
+    );
+
+    let _ = fs::remove_dir_all(results_dir);
+}
+
+/// The demotion must not decay into a deletion.
+///
+/// `replay_evaluation_verdict_is_invariant_under_detect_stage_load` pins the
+/// VERDICT, not the RECORD. Its latency scan is shape-tolerant by design, so it
+/// is already satisfied by `evaluation.performance.detect.max_latency_us` -- a
+/// field that predates the demotion. Empty `observations` and that test stays
+/// green.
+///
+/// We lose three gates, not the signal. Each measurement, the advisory budget
+/// the shipped manifest declares for it, and the comparison's outcome must all
+/// survive as recorded non-gating facts -- in the report an operator or a trend
+/// tool reads, in the single-scenario render, and in the suite render at the
+/// exact place the failing check used to appear.
+#[tokio::test]
+async fn scenario_records_stage_latencies_as_non_gating_observations() {
+    let results_dir = unique_temp_dir("replay-evaluate-latency-observation");
+    let config_path = repo_root().join("rulesets/default.yaml");
+    let scenario_path = repo_root().join("scenarios/office-dropper-correlation.yaml");
+    let suite_path = repo_root().join("scenario-suites/hellcat-office-v1.yaml");
+    let harness = DefaultReplayHarness::from_path(&config_path, &results_dir).unwrap();
+
+    // Read the budgets out of the shipped manifest rather than hard-coding
+    // them: the point is that the manifest keys are still being READ, not that
+    // they hold some particular number.
+    let manifest = load_scenario_manifest(&scenario_path).unwrap().manifest;
+    let report = harness
+        .evaluate_scenario_path(&scenario_path)
+        .await
+        .unwrap();
+
+    // The check list is the verdict input. Latency must not be back in it.
+    let check_names = report
+        .checks
+        .iter()
+        .map(|check| check.name.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        !check_names.iter().any(|name| name.contains("latency")),
+        "no wall-clock latency comparison may sit in the GATING check list, got {check_names:?}"
+    );
+
+    let expected_observations = [
+        (
+            "max_detect_latency_us",
+            manifest.expectations.advisory_max_detect_latency_us,
+            report.performance.detect.max_latency_us,
+        ),
+        (
+            "max_policy_latency_us",
+            manifest.expectations.advisory_max_policy_latency_us,
+            report.performance.policy.max_latency_us,
+        ),
+        (
+            "max_response_latency_us",
+            manifest.expectations.advisory_max_response_latency_us,
+            report.performance.response.max_latency_us,
+        ),
+    ];
+
+    let rendered = render_evaluation_report(&report);
+    assert!(
+        rendered.contains("Observations (non-gating, not part of Status):"),
+        "the rendered evaluation must keep a non-gating observation block:\n{rendered}"
+    );
+
+    for (name, advisory_budget, observed) in expected_observations {
+        let advisory_budget = advisory_budget
+            .unwrap_or_else(|| panic!("the shipped scenario manifest must still declare `{name}`"));
+        let observation = report
+            .observations
+            .iter()
+            .find(|observation| observation.name == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the evaluation report must still RECORD `{name}` as a non-gating \
+                     observation; observations={:?}",
+                    report.observations
+                )
+            });
+        assert_eq!(
+            observation.observed,
+            serde_json::json!(observed),
+            "the `{name}` observation must carry the latency the run measured"
+        );
+        assert_eq!(
+            observation.advisory_budget,
+            serde_json::json!(advisory_budget),
+            "the `{name}` observation must echo back the manifest's `{name}` as its \
+             advisory budget"
+        );
+        assert_eq!(
+            observation.within_advisory_budget,
+            observed <= advisory_budget,
+            "the `{name}` budget comparison must survive as a recorded fact"
+        );
+        assert!(
+            rendered.contains(&format!(
+                "- {name} | observed={observed} advisory_budget={advisory_budget} within={} |",
+                observed <= advisory_budget
+            )),
+            "the rendered evaluation must show the measured `{name}` next to its \
+             advisory budget:\n{rendered}"
+        );
+    }
+
+    // A breach still has to reach the operator running the suite, at the exact
+    // place the failing check used to appear -- otherwise the key is silently
+    // ignored, which is strictly worse than a spurious failure.
+    let stalled = {
+        let _stall =
+            super::detect_stall::DetectStallGuard::arm(1, std::time::Duration::from_millis(120));
+        harness.evaluate_suite_path(&suite_path).await.unwrap()
+    };
+    assert!(stalled.passed, "a stalled suite must still pass");
+    let stalled_render = render_suite_report(&stalled);
+    assert!(
+        stalled_render.contains("observation over advisory budget: max_detect_latency_us"),
+        "the suite render must surface an over-budget latency observation where the \
+         failing check used to appear:\n{stalled_render}"
+    );
+
+    let _ = fs::remove_dir_all(results_dir);
 }

@@ -1,5 +1,5 @@
 use super::helpers::{
-    equality_check, experiment_id_for_manifest, latency_check, normalize_groups, now_ms,
+    equality_check, experiment_id_for_manifest, latency_observation, normalize_groups, now_ms,
     promotion_review_id_for_packet, resolve_relative_path, run_id_for_manifest,
     scenario_paths_in_dir, verification_id_for_experiment,
 };
@@ -456,24 +456,28 @@ impl DefaultReplayHarness {
             ));
         }
 
-        if let Some(expected) = run.expectations.max_detect_latency_us {
-            checks.push(latency_check(
+        // NON-GATING. Every stage latency the manifest declares a budget for is
+        // measured and recorded beside that budget, and none of it reaches
+        // `passed`. See `helpers::latency_observation`.
+        let mut observations = Vec::new();
+        if let Some(advisory_max) = run.expectations.advisory_max_detect_latency_us {
+            observations.push(latency_observation(
                 "max_detect_latency_us",
-                expected,
+                advisory_max,
                 run.performance.detect.max_latency_us,
             ));
         }
-        if let Some(expected) = run.expectations.max_policy_latency_us {
-            checks.push(latency_check(
+        if let Some(advisory_max) = run.expectations.advisory_max_policy_latency_us {
+            observations.push(latency_observation(
                 "max_policy_latency_us",
-                expected,
+                advisory_max,
                 run.performance.policy.max_latency_us,
             ));
         }
-        if let Some(expected) = run.expectations.max_response_latency_us {
-            checks.push(latency_check(
+        if let Some(advisory_max) = run.expectations.advisory_max_response_latency_us {
+            observations.push(latency_observation(
                 "max_response_latency_us",
-                expected,
+                advisory_max,
                 run.performance.response.max_latency_us,
             ));
         }
@@ -486,6 +490,7 @@ impl DefaultReplayHarness {
             metadata: run.metadata.clone(),
             passed,
             checks,
+            observations,
             deterministic_summary: summary.clone(),
             performance: run.performance.clone(),
         }

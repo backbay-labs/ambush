@@ -82,6 +82,23 @@ pub fn render_evaluation_report(report: &ReplayEvaluationReport) -> String {
         ));
     }
 
+    if !report.observations.is_empty() {
+        // Rendered without a pass/fail marker on purpose. `within` reads as the
+        // recorded comparison it is; a `[pass]`/`[fail]` column here would look
+        // like a verdict, and the whole point is that it is not one.
+        lines.push("Observations (non-gating, not part of Status):".to_string());
+        for observation in &report.observations {
+            lines.push(format!(
+                "- {} | observed={} advisory_budget={} within={} | {}",
+                observation.name,
+                observation.observed,
+                observation.advisory_budget,
+                observation.within_advisory_budget,
+                observation.details
+            ));
+        }
+    }
+
     lines.join("\n")
 }
 
@@ -154,6 +171,22 @@ pub fn render_suite_report(report: &ReplaySuiteReport) -> String {
             lines.push(format!(
                 "  failing check: {} | expected={} actual={} | {}",
                 check.name, check.expected, check.actual, check.details
+            ));
+        }
+        // Surfaced at the exact place the failing latency check used to appear.
+        // The suite `Status` no longer moves for these, but an operator who set
+        // a budget still has to be told it was exceeded -- a silently ignored
+        // manifest key is worse than the spurious failure this replaced.
+        for observation in scenario_report
+            .evaluation
+            .observations
+            .iter()
+            .filter(|observation| !observation.within_advisory_budget)
+        {
+            lines.push(format!(
+                "  observation over advisory budget: {} | observed={} advisory_budget={} | \
+                 non-gating, Status unaffected",
+                observation.name, observation.observed, observation.advisory_budget
             ));
         }
     }

@@ -1,6 +1,7 @@
 use super::types::{
-    DetectorExperimentManifest, ReplayEvaluationCheck, ReplayHarnessError, ReplayScenarioManifest,
-    StrategyExperimentReport, StrategyShadowReport, VerificationCorpusManifest,
+    DetectorExperimentManifest, ReplayEvaluationCheck, ReplayEvaluationObservation,
+    ReplayHarnessError, ReplayScenarioManifest, StrategyExperimentReport, StrategyShadowReport,
+    VerificationCorpusManifest,
 };
 use serde_json::json;
 use std::fs;
@@ -27,21 +28,46 @@ pub(super) fn equality_check(
     }
 }
 
-pub(super) fn latency_check(
+/// Records one stage latency measured during a replay run as a NON-GATING
+/// observation.
+///
+/// This used to be `latency_check`, and the three checks it produced were the
+/// only entries in `ReplayEvaluationReport::checks` whose verdict was not a
+/// function of the fixture. `expected_max <= actual_max` compared a manifest
+/// constant against a wall-clock `Instant` delta captured in
+/// `service::runtime_service`, so it measured the machine, the build profile,
+/// and whatever else the scheduler was running -- not the scenario. That verdict
+/// reached `ReplaySuiteReport::passed` and then `std::process::exit(1)` in
+/// `swarmctl replay-evaluate`, a command `CONTRIBUTING.md` and `README.md` tell
+/// contributors to run, which is what
+/// `replay::tests::replay_evaluation_verdict_is_invariant_under_detect_stage_load`
+/// pins down.
+///
+/// The measurement is still taken and still recorded in full, with the
+/// manifest budget beside it. Only its authority to fail an evaluation is
+/// removed. Re-earning a latency gate means counting work rather than reading a
+/// clock, which is a cost model, not a rename.
+pub(super) fn latency_observation(
     name: &str,
-    expected_max: u64,
-    actual_max: u64,
-) -> ReplayEvaluationCheck {
-    let passed = actual_max <= expected_max;
-    ReplayEvaluationCheck {
+    advisory_max: u64,
+    observed: u64,
+) -> ReplayEvaluationObservation {
+    let within_advisory_budget = observed <= advisory_max;
+    ReplayEvaluationObservation {
         name: name.to_string(),
-        passed,
-        expected: json!(expected_max),
-        actual: json!(actual_max),
-        details: if passed {
-            format!("{name} stayed within configured replay threshold")
+        advisory_budget: json!(advisory_max),
+        observed: json!(observed),
+        within_advisory_budget,
+        details: if within_advisory_budget {
+            format!(
+                "{name} observed {observed}us stayed within the advisory budget \
+                 {advisory_max}us (non-gating wall-clock measurement)"
+            )
         } else {
-            format!("{name} exceeded configured replay threshold")
+            format!(
+                "{name} observed {observed}us exceeded the advisory budget {advisory_max}us \
+                 (non-gating wall-clock measurement; recorded, not enforced)"
+            )
         },
     }
 }
