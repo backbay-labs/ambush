@@ -43,12 +43,48 @@ pub struct GovernanceRuntimeEventRecord {
     pub details: serde_json::Value,
 }
 
+/// Not public API. Seals [`GovernanceAuthority`]; see the note on that trait.
+#[doc(hidden)]
+pub mod sealed {
+    /// Supertrait of [`super::GovernanceAuthority`], carrying no contract of its own.
+    ///
+    /// Its only job is to make implementing `GovernanceAuthority` require naming a
+    /// `#[doc(hidden)]` item, so the set of types that can authorize a destructive
+    /// action during a governance partition stays enumerable and every addition is
+    /// explicit.
+    pub trait SealedGovernanceAuthority {}
+}
+
 /// Partition-time authorization and event drain, as the dispatcher needs them.
 ///
 /// Deliberately narrow: these two methods are the entire surface the dispatcher used
 /// of the concrete governance policy, and widening it would re-import the coupling
 /// this trait exists to remove.
-pub trait GovernanceAuthority: Send + Sync {
+///
+/// # What the trait widened, and why it is sealed
+///
+/// This is a security-relevant extension point, and it did not exist before SPLIT-03.
+/// The dispatcher used to install one concrete type,
+/// `swarm_runtime::tom_agent::GovernancePolicy`, whose enforcement logic is the only
+/// thing that could answer [`GovernanceAuthority::authorize_partition_request`]. That
+/// method returning `Ok(true)` is what lets a destructive action proceed while the
+/// governance quorum is partitioned, so an arbitrary implementation installed through
+/// `AgentDispatcher::with_governance_policy` could approve every partition-time
+/// request without minting a contingency lease.
+///
+/// The trait is therefore sealed: it requires
+/// [`sealed::SealedGovernanceAuthority`], which lives in a `#[doc(hidden)]` module and
+/// is not part of the documented API. An implementer must write that impl too, so
+/// every type that can render this verdict stays enumerable with
+/// `grep -rn SealedGovernanceAuthority`, and adding one is a deliberate, reviewable
+/// act rather than a side effect of depending on this crate.
+///
+/// The seal is a deliberate-act barrier, not a capability boundary. Rust cannot
+/// restrict an impl to a named set of crates, and this trait must stay implementable
+/// from whichever crate the governance agent is extracted into (that is the entire
+/// point of SPLIT-03), so a determined downstream crate can still name the hidden
+/// module. What the seal buys is that it cannot happen by accident or unnoticed.
+pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
     /// Whether `request` may proceed while the governance quorum is partitioned.
     ///
     /// `Ok(true)` means a contingency lease covers the request, `Ok(false)` that no

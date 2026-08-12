@@ -48,6 +48,10 @@ pub enum StalkerAgentTickError {
     Substrate(#[from] SubstrateError),
 }
 
+// `AgentTickError` is sealed so the set of types that can emit an `error_boundary`
+// telemetry label stays enumerable. See `swarm_core::agent::AgentTickError`.
+impl swarm_core::agent::sealed::SealedAgentTickError for StalkerAgentTickError {}
+
 impl AgentTickError for StalkerAgentTickError {
     fn boundary(&self) -> &'static str {
         match self {

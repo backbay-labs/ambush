@@ -1295,6 +1295,11 @@ fn now_ms() -> i64 {
 // probed before trait impls, so `GovernancePolicy::method(self, ..)` resolves to the
 // inherent one; the return types also differ, so a mis-resolution would be a compile
 // error rather than a silent recursion.
+// `GovernanceAuthority` is sealed so the set of types that can authorize a
+// destructive action during a governance partition stays enumerable. See
+// `swarm_policy::governance::GovernanceAuthority`.
+impl swarm_policy::governance::sealed::SealedGovernanceAuthority for GovernancePolicy {}
+
 impl GovernanceAuthority for GovernancePolicy {
     fn authorize_partition_request(
         &self,

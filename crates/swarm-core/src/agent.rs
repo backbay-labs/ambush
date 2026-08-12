@@ -207,6 +207,17 @@ pub enum SwarmError {
     Internal(#[from] anyhow::Error),
 }
 
+/// Not public API. Seals [`AgentTickError`]; see the note on that trait.
+#[doc(hidden)]
+pub mod sealed {
+    /// Supertrait of [`super::AgentTickError`], carrying no contract of its own.
+    ///
+    /// Its only job is to make implementing `AgentTickError` require naming a
+    /// `#[doc(hidden)]` item, so the set of types that can emit an `error_boundary`
+    /// telemetry label stays enumerable and every addition is explicit.
+    pub trait SealedAgentTickError {}
+}
+
 /// A typed tick failure owned by an agent implementation.
 ///
 /// # Why this exists (SPLIT-03, phase 282)
@@ -227,7 +238,32 @@ pub enum SwarmError {
 /// The two methods are the entire contract the runtime ever used, and they are the
 /// contract it still uses: `boundary()` feeds the `error_boundary` label on restart
 /// and health telemetry, `role()` attributes the failure to an agent role.
-pub trait AgentTickError: std::error::Error + Send + Sync + 'static {
+///
+/// # What the trait widened, and why it is sealed
+///
+/// Replacing a closed enum with a `pub` trait opens an extension point that did not
+/// exist before. The `error_boundary` telemetry label is derived from `boundary()`
+/// (see the `agent tick failed` / `agent tick panicked` sites in the dispatcher), and
+/// its value domain used to be fixed by the crate that owned the enum: the three
+/// strings `SphinxAgentTickError` returns, the four `StalkerAgentTickError` returns,
+/// and `"panic"`. An arbitrary implementation can return any `&'static str`, so the
+/// label domain would otherwise be unbounded and the set of label sources would grow
+/// silently with any crate that imports `swarm-core`.
+///
+/// The trait is therefore sealed: it requires [`sealed::SealedAgentTickError`], which
+/// lives in a `#[doc(hidden)]` module and is not part of the documented API. An
+/// implementer must write that impl too, so every source of a boundary label stays
+/// enumerable with `grep -rn SealedAgentTickError`, and adding one is a deliberate,
+/// reviewable act rather than a side effect of depending on this crate.
+///
+/// The seal is a deliberate-act barrier, not a capability boundary. Rust cannot
+/// restrict an impl to a named set of crates, and this trait must stay implementable
+/// from whichever crate the agents are extracted into (that is the entire point of
+/// SPLIT-03), so a determined downstream crate can still name the hidden module. What
+/// the seal buys is that it cannot happen by accident or unnoticed.
+pub trait AgentTickError:
+    sealed::SealedAgentTickError + std::error::Error + Send + Sync + 'static
+{
     /// Stable identifier for the subsystem boundary this failure crossed.
     ///
     /// Used as a telemetry label, so the returned strings are part of the observable
