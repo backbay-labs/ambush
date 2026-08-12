@@ -1252,9 +1252,17 @@ Repo-owned scenarios live under `scenarios/`:
 - `scenarios/pdf-lolbin-execution.yaml`
 - `scenarios/python-maintenance-benign.yaml`
 
-Scenario manifests now carry explicit offline corpus metadata:
+Scenario manifests carry explicit offline corpus metadata. The `metadata:` block
+is **required** -- a manifest without one fails to parse, because a scenario with no
+declared class was previously exempt from every safety invariant and passed
+verification without any of them running.
 
-- `metadata.class`: `adversarial`, `benign`, or `mixed`
+- `metadata.class`: `adversarial` or `benign`. **`mixed` is accepted by the parser
+  but FAILS the `scenario_class_declared` verification invariant**, and is retained
+  only so an existing corpus reports a named failure rather than a parse error.
+  A `mixed` scenario matches neither `known_bad_coverage` (which requires
+  `adversarial`) nor `false_positive_bound` (which requires `benign`), so it would
+  otherwise be checked by nothing. Classify each scenario as one or the other.
 - `metadata.campaign`: campaign or operator workflow label
 - `metadata.techniques`: MITRE ATT&CK technique IDs or internal technique labels
 - `metadata.tags`: free-form suite or debugging tags
