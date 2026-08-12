@@ -1942,3 +1942,64 @@ fn validate_waiver_rejects_not_yet_active() {
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not active until"));
 }
+
+/// The repo-owned admission ruleset `rulesets/safety/office-detector-admission.yaml`
+/// carries a `latency_budget` invariant that reads the detect-latency number the
+/// replay verification recorded and compares it to `max_detect_latency_us: 10000`.
+/// That makes the formal-safety gate a SECOND wall-clock verdict, downstream of
+/// the replay one: the same candidate is admitted or rejected depending on how
+/// busy the machine was when its verification ran.
+///
+/// This drives the real measurement path -- the detect stage is genuinely stalled
+/// past the ruleset budget via `replay::detect_stall` -- and asserts the gate
+/// admits the candidate anyway. Latency is still recorded and still rendered in
+/// the verdict details; it just does not decide admission.
+///
+/// The ruleset file is covered by the signed `rulesets/attestation.json`, so the
+/// invariant entry cannot be deleted from it. The invariant therefore has to stop
+/// being a threshold check and become the deterministic check it can actually
+/// make: that the candidate's verification recorded a detect-latency observation
+/// over this corpus at all.
+#[tokio::test]
+async fn formal_safety_gate_admits_candidate_whose_detect_stage_ran_slow() {
+    let root = unique_temp_dir("formal-safety-slow-detect");
+    let config = sample_config();
+    let config_path = repo_root().join("rulesets/default.yaml");
+
+    // Stall one detect-stage evaluation by 40ms. The admission ruleset budget is
+    // 10_000us, so the recorded measurement lands far past it -- deterministically,
+    // on any machine, not just a loaded one.
+    let genome = {
+        let _stall = crate::replay::detect_stall::DetectStallGuard::arm(
+            1,
+            std::time::Duration::from_millis(40),
+        );
+        verified_strategy_genome(&root, &config_path, &config).await
+    };
+
+    let gate = DefaultFormalSafetyGate::from_config(config_path, config);
+    let report = gate.verify(&genome).unwrap();
+
+    let latency = report
+        .invariants
+        .iter()
+        .find(|invariant| invariant.name == "detect_latency_budget")
+        .expect("admission ruleset pins a detect_latency_budget invariant");
+    assert!(
+        latency.passed,
+        "a slow detect stage must not decide admission; verdict details: {}",
+        latency.details
+    );
+    assert!(
+        report.passed,
+        "formal safety gate rejected a candidate for being measured on a slow machine: {:?}",
+        report
+            .invariants
+            .iter()
+            .filter(|invariant| !invariant.passed)
+            .map(|invariant| (invariant.name.clone(), invariant.details.clone()))
+            .collect::<Vec<_>>()
+    );
+
+    let _ = fs::remove_dir_all(root);
+}

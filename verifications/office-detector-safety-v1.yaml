@@ -22,5 +22,12 @@ canonical_templates:
         user: alice
 resource_budgets:
   max_false_positive_rate: 0.05
+  # ADVISORY, NOT ENFORCED. This is compared against a wall-clock `Instant`
+  # delta, so it measures the machine and the build profile rather than the
+  # candidate: the same candidate over these same fixtures lands on either side
+  # of it depending on load. It is recorded as the reference point for the
+  # non-gating `detect_latency_budget` observation in the verification report.
+  # Value left unchanged so the recorded historical series stays comparable.
+  # A real latency gate has to count work, not read a clock.
   max_detect_latency_us: 10000
   max_total_detections: 8

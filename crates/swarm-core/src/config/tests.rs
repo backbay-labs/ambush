@@ -2,10 +2,10 @@ use super::{
     AuditConfig, AuditdBridgeConfig, BundleStoreConfig, CanaryConfig, CloudTrailBridgeConfig,
     CorrelationConfig, DeceptionConfig, DeceptionMonitoringConfig, DeceptionPlacementStrategy,
     DeceptionPlaybookConfig, DeceptionPlaybookEntry, EvolutionAssuranceCoverageOverrideConfig,
-    EvolutionConfig, InvestigationConfig, JsonFileSourceConfig, NotificationChannelConfig,
-    OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, PheromoneBackendConfig,
-    PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig, PlatformApiScope,
-    PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
+    EvolutionConfig, EvolutionFitnessWeightsConfig, InvestigationConfig, JsonFileSourceConfig,
+    NotificationChannelConfig, OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig,
+    PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig,
+    PlatformApiScope, PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
     PolicyTimeWindowConfig, PromotionConfig, RequestSignatureConfig, ResponsePlaybookBranch,
     ResponsePlaybookCondition, ResponsePlaybookConfig, ResponsePlaybookRule,
     RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings, SecretString, SentinelBridgeConfig,
@@ -578,6 +578,12 @@ fn evolution_requires_positive_hourly_proposal_limit_when_enabled() {
     );
 }
 
+/// Message updated, not just the expectation: "at least one weight" was accurate
+/// while all four weights counted, and is now wrong in a way an operator would
+/// act on. A config with `speed: 1.0` and everything else zero DOES have one
+/// weight greater than zero and is still rejected -- see
+/// `evolution_rejects_fitness_weights_carried_entirely_by_the_inert_speed_weight`.
+/// The message has to name the weights that actually count.
 #[test]
 fn evolution_requires_non_zero_fitness_weight_total_when_enabled() {
     let mut config = valid_config(PheromoneBackendConfig::InMemory);
@@ -591,7 +597,9 @@ fn evolution_requires_non_zero_fitness_weight_total_when_enabled() {
     let error = config.validate().unwrap_err();
     assert_eq!(
         error.to_string(),
-        "invalid field `evolution.fitness_weights`: at least one weight must be greater than zero"
+        "invalid field `evolution.fitness_weights`: at least one of `detection_rate`, \
+         `false_positive_cost` or `threat_class_coverage` must be greater than zero (`speed` is \
+         accepted for compatibility but no longer contributes)"
     );
 }
 
@@ -1498,5 +1506,74 @@ fn investigation_requires_ambiguity_margin_within_basis_point_range() {
     assert_eq!(
         error.to_string(),
         "invalid field `investigation.ambiguity_margin_basis_points`: must be between 1 and 10000 when investigation is enabled"
+    );
+}
+
+/// `speed` used to satisfy the "at least one weight" check on its own. It no
+/// longer contributes to fitness, so a weights block whose only non-zero entry
+/// is `speed` now yields a fitness of exactly zero for every candidate: a total
+/// tie in which survivor selection falls through to tie-breaks and the
+/// operator's stated objective is never expressed anywhere.
+///
+/// A ranking that silently means nothing is worse than a config that refuses to
+/// load, so this fails closed at validation.
+#[test]
+fn evolution_rejects_fitness_weights_carried_entirely_by_the_inert_speed_weight() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.evolution.enabled = true;
+    config.evolution.fitness_weights.detection_rate = 0.0;
+    config.evolution.fitness_weights.false_positive_cost = 0.0;
+    config.evolution.fitness_weights.speed = 1.0;
+    config.evolution.fitness_weights.threat_class_coverage = 0.0;
+
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `evolution.fitness_weights`: at least one of `detection_rate`, \
+         `false_positive_cost` or `threat_class_coverage` must be greater than zero (`speed` is \
+         accepted for compatibility but no longer contributes)"
+    );
+}
+
+/// Every ruleset already deployed carries a `speed:` entry in its weights block,
+/// including this repository's own tracked `rulesets/default.yaml` (covered by
+/// `mutation::tests_core::tracked_default_ruleset_still_loads_with_its_speed_weight`,
+/// which parses that file). The struct is `deny_unknown_fields`, so deleting the
+/// field would turn a config that loads today into a hard startup failure -- and
+/// `rulesets/` is covered by the signed `rulesets/attestation.json`, whose
+/// signing key is deliberately not in this repository, so the tracked ruleset
+/// could not have been edited to drop the key either.
+///
+/// The weight is therefore still accepted and still validated. It just no longer
+/// contributes.
+#[test]
+fn evolution_fitness_weights_still_accept_the_inert_speed_weight() {
+    let raw = r#"{
+        "detection_rate": 0.40,
+        "false_positive_cost": 0.30,
+        "speed": 0.15,
+        "threat_class_coverage": 0.15
+    }"#;
+    let weights: EvolutionFitnessWeightsConfig = serde_json::from_str(raw).unwrap();
+    assert_eq!(weights.speed, 0.15);
+
+    // Redistributed, not dropped: the total the operator wrote is preserved and
+    // only the split across the applied objectives changes.
+    let applied = weights.applied();
+    let configured_total = weights.detection_rate
+        + weights.false_positive_cost
+        + weights.speed
+        + weights.threat_class_coverage;
+    let applied_total =
+        applied.detection_rate + applied.false_positive_cost + applied.threat_class_coverage;
+    assert!((applied_total - configured_total).abs() < 1e-12);
+
+    // The proportions between the applied objectives are exactly as configured.
+    assert!(
+        (applied.detection_rate / applied.false_positive_cost
+            - weights.detection_rate / weights.false_positive_cost)
+            .abs()
+            < 1e-12
     );
 }

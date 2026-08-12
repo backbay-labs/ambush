@@ -181,12 +181,50 @@ pub struct CanaryRollbackRecord {
 }
 
 /// One threshold verdict preserved in the canary artifact.
+///
+/// Everything in this list is GATING: `DefaultCanaryHarness::ingest_event`
+/// rolls the canary back and blocks the candidate on the first entry whose
+/// `passed` is false. Only bounds that are a deterministic function of what the
+/// candidate DID over the observed events belong here -- detection counts,
+/// divergence rates, deposit volume. A measurement of the machine the canary
+/// happened to run on does not; see [`CanaryObservation`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CanaryThresholdResult {
     pub name: String,
     pub passed: bool,
     pub expected: serde_json::Value,
     pub actual: serde_json::Value,
+    pub details: String,
+}
+
+/// One recorded, NON-GATING measurement taken during a bounded canary run.
+///
+/// Same split as [`crate::replay::VerificationObservation`], for the same
+/// reason and in the same shape: a separate collection rather than a
+/// `gating: bool` flag on [`CanaryThresholdResult`], so that the rollback
+/// reduce in `ingest_event` is correct by construction and a consumer that has
+/// never heard of observations simply does not see latency instead of wrongly
+/// rolling a live detector back on it.
+///
+/// `detect_latency_budget` lives here because the number it reports is a
+/// wall-clock `Instant` delta around the candidate's detect stage. It measures
+/// the machine, the build profile, and whatever else the scheduler was running
+/// -- not the candidate. Two canary runs of the same candidate over the same
+/// events reached opposite verdicts on one machine, minutes apart, which is
+/// what `canary::tests::canary_verdict_is_invariant_under_detect_stage_load`
+/// pins down.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CanaryObservation {
+    pub name: String,
+    /// The configured budget this measurement is compared against. ADVISORY
+    /// ONLY: recorded so a human or a trend tool has a reference point, never
+    /// enforced. See `canary.max_detect_latency_us` in `rulesets/default.yaml`.
+    pub advisory_budget: serde_json::Value,
+    /// The measurement itself.
+    pub observed: serde_json::Value,
+    /// Recorded fact, not a verdict: nothing gates on this. It is here so a
+    /// trend tool can chart budget breaches without re-deriving the comparison.
+    pub within_advisory_budget: bool,
     pub details: String,
 }
 
@@ -311,7 +349,12 @@ pub struct CanaryRunReport {
     pub recommendation: CanaryRecommendation,
     pub assignment: CanaryAssignment,
     pub metrics: CanaryMetrics,
+    /// GATING. The run rolls back on the first entry that failed.
     pub threshold_results: Vec<CanaryThresholdResult>,
+    /// NON-GATING measurements. `#[serde(default)]` so canary artifacts
+    /// persisted before observations existed still load and render.
+    #[serde(default)]
+    pub observations: Vec<CanaryObservation>,
     pub recent_candidate_findings: Vec<CanaryFindingPreview>,
     pub rollback_history: Vec<CanaryRollbackRecord>,
 }
@@ -659,6 +702,10 @@ impl DefaultCanaryHarness {
         };
         let run_id = canary_run_id(&self.config.canary.slot_id, &assignment, now_ms);
         let threshold_results = evaluate_thresholds(&CanaryMetrics::default(), &assignment.canary);
+        let observations = vec![observe_detect_latency(
+            &CanaryMetrics::default(),
+            &assignment.canary,
+        )];
         let report = CanaryRunReport {
             run_id,
             slot_id: self.config.canary.slot_id.clone(),
@@ -669,6 +716,7 @@ impl DefaultCanaryHarness {
             assignment,
             metrics: CanaryMetrics::default(),
             threshold_results,
+            observations,
             recent_candidate_findings: Vec::new(),
             rollback_history: Vec::new(),
         };
@@ -716,6 +764,15 @@ impl DefaultCanaryHarness {
         let baseline =
             baseline_detector(&lookup.report.assignment.baseline_strategy_id, &self.config)?;
         let candidate = candidate_detector(&lookup.report.assignment.candidate)?;
+        // TEST-ONLY SEAM (compiled out entirely by `#[cfg(test)]`): substitute a
+        // delegating detector that can burn wall-clock time inside the candidate
+        // detect stage, so the load-differential regression test drives the real
+        // measurement below without a hook in the live lane. Only the CANDIDATE
+        // is wrapped -- `max_candidate_detect_latency_us` is the number the
+        // canary decision used to read -- which keeps the differential confined
+        // to it. See `replay::detect_stall`. Inert unless a guard is armed.
+        #[cfg(test)]
+        let candidate = crate::replay::detect_stall::StallingDetector::new(candidate);
 
         let baseline_started = Instant::now();
         let baseline_findings = evaluate_event(&baseline, event);
@@ -747,6 +804,10 @@ impl DefaultCanaryHarness {
 
         lookup.report.threshold_results =
             evaluate_thresholds(&lookup.report.metrics, &lookup.report.assignment.canary);
+        lookup.report.observations = vec![observe_detect_latency(
+            &lookup.report.metrics,
+            &lookup.report.assignment.canary,
+        )];
         lookup.report.updated_at_ms = now_ms();
 
         if let Some(failure) = lookup
@@ -922,6 +983,22 @@ pub fn render_canary_run_report(report: &CanaryRunReport) -> String {
         }
     }
 
+    if report.observations.is_empty() {
+        lines.push("Observations (advisory, non-gating): none".to_string());
+    } else {
+        lines.push("Observations (advisory, non-gating):".to_string());
+        for observation in &report.observations {
+            lines.push(format!(
+                "- {}: observed={} advisory_budget={} within_advisory_budget={} | {}",
+                observation.name,
+                observation.observed,
+                observation.advisory_budget,
+                observation.within_advisory_budget,
+                observation.details
+            ));
+        }
+    }
+
     if report.rollback_history.is_empty() {
         lines.push("Rollback history: none".to_string());
     } else {
@@ -993,6 +1070,10 @@ fn lineage_label(lineage: &ExperimentLineage) -> String {
     )
 }
 
+/// GATING. Every entry is a deterministic function of what the candidate did
+/// over the observed events -- counts and rates -- so it computes the same value
+/// on any machine, under any load, on any architecture. Do not add anything
+/// derived from a clock here: see [`observe_detect_latency`].
 fn evaluate_thresholds(
     metrics: &CanaryMetrics,
     config: &CanaryConfig,
@@ -1013,13 +1094,6 @@ fn evaluate_thresholds(
             "baseline miss rate exceeded the configured bound",
         ),
         int_threshold(
-            "detect_latency_threshold",
-            config.max_detect_latency_us as u128,
-            metrics.max_candidate_detect_latency_us as u128,
-            "candidate detect latency stayed within the configured bound",
-            "candidate detect latency exceeded the configured bound",
-        ),
-        int_threshold(
             "total_detection_budget",
             config.max_total_detections as u128,
             metrics.total_candidate_deposits as u128,
@@ -1027,6 +1101,44 @@ fn evaluate_thresholds(
             "candidate detection volume exceeded the configured budget",
         ),
     ]
+}
+
+/// Records the worst candidate detect-stage latency measured over the canary
+/// window as a NON-GATING observation.
+///
+/// This used to be the `detect_latency_threshold` entry in
+/// [`evaluate_thresholds`], and it was the only bound there whose verdict was
+/// not a function of what the candidate did. `max_candidate_detect_latency_us`
+/// is a wall-clock `Instant` delta, so a busy runner could roll a healthy
+/// candidate out of a live lane and write `AutomaticThreshold` into the rollback
+/// history for it.
+///
+/// The measurement is still taken and still recorded in full, next to the
+/// budget it is measured against. Only its authority to roll the canary back is
+/// removed. Re-earning a latency gate means counting work rather than reading a
+/// clock, which is a cost model, not a rename.
+fn observe_detect_latency(metrics: &CanaryMetrics, config: &CanaryConfig) -> CanaryObservation {
+    let observed_us = metrics.max_candidate_detect_latency_us;
+    let advisory_budget_us = config.max_detect_latency_us;
+    let within_advisory_budget = observed_us <= advisory_budget_us;
+    CanaryObservation {
+        name: "detect_latency_budget".to_string(),
+        advisory_budget: serde_json::json!(advisory_budget_us),
+        observed: serde_json::json!(observed_us),
+        within_advisory_budget,
+        details: if within_advisory_budget {
+            format!(
+                "candidate detect latency {observed_us}us stayed within the advisory budget \
+                 {advisory_budget_us}us (non-gating wall-clock measurement)"
+            )
+        } else {
+            format!(
+                "candidate detect latency {observed_us}us exceeded the advisory budget \
+                 {advisory_budget_us}us (non-gating wall-clock measurement; recorded, not \
+                 enforced -- this does not roll the canary back)"
+            )
+        },
+    }
 }
 
 fn float_threshold(
@@ -1142,8 +1254,8 @@ struct CanaryIndex {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        CanaryError, CanaryRecommendation, CanaryRollbackTrigger, CanaryRunStatus,
-        DefaultCanaryHarness, render_canary_run_report,
+        CanaryError, CanaryRecommendation, CanaryRollbackTrigger, CanaryRunReport, CanaryRunStatus,
+        DefaultCanaryHarness, FileCanaryStore, render_canary_run_report,
     };
     use crate::config::RuntimeMode;
     use crate::evolution::{
@@ -1420,6 +1532,7 @@ mod tests {
             candidate_strategy_id: manifest.candidate.strategy_id().to_string(),
             candidate_description: manifest.candidate.description().to_string(),
             invariants: vec![],
+            observations: Vec::new(),
             passed: true,
         };
         let shadow_report = StrategyShadowReport {
@@ -1839,5 +1952,399 @@ mod tests {
             halted.report.rollback_history[0].reason,
             "operator requested stop"
         );
+    }
+
+    /// Canonical text over exactly the VERDICT-bearing fields of one canary
+    /// report: the run status, the operator recommendation, every gating
+    /// threshold's name and verdict, and every rollback the run recorded.
+    ///
+    /// Deliberately excludes each threshold's `expected`/`actual`/`details` and
+    /// every timestamp. That is where measurements live, and two runs of the
+    /// same candidate over the same events are allowed to measure differently.
+    /// The verdict they reach is not.
+    fn canary_verdict_digest(report: &CanaryRunReport) -> (String, String) {
+        let canonical = serde_json::json!({
+            "status": format!("{:?}", report.status),
+            "recommendation": format!("{:?}", report.recommendation),
+            "thresholds": report
+                .threshold_results
+                .iter()
+                .map(|threshold| {
+                    serde_json::json!({
+                        "name": threshold.name,
+                        "passed": threshold.passed,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "rollback_history": report
+                .rollback_history
+                .iter()
+                .map(|rollback| {
+                    serde_json::json!({
+                        "trigger": format!("{:?}", rollback.trigger),
+                        "reason": rollback.reason,
+                        "reverted_baseline_strategy_id": rollback.reverted_baseline_strategy_id,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        });
+        let canonical_text = serde_json::to_string(&canonical).unwrap();
+        let digest = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+            canonical_text.as_bytes(),
+        ));
+        (digest, canonical_text)
+    }
+
+    /// Every number the persisted artifact records under a detect-latency key,
+    /// wherever it lives. Shape-tolerant on purpose: the fix moves the latency
+    /// entry out of the gating threshold list, but it must keep RECORDING the
+    /// measurement somewhere in the artifact.
+    fn recorded_detect_latencies(value: &serde_json::Value, out: &mut Vec<u64>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    if key.contains("detect_latency")
+                        && let Some(number) = child.as_u64()
+                    {
+                        out.push(number);
+                    }
+                    recorded_detect_latencies(child, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    recorded_detect_latencies(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn canary_detect_latencies(report: &CanaryRunReport) -> Vec<u64> {
+        let mut recorded = Vec::new();
+        recorded_detect_latencies(&serde_json::to_value(report).unwrap(), &mut recorded);
+        recorded.sort_unstable();
+        recorded
+    }
+
+    fn start_canary_pass(
+        results_dir: &Path,
+        experiment_path: &Path,
+        verifications_dir: &Path,
+        verification_id: &str,
+        shadows_dir: &Path,
+        shadow_id: &str,
+    ) -> (DefaultCanaryHarness, String) {
+        let harness = DefaultCanaryHarness::from_config(
+            "rulesets/default.yaml",
+            canary_config(),
+            results_dir,
+        )
+        .unwrap();
+        let started = harness
+            .start_run(
+                experiment_path,
+                verifications_dir,
+                verification_id,
+                shadows_dir,
+                shadow_id,
+            )
+            .unwrap();
+        let run_id = started.record.run_id.clone();
+        (harness, run_id)
+    }
+
+    /// Same machine, same process, same experiment, same verification, same
+    /// shadow, same events -- two bounded canary runs, the second one with the
+    /// candidate detect stage deliberately stalled far past
+    /// `canary.max_detect_latency_us`.
+    ///
+    /// A canary decides whether an operator's live detector gets rolled back.
+    /// That decision must be a function of what the candidate DID over the
+    /// observed events -- which detections it raised, which the baseline raised,
+    /// how much it deposited -- not of how busy the machine was while it was
+    /// measured. So:
+    ///   (1) the recorded latency must differ between the two runs and the
+    ///       stalled run must measure past the configured budget, proving the
+    ///       load differential landed and that the artifact still carries the
+    ///       signal; and
+    ///   (2) the verdict digest must be byte-identical across the two runs.
+    ///
+    /// Half (1) is the vacuity check and is asserted first: without it half (2)
+    /// could pass by measuring nothing at all.
+    #[test]
+    fn canary_verdict_is_invariant_under_detect_stage_load() {
+        let root = unique_temp_dir("load-differential");
+        let config = canary_config();
+        let budget_us = config.canary.max_detect_latency_us;
+        let manifest = experiment_manifest("control", control_candidate());
+        let experiment_path = write_experiment(&root, &manifest);
+        let (verifications_dir, shadows_dir, verification_id, shadow_id) =
+            persist_supporting_artifacts(&root, &manifest);
+
+        // Pass 1: nominal.
+        let (nominal_harness, nominal_run) = start_canary_pass(
+            &root.join("canaries-nominal"),
+            &experiment_path,
+            &verifications_dir,
+            &verification_id,
+            &shadows_dir,
+            &shadow_id,
+        );
+        let nominal_first = nominal_harness
+            .ingest_event(&nominal_run, &suspicious_event("evt-canary-1"))
+            .unwrap()
+            .report;
+
+        // Pass 2: identical inputs, one candidate detect-stage evaluation
+        // stalled by 20ms -- twice the 10_000us configured budget.
+        let (stalled_harness, stalled_run) = start_canary_pass(
+            &root.join("canaries-stalled"),
+            &experiment_path,
+            &verifications_dir,
+            &verification_id,
+            &shadows_dir,
+            &shadow_id,
+        );
+        let stalled_first = {
+            let _stall = crate::replay::detect_stall::DetectStallGuard::arm(
+                1,
+                std::time::Duration::from_millis(20),
+            );
+            stalled_harness
+                .ingest_event(&stalled_run, &suspicious_event("evt-canary-1"))
+                .unwrap()
+                .report
+        };
+
+        // (1) Vacuity: the differential landed, and both artifacts still record
+        // the measurement each run took.
+        let nominal_latency = nominal_first.metrics.max_candidate_detect_latency_us;
+        let stalled_latency = stalled_first.metrics.max_candidate_detect_latency_us;
+        assert!(
+            nominal_latency <= budget_us,
+            "precondition: the nominal run must stay within the {budget_us}us budget, \
+             otherwise this machine is too loaded for the differential to mean anything; \
+             measured {nominal_latency}us"
+        );
+        assert!(
+            stalled_latency > budget_us,
+            "the stalled run must measure past the {budget_us}us budget, got {stalled_latency}us"
+        );
+        assert!(
+            canary_detect_latencies(&nominal_first).contains(&nominal_latency)
+                && canary_detect_latencies(&stalled_first).contains(&stalled_latency),
+            "both artifacts must still RECORD the measurement they took; \
+             nominal={:?} stalled={:?}",
+            canary_detect_latencies(&nominal_first),
+            canary_detect_latencies(&stalled_first)
+        );
+
+        // (2) The verdict must be identical after the first observed event.
+        let (nominal_digest, nominal_canonical) = canary_verdict_digest(&nominal_first);
+        let (stalled_digest, stalled_canonical) = canary_verdict_digest(&stalled_first);
+        assert_eq!(
+            nominal_digest, stalled_digest,
+            "canary verdict changed with machine load after one event.\n  \
+             nominal: {nominal_canonical}\n  stalled: {stalled_canonical}"
+        );
+
+        // ... and identical again when the observation window closes.
+        let nominal_second = nominal_harness
+            .ingest_event(&nominal_run, &suspicious_event("evt-canary-2"))
+            .unwrap()
+            .report;
+        let stalled_second = {
+            let _stall = crate::replay::detect_stall::DetectStallGuard::arm(
+                1,
+                std::time::Duration::from_millis(20),
+            );
+            stalled_harness
+                .ingest_event(&stalled_run, &suspicious_event("evt-canary-2"))
+                .unwrap()
+                .report
+        };
+        let (nominal_digest, nominal_canonical) = canary_verdict_digest(&nominal_second);
+        let (stalled_digest, stalled_canonical) = canary_verdict_digest(&stalled_second);
+        assert_eq!(
+            nominal_digest, stalled_digest,
+            "canary verdict changed with machine load at window close.\n  \
+             nominal: {nominal_canonical}\n  stalled: {stalled_canonical}"
+        );
+        assert_eq!(stalled_second.status, CanaryRunStatus::Completed);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// We lose a gate, not the signal. The measurement must survive the fix as a
+    /// recorded, explicitly NON-GATING observation carrying the advisory budget
+    /// it was compared against, and the operator-facing render must say so at
+    /// the exact place the failure used to appear.
+    #[test]
+    fn canary_records_detect_latency_as_a_non_gating_observation() {
+        let root = unique_temp_dir("latency-observation");
+        let config = canary_config();
+        let budget_us = config.canary.max_detect_latency_us;
+        let manifest = experiment_manifest("control", control_candidate());
+        let experiment_path = write_experiment(&root, &manifest);
+        let (verifications_dir, shadows_dir, verification_id, shadow_id) =
+            persist_supporting_artifacts(&root, &manifest);
+        let (harness, run_id) = start_canary_pass(
+            &root.join("canaries"),
+            &experiment_path,
+            &verifications_dir,
+            &verification_id,
+            &shadows_dir,
+            &shadow_id,
+        );
+        let report = harness
+            .ingest_event(&run_id, &suspicious_event("evt-canary-1"))
+            .unwrap()
+            .report;
+
+        let gating_names = report
+            .threshold_results
+            .iter()
+            .map(|threshold| threshold.name.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            !gating_names
+                .iter()
+                .any(|name| name.contains("detect_latency")),
+            "no wall-clock latency comparison may sit in the GATING threshold list, got {gating_names:?}"
+        );
+
+        // Shape-tolerant read: this test is written before the observation type
+        // exists, so it asserts the persisted artifact contract rather than a
+        // Rust type.
+        let persisted = serde_json::to_value(&report).unwrap();
+        let observations = persisted
+            .get("observations")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let latency = observations
+            .iter()
+            .find(|observation| {
+                observation.get("name").and_then(serde_json::Value::as_str)
+                    == Some("detect_latency_budget")
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "the canary artifact must still RECORD the detect-latency measurement as a \
+                     non-gating observation; observations={observations:?}"
+                )
+            });
+        assert_eq!(
+            latency.get("observed").and_then(serde_json::Value::as_u64),
+            Some(report.metrics.max_candidate_detect_latency_us),
+            "the observation must carry the measurement this run took"
+        );
+        assert_eq!(
+            latency
+                .get("advisory_budget")
+                .and_then(serde_json::Value::as_u64),
+            Some(budget_us),
+            "the observation must carry the advisory budget it was compared against"
+        );
+        assert_eq!(
+            latency
+                .get("within_advisory_budget")
+                .and_then(serde_json::Value::as_bool),
+            Some(true),
+            "the budget comparison must survive as a recorded fact"
+        );
+
+        let rendered = render_canary_run_report(&report);
+        assert!(
+            rendered.contains("Observations (advisory, non-gating)"),
+            "the operator-facing render must say the latency observation does not \
+             gate, at the place the failure used to appear:\n{rendered}"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Canary artifacts written before this change have no `observations` key
+    /// and carry a fourth gating threshold named `detect_latency_threshold`.
+    /// They must keep loading, keep rendering, and -- the part that matters --
+    /// the retired gate must not be able to resurrect itself out of persisted
+    /// state: a stored artifact whose legacy latency entry FAILED must not roll
+    /// a run back when the next event arrives.
+    #[test]
+    fn canary_artifacts_persisted_before_observations_still_load_and_cannot_regate() {
+        let root = unique_temp_dir("legacy-artifact");
+        let results_dir = root.join("canaries");
+        let manifest = experiment_manifest("control", control_candidate());
+        let experiment_path = write_experiment(&root, &manifest);
+        let (verifications_dir, shadows_dir, verification_id, shadow_id) =
+            persist_supporting_artifacts(&root, &manifest);
+        let (harness, run_id) = start_canary_pass(
+            &results_dir,
+            &experiment_path,
+            &verifications_dir,
+            &verification_id,
+            &shadows_dir,
+            &shadow_id,
+        );
+
+        // Rewrite the freshly started run into the pre-change artifact shape:
+        // no `observations`, and a FAILING `detect_latency_threshold` sitting in
+        // the gating list exactly where the old code put it.
+        let stored = harness.load_run(&run_id).unwrap().unwrap().report;
+        let mut legacy = serde_json::to_value(&stored).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        object.remove("observations");
+        object
+            .get_mut("threshold_results")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .insert(
+                2,
+                serde_json::json!({
+                    "name": "detect_latency_threshold",
+                    "passed": false,
+                    "expected": 10_000,
+                    "actual": 31_284,
+                    "details": "candidate detect latency exceeded the configured bound"
+                }),
+            );
+        let restored: CanaryRunReport = serde_json::from_value(legacy).unwrap();
+        assert!(
+            restored.observations.is_empty(),
+            "a pre-change artifact has no observations and must still deserialize"
+        );
+        assert_eq!(restored.threshold_results.len(), 4);
+        assert!(
+            render_canary_run_report(&restored).contains("Observations (advisory, non-gating)")
+        );
+
+        FileCanaryStore::open(&results_dir)
+            .unwrap()
+            .persist(&restored)
+            .unwrap();
+
+        let after = harness
+            .ingest_event(&run_id, &suspicious_event("evt-canary-1"))
+            .unwrap()
+            .report;
+        assert_eq!(
+            after.status,
+            CanaryRunStatus::Active,
+            "a persisted legacy latency failure must not roll the run back: {:?}",
+            after.rollback_history
+        );
+        assert!(after.rollback_history.is_empty());
+        assert!(
+            !after
+                .threshold_results
+                .iter()
+                .any(|threshold| threshold.name.contains("detect_latency")),
+            "re-evaluation must not carry the retired gate forward: {:?}",
+            after.threshold_results
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }

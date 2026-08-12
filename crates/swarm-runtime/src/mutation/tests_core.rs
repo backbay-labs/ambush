@@ -851,9 +851,9 @@ async fn autonomous_mutation_spec_generates_bounded_variants_from_population_win
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.96,
                         false_positive_cost: 0.90,
-                        speed: 0.88,
                         threat_class_coverage: 0.92,
                     },
+                    observations: None,
                     summary: "top control winner".to_string(),
                 },
                 EvolutionPopulationCandidate {
@@ -884,9 +884,9 @@ async fn autonomous_mutation_spec_generates_bounded_variants_from_population_win
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.93,
                         false_positive_cost: 0.87,
-                        speed: 0.86,
                         threat_class_coverage: 0.91,
                     },
+                    observations: None,
                     summary: "second winning genome".to_string(),
                 },
             ],
@@ -1196,9 +1196,9 @@ async fn autonomous_mutation_spec_generates_behavioral_anomaly_variants() {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.91,
                         false_positive_cost: 0.88,
-                        speed: 0.87,
                         threat_class_coverage: 0.86,
                     },
+                    observations: None,
                     summary: "behavioral control winner".to_string(),
                 },
                 EvolutionPopulationCandidate {
@@ -1229,9 +1229,9 @@ async fn autonomous_mutation_spec_generates_behavioral_anomaly_variants() {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.89,
                         false_positive_cost: 0.86,
-                        speed: 0.85,
                         threat_class_coverage: 0.84,
                     },
+                    observations: None,
                     summary: "behavioral donor winner".to_string(),
                 },
             ],
@@ -1484,9 +1484,9 @@ async fn autonomous_mutation_spec_generates_fileless_execution_variants() {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.92,
                         false_positive_cost: 0.88,
-                        speed: 0.87,
                         threat_class_coverage: 0.86,
                     },
+                    observations: None,
                     summary: "fileless control winner".to_string(),
                 },
                 EvolutionPopulationCandidate {
@@ -1517,9 +1517,9 @@ async fn autonomous_mutation_spec_generates_fileless_execution_variants() {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.90,
                         false_positive_cost: 0.87,
-                        speed: 0.86,
                         threat_class_coverage: 0.85,
                     },
+                    observations: None,
                     summary: "fileless donor winner".to_string(),
                 },
             ],
@@ -1769,9 +1769,9 @@ async fn autonomous_mutation_spec_generates_dns_exfiltration_variants() {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.91,
                         false_positive_cost: 0.88,
-                        speed: 0.87,
                         threat_class_coverage: 0.85,
                     },
+                    observations: None,
                     summary: "dns control winner".to_string(),
                 },
                 EvolutionPopulationCandidate {
@@ -1802,9 +1802,9 @@ async fn autonomous_mutation_spec_generates_dns_exfiltration_variants() {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.89,
                         false_positive_cost: 0.87,
-                        speed: 0.86,
                         threat_class_coverage: 0.84,
                     },
+                    observations: None,
                     summary: "dns donor winner".to_string(),
                 },
             ],
@@ -2190,4 +2190,414 @@ async fn mutation_batch_refreshes_ready_and_blocked_validation() {
             fs::remove_file(path).unwrap();
         }
     }
+}
+
+fn latency_suite_report() -> crate::replay::ReplaySuiteReport {
+    crate::replay::ReplaySuiteReport {
+        source: "scenario-suites/hellcat-office-v1.yaml".to_string(),
+        source_kind: crate::replay::ReplaySuiteSourceKind::SuiteManifest,
+        suite_name: Some("hellcat_office_v1".to_string()),
+        suite_description: Some("fitness invariance fixture".to_string()),
+        corpus_version: Some("2026-04-03".to_string()),
+        total_scenarios: 2,
+        passed_scenarios: 2,
+        failed_scenarios: 0,
+        passed: true,
+        scenario_reports: Vec::new(),
+        technique_groups: Vec::new(),
+    }
+}
+
+/// Two experiment reports that differ in exactly one field: the wall-clock
+/// detect latency the harness happened to measure.
+fn latency_experiment_report(
+    max_detect_latency_us: u64,
+) -> crate::replay::StrategyExperimentReport {
+    let metrics = crate::replay::StrategyExperimentMetrics {
+        total_scenarios: 2,
+        adversarial_scenarios: 1,
+        benign_scenarios: 1,
+        true_positive_scenarios: 1,
+        false_negative_scenarios: 0,
+        true_negative_scenarios: 1,
+        false_positive_scenarios: 0,
+        detection_rate: 0.86,
+        false_positive_rate: 0.02,
+        max_detect_latency_us,
+    };
+    crate::replay::StrategyExperimentReport {
+        experiment_id: "experiment:fitness-invariance".to_string(),
+        experiment_name: "fitness-invariance".to_string(),
+        description: "fitness invariance fixture".to_string(),
+        created_at_ms: 1_700_000_000_000,
+        suite_name: "hellcat_office_v1".to_string(),
+        suite_path: "scenario-suites/hellcat-office-v1.yaml".to_string(),
+        corpus_version: "2026-04-03".to_string(),
+        lineage: crate::replay::ExperimentLineage {
+            parent_strategy_id: "suspicious_process_tree".to_string(),
+            mutation: "control".to_string(),
+            rationale: "fitness invariance fixture".to_string(),
+        },
+        baseline_strategy_id: "suspicious_process_tree".to_string(),
+        candidate_strategy_id: "suspicious_process_tree_variant".to_string(),
+        candidate_description: "fitness invariance candidate".to_string(),
+        baseline_report: latency_suite_report(),
+        candidate_report: latency_suite_report(),
+        comparison: crate::replay::StrategyExperimentComparison {
+            baseline: metrics.clone(),
+            candidate: metrics,
+            delta: crate::replay::StrategyExperimentMetricDelta {
+                detection_rate_delta: 0.0,
+                false_positive_rate_delta: 0.0,
+                max_detect_latency_delta_us: 0,
+                false_positive_scenario_delta: 0,
+            },
+            scenario_regressions: Vec::new(),
+            technique_regressions: Vec::new(),
+        },
+        gates: Vec::new(),
+        passed: true,
+    }
+}
+
+fn latency_verification_report() -> crate::replay::DetectorVerificationReport {
+    crate::replay::DetectorVerificationReport {
+        verification_id: "verification:fitness-invariance".to_string(),
+        experiment_id: "experiment:fitness-invariance".to_string(),
+        experiment_name: "fitness-invariance".to_string(),
+        corpus_name: "office_detector_safety_v1".to_string(),
+        corpus_path: repo_root()
+            .join("verifications/office-detector-safety-v1.yaml")
+            .display()
+            .to_string(),
+        created_at_ms: 1_700_000_000_100,
+        lineage: crate::replay::ExperimentLineage {
+            parent_strategy_id: "suspicious_process_tree".to_string(),
+            mutation: "control".to_string(),
+            rationale: "fitness invariance fixture".to_string(),
+        },
+        candidate_strategy_id: "suspicious_process_tree_variant".to_string(),
+        candidate_description: "fitness invariance candidate".to_string(),
+        // `threat_class_templates` with no counterexamples: full coverage, and
+        // identical for both reports, so it cannot explain any difference.
+        invariants: vec![crate::replay::VerificationInvariantResult {
+            name: "threat_class_templates".to_string(),
+            passed: true,
+            expected: serde_json::json!(1),
+            actual: serde_json::json!(1),
+            details: "fitness invariance fixture".to_string(),
+            counterexamples: Vec::new(),
+        }],
+        observations: Vec::new(),
+        passed: true,
+    }
+}
+
+/// `population_objectives` derives a `speed` objective from
+/// `max_detect_latency_us` -- a wall-clock `Instant` delta -- and
+/// `population_fitness` weights it into the scalar that ranks evolved detectors
+/// and drives which candidate gets proposed for promotion.
+///
+/// Both reports below are byte-identical apart from that one measured number.
+/// Every input the fixtures determine -- detection rate, false-positive rate,
+/// threat-class template coverage -- is the same. So two operators replaying
+/// the identical bundle on different hardware rank the same population
+/// differently and can promote different detectors, with a green suite on both.
+///
+/// Fitness must be a function of fixture content alone.
+#[test]
+fn population_fitness_is_invariant_to_measured_detect_latency() {
+    let verification = latency_verification_report();
+    let fast = latency_experiment_report(600);
+    let slow = latency_experiment_report(60_000);
+    let weights = swarm_core::config::EvolutionFitnessWeightsConfig::default();
+
+    let fast_measurement = crate::mutation::population_objectives(&fast, &verification).unwrap();
+    let slow_measurement = crate::mutation::population_objectives(&slow, &verification).unwrap();
+    let fast_objectives = fast_measurement.objectives;
+    let slow_objectives = slow_measurement.objectives;
+
+    // Everything the fixtures determine is identical; only the clock differs.
+    assert_eq!(
+        fast_objectives.detection_rate,
+        slow_objectives.detection_rate
+    );
+    assert_eq!(
+        fast_objectives.false_positive_cost,
+        slow_objectives.false_positive_cost
+    );
+    assert_eq!(
+        fast_objectives.threat_class_coverage,
+        slow_objectives.threat_class_coverage
+    );
+
+    // We lose a gate, not the signal: the measurement each run made is still
+    // read and still recorded, next to the budget it is measured against.
+    assert_eq!(
+        fast_measurement.observations.max_detect_latency_us,
+        fast.comparison.candidate.max_detect_latency_us
+    );
+    assert_eq!(
+        slow_measurement.observations.max_detect_latency_us,
+        slow.comparison.candidate.max_detect_latency_us
+    );
+    assert_eq!(
+        fast_measurement
+            .observations
+            .advisory_detect_latency_budget_us,
+        slow_measurement
+            .observations
+            .advisory_detect_latency_budget_us
+    );
+    assert!(
+        fast_measurement
+            .observations
+            .within_advisory_detect_latency_budget
+    );
+    assert!(
+        !slow_measurement
+            .observations
+            .within_advisory_detect_latency_budget
+    );
+
+    let fast_fitness = crate::mutation::population_fitness(&fast_objectives, &weights);
+    let slow_fitness = crate::mutation::population_fitness(&slow_objectives, &weights);
+
+    assert_eq!(
+        fast_fitness,
+        slow_fitness,
+        "population fitness moved from {fast_fitness} to {slow_fitness} because the detect stage \
+         was measured at {}us instead of {}us over identical fixtures",
+        slow.comparison.candidate.max_detect_latency_us,
+        fast.comparison.candidate.max_detect_latency_us
+    );
+}
+
+/// Removing an objective raises the question of what happens to the weight it
+/// carried, and the answer is visible in the score of a perfect candidate.
+///
+/// This candidate is perfect on everything the fixtures determine: it catches
+/// every scenario, raises no false positive, and covers every canonical threat
+/// template. With the default weights summing to 1.00 it should score exactly
+/// the configured total.
+///
+/// Before the fix it could not: `speed` held 0.15 of that total hostage to a
+/// wall-clock reading, so a flawless candidate measured at 600us scored 0.9915
+/// and one measured at 60_000us scored 0.8786.
+///
+/// The assertion also rules out the other removal option. Dropping `speed`'s
+/// share outright would score this candidate 0.85 -- correct as a ranking, wrong
+/// as a magnitude, because `fitness` is blended against 0..1 rates elsewhere
+/// (`EVASION_PRESSURE_BLEND_WEIGHT` in the population refresh) and shrinking one
+/// side of that blend silently re-weights it. Redistributing `speed`'s share
+/// proportionally keeps the total the operator configured.
+#[test]
+fn perfect_candidate_scores_the_full_configured_weight_total() {
+    let weights = swarm_core::config::EvolutionFitnessWeightsConfig::default();
+    let configured_total = weights.detection_rate
+        + weights.false_positive_cost
+        + weights.speed
+        + weights.threat_class_coverage;
+    assert!((configured_total - 1.0).abs() < f64::EPSILON);
+
+    let verification = latency_verification_report();
+    let mut experiment = latency_experiment_report(600);
+    experiment.comparison.candidate.detection_rate = 1.0;
+    experiment.comparison.candidate.false_positive_rate = 0.0;
+
+    let measurement = crate::mutation::population_objectives(&experiment, &verification).unwrap();
+    assert_eq!(measurement.objectives.detection_rate, 1.0);
+    assert_eq!(measurement.objectives.false_positive_cost, 1.0);
+    assert_eq!(measurement.objectives.threat_class_coverage, 1.0);
+
+    let fitness = crate::mutation::population_fitness(&measurement.objectives, &weights);
+    assert_eq!(
+        fitness, configured_total,
+        "a candidate perfect on every fixture-determined objective scored {fitness} against a \
+         configured weight total of {configured_total}"
+    );
+}
+
+/// Population state written before `speed` left the objective vector must still
+/// load. This is the durable artifact under `evolution.paths.population_results_dir`;
+/// a runtime that cannot read its own history restarts evolution from nothing.
+///
+/// A compatibility guard rather than a behaviour test: it holds because
+/// `EvolutionPopulationFitnessObjectives` is not `deny_unknown_fields`, and it
+/// fails the moment someone adds that attribute.
+#[test]
+fn population_state_persisted_with_the_removed_speed_objective_still_loads() {
+    let raw = r#"{
+        "updated_at_ms": 1700000000000,
+        "ranking_id": "ranking:legacy",
+        "validation_batch_id": "batch:legacy",
+        "population_size": 16,
+        "pareto_tournament_size": 4,
+        "proposal_timestamps_ms": [],
+        "members": [
+            {
+                "generation": 1,
+                "generation_created_at_ms": 1700000000000,
+                "population_rank": 1,
+                "pareto_front": 1,
+                "ranking_id": "ranking:legacy",
+                "validation_batch_id": "batch:legacy",
+                "variant_id": "variant:legacy",
+                "strategy_id": "suspicious_process_tree_legacy",
+                "materialization_id": "materialization:legacy",
+                "validation_bundle_id": "bundle:legacy",
+                "experiment_id": "experiment:legacy",
+                "verification_id": "verification:legacy",
+                "ready_for_review": true,
+                "status": "ready_for_queue",
+                "proof_status": "proved",
+                "queue_review_state": null,
+                "advisory_recommendation": null,
+                "blocking_reason_names": [],
+                "ranking_score": 100.0,
+                "fitness": 0.9,
+                "proposed_at_ms": null,
+                "objectives": {
+                    "detection_rate": 0.9,
+                    "false_positive_cost": 0.98,
+                    "speed": 0.87,
+                    "threat_class_coverage": 1.0
+                },
+                "summary": "legacy population member"
+            }
+        ]
+    }"#;
+
+    let state: EvolutionPopulationState = serde_json::from_str(raw).unwrap();
+    let member = &state.members[0];
+    assert_eq!(member.strategy_id, "suspicious_process_tree_legacy");
+    assert_eq!(member.objectives.detection_rate, 0.9);
+    assert_eq!(member.objectives.false_positive_cost, 0.98);
+    assert_eq!(member.objectives.threat_class_coverage, 1.0);
+    // No observations were recorded when this state was written; absence is not
+    // an error, it is just an older artifact.
+    assert!(member.observations.is_none());
+}
+
+/// The repository's own tracked ruleset carries `speed: 0.15` in its
+/// `evolution.fitness_weights` block, and `EvolutionFitnessWeightsConfig` is
+/// `deny_unknown_fields`. Deleting the weight would therefore have broken the
+/// default config -- which could not have been fixed, because `rulesets/` is
+/// covered by the signed `rulesets/attestation.json` and the signing key is
+/// deliberately not in this repository.
+///
+/// `sample_config` parses that exact tracked file.
+#[test]
+fn tracked_default_ruleset_still_loads_with_its_speed_weight() {
+    let config = sample_config();
+    assert_eq!(config.evolution.fitness_weights.speed, 0.15);
+    config.validate().unwrap();
+}
+
+fn latency_population_candidate(
+    strategy_id: &str,
+    objectives: EvolutionPopulationFitnessObjectives,
+    fitness: f64,
+) -> EvolutionPopulationCandidate {
+    EvolutionPopulationCandidate {
+        generation: 1,
+        generation_created_at_ms: 1_700_000_000_000,
+        population_rank: 0,
+        pareto_front: 0,
+        ranking_id: "ranking:selection".to_string(),
+        validation_batch_id: "batch:selection".to_string(),
+        variant_id: format!("variant:{strategy_id}"),
+        strategy_id: strategy_id.to_string(),
+        materialization_id: format!("materialization:{strategy_id}"),
+        validation_bundle_id: format!("bundle:{strategy_id}"),
+        experiment_id: format!("experiment:{strategy_id}"),
+        verification_id: format!("verification:{strategy_id}"),
+        ready_for_review: true,
+        status: EvolutionValidationBundleStatus::ReadyForQueue,
+        proof_status: crate::evolution::EvolutionProposalProofStatus::Proved,
+        queue_review_state: None,
+        advisory_recommendation: None,
+        blocking_reason_names: Vec::new(),
+        ranking_score: 100.0,
+        baseline_fitness: Some(fitness),
+        fitness,
+        evasion_pressure: None,
+        autonomous_fitness: None,
+        proposed_at_ms: None,
+        objectives,
+        observations: None,
+        summary: format!("selection fixture {strategy_id}"),
+    }
+}
+
+/// The whole point, end to end: which detector gets promoted.
+///
+/// `broader` catches more of the corpus than `narrower` and is otherwise
+/// identical -- same false-positive rate, same threat-class template coverage.
+/// It is strictly the better detector on every fact the fixtures determine, and
+/// it strictly Pareto-dominates the other. It should win selection anywhere.
+///
+/// The only thing separating them is that `broader` was measured at 60_000us and
+/// `narrower` at 600us -- a difference in machine and load, not in detector.
+/// Before the fix that inverted the result twice over: the latency-derived
+/// `speed` objective put `narrower` ahead on the weighted score (0.930 vs 0.825)
+/// AND broke the Pareto dominance that would otherwise have placed `broader`
+/// alone on the first front, so `select_population_survivors` promoted the worse
+/// detector. Run the same bundle on a machine where the measurements land the
+/// other way round and you promote the other one, with a green suite both times.
+#[test]
+fn population_selection_promotes_the_better_detector_regardless_of_measured_latency() {
+    let verification = latency_verification_report();
+    let weights = swarm_core::config::EvolutionFitnessWeightsConfig::default();
+
+    let mut broader_experiment = latency_experiment_report(60_000);
+    broader_experiment.comparison.candidate.detection_rate = 0.90;
+    let mut narrower_experiment = latency_experiment_report(600);
+    narrower_experiment.comparison.candidate.detection_rate = 0.86;
+
+    let broader_measurement =
+        crate::mutation::population_objectives(&broader_experiment, &verification).unwrap();
+    let narrower_measurement =
+        crate::mutation::population_objectives(&narrower_experiment, &verification).unwrap();
+
+    // Strictly better on every fixture-determined objective.
+    assert!(
+        broader_measurement.objectives.detection_rate
+            > narrower_measurement.objectives.detection_rate
+    );
+    assert_eq!(
+        broader_measurement.objectives.false_positive_cost,
+        narrower_measurement.objectives.false_positive_cost
+    );
+    assert_eq!(
+        broader_measurement.objectives.threat_class_coverage,
+        narrower_measurement.objectives.threat_class_coverage
+    );
+
+    let broader = latency_population_candidate(
+        "office_broader_coverage",
+        broader_measurement.objectives.clone(),
+        crate::mutation::population_fitness(&broader_measurement.objectives, &weights),
+    );
+    let narrower = latency_population_candidate(
+        "office_narrower_coverage",
+        narrower_measurement.objectives.clone(),
+        crate::mutation::population_fitness(&narrower_measurement.objectives, &weights),
+    );
+
+    // Pareto path: strictly better on one objective, equal on the rest.
+    assert!(crate::mutation::population_candidate_dominates(
+        &broader, &narrower
+    ));
+    assert!(!crate::mutation::population_candidate_dominates(
+        &narrower, &broader
+    ));
+
+    // Scalar path.
+    assert!(broader.fitness > narrower.fitness);
+
+    // And the selection that actually decides what gets proposed.
+    let survivors = crate::mutation::select_population_survivors(vec![narrower, broader], 1, 1);
+    assert_eq!(survivors.len(), 1);
+    assert_eq!(survivors[0].strategy_id, "office_broader_coverage");
 }

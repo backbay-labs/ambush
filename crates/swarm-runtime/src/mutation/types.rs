@@ -690,12 +690,43 @@ pub struct EvolutionMutationRankingLookup {
 }
 
 /// Multi-objective fitness vector persisted for one validated candidate.
+///
+/// GATING, in the sense that every field here ranks candidates: `population_fitness`
+/// weights all of them into the scalar that orders the population, and
+/// `population_candidate_dominates` compares all of them component-wise to build
+/// the Pareto fronts that decide who survives selection.
+///
+/// A `speed` objective derived from a wall-clock `Instant` delta used to sit in
+/// this vector. It is gone rather than zero-weighted: the Pareto dominance test
+/// has no weights at all, so a zero weight would have removed latency from the
+/// scalar while leaving it deciding survivorship. Anything that ranks has to be a
+/// function of fixture content. The measurement itself is preserved on the
+/// candidate as [`EvolutionPopulationObservations`].
+///
+/// Population state persisted with the old four-field vector still loads -- this
+/// struct is not `deny_unknown_fields`, so a stored `speed` is ignored on read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvolutionPopulationFitnessObjectives {
     pub detection_rate: f64,
     pub false_positive_cost: f64,
-    pub speed: f64,
     pub threat_class_coverage: f64,
+}
+
+/// NON-GATING measurements recorded for one population candidate.
+///
+/// Nothing here ranks, selects, or blocks. It exists so that removing latency
+/// from the objective vector loses a gate and not the signal: an operator
+/// reading a population report still sees what the detect stage measured and
+/// how that compares to the advisory budget.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvolutionPopulationObservations {
+    /// Slowest detect-stage measurement recorded by the candidate's experiment.
+    pub max_detect_latency_us: u64,
+    /// `resource_budgets.max_detect_latency_us` from the verification corpus.
+    /// Advisory: a reference point for the measurement, not a threshold.
+    pub advisory_detect_latency_budget_us: u64,
+    /// Recorded fact, not a verdict.
+    pub within_advisory_detect_latency_budget: bool,
 }
 
 /// Measured autonomous fitness preserved for one generated candidate lineage.
@@ -709,8 +740,13 @@ pub struct EvolutionAutonomousFitnessMeasurement {
     pub catch_rate: f64,
     pub false_positive_rate: f64,
     pub false_positive_fitness: f64,
+    /// NON-GATING observation. Recorded, not applied.
     pub max_detect_latency_us: u64,
+    /// NON-GATING observation. Advisory reference point for the measurement.
     pub latency_budget_us: u64,
+    /// NON-GATING observation. Name kept for artifact compatibility: this is
+    /// the normalized latency measurement, and since latency stopped ranking it
+    /// no longer contributes to `measured_fitness`.
     pub latency_fitness: f64,
     pub verification_threat_class_coverage: f64,
     pub measured_fitness: f64,
@@ -747,6 +783,10 @@ pub struct EvolutionPopulationCandidate {
     pub autonomous_fitness: Option<EvolutionAutonomousFitnessMeasurement>,
     pub proposed_at_ms: Option<i64>,
     pub objectives: EvolutionPopulationFitnessObjectives,
+    /// NON-GATING. `#[serde(default)]` so population state persisted before
+    /// observations existed still loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observations: Option<EvolutionPopulationObservations>,
     pub summary: String,
 }
 

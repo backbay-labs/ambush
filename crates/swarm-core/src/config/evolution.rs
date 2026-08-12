@@ -49,6 +49,9 @@ pub struct EvolutionConfig {
 }
 
 /// Weighting used by the runtime evolution lane when combining replay-derived objectives.
+///
+/// Three of these four weights are applied. `speed` is not -- see the field
+/// comment and [`EvolutionFitnessWeightsConfig::applied`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvolutionFitnessWeightsConfig {
@@ -56,9 +59,42 @@ pub struct EvolutionFitnessWeightsConfig {
     pub detection_rate: f64,
     #[serde(default = "default_evolution_fitness_false_positive_cost_weight")]
     pub false_positive_cost: f64,
+    /// ACCEPTED FOR COMPATIBILITY, NO LONGER APPLIED.
+    ///
+    /// This weighted a `speed` objective derived from a wall-clock `Instant`
+    /// delta around the detect stage, which made a candidate's rank a function
+    /// of the machine and build profile that happened to measure it rather than
+    /// of the candidate. Latency is still measured and still recorded; it no
+    /// longer ranks anything.
+    ///
+    /// The field cannot be deleted. This struct is `deny_unknown_fields` and
+    /// the repo's own `rulesets/default.yaml` carries a `speed:` entry, as does
+    /// every ruleset already deployed; removing it would turn a config that
+    /// loads today into a hard startup failure. `rulesets/` is additionally
+    /// covered by the signed `rulesets/attestation.json`, whose signing key is
+    /// deliberately not in this repository, so the tracked ruleset could not be
+    /// edited to drop the key either.
+    ///
+    /// The configured share is redistributed proportionally across the three
+    /// weights that remain, so the total weight -- and therefore the scale that
+    /// `fitness` is blended and compared on -- is unchanged. The value is still
+    /// validated (finite, non-negative) rather than silently ignored, but it can
+    /// no longer be the ONLY non-zero weight: see `validate` below.
     #[serde(default = "default_evolution_fitness_speed_weight")]
     pub speed: f64,
     #[serde(default = "default_evolution_fitness_threat_class_coverage_weight")]
+    pub threat_class_coverage: f64,
+}
+
+/// The weights the evolution lane actually applies to the ranking objectives.
+///
+/// Produced by [`EvolutionFitnessWeightsConfig::applied`]. Distinct from the
+/// config struct so that a caller cannot reach for the inert `speed` weight by
+/// accident.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EvolutionAppliedFitnessWeights {
+    pub detection_rate: f64,
+    pub false_positive_cost: f64,
     pub threat_class_coverage: f64,
 }
 
@@ -281,17 +317,64 @@ impl EvolutionFitnessWeightsConfig {
                 });
             }
         }
-        let total = self.detection_rate
-            + self.false_positive_cost
-            + self.speed
-            + self.threat_class_coverage;
-        if total <= 0.0 {
+        // `speed` is deliberately absent from this total. It used to count, so a
+        // config that set ONLY `speed` passed validation and produced a working
+        // ranking. Under the applied weights that same config yields a fitness
+        // of exactly zero for every candidate -- a silent total tie in which
+        // survivor selection falls through to tie-breaks and the operator's
+        // stated objective is never expressed. Fail closed at load instead.
+        if self.applied_weight_total() <= 0.0 {
             return Err(ConfigValidationError::InvalidField {
                 field: "evolution.fitness_weights",
-                reason: "at least one weight must be greater than zero".to_string(),
+                reason: "at least one of `detection_rate`, `false_positive_cost` or \
+                         `threat_class_coverage` must be greater than zero (`speed` is accepted \
+                         for compatibility but no longer contributes)"
+                    .to_string(),
             });
         }
         Ok(())
+    }
+
+    fn applied_weight_total(&self) -> f64 {
+        self.detection_rate + self.false_positive_cost + self.threat_class_coverage
+    }
+
+    /// The weights actually applied to the ranking objectives.
+    ///
+    /// `speed`'s configured share is redistributed proportionally across the
+    /// three remaining weights, so the total weight is whatever the operator
+    /// wrote and only the split changes.
+    ///
+    /// Redistribution rather than a plain drop: `fitness` is not only ranked, it
+    /// is blended against rate-scaled quantities (see the evasion-pressure blend
+    /// in the runtime's population refresh, which mixes fitness with a 0..1
+    /// closure rate). Dropping `speed`'s share outright would shrink the fitness
+    /// side of that blend by its weight while the rate side kept its full range,
+    /// quietly re-weighting a second thing that has nothing to do with latency.
+    /// Redistribution is also order-preserving with respect to a plain drop: it
+    /// scales every candidate's fitness by the same positive constant, so it
+    /// changes no ranking relative to simply removing the term.
+    ///
+    /// Rankings DO change relative to the pre-fix behaviour that included
+    /// `speed`. That is the point: they stop depending on the machine.
+    pub fn applied(&self) -> EvolutionAppliedFitnessWeights {
+        let applied_total = self.applied_weight_total();
+        // `validate` rejects a non-positive applied total, so this is only
+        // reachable for a hand-built config that skipped validation. Fall back to
+        // the configured weights verbatim rather than dividing by zero.
+        if applied_total <= 0.0 {
+            return EvolutionAppliedFitnessWeights {
+                detection_rate: self.detection_rate,
+                false_positive_cost: self.false_positive_cost,
+                threat_class_coverage: self.threat_class_coverage,
+            };
+        }
+        let scale = (applied_total + self.speed) / applied_total;
+        EvolutionAppliedFitnessWeights {
+            detection_rate: self.detection_rate * scale,
+            false_positive_cost: self.false_positive_cost * scale,
+            threat_class_coverage: self.threat_class_coverage * scale,
+        }
     }
 }
 

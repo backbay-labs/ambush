@@ -761,7 +761,9 @@ impl DefaultEvolutionMutationHarness {
                         validation.report.verification_id
                     ),
                 })?;
-            let objectives = population_objectives(&experiment.report, &verification.report)?;
+            let measurement = population_objectives(&experiment.report, &verification.report)?;
+            let objectives = measurement.objectives;
+            let observations = measurement.observations;
             let baseline_fitness = population_fitness(&objectives, fitness_weights);
             let measured_evasion_pressure = evasion_pressure
                 .map(|input| {
@@ -828,6 +830,7 @@ impl DefaultEvolutionMutationHarness {
                     autonomous_fitness,
                     proposed_at_ms,
                     objectives,
+                    observations: Some(observations),
                     summary: candidate.summary.clone(),
                 },
             );

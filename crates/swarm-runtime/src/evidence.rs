@@ -2146,6 +2146,7 @@ mod tests {
             },
             metrics: CanaryMetrics::default(),
             threshold_results: vec![],
+            observations: vec![],
             recent_candidate_findings: vec![],
             rollback_history: vec![],
         }
@@ -2184,6 +2185,7 @@ mod tests {
             },
             metrics: ProductionPromotionMetrics::default(),
             threshold_results: vec![],
+            observations: vec![],
             recent_promoted_findings: vec![],
             rollback_history: vec![],
             pending_review: None,

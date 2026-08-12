@@ -757,6 +757,72 @@ Read these keys as one state machine:
 The config does not imply automatic fleet rollout or review-surface authority.
 It defines where the bounded runtime stores and surfaces each stage.
 
+#### `evolution.fitness_weights`
+
+Multi-objective weights used to rank evolved detector candidates.
+
+```yaml
+evolution:
+  fitness_weights:
+    detection_rate: 0.40
+    false_positive_cost: 0.30
+    speed: 0.15
+    threat_class_coverage: 0.15
+```
+
+Three of these four are applied:
+
+- `detection_rate`: candidate catch rate over the pinned corpus
+- `false_positive_cost`: `1 - false_positive_rate` against the benign controls
+- `threat_class_coverage`: fraction of canonical threat-class templates matched
+
+Each is a count or a rate over fixture content, so the ranking a bundle produces
+is the same on every machine.
+
+`speed` is **accepted for compatibility and no longer contributes**. It weighted
+an objective computed as `1 / (1 + measured_detect_latency_us / budget)`, where
+the measurement is a wall-clock `Instant` delta around the detect stage. That
+made a candidate's rank a function of the machine and build profile that happened
+to measure it: two operators replaying the identical bundle on different hardware
+ranked the same population differently and could promote different detectors,
+with a green suite on both.
+
+The objective was removed outright rather than weighted to zero. Fitness is not
+the only consumer of the objective vector -- Pareto dominance compares the
+objectives component-wise, with no weights at all, to decide which candidates
+survive selection. A zero weight would have removed latency from the score while
+leaving it deciding survivorship.
+
+Compatibility and behavior:
+
+- a `speed:` entry in an existing weights block still loads and is still
+  validated as finite and non-negative; the field is not removable because the
+  weights block is `deny_unknown_fields` and `rulesets/default.yaml` carries the
+  key under the signed `rulesets/attestation.json`
+- the configured `speed` share is **redistributed proportionally** across the
+  three applied weights, so the total weight -- and the scale that `fitness` is
+  compared and blended on, including the evasion-pressure blend against a 0..1
+  closure rate -- is whatever you configured. Only the split changes.
+- **rankings change** relative to releases that scored `speed`. That is the
+  intent: they stop depending on the machine. A candidate that is perfect on
+  every fixture-determined objective now scores the full configured weight total
+  instead of being held short of it by a clock reading.
+- a weights block whose only non-zero entry is `speed` is now **rejected at
+  config validation**. It used to pass and produce a working ranking; under the
+  applied weights it would produce a fitness of exactly zero for every candidate,
+  a silent total tie. It fails closed at load instead.
+
+The latency measurement is still taken and still recorded. Each population
+candidate carries a non-gating `observations` block with the measured
+`max_detect_latency_us`, the corpus `advisory_detect_latency_budget_us`, and
+`within_advisory_detect_latency_budget` as a recorded fact rather than a verdict.
+The autonomous benchmark reports likewise keep `max_detect_latency_us`,
+`latency_budget_us`, and `latency_fitness`; the last of these is now a recorded
+normalized measurement that no longer feeds `measured_fitness`.
+
+A fitness term for cost that can be trusted has to count work rather than read a
+clock. That is a cost model, and it is not this change.
+
 ### Authenticated Local Operator Surface
 
 The repo now ships a scoped authenticated operator HTTP surface above the existing CLI.
@@ -1319,17 +1385,45 @@ cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate --experiment 
 cargo run -p swarm-runtime --bin swarmctl -- verification-result --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
 ```
 
-Current invariant set:
+Current gating invariant set (`invariants` in the report; `passed` is exactly
+`invariants.iter().all(|i| i.passed)`):
 
 - `known_bad_coverage`: candidate must not miss tracked adversarial verification scenarios
 - `threat_class_templates`: candidate must still match canonical threat-class templates
 - `false_positive_bound`: candidate must stay under the repo-owned benign false-positive threshold
-- `detect_latency_budget`: candidate max detect latency must stay within the corpus budget
 - `total_detection_budget`: candidate total emitted detections must stay within the corpus volume budget
+
+Every one of these is a count or a rate over fixture content, so each computes
+the same value on any machine, under any load, on any architecture.
+
+Current non-gating observation set (`observations` in the report; nothing
+reduces over it):
+
+- `detect_latency_budget`: worst-case detect-stage latency measured across the
+  verification suites, with the corpus `max_detect_latency_us` recorded beside
+  it as an advisory reference point and `within_advisory_budget` recorded as a
+  fact rather than a verdict
+
+`detect_latency_budget` used to gate. It was removed from the gating set because
+the number it compares is a wall-clock `Instant` delta: it measures the machine,
+the build profile, and whatever else the scheduler was running, not the
+candidate. An identical candidate over identical fixtures reached opposite
+verdicts on the same machine minutes apart. The measurement is still taken, still
+recorded in full including which scenario was slowest, and still rendered by
+`verification-result` under `Observations (non-gating, not part of Status)`. A
+latency gate that can be trusted has to count work rather than read a clock.
+
+The same reasoning applies to the `latency_budget` invariant in
+`rulesets/safety/office-detector-admission.yaml`. Its `max_detect_latency_us` is
+now advisory: the admission check requires the candidate's verification to carry
+an attributable detect-latency observation over the pinned corpus, and reports
+the measurement in the verdict details, but does not reject a candidate for
+being measured on a busy machine.
 
 Failure behavior:
 
-- `verification-evaluate` exits nonzero when any invariant fails
+- `verification-evaluate` exits nonzero when any GATING invariant fails; an
+  observation never changes the exit code
 - failing output preserves scenario or template references for operator inspection
 
 ### Offline Shadow
@@ -1404,10 +1498,35 @@ Current canary inputs and semantics:
 - `observation_window_events`: how many live events the candidate must survive before the run can complete normally
 - `max_candidate_only_rate`: conservative false-positive proxy bound, based on candidate-only detections versus the production baseline
 - `max_baseline_miss_rate`: bound on how often the candidate misses a detection that the baseline still produces
-- `max_detect_latency_us`: maximum candidate detect latency over the canary window
+- `max_detect_latency_us`: **advisory only, not a gate.** The reference point recorded beside the non-gating `detect_latency_budget` observation on the canary artifact. Nothing rolls a canary back for exceeding it
 - `max_total_detections`: resource budget for total candidate detections over the window
 
 Canary artifacts are written under `data/canaries/` by default.
+
+The canary artifact separates the two kinds of entry, and so does
+`canary-result`:
+
+- `threshold_results` is **gating**. Every entry is a count or a rate over what
+  the candidate did across the observed events, so it computes the same value on
+  any machine, under any load, on any architecture. The run rolls back and the
+  candidate is blocked on the first entry that fails.
+- `observations` is **non-gating**. Nothing reduces over it. It carries
+  `detect_latency_budget`: the worst candidate detect latency measured over the
+  window, the advisory budget it was compared against, and
+  `within_advisory_budget` as a recorded fact rather than a verdict.
+
+`detect_latency_threshold` used to be a gating threshold and is gone from
+`threshold_results`. It was the only bound there whose verdict was not a
+function of what the candidate did: `max_candidate_detect_latency_us` is a
+wall-clock `Instant` delta, so a busy runner could roll a healthy candidate out
+of a live lane and record `AutomaticThreshold` against it. **If you tightened
+`canary.max_detect_latency_us` expecting a hard bound, it no longer stops
+anything.** The measurement is still taken and still recorded: it appears in
+every run's `observations` block and under `Observations (advisory,
+non-gating)` in the rendered report, with `within_advisory_budget: false` when
+your budget is exceeded. Alerting on that field is the supported replacement.
+A latency bound that can be enforced has to count work rather than read a
+clock; that is a cost model, and it is not this field.
 
 Example operator flow:
 
@@ -1433,7 +1552,7 @@ cargo run -p swarm-runtime --bin swarmctl -- canary-result --run-id YOUR_CANARY_
 
 Automatic failure behavior:
 
-- `canary-event` exits nonzero when the canary auto-rolls back on a threshold or budget violation
+- `canary-event` exits nonzero when the canary auto-rolls back on a threshold or budget violation. Detect latency is not one of those thresholds; see above
 - rollback history preserves the trigger, reason, slot ID, and reverted baseline strategy
 - the final canary artifact carries an `observing`, `ready_for_promotion_review`, or `blocked` recommendation
 
@@ -1469,10 +1588,21 @@ Current promotion inputs and semantics:
 - `observation_window_events`: how many live events the promoted detector must survive before the promotion can complete normally
 - `max_promoted_only_rate`: divergence bound for promoted-only detections versus the retained fallback baseline
 - `max_fallback_recovery_rate`: bound on how often the retained fallback baseline still detects activity that the promoted detector misses
-- `max_detect_latency_us`: maximum promoted detect latency during the observation window
+- `max_detect_latency_us`: **advisory only, not a gate.** The reference point recorded beside the non-gating `detect_latency_budget` observation on the promotion artifact. Nothing rolls a promotion back for exceeding it
 - `max_total_detections`: resource budget for total promoted detections over the production window
 
 Production-promotion artifacts are written under `data/promotions/` by default.
+
+The promotion artifact makes the same split as the canary artifact:
+`threshold_results` is gating and reverts production to the retained fallback
+detector on the first failure; `observations` is non-gating and carries
+`detect_latency_budget` with its advisory budget and `within_advisory_budget`.
+`detect_latency_threshold` is gone from `threshold_results` for the same reason
+-- `max_promoted_detect_latency_us` is a wall-clock delta, and reverting the
+detector serving production traffic on it is a false positive waiting for a
+busy runner. **If you tightened `promotion.max_detect_latency_us` expecting a
+hard bound, it no longer stops anything;** alert on `within_advisory_budget`
+instead.
 
 Example operator flow:
 
@@ -1495,7 +1625,7 @@ cargo run -p swarm-runtime --bin swarmctl -- promotion-result --promotion-id YOU
 
 Automatic failure behavior:
 
-- `promotion-event` exits nonzero when the promoted detector auto-rolls back on a threshold or budget violation
+- `promotion-event` exits nonzero when the promoted detector auto-rolls back on a threshold or budget violation. Detect latency is not one of those thresholds; see above
 - rollback history preserves the trigger, reason, restored baseline strategy, and observed event count
 - the final promotion artifact carries an `observing`, `stable_in_production`, or `blocked` recommendation
 
@@ -1563,6 +1693,17 @@ Scorecards compare the current production baseline and the verified candidate us
 - durable live rollout memories when they exist
 - replay-fitness fallback when live memory is sparse
 - per-memory explanations with outcome weights, recency decay, context matches, and weighted contribution
+
+The replay-fitness fallback is `detection_rate - false_positive_rate`, clamped to
+`[-1.0, 1.0]`. It used to subtract a further penalty of up to 0.25 derived from
+the experiment's measured `max_detect_latency_us` -- a wall-clock `Instant`
+delta. Against a recommendation epsilon of 0.05 that let the machine, not the
+candidate, flip `CandidatePreferred` to `RetainBaseline`, and the fallback is the
+path every candidate takes until it has two matching live rollout memories, so a
+brand new candidate was always scored this way. Both remaining terms are counts
+over fixture content, so the fallback is now identical wherever the same bundle
+is replayed. The latency measurement is unchanged and still recorded on the
+experiment report the scorecard is derived from.
 
 This lane is advisory only. The scorecard does not approve, deploy, or promote a detector by itself.
 

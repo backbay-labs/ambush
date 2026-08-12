@@ -211,7 +211,7 @@ pub fn render_verification_report(report: &DetectorVerificationReport) -> String
         format!("Status: {}", if report.passed { "pass" } else { "fail" }),
     ];
 
-    lines.push("Invariants:".to_string());
+    lines.push("Invariants (gating):".to_string());
     for invariant in &report.invariants {
         lines.push(format!(
             "- [{}] {} | expected={} actual={} | {}",
@@ -226,6 +226,29 @@ pub fn render_verification_report(report: &DetectorVerificationReport) -> String
                 "  counterexample: {} | {} | {}",
                 counterexample.subject, counterexample.reference, counterexample.details
             ));
+        }
+    }
+
+    if !report.observations.is_empty() {
+        // Rendered without a pass/fail marker on purpose. `within` reads as the
+        // recorded comparison it is; a `[pass]`/`[fail]` column here would look
+        // like a verdict, and the whole point is that it is not one.
+        lines.push("Observations (non-gating, not part of Status):".to_string());
+        for observation in &report.observations {
+            lines.push(format!(
+                "- {} | observed={} advisory_budget={} within={} | {}",
+                observation.name,
+                observation.observed,
+                observation.advisory_budget,
+                observation.within_advisory_budget,
+                observation.details
+            ));
+            for source in &observation.sources {
+                lines.push(format!(
+                    "  source: {} | {} | {}",
+                    source.subject, source.reference, source.details
+                ));
+            }
         }
     }
 

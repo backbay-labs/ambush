@@ -242,11 +242,22 @@ pub struct VerificationThreatClassTemplate {
     pub event: TelemetryEvent,
 }
 
-/// Repo-owned resource budgets that candidate detectors must stay within.
+/// Repo-owned resource budgets for candidate detectors.
+///
+/// `max_false_positive_rate` and `max_total_detections` are ENFORCED: both are
+/// counts and rates over fixture content, so they compute the same value on any
+/// machine. `max_detect_latency_us` is ADVISORY -- see its field docs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VerificationResourceBudgets {
     pub max_false_positive_rate: f64,
+    /// ADVISORY ONLY. Recorded as the reference point for the non-gating
+    /// `detect_latency_budget` observation; nothing fails a verification for
+    /// exceeding it. The value it is compared against is a wall-clock `Instant`
+    /// delta, which measures the machine and the build profile rather than the
+    /// candidate. Kept in the schema, and kept at its original value, because
+    /// the observation is meaningless without a reference point and because a
+    /// trend tool wants the historical series to stay comparable.
     pub max_detect_latency_us: u64,
     pub max_total_detections: usize,
 }
@@ -779,6 +790,12 @@ pub struct VerificationCounterexample {
 }
 
 /// One verification invariant verdict for a candidate detector.
+///
+/// Everything in this list is GATING: `DetectorVerificationReport::passed`
+/// reduces over it, and `collect_review_blocking_reasons` turns every failure
+/// here into a promotion blocker. Only invariants that are a deterministic
+/// function of fixture content belong here. A measurement of the machine the
+/// verification happened to run on does not -- see [`VerificationObservation`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationInvariantResult {
     pub name: String,
@@ -787,6 +804,50 @@ pub struct VerificationInvariantResult {
     pub actual: serde_json::Value,
     pub details: String,
     pub counterexamples: Vec<VerificationCounterexample>,
+}
+
+/// Where a recorded observation's reported value came from, e.g. the single
+/// slowest scenario behind a worst-case latency number.
+///
+/// Deliberately NOT a [`VerificationCounterexample`]: a counterexample is
+/// evidence for a failed verdict, and an observation reaches no verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationObservationSource {
+    pub subject: String,
+    pub reference: String,
+    pub details: String,
+}
+
+/// One recorded, NON-GATING measurement taken during verification.
+///
+/// Observations exist so a signal can be kept without letting it decide a
+/// verdict. Nothing in the runtime reduces over this collection:
+/// `DetectorVerificationReport::passed` reduces over `invariants` only, and
+/// `collect_review_blocking_reasons` iterates `invariants` only.
+///
+/// The distinction is a separate collection rather than a `gating: bool` flag
+/// on `VerificationInvariantResult` on purpose. A flag leaves the measurement
+/// sitting inside a list whose name promises verdict inputs, and every present
+/// and future consumer -- the `passed` reduce, promotion blockers, the formal
+/// safety gate, swarmctl, the assurance-case reports -- has to remember to
+/// filter on it. Forgetting fails CLOSED and silently: the candidate is
+/// rejected for something that was never its fault. Splitting the collection
+/// makes the reduce correct by construction, and a consumer that has not heard
+/// of observations simply does not see latency instead of wrongly gating on it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationObservation {
+    pub name: String,
+    /// The corpus budget this measurement is compared against. ADVISORY ONLY:
+    /// recorded so a human or a trend tool has a reference point, never
+    /// enforced. See `verifications/office-detector-safety-v1.yaml`.
+    pub advisory_budget: serde_json::Value,
+    /// The measurement itself.
+    pub observed: serde_json::Value,
+    /// Recorded fact, not a verdict: nothing gates on this. It is here so a
+    /// trend tool can chart budget breaches without re-deriving the comparison.
+    pub within_advisory_budget: bool,
+    pub details: String,
+    pub sources: Vec<VerificationObservationSource>,
 }
 
 /// Persisted candidate-verification report derived from one experiment plus a verification corpus.
@@ -801,7 +862,12 @@ pub struct DetectorVerificationReport {
     pub lineage: ExperimentLineage,
     pub candidate_strategy_id: String,
     pub candidate_description: String,
+    /// GATING. `passed` is exactly `invariants.iter().all(|i| i.passed)`.
     pub invariants: Vec<VerificationInvariantResult>,
+    /// NON-GATING measurements. `#[serde(default)]` so verification reports
+    /// persisted before observations existed still load.
+    #[serde(default)]
+    pub observations: Vec<VerificationObservation>,
     pub passed: bool,
 }
 

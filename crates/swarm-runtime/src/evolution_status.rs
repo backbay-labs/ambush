@@ -1544,9 +1544,9 @@ mod tests {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 1.0,
                         false_positive_cost: 0.0,
-                        speed: 0.7,
                         threat_class_coverage: 1.0,
                     },
+                    observations: None,
                     summary: "candidate a".to_string(),
                 },
                 EvolutionPopulationCandidate {
@@ -1577,9 +1577,9 @@ mod tests {
                     objectives: EvolutionPopulationFitnessObjectives {
                         detection_rate: 0.9,
                         false_positive_cost: 0.1,
-                        speed: 0.6,
                         threat_class_coverage: 0.8,
                     },
+                    observations: None,
                     summary: "candidate c".to_string(),
                 },
             ],
