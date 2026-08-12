@@ -57,11 +57,17 @@ pub mod weaver_agent;
 pub mod whisker_agent;
 pub mod workbench;
 
-use std::any::Any;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use swarm_consensus::ConsensusGovernanceReceipt;
-use swarm_core::agent::{AgentRole, SwarmError};
+// Re-exported so `crate::AgentTickBoundaryError` and friends keep resolving inside
+// this crate. The definitions moved to `swarm_core::agent` in SPLIT-03: the
+// composition root must not name concrete agent types, and the agents must not
+// import back out of the root. See `swarm_core::agent::AgentTickError`.
+pub use swarm_core::agent::{
+    AgentPanicBoundaryError, AgentTickBoundaryError, AgentTickError, agent_tick_error_boundary,
+    agent_tick_error_role, agent_tick_panic_error,
+};
 pub use swarm_core::config::RuntimeMode;
 use swarm_core::config::TemporalEventWindowConfig;
 use swarm_core::types::AgentId;
@@ -84,98 +90,6 @@ pub enum RuntimeError {
 
     #[error(transparent)]
     Response(#[from] ResponseError),
-}
-
-/// Typed boundary errors surfaced from runtime-owned agent ticks.
-#[derive(Debug, thiserror::Error)]
-pub enum AgentTickBoundaryError {
-    #[error(transparent)]
-    Panic(#[from] AgentPanicBoundaryError),
-
-    #[error(transparent)]
-    Sphinx(#[from] crate::sphinx_agent::SphinxAgentTickError),
-
-    #[error(transparent)]
-    Stalker(#[from] crate::stalker_agent::StalkerAgentTickError),
-}
-
-impl AgentTickBoundaryError {
-    pub fn boundary(&self) -> &'static str {
-        match self {
-            Self::Panic(_) => "panic",
-            Self::Sphinx(error) => error.boundary(),
-            Self::Stalker(error) => error.boundary(),
-        }
-    }
-
-    pub fn role(&self) -> AgentRole {
-        match self {
-            Self::Panic(error) => error.role,
-            Self::Sphinx(_) => AgentRole::Sphinx,
-            Self::Stalker(_) => AgentRole::Stalker,
-        }
-    }
-}
-
-pub fn agent_tick_error_boundary(error: &SwarmError) -> Option<&'static str> {
-    match error {
-        SwarmError::Internal(error) => error
-            .downcast_ref::<AgentTickBoundaryError>()
-            .map(AgentTickBoundaryError::boundary),
-        _ => None,
-    }
-}
-
-pub fn agent_tick_error_role(error: &SwarmError) -> Option<AgentRole> {
-    match error {
-        SwarmError::Internal(error) => error
-            .downcast_ref::<AgentTickBoundaryError>()
-            .map(AgentTickBoundaryError::role),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("agent `{agent_id}` ({role:?}) panicked during tick: {message}")]
-pub struct AgentPanicBoundaryError {
-    pub agent_id: AgentId,
-    pub role: AgentRole,
-    pub message: String,
-}
-
-impl AgentPanicBoundaryError {
-    pub fn new(agent_id: AgentId, role: AgentRole, payload: Box<dyn Any + Send>) -> Self {
-        Self {
-            agent_id,
-            role,
-            message: panic_payload_message(payload.as_ref()),
-        }
-    }
-}
-
-fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        return (*message).to_string();
-    }
-    "non-string panic payload".to_string()
-}
-
-pub fn agent_tick_panic_error(
-    agent_id: &AgentId,
-    role: AgentRole,
-    payload: Box<dyn Any + Send>,
-) -> SwarmError {
-    SwarmError::Internal(
-        AgentTickBoundaryError::from(AgentPanicBoundaryError::new(
-            agent_id.clone(),
-            role,
-            payload,
-        ))
-        .into(),
-    )
 }
 
 /// Typed boundary errors surfaced while routing Kitten strategy proposals.

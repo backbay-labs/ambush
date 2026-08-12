@@ -27,7 +27,7 @@ use swarm_pheromone::{
     ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate, SubstrateError,
 };
 
-use crate::AgentTickBoundaryError;
+use crate::{AgentTickBoundaryError, AgentTickError};
 
 const KNOWLEDGE_GRAPH_SCHEMA_VERSION: u32 = 1;
 const KNOWLEDGE_GRAPH_STATE_KIND: &str = "sphinx_knowledge_graph";
@@ -59,13 +59,17 @@ pub enum SphinxAgentTickError {
     Substrate(#[from] SubstrateError),
 }
 
-impl SphinxAgentTickError {
-    pub fn boundary(&self) -> &'static str {
+impl AgentTickError for SphinxAgentTickError {
+    fn boundary(&self) -> &'static str {
         match self {
             Self::Store(_) => "knowledge_graph_store",
             Self::Serialization(_) => "serialization",
             Self::Substrate(_) => "substrate",
         }
+    }
+
+    fn role(&self) -> AgentRole {
+        AgentRole::Sphinx
     }
 }
 
@@ -2058,11 +2062,12 @@ where
 }
 
 fn internal_error(error: KnowledgeGraphStoreError) -> SwarmError {
-    SwarmError::Internal(AgentTickBoundaryError::from(SphinxAgentTickError::from(error)).into())
+    SwarmError::Internal(AgentTickBoundaryError::agent(SphinxAgentTickError::from(error)).into())
 }
 
 fn internal_runtime_error(error: impl Into<SphinxAgentTickError>) -> SwarmError {
-    SwarmError::Internal(AgentTickBoundaryError::from(error.into()).into())
+    let error: SphinxAgentTickError = error.into();
+    SwarmError::Internal(AgentTickBoundaryError::agent(error).into())
 }
 
 #[cfg(test)]
@@ -2116,8 +2121,8 @@ fn signed_memory_query_deposit(
 mod tests {
     use super::{
         DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
-        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, SphinxAgentTickError,
-        parse_memory_query, signed_memory_query_deposit,
+        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, parse_memory_query,
+        signed_memory_query_deposit,
     };
     use crate::AgentTickBoundaryError;
     use crate::calico_agent::{
@@ -2423,10 +2428,8 @@ mod tests {
             other => panic!("expected internal boundary error, got {other:?}"),
         };
 
-        assert!(matches!(
-            boundary,
-            AgentTickBoundaryError::Sphinx(SphinxAgentTickError::Store(_))
-        ));
+        assert!(matches!(boundary, AgentTickBoundaryError::Agent(_)));
+        assert_eq!(boundary.role(), AgentRole::Sphinx);
         assert_eq!(boundary.boundary(), "knowledge_graph_store");
 
         let _ = fs::remove_dir_all(root);

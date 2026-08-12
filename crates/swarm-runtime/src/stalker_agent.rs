@@ -13,9 +13,9 @@ use swarm_pheromone::{
 };
 use swarm_spine::{ConfiguredReplayBundleStore, ReplayBundleStore, ReplayStoreError};
 
-use crate::AgentTickBoundaryError;
 use crate::investigation::InvestigationError;
 use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
+use crate::{AgentTickBoundaryError, AgentTickError};
 use swarm_spine::ConfiguredInvestigationBundleStore;
 
 pub struct StalkerAgent {
@@ -48,14 +48,18 @@ pub enum StalkerAgentTickError {
     Substrate(#[from] SubstrateError),
 }
 
-impl StalkerAgentTickError {
-    pub fn boundary(&self) -> &'static str {
+impl AgentTickError for StalkerAgentTickError {
+    fn boundary(&self) -> &'static str {
         match self {
             Self::ReplayStore(_) => "replay_store",
             Self::Investigation(_) => "investigation",
             Self::Serialization(_) => "serialization",
             Self::Substrate(_) => "substrate",
         }
+    }
+
+    fn role(&self) -> AgentRole {
+        AgentRole::Stalker
     }
 }
 
@@ -299,13 +303,14 @@ fn threat_class_name(threat_class: &swarm_core::pheromone::ThreatClass) -> Strin
 }
 
 fn agent_tick_error(error: impl Into<StalkerAgentTickError>) -> SwarmError {
-    SwarmError::Internal(AgentTickBoundaryError::from(error.into()).into())
+    let error: StalkerAgentTickError = error.into();
+    SwarmError::Internal(AgentTickBoundaryError::agent(error).into())
 }
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{StalkerAgent, StalkerAgentTickError};
+    use super::StalkerAgent;
     use crate::AgentTickBoundaryError;
     use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
     use std::fs;
@@ -588,10 +593,8 @@ mod tests {
             other => panic!("expected internal boundary error, got {other:?}"),
         };
 
-        assert!(matches!(
-            boundary,
-            AgentTickBoundaryError::Stalker(StalkerAgentTickError::ReplayStore(_))
-        ));
+        assert!(matches!(boundary, AgentTickBoundaryError::Agent(_)));
+        assert_eq!(boundary.role(), AgentRole::Stalker);
         assert_eq!(boundary.boundary(), "replay_store");
 
         let _ = fs::remove_dir_all(root);
