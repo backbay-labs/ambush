@@ -49,8 +49,11 @@
 pub(crate) use swarm_runtime::{
     agent_identity, approval, canary, config, control, drafting, evidence, evolution,
     evolution_status, governance_prep, mutation, operator_maintenance, portfolio, promotion,
-    replay, review_workbench, selection, strategy,
+    replay, selection, strategy,
 };
+// `review_workbench` left `swarm-runtime` with SPLIT-02. Same alias, new home,
+// so `cli::core`'s `crate::review_workbench::...` paths resolve unchanged.
+pub(crate) use swarm_runtime_workbench::review_workbench;
 
 pub mod cli;
 pub mod http;

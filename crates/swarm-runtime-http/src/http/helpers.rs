@@ -21,7 +21,7 @@ use swarm_runtime::operator_maintenance::{
 use swarm_runtime::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioList,
 };
-use swarm_runtime::review_workbench::{
+use swarm_runtime_workbench::review_workbench::{
     DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind,
     ReviewCapsuleImportList, ReviewCapsuleList, ReviewDelegationPacketList, ReviewSessionList,
     ReviewSessionMaintenanceHandoffList, ReviewSessionPromotionReadinessList,
@@ -333,10 +333,10 @@ pub(super) fn limit_review_session_list(
 }
 
 pub(super) fn limit_review_session_export_list(
-    mut list: swarm_runtime::review_workbench::ReviewSessionExportList,
+    mut list: swarm_runtime_workbench::review_workbench::ReviewSessionExportList,
     requested_limit: Option<usize>,
     max_limit: usize,
-) -> swarm_runtime::review_workbench::ReviewSessionExportList {
+) -> swarm_runtime_workbench::review_workbench::ReviewSessionExportList {
     let limit = effective_limit(requested_limit, max_limit);
     list.exports = list.exports.into_iter().take(limit).collect();
     list.total_count = list.exports.len();

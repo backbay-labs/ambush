@@ -65,7 +65,7 @@ pub mod replay {
 }
 
 pub mod review_workbench {
-    pub use swarm_runtime::review_workbench::*;
+    pub use swarm_runtime_workbench::review_workbench::*;
 }
 
 pub mod selection {

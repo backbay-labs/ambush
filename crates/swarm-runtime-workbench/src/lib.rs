@@ -18,3 +18,15 @@
 //!
 //! Nothing in `swarm-runtime` may depend on this crate. If a runtime module
 //! needs something from here, the item is in the wrong crate.
+//!
+//! `result_large_err` is allowed crate-wide here for the same reason it is
+//! allowed in `swarm-runtime`, whose `lib.rs` carries the identical attribute,
+//! and in `swarm-runtime-http`, which inherited it the same way in SPLIT-01:
+//! `ReviewWorkbenchError` wraps the runtime's own large error types
+//! (`EvidenceError`, `OperatorMaintenanceError`) by `#[from]`. The moved code is
+//! byte-identical to what compiled under that allow before the split, so the
+//! allow moves with it rather than the error types being reshaped here.
+#![allow(clippy::result_large_err)]
+
+pub mod review_workbench;
+pub mod workbench;

@@ -30,18 +30,18 @@ use super::types::{
     ReviewSessionPromotionReadinessLookup, ReviewSessionReport, ReviewSessionResolved,
     ReviewSessionReverifyRequest, ReviewWorkbenchError,
 };
-use crate::evidence::{
-    EvidenceSubjectKind, EvidenceVerificationCheck, OperatorEvidenceReadService,
-};
-use crate::operator_maintenance::{
-    OperatorMaintenanceRequest, OperatorMaintenanceService, OperatorMaintenanceStatus,
-};
 use std::fs;
 use std::path::PathBuf;
 use swarm_core::config::OperatorSurfacePaths;
 use swarm_crypto::{
     Ed25519Signer, canonical_json_string, normalize_canonical_json, sha256_hex,
     verify_detached_signature,
+};
+use swarm_runtime::evidence::{
+    EvidenceSubjectKind, EvidenceVerificationCheck, OperatorEvidenceReadService,
+};
+use swarm_runtime::operator_maintenance::{
+    OperatorMaintenanceRequest, OperatorMaintenanceService, OperatorMaintenanceStatus,
 };
 
 /// Repo-owned workbench harness above signed evidence and maintenance audit flows.

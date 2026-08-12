@@ -74,7 +74,7 @@ use swarm_runtime::portfolio::{
     EvolutionPortfolioEntryReport, EvolutionPortfolioEntryReviewState, EvolutionPortfolioReport,
     FileEvolutionGovernanceReviewPacketStore, FileEvolutionPortfolioStore,
 };
-use swarm_runtime::review_workbench::DefaultReviewWorkbenchHarness;
+use swarm_runtime_workbench::review_workbench::DefaultReviewWorkbenchHarness;
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 

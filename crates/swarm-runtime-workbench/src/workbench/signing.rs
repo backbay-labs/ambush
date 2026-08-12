@@ -3,9 +3,9 @@
 use super::types::{
     ReviewCapsule, ReviewDelegationPacket, ReviewSessionExport, ReviewSessionResolved,
 };
-use crate::evidence::{EvidenceRelatedRef, EvidenceSignature};
 use serde::Serialize;
 use swarm_crypto::{CryptoError, Ed25519Signer, canonical_json_bytes};
+use swarm_runtime::evidence::{EvidenceRelatedRef, EvidenceSignature};
 
 #[derive(Debug, Serialize)]
 struct ReviewCapsuleSignatureStatement<'a> {

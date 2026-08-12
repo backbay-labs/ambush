@@ -10,8 +10,8 @@ use swarm_runtime::governance_prep::EvolutionGovernancePrepError;
 use swarm_runtime::http::rate_limit::HttpRateLimitRejection;
 use swarm_runtime::operator_maintenance::OperatorMaintenanceError;
 use swarm_runtime::portfolio::EvolutionPortfolioError;
-use swarm_runtime::review_workbench::ReviewWorkbenchError;
 use swarm_runtime::service::{ReadinessError, ServiceError};
+use swarm_runtime_workbench::review_workbench::ReviewWorkbenchError;
 
 #[derive(Debug, Clone, Serialize)]
 struct OperatorApiErrorBody {

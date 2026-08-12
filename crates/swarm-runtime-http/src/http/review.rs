@@ -33,7 +33,7 @@ use swarm_runtime::control::{
     ReplayLookupSelector,
 };
 use swarm_runtime::evidence::{EvidenceExportRequest, EvidenceSubjectKind};
-use swarm_runtime::review_workbench::{
+use swarm_runtime_workbench::review_workbench::{
     ReviewCapsuleImportRequest, ReviewDelegationCreateRequest, ReviewSessionCreateRequest,
     ReviewSessionReverifyRequest,
 };

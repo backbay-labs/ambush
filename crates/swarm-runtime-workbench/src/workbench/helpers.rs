@@ -1,7 +1,7 @@
 use super::types::ReviewArtifactRef;
-use crate::operator_maintenance::OperatorMaintenanceStatus;
 use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
+use swarm_runtime::operator_maintenance::OperatorMaintenanceStatus;
 
 pub(super) fn normalize_artifact_refs(
     artifact_refs: Vec<ReviewArtifactRef>,

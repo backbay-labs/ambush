@@ -52,7 +52,9 @@ use swarm_runtime::governance_prep::DefaultEvolutionGovernancePrepHarness;
 use swarm_runtime::http::rate_limit::HttpRateLimiter;
 use swarm_runtime::operator_maintenance::{OperatorMaintenanceError, OperatorMaintenanceService};
 use swarm_runtime::portfolio::DefaultEvolutionPortfolioHarness;
-use swarm_runtime::review_workbench::{DefaultReviewWorkbenchHarness, ReviewWorkbenchError};
+use swarm_runtime_workbench::review_workbench::{
+    DefaultReviewWorkbenchHarness, ReviewWorkbenchError,
+};
 
 /// Errors raised while building or serving the authenticated operator surface.
 #[derive(Debug, thiserror::Error)]

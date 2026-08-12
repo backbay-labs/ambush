@@ -39,7 +39,6 @@ pub mod promotion;
 pub mod providence;
 pub mod red_swarm;
 pub mod replay;
-pub mod review_workbench;
 pub mod runtime_events;
 pub mod selection;
 pub mod sequence_detector;
@@ -52,7 +51,6 @@ pub mod threat_intel_runtime;
 pub mod tom_agent;
 pub mod weaver_agent;
 pub mod whisker_agent;
-pub mod workbench;
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

@@ -6,11 +6,11 @@ use super::types::{
     ReviewArtifactRef, ReviewArtifactRefKind, ReviewLane, ReviewLaneGap, ReviewLaneSummary,
     ReviewPromotionReadinessRecommendation, ReviewSessionResolved, ReviewWorkbenchError,
 };
-use crate::evidence::{
+use std::collections::BTreeSet;
+use swarm_runtime::evidence::{
     EvidenceBundleLookup, EvidenceSubjectKind, EvidenceVerificationLookup,
     EvidenceVerificationStatus, OperatorEvidenceReadService, PromotionEvidencePacketLookup,
 };
-use std::collections::BTreeSet;
 
 pub(super) fn ensure_selected_refs_belong_to_session(
     session_refs: &[ReviewArtifactRef],
