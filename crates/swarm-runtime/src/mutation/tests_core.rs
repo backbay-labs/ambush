@@ -2256,6 +2256,7 @@ fn latency_experiment_report(
             technique_regressions: Vec::new(),
         },
         gates: Vec::new(),
+        observations: Vec::new(),
         passed: true,
     }
 }
