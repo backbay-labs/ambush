@@ -49,8 +49,6 @@ pub mod startup_attestation;
 pub mod strategy;
 pub mod threat_intel_runtime;
 pub mod tom_agent;
-pub mod weaver_agent;
-pub mod whisker_agent;
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

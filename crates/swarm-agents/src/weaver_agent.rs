@@ -8,7 +8,7 @@ use swarm_core::agent::{
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
 use swarm_spine::{ConfiguredIncidentStore, ConfiguredInvestigationBundleStore};
 
-use crate::correlation::CorrelationEngine;
+use swarm_runtime::correlation::CorrelationEngine;
 
 pub struct WeaverAgent {
     id: AgentId,
@@ -155,11 +155,11 @@ fn internal_error(error: impl std::error::Error) -> SwarmError {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::WeaverAgent;
-    use crate::correlation::CorrelationEngine;
     use swarm_core::agent::{AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode};
     use swarm_core::config::{BundleStoreConfig, CorrelationConfig};
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::{AgentId, Severity, SwarmAction};
+    use swarm_runtime::correlation::CorrelationEngine;
     use swarm_spine::{
         ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, InvestigationBundle,
         InvestigationBundleStore, InvestigationStatus,

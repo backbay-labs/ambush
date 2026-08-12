@@ -59,6 +59,10 @@ zeroize.workspace = true
 z3 = { version = "0.20", optional = true, features = ["gh-release"] }
 
 [dev-dependencies]
+# Dev-only, and it must stay dev-only. `swarm-agents` depends on this crate, so a
+# normal dependency here is a Cargo cycle and is rejected outright. The root's
+# integration tests construct concrete agents; its non-test code does not.
+swarm-agents.workspace = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 tower.workspace = true
 

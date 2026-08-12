@@ -1,4 +1,3 @@
-use crate::detection::pipeline::detect_and_deposit_with_role;
 use async_trait::async_trait;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
@@ -10,6 +9,7 @@ use swarm_core::config::PheromoneConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{AgentId, SwarmAction};
 use swarm_pheromone::ConfiguredPheromoneSubstrate;
+use swarm_runtime::detection::pipeline::detect_and_deposit_with_role;
 use swarm_whisker::{CompositeDetector, TelemetryEvent};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;

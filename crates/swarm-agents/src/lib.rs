@@ -53,3 +53,6 @@
 //!
 //! `ingest/` is SPLIT-05's file set. The remaining four roles follow it, not this
 //! commit.
+
+pub mod weaver_agent;
+pub mod whisker_agent;

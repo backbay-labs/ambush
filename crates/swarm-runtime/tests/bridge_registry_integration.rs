@@ -7,6 +7,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::agent::{SwarmAgent, SwarmEnvironment, SwarmMode};
 use swarm_core::config::{
     AuditdBridgeConfig, CloudTrailBridgeConfig, FieldMappingConfig, GenericJsonBridgeConfig,
@@ -21,7 +22,6 @@ use swarm_runtime::bridge_runtime::{BridgeRuntimeRegistry, bridge_health_report}
 use swarm_runtime::config::load_config;
 use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::detection::metrics::{CriticalPathMetrics, encode_metrics};
-use swarm_runtime::whisker_agent::WhiskerAgent;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 

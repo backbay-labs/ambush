@@ -21,6 +21,7 @@ reqwest.workspace = true
 rustls-pemfile = "2"
 serde.workspace = true
 serde_json.workspace = true
+swarm-agents.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
 swarm-pheromone.workspace = true
