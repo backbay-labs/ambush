@@ -3172,7 +3172,27 @@ dependencies = [
 name = "swarm-runtime-http"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
+ "clap",
+ "ed25519-dalek",
+ "notify",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rand_core 0.6.4",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "swarm-core",
+ "swarm-crypto",
+ "swarm-pheromone",
+ "swarm-policy",
  "swarm-runtime",
+ "swarm-spine",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]

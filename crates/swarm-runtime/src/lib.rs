@@ -14,7 +14,6 @@ pub mod approval;
 pub mod bridge_runtime;
 pub mod calico_agent;
 pub mod canary;
-pub mod cli;
 pub mod config;
 pub mod control;
 pub mod correlation;

@@ -6,7 +6,27 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+arc-swap.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+ed25519-dalek.workspace = true
+notify.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+rand_core.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+swarm-core.workspace = true
+swarm-crypto.workspace = true
+swarm-pheromone.workspace = true
+swarm-policy.workspace = true
 swarm-runtime.workspace = true
+swarm-spine.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

@@ -196,7 +196,7 @@ The production chart mounts:
 ### Build
 
 ```bash
-cargo build --release -p swarm-runtime --bin swarm_detect --bin swarmctl
+cargo build --release -p swarm-runtime-http --bin swarm_detect --bin swarmctl
 ```
 
 ### Initialize And Validate

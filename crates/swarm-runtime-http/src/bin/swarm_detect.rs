@@ -646,8 +646,10 @@ async fn await_background_tasks(name: &str, handles: Vec<tokio::task::JoinHandle
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let _tracing =
-        swarm_runtime::cli::tracing::init_tracing("swarm_detect", cli.otlp_endpoint.as_deref())?;
+    let _tracing = swarm_runtime_http::cli::tracing::init_tracing(
+        "swarm_detect",
+        cli.otlp_endpoint.as_deref(),
+    )?;
     let config = load_config(&cli.config)?;
     let startup_attestation = StartupAttestationReport::verify(&cli.config);
     let anti_tamper_monitor = AntiTamperMonitor::new();
