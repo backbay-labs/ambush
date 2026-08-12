@@ -11,6 +11,7 @@ members = [
     "crates/swarm-policy",
     "crates/swarm-response",
     "crates/swarm-runtime",
+    "crates/swarm-runtime-http",
     "crates/swarm-evolution",
     "crates/swarm-cli",
     "crates/swarm-consensus",
@@ -37,6 +38,7 @@ swarm-pheromone = { version = "0.1.0", path = "crates/swarm-pheromone" }
 swarm-policy = { version = "0.1.0", path = "crates/swarm-policy" }
 swarm-response = { version = "0.1.0", path = "crates/swarm-response" }
 swarm-runtime = { version = "0.1.0", path = "crates/swarm-runtime" }
+swarm-runtime-http = { version = "0.1.0", path = "crates/swarm-runtime-http" }
 swarm-evolution = { version = "0.1.0", path = "crates/swarm-evolution" }
 swarm-cli = { version = "0.1.0", path = "crates/swarm-cli" }
 swarm-consensus = { version = "0.1.0", path = "crates/swarm-consensus" }

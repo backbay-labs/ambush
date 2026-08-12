@@ -3169,6 +3169,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "swarm-runtime-http"
+version = "0.1.0"
+dependencies = [
+ "swarm-runtime",
+]
+
+[[package]]
 name = "swarm-spine"
 version = "0.1.0"
 dependencies = [
