@@ -1572,9 +1572,12 @@ fn experiment_verdict_digest(report: &super::StrategyExperimentReport) -> (Strin
     (digest, canonical_text)
 }
 
-/// Every recorded candidate-minus-baseline detect-latency delta the report
-/// carries, wherever it lives. Shape-tolerant on purpose: the fix may move the
-/// delta out of the gate list, but it must keep recording it somewhere.
+/// Every candidate-minus-baseline detect-latency delta the report carries,
+/// wherever it lives. Shape-tolerant on purpose, because its only job is to
+/// prove the injected load differential MEASURABLY landed -- it is satisfied by
+/// `comparison.delta.max_detect_latency_delta_us` alone and therefore pins
+/// nothing about where the delta is recorded. The recording contract lives in
+/// `experiment_records_detect_latency_delta_as_a_non_gating_observation`.
 fn recorded_latency_deltas(value: &Value, out: &mut Vec<i64>) {
     match value {
         Value::Object(map) => {
@@ -1624,9 +1627,10 @@ fn latency_delta_observations(report: &super::StrategyExperimentReport) -> Vec<i
 /// The verdict an experiment report reaches must be a function of the fixture
 /// content, not of how busy the machine was while the candidate suite ran. So:
 ///   (1) the digest of the verdict-bearing fields must be byte-identical, and
-///   (2) the recorded latency delta must differ, proving the differential
-///       really landed and that the report still carries the signal. Without
-///       (2) this test could pass by measuring nothing at all.
+///   (2) the measured latency delta must differ, proving the differential
+///       really landed. Without (2) this test could pass by measuring nothing
+///       at all. (2) says nothing about WHERE the delta is recorded; that is
+///       `experiment_records_detect_latency_delta_as_a_non_gating_observation`.
 #[tokio::test]
 async fn experiment_verdict_is_invariant_under_candidate_detect_stage_load() {
     let root = unique_temp_dir("experiment-load-differential");
@@ -1669,14 +1673,15 @@ async fn experiment_verdict_is_invariant_under_candidate_detect_stage_load() {
             .report
     };
 
-    // (2) Vacuity check first: prove the load differential actually landed and
-    // that the latency delta is still a recorded signal in both reports.
+    // (2) Vacuity check first: prove the load differential actually landed as a
+    // measurable difference. Deliberately NOT a claim that the observation
+    // survives -- see the helper's note.
     let nominal_deltas = latency_delta_observations(&nominal);
     let stalled_deltas = latency_delta_observations(&stalled);
     assert!(
         !nominal_deltas.is_empty() && !stalled_deltas.is_empty(),
-        "report must still RECORD a detect-latency delta; \
-         nominal={nominal_deltas:?} stalled={stalled_deltas:?}"
+        "both runs must measure a detect-latency delta, otherwise the differential \
+         cannot be shown to have landed; nominal={nominal_deltas:?} stalled={stalled_deltas:?}"
     );
     assert!(
         stalled_deltas.iter().copied().max().unwrap_or(0) > 10_000,
@@ -1697,6 +1702,125 @@ async fn experiment_verdict_is_invariant_under_candidate_detect_stage_load() {
         "experiment verdict digest changed with a candidate-side load differential.\n  \
          nominal: {nominal_canonical}\n  stalled: {stalled_canonical}"
     );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The demotion must not decay into a deletion.
+///
+/// `experiment_verdict_is_invariant_under_candidate_detect_stage_load` pins the
+/// VERDICT, not the RECORD. Its delta scan is shape-tolerant by design, so it is
+/// already satisfied by `comparison.delta.max_detect_latency_delta_us` -- a field
+/// that predates the demotion. Empty `observations` and that test stays green.
+/// This one pins the record itself, on both artifacts a downstream consumer
+/// actually reads: the experiment report, and the shadow report `canary.rs`
+/// loads before it admits a candidate.
+///
+/// We lose a gate, not the signal. The measurement, the advisory budget it was
+/// compared against, and the comparison's outcome must all survive as recorded
+/// non-gating facts -- in the persisted artifact and in the operator-facing
+/// render, at the exact place the failure used to appear.
+#[tokio::test]
+async fn experiment_records_detect_latency_delta_as_a_non_gating_observation() {
+    let root = unique_temp_dir("experiment-latency-observation");
+    let harness =
+        DefaultReplayHarness::from_config("inline", sample_config(), root.join("results")).unwrap();
+
+    // Read the budget out of the manifest rather than hard-coding it: the point
+    // is that the manifest key is still being READ, not that it holds some
+    // particular number.
+    let manifest = load_detector_experiment_manifest(office_control_experiment()).unwrap();
+    let advisory_budget = manifest.gates.advisory_max_detect_latency_delta_us;
+
+    let (experiment, shadow) = harness
+        .evaluate_experiment_and_shadow_path(
+            office_control_experiment(),
+            root.join("experiments"),
+            root.join("shadows"),
+        )
+        .await
+        .unwrap();
+
+    // The gate list is the verdict input. Latency must not be back in it.
+    let gate_names = experiment
+        .report
+        .gates
+        .iter()
+        .map(|gate| gate.name.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        !gate_names
+            .iter()
+            .any(|name| name.contains("detect_latency")),
+        "no wall-clock latency comparison may sit in the GATING gate list, got {gate_names:?}"
+    );
+
+    let delta = experiment
+        .report
+        .comparison
+        .delta
+        .max_detect_latency_delta_us;
+    let within_budget = delta <= advisory_budget as i64;
+
+    for (artifact, observations) in [
+        ("experiment report", &experiment.report.observations),
+        ("shadow report", &shadow.report.observations),
+    ] {
+        let observation = observations
+            .iter()
+            .find(|observation| observation.name == "max_detect_latency_delta_us")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the {artifact} must still RECORD the candidate-minus-baseline \
+                     detect-latency delta as a non-gating observation; \
+                     observations={observations:?}"
+                )
+            });
+        assert_eq!(
+            observation.observed,
+            serde_json::json!(delta),
+            "the {artifact} observation must carry the delta the comparison measured"
+        );
+        assert_eq!(
+            observation.advisory_budget,
+            serde_json::json!(advisory_budget),
+            "the {artifact} observation must echo back the manifest's \
+             gates.max_detect_latency_delta_us as its advisory budget"
+        );
+        assert_eq!(
+            observation.within_advisory_budget, within_budget,
+            "the {artifact} budget comparison must survive as a recorded fact"
+        );
+    }
+
+    // Same measurement on both artifacts: the shadow is what canary admission
+    // reads, so a signal that only reaches the experiment report is not enough.
+    assert_eq!(
+        shadow.report.comparison.delta.max_detect_latency_delta_us, delta,
+        "the shadow report must carry the same measured delta as its experiment"
+    );
+
+    let observation_line = format!(
+        "- max_detect_latency_delta_us | observed={delta} \
+         advisory_budget={advisory_budget} within={within_budget} |"
+    );
+    for (artifact, rendered) in [
+        (
+            "experiment report",
+            render_experiment_report(&experiment.report),
+        ),
+        ("shadow report", render_shadow_report(&shadow.report)),
+    ] {
+        assert!(
+            rendered.contains("Observations (non-gating, not part of Status):"),
+            "the rendered {artifact} must keep the non-gating observation block:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(&observation_line),
+            "the rendered {artifact} must show the measured delta next to the advisory \
+             budget; expected a line starting {observation_line:?}, got:\n{rendered}"
+        );
+    }
 
     let _ = fs::remove_dir_all(root);
 }
