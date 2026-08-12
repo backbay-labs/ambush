@@ -13,9 +13,9 @@ use swarm_pheromone::{
 };
 use swarm_spine::{ConfiguredReplayBundleStore, ReplayBundleStore, ReplayStoreError};
 
-use crate::investigation::InvestigationError;
-use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
-use crate::{AgentTickBoundaryError, AgentTickError};
+use swarm_core::agent::{AgentTickBoundaryError, AgentTickError};
+use swarm_runtime::investigation::InvestigationError;
+use swarm_runtime::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use swarm_spine::ConfiguredInvestigationBundleStore;
 
 pub struct StalkerAgent {
@@ -315,12 +315,11 @@ fn agent_tick_error(error: impl Into<StalkerAgentTickError>) -> SwarmError {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::StalkerAgent;
-    use crate::AgentTickBoundaryError;
-    use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
     use std::fs;
     use std::path::PathBuf;
     use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use swarm_core::agent::AgentTickBoundaryError;
     use swarm_core::agent::{AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmMode};
     use swarm_core::config::{
         BundleStoreConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
@@ -332,6 +331,7 @@ mod tests {
     };
     use swarm_policy::{ActionRequest, CapabilityLease, PolicyVerdict};
     use swarm_response::{ExecutionMode, ResponseReceipt, ResponseStatus};
+    use swarm_runtime::investigation::{InvestigationCoordinator, SummaryInvestigator};
     use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
     use swarm_spine::{
         ConfiguredInvestigationBundleStore, ConfiguredReplayBundleStore, ReplayBundle,

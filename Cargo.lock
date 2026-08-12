@@ -2919,9 +2919,12 @@ dependencies = [
  "serde_json",
  "swarm-core",
  "swarm-pheromone",
+ "swarm-policy",
+ "swarm-response",
  "swarm-runtime",
  "swarm-spine",
  "swarm-whisker",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]

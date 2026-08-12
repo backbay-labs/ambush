@@ -44,7 +44,6 @@ pub mod selection;
 pub mod sequence_detector;
 pub mod service;
 pub mod sphinx_agent;
-pub mod stalker_agent;
 pub mod startup_attestation;
 pub mod strategy;
 pub mod threat_intel_runtime;

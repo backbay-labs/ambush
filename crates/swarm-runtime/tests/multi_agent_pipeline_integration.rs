@@ -4,6 +4,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use swarm_agents::stalker_agent::StalkerAgent;
 use swarm_agents::weaver_agent::WeaverAgent;
 use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::config::{
@@ -19,7 +20,6 @@ use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::investigation::SummaryInvestigator;
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
-use swarm_runtime::stalker_agent::StalkerAgent;
 use swarm_spine::IncidentStore;
 use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 

@@ -15,8 +15,15 @@ swarm-pheromone.workspace = true
 swarm-runtime.workspace = true
 swarm-spine.workspace = true
 swarm-whisker.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# Test-only collaborators: stalker's tests drive a full policy/response round
+# trip. Neither appears in this crate's non-test code.
+swarm-policy.workspace = true
+swarm-response.workspace = true
 
 [lints]
 workspace = true

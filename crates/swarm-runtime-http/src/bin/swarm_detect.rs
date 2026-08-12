@@ -4,6 +4,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use swarm_agents::stalker_agent::StalkerAgent;
 use swarm_agents::weaver_agent::WeaverAgent;
 use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::agent::{AgentRole, SwarmAgent, SwarmModeState};
@@ -29,7 +30,6 @@ use swarm_runtime::replay::{ReplayScenarioInput, load_scenario_manifest, scenari
 use swarm_runtime::runtime_events::{DEFAULT_RUNTIME_EVENT_CAPACITY, RuntimeEventBroadcaster};
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
 use swarm_runtime::sphinx_agent::SphinxAgent;
-use swarm_runtime::stalker_agent::StalkerAgent;
 use swarm_runtime::startup_attestation::{StartupAttestationFailure, StartupAttestationReport};
 use swarm_runtime::threat_intel_runtime::ThreatIntelFeedRuntimeRegistry;
 use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
