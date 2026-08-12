@@ -16,12 +16,16 @@
 //! `mutation`, `promotion`, `selection`, `strategy` -- is still compiled in
 //! `swarm-runtime` and reached from here by re-export, so a consumer that
 //! names `swarm_evolution::canary` keeps resolving. Those seven modules are
-//! NOT movable by code motion today: `swarm-runtime`'s own `lib.rs`,
-//! `ingest/`, `kitten_agent.rs`, `sphinx_agent.rs` and `evolution_status.rs`
-//! name them in non-test code, and moving them would put a normal
-//! `swarm-evolution` entry in `swarm-runtime`'s `[dependencies]`, which Cargo
-//! rejects. The measurement and the alternatives are in
-//! `docs/decisions/0005-split-04-evolution-lane-pinned-by-ingest-and-lib.md`.
+//! NOT movable by code motion, and not by any later extraction either:
+//! `swarm-runtime`'s own `lib.rs` names five of them by `#[from]` on
+//! `StrategyProposalRouteError`, `strategy` is named by four of those five and
+//! `promotion` only by `strategy`, so the crate root alone closes over all
+//! seven. Moving them would put a normal `swarm-evolution` entry in
+//! `swarm-runtime`'s `[dependencies]`, which Cargo rejects. What has to happen
+//! first is the sealed-boundary inversion SPLIT-03 applied to
+//! `swarm_core::agent::AgentTickError`. The measurement and the alternatives
+//! are in
+//! `docs/decisions/0005-split-04-evolution-lane-pinned-by-the-crate-root.md`.
 #![allow(clippy::result_large_err)]
 
 pub mod evidence;
