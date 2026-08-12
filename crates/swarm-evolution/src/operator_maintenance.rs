@@ -2,14 +2,12 @@ use crate::evidence::{
     EvidenceError, FileEvidenceBundleStore, FileEvidenceVerificationStore,
     verify_bundle_with_stores,
 };
+use crate::governance_prep::{DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePrepError};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::OperatorSurfacePaths;
-use swarm_runtime::governance_prep::{
-    DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePrepError,
-};
 use swarm_runtime::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction, EvolutionPortfolioError,
 };

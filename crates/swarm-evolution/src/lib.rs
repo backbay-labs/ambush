@@ -22,9 +22,10 @@
 #![allow(clippy::result_large_err)]
 
 pub mod evidence;
+pub mod governance_prep;
 pub mod operator_maintenance;
 
 pub use swarm_runtime::{
     RuntimeMode, canary, config, control, detector_factory, drafting, evasion_coverage, evolution,
-    governance_prep, mutation, portfolio, promotion, replay, selection, service, strategy,
+    mutation, portfolio, promotion, replay, selection, service, strategy,
 };

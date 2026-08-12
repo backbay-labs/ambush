@@ -7,7 +7,7 @@ use super::state::OperatorHttpState;
 use axum::Json;
 use axum::extract::{Path as RoutePath, Query, State};
 use serde::Deserialize;
-use swarm_runtime::governance_prep::{
+use swarm_evolution::governance_prep::{
     EvolutionGovernancePacketSetList, EvolutionPortfolioHistoryList,
 };
 use swarm_runtime::portfolio::EvolutionPortfolioList;
@@ -78,7 +78,7 @@ pub(super) async fn packet_set_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(packet_set_id): RoutePath<String>,
 ) -> Result<
-    Json<swarm_runtime::governance_prep::EvolutionGovernancePacketSetReport>,
+    Json<swarm_evolution::governance_prep::EvolutionGovernancePacketSetReport>,
     OperatorApiError,
 > {
     let harness = governance_harness(&state)?;
@@ -109,7 +109,7 @@ pub(super) async fn packet_set_list_handler(
 pub(super) async fn portfolio_history_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(history_id): RoutePath<String>,
-) -> Result<Json<swarm_runtime::governance_prep::EvolutionPortfolioHistoryReport>, OperatorApiError>
+) -> Result<Json<swarm_evolution::governance_prep::EvolutionPortfolioHistoryReport>, OperatorApiError>
 {
     let harness = governance_harness(&state)?;
     let lookup = harness

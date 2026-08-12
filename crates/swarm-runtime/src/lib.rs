@@ -58,7 +58,6 @@ pub mod escalation;
 pub mod evasion_coverage;
 pub mod evolution;
 pub mod evolution_status;
-pub mod governance_prep;
 pub mod http;
 pub mod ingest;
 pub mod investigation;

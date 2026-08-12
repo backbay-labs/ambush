@@ -44,12 +44,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swarm_core::config::{OperatorSurfacePaths, SwarmConfig};
 use swarm_evolution::evidence::{DefaultEvidenceHarness, OperatorEvidenceReadService};
+use swarm_evolution::governance_prep::DefaultEvolutionGovernancePrepHarness;
 use swarm_evolution::operator_maintenance::{OperatorMaintenanceError, OperatorMaintenanceService};
 use swarm_runtime::approval::{ApprovalError, DefaultApprovalHarness};
 use swarm_runtime::config::{RuntimeConfigError, load_config};
 use swarm_runtime::control::{ControlError, DefaultControlPlane};
 use swarm_runtime::detection::metrics::CriticalPathMetrics;
-use swarm_runtime::governance_prep::DefaultEvolutionGovernancePrepHarness;
 use swarm_runtime::http::rate_limit::HttpRateLimiter;
 use swarm_runtime::portfolio::DefaultEvolutionPortfolioHarness;
 use swarm_runtime_workbench::review_workbench::{
@@ -72,7 +72,7 @@ pub enum OperatorHttpError {
     Portfolio(#[from] swarm_runtime::portfolio::EvolutionPortfolioError),
 
     #[error(transparent)]
-    GovernancePrep(#[from] swarm_runtime::governance_prep::EvolutionGovernancePrepError),
+    GovernancePrep(#[from] swarm_evolution::governance_prep::EvolutionGovernancePrepError),
 
     #[error(transparent)]
     Maintenance(#[from] OperatorMaintenanceError),

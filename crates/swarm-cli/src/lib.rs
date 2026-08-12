@@ -37,7 +37,7 @@ pub mod evolution_status {
 }
 
 pub mod governance_prep {
-    pub use swarm_runtime::governance_prep::*;
+    pub use swarm_evolution::governance_prep::*;
 }
 
 pub mod mutation {

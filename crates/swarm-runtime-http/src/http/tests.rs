@@ -57,17 +57,17 @@ use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, Telemet
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use tower::ServiceExt;
 
-use swarm_runtime::drafting::EvolutionValidationBundleStatus;
-use swarm_runtime::evolution::{
-    EvolutionProposalBlockingReason, EvolutionProposalProofStatus, EvolutionProposalProofSummary,
-    EvolutionProposalReviewState,
-};
-use swarm_runtime::governance_prep::{
+use swarm_evolution::governance_prep::{
     EvolutionGovernancePacketSetEntryReport, EvolutionGovernancePacketSetReport,
     EvolutionPortfolioHistoryCohortSummary, EvolutionPortfolioHistoryEntryReport,
     EvolutionPortfolioHistoryOutcomeCounts, EvolutionPortfolioHistoryOutcomeKind,
     EvolutionPortfolioHistoryReport, EvolutionPortfolioHistoryReviewDebtKind,
     FileEvolutionGovernancePacketSetStore, FileEvolutionPortfolioHistoryStore,
+};
+use swarm_runtime::drafting::EvolutionValidationBundleStatus;
+use swarm_runtime::evolution::{
+    EvolutionProposalBlockingReason, EvolutionProposalProofStatus, EvolutionProposalProofSummary,
+    EvolutionProposalReviewState,
 };
 use swarm_runtime::portfolio::{
     EvolutionGovernanceReviewPacketReport, EvolutionPortfolioDecisionRecord,
