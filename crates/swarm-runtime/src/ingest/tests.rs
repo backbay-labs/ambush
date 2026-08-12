@@ -11,7 +11,7 @@ use super::{
 use crate::StrategyProposalRouteError;
 use crate::anti_tamper::AntiTamperReport;
 use crate::approval::DefaultApprovalHarness;
-use crate::bridge_runtime::{BridgeStatusSnapshot, SharedBridgeHealth};
+use crate::bridge_runtime::SharedBridgeHealth;
 use crate::config::{CURRENT_SCHEMA_VERSION, write_debug_test_config_signature};
 use crate::control::CURRENT_OPERATOR_API_SCHEMA_VERSION;
 use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
@@ -42,6 +42,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use swarm_core::BridgeStatusSnapshot;
 use swarm_core::ThreatClass;
 use swarm_core::agent::AgentHealthEntry;
 use swarm_core::agent::{AgentHealth, AgentRole, SwarmMode, SwarmModeState};

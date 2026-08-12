@@ -36,7 +36,6 @@
 //! accepting that replay inherits transport.
 
 use crate::alert_tuning::{AlertTuningReport, build_alert_tuning_report};
-use crate::bridge_runtime::BridgeStatusReport;
 use crate::config::{DetectorProfileError, RuntimeConfig, kill_chain_sequence_profile};
 use crate::correlation::{CorrelationEngine, CorrelationError, CorrelationOutcome};
 use crate::detection::metrics::CriticalPathMetrics;
@@ -62,6 +61,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use swarm_core::BridgeStatusReport;
 use swarm_core::agent::SwarmMode;
 use swarm_core::config::{ResponsePlaybookRuleResolution, RuntimeDegradationLevel, SwarmConfig};
 use swarm_core::observability::with_trace_id;

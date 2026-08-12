@@ -3,7 +3,7 @@
         ResponsePlaybookPreviewRequest, ResponsePlaybookPreviewStatus, RuntimeService,
         ServiceError,
     };
-    use crate::bridge_runtime::{BridgeStatusReport, BridgeStatusSnapshot};
+    use swarm_core::{BridgeStatusReport, BridgeStatusSnapshot};
     use crate::correlation::CorrelationEngine;
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use crate::investigation::{InvestigationOutcome, InvestigationStrategy};

@@ -1,4 +1,3 @@
-use crate::bridge_runtime::BridgeStatusReport;
 use crate::runtime_events::now_ms;
 use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -7,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use swarm_core::BridgeStatusReport;
 use swarm_core::agent::{AgentHealth, AgentHealthEntry, SwarmMode, SwarmModeState};
 use swarm_core::config::{NotificationChannelConfig, OperatorSurfaceConfig};
 use swarm_core::types::{
@@ -1312,7 +1312,6 @@ pub mod tests {
         PROVIDENCE_EXTERNAL_SYSTEM, ProvidenceIncidentAdapter, ProvidenceRuntimeContext,
         providence_incident_key,
     };
-    use crate::bridge_runtime::BridgeStatusReport;
     use axum::extract::{Path, State};
     use axum::http::StatusCode;
     use axum::routing::{get, put};
@@ -1320,6 +1319,7 @@ pub mod tests {
     use serde_json::Value;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use swarm_core::BridgeStatusReport;
     use swarm_core::agent::SwarmModeState;
     use swarm_core::config::{
         BundleStoreConfig, NotificationChannelConfig, NotificationRateLimitConfig,

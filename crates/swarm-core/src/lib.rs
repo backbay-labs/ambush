@@ -31,11 +31,12 @@ pub use signed_state::{
     SignedStateStatement, VerifiedSignedState,
 };
 pub use telemetry::{
-    AuthenticationEventData, BridgeHealth, CloudTrailEvent, DnsQueryEvent, ExhaustedResource,
-    FilePersistenceEvent, InfrastructureHealthEvent, KubernetesAuditEvent, NetworkConnectEvent,
-    ProcessMemoryAccessEvent, ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent,
-    ResourceExhaustionEvent, TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult,
-    TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity,
+    AuthenticationEventData, BridgeHealth, BridgeStatusReport, BridgeStatusSnapshot,
+    CloudTrailEvent, DnsQueryEvent, ExhaustedResource, FilePersistenceEvent,
+    InfrastructureHealthEvent, KubernetesAuditEvent, NetworkConnectEvent, ProcessMemoryAccessEvent,
+    ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent,
+    TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult, TelemetryEvent, TelemetryPayload,
+    ThermalAnomalyEvent, ThermalSeverity,
 };
 pub use types::{
     AgentId, EscalationEvent, HuntId, ProvidenceCallbackAuditEntry, ProvidenceCallbackEvent,

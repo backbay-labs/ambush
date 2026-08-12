@@ -445,3 +445,98 @@ mod tests {
         );
     }
 }
+
+/// One telemetry bridge's health as the operator surfaces report it.
+///
+/// Lives here rather than next to the bridge registry that produces it: the
+/// registry is ingest-lane code and moved to `swarm-ingest-runtime` in SPLIT-05,
+/// while `swarm-runtime`'s own `service` and `providence` report types embed
+/// these two structs as fields. Keeping the data types in `swarm-core` is what
+/// lets the registry leave without the root keeping a forward dependency on it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BridgeStatusSnapshot {
+    pub name: String,
+    pub source_id: String,
+    pub ready: bool,
+    pub events_processed: u64,
+    pub error_count: u64,
+    pub lag_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+impl BridgeStatusSnapshot {
+    pub fn from_health(name: impl Into<String>, health: BridgeHealth) -> Self {
+        Self {
+            name: name.into(),
+            source_id: health.source_id,
+            ready: health.ready,
+            events_processed: health.events_processed,
+            error_count: health.error_count,
+            lag_seconds: health.lag_seconds,
+            last_error: health.last_error,
+        }
+    }
+
+    pub fn status(&self) -> &'static str {
+        if self.ready {
+            "ok"
+        } else if self.error_count > 0 {
+            "degraded"
+        } else {
+            "idle"
+        }
+    }
+
+    pub fn is_degraded(&self) -> bool {
+        self.status() == "degraded"
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct BridgeStatusReport {
+    pub configured: usize,
+    pub ok: usize,
+    pub degraded: usize,
+    pub idle: usize,
+    pub entries: Vec<BridgeStatusSnapshot>,
+}
+
+impl BridgeStatusReport {
+    pub fn from_entries(mut entries: Vec<BridgeStatusSnapshot>) -> Self {
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut ok = 0usize;
+        let mut degraded = 0usize;
+        let mut idle = 0usize;
+        for entry in &entries {
+            match entry.status() {
+                "ok" => ok = ok.saturating_add(1),
+                "degraded" => degraded = degraded.saturating_add(1),
+                _ => idle = idle.saturating_add(1),
+            }
+        }
+        Self {
+            configured: entries.len(),
+            ok,
+            degraded,
+            idle,
+            entries,
+        }
+    }
+
+    pub fn status(&self) -> &'static str {
+        if self.degraded > 0 {
+            "degraded"
+        } else if self.ok > 0 {
+            "ok"
+        } else if self.configured > 0 {
+            "idle"
+        } else {
+            "disabled"
+        }
+    }
+
+    pub fn has_degraded(&self) -> bool {
+        self.degraded > 0
+    }
+}

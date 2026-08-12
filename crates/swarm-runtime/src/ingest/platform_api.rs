@@ -305,7 +305,7 @@ pub(super) struct PlatformRuntimeStatus {
     pub(super) bearer_tokens: Vec<OperatorBearerTokenStatus>,
     pub(super) rate_limit: HttpRateLimitStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) bridge_health: Option<crate::bridge_runtime::BridgeStatusReport>,
+    pub(super) bridge_health: Option<swarm_core::BridgeStatusReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
