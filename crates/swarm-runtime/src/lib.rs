@@ -36,6 +36,34 @@
 //! would have cost to force `sphinx` out early, and the alternative weighed for
 //! the dev-dependency edge that carries the root's integration tests -- is in
 //! `docs/decisions/0004-split-03-four-of-eight-agents-pinned-by-ingest.md`.
+//!
+//! # Seven evolution modules are still declared here (SPLIT-04, phase 282)
+//!
+//! SPLIT-04 moved the evolution lane's leaf modules to `swarm-evolution`:
+//! `evidence`, `governance_prep`, `operator_maintenance` and `portfolio`. Seven
+//! of the ten modules it named did not go -- `canary`, `drafting`, `evolution`,
+//! `mutation`, `promotion`, `selection`, `strategy` -- because the edge runs
+//! `swarm-evolution -> swarm-runtime` (the lane reads `crate::replay`, which
+//! stays), so anything this crate still names cannot move.
+//!
+//! Six files here name those seven in non-test code: this file's
+//! `StrategyProposalRouteError` (below, seven `#[from]` variants),
+//! `ingest/mod.rs`, `ingest/tests.rs`, `kitten_agent.rs`, `sphinx_agent.rs` and
+//! `evolution_status.rs`. Every one is pinned by an earlier decision -- the
+//! crate root cannot move, `ingest/` is SPLIT-05's, and the two agents are ADR
+//! 0004's. Reversing the crate edge instead is rejected outright:
+//!
+//! ```text
+//! error: cyclic package dependency: package `swarm-runtime` depends on itself.
+//! ```
+//!
+//! IF THIS CHANGES: SPLIT-04 unblocks with SPLIT-01 and SPLIT-03, when `ingest/`
+//! leaves. The progress measure is
+//! `grep -rcE 'crate::(canary|drafting|evolution|mutation|promotion|selection|strategy)::'
+//! src/lib.rs src/ingest src/kitten_agent.rs src/sphinx_agent.rs src/evolution_status.rs`:
+//! it sums to 58 today and has to reach 0. The full argument, and what SPLIT-04
+//! did and did not buy for replay, is in
+//! `docs/decisions/0005-split-04-evolution-lane-pinned-by-ingest-and-lib.md`.
 #![allow(clippy::result_large_err)]
 
 extern crate self as swarm_runtime;

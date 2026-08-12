@@ -2,10 +2,13 @@
 //!
 //! # What this crate owns (SPLIT-04, phase 282)
 //!
-//! The modules declared below are compiled here, not in `swarm-runtime`. The
-//! dependency runs `swarm-evolution -> swarm-runtime` and never back, which is
-//! what lets these modules keep reaching `swarm_runtime::replay` while the
-//! replay lane is still in the composition root.
+//! The four modules declared below are compiled here, not in `swarm-runtime`.
+//! The dependency runs `swarm-evolution -> swarm-runtime` and never back, which
+//! is what lets them keep reaching `swarm_runtime::replay` while the replay
+//! lane is still in the composition root.
+//!
+//! `operator_maintenance` is here although SPLIT-04 did not name it: it and
+//! `evidence` import each other, so neither could cross the crate line alone.
 //!
 //! # What this crate still re-exports, and why
 //!
