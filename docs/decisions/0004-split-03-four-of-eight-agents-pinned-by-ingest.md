@@ -2,13 +2,24 @@
 
 ## Status
 
-Accepted on 2026-08-12.
+Accepted on 2026-08-12. Amended on 2026-08-12 after review, on two points in the
+Decision section: it named `kitten`'s inline test module as a consumer of the
+dev-dependency edge, which is false, and it did not record the alternative to
+that edge. The decision itself is unchanged.
 
 ## Context
 
 SPLIT-03 (phase 282) asked for one extraction: `swarm-agents`, holding the eight
-`*_agent.rs` role implementations in `crates/swarm-runtime/src/`, roughly 12,137
-lines. It satisfies v1.74's undelivered EXTRACT-01..03.
+`*_agent.rs` role implementations in `crates/swarm-runtime/src/`. That is 12,215
+lines, measured at the pre-split commit:
+
+```
+$ for f in calico kitten pounce sphinx stalker tom weaver whisker; do \
+    git show bf23a4f:crates/swarm-runtime/src/${f}_agent.rs; done | wc -l
+   12215
+```
+
+It satisfies v1.74's undelivered EXTRACT-01..03.
 
 Four roles moved: `pounce`, `stalker`, `weaver`, `whisker`. Four did not:
 `calico`, `kitten`, `sphinx`, `tom`. This ADR records why the other four cannot
@@ -125,9 +136,114 @@ $ cargo tree -p swarm-runtime -e normal --prefix none | grep -c swarm-agents
 `swarm-runtime` carries `swarm-agents` under `[dev-dependencies]` only. Cargo
 permits a cycle closed by a dev-dependency edge, because dev-dependencies do not
 participate in the build-order graph of the lib target; the same experiment that
-fails above exits 0 with the entry under `[dev-dependencies]`. That allowance is
-what lets the root's four integration tests and `kitten`'s test module keep
-constructing concrete agents without any test being moved or renamed.
+fails above exits 0 with the entry under `[dev-dependencies]`.
+
+That edge has exactly four consumers, and every one of them is a whole file
+under `tests/`. This is the complete reference set from this crate into the new
+one:
+
+```
+$ grep -rn --include='*.rs' swarm_agents crates/swarm-runtime/ | sort
+crates/swarm-runtime/tests/bridge_registry_integration.rs:10:use swarm_agents::whisker_agent::WhiskerAgent;
+crates/swarm-runtime/tests/dispatch_integration.rs:15:use swarm_agents::pounce_agent::PounceAgent;
+crates/swarm-runtime/tests/multi_agent_pipeline_integration.rs:7:use swarm_agents::stalker_agent::StalkerAgent;
+crates/swarm-runtime/tests/multi_agent_pipeline_integration.rs:8:use swarm_agents::weaver_agent::WeaverAgent;
+crates/swarm-runtime/tests/multi_agent_pipeline_integration.rs:9:use swarm_agents::whisker_agent::WhiskerAgent;
+crates/swarm-runtime/tests/pounceagent_integration.rs:6:use swarm_agents::pounce_agent::PounceAgent;
+```
+
+Six lines, four files, nothing under `src/`:
+
+```
+$ grep -rln --include='*.rs' swarm_agents crates/swarm-runtime/src | wc -l
+       0
+```
+
+So no inline `#[cfg(test)] mod tests` in the root depends on the edge --
+`kitten`'s included. An earlier revision of this ADR said otherwise; that was
+wrong, and the correction matters because it is what makes the alternative below
+cheap enough to have to argue against. `kitten`'s test module reaches for
+`calico`, which never left this crate:
+
+```
+$ grep -n 'use crate::calico_agent' crates/swarm-runtime/src/kitten_agent.rs
+2:use crate::calico_agent::parse_calico_deception_interaction;
+2556:    use crate::calico_agent::{CalicoDeceptionInteractionPayload, CalicoLifecycleStage};
+```
+
+### The alternative to the dev-dependency edge, weighed and declined
+
+Because the edge's consumers are four whole files, the cycle is not forced by
+the code -- it is chosen. Moving `dispatch_integration.rs`,
+`bridge_registry_integration.rs`, `pounceagent_integration.rs` and
+`multi_agent_pipeline_integration.rs` to `crates/swarm-agents/tests/` would let
+the `[dev-dependencies]` entry be deleted, leaving no edge at all from
+`swarm-runtime` to `swarm-agents` in either dependency table.
+
+Test accounting does not object to that. The contract is the sum and the sorted
+union of test names, not the per-lane split; an integration test is reported
+under its function path in a binary named after its file, and neither changes
+when the file changes crate. The union would be preserved exactly and only the
+G1/G2 split would move -- the same thing that already happened to the nine unit
+tests in the table below.
+
+Two costs decided it the other way.
+
+**1. The transport stack would follow the tests into the agents crate.** The
+four files use five crates `swarm-agents` does not depend on, so each would have
+to be added to its `[dev-dependencies]`:
+
+```
+$ for c in arc_swap axum swarm_consensus swarm_crypto swarm_guard; do
+    for f in dispatch bridge_registry pounceagent multi_agent_pipeline; do
+      grep -qE "\b$c\b" crates/swarm-runtime/tests/${f}_integration.rs && echo "$c ${f}_integration.rs"
+    done
+  done
+arc_swap dispatch_integration.rs
+arc_swap multi_agent_pipeline_integration.rs
+axum dispatch_integration.rs
+axum bridge_registry_integration.rs
+swarm_consensus dispatch_integration.rs
+swarm_crypto dispatch_integration.rs
+swarm_guard dispatch_integration.rs
+```
+
+```
+$ grep -cE '^(arc-swap|axum|swarm-consensus|swarm-crypto|swarm-guard)' crates/swarm-agents/Cargo.toml
+0
+```
+
+`axum` is the dependency SPLIT-01 undertook to remove from this side of the tree
+and that ADR 0002 holds SPLIT-01 open over. Putting it into a crate that does
+not have it, to buy a manifest cleanup, moves the wrong way.
+
+**2. Two of the four are not agent tests, and two straddle the split.**
+`dispatch_integration.rs` (1,899 lines) exercises the dispatcher through a
+nine-line `use swarm_runtime::{...}` group opened at `:49`, and
+`bridge_registry_integration.rs` exercises `bridge_runtime`, `control` and
+`detection::metrics`. Each names exactly one agent type, as a fixture. Filing
+them under `swarm-agents` puts a crate's integration tests in a crate that is
+not under test. And two of the four name agents from *both* crates, so
+relocating them does not make them local to either:
+
+```
+$ sed -n '15p;56p' crates/swarm-runtime/tests/dispatch_integration.rs
+use swarm_agents::pounce_agent::PounceAgent;
+    tom_agent::{ContingencyLease, GovernanceDecision, GovernancePolicy, GovernancePolicyConfig},
+$ sed -n '6p;17p' crates/swarm-runtime/tests/pounceagent_integration.rs
+use swarm_agents::pounce_agent::PounceAgent;
+use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
+```
+
+Against that, the cost of keeping the edge is bounded and known:
+`cargo test -p swarm-runtime` has to build `swarm-agents` first, and the two
+crates could not be published to a registry independently of each other. Neither
+binds this repo today.
+
+The choice costs nothing to revisit. At SPLIT-05, once `ingest/` leaves and the
+other four roles follow it, `pounceagent_integration.rs` and
+`multi_agent_pipeline_integration.rs` become tests of `swarm-agents` alone and
+can move without dragging `axum` anywhere.
 
 ### Nothing was widened
 
@@ -155,7 +271,18 @@ for was already `pub` in a `pub mod`:
   `swarm_agents::<role>_agent`. `swarm-runtime` cannot re-export them, because a
   re-export needs a normal dependency and that is the cycle.
 - SPLIT-03 stays open, in the sense ADR 0002 uses for SPLIT-01: the requirement is
-  not fully delivered until the other four roles follow `ingest/` out.
+  not fully delivered until the other four roles follow `ingest/` out. It is
+  4-of-8 by role and 1,593-of-12,215 by line. The exit criterion is mechanical,
+  so the open item cannot be lost to a reading of this prose:
+
+  ```
+  $ ls crates/swarm-runtime/src/*_agent.rs | wc -l
+         4
+  ```
+
+  It has to reach 0. The composition root carries the same note in code, at the
+  top of `crates/swarm-runtime/src/lib.rs` and on each of the four `pub mod`
+  declarations, so a reader who never opens `docs/decisions/` still finds it.
 
 ### Test accounting
 
