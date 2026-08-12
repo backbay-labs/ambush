@@ -34,7 +34,6 @@ pub mod kitten_agent;
 pub mod mutation;
 pub mod operator_maintenance;
 pub mod portfolio;
-pub mod pounce_agent;
 pub mod promotion;
 pub mod providence;
 pub mod red_swarm;

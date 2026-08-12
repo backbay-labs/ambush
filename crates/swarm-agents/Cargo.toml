@@ -12,6 +12,7 @@ rand_core.workspace = true
 serde_json.workspace = true
 swarm-core.workspace = true
 swarm-pheromone.workspace = true
+swarm-policy.workspace = true
 swarm-runtime.workspace = true
 swarm-spine.workspace = true
 swarm-whisker.workspace = true
@@ -20,9 +21,9 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# Test-only collaborators: stalker's tests drive a full policy/response round
-# trip. Neither appears in this crate's non-test code.
-swarm-policy.workspace = true
+# Test-only collaborator: stalker's tests drive a full policy/response round
+# trip. It does not appear in this crate's non-test code. (`swarm-policy` used
+# to sit here too; `pounce_agent` now names it in production, so it moved up.)
 swarm-response.workspace = true
 
 [lints]

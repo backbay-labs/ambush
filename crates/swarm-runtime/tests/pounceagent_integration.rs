@@ -3,6 +3,7 @@
 use ed25519_dalek::SigningKey;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use swarm_agents::pounce_agent::PounceAgent;
 use swarm_core::agent::{
     AgentFinding, AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode,
 };
@@ -13,7 +14,6 @@ use swarm_core::config::{
 use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
 use swarm_core::types::{AgentId, ResponseAction, Severity, SwarmAction};
 use swarm_policy::static_gate::scope_for_response_action;
-use swarm_runtime::pounce_agent::PounceAgent;
 use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 
 fn playbook() -> ResponsePlaybookConfig {
