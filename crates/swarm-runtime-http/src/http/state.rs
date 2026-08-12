@@ -35,17 +35,6 @@ use super::review::{
     review_session_promotion_readiness_handler, review_session_promotion_readiness_page_handler,
     review_session_readiness_capsule_handler,
 };
-use crate::approval::{ApprovalError, DefaultApprovalHarness};
-use crate::config::{RuntimeConfigError, load_config};
-use crate::control::{ControlError, DefaultControlPlane};
-use crate::detection::metrics::CriticalPathMetrics;
-use crate::evidence::{DefaultEvidenceHarness, OperatorEvidenceReadService};
-use crate::governance_prep::DefaultEvolutionGovernancePrepHarness;
-use crate::http::rate_limit::HttpRateLimiter;
-use crate::operator_maintenance::{OperatorMaintenanceError, OperatorMaintenanceService};
-use crate::portfolio::DefaultEvolutionPortfolioHarness;
-use crate::review_workbench::{DefaultReviewWorkbenchHarness, ReviewWorkbenchError};
-use crate::serve::{ServeError, serve_with_listener};
 use axum::Router;
 use axum::middleware;
 use axum::routing::{get, post};
@@ -53,6 +42,17 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swarm_core::config::{OperatorSurfacePaths, SwarmConfig};
+use swarm_runtime::approval::{ApprovalError, DefaultApprovalHarness};
+use swarm_runtime::config::{RuntimeConfigError, load_config};
+use swarm_runtime::control::{ControlError, DefaultControlPlane};
+use swarm_runtime::detection::metrics::CriticalPathMetrics;
+use swarm_runtime::evidence::{DefaultEvidenceHarness, OperatorEvidenceReadService};
+use swarm_runtime::governance_prep::DefaultEvolutionGovernancePrepHarness;
+use swarm_runtime::http::rate_limit::HttpRateLimiter;
+use swarm_runtime::operator_maintenance::{OperatorMaintenanceError, OperatorMaintenanceService};
+use swarm_runtime::portfolio::DefaultEvolutionPortfolioHarness;
+use swarm_runtime::review_workbench::{DefaultReviewWorkbenchHarness, ReviewWorkbenchError};
+use swarm_runtime::serve::{ServeError, serve_with_listener};
 
 /// Errors raised while building or serving the authenticated operator surface.
 #[derive(Debug, thiserror::Error)]
@@ -64,13 +64,13 @@ pub enum OperatorHttpError {
     Control(#[from] ControlError),
 
     #[error(transparent)]
-    Evidence(#[from] crate::evidence::EvidenceError),
+    Evidence(#[from] swarm_runtime::evidence::EvidenceError),
 
     #[error(transparent)]
-    Portfolio(#[from] crate::portfolio::EvolutionPortfolioError),
+    Portfolio(#[from] swarm_runtime::portfolio::EvolutionPortfolioError),
 
     #[error(transparent)]
-    GovernancePrep(#[from] crate::governance_prep::EvolutionGovernancePrepError),
+    GovernancePrep(#[from] swarm_runtime::governance_prep::EvolutionGovernancePrepError),
 
     #[error(transparent)]
     Maintenance(#[from] OperatorMaintenanceError),

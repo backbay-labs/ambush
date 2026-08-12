@@ -2924,6 +2924,7 @@ dependencies = [
  "swarm-core",
  "swarm-crypto",
  "swarm-runtime",
+ "swarm-runtime-http",
  "tokio",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -3173,6 +3174,7 @@ name = "swarm-runtime-http"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "axum",
  "clap",
  "ed25519-dalek",
  "notify",
@@ -3183,16 +3185,22 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_yaml",
  "swarm-core",
  "swarm-crypto",
  "swarm-pheromone",
  "swarm-policy",
+ "swarm-response",
  "swarm-runtime",
  "swarm-spine",
+ "swarm-whisker",
+ "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

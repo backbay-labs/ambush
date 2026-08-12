@@ -1,17 +1,17 @@
 use super::render::{escape_html, render_review_layout};
-use crate::approval::ApprovalError;
-use crate::control::ControlError;
-use crate::evidence::EvidenceError;
-use crate::governance_prep::EvolutionGovernancePrepError;
-use crate::http::rate_limit::HttpRateLimitRejection;
-use crate::operator_maintenance::OperatorMaintenanceError;
-use crate::portfolio::EvolutionPortfolioError;
-use crate::review_workbench::ReviewWorkbenchError;
-use crate::service::{ReadinessError, ServiceError};
 use axum::Json;
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Serialize;
+use swarm_runtime::approval::ApprovalError;
+use swarm_runtime::control::ControlError;
+use swarm_runtime::evidence::EvidenceError;
+use swarm_runtime::governance_prep::EvolutionGovernancePrepError;
+use swarm_runtime::http::rate_limit::HttpRateLimitRejection;
+use swarm_runtime::operator_maintenance::OperatorMaintenanceError;
+use swarm_runtime::portfolio::EvolutionPortfolioError;
+use swarm_runtime::review_workbench::ReviewWorkbenchError;
+use swarm_runtime::service::{ReadinessError, ServiceError};
 
 #[derive(Debug, Clone, Serialize)]
 struct OperatorApiErrorBody {
@@ -182,10 +182,12 @@ pub(super) fn map_operator_rate_limit_rejection(
     )
 }
 
-fn rate_limit_threshold_label(threshold: crate::service::HttpRateLimitThreshold) -> &'static str {
+fn rate_limit_threshold_label(
+    threshold: swarm_runtime::service::HttpRateLimitThreshold,
+) -> &'static str {
     match threshold {
-        crate::service::HttpRateLimitThreshold::Burst => "burst",
-        crate::service::HttpRateLimitThreshold::Sustained => "sustained",
+        swarm_runtime::service::HttpRateLimitThreshold::Burst => "burst",
+        swarm_runtime::service::HttpRateLimitThreshold::Sustained => "sustained",
     }
 }
 
@@ -409,10 +411,10 @@ mod tests {
 
     #[test]
     fn control_service_readiness_error_maps_to_internal_api_error() {
-        let error = super::map_control_error(crate::control::ControlError::Service(
-            crate::service::ServiceError::Readiness {
+        let error = super::map_control_error(swarm_runtime::control::ControlError::Service(
+            swarm_runtime::service::ServiceError::Readiness {
                 component: "substrate",
-                source: crate::service::ReadinessError::SubstrateNotDurable {
+                source: swarm_runtime::service::ReadinessError::SubstrateNotDurable {
                     backend: "in_memory".to_string(),
                 },
             },
@@ -427,7 +429,7 @@ mod tests {
     #[test]
     fn portfolio_invalid_request_maps_to_bad_request() {
         let error = super::map_portfolio_error(
-            crate::portfolio::EvolutionPortfolioError::InvalidPortfolioRequest {
+            swarm_runtime::portfolio::EvolutionPortfolioError::InvalidPortfolioRequest {
                 reason: "missing cohort".to_string(),
             },
         );
@@ -439,11 +441,12 @@ mod tests {
 
     #[test]
     fn review_evidence_artifact_not_found_maps_to_not_found() {
-        let error =
-            super::map_review_evidence_error(crate::evidence::EvidenceError::ArtifactNotFound {
+        let error = super::map_review_evidence_error(
+            swarm_runtime::evidence::EvidenceError::ArtifactNotFound {
                 kind: "replay_bundle",
                 id: "bundle:missing".to_string(),
-            });
+            },
+        );
 
         assert_eq!(error.status, StatusCode::NOT_FOUND);
         assert_eq!(error.title, "Not Found");

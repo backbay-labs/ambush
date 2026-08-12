@@ -4,11 +4,13 @@ use super::helpers::{
     parse_portfolio_review_state, portfolio_harness,
 };
 use super::state::OperatorHttpState;
-use crate::governance_prep::{EvolutionGovernancePacketSetList, EvolutionPortfolioHistoryList};
-use crate::portfolio::EvolutionPortfolioList;
 use axum::Json;
 use axum::extract::{Path as RoutePath, Query, State};
 use serde::Deserialize;
+use swarm_runtime::governance_prep::{
+    EvolutionGovernancePacketSetList, EvolutionPortfolioHistoryList,
+};
+use swarm_runtime::portfolio::EvolutionPortfolioList;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct PortfolioListQuery {
@@ -26,7 +28,7 @@ pub(super) struct CohortListQuery {
 pub(super) async fn portfolio_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(portfolio_id): RoutePath<String>,
-) -> Result<Json<crate::portfolio::EvolutionPortfolioReport>, OperatorApiError> {
+) -> Result<Json<swarm_runtime::portfolio::EvolutionPortfolioReport>, OperatorApiError> {
     let harness = portfolio_harness(&state)?;
     let lookup = harness
         .load_portfolio(&portfolio_id)
@@ -60,7 +62,8 @@ pub(super) async fn portfolio_list_handler(
 pub(super) async fn governance_packet_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(packet_id): RoutePath<String>,
-) -> Result<Json<crate::portfolio::EvolutionGovernanceReviewPacketReport>, OperatorApiError> {
+) -> Result<Json<swarm_runtime::portfolio::EvolutionGovernanceReviewPacketReport>, OperatorApiError>
+{
     let harness = portfolio_harness(&state)?;
     let lookup = harness
         .load_governance_review_packet(&packet_id)
@@ -74,7 +77,10 @@ pub(super) async fn governance_packet_handler(
 pub(super) async fn packet_set_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(packet_set_id): RoutePath<String>,
-) -> Result<Json<crate::governance_prep::EvolutionGovernancePacketSetReport>, OperatorApiError> {
+) -> Result<
+    Json<swarm_runtime::governance_prep::EvolutionGovernancePacketSetReport>,
+    OperatorApiError,
+> {
     let harness = governance_harness(&state)?;
     let lookup = harness
         .load_packet_set(&packet_set_id)
@@ -103,7 +109,8 @@ pub(super) async fn packet_set_list_handler(
 pub(super) async fn portfolio_history_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(history_id): RoutePath<String>,
-) -> Result<Json<crate::governance_prep::EvolutionPortfolioHistoryReport>, OperatorApiError> {
+) -> Result<Json<swarm_runtime::governance_prep::EvolutionPortfolioHistoryReport>, OperatorApiError>
+{
     let harness = governance_harness(&state)?;
     let lookup = harness
         .load_portfolio_history(&history_id)

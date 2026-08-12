@@ -45,7 +45,7 @@ pub mod mutation {
 }
 
 pub mod operator_http {
-    pub use swarm_runtime::operator_http::*;
+    pub use swarm_runtime_http::operator_http::*;
 }
 
 pub mod operator_maintenance {

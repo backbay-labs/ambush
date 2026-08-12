@@ -7,11 +7,11 @@ use super::render::{
     render_verification_filter_options, review_link, subject_api_path,
 };
 use super::review::ReviewHomeContext;
-use crate::evidence::{
+use swarm_runtime::evidence::{
     EvidenceBundle, EvidenceBundleList, EvidenceVerificationReport, EvidenceVerificationStatus,
     PromotionEvidencePacket, PromotionEvidencePacketList, PromotionEvidenceRecommendation,
 };
-use crate::review_workbench::{
+use swarm_runtime::review_workbench::{
     ReviewCapsule, ReviewCapsuleImport, ReviewCapsuleImportList, ReviewCapsuleList,
     ReviewDelegationPacket, ReviewDelegationPacketList, ReviewSessionExport, ReviewSessionList,
     ReviewSessionMaintenanceHandoff, ReviewSessionPromotionReadiness, ReviewSessionResolved,
@@ -66,11 +66,11 @@ pub(super) fn render_review_session_list_page(list: &ReviewSessionList) -> Strin
 
 pub(super) fn render_review_session_page(
     resolved: &ReviewSessionResolved,
-    exports: &[crate::review_workbench::ReviewSessionExportRecord],
-    readiness_reports: &[crate::review_workbench::ReviewSessionPromotionReadinessRecord],
-    handoffs: &[crate::review_workbench::ReviewSessionMaintenanceHandoffRecord],
-    capsules: &[crate::review_workbench::ReviewCapsuleRecord],
-    delegations: &[crate::review_workbench::ReviewDelegationPacketRecord],
+    exports: &[swarm_runtime::review_workbench::ReviewSessionExportRecord],
+    readiness_reports: &[swarm_runtime::review_workbench::ReviewSessionPromotionReadinessRecord],
+    handoffs: &[swarm_runtime::review_workbench::ReviewSessionMaintenanceHandoffRecord],
+    capsules: &[swarm_runtime::review_workbench::ReviewCapsuleRecord],
+    delegations: &[swarm_runtime::review_workbench::ReviewDelegationPacketRecord],
 ) -> String {
     let mut lane_rows = String::new();
     for summary in &resolved.lane_summaries {

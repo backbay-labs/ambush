@@ -2,10 +2,6 @@ use super::auth::{AuthenticatedOperatorPrincipal, require_operator_api_scope};
 use super::error::{OperatorApiError, map_approval_error};
 use super::helpers::{approval_harness, limit_approval_ledger_list, limit_approval_set_list};
 use super::state::OperatorHttpState;
-use crate::approval::{
-    ApprovalLedgerList, ApprovalLedgerLookup, ApprovalSetList, ApprovalSetReport,
-    ApprovalVerdictStatus, ThresholdRule,
-};
 use axum::Json;
 use axum::extract::{Extension, Path as RoutePath, Query, State};
 use axum::http::StatusCode;
@@ -13,6 +9,10 @@ use serde::Deserialize;
 use serde_json::json;
 use swarm_core::config::OperatorScope;
 use swarm_crypto::DetachedSignature;
+use swarm_runtime::approval::{
+    ApprovalLedgerList, ApprovalLedgerLookup, ApprovalSetList, ApprovalSetReport,
+    ApprovalVerdictStatus, ThresholdRule,
+};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ApprovalSetListQuery {
@@ -183,7 +183,7 @@ pub(super) async fn approval_vote_append_handler(
 async fn resume_demo_approval(
     runtime_base_url: &str,
     approval_set_id: &str,
-    receipt_pack: &crate::approval::ApprovalReceiptPackReport,
+    receipt_pack: &swarm_runtime::approval::ApprovalReceiptPackReport,
 ) -> Result<(), OperatorApiError> {
     let url = format!(
         "{}/v1/demo/approvals/{}/resume",

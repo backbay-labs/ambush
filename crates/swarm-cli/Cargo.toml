@@ -17,6 +17,7 @@ serde_json.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
 swarm-runtime.workspace = true
+swarm-runtime-http.workspace = true
 tokio.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true

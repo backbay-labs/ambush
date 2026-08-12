@@ -2,16 +2,16 @@ use super::auth::{AuthenticatedOperatorPrincipal, require_operator_api_scope};
 use super::error::{OperatorApiError, map_maintenance_error};
 use super::helpers::{limit_maintenance_list, maintenance_service, parse_maintenance_status};
 use super::state::OperatorHttpState;
-use crate::operator_maintenance::{
-    OperatorMaintenanceExecution, OperatorMaintenanceList, OperatorMaintenanceRecord,
-    OperatorMaintenanceRequest,
-};
 use axum::Json;
 use axum::extract::{Extension, Path as RoutePath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use swarm_core::config::OperatorScope;
+use swarm_runtime::operator_maintenance::{
+    OperatorMaintenanceExecution, OperatorMaintenanceList, OperatorMaintenanceRecord,
+    OperatorMaintenanceRequest,
+};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct MaintenanceActionListQuery {

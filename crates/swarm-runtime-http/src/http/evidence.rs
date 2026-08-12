@@ -1,12 +1,12 @@
 use super::error::{OperatorApiError, map_evidence_api_error};
 use super::helpers::{evidence_service, limit_evidence_bundle_list, parse_evidence_subject_kind};
 use super::state::OperatorHttpState;
-use crate::evidence::{
-    EvidenceBundle, EvidenceBundleList, EvidenceVerificationReport, PromotionEvidencePacket,
-};
 use axum::Json;
 use axum::extract::{Path as RoutePath, Query, State};
 use serde::Deserialize;
+use swarm_runtime::evidence::{
+    EvidenceBundle, EvidenceBundleList, EvidenceVerificationReport, PromotionEvidencePacket,
+};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct EvidenceListQuery {

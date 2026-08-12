@@ -1,20 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::LocalOperatorSurface;
-use crate::approval::DefaultApprovalHarness;
-use crate::control::{CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER};
-use crate::evidence::{
-    EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
-    EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
-    FileEvidenceBundleStore, FileEvidenceVerificationStore, FilePromotionEvidencePacketStore,
-    PromotionEvidenceAttachment, PromotionEvidencePacket, PromotionEvidenceRecommendation,
-};
-use crate::ingest::{DemoProofPackage, IngestState, detect_http_router};
-use crate::replay::{
-    ExperimentLineage, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
-    ReplayScenarioMetadata, ReplayScenarioStep,
-};
-use crate::service::EventExecutionContext;
 use axum::Json;
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -47,6 +33,22 @@ use swarm_core::types::{
 use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
 use swarm_policy::ApprovalContext;
 use swarm_response::SwarmFindingEnvelope;
+use swarm_runtime::approval::DefaultApprovalHarness;
+use swarm_runtime::control::{
+    CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
+};
+use swarm_runtime::evidence::{
+    EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
+    EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
+    FileEvidenceBundleStore, FileEvidenceVerificationStore, FilePromotionEvidencePacketStore,
+    PromotionEvidenceAttachment, PromotionEvidencePacket, PromotionEvidenceRecommendation,
+};
+use swarm_runtime::ingest::{DemoProofPackage, IngestState, detect_http_router};
+use swarm_runtime::replay::{
+    ExperimentLineage, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
+    ReplayScenarioMetadata, ReplayScenarioStep,
+};
+use swarm_runtime::service::EventExecutionContext;
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, CorrelatedIncident, IncidentMemberDecision, IncidentStore,
     PolicyRecord, ReplayBundle, ReplayBundleStore,
@@ -55,24 +57,24 @@ use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, Telemet
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use tower::ServiceExt;
 
-use crate::drafting::EvolutionValidationBundleStatus;
-use crate::evolution::{
+use swarm_runtime::drafting::EvolutionValidationBundleStatus;
+use swarm_runtime::evolution::{
     EvolutionProposalBlockingReason, EvolutionProposalProofStatus, EvolutionProposalProofSummary,
     EvolutionProposalReviewState,
 };
-use crate::governance_prep::{
+use swarm_runtime::governance_prep::{
     EvolutionGovernancePacketSetEntryReport, EvolutionGovernancePacketSetReport,
     EvolutionPortfolioHistoryCohortSummary, EvolutionPortfolioHistoryEntryReport,
     EvolutionPortfolioHistoryOutcomeCounts, EvolutionPortfolioHistoryOutcomeKind,
     EvolutionPortfolioHistoryReport, EvolutionPortfolioHistoryReviewDebtKind,
     FileEvolutionGovernancePacketSetStore, FileEvolutionPortfolioHistoryStore,
 };
-use crate::portfolio::{
+use swarm_runtime::portfolio::{
     EvolutionGovernanceReviewPacketReport, EvolutionPortfolioDecisionRecord,
     EvolutionPortfolioEntryReport, EvolutionPortfolioEntryReviewState, EvolutionPortfolioReport,
     FileEvolutionGovernanceReviewPacketStore, FileEvolutionPortfolioStore,
 };
-use crate::review_workbench::DefaultReviewWorkbenchHarness;
+use swarm_runtime::review_workbench::DefaultReviewWorkbenchHarness;
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -96,7 +98,7 @@ fn operator_config() -> SwarmConfig {
         name: "operator-http".to_string(),
         description: "operator surface config".to_string(),
         runtime: RuntimeSettings {
-            mode: crate::RuntimeMode::DetectOnly,
+            mode: swarm_runtime::RuntimeMode::DetectOnly,
             demo_mode: false,
             telemetry_sources: vec![TelemetrySourceConfig {
                 name: "synthetic".to_string(),
@@ -469,7 +471,7 @@ fn sample_portfolio_report() -> EvolutionPortfolioReport {
             blocking_reasons: Vec::new(),
             decision_history: vec![EvolutionPortfolioDecisionRecord {
                 decided_at_ms: 1_710_000_000_120,
-                action: crate::portfolio::EvolutionPortfolioDecisionAction::Include,
+                action: swarm_runtime::portfolio::EvolutionPortfolioDecisionAction::Include,
                 reason: "include the ready portfolio entry".to_string(),
             }],
         }],
@@ -571,10 +573,11 @@ fn sample_portfolio_history_report() -> EvolutionPortfolioHistoryReport {
             ready_for_governance: true,
             blocking_reasons: Vec::new(),
             memory_ids: vec!["memory:office_red_ready_v1:1".to_string()],
-            latest_rollout_state: Some(crate::strategy::StrategyRolloutStateSummary {
-                source_kind: crate::strategy::StrategyMemorySourceKind::Promotion,
+            latest_rollout_state: Some(swarm_runtime::strategy::StrategyRolloutStateSummary {
+                source_kind: swarm_runtime::strategy::StrategyMemorySourceKind::Promotion,
                 source_artifact_id: "promotion:office_red_ready_v1".to_string(),
-                outcome_kind: crate::strategy::StrategyMemoryOutcomeKind::StableInProduction,
+                outcome_kind:
+                    swarm_runtime::strategy::StrategyMemoryOutcomeKind::StableInProduction,
                 observed_at_ms: 1_710_000_000_250,
             }),
             outcome: EvolutionPortfolioHistoryOutcomeKind::StableInProduction,
@@ -680,7 +683,7 @@ fn sample_subject_verification_report(
         signer_id: "local-evidence-signer".to_string(),
         signer_key_id: "key:red".to_string(),
         expected_key_id: Some("key:red".to_string()),
-        checks: vec![crate::evidence::EvidenceVerificationCheck {
+        checks: vec![swarm_runtime::evidence::EvidenceVerificationCheck {
             name: "canonical_payload".to_string(),
             passed: true,
             details: "canonical payload bytes normalized cleanly".to_string(),
@@ -694,7 +697,7 @@ fn sample_promotion_evidence_packet() -> PromotionEvidencePacket {
             promotion_id: "promotion:red".to_string(),
             created_at_ms: 1_710_000_000_900,
             window_id: "production-primary".to_string(),
-            promotion_status: crate::promotion::ProductionPromotionStatus::Completed,
+            promotion_status: swarm_runtime::promotion::ProductionPromotionStatus::Completed,
             promoted_strategy_id: "office_red_ready_v1".to_string(),
             fallback_strategy_id: "office_control_v1".to_string(),
             canary_run_id: "canary:red".to_string(),
@@ -1741,7 +1744,7 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
 
     let runtime_config_path = root.join("runtime-config.yaml");
     let mut runtime_config = operator_config();
-    runtime_config.runtime.mode = crate::RuntimeMode::LiveResponse;
+    runtime_config.runtime.mode = swarm_runtime::RuntimeMode::LiveResponse;
     runtime_config.runtime.demo_mode = true;
     runtime_config.policy.human_gate_severity = swarm_core::types::Severity::Low;
     // Lowering `human_gate_severity` is not sufficient on its own. `operator_config()`

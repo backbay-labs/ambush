@@ -1,18 +1,19 @@
-pub mod approval;
-pub mod auth;
-pub mod control;
-pub mod error;
-pub mod evidence;
-pub mod evolution;
-pub mod helpers;
-pub mod maintenance;
-mod pages;
+//! The part of the operator HTTP surface that stayed in the composition root.
+//!
+//! # Placement (SPLIT-01, phase 282)
+//!
+//! Everything else that lived here -- the authenticated operator surface, its
+//! handlers, its HTML rendering and its tests -- moved to `swarm-runtime-http`.
+//! `rate_limit` did NOT, because `ingest` uses it from non-test code:
+//! `ingest/mod.rs` holds an `HttpRateLimiter` for the platform API surface and
+//! `ingest/platform_api.rs` maps its `HttpRateLimitRejection` onto a 429.
+//!
+//! Promoting it into `swarm-runtime-http` would make `swarm-runtime` depend on
+//! the transport crate, which is exactly the cycle the split exists to remove.
+//! It therefore stays at its original path: `ingest` is untouched by the split,
+//! and `swarm-runtime-http` reaches it as `swarm_runtime::http::rate_limit`.
+//!
+//! IF THIS CHANGES: once `ingest` no longer needs a rate limiter -- or once
+//! `ingest` itself moves out of the composition root -- this module and the
+//! `axum` dependency it forces can follow the rest of the surface upward.
 pub mod rate_limit;
-pub mod render;
-pub mod review;
-pub mod state;
-
-#[cfg(test)]
-mod tests;
-
-pub use state::{LocalOperatorSurface, OperatorHttpError};

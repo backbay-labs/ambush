@@ -32,7 +32,6 @@ pub mod ingest;
 pub mod investigation;
 pub mod kitten_agent;
 pub mod mutation;
-pub mod operator_http;
 pub mod operator_maintenance;
 pub mod portfolio;
 pub mod pounce_agent;
