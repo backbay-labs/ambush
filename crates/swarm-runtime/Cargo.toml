@@ -11,6 +11,17 @@ z3 = ["dep:z3"]
 
 [dependencies]
 async-trait.workspace = true
+# NOT REMOVED BY SPLIT-01, AND SPLIT-01 SAID IT WOULD BE. SPLIT-01 names six
+# transport dependencies to take out of this manifest; five left with the moved
+# code (`hyper` and `hyper-util` are now reachable only through `axum` and
+# `tonic`, `tokio-rustls` only through `async-nats`, and `rustls-pemfile` and
+# `x509-parser` are out of this crate's graph entirely). `axum` did not, because
+# two things below the split still name it in NON-TEST code: `ingest/` imports
+# it directly in six files, and `http/rate_limit.rs` -- which stayed because
+# `ingest` uses it -- imports `axum::http::HeaderMap`. Both belong to SPLIT-05
+# (`swarm-ingest-runtime`), so this edge leaves with that extraction, not this
+# one. See `src/http/mod.rs` for the full argument. Do not read the absence of
+# the other five as evidence that this crate is off the transport stack.
 axum.workspace = true
 anyhow.workspace = true
 clap = { version = "4.5", features = ["derive"] }
