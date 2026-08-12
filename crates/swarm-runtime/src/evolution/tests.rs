@@ -7,9 +7,10 @@ use super::{
     EvolutionProposalAssuranceDecision, EvolutionProposalAssuranceSolverSummary,
     EvolutionProposalAssuranceSummary, EvolutionProposalBlockingReason,
     EvolutionProposalCreateRequest, EvolutionProposalDecisionAction, EvolutionProposalProofStatus,
-    EvolutionProposalReviewState, EvolutionSolverProofStatus, FileEvolutionProofStore,
-    FileEvolutionProposalStore, FormalSafetyGate, StrategyGenome, assurance_gate_block_reason,
-    assurance_rollout_state, build_assurance_waiver_summary, render_evolution_handoff,
+    EvolutionProposalReviewState, EvolutionSolverCounterexample, EvolutionSolverInvariantArtifact,
+    EvolutionSolverProofStatus, FileEvolutionProofStore, FileEvolutionProposalStore,
+    FormalSafetyGate, StrategyGenome, assurance_gate_block_reason, assurance_rollout_state,
+    build_assurance_waiver_summary, persist_harvested_assurance_cases, render_evolution_handoff,
     render_evolution_proof, render_evolution_proposal, render_evolution_proposal_list,
     validate_assurance_waiver,
 };
@@ -1999,6 +2000,114 @@ async fn formal_safety_gate_admits_candidate_whose_detect_stage_ran_slow() {
             .filter(|invariant| !invariant.passed)
             .map(|invariant| (invariant.name.clone(), invariant.details.clone()))
             .collect::<Vec<_>>()
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The evolution lane does not only READ scenario manifests, it WRITES them:
+/// `FileEvolutionAssuranceCaseStore::persist` serialises a harvested case to
+/// `data/evolution-assurance-cases/scenarios/*.yaml`, and anything that later
+/// picks one up reaches it through `load_scenario_manifest` like any other
+/// fixture. So a harvested scenario carries the same obligation as a
+/// hand-authored one: declare a class some safety invariant actually reads.
+///
+/// `harvested_solver_counterexample_scenario` declared `mixed`, which is the
+/// one class no invariant reads -- the lane was minting scenarios its own
+/// `scenario_class_declared` verification refuses, and that every other
+/// class-keyed site skips without saying so.
+///
+/// Kept off the `z3` feature (which the gate does not build) by synthesising
+/// the one input the solver harvest keys on: a solver artifact carrying
+/// counterexample bindings. Everything else -- experiment manifest,
+/// verification, proof, store, YAML round-trip -- is the production path.
+#[tokio::test]
+async fn harvested_solver_counterexample_declares_a_class_a_safety_invariant_reads() {
+    let root = unique_temp_dir("assurance-harvest-solver-class");
+    let replay_dir = root.join("replay");
+    let verification_dir = root.join("verification");
+    let proofs_dir = root.join("proofs");
+    let harvest_dir = root.join("assurance-cases");
+    let config_path = repo_root().join("rulesets/default.yaml");
+
+    let mut config = sample_config();
+    config.evolution.assurance.harvest.results_dir = harvest_dir.display().to_string();
+
+    let replay =
+        DefaultReplayHarness::from_config(&config_path, config.clone(), &replay_dir).unwrap();
+    let verification = replay
+        .evaluate_verification_path(office_control_experiment(), &verification_dir)
+        .await
+        .unwrap();
+    let proof_harness =
+        DefaultEvolutionProofHarness::from_config(&config_path, config.clone(), &proofs_dir)
+            .unwrap();
+    let proof = proof_harness
+        .create_proof(
+            office_control_experiment(),
+            &verification_dir,
+            &verification.report.verification_id,
+        )
+        .unwrap();
+
+    let mut proof_report = proof.report.clone();
+    proof_report.solver_artifacts = vec![EvolutionSolverInvariantArtifact {
+        invariant_name: "medium_confidence_floor".to_string(),
+        solver: "custom_z3".to_string(),
+        status: EvolutionSolverProofStatus::Counterexample,
+        timeout_ms: 1_000,
+        duration_ms: 1,
+        compiled_query_sha256: "0".repeat(64),
+        attestation_sha256: "0".repeat(64),
+        counterexamples: vec![EvolutionSolverCounterexample {
+            name: "medium_confidence".to_string(),
+            value: "0.7".to_string(),
+        }],
+        reason_unknown: None,
+    }];
+
+    let manifest =
+        crate::replay::load_detector_experiment_manifest(office_control_experiment()).unwrap();
+    // Blocked, but with the coverage half already satisfied, so the solver
+    // harvest is the only thing that runs and the only thing that writes.
+    let mut assurance = passed_assurance_summary();
+    assurance.decision = EvolutionProposalAssuranceDecision::Blocked;
+
+    let case_ids = persist_harvested_assurance_cases(
+        &config_path,
+        &config,
+        "evolution_proposal:harvest-class-test",
+        1_700_000_000_000,
+        &manifest,
+        Some(&verification),
+        Some(&proof_report),
+        &assurance,
+    )
+    .unwrap();
+    assert_eq!(
+        case_ids.len(),
+        1,
+        "one solver artifact with bindings must harvest exactly one case"
+    );
+
+    let scenario_path = fs::read_dir(harvest_dir.join("scenarios"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .next()
+        .expect("the harvest must have written a scenario manifest");
+    let harvested = crate::replay::load_scenario_manifest(&scenario_path).unwrap_or_else(|error| {
+        panic!("the evolution lane wrote a scenario no lane can load: {error}")
+    });
+
+    assert_eq!(
+        harvested.manifest.metadata.class,
+        crate::replay::ReplayScenarioClass::Adversarial,
+        "a harvested solver counterexample is a witness that a detector safety invariant \
+         can be violated, so the obligation it carries is `known_bad_coverage`'s: the \
+         detector must fire on it. `mixed` carries no obligation at all and fails \
+         `scenario_class_declared`; `benign` would assert the opposite obligation and \
+         turn any real detection into a false positive"
     );
 
     let _ = fs::remove_dir_all(root);

@@ -1,7 +1,7 @@
 use super::types::{
     DetectorCandidateManifest, DetectorExperimentManifest, LoadedDetectorExperiment,
-    LoadedReplayScenario, LoadedReplaySuite, ReplayHarnessError, ReplayScenarioInput,
-    ReplayScenarioManifest, ReplaySuiteManifest, VerificationCorpusManifest,
+    LoadedReplayScenario, LoadedReplaySuite, ReplayHarnessError, ReplayScenarioClass,
+    ReplayScenarioInput, ReplayScenarioManifest, ReplaySuiteManifest, VerificationCorpusManifest,
 };
 use std::fs;
 use std::path::Path;
@@ -94,6 +94,39 @@ fn validate_manifest(
     path: &Path,
     manifest: &ReplayScenarioManifest,
 ) -> Result<(), ReplayHarnessError> {
+    // FIRST, because it is the precondition every lane downstream is written
+    // on. Nine sites across the runtime branch on `metadata.class` --
+    // `replay::metrics` (the two rate denominators, the regression class filter
+    // and the known-bad gate), `evasion_coverage` (adversarial and benign
+    // corpora), `red_swarm`, `mutation::fitness` and `evolution::assurance` --
+    // and `Mixed` matches no branch any of them takes. Each one silently skips
+    // or mis-sorts such a scenario: it is counted in `total_scenarios` but sits
+    // in neither `detection_rate` nor `false_positive_rate`, so a detection it
+    // fires is scored by nothing and every gate still passes.
+    //
+    // Only the verification lane noticed, through the `scenario_class_declared`
+    // invariant. Rather than repeat that check at nine call sites -- nine
+    // reminders that drift -- it is asserted once here. This is the single
+    // deserialization entry point for a scenario manifest, and every one of
+    // those lanes reaches a scenario through `load_scenario_manifest`, so an
+    // unclassified scenario never becomes a `LoadedReplayScenario` at all.
+    //
+    // The ABSENT spelling is already refused one step earlier, by serde: `class`
+    // is mandatory and `ReplayScenarioClass` has no `Default`. This refuses the
+    // spelling serde cannot see, an explicit `class: mixed`, and refuses it in
+    // the same place and the same shape.
+    if manifest.metadata.class == ReplayScenarioClass::Mixed {
+        return Err(ReplayHarnessError::ScenarioValidation {
+            path: path.to_path_buf(),
+            reason: concat!(
+                "metadata.class is `mixed`, which no safety invariant reads: ",
+                "`known_bad_coverage` demands a detection only from `adversarial` ",
+                "scenarios and `false_positive_bound` bounds detections only on ",
+                "`benign` ones. Classify the scenario `adversarial` or `benign`"
+            )
+            .to_string(),
+        });
+    }
     if manifest.name.trim().is_empty() {
         return Err(ReplayHarnessError::ScenarioValidation {
             path: path.to_path_buf(),

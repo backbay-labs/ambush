@@ -1294,10 +1294,11 @@ metadata:
 }
 
 /// The same vacuity, reached by declaring the class explicitly rather than by
-/// omitting it. Making the field mandatory closes the omission path but leaves
+/// omitting it. Making the field mandatory closes the omission path but left
 /// this one wide open -- and `harvested_solver_counterexample_scenario` in the
-/// evolution lane writes `class: mixed` today. An unclassified scenario is a
-/// weak input however it is spelled, so it must fail closed here too.
+/// evolution lane used to write `class: mixed` into every harvested assurance
+/// case. An unclassified scenario is a weak input however it is spelled, so it
+/// must fail closed here too.
 #[tokio::test]
 async fn verification_does_not_pass_vacuously_on_a_scenario_that_declares_class_mixed() {
     let yaml = format!(
@@ -1359,15 +1360,26 @@ metadata:
     let _ = fs::remove_dir_all(root);
 }
 
-/// Pins the SHAPE of the refusal for an explicit `class: mixed`. Serde cannot
-/// catch that one -- the value is well formed -- so a named gating invariant
-/// does, and it records the offending scenario as its own counterexample. The
-/// alternative considered was making `Mixed` subject to both existing
-/// invariants; that also fails closed, but it fails through two contradictory
-/// messages ("expected at least one detection" AND "produced a detection on a
-/// benign control"), so the evidence bundle would misdescribe the reason.
+/// Pins the SHAPE of the refusal for an explicit `class: mixed`.
+///
+/// b78bbfb caught this spelling with the `scenario_class_declared` invariant,
+/// on the reasoning that serde cannot see it. Serde cannot, but
+/// `validate_manifest` can, and the invariant only ever covered the
+/// verification lane -- eight other sites read `metadata.class` and skipped a
+/// `mixed` scenario in silence. The refusal therefore MOVED one step earlier,
+/// to the single scenario-load entry point every lane goes through, so it now
+/// covers all nine. See
+/// `scenario_manifest_that_declares_class_mixed_is_refused_at_load` for the
+/// unit-level statement and
+/// `experiment_scores_every_counted_scenario_into_a_rate_denominator` for the
+/// lane this used to miss.
+///
+/// A parse error was the outcome b78bbfb traded away to get a named failure.
+/// The trade is reversed here, but the diagnostic is not lost: the refusal
+/// still names the manifest, the offending value, and both invariants that
+/// would have been responsible for it.
 #[tokio::test]
-async fn verification_reports_a_mixed_class_scenario_under_scenario_class_declared() {
+async fn verification_refuses_a_mixed_class_scenario_before_any_invariant_runs() {
     let yaml = format!(
         r#"name: mixed_scenario
 description: Scenario manifest that declares the mixed class
@@ -1387,32 +1399,70 @@ metadata:
         ExtraScenarioPlacement::KnownBadSuite,
     )
     .await;
+
+    let error = outcome
+        .err()
+        .map(|error| error.to_string())
+        .expect("a corpus carrying an unclassified scenario must not produce a report at all");
+    assert!(
+        error.contains("mixed-scenario.yaml"),
+        "refusal must name the offending manifest, got: {error}"
+    );
+    assert!(
+        error.contains("`mixed`"),
+        "refusal must name the offending value, got: {error}"
+    );
+    assert!(
+        error.contains("known_bad_coverage") && error.contains("false_positive_bound"),
+        "refusal must name the invariants that would have owned it, got: {error}"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The other half of moving the refusal: `scenario_class_declared` is retained,
+/// and a clean corpus must still say so in the bundle it signs.
+///
+/// The loader now makes this invariant unfailable through the load path, which
+/// is the point -- it is the second line, not the first. It is kept because the
+/// verification report is signed evidence and a reader of that bundle should
+/// see the corpus assert the property, not have to know that some loader
+/// enforced it; and because "there is exactly one deserialization entry point"
+/// is a property of today's tree, not a guarantee about tomorrow's.
+#[tokio::test]
+async fn verification_attests_scenario_class_declared_on_a_classified_corpus() {
+    let yaml = format!(
+        r#"name: classified_scenario
+description: Scenario manifest declaring adversarial, listed in the known-bad suite
+seed_time_ms: 1700000700000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: adversarial
+  tags:
+    - classified
+{DETECTING_SCENARIO_BODY}"#
+    );
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-classified-corpus",
+        "classified-scenario.yaml",
+        &yaml,
+        ExtraScenarioPlacement::KnownBadSuite,
+    )
+    .await;
     let report = outcome.unwrap().report;
 
-    assert!(!report.passed);
     let invariant = report
         .invariants
         .iter()
         .find(|invariant| invariant.name == "scenario_class_declared")
         .expect("verification must carry a scenario_class_declared invariant");
-    assert!(!invariant.passed);
-    assert_eq!(invariant.actual, serde_json::json!(1));
-    assert_eq!(
-        invariant
-            .counterexamples
-            .iter()
-            .map(|counterexample| counterexample.subject.as_str())
-            .collect::<Vec<_>>(),
-        vec!["mixed_scenario"]
-    );
-    // Every OTHER invariant is green, which is the point: nothing else in the
-    // corpus is wrong, and without this invariant the report would say passed.
+    assert!(invariant.passed, "{invariant:#?}");
+    assert_eq!(invariant.actual, serde_json::json!(0));
     assert!(
-        report
-            .invariants
-            .iter()
-            .filter(|invariant| invariant.name != "scenario_class_declared")
-            .all(|invariant| invariant.passed)
+        report.passed,
+        "a fully classified corpus must verify clean: {:#?}",
+        report.invariants
     );
 
     let _ = fs::remove_dir_all(root);
@@ -1706,6 +1756,256 @@ fn assert_invariant_owns_scenario(report: &super::DetectorVerificationReport, sc
         "{:#?}",
         report.invariants
     );
+}
+/// `verify_scenario_class_declared` refuses `mixed` in ONE lane. Eight other
+/// sites read `metadata.class` with no equivalent precondition -- `metrics.rs`
+/// (four), `evasion_coverage.rs` (two), `red_swarm.rs`, `mutation/fitness.rs`
+/// and `evolution/assurance.rs` -- and each one silently skips or mis-sorts a
+/// scenario that matches neither `Adversarial` nor `Benign`.
+///
+/// The cheap structural answer is not nine reminders that will drift. Every one
+/// of those lanes reaches a scenario through exactly one function,
+/// `load_scenario_manifest`, so the precondition belongs there: an unclassified
+/// scenario must not become a `LoadedReplayScenario` at all. That is the same
+/// refusal the ABSENT spelling already gets -- see
+/// `scenario_manifest_that_omits_class_is_refused_at_load` -- moved one step
+/// later so it also covers the spelling serde cannot see.
+#[test]
+fn scenario_manifest_that_declares_class_mixed_is_refused_at_load() {
+    let root = unique_temp_dir("scenario-mixed-class");
+    let path = root.join("mixed-scenario.yaml");
+    fs::write(
+        &path,
+        format!(
+            r#"name: mixed_scenario
+description: Scenario manifest that declares the mixed class
+seed_time_ms: 1700000700000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: mixed
+  tags:
+    - unclassified
+{UNCLASSIFIED_SCENARIO_BODY}"#
+        ),
+    )
+    .unwrap();
+
+    let error = load_scenario_manifest(&path)
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| {
+            panic!(
+                "`class: mixed` loaded cleanly; every lane keyed off metadata.class \
+                 will now skip or mis-sort `{}` with nothing said",
+                path.display()
+            )
+        });
+    assert!(
+        error.contains("mixed"),
+        "refusal must name the class it refused, got: {error}"
+    );
+    assert!(
+        error.contains("mixed-scenario"),
+        "refusal must name the offending manifest, got: {error}"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The reachability proof for the paragraph above, in a SECOND lane.
+///
+/// `replay::metrics` splits a suite into `adversarial_scenarios` (the
+/// `detection_rate` denominator) and `benign_scenarios` (the
+/// `false_positive_rate` denominator) and counts everything into
+/// `total_scenarios`. A `mixed` scenario lands in `total_scenarios` and in
+/// NEITHER denominator, so its detections are scored by nothing -- and the
+/// experiment lane, unlike the verification lane, carries no
+/// `scenario_class_declared` to notice. The fixture below fires the exact
+/// office parent/child detection `false_positive_delta` exists to bound.
+///
+/// The property asserted is the one that must hold in every lane: a scenario the
+/// experiment counted must be a scenario some rate is computed over.
+#[tokio::test]
+async fn experiment_scores_every_counted_scenario_into_a_rate_denominator() {
+    let root = unique_temp_dir("experiment-mixed-class");
+    let results_dir = root.join("results");
+    let experiments_dir = root.join("experiments-results");
+    let scenarios_dir = root.join("scenarios");
+    let suites_dir = root.join("scenario-suites");
+    let experiments_src_dir = root.join("experiments");
+    let verifications_dir = root.join("verifications");
+    fs::create_dir_all(&scenarios_dir).unwrap();
+    fs::create_dir_all(&suites_dir).unwrap();
+    fs::create_dir_all(&experiments_src_dir).unwrap();
+    fs::create_dir_all(&verifications_dir).unwrap();
+
+    let office_path = write_scenario(
+        &scenarios_dir,
+        "office-dropper-correlation.yaml",
+        &scenario_manifest(),
+    );
+    let benign_path = write_scenario(&scenarios_dir, "benign-baseline.yaml", &benign_manifest());
+    let mixed_path = scenarios_dir.join("mixed-scenario.yaml");
+    fs::write(
+        &mixed_path,
+        format!(
+            r#"name: mixed_scenario
+description: Scenario manifest that declares the mixed class and fires a detection
+seed_time_ms: 1700000700000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: mixed
+  tags:
+    - unclassified
+{DETECTING_SCENARIO_BODY}"#
+        ),
+    )
+    .unwrap();
+
+    let suite_path = write_suite(
+        &suites_dir,
+        "hellcat-office-v1.yaml",
+        &ReplaySuiteManifest {
+            name: "hellcat_office_v1".to_string(),
+            description: "Hellcat office corpus".to_string(),
+            corpus_version: "test-1".to_string(),
+            metadata: Default::default(),
+            scenarios: vec![
+                office_path.display().to_string(),
+                benign_path.display().to_string(),
+                mixed_path.display().to_string(),
+            ],
+        },
+    );
+    let verification_path = write_verification(
+        &verifications_dir,
+        "office-detector-safety-v1.yaml",
+        &serde_yaml::from_str::<VerificationCorpusManifest>(&format!(
+            r#"
+name: office_detector_safety_v1
+description: safety corpus
+known_bad:
+  suite: {}
+benign_controls:
+  scenarios:
+    - {}
+canonical_templates:
+  - name: office_encoded_powershell_execution
+    threat_class: execution
+    event:
+      source: verification-template
+      event_id: tpl-execution-1
+      timestamp: 1700000300000
+      host_id: template-host-1
+      payload:
+        kind: process_start
+        parent_process: WINWORD
+        process_name: powershell
+        command_line: powershell -enc SQBFAFgA
+        user: alice
+resource_budgets:
+  max_false_positive_rate: 0.05
+  max_detect_latency_us: 10000
+  max_total_detections: 8
+"#,
+            suite_path.display(),
+            benign_path.display(),
+        ))
+        .unwrap(),
+    );
+    let experiment_path = write_experiment(
+        &experiments_src_dir,
+        "office-baseline-control.yaml",
+        &serde_yaml::from_str::<DetectorExperimentManifest>(&format!(
+            r#"
+name: office_baseline_control
+description: control candidate over a corpus carrying one mixed-class scenario
+corpus:
+  suite: {}
+verification:
+  corpus: {}
+candidate:
+  strategy: suspicious_process_tree
+  strategy_id: office_baseline_control
+  description: candidate profile matches the production detector
+  profile:
+    suspicious_parents:
+      - winword
+      - excel
+      - outlook
+      - acrord32
+      - teams
+    suspicious_children:
+      - powershell
+      - pwsh
+      - cmd
+      - sh
+      - bash
+      - curl
+      - wget
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+lineage:
+  parent_strategy_id: suspicious_process_tree
+  mutation: control
+  rationale: pin the mixed-class denominator hole
+gates:
+  require_known_bad_coverage: true
+  max_false_positive_delta: 0
+  max_detect_latency_delta_us: 10000
+"#,
+            suite_path.display(),
+            verification_path.display()
+        ))
+        .unwrap(),
+    );
+
+    let harness =
+        DefaultReplayHarness::from_config("inline", sample_config(), &results_dir).unwrap();
+    let outcome = harness
+        .evaluate_experiment_path(&experiment_path, &experiments_dir)
+        .await;
+
+    match outcome {
+        Err(error) => {
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("mixed"),
+                "refusal must name the class it refused, got: {rendered}"
+            );
+        }
+        Ok(lookup) => {
+            // What the skipped scenario actually did, read from the candidate's
+            // own suite report. Without this the failure below would only say a
+            // scenario went uncounted; with it, it says a DETECTION did.
+            let mixed_detections = lookup
+                .report
+                .candidate_report
+                .scenario_reports
+                .iter()
+                .find(|scenario| scenario.scenario_name == "mixed_scenario")
+                .expect("the candidate suite report must carry the mixed scenario")
+                .evaluation
+                .deterministic_summary
+                .replay_bundle_count;
+            let candidate = &lookup.report.comparison.candidate;
+            assert_eq!(
+                candidate.adversarial_scenarios + candidate.benign_scenarios,
+                candidate.total_scenarios,
+                "the experiment counted {} scenarios but computed both rates over {} of them; \
+                 `mixed_scenario` produced {mixed_detections} detection(s) scored by neither \
+                 rate, and every gate still passed: gates={:#?} metrics={:#?}",
+                candidate.total_scenarios,
+                candidate.adversarial_scenarios + candidate.benign_scenarios,
+                lookup.report.gates,
+                candidate,
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[tokio::test]

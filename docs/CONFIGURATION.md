@@ -1257,12 +1257,19 @@ is **required** -- a manifest without one fails to parse, because a scenario wit
 declared class was previously exempt from every safety invariant and passed
 verification without any of them running.
 
-- `metadata.class`: `adversarial` or `benign`. **`mixed` is accepted by the parser
-  but FAILS the `scenario_class_declared` verification invariant**, and is retained
-  only so an existing corpus reports a named failure rather than a parse error.
-  A `mixed` scenario matches neither `known_bad_coverage` (which requires
-  `adversarial`) nor `false_positive_bound` (which requires `benign`), so it would
-  otherwise be checked by nothing. Classify each scenario as one or the other.
+- `metadata.class`: `adversarial` or `benign`. **`mixed` is REFUSED AT LOAD**, in
+  the same place and the same shape as an absent `class:` -- `load_scenario_manifest`
+  fails with a validation error naming the manifest, the value, and the two
+  invariants that would have owned it. A `mixed` scenario matches neither
+  `known_bad_coverage` (which requires `adversarial`) nor `false_positive_bound`
+  (which requires `benign`), and it is not only the verification lane that reads
+  this field: the experiment metrics, evasion-coverage, red-swarm,
+  mutation-fitness and assurance-harvest lanes all branch on it and would skip
+  such a scenario in silence -- counted in `total_scenarios`, present in neither
+  the `detection_rate` nor the `false_positive_rate` denominator, its detections
+  scored by nothing. The refusal sits at the single scenario-load entry point so
+  that every one of those lanes inherits it. Classify each scenario as one or the
+  other.
 
   Declaring a class is necessary but not sufficient: each of those two
   invariants reads exactly one half of a verification corpus, so a class is
@@ -1490,7 +1497,9 @@ Current gating invariant set (`invariants` in the report; `passed` is exactly
 `invariants.iter().all(|i| i.passed)`):
 
 - `scenario_class_declared`: every corpus scenario must declare a class an
-  invariant can enforce; `mixed` fails here
+  invariant can enforce. Since `mixed` is refused at load this can no longer
+  fail through a manifest, and is retained as the bundle's own attestation of
+  the property
 - `scenario_class_enforced`: every corpus scenario must sit in the corpus half
   that reads its class, so that some invariant is actually responsible for it
 - `known_bad_coverage`: candidate must not miss tracked adversarial verification scenarios

@@ -21,11 +21,18 @@ use swarm_whisker::DetectionStrategy;
 /// denominator. Without this check it passes vacuously, and the verification
 /// report -- signed evidence -- attests to checks that never looked at it.
 ///
-/// An ABSENT `class:` is refused earlier, at deserialization: the field is
-/// mandatory and `ReplayScenarioClass` has no `Default`. This catches the
-/// other spelling, an explicit `class: mixed`, which the evolution lane's
-/// `harvested_solver_counterexample_scenario` emits today. Both spellings are
-/// weak input, and the repo contract is that weak input fails closed.
+/// SECOND LINE, not the first. Both spellings are now refused at load: an
+/// ABSENT `class:` by serde (the field is mandatory and `ReplayScenarioClass`
+/// has no `Default`), an explicit `class: mixed` by
+/// `validation::validate_manifest`. The loader is where the precondition
+/// belongs, because eight other sites read `metadata.class` and had no
+/// equivalent check -- see the comment there.
+///
+/// This is retained anyway. The verification report is signed evidence, and a
+/// reader of the bundle should see the corpus assert the property rather than
+/// have to know which loader enforced it; and "there is exactly one
+/// deserialization entry point for a scenario manifest" is a fact about
+/// today's tree, not a guarantee about tomorrow's.
 pub(super) fn verify_scenario_class_declared(
     reports: &[&ReplaySuiteReport],
 ) -> VerificationInvariantResult {

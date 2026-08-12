@@ -159,8 +159,15 @@ pub enum ReplayHarnessError {
 /// A default is what made that reachable silently: an omitted `class:` key, a
 /// struct literal, or `..Default::default()` all produced `Mixed` with nothing
 /// said. There is no safe class to assume for an unclassified scenario, so
-/// there is no default. Absence is now a deserialization error, and an
-/// explicit `Mixed` is caught by the `scenario_class_declared` invariant.
+/// there is no default. Absence is a deserialization error, and an explicit
+/// `Mixed` is refused by `validation::validate_manifest`, so no LOADED manifest
+/// can carry it -- which is what the eight other sites that branch on this
+/// value (`metrics`, `evasion_coverage`, `red_swarm`, `mutation::fitness`,
+/// `evolution::assurance`) rely on, none of them having a check of their own.
+///
+/// The variant itself is kept because this enum is serialised into persisted
+/// evidence artifacts, and removing a variant would make historical bundles
+/// that recorded it unreadable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplayScenarioClass {
