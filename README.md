@@ -40,7 +40,7 @@
 ---
 
 ```sh
-cargo install --git https://github.com/backbay-labs/ambush swarm-runtime --bin swarmctl
+cargo install --git https://github.com/backbay-labs/ambush swarm-runtime-http --bin swarmctl
 ```
 
 ## What is Ambush
@@ -132,7 +132,7 @@ Run a full hunt against recorded telemetry, read the receipts, then point it at 
 ### 1. Install
 
 ```sh
-cargo install --git https://github.com/backbay-labs/ambush swarm-runtime --bin swarmctl
+cargo install --git https://github.com/backbay-labs/ambush swarm-runtime-http --bin swarmctl
 ```
 
 <sub>Or from source: <code>git clone https://github.com/backbay-labs/ambush && cd ambush && cargo build --release</code>, then use <code>./target/release/swarmctl</code>.</sub>
