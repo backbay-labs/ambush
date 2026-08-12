@@ -3044,6 +3044,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "swarm-ingest-runtime"
+version = "0.1.0"
+dependencies = [
+ "swarm-runtime",
+]
+
+[[package]]
 name = "swarm-ingest-sentinel"
 version = "0.1.0"
 dependencies = [

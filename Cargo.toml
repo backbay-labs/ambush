@@ -13,6 +13,7 @@ members = [
     "crates/swarm-runtime",
     "crates/swarm-agents",
     "crates/swarm-runtime-http",
+    "crates/swarm-ingest-runtime",
     "crates/swarm-runtime-workbench",
     "crates/swarm-evolution",
     "crates/swarm-cli",
@@ -42,6 +43,7 @@ swarm-response = { version = "0.1.0", path = "crates/swarm-response" }
 swarm-runtime = { version = "0.1.0", path = "crates/swarm-runtime" }
 swarm-agents = { version = "0.1.0", path = "crates/swarm-agents" }
 swarm-runtime-http = { version = "0.1.0", path = "crates/swarm-runtime-http" }
+swarm-ingest-runtime = { version = "0.1.0", path = "crates/swarm-ingest-runtime" }
 swarm-runtime-workbench = { version = "0.1.0", path = "crates/swarm-runtime-workbench" }
 swarm-evolution = { version = "0.1.0", path = "crates/swarm-evolution" }
 swarm-cli = { version = "0.1.0", path = "crates/swarm-cli" }
