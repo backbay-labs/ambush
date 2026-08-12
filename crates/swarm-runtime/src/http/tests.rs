@@ -11,8 +11,8 @@ use crate::evidence::{
 };
 use crate::ingest::{DemoProofPackage, IngestState, detect_http_router};
 use crate::replay::{
-    ExperimentLineage, ReplayScenarioInput, ReplayScenarioManifest, ReplayScenarioMetadata,
-    ReplayScenarioStep,
+    ExperimentLineage, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
+    ReplayScenarioMetadata, ReplayScenarioStep,
 };
 use crate::service::EventExecutionContext;
 use axum::Json;
@@ -1783,7 +1783,17 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
         seed_time_ms: 1_700_000_200_000,
         requested_by: "demo-operator".to_string(),
         receipt_chain: Vec::new(),
-        metadata: ReplayScenarioMetadata::default(),
+        metadata: ReplayScenarioMetadata {
+            // Explicit. `ReplayScenarioClass` has no `Default` any more, so an
+            // unclassified scenario can no longer be produced by omission --
+            // that default is what let a scenario sit exempt from every replay
+            // safety invariant. WINWORD -> encoded powershell is adversarial.
+            class: ReplayScenarioClass::Adversarial,
+            threat_class: None,
+            campaign: None,
+            techniques: Vec::new(),
+            tags: Vec::new(),
+        },
         input: ReplayScenarioInput::Events {
             events: vec![ReplayScenarioStep {
                 action: ResponseAction::IsolateHost {

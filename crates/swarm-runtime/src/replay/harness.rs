@@ -26,7 +26,8 @@ use super::validation::{
 };
 use super::verification::{
     collect_review_blocking_reasons, observe_detect_latency, verify_canonical_templates,
-    verify_false_positive_bound, verify_known_bad_coverage, verify_total_detection_budget,
+    verify_false_positive_bound, verify_known_bad_coverage, verify_scenario_class_declared,
+    verify_total_detection_budget,
 };
 use crate::config::load_config;
 use crate::correlation::{CorrelationEngine, CorrelationOutcome};
@@ -658,6 +659,10 @@ impl DefaultReplayHarness {
         // value on any machine, under any load, on any architecture. Do not add
         // anything derived from a clock: see `observations` below.
         let invariants = vec![
+            // FIRST, because it is the precondition the next two are written
+            // on: a scenario whose class is `mixed` matches neither of their
+            // predicates and would otherwise be exempt from both at once.
+            verify_scenario_class_declared(&[&known_bad_report, &benign_report]),
             verify_known_bad_coverage(&known_bad_report),
             verify_canonical_templates(
                 &candidate_detector,

@@ -5,9 +5,9 @@ use super::{
     PromotionReviewRecommendation, ReplayEvaluationReport, ReplayRunBundle, ReplayScenarioClass,
     ReplayScenarioInput, ReplayScenarioManifest, ReplayScenarioMetadata, ReplayScenarioStep,
     ReplaySuiteManifest, ReplaySuiteMetadata, VerificationCorpusManifest,
-    load_detector_experiment_manifest, load_verification_manifest, render_evaluation_report,
-    render_experiment_report, render_promotion_review_packet, render_replay_run,
-    render_shadow_report, render_suite_report, render_verification_report,
+    load_detector_experiment_manifest, load_scenario_manifest, load_verification_manifest,
+    render_evaluation_report, render_experiment_report, render_promotion_review_packet,
+    render_replay_run, render_shadow_report, render_suite_report, render_verification_report,
 };
 use serde_json::Value;
 use std::fs;
@@ -434,6 +434,8 @@ name: persisted_bundle_fixture
 description: Persisted replay bundles can be re-run offline
 seed_time_ms: 1700000300000
 requested_by: replay-whisker
+metadata:
+  class: adversarial
 input:
   kind: replay_bundles
   paths:
@@ -963,6 +965,380 @@ gates:
     assert_eq!(
         reloaded.record.verification_id,
         lookup.record.verification_id
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Builds a verification whose known-bad suite contains one adversarial
+/// scenario that IS detected plus one extra scenario supplied verbatim as
+/// YAML, and whose benign controls are a single clean scenario. Every other
+/// invariant is arranged to pass, so the verdict this returns is a statement
+/// about the extra scenario and nothing else.
+async fn verification_over_extra_scenario_yaml(
+    label: &str,
+    extra_file_name: &str,
+    extra_scenario_yaml: &str,
+) -> (
+    PathBuf,
+    Result<super::DetectorVerificationLookup, super::ReplayHarnessError>,
+) {
+    let root = unique_temp_dir(label);
+    let results_dir = root.join("results");
+    let verifications_dir = root.join("verification-results");
+    let scenarios_dir = root.join("scenarios");
+    let suites_dir = root.join("scenario-suites");
+    let experiments_src_dir = root.join("experiments");
+    let verification_src_dir = root.join("verifications");
+    fs::create_dir_all(&scenarios_dir).unwrap();
+    fs::create_dir_all(&suites_dir).unwrap();
+    fs::create_dir_all(&experiments_src_dir).unwrap();
+    fs::create_dir_all(&verification_src_dir).unwrap();
+
+    let office_path = write_scenario(
+        &scenarios_dir,
+        "office-dropper-correlation.yaml",
+        &scenario_manifest(),
+    );
+    let benign_path = write_scenario(&scenarios_dir, "benign-baseline.yaml", &benign_manifest());
+    let extra_path = scenarios_dir.join(extra_file_name);
+    fs::write(&extra_path, extra_scenario_yaml).unwrap();
+
+    let suite_path = write_suite(
+        &suites_dir,
+        "hellcat-office-v1.yaml",
+        &ReplaySuiteManifest {
+            name: "hellcat_office_v1".to_string(),
+            description: "Hellcat office corpus".to_string(),
+            corpus_version: "test-1".to_string(),
+            metadata: Default::default(),
+            scenarios: vec![
+                office_path.display().to_string(),
+                extra_path.display().to_string(),
+            ],
+        },
+    );
+    let verification_path = write_verification(
+        &verification_src_dir,
+        "office-detector-safety-v1.yaml",
+        &serde_yaml::from_str::<VerificationCorpusManifest>(&format!(
+            r#"
+name: office_detector_safety_v1
+description: safety corpus
+known_bad:
+  suite: {}
+benign_controls:
+  scenarios:
+    - {}
+canonical_templates:
+  - name: office_encoded_powershell_execution
+    threat_class: execution
+    event:
+      source: verification-template
+      event_id: tpl-execution-1
+      timestamp: 1700000300000
+      host_id: template-host-1
+      payload:
+        kind: process_start
+        parent_process: WINWORD
+        process_name: powershell
+        command_line: powershell -enc SQBFAFgA
+        user: alice
+resource_budgets:
+  max_false_positive_rate: 0.05
+  max_detect_latency_us: 10000
+  max_total_detections: 8
+"#,
+            suite_path.display(),
+            benign_path.display(),
+        ))
+        .unwrap(),
+    );
+    let experiment_path = write_experiment(
+        &experiments_src_dir,
+        "office-baseline-control.yaml",
+        &serde_yaml::from_str::<DetectorExperimentManifest>(&format!(
+            r#"
+name: office_baseline_control
+description: control candidate mirroring the production detector
+corpus:
+  suite: {}
+verification:
+  corpus: {}
+candidate:
+  strategy: suspicious_process_tree
+  strategy_id: office_baseline_control
+  description: candidate profile matches the production suspicious process-tree detector
+  profile:
+    suspicious_parents:
+      - winword
+      - excel
+      - outlook
+      - acrord32
+      - teams
+    suspicious_children:
+      - powershell
+      - pwsh
+      - cmd
+      - sh
+      - bash
+      - curl
+      - wget
+    high_confidence_threshold: 0.9
+    medium_confidence_threshold: 0.7
+lineage:
+  parent_strategy_id: suspicious_process_tree
+  mutation: control
+  rationale: establish a no-drift baseline
+gates:
+  require_known_bad_coverage: true
+  max_false_positive_delta: 0
+  max_detect_latency_delta_us: 10000
+"#,
+            suite_path.display(),
+            verification_path.display(),
+        ))
+        .unwrap(),
+    );
+
+    let harness =
+        DefaultReplayHarness::from_config("inline", sample_config(), &results_dir).unwrap();
+    let outcome = harness
+        .evaluate_verification_path(&experiment_path, &verifications_dir)
+        .await;
+    (root, outcome)
+}
+
+/// Asserts the verification did not reach a verdict *without looking at* the
+/// named scenario. Either the manifest was refused outright, or it appears as
+/// the counterexample of an invariant that failed. A `passed: true` report, or
+/// a failure that never names the scenario, both mean the scenario slipped
+/// past every check -- which is the vacuity this exists to forbid.
+fn assert_scenario_was_not_silently_exempt(
+    outcome: Result<super::DetectorVerificationLookup, super::ReplayHarnessError>,
+    scenario_name: &str,
+    scenario_file_stem: &str,
+) {
+    match outcome {
+        Err(error) => {
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(scenario_file_stem) || rendered.contains("class"),
+                "rejection must name the offending scenario or the missing class, got: {rendered}"
+            );
+        }
+        Ok(lookup) => {
+            assert!(
+                !lookup.report.passed,
+                "verification passed while `{scenario_name}` was subject to no invariant at all: {:#?}",
+                lookup.report.invariants
+            );
+            let subject_of_a_failed_invariant = lookup
+                .report
+                .invariants
+                .iter()
+                .filter(|invariant| !invariant.passed)
+                .flat_map(|invariant| invariant.counterexamples.iter())
+                .any(|counterexample| {
+                    counterexample.subject == scenario_name
+                        || counterexample.reference.contains(scenario_file_stem)
+                });
+            assert!(
+                subject_of_a_failed_invariant,
+                "verification failed, but not because of `{scenario_name}`; the scenario was still skipped by every invariant: {:#?}",
+                lookup.report.invariants
+            );
+        }
+    }
+}
+
+const UNCLASSIFIED_SCENARIO_BODY: &str = r#"
+input:
+  kind: events
+  events:
+    - action:
+        type: escalate
+        summary: operator review
+        urgency: MEDIUM
+      event:
+        source: synthetic
+        event_id: hunt-unclassified-1
+        timestamp: 1700000000600
+        host_id: host-unclassified
+        payload:
+          kind: process_start
+          parent_process: launchd
+          process_name: ls
+          command_line: ls -la
+          user: alice
+
+expectations:
+  replay_bundle_count: 0
+  investigation_count: 0
+  incident_count: 0
+  max_detect_latency_us: 5000
+  max_policy_latency_us: 5000
+  max_response_latency_us: 5000
+"#;
+
+/// A replay scenario manifest that declares no `class:` must not pass a
+/// verification vacuously.
+///
+/// `ReplayScenarioClass` defaulted to `Mixed`, and `Mixed` satisfied NEITHER
+/// safety invariant: `verify_known_bad_coverage` demands a detection only from
+/// `Adversarial` scenarios, and `verify_false_positive_bound` draws
+/// counterexamples only from `Benign` ones. A scenario that omitted the field
+/// was therefore exempt from BOTH invariants at once and contributed to
+/// neither -- and the verification report still recorded `passed: true`. That
+/// is a signed evidence artifact attesting to a check that never executed.
+///
+/// The scenario below emits no detection, so it would FAIL
+/// `known_bad_coverage` were it adversarial. A fix may refuse the manifest or
+/// subject it to an invariant. What it may not do is return `passed: true`
+/// having looked at it through neither.
+#[tokio::test]
+async fn verification_does_not_pass_vacuously_on_a_scenario_that_declares_no_class() {
+    let yaml = format!(
+        r#"name: unclassified_scenario
+description: Scenario manifest that declares no class
+seed_time_ms: 1700000600000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  tags:
+    - unclassified
+{UNCLASSIFIED_SCENARIO_BODY}"#
+    );
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-absent-class",
+        "unclassified-scenario.yaml",
+        &yaml,
+    )
+    .await;
+
+    assert_scenario_was_not_silently_exempt(outcome, "unclassified_scenario", "unclassified");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The same vacuity, reached by declaring the class explicitly rather than by
+/// omitting it. Making the field mandatory closes the omission path but leaves
+/// this one wide open -- and `harvested_solver_counterexample_scenario` in the
+/// evolution lane writes `class: mixed` today. An unclassified scenario is a
+/// weak input however it is spelled, so it must fail closed here too.
+#[tokio::test]
+async fn verification_does_not_pass_vacuously_on_a_scenario_that_declares_class_mixed() {
+    let yaml = format!(
+        r#"name: mixed_scenario
+description: Scenario manifest that declares the mixed class
+seed_time_ms: 1700000700000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: mixed
+  tags:
+    - unclassified
+{UNCLASSIFIED_SCENARIO_BODY}"#
+    );
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-mixed-class",
+        "mixed-scenario.yaml",
+        &yaml,
+    )
+    .await;
+
+    assert_scenario_was_not_silently_exempt(outcome, "mixed_scenario", "mixed-scenario");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Pins the SHAPE of the refusal for an absent `class:`. It is a
+/// deserialization failure at load, before the scenario can enter any corpus:
+/// `class` carries no `#[serde(default)]` and `ReplayScenarioClass` carries no
+/// `Default`, so serde has nothing to fall back on and says which field is
+/// missing.
+#[test]
+fn scenario_manifest_that_omits_class_is_refused_at_load() {
+    let root = unique_temp_dir("scenario-missing-class");
+    let path = root.join("unclassified-scenario.yaml");
+    fs::write(
+        &path,
+        format!(
+            r#"name: unclassified_scenario
+description: Scenario manifest that declares no class
+seed_time_ms: 1700000600000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  tags:
+    - unclassified
+{UNCLASSIFIED_SCENARIO_BODY}"#
+        ),
+    )
+    .unwrap();
+
+    let error = load_scenario_manifest(&path).unwrap_err().to_string();
+    assert!(
+        error.contains("missing field `class`"),
+        "refusal must name the missing field, got: {error}"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Pins the SHAPE of the refusal for an explicit `class: mixed`. Serde cannot
+/// catch that one -- the value is well formed -- so a named gating invariant
+/// does, and it records the offending scenario as its own counterexample. The
+/// alternative considered was making `Mixed` subject to both existing
+/// invariants; that also fails closed, but it fails through two contradictory
+/// messages ("expected at least one detection" AND "produced a detection on a
+/// benign control"), so the evidence bundle would misdescribe the reason.
+#[tokio::test]
+async fn verification_reports_a_mixed_class_scenario_under_scenario_class_declared() {
+    let yaml = format!(
+        r#"name: mixed_scenario
+description: Scenario manifest that declares the mixed class
+seed_time_ms: 1700000700000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: mixed
+  tags:
+    - unclassified
+{UNCLASSIFIED_SCENARIO_BODY}"#
+    );
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-mixed-class-named",
+        "mixed-scenario.yaml",
+        &yaml,
+    )
+    .await;
+    let report = outcome.unwrap().report;
+
+    assert!(!report.passed);
+    let invariant = report
+        .invariants
+        .iter()
+        .find(|invariant| invariant.name == "scenario_class_declared")
+        .expect("verification must carry a scenario_class_declared invariant");
+    assert!(!invariant.passed);
+    assert_eq!(invariant.actual, serde_json::json!(1));
+    assert_eq!(
+        invariant
+            .counterexamples
+            .iter()
+            .map(|counterexample| counterexample.subject.as_str())
+            .collect::<Vec<_>>(),
+        vec!["mixed_scenario"]
+    );
+    // Every OTHER invariant is green, which is the point: nothing else in the
+    // corpus is wrong, and without this invariant the report would say passed.
+    assert!(
+        report
+            .invariants
+            .iter()
+            .filter(|invariant| invariant.name != "scenario_class_declared")
+            .all(|invariant| invariant.passed)
     );
 
     let _ = fs::remove_dir_all(root);

@@ -22,8 +22,8 @@ use crate::mutation::{
     EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
 };
 use crate::replay::{
-    DefaultReplayHarness, ReplayScenarioInput, ReplayScenarioManifest, ReplayScenarioMetadata,
-    ReplayScenarioStep,
+    DefaultReplayHarness, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
+    ReplayScenarioMetadata, ReplayScenarioStep,
 };
 use crate::runtime_events::{ReplayEventPhase, RuntimeEvent, RuntimeEventBroadcaster, now_ms};
 use crate::startup_attestation::{StartupAttestationComponentReport, StartupAttestationReport};
@@ -1198,7 +1198,17 @@ fn write_demo_scenario(path: &Path) {
         seed_time_ms: 1_700_000_000_000,
         requested_by: "demo-runner".to_string(),
         receipt_chain: Vec::new(),
-        metadata: ReplayScenarioMetadata::default(),
+        metadata: ReplayScenarioMetadata {
+            // Explicit. `ReplayScenarioClass` has no `Default` any more, so an
+            // unclassified scenario can no longer be produced by omission --
+            // that default is what let a scenario sit exempt from every replay
+            // safety invariant. WINWORD -> encoded powershell is adversarial.
+            class: ReplayScenarioClass::Adversarial,
+            threat_class: None,
+            campaign: None,
+            techniques: Vec::new(),
+            tags: Vec::new(),
+        },
         input: ReplayScenarioInput::Events {
             events: vec![ReplayScenarioStep {
                 action: ResponseAction::Escalate {
@@ -1220,7 +1230,17 @@ fn write_human_gate_demo_scenario(path: &Path) {
         seed_time_ms: 1_700_000_100_000,
         requested_by: "demo-operator".to_string(),
         receipt_chain: Vec::new(),
-        metadata: ReplayScenarioMetadata::default(),
+        metadata: ReplayScenarioMetadata {
+            // Explicit. `ReplayScenarioClass` has no `Default` any more, so an
+            // unclassified scenario can no longer be produced by omission --
+            // that default is what let a scenario sit exempt from every replay
+            // safety invariant. WINWORD -> encoded powershell is adversarial.
+            class: ReplayScenarioClass::Adversarial,
+            threat_class: None,
+            campaign: None,
+            techniques: Vec::new(),
+            tags: Vec::new(),
+        },
         input: ReplayScenarioInput::Events {
             events: vec![ReplayScenarioStep {
                 action: ResponseAction::IsolateHost {

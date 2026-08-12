@@ -146,20 +146,36 @@ pub enum ReplayHarnessError {
 }
 
 /// Whether one replay scenario represents adversarial coverage or benign control traffic.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deliberately NOT `Default`, and `class` below is deliberately not
+/// `#[serde(default)]`. Every safety invariant in `replay::verification` keys
+/// off this value: `known_bad_coverage` demands a detection from `Adversarial`
+/// scenarios and `false_positive_bound` draws counterexamples from `Benign`
+/// ones. `Mixed` satisfies neither predicate, so a scenario carrying it is
+/// exempt from both invariants at once and contributes to neither -- it passes
+/// without either check ever looking at it, in the lane that signs evidence
+/// bundles.
+///
+/// A default is what made that reachable silently: an omitted `class:` key, a
+/// struct literal, or `..Default::default()` all produced `Mixed` with nothing
+/// said. There is no safe class to assume for an unclassified scenario, so
+/// there is no default. Absence is now a deserialization error, and an
+/// explicit `Mixed` is caught by the `scenario_class_declared` invariant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplayScenarioClass {
     Benign,
     Adversarial,
-    #[default]
     Mixed,
 }
 
 /// Repo-owned metadata attached to one tracked replay scenario.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Not `Default` either, for the same reason: a defaulted metadata block would
+/// reintroduce the defaulted class one level up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplayScenarioMetadata {
-    #[serde(default)]
     pub class: ReplayScenarioClass,
     #[serde(default)]
     pub threat_class: Option<ThreatClass>,
@@ -193,7 +209,9 @@ pub struct ReplayScenarioManifest {
     pub requested_by: String,
     #[serde(default)]
     pub receipt_chain: Vec<String>,
-    #[serde(default)]
+    /// Required. A scenario with no metadata block has no class, and a
+    /// classless scenario is exempt from every safety invariant -- see
+    /// `ReplayScenarioClass`.
     pub metadata: ReplayScenarioMetadata,
     pub input: ReplayScenarioInput,
     #[serde(default)]
