@@ -1,6 +1,5 @@
 use crate::detection::metrics::CriticalPathMetrics;
 use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster, now_ms};
-use crate::tom_agent::{GovernancePolicy, GovernanceRuntimeEvent};
 use crate::{
     RuntimeError, StrategyProposalRouteError, agent_tick_error_boundary, agent_tick_panic_error,
 };
@@ -19,6 +18,7 @@ use swarm_core::agent::{
 };
 use swarm_core::types::{AgentId, ResponseAction, Severity, SwarmAction};
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+use swarm_policy::governance::GovernanceAuthority;
 use swarm_policy::static_gate::scope_for_response_action;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_spine::AuditTrail;
@@ -182,7 +182,7 @@ pub struct AgentDispatcher {
     request_response_router: Option<Arc<dyn RequestResponseRouter>>,
     strategy_proposal_router: Option<Arc<dyn StrategyProposalRouter>>,
     runtime_events: Option<RuntimeEventBroadcaster>,
-    governance_policy: Option<Arc<GovernancePolicy>>,
+    governance_policy: Option<Arc<dyn GovernanceAuthority>>,
 }
 
 pub type AgentRestartFactory = Arc<dyn Fn() -> Result<Box<dyn SwarmAgent>, String> + Send + Sync>;
@@ -241,7 +241,14 @@ impl AgentDispatcher {
         self
     }
 
-    pub fn with_governance_policy(mut self, governance_policy: Arc<GovernancePolicy>) -> Self {
+    /// Accepts any `Arc<impl GovernanceAuthority>` rather than `Arc<dyn ..>` so every
+    /// existing `Arc<GovernancePolicy>` call site is unchanged: `Arc::clone(&policy)`
+    /// infers `Arc<GovernancePolicy>` and an inference variable is not an unsizing
+    /// coercion site, so a `dyn` parameter would have forced a cast at each caller.
+    pub fn with_governance_policy(
+        mut self,
+        governance_policy: Arc<impl GovernanceAuthority + 'static>,
+    ) -> Self {
         self.governance_policy = Some(governance_policy);
         self
     }
@@ -1008,9 +1015,7 @@ impl AgentDispatcher {
         let Some(governance_policy) = &self.governance_policy else {
             return Ok(false);
         };
-        governance_policy
-            .authorize_partition_request(request, unix_timestamp_millis())
-            .map(|lease| lease.is_some())
+        governance_policy.authorize_partition_request(request, unix_timestamp_millis())
     }
 
     fn publish_governance_events(&self) {
@@ -1026,26 +1031,13 @@ impl AgentDispatcher {
         };
 
         for event in events {
-            let (agent_id, action_kind) = match &event {
-                GovernanceRuntimeEvent::PartitionStateTransition {
-                    governing_agent_id, ..
-                } => (governing_agent_id.to_string(), "partition_state_transition"),
-                GovernanceRuntimeEvent::PartitionReconciliation {
-                    governing_agent_id, ..
-                } => (governing_agent_id.to_string(), "partition_reconciliation"),
-            };
             runtime_events.publish(RuntimeEvent::AgentAction {
                 emitted_at_ms: now_ms(),
-                agent_id,
-                role: AgentRole::Tom,
-                action_kind: action_kind.to_string(),
+                agent_id: event.governing_agent_id,
+                role: event.role,
+                action_kind: event.action_kind,
                 hunt_id: None,
-                details: serde_json::to_value(&event).unwrap_or_else(|error| {
-                    json!({
-                        "type": "serialization_error",
-                        "reason": error.to_string(),
-                    })
-                }),
+                details: event.details,
             });
         }
     }

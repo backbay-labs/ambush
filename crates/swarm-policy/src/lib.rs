@@ -7,6 +7,7 @@
 //! - mint short-lived capability leases for authorized execution
 
 pub mod configurable_gate;
+pub mod governance;
 pub mod static_gate;
 
 use serde::{Deserialize, Serialize};

@@ -18,6 +18,7 @@ use swarm_core::agent::{
 use swarm_core::types::{AgentId, ResponseAction, SwarmAction};
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
 use swarm_policy::ActionRequest;
+use swarm_policy::governance::{GovernanceAuthority, GovernanceRuntimeEventRecord};
 use swarm_policy::static_gate::scope_for_response_action;
 
 const DEFAULT_CONTINGENCY_LEASE_TTL_MS: i64 = 300_000;
@@ -1283,6 +1284,64 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or_default()
+}
+
+// The mapping from the private `GovernanceRuntimeEvent` enum to the flat record the
+// runtime publishes lives HERE, with the enum, not in the dispatcher. That is the
+// whole point of SPLIT-03: the dispatcher publishes governance events without ever
+// naming a governance type.
+//
+// Both methods delegate to the inherent methods of the same name. Inherent impls are
+// probed before trait impls, so `GovernancePolicy::method(self, ..)` resolves to the
+// inherent one; the return types also differ, so a mis-resolution would be a compile
+// error rather than a silent recursion.
+impl GovernanceAuthority for GovernancePolicy {
+    fn authorize_partition_request(
+        &self,
+        request: &ActionRequest,
+        now_ms: i64,
+    ) -> Result<bool, String> {
+        GovernancePolicy::authorize_partition_request(self, request, now_ms)
+            .map(|lease| lease.is_some())
+    }
+
+    fn is_partitioned(&self) -> bool {
+        GovernancePolicy::is_partitioned(self)
+    }
+
+    fn note_partition_veto(&self, request: &ActionRequest, reason: &str, now_ms: i64) {
+        GovernancePolicy::note_partition_veto(self, request, reason, now_ms);
+    }
+
+    fn drain_runtime_events(&self) -> Vec<GovernanceRuntimeEventRecord> {
+        GovernancePolicy::drain_runtime_events(self)
+            .into_iter()
+            .map(governance_runtime_event_record)
+            .collect()
+    }
+}
+
+fn governance_runtime_event_record(event: GovernanceRuntimeEvent) -> GovernanceRuntimeEventRecord {
+    let (governing_agent_id, action_kind) = match &event {
+        GovernanceRuntimeEvent::PartitionStateTransition {
+            governing_agent_id, ..
+        } => (governing_agent_id.to_string(), "partition_state_transition"),
+        GovernanceRuntimeEvent::PartitionReconciliation {
+            governing_agent_id, ..
+        } => (governing_agent_id.to_string(), "partition_reconciliation"),
+    };
+
+    GovernanceRuntimeEventRecord {
+        governing_agent_id,
+        role: AgentRole::Tom,
+        action_kind: action_kind.to_string(),
+        details: serde_json::to_value(&event).unwrap_or_else(|error| {
+            serde_json::json!({
+                "type": "serialization_error",
+                "reason": error.to_string(),
+            })
+        }),
+    }
 }
 
 #[cfg(test)]
