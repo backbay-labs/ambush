@@ -64,15 +64,15 @@ use swarm_evolution::governance_prep::{
     EvolutionPortfolioHistoryReport, EvolutionPortfolioHistoryReviewDebtKind,
     FileEvolutionGovernancePacketSetStore, FileEvolutionPortfolioHistoryStore,
 };
+use swarm_evolution::portfolio::{
+    EvolutionGovernanceReviewPacketReport, EvolutionPortfolioDecisionRecord,
+    EvolutionPortfolioEntryReport, EvolutionPortfolioEntryReviewState, EvolutionPortfolioReport,
+    FileEvolutionGovernanceReviewPacketStore, FileEvolutionPortfolioStore,
+};
 use swarm_runtime::drafting::EvolutionValidationBundleStatus;
 use swarm_runtime::evolution::{
     EvolutionProposalBlockingReason, EvolutionProposalProofStatus, EvolutionProposalProofSummary,
     EvolutionProposalReviewState,
-};
-use swarm_runtime::portfolio::{
-    EvolutionGovernanceReviewPacketReport, EvolutionPortfolioDecisionRecord,
-    EvolutionPortfolioEntryReport, EvolutionPortfolioEntryReviewState, EvolutionPortfolioReport,
-    FileEvolutionGovernanceReviewPacketStore, FileEvolutionPortfolioStore,
 };
 use swarm_runtime_workbench::review_workbench::DefaultReviewWorkbenchHarness;
 
@@ -471,7 +471,7 @@ fn sample_portfolio_report() -> EvolutionPortfolioReport {
             blocking_reasons: Vec::new(),
             decision_history: vec![EvolutionPortfolioDecisionRecord {
                 decided_at_ms: 1_710_000_000_120,
-                action: swarm_runtime::portfolio::EvolutionPortfolioDecisionAction::Include,
+                action: swarm_evolution::portfolio::EvolutionPortfolioDecisionAction::Include,
                 reason: "include the ready portfolio entry".to_string(),
             }],
         }],

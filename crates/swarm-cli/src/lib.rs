@@ -53,7 +53,7 @@ pub mod operator_maintenance {
 }
 
 pub mod portfolio {
-    pub use swarm_runtime::portfolio::*;
+    pub use swarm_evolution::portfolio::*;
 }
 
 pub mod promotion {

@@ -14,12 +14,12 @@ use swarm_evolution::governance_prep::{
 use swarm_evolution::operator_maintenance::{
     OperatorMaintenanceList, OperatorMaintenanceService, OperatorMaintenanceStatus,
 };
+use swarm_evolution::portfolio::{
+    DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioList,
+};
 use swarm_runtime::approval::{ApprovalLedgerList, ApprovalSetList, DefaultApprovalHarness};
 use swarm_runtime::control::{
     IncidentLookupSelector, InvestigationLookupSelector, ReplayLookupSelector,
-};
-use swarm_runtime::portfolio::{
-    DefaultEvolutionPortfolioHarness, EvolutionPortfolioEntryReviewState, EvolutionPortfolioList,
 };
 use swarm_runtime_workbench::review_workbench::{
     DefaultReviewWorkbenchHarness, ReviewArtifactRef, ReviewArtifactRefKind,

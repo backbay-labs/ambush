@@ -1,17 +1,21 @@
-use crate::drafting::EvolutionValidationBundleStatus;
-use crate::evolution::{
-    EvolutionProposalAdvisorySummary, EvolutionProposalBlockingReason,
-    EvolutionProposalProofStatus, EvolutionProposalProofSummary, EvolutionProposalReviewState,
-};
-use crate::mutation::{EvolutionMutationRankingStoreError, FileEvolutionMutationRankingStore};
-use crate::replay::{ExperimentLineage, ReplayHarnessError, load_detector_experiment_manifest};
-use crate::selection::{EvolutionSelectionStoreError, FileEvolutionSelectionStore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use swarm_runtime::drafting::EvolutionValidationBundleStatus;
+use swarm_runtime::evolution::{
+    EvolutionProposalAdvisorySummary, EvolutionProposalBlockingReason,
+    EvolutionProposalProofStatus, EvolutionProposalProofSummary, EvolutionProposalReviewState,
+};
+use swarm_runtime::mutation::{
+    EvolutionMutationRankingStoreError, FileEvolutionMutationRankingStore,
+};
+use swarm_runtime::replay::{
+    ExperimentLineage, ReplayHarnessError, load_detector_experiment_manifest,
+};
+use swarm_runtime::selection::{EvolutionSelectionStoreError, FileEvolutionSelectionStore};
 
 /// One operator-supplied portfolio input item assembled from a ranked selection.
 #[derive(Debug, Clone)]
@@ -1310,7 +1314,9 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-fn experiment_id_for_manifest(manifest: &crate::replay::DetectorExperimentManifest) -> String {
+fn experiment_id_for_manifest(
+    manifest: &swarm_runtime::replay::DetectorExperimentManifest,
+) -> String {
     format!(
         "experiment:{}:{}",
         manifest.name,
@@ -1369,14 +1375,14 @@ fn proof_status_label(status: EvolutionProposalProofStatus) -> &'static str {
 }
 
 fn advisory_recommendation_label(
-    value: crate::strategy::StrategyAdvisoryRecommendation,
+    value: swarm_runtime::strategy::StrategyAdvisoryRecommendation,
 ) -> &'static str {
     match value {
-        crate::strategy::StrategyAdvisoryRecommendation::RetainBaseline => "retain_baseline",
-        crate::strategy::StrategyAdvisoryRecommendation::CandidatePreferred => {
+        swarm_runtime::strategy::StrategyAdvisoryRecommendation::RetainBaseline => "retain_baseline",
+        swarm_runtime::strategy::StrategyAdvisoryRecommendation::CandidatePreferred => {
             "candidate_preferred"
         }
-        crate::strategy::StrategyAdvisoryRecommendation::CandidateAlreadyStableInProduction => {
+        swarm_runtime::strategy::StrategyAdvisoryRecommendation::CandidateAlreadyStableInProduction => {
             "candidate_already_stable_in_production"
         }
     }
@@ -1401,21 +1407,21 @@ mod tests {
         EvolutionProposalReviewState, render_evolution_governance_review_packet,
         render_evolution_portfolio, render_evolution_portfolio_list,
     };
-    use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
-    use crate::mutation::{
-        DefaultEvolutionMutationHarness, EvolutionMutationProfileOverrides,
-        EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
-    };
     use crate::portfolio::EvolutionPortfolioError;
-    use crate::replay::DefaultReplayHarness;
-    use crate::selection::DefaultEvolutionSelectionHarness;
-    use crate::strategy::DefaultStrategyScorecardHarness;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use swarm_core::ThreatClass;
     use swarm_core::config::{PolicyRuleConfig, PolicyRuleDecision, SwarmConfig};
     use swarm_core::types::Severity;
+    use swarm_runtime::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
+    use swarm_runtime::mutation::{
+        DefaultEvolutionMutationHarness, EvolutionMutationProfileOverrides,
+        EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
+    };
+    use swarm_runtime::replay::DefaultReplayHarness;
+    use swarm_runtime::selection::DefaultEvolutionSelectionHarness;
+    use swarm_runtime::strategy::DefaultStrategyScorecardHarness;
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1557,7 +1563,7 @@ mod tests {
             .evaluate_verification_path(&base_experiment, &verification_dir)
             .await
             .unwrap();
-        let proofs = crate::evolution::DefaultEvolutionProofHarness::from_config(
+        let proofs = swarm_runtime::evolution::DefaultEvolutionProofHarness::from_config(
             "inline",
             config.clone(),
             &proof_dir,

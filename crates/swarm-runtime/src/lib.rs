@@ -63,7 +63,6 @@ pub mod ingest;
 pub mod investigation;
 pub mod kitten_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod mutation;
-pub mod portfolio;
 pub mod promotion;
 pub mod providence;
 pub mod red_swarm;

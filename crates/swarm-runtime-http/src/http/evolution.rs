@@ -10,7 +10,7 @@ use serde::Deserialize;
 use swarm_evolution::governance_prep::{
     EvolutionGovernancePacketSetList, EvolutionPortfolioHistoryList,
 };
-use swarm_runtime::portfolio::EvolutionPortfolioList;
+use swarm_evolution::portfolio::EvolutionPortfolioList;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct PortfolioListQuery {
@@ -28,7 +28,7 @@ pub(super) struct CohortListQuery {
 pub(super) async fn portfolio_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(portfolio_id): RoutePath<String>,
-) -> Result<Json<swarm_runtime::portfolio::EvolutionPortfolioReport>, OperatorApiError> {
+) -> Result<Json<swarm_evolution::portfolio::EvolutionPortfolioReport>, OperatorApiError> {
     let harness = portfolio_harness(&state)?;
     let lookup = harness
         .load_portfolio(&portfolio_id)
@@ -62,7 +62,7 @@ pub(super) async fn portfolio_list_handler(
 pub(super) async fn governance_packet_handler(
     State(state): State<OperatorHttpState>,
     RoutePath(packet_id): RoutePath<String>,
-) -> Result<Json<swarm_runtime::portfolio::EvolutionGovernanceReviewPacketReport>, OperatorApiError>
+) -> Result<Json<swarm_evolution::portfolio::EvolutionGovernanceReviewPacketReport>, OperatorApiError>
 {
     let harness = portfolio_harness(&state)?;
     let lookup = harness

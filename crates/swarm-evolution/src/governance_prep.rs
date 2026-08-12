@@ -1,3 +1,7 @@
+use crate::portfolio::{
+    EvolutionGovernanceReviewPacketReport, EvolutionGovernanceReviewPacketStoreError,
+    EvolutionPortfolioEntryReviewState, FileEvolutionGovernanceReviewPacketStore,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
@@ -7,10 +11,6 @@ use swarm_runtime::drafting::EvolutionValidationBundleStatus;
 use swarm_runtime::evolution::{
     EvolutionProposalAdvisorySummary, EvolutionProposalBlockingReason,
     EvolutionProposalProofStatus, EvolutionProposalProofSummary, EvolutionProposalReviewState,
-};
-use swarm_runtime::portfolio::{
-    EvolutionGovernanceReviewPacketReport, EvolutionGovernanceReviewPacketStoreError,
-    EvolutionPortfolioEntryReviewState, FileEvolutionGovernanceReviewPacketStore,
 };
 use swarm_runtime::replay::ExperimentLineage;
 use swarm_runtime::strategy::{
@@ -1313,6 +1313,10 @@ mod tests {
         render_evolution_governance_packet_set, render_evolution_governance_packet_set_list,
         render_evolution_portfolio_history, render_evolution_portfolio_history_list,
     };
+    use crate::portfolio::{
+        EvolutionGovernanceReviewPacketReport, EvolutionPortfolioEntryReviewState,
+        FileEvolutionGovernanceReviewPacketStore,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1320,10 +1324,6 @@ mod tests {
     use swarm_runtime::evolution::{
         EvolutionProposalBlockingReason, EvolutionProposalProofStatus,
         EvolutionProposalProofSummary, EvolutionProposalReviewState,
-    };
-    use swarm_runtime::portfolio::{
-        EvolutionGovernanceReviewPacketReport, EvolutionPortfolioEntryReviewState,
-        FileEvolutionGovernanceReviewPacketStore,
     };
     use swarm_runtime::replay::ExperimentLineage;
     use swarm_runtime::strategy::{
