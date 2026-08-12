@@ -23,23 +23,39 @@ extracting both as-is would not build. It prescribed relocating
 ```
 $ grep -rn "pub struct OperatorSurfacePaths" crates/
 crates/swarm-core/src/config/operator.rs:318:pub struct OperatorSurfacePaths {
+
 $ grep -rn "swarm_runtime_http\|crate::http" crates/swarm-runtime-workbench/src/ --include='*.rs'
+$ echo "rc=$?"
+rc=1
+
+$ grep -rn "swarm.runtime.http" crates/swarm-runtime-workbench/src/ --include='*.rs'
 crates/swarm-runtime-workbench/src/lib.rs:24://! and in `swarm-runtime-http`, which inherited it the same way in SPLIT-01:
 ```
 
-The sole surviving mention is prose in a doc comment. The edge is one-way,
-`swarm-runtime-http` -> `swarm-runtime-workbench` -> `swarm-runtime`, and the
-workbench extraction went through on that basis.
+The workbench crate references the HTTP crate **not at all** in code: no import,
+no path, no `use`. The identifier-form pattern returns nothing (rc=1). Widening
+the pattern to the hyphenated crate name -- which is how a doc comment would
+spell it, and which the identifier pattern therefore cannot match -- turns up one
+line, and it is prose. The edge is one-way, `swarm-runtime-http` ->
+`swarm-runtime-workbench` -> `swarm-runtime`, and the workbench extraction went
+through on that basis.
 
 ### A second cycle the requirement does not mention
 
 `replay` and the composition root depend on each other, in non-test code, in
 both directions.
 
-**Root -> replay.** Commenting out `pub mod replay;` in
-`crates/swarm-runtime/src/lib.rs` and running `cargo check -p swarm-runtime
---lib` produces 36 errors across 20 production files (test modules are not
-compiled by `--lib`, so every one of these is production code):
+**Root -> replay.** Comment out `pub mod replay;` at
+`crates/swarm-runtime/src/lib.rs:41` and run:
+
+```
+$ cargo check -p swarm-runtime --lib --message-format=short
+rc=101
+error: could not compile `swarm-runtime` (lib) due to 36 previous errors
+```
+
+The 36 are spread over 20 files. `--lib` does not compile `#[cfg(test)]`
+modules, so every one of them is production code:
 
 ```
    4 ingest/mod.rs          2 selection.rs            1 promotion.rs
@@ -52,6 +68,12 @@ compiled by `--lib`, so every one of these is production code):
                             1 detector_factory.rs     1 canary.rs
 ```
 
+Thirty-three of them are `E0432`/`E0433` on `crate::replay` directly. The
+remaining three, all in `mutation/fitness.rs`, are `E0689` -- "can't call method
+clamp on ambiguous numeric type {float}" -- which is inference fallout from the
+replay types disappearing out from under those expressions, not a pre-existing
+defect. Restore the commented line afterwards; the probe leaves nothing behind.
+
 Three of those errors are in `lib.rs` itself, because the crate's own top-level
 error enum structurally contains replay's error types:
 
@@ -62,7 +84,7 @@ VerificationStore(#[from] crate::replay::VerificationStoreError),
 ShadowStore(#[from] crate::replay::ShadowStoreError),
 ```
 
-**Replay -> root.** Four of the ten non-test files under `replay/` import five
+**Replay -> root.** Three of the nine non-test files under `replay/` import five
 distinct `crate::` modules plus the crate root:
 
 ```
@@ -70,9 +92,13 @@ replay/types.rs:5-7        crate::config, crate::correlation, crate::service
 replay/harness.rs:32-42    crate::config, crate::correlation,
                            crate::detector_factory, crate::investigation,
                            crate::service, crate::{RuntimeMode, SwarmRuntime}
-replay/detect_stall.rs:23  crate::detector_factory::RuntimeDetector
 replay/verification.rs:8   crate::detector_factory::RuntimeDetector
 ```
+
+A fourth file, `replay/detect_stall.rs:23`, imports `crate::detector_factory`
+as well, but its module declaration is `#[cfg(test)]` (`replay/mod.rs:25-26`),
+so it is test-only and carries no weight in this argument. It is excluded above,
+and from the file count, for that reason.
 
 This is not path convenience. `replay/harness.rs:853-862` builds the composition
 root to run a replay against it:
@@ -87,16 +113,27 @@ root to run a replay against it:
 `service/` stays in `swarm-runtime` — that is ADR-adjacent settled ground from
 SPLIT-01 (a43df1c), and it is settled *because* replay imports it.
 
-**Cargo's verdict.** Building the skeleton and adding the edge the 20 consumers
-would require is rejected before compilation begins:
+**Cargo's verdict.** The cycle lives in the package graph, so it is rejected
+before compilation begins. This is **not** observable at HEAD: no
+`swarm-runtime-replay` exists, and `cargo metadata --format-version 1` exits 0
+with an empty stderr. Reproducing it takes a transient probe -- create a skeleton
+`crates/swarm-runtime-replay` whose only dependency is `swarm-runtime`, add it to
+`members` and `[workspace.dependencies]`, then give `swarm-runtime` the
+`swarm-runtime-replay` edge its 20 consumers would require:
 
 ```
 $ cargo metadata --format-version 1
-error: cyclic package dependency: package `swarm-runtime v0.1.0` depends on itself. Cycle:
-package `swarm-runtime v0.1.0 (crates/swarm-runtime)`
-    ... which satisfies path dependency `swarm-runtime` of package `swarm-runtime-replay v0.1.0`
-    ... which satisfies path dependency `swarm-runtime-replay` of package `swarm-runtime v0.1.0`
+rc=101
+error: cyclic package dependency: package `swarm-runtime v0.1.0 (/…/crates/swarm-runtime)` depends on itself. Cycle:
+package `swarm-runtime v0.1.0 (/…/crates/swarm-runtime)`
+    ... which satisfies path dependency `swarm-runtime` (locked to 0.1.0) of package `swarm-runtime-replay v0.1.0 (/…/crates/swarm-runtime-replay)`
+    ... which satisfies path dependency `swarm-runtime-replay` (locked to 0.1.0) of package `swarm-runtime v0.1.0 (/…/crates/swarm-runtime)`
+    ... which satisfies path dependency `swarm-runtime` (locked to 0.1.0) of package `swarm-cli v0.1.0 (/…/crates/swarm-cli)`
 ```
+
+(Verbatim except that the absolute checkout prefix is elided to `/…/`.) The probe
+is not committed; revert `Cargo.toml`, `Cargo.lock`, `crates/swarm-runtime/Cargo.toml`
+and delete the skeleton directory afterwards.
 
 ### No sub-boundary rescues it
 
@@ -128,6 +165,31 @@ open.**
 - The requirement text is **not** amended. Its account of the cycle is
   incomplete rather than wrong, and correcting requirement scope belongs to the
   phase owner, not the implementer.
+
+### Escalation: this is a scope decision, not an implementation defect
+
+The gap between "SPLIT-02 names two crates" and "one crate exists" cannot be
+closed from inside phase 282. Both available closures are barred:
+
+- **Force the extraction.** Requires the trait inversion described under
+  Alternatives -- new trait definitions and changed signatures. Phase 282 is pure
+  code motion; a design change is out of contract.
+- **Land a placeholder `swarm-runtime-replay`.** An empty or partial crate that
+  ticks a checkbox while `replay/` stays in the root is worse than the honest
+  gap, because it makes the boundary look enforced when it is not.
+
+So the requirement stays open and this ADR is the escalation. **The phase owner
+must decide** between:
+
+1. Splitting SPLIT-02 so the delivered workbench half can close, and re-scoping
+   the replay half into its own requirement whose text budgets for the trait
+   inversion on `replay/harness.rs`'s `SwarmRuntime` dependency; or
+2. Leaving SPLIT-02 whole and open, and accepting that it blocks SPLIT-06's
+   under-25,000-LOC target for `swarm-runtime` by the 8,142 lines of replay
+   machinery that do not move.
+
+Until one of those happens, SPLIT-02 must not be reported as delivered, and no
+phase-282 artifact does so.
 
 ## Alternatives Considered
 
@@ -164,8 +226,10 @@ in the package graph, not the module graph.
 
 ### Negative
 
-- `swarm-runtime` keeps 8,118 lines of replay machinery, so the composition root
-  is smaller than SPLIT-02 intended.
+- `swarm-runtime` keeps 8,142 lines of replay machinery (`wc -l
+  crates/swarm-runtime/src/replay/*.rs`; 4,857 of them outside the two
+  `#[cfg(test)]` files), so the composition root is larger than SPLIT-02
+  intended.
 - Phase 282 cannot report SPLIT-02 as delivered.
 - The requirement's stated premise — that relocating `OperatorSurfacePaths` is
   what unblocks *both* extractions — reads as sufficient and is not. Anyone
@@ -175,13 +239,19 @@ in the package graph, not the module graph.
 
 ```sh
 # Return edge: replay's non-test dependence on the composition root.
-# Requirement remains blocked while this prints lines.
-grep -n "use crate::" crates/swarm-runtime/src/replay/{types,harness,detect_stall,verification}.rs
+# Requirement remains blocked while this prints lines. detect_stall.rs is
+# deliberately absent -- it is #[cfg(test)] at replay/mod.rs:25-26.
+grep -n "use crate::" crates/swarm-runtime/src/replay/{types,harness,verification}.rs
 
 # Forward edge: production consumers inside the root. Currently 20.
 grep -rl "crate::replay" --include="*.rs" crates/swarm-runtime/src/ \
   | grep -v "/src/replay/" | grep -vE "test" | wc -l
 
-# Cycle 1 (the one SPLIT-02 predicted) stays fixed: expects only a doc comment.
+# Cycle 1 (the one SPLIT-02 predicted) stays fixed. The identifier-form pattern
+# expects NO output and rc=1 -- the workbench has no code edge to the HTTP crate.
 grep -rn "swarm_runtime_http\|crate::http" crates/swarm-runtime-workbench/src/ --include='*.rs'
+
+# Widened to the hyphenated spelling, for the prose audit: expects exactly one
+# hit, the doc comment at lib.rs:24.
+grep -rn "swarm.runtime.http" crates/swarm-runtime-workbench/src/ --include='*.rs'
 ```
