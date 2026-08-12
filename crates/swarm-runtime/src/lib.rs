@@ -3,6 +3,39 @@
 //! This crate is the intended composition root for the production runtime:
 //! detection stays in Rust, policy stays deterministic, and live response
 //! execution is capability-scoped.
+//!
+//! # Four agent roles are still declared here (SPLIT-03, phase 282)
+//!
+//! SPLIT-03 moved the `*_agent` role implementations to `swarm-agents`, so that
+//! consumers of the composition root stop compiling behaviour they never call.
+//! Four of the eight went: `pounce`, `stalker`, `weaver`, `whisker`. Four did
+//! not, and are declared below with a marker on each -- `calico_agent`,
+//! `kitten_agent`, `sphinx_agent`, `tom_agent`.
+//!
+//! They are pinned by `ingest/`, which calls into two of them from NON-TEST
+//! code: `ingest/mod.rs:61` stores a `tom_agent::GovernancePolicy`, and
+//! `ingest/providence_handlers.rs:2` calls
+//! `kitten_agent::route_feedback_signal`. Those are back-edges. Moving either
+//! role would put a normal `swarm-agents` entry in this crate's
+//! `[dependencies]`, and Cargo rejects that outright:
+//!
+//! ```text
+//! error: cyclic package dependency: package `swarm-agents` depends on itself.
+//! ```
+//!
+//! `calico` is pinned transitively -- `kitten_agent.rs:2` parses calico
+//! payloads -- and `sphinx` reads nine `pub(crate)` items out of `calico_agent`,
+//! so moving `sphinx` alone would turn all nine into permanent public API of
+//! this crate, four of them to serve a test module.
+//!
+//! IF THIS CHANGES: `ingest/` belongs to SPLIT-05 (`swarm-ingest-runtime`). When
+//! it leaves, all four roles follow it out and this section goes with them.
+//! Until then SPLIT-03 is 4-of-8 by role and 1,593-of-12,215 by line, and the
+//! progress measure is `ls crates/swarm-runtime/src/*_agent.rs | wc -l`: it
+//! prints 4 today and has to reach 0. The full argument -- including what it
+//! would have cost to force `sphinx` out early, and the alternative weighed for
+//! the dev-dependency edge that carries the root's integration tests -- is in
+//! `docs/decisions/0004-split-03-four-of-eight-agents-pinned-by-ingest.md`.
 #![allow(clippy::result_large_err)]
 
 extern crate self as swarm_runtime;
@@ -12,7 +45,7 @@ pub mod alert_tuning;
 pub mod anti_tamper;
 pub mod approval;
 pub mod bridge_runtime;
-pub mod calico_agent;
+pub mod calico_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod canary;
 pub mod config;
 pub mod control;
@@ -30,7 +63,7 @@ pub mod governance_prep;
 pub mod http;
 pub mod ingest;
 pub mod investigation;
-pub mod kitten_agent;
+pub mod kitten_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod mutation;
 pub mod operator_maintenance;
 pub mod portfolio;
@@ -42,11 +75,11 @@ pub mod runtime_events;
 pub mod selection;
 pub mod sequence_detector;
 pub mod service;
-pub mod sphinx_agent;
+pub mod sphinx_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod startup_attestation;
 pub mod strategy;
 pub mod threat_intel_runtime;
-pub mod tom_agent;
+pub mod tom_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
