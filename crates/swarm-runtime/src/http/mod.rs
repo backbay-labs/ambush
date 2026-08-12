@@ -16,4 +16,8 @@
 //! IF THIS CHANGES: once `ingest` no longer needs a rate limiter -- or once
 //! `ingest` itself moves out of the composition root -- this module and the
 //! `axum` dependency it forces can follow the rest of the surface upward.
+//! Two items stayed for the same reason, and they are the only two:
+//! `rate_limit`, and `tls_identity`'s `TlsClientIdentity` (produced by the TLS
+//! accept loop above, read back here by `ingest/platform_api.rs`).
 pub mod rate_limit;
+pub mod tls_identity;

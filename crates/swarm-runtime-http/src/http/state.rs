@@ -35,6 +35,7 @@ use super::review::{
     review_session_promotion_readiness_handler, review_session_promotion_readiness_page_handler,
     review_session_readiness_capsule_handler,
 };
+use crate::serve::{ServeError, serve_with_listener};
 use axum::Router;
 use axum::middleware;
 use axum::routing::{get, post};
@@ -52,7 +53,6 @@ use swarm_runtime::http::rate_limit::HttpRateLimiter;
 use swarm_runtime::operator_maintenance::{OperatorMaintenanceError, OperatorMaintenanceService};
 use swarm_runtime::portfolio::DefaultEvolutionPortfolioHarness;
 use swarm_runtime::review_workbench::{DefaultReviewWorkbenchHarness, ReviewWorkbenchError};
-use swarm_runtime::serve::{ServeError, serve_with_listener};
 
 /// Errors raised while building or serving the authenticated operator surface.
 #[derive(Debug, thiserror::Error)]

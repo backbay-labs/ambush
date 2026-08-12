@@ -25,7 +25,6 @@ use swarm_runtime::kitten_agent::KittenAgent;
 use swarm_runtime::pounce_agent::PounceAgent;
 use swarm_runtime::replay::{ReplayScenarioInput, load_scenario_manifest, scenario_paths_in_dir};
 use swarm_runtime::runtime_events::{DEFAULT_RUNTIME_EVENT_CAPACITY, RuntimeEventBroadcaster};
-use swarm_runtime::serve::serve_with_listener;
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
 use swarm_runtime::sphinx_agent::SphinxAgent;
 use swarm_runtime::stalker_agent::StalkerAgent;
@@ -34,6 +33,7 @@ use swarm_runtime::threat_intel_runtime::ThreatIntelFeedRuntimeRegistry;
 use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
 use swarm_runtime::weaver_agent::WeaverAgent;
 use swarm_runtime::whisker_agent::WhiskerAgent;
+use swarm_runtime_http::serve::serve_with_listener;
 
 const RELOAD_DEBOUNCE_MS: u64 = 500;
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 30;

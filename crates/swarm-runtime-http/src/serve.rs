@@ -20,6 +20,9 @@ use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::server::danger::ClientCertVerifier;
 use tokio_rustls::rustls::{RootCertStore, ServerConfig};
 use tower::Service;
+// Defined in `swarm-runtime` because `ingest` reads it back out of the request
+// extensions; re-exported so `serve::TlsClientIdentity` still names it here.
+pub use swarm_runtime::http::tls_identity::TlsClientIdentity;
 use x509_parser::parse_x509_certificate;
 
 #[derive(Debug, thiserror::Error)]
@@ -41,15 +44,6 @@ pub enum ServeError {
 
     #[error("TLS connection failed: {0}")]
     Connection(#[source] io::Error),
-}
-
-#[derive(Debug, Clone)]
-pub struct TlsClientIdentity(Arc<str>);
-
-impl TlsClientIdentity {
-    pub fn as_str(&self) -> &str {
-        self.0.as_ref()
-    }
 }
 
 pub async fn serve_with_listener<F>(
@@ -135,7 +129,7 @@ where
                             if let Some(identity) = client_identity {
                                 request
                                     .extensions_mut()
-                                    .insert(TlsClientIdentity(Arc::from(identity)));
+                                    .insert(TlsClientIdentity::new(Arc::from(identity)));
                             }
                             let response = router
                                 .call(request)

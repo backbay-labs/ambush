@@ -8,9 +8,9 @@ use crate::control::{
 use crate::escalation::standard_threat_classes;
 use crate::evasion_coverage::EvasionCoverageSnapshot;
 use crate::http::rate_limit::HttpRateLimitRejection;
+use crate::http::tls_identity::TlsClientIdentity;
 use crate::providence::verify_providence_context_token;
 use crate::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
-use crate::serve::TlsClientIdentity;
 use crate::service::{HttpRateLimitStatus, OperatorBearerTokenStatus, RuntimeDegradationStatus};
 use axum::Router;
 use axum::extract::{Extension, Json, Path as AxumPath, Query, State};

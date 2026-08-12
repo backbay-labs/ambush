@@ -12,6 +12,19 @@
 //! Nothing in `swarm-runtime` may depend on this crate. If a runtime module
 //! needs something from here, the item is in the wrong crate.
 //!
+//! # What did NOT move, and why `axum` is still below this line
+//!
+//! `axum` is still a direct dependency of `swarm-runtime`, and this crate did
+//! not change that. `ingest/` -- `mod.rs`, `health.rs`, `demo.rs`,
+//! `platform_api.rs`, `providence_handlers.rs`, `soar_verdict_handlers.rs` --
+//! builds axum routers and handlers in NON-TEST code, and `swarm-runtime`'s own
+//! `control.rs` and `anti_tamper.rs` consume `crate::ingest` in non-test code
+//! in turn. Lifting `ingest` up here would invert those two edges, which is a
+//! trait-boundary change, not a code move. Until that happens the runtime keeps
+//! `axum`; the five heavier transport crates above are gone either way, and
+//! `rustls-pemfile` and `x509-parser` are now unreachable from
+//! `cargo tree -p swarm-runtime` entirely.
+//!
 //! `result_large_err` is allowed crate-wide here for the same reason it is
 //! allowed in `swarm-runtime`, whose `lib.rs` carries the identical attribute:
 //! the operator handlers return `Result<_, OperatorHttpError>` and that enum
@@ -36,3 +49,4 @@ pub(crate) use swarm_runtime::{
 pub mod cli;
 pub mod http;
 pub mod operator_http;
+pub mod serve;

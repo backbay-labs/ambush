@@ -43,7 +43,6 @@ pub mod review_workbench;
 pub mod runtime_events;
 pub mod selection;
 pub mod sequence_detector;
-pub mod serve;
 pub mod service;
 pub mod sphinx_agent;
 pub mod stalker_agent;
