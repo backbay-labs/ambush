@@ -27,7 +27,7 @@ use super::validation::{
 use super::verification::{
     collect_review_blocking_reasons, observe_detect_latency, verify_canonical_templates,
     verify_false_positive_bound, verify_known_bad_coverage, verify_scenario_class_declared,
-    verify_total_detection_budget,
+    verify_scenario_class_enforced, verify_total_detection_budget,
 };
 use crate::config::load_config;
 use crate::correlation::{CorrelationEngine, CorrelationOutcome};
@@ -668,6 +668,13 @@ impl DefaultReplayHarness {
             // on: a scenario whose class is `mixed` matches neither of their
             // predicates and would otherwise be exempt from both at once.
             verify_scenario_class_declared(&[&known_bad_report, &benign_report]),
+            // SECOND, and the other half of that precondition. A declared class
+            // is enforceable only in the corpus half whose invariant READS that
+            // class, and each of the next two reads exactly one half. A `benign`
+            // scenario listed only in the known-bad suite, or an `adversarial`
+            // one listed only in the benign controls, satisfies both of them
+            // vacuously -- neither ever looks at it.
+            verify_scenario_class_enforced(&known_bad_report, &benign_report),
             verify_known_bad_coverage(&known_bad_report),
             verify_canonical_templates(
                 &candidate_detector,

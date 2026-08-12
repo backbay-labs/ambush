@@ -7,6 +7,8 @@ use super::types::{
 };
 use crate::detector_factory::RuntimeDetector;
 use serde_json::json;
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 use swarm_whisker::DetectionStrategy;
 
 /// Fails closed on any verification scenario that declares no enforceable class.
@@ -54,6 +56,135 @@ pub(super) fn verify_scenario_class_declared(
         },
         counterexamples,
     }
+}
+
+/// Fails closed on any verification scenario whose declared class no invariant
+/// is actually responsible for.
+///
+/// `verify_scenario_class_declared` proves a scenario HAS a class some
+/// invariant could enforce. It does not prove that any invariant did. The two
+/// halves of the corpus are read separately, and each reader acts on one class
+/// only: `verify_known_bad_coverage` sees the known-bad report and acts on
+/// `Adversarial`; `verify_false_positive_bound` sees the benign report and acts
+/// on `Benign`. So a class is enforceable only where it is also READ:
+///
+///   `benign` only in `known_bad.suite`
+///       -> `known_bad_coverage` skips it, `false_positive_bound` never sees
+///          it, and its detections land in neither the numerator nor the
+///          denominator of the false-positive rate. It can fire a real
+///          detection -- a false positive by definition -- while the report
+///          records `false_positive_bound` as 0.0 and `passed: true`.
+///
+///   `adversarial` only in `benign_controls.scenarios`
+///       -> `false_positive_bound` filters it out as not benign, and
+///          `known_bad_coverage` never sees it, so nothing demands the
+///          detection its class promises. It can miss detection entirely and
+///          still pass.
+///
+/// Both spellings are a malformed corpus, and the repo contract is that weak
+/// input fails closed. This is the same family as `scenario_class_declared`
+/// and reports the same way: a named gating invariant carrying the offending
+/// scenario as its own counterexample, rather than a borrowed failure from an
+/// invariant that means something else.
+///
+/// A COVERAGE CHECK, NOT A SUITE-ROLE CHECK. A scenario listed in BOTH halves
+/// is correct, and the shipped corpus depends on it: `hellcat-office-v1` is a
+/// full replay suite that carries `benign-baseline` and
+/// `python-maintenance-benign` so its own experiment metrics have a
+/// false-positive denominator, and `office-detector-safety-v1` names those same
+/// two files as its benign controls. Replay is deterministic -- the same
+/// fixture through the same detector produces the same bundles -- so the
+/// benign-half evaluation of such a scenario is what `false_positive_bound`
+/// bounds, and the known-bad-half copy is genuinely covered. Demanding that a
+/// scenario's class match the role of the suite it sits in would fail that
+/// corpus for being correct, and would push benign controls out of the replay
+/// suites that measure against them.
+pub(super) fn verify_scenario_class_enforced(
+    known_bad_report: &ReplaySuiteReport,
+    benign_report: &ReplaySuiteReport,
+) -> VerificationInvariantResult {
+    let known_bad_fixtures = scenario_identities(known_bad_report);
+    let benign_fixtures = scenario_identities(benign_report);
+
+    let mut counterexamples = Vec::new();
+    for scenario in &known_bad_report.scenario_reports {
+        if scenario.metadata.class == ReplayScenarioClass::Benign
+            && !benign_fixtures.contains(&scenario_identity(&scenario.scenario_path))
+        {
+            counterexamples.push(VerificationCounterexample {
+                subject: scenario.scenario_name.clone(),
+                reference: scenario.scenario_path.clone(),
+                details: concat!(
+                    "scenario declares class `benign` but is listed only in the known-bad ",
+                    "suite, where no invariant bounds its detections; list it under ",
+                    "`benign_controls.scenarios` so `false_positive_bound` sees it, or ",
+                    "reclassify it `adversarial`"
+                )
+                .to_string(),
+            });
+        }
+    }
+    for scenario in &benign_report.scenario_reports {
+        if scenario.metadata.class == ReplayScenarioClass::Adversarial
+            && !known_bad_fixtures.contains(&scenario_identity(&scenario.scenario_path))
+        {
+            counterexamples.push(VerificationCounterexample {
+                subject: scenario.scenario_name.clone(),
+                reference: scenario.scenario_path.clone(),
+                details: concat!(
+                    "scenario declares class `adversarial` but is listed only in the benign ",
+                    "controls, where no invariant demands the detection it promises; list it ",
+                    "in the `known_bad.suite` so `known_bad_coverage` sees it, or reclassify ",
+                    "it `benign`"
+                )
+                .to_string(),
+            });
+        }
+    }
+
+    let unenforced = counterexamples.len();
+    VerificationInvariantResult {
+        name: "scenario_class_enforced".to_string(),
+        passed: unenforced == 0,
+        expected: json!(0),
+        actual: json!(unenforced),
+        details: if unenforced == 0 {
+            "every verification scenario sits in the corpus half that enforces its class"
+                .to_string()
+        } else {
+            "verification corpus contains scenarios whose declared class no invariant enforces"
+                .to_string()
+        },
+        counterexamples,
+    }
+}
+
+fn scenario_identities(report: &ReplaySuiteReport) -> BTreeSet<PathBuf> {
+    report
+        .scenario_reports
+        .iter()
+        .map(|scenario| scenario_identity(&scenario.scenario_path))
+        .collect()
+}
+
+/// Identity of the FIXTURE a scenario report was produced from.
+///
+/// The two halves of a corpus reference the same file through different roots
+/// -- the known-bad suite resolves `../scenarios/x.yaml` against
+/// `scenario-suites/`, the benign controls resolve it against `verifications/`
+/// -- so the recorded path strings differ for what is one file. The shipped
+/// corpus records exactly that: `experiments/../verifications/../scenario-suites/../scenarios/benign-baseline.yaml`
+/// on the known-bad side and `experiments/../verifications/../scenarios/benign-baseline.yaml`
+/// on the benign side. Comparing raw strings would report its dual-listed
+/// benign controls as uncovered.
+///
+/// `canonicalize` resolves `..` and symlinks against the filesystem, and every
+/// one of these files was just read to produce the report being checked. If it
+/// fails anyway -- the file moved underfoot -- the raw path is kept, which can
+/// only ever fail to match, and failing to match reports the scenario as
+/// unenforced. That is the fail-closed direction.
+fn scenario_identity(path: &str) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
 }
 
 pub(super) fn verify_known_bad_coverage(report: &ReplaySuiteReport) -> VerificationInvariantResult {

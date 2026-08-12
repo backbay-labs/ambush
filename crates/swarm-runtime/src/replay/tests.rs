@@ -1012,10 +1012,28 @@ gates:
 /// YAML, and whose benign controls are a single clean scenario. Every other
 /// invariant is arranged to pass, so the verdict this returns is a statement
 /// about the extra scenario and nothing else.
+/// Where the extra scenario is listed in the verification corpus. The corpus
+/// has exactly two halves and each is read by exactly one safety invariant, so
+/// which list a scenario lands in decides which invariant -- if any -- is
+/// responsible for it.
+#[derive(Clone, Copy)]
+enum ExtraScenarioPlacement {
+    /// `known_bad.suite`, read by `verify_known_bad_coverage`.
+    KnownBadSuite,
+    /// `benign_controls.scenarios`, read by `verify_false_positive_bound`.
+    BenignControls,
+    /// Both halves at once. This is the shape of the SHIPPED corpus:
+    /// `hellcat-office-v1` is a full replay suite that carries its own benign
+    /// controls, and `office-detector-safety-v1` names those same files under
+    /// `benign_controls.scenarios`.
+    BothHalves,
+}
+
 async fn verification_over_extra_scenario_yaml(
     label: &str,
     extra_file_name: &str,
     extra_scenario_yaml: &str,
+    placement: ExtraScenarioPlacement,
 ) -> (
     PathBuf,
     Result<super::DetectorVerificationLookup, super::ReplayHarnessError>,
@@ -1041,6 +1059,21 @@ async fn verification_over_extra_scenario_yaml(
     let extra_path = scenarios_dir.join(extra_file_name);
     fs::write(&extra_path, extra_scenario_yaml).unwrap();
 
+    let mut suite_scenarios = vec![office_path.display().to_string()];
+    let mut benign_control_scenarios = vec![benign_path.display().to_string()];
+    match placement {
+        ExtraScenarioPlacement::KnownBadSuite => {
+            suite_scenarios.push(extra_path.display().to_string());
+        }
+        ExtraScenarioPlacement::BenignControls => {
+            benign_control_scenarios.push(extra_path.display().to_string());
+        }
+        ExtraScenarioPlacement::BothHalves => {
+            suite_scenarios.push(extra_path.display().to_string());
+            benign_control_scenarios.push(extra_path.display().to_string());
+        }
+    }
+
     let suite_path = write_suite(
         &suites_dir,
         "hellcat-office-v1.yaml",
@@ -1049,10 +1082,7 @@ async fn verification_over_extra_scenario_yaml(
             description: "Hellcat office corpus".to_string(),
             corpus_version: "test-1".to_string(),
             metadata: Default::default(),
-            scenarios: vec![
-                office_path.display().to_string(),
-                extra_path.display().to_string(),
-            ],
+            scenarios: suite_scenarios,
         },
     );
     let verification_path = write_verification(
@@ -1066,7 +1096,7 @@ known_bad:
   suite: {}
 benign_controls:
   scenarios:
-    - {}
+{}
 canonical_templates:
   - name: office_encoded_powershell_execution
     threat_class: execution
@@ -1087,7 +1117,11 @@ resource_budgets:
   max_total_detections: 8
 "#,
             suite_path.display(),
-            benign_path.display(),
+            benign_control_scenarios
+                .iter()
+                .map(|scenario| format!("    - {scenario}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ))
         .unwrap(),
     );
@@ -1250,6 +1284,7 @@ metadata:
         "verification-absent-class",
         "unclassified-scenario.yaml",
         &yaml,
+        ExtraScenarioPlacement::KnownBadSuite,
     )
     .await;
 
@@ -1281,6 +1316,7 @@ metadata:
         "verification-mixed-class",
         "mixed-scenario.yaml",
         &yaml,
+        ExtraScenarioPlacement::KnownBadSuite,
     )
     .await;
 
@@ -1348,6 +1384,7 @@ metadata:
         "verification-mixed-class-named",
         "mixed-scenario.yaml",
         &yaml,
+        ExtraScenarioPlacement::KnownBadSuite,
     )
     .await;
     let report = outcome.unwrap().report;
@@ -1379,6 +1416,296 @@ metadata:
     );
 
     let _ = fs::remove_dir_all(root);
+}
+
+/// A scenario body that DOES fire a detection: the office parent/child pair the
+/// production `suspicious_process_tree` profile is built around. Used to show a
+/// misfiled `benign` scenario is not merely ignored -- it is ignored while
+/// actively producing the exact signal `false_positive_bound` exists to bound.
+const DETECTING_SCENARIO_BODY: &str = r#"
+input:
+  kind: events
+  events:
+    - action:
+        type: isolate_host
+        host_id: host-misfiled-1
+      event:
+        source: synthetic
+        event_id: hunt-misfiled-1
+        timestamp: 1700000000800
+        host_id: host-misfiled-1
+        payload:
+          kind: process_start
+          parent_process: WINWORD
+          process_name: powershell
+          command_line: powershell.exe -enc AAA=
+          user: alice
+
+expectations:
+  replay_bundle_count: 1
+  investigation_count: 1
+  incident_count: 0
+  max_detect_latency_us: 5000
+  max_policy_latency_us: 5000
+  max_response_latency_us: 5000
+"#;
+
+fn misfiled_benign_scenario_yaml() -> String {
+    format!(
+        r#"name: misfiled_benign_scenario
+description: Scenario declaring class benign while listed only in the known-bad suite
+seed_time_ms: 1700000800000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: benign
+  tags:
+    - misfiled
+{DETECTING_SCENARIO_BODY}"#
+    )
+}
+
+fn misfiled_adversarial_scenario_yaml() -> String {
+    format!(
+        r#"name: misfiled_adversarial_scenario
+description: Scenario declaring class adversarial while listed only in benign controls
+seed_time_ms: 1700000900000
+requested_by: replay-whisker
+receipt_chain: []
+metadata:
+  class: adversarial
+  tags:
+    - misfiled
+{UNCLASSIFIED_SCENARIO_BODY}"#
+    )
+}
+
+/// Reads the recorded total detection count out of a verification report. This
+/// is the one place the report says how much the candidate actually fired, and
+/// it is what makes the vacuity below observable rather than theoretical.
+fn total_detections_in(report: &super::DetectorVerificationReport) -> u64 {
+    report
+        .invariants
+        .iter()
+        .find(|invariant| invariant.name == "total_detection_budget")
+        .expect("verification must carry a total_detection_budget invariant")
+        .actual
+        .as_u64()
+        .expect("total_detection_budget actual must be a count")
+}
+
+/// A scenario declaring `class: benign` but listed ONLY in the known-bad suite
+/// is subject to no safety invariant at all.
+///
+/// `verify_known_bad_coverage` reads the known-bad report but demands a
+/// detection only from `Adversarial` scenarios, so it skips this one.
+/// `verify_false_positive_bound` is the invariant that owns benign scenarios,
+/// but it reads only `benign_report`, and this scenario is not in it -- so it
+/// never sees the scenario, and the scenario contributes to neither the
+/// numerator nor the denominator of the false-positive rate.
+/// `scenario_class_declared` passes it because it HAS a class.
+///
+/// The scenario below fires a real detection. On a benign scenario that is a
+/// false positive by definition, which is exactly what the corpus exists to
+/// bound -- and the report still says `passed: true` with
+/// `false_positive_bound` reporting a rate of 0.0.
+#[tokio::test]
+async fn verification_does_not_pass_vacuously_on_a_benign_scenario_only_in_the_known_bad_suite() {
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-misfiled-benign",
+        "misfiled-benign-scenario.yaml",
+        &misfiled_benign_scenario_yaml(),
+        ExtraScenarioPlacement::KnownBadSuite,
+    )
+    .await;
+
+    if let Ok(lookup) = outcome.as_ref() {
+        // The detection demonstrably fired: the office control contributes 2,
+        // so a third can only have come from the misfiled scenario.
+        assert_eq!(
+            total_detections_in(&lookup.report),
+            3,
+            "the misfiled benign scenario must actually fire for this to be a false positive: {:#?}",
+            lookup.report.invariants
+        );
+    }
+
+    assert_scenario_was_not_silently_exempt(
+        outcome,
+        "misfiled_benign_scenario",
+        "misfiled-benign-scenario",
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The mirror hole, equally open: a scenario declaring `class: adversarial` but
+/// listed ONLY in `benign_controls.scenarios`.
+///
+/// `verify_false_positive_bound` filters on `Benign`, so this scenario is not a
+/// counterexample there and does not enter the benign denominator.
+/// `verify_known_bad_coverage` is the invariant that owns adversarial
+/// scenarios, but it reads only `known_bad_report`, and this scenario is not in
+/// it -- so nothing ever demands the detection its class promises.
+///
+/// The scenario below emits NO detection. Listed in the known-bad suite it
+/// would fail `known_bad_coverage` outright; listed here it passes silently.
+#[tokio::test]
+async fn verification_does_not_pass_vacuously_on_an_adversarial_scenario_only_in_benign_controls() {
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-misfiled-adversarial",
+        "misfiled-adversarial-scenario.yaml",
+        &misfiled_adversarial_scenario_yaml(),
+        ExtraScenarioPlacement::BenignControls,
+    )
+    .await;
+
+    if let Ok(lookup) = outcome.as_ref() {
+        // Nothing fired for it: the 2 detections are the office control's.
+        assert_eq!(
+            total_detections_in(&lookup.report),
+            2,
+            "the misfiled adversarial scenario must miss detection for this to be a coverage hole: {:#?}",
+            lookup.report.invariants
+        );
+    }
+
+    assert_scenario_was_not_silently_exempt(
+        outcome,
+        "misfiled_adversarial_scenario",
+        "misfiled-adversarial-scenario",
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Pins the SHAPE of the refusal for a `benign` scenario the benign invariant
+/// never sees. Like `scenario_class_declared`, it is a named gating invariant
+/// carrying the offending scenario as its own counterexample, rather than a
+/// borrowed failure from an invariant that means something else.
+#[tokio::test]
+async fn verification_reports_a_misfiled_benign_scenario_under_scenario_class_enforced() {
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-misfiled-benign-named",
+        "misfiled-benign-scenario.yaml",
+        &misfiled_benign_scenario_yaml(),
+        ExtraScenarioPlacement::KnownBadSuite,
+    )
+    .await;
+    let report = outcome.unwrap().report;
+
+    assert_invariant_owns_scenario(&report, "misfiled_benign_scenario");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The mirror shape assertion, for an `adversarial` scenario the adversarial
+/// invariant never sees.
+#[tokio::test]
+async fn verification_reports_a_misfiled_adversarial_scenario_under_scenario_class_enforced() {
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-misfiled-adversarial-named",
+        "misfiled-adversarial-scenario.yaml",
+        &misfiled_adversarial_scenario_yaml(),
+        ExtraScenarioPlacement::BenignControls,
+    )
+    .await;
+    let report = outcome.unwrap().report;
+
+    assert_invariant_owns_scenario(&report, "misfiled_adversarial_scenario");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The shipped corpus's own shape must stay legal, and the coverage it claims
+/// must be REAL.
+///
+/// `scenario-suites/hellcat-office-v1.yaml` lists `benign-baseline.yaml` and
+/// `python-maintenance-benign.yaml` -- it is a full replay suite and needs a
+/// benign denominator for its own experiment metrics -- and
+/// `verifications/office-detector-safety-v1.yaml` names those same two files as
+/// its benign controls. So `benign` scenarios legitimately sit inside the
+/// known-bad suite, and an invariant demanding that a scenario's class match the
+/// role of its suite would fail the tracked corpus for being correct.
+///
+/// The scenario below is the SAME misfiled-benign fixture as the vacuity test,
+/// dual-listed instead of misfiled. `scenario_class_enforced` must pass it --
+/// and `false_positive_bound` must now FAIL on it, which is the whole point: the
+/// identical detection that produced a green report while the scenario sat only
+/// in the known-bad suite is bounded the moment the benign half can see it.
+#[tokio::test]
+async fn verification_bounds_a_benign_control_listed_in_both_corpus_halves() {
+    let (root, outcome) = verification_over_extra_scenario_yaml(
+        "verification-dual-listed-benign",
+        "misfiled-benign-scenario.yaml",
+        &misfiled_benign_scenario_yaml(),
+        ExtraScenarioPlacement::BothHalves,
+    )
+    .await;
+    let report = outcome.unwrap().report;
+
+    let enforced = report
+        .invariants
+        .iter()
+        .find(|invariant| invariant.name == "scenario_class_enforced")
+        .expect("verification must carry a scenario_class_enforced invariant");
+    assert!(
+        enforced.passed,
+        "a benign control listed in both halves is covered, not misfiled: {enforced:#?}"
+    );
+
+    let bound = report
+        .invariants
+        .iter()
+        .find(|invariant| invariant.name == "false_positive_bound")
+        .expect("verification must carry a false_positive_bound invariant");
+    assert!(
+        !bound.passed,
+        "the benign half must actually bound the detection it can now see: {bound:#?}"
+    );
+    assert_eq!(
+        bound
+            .counterexamples
+            .iter()
+            .map(|counterexample| counterexample.subject.as_str())
+            .collect::<Vec<_>>(),
+        vec!["misfiled_benign_scenario"]
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// `scenario_class_enforced` must be the ONLY thing that fails, and it must
+/// name the scenario. If any other invariant also failed, the corpus would be
+/// wrong for a second reason and the test would not be isolating this one.
+fn assert_invariant_owns_scenario(report: &super::DetectorVerificationReport, scenario_name: &str) {
+    assert!(!report.passed);
+    let invariant = report
+        .invariants
+        .iter()
+        .find(|invariant| invariant.name == "scenario_class_enforced")
+        .expect("verification must carry a scenario_class_enforced invariant");
+    assert!(!invariant.passed);
+    assert_eq!(invariant.actual, serde_json::json!(1));
+    assert_eq!(
+        invariant
+            .counterexamples
+            .iter()
+            .map(|counterexample| counterexample.subject.as_str())
+            .collect::<Vec<_>>(),
+        vec![scenario_name]
+    );
+    // Every OTHER invariant is green, which is the point: nothing else in the
+    // corpus is wrong, and without this invariant the report would say passed.
+    assert!(
+        report
+            .invariants
+            .iter()
+            .filter(|invariant| invariant.name != "scenario_class_enforced")
+            .all(|invariant| invariant.passed),
+        "{:#?}",
+        report.invariants
+    );
 }
 
 #[tokio::test]

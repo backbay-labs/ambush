@@ -1263,6 +1263,17 @@ verification without any of them running.
   A `mixed` scenario matches neither `known_bad_coverage` (which requires
   `adversarial`) nor `false_positive_bound` (which requires `benign`), so it would
   otherwise be checked by nothing. Classify each scenario as one or the other.
+
+  Declaring a class is necessary but not sufficient: each of those two
+  invariants reads exactly one half of a verification corpus, so a class is
+  enforced only where it is also read. A scenario must appear in the half that
+  reads its class -- `adversarial` in `known_bad.suite`, `benign` in
+  `benign_controls.scenarios` -- or it satisfies both invariants vacuously and
+  FAILS the `scenario_class_enforced` invariant. Appearing in BOTH halves is
+  fine and is what the tracked corpus does: `hellcat-office-v1` carries
+  `benign-baseline` and `python-maintenance-benign` for its own false-positive
+  denominator, and `office-detector-safety-v1` lists those same two files as its
+  benign controls.
 - `metadata.campaign`: campaign or operator workflow label
 - `metadata.techniques`: MITRE ATT&CK technique IDs or internal technique labels
 - `metadata.tags`: free-form suite or debugging tags
@@ -1478,10 +1489,18 @@ cargo run -p swarm-runtime --bin swarmctl -- verification-result --verification-
 Current gating invariant set (`invariants` in the report; `passed` is exactly
 `invariants.iter().all(|i| i.passed)`):
 
+- `scenario_class_declared`: every corpus scenario must declare a class an
+  invariant can enforce; `mixed` fails here
+- `scenario_class_enforced`: every corpus scenario must sit in the corpus half
+  that reads its class, so that some invariant is actually responsible for it
 - `known_bad_coverage`: candidate must not miss tracked adversarial verification scenarios
 - `threat_class_templates`: candidate must still match canonical threat-class templates
 - `false_positive_bound`: candidate must stay under the repo-owned benign false-positive threshold
 - `total_detection_budget`: candidate total emitted detections must stay within the corpus volume budget
+
+The first two are preconditions on the corpus rather than on the candidate, and
+they come first for that reason: without them a scenario can satisfy the
+remaining invariants by being invisible to all of them.
 
 Every one of these is a count or a rate over fixture content, so each computes
 the same value on any machine, under any load, on any architecture.
