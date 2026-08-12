@@ -7,7 +7,7 @@ use super::types::{
     ReviewPromotionReadinessRecommendation, ReviewSessionResolved, ReviewWorkbenchError,
 };
 use std::collections::BTreeSet;
-use swarm_runtime::evidence::{
+use swarm_evolution::evidence::{
     EvidenceBundleLookup, EvidenceSubjectKind, EvidenceVerificationLookup,
     EvidenceVerificationStatus, OperatorEvidenceReadService, PromotionEvidencePacketLookup,
 };

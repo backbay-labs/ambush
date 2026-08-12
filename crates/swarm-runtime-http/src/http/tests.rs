@@ -31,17 +31,17 @@ use swarm_core::types::{
     ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity,
 };
 use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
+use swarm_evolution::evidence::{
+    EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
+    EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
+    FileEvidenceBundleStore, FileEvidenceVerificationStore, FilePromotionEvidencePacketStore,
+    PromotionEvidenceAttachment, PromotionEvidencePacket, PromotionEvidenceRecommendation,
+};
 use swarm_policy::ApprovalContext;
 use swarm_response::SwarmFindingEnvelope;
 use swarm_runtime::approval::DefaultApprovalHarness;
 use swarm_runtime::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
-};
-use swarm_runtime::evidence::{
-    EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
-    EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
-    FileEvidenceBundleStore, FileEvidenceVerificationStore, FilePromotionEvidencePacketStore,
-    PromotionEvidenceAttachment, PromotionEvidencePacket, PromotionEvidenceRecommendation,
 };
 use swarm_runtime::ingest::{DemoProofPackage, IngestState, detect_http_router};
 use swarm_runtime::replay::{
@@ -683,7 +683,7 @@ fn sample_subject_verification_report(
         signer_id: "local-evidence-signer".to_string(),
         signer_key_id: "key:red".to_string(),
         expected_key_id: Some("key:red".to_string()),
-        checks: vec![swarm_runtime::evidence::EvidenceVerificationCheck {
+        checks: vec![swarm_evolution::evidence::EvidenceVerificationCheck {
             name: "canonical_payload".to_string(),
             passed: true,
             details: "canonical payload bytes normalized cleanly".to_string(),

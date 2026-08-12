@@ -16,6 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
+swarm-evolution.workspace = true
 swarm-runtime.workspace = true
 swarm-runtime-http.workspace = true
 swarm-runtime-workbench.workspace = true

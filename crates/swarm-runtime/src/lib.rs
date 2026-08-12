@@ -56,7 +56,6 @@ pub mod dispatcher;
 pub mod drafting;
 pub mod escalation;
 pub mod evasion_coverage;
-pub mod evidence;
 pub mod evolution;
 pub mod evolution_status;
 pub mod governance_prep;
@@ -65,7 +64,6 @@ pub mod ingest;
 pub mod investigation;
 pub mod kitten_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod mutation;
-pub mod operator_maintenance;
 pub mod portfolio;
 pub mod promotion;
 pub mod providence;

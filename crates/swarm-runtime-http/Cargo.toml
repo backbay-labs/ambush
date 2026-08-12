@@ -24,6 +24,7 @@ serde_json.workspace = true
 swarm-agents.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
+swarm-evolution.workspace = true
 swarm-pheromone.workspace = true
 swarm-policy.workspace = true
 swarm-response.workspace = true

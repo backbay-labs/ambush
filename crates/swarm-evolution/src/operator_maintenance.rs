@@ -2,15 +2,17 @@ use crate::evidence::{
     EvidenceError, FileEvidenceBundleStore, FileEvidenceVerificationStore,
     verify_bundle_with_stores,
 };
-use crate::governance_prep::{DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePrepError};
-use crate::portfolio::{
-    DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction, EvolutionPortfolioError,
-};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::OperatorSurfacePaths;
+use swarm_runtime::governance_prep::{
+    DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePrepError,
+};
+use swarm_runtime::portfolio::{
+    DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction, EvolutionPortfolioError,
+};
 
 /// Approved operator maintenance actions for the local authenticated surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -818,7 +820,7 @@ mod tests {
         FileOperatorMaintenanceStore, OperatorMaintenanceExecution, OperatorMaintenanceRecord,
         OperatorMaintenanceRequest, OperatorMaintenanceStatus,
     };
-    use crate::portfolio::EvolutionPortfolioDecisionAction;
+    use swarm_runtime::portfolio::EvolutionPortfolioDecisionAction;
 
     fn sample_record(
         action_id: &str,

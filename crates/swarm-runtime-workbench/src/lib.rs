@@ -12,9 +12,12 @@
 //!
 //! The edge runs `swarm-runtime-workbench -> swarm-runtime` and never back.
 //! `swarm-runtime` carries no `pub mod workbench` any more: the module's only
-//! two upward dependencies, `evidence` and `operator_maintenance`, stay in the
-//! runtime, and this crate reaches them as `swarm_runtime::evidence` and
-//! `swarm_runtime::operator_maintenance`.
+//! two upward dependencies are `evidence` and `operator_maintenance`, which
+//! SPLIT-04 moved on to `swarm-evolution`, so this crate reaches them as
+//! `swarm_evolution::evidence` and `swarm_evolution::operator_maintenance` and
+//! carries a `swarm-evolution` dependency for them. That edge runs
+//! `swarm-runtime-workbench -> swarm-evolution -> swarm-runtime`; it does not
+//! reintroduce a back-edge into the composition root.
 //!
 //! Nothing in `swarm-runtime` may depend on this crate. If a runtime module
 //! needs something from here, the item is in the wrong crate.

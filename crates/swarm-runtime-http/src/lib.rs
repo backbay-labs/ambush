@@ -47,12 +47,14 @@
 // resolve inside this crate, and nothing outside it should reach `swarm-runtime`
 // through `swarm-runtime-http` when it can depend on `swarm-runtime` directly.
 pub(crate) use swarm_runtime::{
-    agent_identity, approval, canary, config, control, drafting, evidence, evolution,
-    evolution_status, governance_prep, mutation, operator_maintenance, portfolio, promotion,
-    replay, selection, strategy,
+    agent_identity, approval, canary, config, control, drafting, evolution, evolution_status,
+    governance_prep, mutation, portfolio, promotion, replay, selection, strategy,
 };
-// `review_workbench` left `swarm-runtime` with SPLIT-02. Same alias, new home,
-// so `cli::core`'s `crate::review_workbench::...` paths resolve unchanged.
+// `evidence` and `operator_maintenance` left `swarm-runtime` with SPLIT-04, and
+// `review_workbench` left with SPLIT-02. Same aliases, new homes, so
+// `cli::core`'s `crate::evidence::...`, `crate::operator_maintenance::...` and
+// `crate::review_workbench::...` paths resolve unchanged.
+pub(crate) use swarm_evolution::{evidence, operator_maintenance};
 pub(crate) use swarm_runtime_workbench::review_workbench;
 
 pub mod cli;

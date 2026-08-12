@@ -2943,6 +2943,7 @@ dependencies = [
  "serde_json",
  "swarm-core",
  "swarm-crypto",
+ "swarm-evolution",
  "swarm-runtime",
  "swarm-runtime-http",
  "swarm-runtime-workbench",
@@ -3203,6 +3204,7 @@ dependencies = [
  "swarm-agents",
  "swarm-core",
  "swarm-crypto",
+ "swarm-evolution",
  "swarm-pheromone",
  "swarm-policy",
  "swarm-response",
@@ -3229,6 +3231,7 @@ dependencies = [
  "serde_json",
  "swarm-core",
  "swarm-crypto",
+ "swarm-evolution",
  "swarm-runtime",
  "thiserror 2.0.18",
 ]

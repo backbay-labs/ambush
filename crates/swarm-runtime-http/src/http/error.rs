@@ -3,12 +3,12 @@ use axum::Json;
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Serialize;
+use swarm_evolution::evidence::EvidenceError;
+use swarm_evolution::operator_maintenance::OperatorMaintenanceError;
 use swarm_runtime::approval::ApprovalError;
 use swarm_runtime::control::ControlError;
-use swarm_runtime::evidence::EvidenceError;
 use swarm_runtime::governance_prep::EvolutionGovernancePrepError;
 use swarm_runtime::http::rate_limit::HttpRateLimitRejection;
-use swarm_runtime::operator_maintenance::OperatorMaintenanceError;
 use swarm_runtime::portfolio::EvolutionPortfolioError;
 use swarm_runtime::service::{ReadinessError, ServiceError};
 use swarm_runtime_workbench::review_workbench::ReviewWorkbenchError;
@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn review_evidence_artifact_not_found_maps_to_not_found() {
         let error = super::map_review_evidence_error(
-            swarm_runtime::evidence::EvidenceError::ArtifactNotFound {
+            swarm_evolution::evidence::EvidenceError::ArtifactNotFound {
                 kind: "replay_bundle",
                 id: "bundle:missing".to_string(),
             },

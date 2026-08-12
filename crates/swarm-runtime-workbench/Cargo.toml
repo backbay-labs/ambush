@@ -10,6 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
+swarm-evolution.workspace = true
 swarm-runtime.workspace = true
 thiserror.workspace = true
 

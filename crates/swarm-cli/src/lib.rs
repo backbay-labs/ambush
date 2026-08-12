@@ -25,7 +25,7 @@ pub mod drafting {
 }
 
 pub mod evidence {
-    pub use swarm_runtime::evidence::*;
+    pub use swarm_evolution::evidence::*;
 }
 
 pub mod evolution {
@@ -49,7 +49,7 @@ pub mod operator_http {
 }
 
 pub mod operator_maintenance {
-    pub use swarm_runtime::operator_maintenance::*;
+    pub use swarm_evolution::operator_maintenance::*;
 }
 
 pub mod portfolio {

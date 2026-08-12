@@ -1,21 +1,5 @@
-use crate::canary::{CanaryRunLookup, FileCanaryStore};
-use crate::config::{RuntimeConfigError, load_config};
-use crate::control::{
-    ControlError, DefaultControlPlane, IncidentArtifactView, IncidentLookupSelector,
-    InvestigationArtifactView, InvestigationLookupSelector, ReplayArtifactView,
-    ReplayLookupSelector,
-};
 use crate::operator_maintenance::{
     FileOperatorMaintenanceStore, OperatorMaintenanceLookup, OperatorMaintenanceStoreError,
-};
-use crate::promotion::{
-    FileProductionPromotionStore, ProductionPromotionLookup, ProductionPromotionStatus,
-    ProductionPromotionStoreError,
-};
-use crate::replay::{
-    DetectorVerificationLookup, FilePromotionReviewStore, FileShadowStore, FileVerificationStore,
-    PromotionReviewLookup, PromotionReviewStoreError, ShadowStoreError, StrategyShadowLookup,
-    VerificationStoreError,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -26,6 +10,22 @@ use swarm_core::config::SwarmConfig;
 use swarm_crypto::{
     CryptoError, DetachedSignature, Ed25519Signer, canonical_json_bytes, normalize_canonical_json,
     sha256_hex, verify_detached_signature,
+};
+use swarm_runtime::canary::{CanaryRunLookup, FileCanaryStore};
+use swarm_runtime::config::{RuntimeConfigError, load_config};
+use swarm_runtime::control::{
+    ControlError, DefaultControlPlane, IncidentArtifactView, IncidentLookupSelector,
+    InvestigationArtifactView, InvestigationLookupSelector, ReplayArtifactView,
+    ReplayLookupSelector,
+};
+use swarm_runtime::promotion::{
+    FileProductionPromotionStore, ProductionPromotionLookup, ProductionPromotionStatus,
+    ProductionPromotionStoreError,
+};
+use swarm_runtime::replay::{
+    DetectorVerificationLookup, FilePromotionReviewStore, FileShadowStore, FileVerificationStore,
+    PromotionReviewLookup, PromotionReviewStoreError, ShadowStoreError, StrategyShadowLookup,
+    VerificationStoreError,
 };
 /// Result directories required to export and verify evidence artifacts.
 #[derive(Debug, Clone)]
@@ -1017,7 +1017,7 @@ pub enum EvidenceError {
     PromotionReviewStore(#[from] PromotionReviewStoreError),
 
     #[error(transparent)]
-    CanaryStore(#[from] crate::canary::CanaryStoreError),
+    CanaryStore(#[from] swarm_runtime::canary::CanaryStoreError),
 
     #[error(transparent)]
     PromotionStore(#[from] ProductionPromotionStoreError),
@@ -1925,17 +1925,6 @@ mod tests {
         EvidenceVerificationReport, EvidenceVerificationStatus, FileEvidenceBundleStore,
         FileEvidenceVerificationStore, PromotionEvidenceRecommendation,
     };
-    use crate::RuntimeMode;
-    use crate::canary::{
-        CanaryAssignment, CanaryMetrics, CanaryRecommendation, CanaryRunReport, CanaryRunStatus,
-    };
-    use crate::control::DefaultControlPlane;
-    use crate::promotion::{
-        FileProductionPromotionStore, ProductionPromotionAssignment, ProductionPromotionMetrics,
-        ProductionPromotionRecommendation, ProductionPromotionReport, ProductionPromotionStatus,
-    };
-    use crate::replay::{DetectorCandidateManifest, ExperimentLineage};
-    use crate::service::EventExecutionContext;
     use serde_json::Value;
     use std::fs;
     use std::path::PathBuf;
@@ -1948,6 +1937,17 @@ mod tests {
     };
     use swarm_core::types::{AgentId, Severity};
     use swarm_policy::ApprovalContext;
+    use swarm_runtime::RuntimeMode;
+    use swarm_runtime::canary::{
+        CanaryAssignment, CanaryMetrics, CanaryRecommendation, CanaryRunReport, CanaryRunStatus,
+    };
+    use swarm_runtime::control::DefaultControlPlane;
+    use swarm_runtime::promotion::{
+        FileProductionPromotionStore, ProductionPromotionAssignment, ProductionPromotionMetrics,
+        ProductionPromotionRecommendation, ProductionPromotionReport, ProductionPromotionStatus,
+    };
+    use swarm_runtime::replay::{DetectorCandidateManifest, ExperimentLineage};
+    use swarm_runtime::service::EventExecutionContext;
     use swarm_whisker::{
         ProcessStartEvent, SuspiciousProcessTreeDetector, SuspiciousProcessTreeProfile,
         TelemetryEvent, TelemetryPayload,

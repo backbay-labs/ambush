@@ -37,10 +37,10 @@ use swarm_crypto::{
     Ed25519Signer, canonical_json_string, normalize_canonical_json, sha256_hex,
     verify_detached_signature,
 };
-use swarm_runtime::evidence::{
+use swarm_evolution::evidence::{
     EvidenceSubjectKind, EvidenceVerificationCheck, OperatorEvidenceReadService,
 };
-use swarm_runtime::operator_maintenance::{
+use swarm_evolution::operator_maintenance::{
     OperatorMaintenanceRequest, OperatorMaintenanceService, OperatorMaintenanceStatus,
 };
 

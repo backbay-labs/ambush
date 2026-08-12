@@ -5,7 +5,7 @@ use super::types::{
 };
 use serde::Serialize;
 use swarm_crypto::{CryptoError, Ed25519Signer, canonical_json_bytes};
-use swarm_runtime::evidence::{EvidenceRelatedRef, EvidenceSignature};
+use swarm_evolution::evidence::{EvidenceRelatedRef, EvidenceSignature};
 
 #[derive(Debug, Serialize)]
 struct ReviewCapsuleSignatureStatement<'a> {
