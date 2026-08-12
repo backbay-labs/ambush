@@ -104,11 +104,19 @@ This is not path convenience. `replay/harness.rs:853-862` builds the composition
 root to run a replay against it:
 
 ```rust
-) -> Result<RuntimeService<ConfigurableApprovalGate, SandboxExecutor>, ReplayHarnessError> {
-    offline_config.runtime.mode = RuntimeMode::DetectOnly;
-    let runtime = SwarmRuntime::new(RuntimeMode::DetectOnly, ...);
-    Ok(RuntimeService::new(offline_config, runtime).with_configured_sequence_detector()?)
+    ) -> Result<RuntimeService<ConfigurableApprovalGate, SandboxExecutor>, ReplayHarnessError> {
+        let mut offline_config = self.config.clone();
+        offline_config.runtime.mode = RuntimeMode::DetectOnly;
+        offline_config.runtime.require_durable_live_response = false;
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::DetectOnly,
+            ConfigurableApprovalGate::from_config(&offline_config.policy),
+            SandboxExecutor,
+        );
+        Ok(RuntimeService::new(offline_config, runtime).with_configured_sequence_detector()?)
 ```
+
+(`sed -n '853,862p' crates/swarm-runtime/src/replay/harness.rs`, verbatim.)
 
 `service/` stays in `swarm-runtime` — that is ADR-adjacent settled ground from
 SPLIT-01 (a43df1c), and it is settled *because* replay imports it.
