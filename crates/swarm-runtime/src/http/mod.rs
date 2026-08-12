@@ -45,9 +45,12 @@
 //! `providence.rs:1`, `service/mod.rs:39`). Like SPLIT-03 before it, SPLIT-05
 //! needs a trait inversion first; it is a separate extraction, not a rider.
 //!
-//! Whether SPLIT-01's `axum` clause therefore moves to SPLIT-05, or SPLIT-01
-//! stays open until SPLIT-05 lands, is a scope decision for the phase owner and
-//! not one an implementer may take. Until one of those is recorded, SPLIT-01 is
-//! NOT satisfied, whatever the state of the other five dependencies.
+//! That scope question -- whether SPLIT-01's `axum` clause moves to SPLIT-05,
+//! or SPLIT-01 stays open until SPLIT-05 lands -- is now answered on the record:
+//! `docs/decisions/0002-split-01-open-until-split-05.md` holds SPLIT-01 open.
+//! SPLIT-01 is NOT satisfied while `axum` is in `swarm-runtime`'s manifest,
+//! whatever the state of the other five dependencies. The phase owner may still
+//! prefer the amendment instead; recording it supersedes that ADR and this note
+//! with it.
 pub mod rate_limit;
 pub mod tls_identity;

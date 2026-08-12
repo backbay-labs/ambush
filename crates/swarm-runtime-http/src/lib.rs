@@ -25,6 +25,12 @@
 //! `rustls-pemfile` and `x509-parser` are now unreachable from
 //! `cargo tree -p swarm-runtime` entirely.
 //!
+//! That leaves SPLIT-01's six-dependency clause one dependency short, which is a
+//! scope question rather than a code one. It is recorded in
+//! `docs/decisions/0002-split-01-open-until-split-05.md`: SPLIT-01 stays open
+//! until SPLIT-05 deletes the `axum` line. `swarm_runtime::http`'s module doc
+//! carries the per-file measurement behind that decision.
+//!
 //! `result_large_err` is allowed crate-wide here for the same reason it is
 //! allowed in `swarm-runtime`, whose `lib.rs` carries the identical attribute:
 //! the operator handlers return `Result<_, OperatorHttpError>` and that enum
