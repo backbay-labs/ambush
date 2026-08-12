@@ -52,41 +52,7 @@ use axum::routing::{get, post};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swarm_core::config::SwarmConfig;
-
-/// Result directories required to expose authenticated operator artifacts through HTTP.
-#[derive(Debug, Clone)]
-pub struct OperatorSurfacePaths {
-    pub evidence_signer_id: String,
-    pub evidence_signing_key_env: String,
-    pub verification_results_dir: PathBuf,
-    pub shadow_results_dir: PathBuf,
-    pub promotion_review_results_dir: PathBuf,
-    pub canary_results_dir: PathBuf,
-    pub promotion_results_dir: PathBuf,
-    pub evolution_ranking_results_dir: PathBuf,
-    pub evolution_selection_results_dir: PathBuf,
-    pub evolution_portfolio_results_dir: PathBuf,
-    pub evolution_governance_review_packet_results_dir: PathBuf,
-    pub evolution_packet_set_results_dir: PathBuf,
-    pub strategy_memory_results_dir: PathBuf,
-    pub evolution_portfolio_history_results_dir: PathBuf,
-    pub operator_maintenance_results_dir: PathBuf,
-    pub evidence_results_dir: PathBuf,
-    pub evidence_verification_results_dir: PathBuf,
-    pub promotion_evidence_results_dir: PathBuf,
-    pub review_session_results_dir: PathBuf,
-    pub review_session_export_results_dir: PathBuf,
-    pub review_session_readiness_results_dir: PathBuf,
-    pub review_session_handoff_results_dir: PathBuf,
-    pub review_capsule_results_dir: PathBuf,
-    pub review_capsule_import_results_dir: PathBuf,
-    pub review_delegation_results_dir: PathBuf,
-    pub approval_set_results_dir: PathBuf,
-    pub approval_ledger_results_dir: PathBuf,
-    pub approval_verdict_results_dir: PathBuf,
-    pub approval_receipt_pack_results_dir: PathBuf,
-}
+use swarm_core::config::{OperatorSurfacePaths, SwarmConfig};
 
 /// Errors raised while building or serving the authenticated operator surface.
 #[derive(Debug, thiserror::Error)]

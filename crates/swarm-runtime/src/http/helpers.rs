@@ -1,6 +1,6 @@
 use super::control::{IncidentLookupQuery, InvestigationLookupQuery, ReplayLookupQuery};
 use super::error::{OperatorApiError, OperatorReviewError};
-use super::state::{OperatorHttpState, OperatorSurfacePaths};
+use super::state::OperatorHttpState;
 use crate::approval::{ApprovalLedgerList, ApprovalSetList, DefaultApprovalHarness};
 use crate::control::{IncidentLookupSelector, InvestigationLookupSelector, ReplayLookupSelector};
 use crate::evidence::{
@@ -23,6 +23,7 @@ use crate::review_workbench::{
     ReviewCapsuleImportList, ReviewCapsuleList, ReviewDelegationPacketList, ReviewSessionList,
     ReviewSessionMaintenanceHandoffList, ReviewSessionPromotionReadinessList,
 };
+use swarm_core::config::OperatorSurfacePaths;
 
 pub(super) fn evidence_harness_paths(paths: &OperatorSurfacePaths) -> EvidenceHarnessPaths {
     EvidenceHarnessPaths {

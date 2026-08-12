@@ -15,4 +15,4 @@ pub mod state;
 #[cfg(test)]
 mod tests;
 
-pub use state::{LocalOperatorSurface, OperatorHttpError, OperatorSurfacePaths};
+pub use state::{LocalOperatorSurface, OperatorHttpError};

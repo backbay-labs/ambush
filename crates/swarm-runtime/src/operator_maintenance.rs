@@ -3,7 +3,6 @@ use crate::evidence::{
     verify_bundle_with_stores,
 };
 use crate::governance_prep::{DefaultEvolutionGovernancePrepHarness, EvolutionGovernancePrepError};
-use crate::operator_http::OperatorSurfacePaths;
 use crate::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction, EvolutionPortfolioError,
 };
@@ -11,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use swarm_core::config::OperatorSurfacePaths;
 
 /// Approved operator maintenance actions for the local authenticated surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -33,12 +33,12 @@ use super::types::{
 use crate::evidence::{
     EvidenceSubjectKind, EvidenceVerificationCheck, OperatorEvidenceReadService,
 };
-use crate::operator_http::OperatorSurfacePaths;
 use crate::operator_maintenance::{
     OperatorMaintenanceRequest, OperatorMaintenanceService, OperatorMaintenanceStatus,
 };
 use std::fs;
 use std::path::PathBuf;
+use swarm_core::config::OperatorSurfacePaths;
 use swarm_crypto::{
     Ed25519Signer, canonical_json_string, normalize_canonical_json, sha256_hex,
     verify_detached_signature,

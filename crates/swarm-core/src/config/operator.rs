@@ -1,4 +1,5 @@
 use super::*;
+use std::path::PathBuf;
 
 /// Local authenticated operator-surface settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,4 +293,56 @@ impl Default for OperatorAuthConfig {
             token_expires_at_ms: None,
         }
     }
+}
+
+/// Result directories the authenticated operator surface reads artifacts from.
+///
+/// # Placement (SPLIT-02, phase 282)
+///
+/// This lives in `swarm-core`, beside [`OperatorSurfaceConfig`], and NOT in the
+/// operator HTTP module, because it has two consumers that must not depend on each
+/// other. `http` (heading for its own transport crate) needs it to build every
+/// artifact harness; `workbench`/`review_workbench` (heading for a different crate)
+/// needs it for `DefaultReviewWorkbenchHarness::from_paths`. `http` already imports
+/// `crate::review_workbench` types in non-test code, so had `workbench` kept
+/// importing this type back out of `http`, extracting the two would have produced a
+/// Cargo circular dependency and a hard build failure.
+///
+/// `swarm-core` is the lowest crate both already depend on, and the type earns its
+/// place here on its own merits: 29 `String`/`PathBuf` fields, no behaviour and no
+/// transport in sight -- a repo layout contract of exactly the kind this module
+/// holds. Unlike its neighbours it is not `Serialize`/`Deserialize`: callers build
+/// it programmatically rather than parsing it out of the config file, which is why
+/// it carries no `serde` attributes.
+#[derive(Debug, Clone)]
+pub struct OperatorSurfacePaths {
+    pub evidence_signer_id: String,
+    pub evidence_signing_key_env: String,
+    pub verification_results_dir: PathBuf,
+    pub shadow_results_dir: PathBuf,
+    pub promotion_review_results_dir: PathBuf,
+    pub canary_results_dir: PathBuf,
+    pub promotion_results_dir: PathBuf,
+    pub evolution_ranking_results_dir: PathBuf,
+    pub evolution_selection_results_dir: PathBuf,
+    pub evolution_portfolio_results_dir: PathBuf,
+    pub evolution_governance_review_packet_results_dir: PathBuf,
+    pub evolution_packet_set_results_dir: PathBuf,
+    pub strategy_memory_results_dir: PathBuf,
+    pub evolution_portfolio_history_results_dir: PathBuf,
+    pub operator_maintenance_results_dir: PathBuf,
+    pub evidence_results_dir: PathBuf,
+    pub evidence_verification_results_dir: PathBuf,
+    pub promotion_evidence_results_dir: PathBuf,
+    pub review_session_results_dir: PathBuf,
+    pub review_session_export_results_dir: PathBuf,
+    pub review_session_readiness_results_dir: PathBuf,
+    pub review_session_handoff_results_dir: PathBuf,
+    pub review_capsule_results_dir: PathBuf,
+    pub review_capsule_import_results_dir: PathBuf,
+    pub review_delegation_results_dir: PathBuf,
+    pub approval_set_results_dir: PathBuf,
+    pub approval_ledger_results_dir: PathBuf,
+    pub approval_verdict_results_dir: PathBuf,
+    pub approval_receipt_pack_results_dir: PathBuf,
 }

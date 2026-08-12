@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use super::{LocalOperatorSurface, OperatorSurfacePaths};
+use super::LocalOperatorSurface;
 use crate::approval::DefaultApprovalHarness;
 use crate::control::{CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER};
 use crate::evidence::{
@@ -30,9 +30,10 @@ use swarm_core::config::{
     AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
     DetectorProfilesConfig, InvestigationConfig, NotificationChannelConfig,
     NotificationRateLimitConfig, NotificationRoutingConfig, OperatorAuthConfig,
-    OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, PheromoneBackendConfig,
-    PheromoneConfig, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PromotionConfig,
-    QuietHoursConfig, RoutingRule, RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
+    OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, OperatorSurfacePaths,
+    PheromoneBackendConfig, PheromoneConfig, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
+    PromotionConfig, QuietHoursConfig, RoutingRule, RuntimeSettings, SwarmConfig,
+    TelemetrySourceConfig,
 };
 use swarm_core::pheromone::{
     ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
