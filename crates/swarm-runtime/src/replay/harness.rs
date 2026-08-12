@@ -1,5 +1,5 @@
 use super::helpers::{
-    equality_check, experiment_id_for_manifest, latency_check, normalize_groups, now_ms,
+    equality_check, experiment_id_for_manifest, latency_observation, normalize_groups, now_ms,
     promotion_review_id_for_packet, resolve_relative_path, run_id_for_manifest,
     scenario_paths_in_dir, verification_id_for_experiment,
 };
@@ -27,7 +27,7 @@ use super::validation::{
 use super::verification::{
     collect_review_blocking_reasons, observe_detect_latency, verify_canonical_templates,
     verify_false_positive_bound, verify_known_bad_coverage, verify_scenario_class_declared,
-    verify_total_detection_budget,
+    verify_scenario_class_enforced, verify_total_detection_budget,
 };
 use crate::config::load_config;
 use crate::correlation::{CorrelationEngine, CorrelationOutcome};
@@ -456,24 +456,28 @@ impl DefaultReplayHarness {
             ));
         }
 
-        if let Some(expected) = run.expectations.max_detect_latency_us {
-            checks.push(latency_check(
+        // NON-GATING. Every stage latency the manifest declares a budget for is
+        // measured and recorded beside that budget, and none of it reaches
+        // `passed`. See `helpers::latency_observation`.
+        let mut observations = Vec::new();
+        if let Some(advisory_max) = run.expectations.advisory_max_detect_latency_us {
+            observations.push(latency_observation(
                 "max_detect_latency_us",
-                expected,
+                advisory_max,
                 run.performance.detect.max_latency_us,
             ));
         }
-        if let Some(expected) = run.expectations.max_policy_latency_us {
-            checks.push(latency_check(
+        if let Some(advisory_max) = run.expectations.advisory_max_policy_latency_us {
+            observations.push(latency_observation(
                 "max_policy_latency_us",
-                expected,
+                advisory_max,
                 run.performance.policy.max_latency_us,
             ));
         }
-        if let Some(expected) = run.expectations.max_response_latency_us {
-            checks.push(latency_check(
+        if let Some(advisory_max) = run.expectations.advisory_max_response_latency_us {
+            observations.push(latency_observation(
                 "max_response_latency_us",
-                expected,
+                advisory_max,
                 run.performance.response.max_latency_us,
             ));
         }
@@ -486,6 +490,7 @@ impl DefaultReplayHarness {
             metadata: run.metadata.clone(),
             passed,
             checks,
+            observations,
             deterministic_summary: summary.clone(),
             performance: run.performance.clone(),
         }
@@ -663,6 +668,13 @@ impl DefaultReplayHarness {
             // on: a scenario whose class is `mixed` matches neither of their
             // predicates and would otherwise be exempt from both at once.
             verify_scenario_class_declared(&[&known_bad_report, &benign_report]),
+            // SECOND, and the other half of that precondition. A declared class
+            // is enforceable only in the corpus half whose invariant READS that
+            // class, and each of the next two reads exactly one half. A `benign`
+            // scenario listed only in the known-bad suite, or an `adversarial`
+            // one listed only in the benign controls, satisfies both of them
+            // vacuously -- neither ever looks at it.
+            verify_scenario_class_enforced(&known_bad_report, &benign_report),
             verify_known_bad_coverage(&known_bad_report),
             verify_canonical_templates(
                 &candidate_detector,

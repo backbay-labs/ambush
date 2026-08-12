@@ -482,15 +482,30 @@ fn harvested_solver_counterexample_scenario(
             proof_id.to_string(),
         ],
         metadata: ReplayScenarioMetadata {
-            // A harvested solver counterexample is genuinely unclassified: it
-            // is a witness that an invariant can be violated, not a labelled
-            // adversarial or benign replay. `Mixed` says exactly that, and it
-            // is now load-bearing rather than free -- the
-            // `scenario_class_declared` verification invariant refuses a
-            // corpus containing one, because neither `known_bad_coverage` nor
-            // `false_positive_bound` can constrain it. Classifying these
-            // properly is a separate change to the harvest, not a rename here.
-            class: ReplayScenarioClass::Mixed,
+            // ADVERSARIAL, and the choice is an obligation, not a label.
+            //
+            // A scenario's class picks which safety invariant owns it, and the
+            // corpus has exactly two: `known_bad_coverage` demands that an
+            // `adversarial` scenario produce a detection, `false_positive_bound`
+            // demands that a `benign` one produce none. A solver counterexample
+            // is a witness that a detector safety invariant CAN be violated, so
+            // the obligation it carries is the first one -- this is a case the
+            // detector is supposed to catch, and the harvest exists to keep
+            // demanding that until it does.
+            //
+            // `benign` would assert the opposite obligation and is the actively
+            // unsafe reading: it would turn any genuine detection on this
+            // evidence into a false-positive counterexample and could roll back
+            // a detector for behaving correctly.
+            //
+            // `mixed` was the previous spelling of "we do not know". It matches
+            // neither predicate, so it is the one value that leaves the scenario
+            // owned by nothing -- and since this manifest is SERIALISED to
+            // `data/evolution-assurance-cases/scenarios/*.yaml`, the lane was
+            // writing fixtures its own `scenario_class_declared` invariant
+            // refuses. It is no longer representable in a loaded manifest; see
+            // `replay::validation::validate_manifest`.
+            class: ReplayScenarioClass::Adversarial,
             threat_class: None,
             campaign: None,
             techniques: Vec::new(),

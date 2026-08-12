@@ -1257,12 +1257,30 @@ is **required** -- a manifest without one fails to parse, because a scenario wit
 declared class was previously exempt from every safety invariant and passed
 verification without any of them running.
 
-- `metadata.class`: `adversarial` or `benign`. **`mixed` is accepted by the parser
-  but FAILS the `scenario_class_declared` verification invariant**, and is retained
-  only so an existing corpus reports a named failure rather than a parse error.
-  A `mixed` scenario matches neither `known_bad_coverage` (which requires
-  `adversarial`) nor `false_positive_bound` (which requires `benign`), so it would
-  otherwise be checked by nothing. Classify each scenario as one or the other.
+- `metadata.class`: `adversarial` or `benign`. **`mixed` is REFUSED AT LOAD**, in
+  the same place and the same shape as an absent `class:` -- `load_scenario_manifest`
+  fails with a validation error naming the manifest, the value, and the two
+  invariants that would have owned it. A `mixed` scenario matches neither
+  `known_bad_coverage` (which requires `adversarial`) nor `false_positive_bound`
+  (which requires `benign`), and it is not only the verification lane that reads
+  this field: the experiment metrics, evasion-coverage, red-swarm,
+  mutation-fitness and assurance-harvest lanes all branch on it and would skip
+  such a scenario in silence -- counted in `total_scenarios`, present in neither
+  the `detection_rate` nor the `false_positive_rate` denominator, its detections
+  scored by nothing. The refusal sits at the single scenario-load entry point so
+  that every one of those lanes inherits it. Classify each scenario as one or the
+  other.
+
+  Declaring a class is necessary but not sufficient: each of those two
+  invariants reads exactly one half of a verification corpus, so a class is
+  enforced only where it is also read. A scenario must appear in the half that
+  reads its class -- `adversarial` in `known_bad.suite`, `benign` in
+  `benign_controls.scenarios` -- or it satisfies both invariants vacuously and
+  FAILS the `scenario_class_enforced` invariant. Appearing in BOTH halves is
+  fine and is what the tracked corpus does: `hellcat-office-v1` carries
+  `benign-baseline` and `python-maintenance-benign` for its own false-positive
+  denominator, and `office-detector-safety-v1` lists those same two files as its
+  benign controls.
 - `metadata.campaign`: campaign or operator workflow label
 - `metadata.techniques`: MITRE ATT&CK technique IDs or internal technique labels
 - `metadata.tags`: free-form suite or debugging tags
@@ -1296,7 +1314,7 @@ The durable replay run bundle captures:
 
 ### Replay Evaluation And Gates
 
-Replay evaluation compares replay-run bundles against the expectations embedded in each scenario manifest, including hunt-level policy or response outcomes, incident grouping, and hot-path latency thresholds.
+Replay evaluation compares replay-run bundles against the expectations embedded in each scenario manifest, including hunt-level policy or response outcomes and incident grouping. Hot-path stage latencies are measured and recorded beside the manifest budget, but they are **advisory only and do not gate** -- see below.
 
 Examples:
 
@@ -1309,9 +1327,45 @@ cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --suite scenario-su
 
 Failure behavior:
 
-- `replay-evaluate` exits nonzero when any expectation or latency threshold fails
+- `replay-evaluate` exits nonzero when any expectation over replay output fails: replay bundle, investigation, and incident counts, per-hunt action/policy/response outcomes, and incident hunt grouping. Every one of these is a pure function of the scenario fixture, so the exit code is the same on any machine
+- `replay-evaluate` **does not** exit nonzero for an exceeded latency budget. `max_detect_latency_us`, `max_policy_latency_us`, and `max_response_latency_us` in a scenario `expectations:` block are advisory reference points, not thresholds
 - `--scenarios-dir` evaluates the full tracked corpus and is intended for local or CI gating
 - `--suite` evaluates one named replay suite and aggregates pass/fail status by scenario and technique group
+
+#### Scenario latency budgets are advisory
+
+`expectations.max_detect_latency_us` and its policy and response siblings used to
+gate. `ReplayEvaluationReport.passed` reduced over them, `ReplaySuiteReport.passed`
+reduced over that, and `replay-evaluate` turned the result into
+`std::process::exit(1)`.
+
+The value being compared was a wall-clock `Instant` delta captured in the runtime
+service, so it measured the machine, the build profile, and whatever else the
+scheduler was running -- not the scenario. Eight consecutive runs over the shipped
+corpus on an idle machine spread 658-888us, a 35% swing, and a single stall flipped
+`scenarios/office-dropper-correlation.yaml` from pass to fail on unchanged code.
+`CONTRIBUTING.md` and `README.md` both tell contributors to run this command, so
+the spurious failure landed on people whose only mistake was owning a slow laptop.
+It is the same defect, and the same fix, as the canary and promotion
+`max_detect_latency_us` gates documented under "Rollout" later in this document.
+
+**Nothing is silently ignored.** The thirteen tracked scenario manifests that
+declare `max_detect_latency_us` (eight of which also declare the policy and
+response budgets) keep their keys, and the keys are still read:
+
+- the measurement is recorded on `ReplayEvaluationReport.observations` next to the
+  budget the manifest declared, together with `within_advisory_budget`
+- `replay-evaluate --scenario` prints it under `Observations (non-gating, not part
+  of Status):`
+- `replay-evaluate --suite` and `--scenarios-dir` print an
+  `observation over advisory budget:` line under the scenario, at the exact place
+  the failing check used to appear
+
+**If you set a scenario `max_*_latency_us` expecting a hard bound, it no longer
+stops anything.** You get a recorded breach in the report and a line in the render;
+you do not get a nonzero exit. A performance regression gate has to count work
+rather than read a clock -- that is a cost model, and this repo does not have one
+yet. Until it does, latency is evidence, not a verdict.
 
 End-to-end flow:
 
@@ -1442,10 +1496,20 @@ cargo run -p swarm-runtime --bin swarmctl -- verification-result --verification-
 Current gating invariant set (`invariants` in the report; `passed` is exactly
 `invariants.iter().all(|i| i.passed)`):
 
+- `scenario_class_declared`: every corpus scenario must declare a class an
+  invariant can enforce. Since `mixed` is refused at load this can no longer
+  fail through a manifest, and is retained as the bundle's own attestation of
+  the property
+- `scenario_class_enforced`: every corpus scenario must sit in the corpus half
+  that reads its class, so that some invariant is actually responsible for it
 - `known_bad_coverage`: candidate must not miss tracked adversarial verification scenarios
 - `threat_class_templates`: candidate must still match canonical threat-class templates
 - `false_positive_bound`: candidate must stay under the repo-owned benign false-positive threshold
 - `total_detection_budget`: candidate total emitted detections must stay within the corpus volume budget
+
+The first two are preconditions on the corpus rather than on the candidate, and
+they come first for that reason: without them a scenario can satisfy the
+remaining invariants by being invisible to all of them.
 
 Every one of these is a count or a rate over fixture content, so each computes
 the same value on any machine, under any load, on any architecture.

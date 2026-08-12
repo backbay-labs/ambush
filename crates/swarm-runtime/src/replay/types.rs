@@ -159,8 +159,15 @@ pub enum ReplayHarnessError {
 /// A default is what made that reachable silently: an omitted `class:` key, a
 /// struct literal, or `..Default::default()` all produced `Mixed` with nothing
 /// said. There is no safe class to assume for an unclassified scenario, so
-/// there is no default. Absence is now a deserialization error, and an
-/// explicit `Mixed` is caught by the `scenario_class_declared` invariant.
+/// there is no default. Absence is a deserialization error, and an explicit
+/// `Mixed` is refused by `validation::validate_manifest`, so no LOADED manifest
+/// can carry it -- which is what the eight other sites that branch on this
+/// value (`metrics`, `evasion_coverage`, `red_swarm`, `mutation::fitness`,
+/// `evolution::assurance`) rely on, none of them having a check of their own.
+///
+/// The variant itself is kept because this enum is serialised into persisted
+/// evidence artifacts, and removing a variant would make historical bundles
+/// that recorded it unreadable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplayScenarioClass {
@@ -331,12 +338,34 @@ pub struct ReplayExpectations {
     pub hunts: Vec<ExpectedHuntOutcome>,
     #[serde(default)]
     pub incident_hunt_groups: Vec<Vec<String>>,
-    #[serde(default)]
-    pub max_detect_latency_us: Option<u64>,
-    #[serde(default)]
-    pub max_policy_latency_us: Option<u64>,
-    #[serde(default)]
-    pub max_response_latency_us: Option<u64>,
+    /// ADVISORY ONLY. Recorded as the reference point for the non-gating
+    /// `max_detect_latency_us` observation on the evaluation report; no
+    /// scenario, suite, or `swarmctl replay-evaluate` exit code fails for
+    /// exceeding it.
+    ///
+    /// The value it is compared against is a wall-clock `Instant` delta
+    /// captured in `service::runtime_service`, so it measures the machine, the
+    /// build profile, and whatever else the scheduler was running -- not the
+    /// fixture. Eight consecutive idle-machine runs of `replay-evaluate` over
+    /// the shipped corpus spread 658-888us, a 35% swing, and a single stall
+    /// flipped `scenarios/office-dropper-correlation.yaml` from pass to fail on
+    /// unchanged code. Contributors are told to run this gate by
+    /// `CONTRIBUTING.md` and `README.md`, so the failure landed on people whose
+    /// only mistake was owning a slow laptop.
+    ///
+    /// The Rust field is named for what it does; the manifest key is
+    /// deliberately unchanged so that every tracked scenario still loads, keeps
+    /// its value, and keeps reporting against it. `deny_unknown_fields` is on
+    /// this struct, so dropping the key from the Rust type would have made all
+    /// fourteen shipped manifests fail to load outright.
+    #[serde(rename = "max_detect_latency_us", default)]
+    pub advisory_max_detect_latency_us: Option<u64>,
+    /// ADVISORY ONLY -- see [`ReplayExpectations::advisory_max_detect_latency_us`].
+    #[serde(rename = "max_policy_latency_us", default)]
+    pub advisory_max_policy_latency_us: Option<u64>,
+    /// ADVISORY ONLY -- see [`ReplayExpectations::advisory_max_detect_latency_us`].
+    #[serde(rename = "max_response_latency_us", default)]
+    pub advisory_max_response_latency_us: Option<u64>,
 }
 
 /// Expected outcome for one replay hunt.
@@ -480,12 +509,51 @@ pub struct ReplayRunStoreHealth {
 }
 
 /// One replay evaluation check.
+///
+/// Everything in this list is GATING: `ReplayEvaluationReport::passed` reduces
+/// over it, `ReplaySuiteReport::passed` reduces over that, and
+/// `swarmctl replay-evaluate` turns a false into `std::process::exit(1)`. Only
+/// checks that are a deterministic function of fixture content belong here --
+/// every one of them is an equality against the manifest's expected replay
+/// output. A measurement of the machine the replay happened to run on does not
+/// -- see [`ReplayEvaluationObservation`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayEvaluationCheck {
     pub name: String,
     pub passed: bool,
     pub expected: serde_json::Value,
     pub actual: serde_json::Value,
+    pub details: String,
+}
+
+/// One recorded, NON-GATING measurement taken during a replay evaluation.
+///
+/// Observations exist so a signal can be kept without letting it decide a
+/// verdict. Nothing in the runtime reduces over this collection:
+/// `ReplayEvaluationReport::passed` reduces over `checks` only, and
+/// `ReplaySuiteReport::passed` counts scenarios whose `passed` is false.
+///
+/// The distinction is a separate collection rather than a `gating: bool` flag
+/// on [`ReplayEvaluationCheck`] for the same reason option F split the
+/// verification collections: a flag leaves the measurement sitting inside a
+/// list whose name promises verdict inputs, and every present and future
+/// consumer has to remember to filter on it. Forgetting fails CLOSED and
+/// silently -- here that means `swarmctl replay-evaluate` exiting nonzero on a
+/// contributor's machine for code that is fine. Splitting the collection makes
+/// the reduce correct by construction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayEvaluationObservation {
+    pub name: String,
+    /// The scenario-manifest budget this measurement is compared against.
+    /// ADVISORY ONLY: recorded so a human or a trend tool has a reference
+    /// point, never enforced. See
+    /// `ReplayExpectations::advisory_max_detect_latency_us`.
+    pub advisory_budget: serde_json::Value,
+    /// The measurement itself.
+    pub observed: serde_json::Value,
+    /// Recorded fact, not a verdict: nothing gates on this. It is here so a
+    /// trend tool can chart budget breaches without re-deriving the comparison.
+    pub within_advisory_budget: bool,
     pub details: String,
 }
 
@@ -496,8 +564,13 @@ pub struct ReplayEvaluationReport {
     pub scenario_name: String,
     pub scenario_path: String,
     pub metadata: ReplayScenarioMetadata,
+    /// GATING. `passed` is exactly `checks.iter().all(|check| check.passed)`.
     pub passed: bool,
     pub checks: Vec<ReplayEvaluationCheck>,
+    /// NON-GATING measurements. `#[serde(default)]` so evaluation reports
+    /// persisted before observations existed still load.
+    #[serde(default)]
+    pub observations: Vec<ReplayEvaluationObservation>,
     pub deterministic_summary: ReplayDeterministicSummary,
     pub performance: RuntimeMetricsSnapshot,
 }
