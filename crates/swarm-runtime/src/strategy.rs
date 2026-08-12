@@ -1703,6 +1703,7 @@ mod tests {
                 technique_regressions: Vec::new(),
             },
             gates: Vec::new(),
+            observations: Vec::new(),
             passed: true,
         }
     }

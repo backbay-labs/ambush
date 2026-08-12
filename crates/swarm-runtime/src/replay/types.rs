@@ -146,20 +146,36 @@ pub enum ReplayHarnessError {
 }
 
 /// Whether one replay scenario represents adversarial coverage or benign control traffic.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deliberately NOT `Default`, and `class` below is deliberately not
+/// `#[serde(default)]`. Every safety invariant in `replay::verification` keys
+/// off this value: `known_bad_coverage` demands a detection from `Adversarial`
+/// scenarios and `false_positive_bound` draws counterexamples from `Benign`
+/// ones. `Mixed` satisfies neither predicate, so a scenario carrying it is
+/// exempt from both invariants at once and contributes to neither -- it passes
+/// without either check ever looking at it, in the lane that signs evidence
+/// bundles.
+///
+/// A default is what made that reachable silently: an omitted `class:` key, a
+/// struct literal, or `..Default::default()` all produced `Mixed` with nothing
+/// said. There is no safe class to assume for an unclassified scenario, so
+/// there is no default. Absence is now a deserialization error, and an
+/// explicit `Mixed` is caught by the `scenario_class_declared` invariant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplayScenarioClass {
     Benign,
     Adversarial,
-    #[default]
     Mixed,
 }
 
 /// Repo-owned metadata attached to one tracked replay scenario.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Not `Default` either, for the same reason: a defaulted metadata block would
+/// reintroduce the defaulted class one level up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplayScenarioMetadata {
-    #[serde(default)]
     pub class: ReplayScenarioClass,
     #[serde(default)]
     pub threat_class: Option<ThreatClass>,
@@ -193,7 +209,9 @@ pub struct ReplayScenarioManifest {
     pub requested_by: String,
     #[serde(default)]
     pub receipt_chain: Vec<String>,
-    #[serde(default)]
+    /// Required. A scenario with no metadata block has no class, and a
+    /// classless scenario is exempt from every safety invariant -- see
+    /// `ReplayScenarioClass`.
     pub metadata: ReplayScenarioMetadata,
     pub input: ReplayScenarioInput,
     #[serde(default)]
@@ -543,6 +561,10 @@ pub struct ExperimentLineage {
 }
 
 /// Offline safety thresholds for one detector experiment.
+///
+/// `require_known_bad_coverage` and `max_false_positive_delta` are ENFORCED:
+/// both are counts over fixture content, so they compute the same value on any
+/// machine. The detect-latency delta is ADVISORY -- see its field docs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExperimentGateConfig {
@@ -550,8 +572,27 @@ pub struct ExperimentGateConfig {
     pub require_known_bad_coverage: bool,
     #[serde(default)]
     pub max_false_positive_delta: i64,
-    #[serde(default = "default_max_detect_latency_delta_us")]
-    pub max_detect_latency_delta_us: u64,
+    /// ADVISORY ONLY. Recorded as the reference point for the non-gating
+    /// `max_detect_latency_delta_us` observation; no experiment, shadow,
+    /// promotion review, or canary admission fails for exceeding it.
+    ///
+    /// The value it is compared against is a DIFFERENCE OF TWO MAXIMA over
+    /// wall-clock `Instant` deltas -- the candidate suite's worst detect
+    /// latency minus the baseline suite's. A uniform slowdown cancels out,
+    /// which is why this looked safe, but the two suites run one after the
+    /// other, so anything that slows down only the second one moves the
+    /// difference. On an idle arm64 machine with nothing injected the nominal
+    /// spread was already 1327us against the 2000us budget
+    /// `experiments/office-python-parent-broadening.yaml` sets.
+    ///
+    /// The Rust field is named for what it does; the manifest key is
+    /// deliberately unchanged so that every existing `gates:` block still
+    /// loads, keeps its value, and keeps reporting against it.
+    #[serde(
+        rename = "max_detect_latency_delta_us",
+        default = "default_max_detect_latency_delta_us"
+    )]
+    pub advisory_max_detect_latency_delta_us: u64,
 }
 
 impl Default for ExperimentGateConfig {
@@ -559,7 +600,7 @@ impl Default for ExperimentGateConfig {
         Self {
             require_known_bad_coverage: default_require_known_bad_coverage(),
             max_false_positive_delta: 0,
-            max_detect_latency_delta_us: default_max_detect_latency_delta_us(),
+            advisory_max_detect_latency_delta_us: default_max_detect_latency_delta_us(),
         }
     }
 }
@@ -718,12 +759,52 @@ pub struct StrategyExperimentComparison {
 }
 
 /// One offline safety gate verdict for a detector experiment.
+///
+/// Everything in this list is GATING: `StrategyExperimentReport::passed` and
+/// `StrategyShadowReport::passed` reduce over it, `collect_review_blocking_reasons`
+/// turns every failure here into a promotion blocker, `canary.rs` refuses
+/// admission on a failed shadow, and `pressure_from_experiment` turns every
+/// failure into evolution selection pressure. Only gates that are a
+/// deterministic function of fixture content belong here. A measurement of the
+/// machine the experiment happened to run on does not -- see
+/// [`ExperimentObservation`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentGateResult {
     pub name: String,
     pub passed: bool,
     pub expected: serde_json::Value,
     pub actual: serde_json::Value,
+    pub details: String,
+}
+
+/// One recorded, NON-GATING measurement taken during a detector experiment.
+///
+/// Observations exist so a signal can be kept without letting it decide a
+/// verdict. Nothing in the runtime reduces over this collection:
+/// `StrategyExperimentReport::passed` and `StrategyShadowReport::passed` reduce
+/// over `gates` only, `collect_review_blocking_reasons` iterates `gates` only,
+/// and `pressure_from_experiment` iterates `gates` only.
+///
+/// The distinction is a separate collection rather than a `gating: bool` flag
+/// on [`ExperimentGateResult`] for the same reason option F split the
+/// verification collections: a flag leaves the measurement sitting inside a
+/// list whose name promises verdict inputs, and every present and future
+/// consumer has to remember to filter on it. Forgetting fails CLOSED and
+/// silently -- the candidate is refused canary admission for something that was
+/// never its fault. Splitting the collection makes the reduce correct by
+/// construction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExperimentObservation {
+    pub name: String,
+    /// The manifest budget this measurement is compared against. ADVISORY
+    /// ONLY: recorded so a human or a trend tool has a reference point, never
+    /// enforced. See `ExperimentGateConfig::advisory_max_detect_latency_delta_us`.
+    pub advisory_budget: serde_json::Value,
+    /// The measurement itself.
+    pub observed: serde_json::Value,
+    /// Recorded fact, not a verdict: nothing gates on this. It is here so a
+    /// trend tool can chart budget breaches without re-deriving the comparison.
+    pub within_advisory_budget: bool,
     pub details: String,
 }
 
@@ -744,7 +825,12 @@ pub struct StrategyExperimentReport {
     pub baseline_report: ReplaySuiteReport,
     pub candidate_report: ReplaySuiteReport,
     pub comparison: StrategyExperimentComparison,
+    /// GATING. `passed` is exactly `gates.iter().all(|gate| gate.passed)`.
     pub gates: Vec<ExperimentGateResult>,
+    /// NON-GATING measurements. `#[serde(default)]` so experiment reports
+    /// persisted before observations existed still load.
+    #[serde(default)]
+    pub observations: Vec<ExperimentObservation>,
     pub passed: bool,
 }
 
@@ -920,7 +1006,13 @@ pub struct StrategyShadowReport {
     pub candidate_strategy_id: String,
     pub candidate_description: String,
     pub comparison: StrategyExperimentComparison,
+    /// GATING. Copied from the experiment report; `passed` reduces over it.
     pub gates: Vec<ExperimentGateResult>,
+    /// NON-GATING measurements copied from the experiment report.
+    /// `#[serde(default)]` so shadow reports persisted before observations
+    /// existed still load.
+    #[serde(default)]
+    pub observations: Vec<ExperimentObservation>,
     pub passed: bool,
 }
 

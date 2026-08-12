@@ -4,8 +4,8 @@ use super::helpers::{
     scenario_paths_in_dir, verification_id_for_experiment,
 };
 use super::metrics::{
-    compare_suite_reports, evaluate_experiment_gates, shadow_report_from_experiment,
-    technique_groups_from_suite,
+    compare_suite_reports, evaluate_experiment_gates, observe_experiment_detect_latency_delta,
+    shadow_report_from_experiment, technique_groups_from_suite,
 };
 use super::stores::{
     FileExperimentStore, FilePromotionReviewStore, FileReplayRunStore, FileShadowStore,
@@ -26,7 +26,8 @@ use super::validation::{
 };
 use super::verification::{
     collect_review_blocking_reasons, observe_detect_latency, verify_canonical_templates,
-    verify_false_positive_bound, verify_known_bad_coverage, verify_total_detection_budget,
+    verify_false_positive_bound, verify_known_bad_coverage, verify_scenario_class_declared,
+    verify_total_detection_budget,
 };
 use crate::config::load_config;
 use crate::correlation::{CorrelationEngine, CorrelationOutcome};
@@ -534,7 +535,16 @@ impl DefaultReplayHarness {
             .evaluate_suite_selection(&candidate_detector, scenario_paths, selection)
             .await?;
         let comparison = compare_suite_reports(&baseline_report, &candidate_report);
+        // GATING. Every entry here is a deterministic function of fixture
+        // content -- counts over the corpus -- so it computes the same value on
+        // any machine, under any load, on any architecture. Do not add anything
+        // derived from a clock: see `observations` below.
         let gates = evaluate_experiment_gates(&loaded_experiment.manifest.gates, &comparison);
+        // NON-GATING. Measured and recorded in full; reduced over by nothing.
+        let observations = vec![observe_experiment_detect_latency_delta(
+            &loaded_experiment.manifest.gates,
+            &comparison,
+        )];
         let passed = gates.iter().all(|gate| gate.passed);
         let report = StrategyExperimentReport {
             experiment_id: experiment_id_for_manifest(&loaded_experiment.manifest),
@@ -560,6 +570,7 @@ impl DefaultReplayHarness {
             candidate_report,
             comparison,
             gates,
+            observations,
             passed,
         };
         Ok((report, source_artifacts))
@@ -648,6 +659,10 @@ impl DefaultReplayHarness {
         // value on any machine, under any load, on any architecture. Do not add
         // anything derived from a clock: see `observations` below.
         let invariants = vec![
+            // FIRST, because it is the precondition the next two are written
+            // on: a scenario whose class is `mixed` matches neither of their
+            // predicates and would otherwise be exempt from both at once.
+            verify_scenario_class_declared(&[&known_bad_report, &benign_report]),
             verify_known_bad_coverage(&known_bad_report),
             verify_canonical_templates(
                 &candidate_detector,

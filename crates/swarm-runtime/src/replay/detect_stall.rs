@@ -21,13 +21,17 @@
 //! `downcast_ref::<RuntimeDetector>()` hydration/persistence hooks still fire.
 
 use crate::detector_factory::RuntimeDetector;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::time::Duration;
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 
 thread_local! {
     static REMAINING: Cell<u32> = const { Cell::new(0) };
     static STALL: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    /// When `Some`, only evaluations by the detector with this strategy id are
+    /// stalled; everything else runs at full speed and does not consume the
+    /// budget. `None` stalls whichever detector evaluates next.
+    static ONLY_STRATEGY: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Arms the detect-stage stall for the current thread and disarms it on drop.
@@ -43,6 +47,23 @@ impl DetectStallGuard {
     pub(crate) fn arm(count: u32, stall: Duration) -> Self {
         REMAINING.with(|remaining| remaining.set(count));
         STALL.with(|configured| configured.set(stall));
+        ONLY_STRATEGY.with(|only| *only.borrow_mut() = None);
+        Self
+    }
+
+    /// Same, but only evaluations by the detector whose `id()` is
+    /// `strategy_id` are stalled.
+    ///
+    /// This is what makes a DIFFERENTIAL stall expressible. An experiment
+    /// evaluates the baseline suite and then the candidate suite in one call on
+    /// one thread, so a plain count-based arm would land on the baseline --
+    /// which moves the latency DELTA the wrong way and proves nothing. Scoping
+    /// by strategy id targets exactly one side of the comparison and is
+    /// deterministic regardless of how many events the other side replays.
+    pub(crate) fn arm_for_strategy(strategy_id: &str, count: u32, stall: Duration) -> Self {
+        REMAINING.with(|remaining| remaining.set(count));
+        STALL.with(|configured| configured.set(stall));
+        ONLY_STRATEGY.with(|only| *only.borrow_mut() = Some(strategy_id.to_string()));
         Self
     }
 }
@@ -51,10 +72,18 @@ impl Drop for DetectStallGuard {
     fn drop(&mut self) {
         REMAINING.with(|remaining| remaining.set(0));
         STALL.with(|configured| configured.set(Duration::ZERO));
+        ONLY_STRATEGY.with(|only| *only.borrow_mut() = None);
     }
 }
 
-fn take_stall() -> Option<Duration> {
+fn take_stall(strategy_id: &str) -> Option<Duration> {
+    let targeted = ONLY_STRATEGY.with(|only| match only.borrow().as_deref() {
+        Some(target) => target == strategy_id,
+        None => true,
+    });
+    if !targeted {
+        return None;
+    }
     REMAINING.with(|remaining| {
         let left = remaining.get();
         if left == 0 {
@@ -89,7 +118,7 @@ impl DetectionStrategy for StallingDetector {
     }
 
     fn evaluate(&self, event: &TelemetryEvent) -> Vec<DetectionFinding> {
-        if let Some(stall) = take_stall() {
+        if let Some(stall) = take_stall(self.inner.id()) {
             std::thread::sleep(stall);
         }
         self.inner.evaluate(event)

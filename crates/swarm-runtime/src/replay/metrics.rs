@@ -1,9 +1,10 @@
 use super::helpers::shadow_id_for_report;
 use super::types::{
-    ExperimentGateConfig, ExperimentGateResult, ReplayScenarioClass, ReplaySuiteReport,
-    ReplaySuiteScenarioReport, ReplayTechniqueGroupReport, StrategyExperimentComparison,
-    StrategyExperimentMetricDelta, StrategyExperimentMetrics, StrategyExperimentReport,
-    StrategyScenarioRegression, StrategyShadowReport, StrategyTechniqueRegression,
+    ExperimentGateConfig, ExperimentGateResult, ExperimentObservation, ReplayScenarioClass,
+    ReplaySuiteReport, ReplaySuiteScenarioReport, ReplayTechniqueGroupReport,
+    StrategyExperimentComparison, StrategyExperimentMetricDelta, StrategyExperimentMetrics,
+    StrategyExperimentReport, StrategyScenarioRegression, StrategyShadowReport,
+    StrategyTechniqueRegression,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -141,6 +142,7 @@ pub(super) fn shadow_report_from_experiment(
         candidate_description: report.candidate_description.clone(),
         comparison: report.comparison.clone(),
         gates: report.gates.clone(),
+        observations: report.observations.clone(),
         passed: report.passed,
     }
 }
@@ -246,18 +248,55 @@ pub(super) fn evaluate_experiment_gates(
         },
     });
 
-    let latency_delta = comparison.delta.max_detect_latency_delta_us;
-    gates.push(ExperimentGateResult {
-        name: "max_detect_latency_delta_us".to_string(),
-        passed: latency_delta <= config.max_detect_latency_delta_us as i64,
-        expected: json!(config.max_detect_latency_delta_us),
-        actual: json!(latency_delta),
-        details: if latency_delta <= config.max_detect_latency_delta_us as i64 {
-            "candidate stayed within the configured detect-latency delta".to_string()
-        } else {
-            "candidate exceeded the configured detect-latency delta".to_string()
-        },
-    });
-
     gates
+}
+
+/// Records the candidate-minus-baseline worst-case detect-latency delta as a
+/// NON-GATING observation.
+///
+/// This used to be a gating gate, and it was the only one whose verdict was not
+/// a function of the fixtures. `max_detect_latency_delta_us` is a difference of
+/// two maxima over wall-clock `Instant` deltas, so it measures the machine, the
+/// build profile, and whatever else the scheduler was running -- not the
+/// candidate. A uniform slowdown does cancel out, which is why it looked safe,
+/// but the baseline suite and the candidate suite run one after the other, so a
+/// DIFFERENTIAL stall moves the difference: a single 20ms stall confined to the
+/// candidate suite flipped this gate and the whole report verdict on identical
+/// fixtures, which is what
+/// `replay::tests::experiment_verdict_is_invariant_under_candidate_detect_stage_load`
+/// pins down. A failed experiment gate does not stop at the report: it becomes
+/// a promotion blocker, evolution selection pressure, and a
+/// `CanaryError::ShadowFailed` that refuses canary admission outright.
+///
+/// The measurement is still taken and still recorded in full. Only its
+/// authority to fail an experiment is removed. Re-earning a latency gate means
+/// counting work rather than reading a clock, which is a cost model, not a
+/// rename.
+pub(super) fn observe_experiment_detect_latency_delta(
+    config: &ExperimentGateConfig,
+    comparison: &StrategyExperimentComparison,
+) -> ExperimentObservation {
+    let latency_delta = comparison.delta.max_detect_latency_delta_us;
+    let advisory_budget = config.advisory_max_detect_latency_delta_us;
+    let within_advisory_budget = latency_delta <= advisory_budget as i64;
+
+    ExperimentObservation {
+        name: "max_detect_latency_delta_us".to_string(),
+        advisory_budget: json!(advisory_budget),
+        observed: json!(latency_delta),
+        within_advisory_budget,
+        details: if within_advisory_budget {
+            format!(
+                "candidate-minus-baseline detect-latency delta {}us stayed within the \
+                 advisory budget {}us (non-gating wall-clock measurement)",
+                latency_delta, advisory_budget
+            )
+        } else {
+            format!(
+                "candidate-minus-baseline detect-latency delta {}us exceeded the advisory \
+                 budget {}us (non-gating wall-clock measurement; recorded, not enforced)",
+                latency_delta, advisory_budget
+            )
+        },
+    }
 }

@@ -1,8 +1,31 @@
 use super::types::{
-    DetectorVerificationReport, PromotionReviewPacket, PromotionReviewRecommendation,
-    ReplayEvaluationReport, ReplayRunBundle, ReplaySuiteReport, ReplaySuiteSourceKind,
-    StrategyExperimentReport, StrategyShadowReport,
+    DetectorVerificationReport, ExperimentObservation, PromotionReviewPacket,
+    PromotionReviewRecommendation, ReplayEvaluationReport, ReplayRunBundle, ReplaySuiteReport,
+    ReplaySuiteSourceKind, StrategyExperimentReport, StrategyShadowReport,
 };
+
+/// Append the non-gating observation block shared by the experiment and shadow
+/// renderers.
+///
+/// Rendered without a pass/fail marker on purpose. `within_advisory_budget`
+/// reads as the recorded comparison it is; a `[pass]`/`[fail]` column here would
+/// look like a verdict, and the whole point is that it is not one.
+fn render_experiment_observations(observations: &[ExperimentObservation], lines: &mut Vec<String>) {
+    if observations.is_empty() {
+        return;
+    }
+    lines.push("Observations (non-gating, not part of Status):".to_string());
+    for observation in observations {
+        lines.push(format!(
+            "- {} | observed={} advisory_budget={} within={} | {}",
+            observation.name,
+            observation.observed,
+            observation.advisory_budget,
+            observation.within_advisory_budget,
+            observation.details
+        ));
+    }
+}
 
 /// Render one replay run in a concise operator-friendly format.
 pub fn render_replay_run(run: &ReplayRunBundle) -> String {
@@ -164,7 +187,7 @@ pub fn render_experiment_report(report: &StrategyExperimentReport) -> String {
         ),
     ];
 
-    lines.push("Gates:".to_string());
+    lines.push("Gates (gating):".to_string());
     for gate in &report.gates {
         lines.push(format!(
             "- [{}] {} | expected={} actual={} | {}",
@@ -175,6 +198,8 @@ pub fn render_experiment_report(report: &StrategyExperimentReport) -> String {
             gate.details
         ));
     }
+
+    render_experiment_observations(&report.observations, &mut lines);
 
     if !report.comparison.scenario_regressions.is_empty() {
         lines.push("Scenario regressions:".to_string());
@@ -280,7 +305,7 @@ pub fn render_shadow_report(report: &StrategyShadowReport) -> String {
         ),
     ];
 
-    lines.push("Shadow gates:".to_string());
+    lines.push("Shadow gates (gating):".to_string());
     for gate in &report.gates {
         lines.push(format!(
             "- [{}] {} | expected={} actual={} | {}",
@@ -291,6 +316,8 @@ pub fn render_shadow_report(report: &StrategyShadowReport) -> String {
             gate.details
         ));
     }
+
+    render_experiment_observations(&report.observations, &mut lines);
 
     if !report.comparison.scenario_regressions.is_empty() {
         lines.push("Scenario regressions:".to_string());

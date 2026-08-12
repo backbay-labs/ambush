@@ -482,6 +482,14 @@ fn harvested_solver_counterexample_scenario(
             proof_id.to_string(),
         ],
         metadata: ReplayScenarioMetadata {
+            // A harvested solver counterexample is genuinely unclassified: it
+            // is a witness that an invariant can be violated, not a labelled
+            // adversarial or benign replay. `Mixed` says exactly that, and it
+            // is now load-bearing rather than free -- the
+            // `scenario_class_declared` verification invariant refuses a
+            // corpus containing one, because neither `known_bad_coverage` nor
+            // `false_positive_bound` can constrain it. Classifying these
+            // properly is a separate change to the harvest, not a rename here.
             class: ReplayScenarioClass::Mixed,
             threat_class: None,
             campaign: None,

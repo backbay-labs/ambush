@@ -1589,6 +1589,7 @@ mod tests {
                 technique_regressions: vec![],
             },
             gates: vec![],
+            observations: vec![],
             passed: true,
         };
 

@@ -9,6 +9,53 @@ use crate::detector_factory::RuntimeDetector;
 use serde_json::json;
 use swarm_whisker::DetectionStrategy;
 
+/// Fails closed on any verification scenario that declares no enforceable class.
+///
+/// This is the precondition the other two safety invariants are written on top
+/// of. `verify_known_bad_coverage` demands a detection only from `Adversarial`
+/// scenarios; `verify_false_positive_bound` draws counterexamples only from
+/// `Benign` ones. `Mixed` matches NEITHER predicate, so a `Mixed` scenario is
+/// exempt from both invariants simultaneously and contributes to neither
+/// denominator. Without this check it passes vacuously, and the verification
+/// report -- signed evidence -- attests to checks that never looked at it.
+///
+/// An ABSENT `class:` is refused earlier, at deserialization: the field is
+/// mandatory and `ReplayScenarioClass` has no `Default`. This catches the
+/// other spelling, an explicit `class: mixed`, which the evolution lane's
+/// `harvested_solver_counterexample_scenario` emits today. Both spellings are
+/// weak input, and the repo contract is that weak input fails closed.
+pub(super) fn verify_scenario_class_declared(
+    reports: &[&ReplaySuiteReport],
+) -> VerificationInvariantResult {
+    let counterexamples = reports
+        .iter()
+        .flat_map(|report| report.scenario_reports.iter())
+        .filter(|scenario| scenario.metadata.class == ReplayScenarioClass::Mixed)
+        .map(|scenario| VerificationCounterexample {
+            subject: scenario.scenario_name.clone(),
+            reference: scenario.scenario_path.clone(),
+            details: concat!(
+                "scenario declares class `mixed`, which no safety invariant ",
+                "constrains; classify it `adversarial` or `benign`"
+            )
+            .to_string(),
+        })
+        .collect::<Vec<_>>();
+    let unclassified = counterexamples.len();
+    VerificationInvariantResult {
+        name: "scenario_class_declared".to_string(),
+        passed: unclassified == 0,
+        expected: json!(0),
+        actual: json!(unclassified),
+        details: if unclassified == 0 {
+            "every verification scenario declared a class an invariant can enforce".to_string()
+        } else {
+            "verification corpus contains scenarios no safety invariant constrains".to_string()
+        },
+        counterexamples,
+    }
+}
+
 pub(super) fn verify_known_bad_coverage(report: &ReplaySuiteReport) -> VerificationInvariantResult {
     let counterexamples = report
         .scenario_reports

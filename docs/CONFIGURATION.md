@@ -1252,9 +1252,17 @@ Repo-owned scenarios live under `scenarios/`:
 - `scenarios/pdf-lolbin-execution.yaml`
 - `scenarios/python-maintenance-benign.yaml`
 
-Scenario manifests now carry explicit offline corpus metadata:
+Scenario manifests carry explicit offline corpus metadata. The `metadata:` block
+is **required** -- a manifest without one fails to parse, because a scenario with no
+declared class was previously exempt from every safety invariant and passed
+verification without any of them running.
 
-- `metadata.class`: `adversarial`, `benign`, or `mixed`
+- `metadata.class`: `adversarial` or `benign`. **`mixed` is accepted by the parser
+  but FAILS the `scenario_class_declared` verification invariant**, and is retained
+  only so an existing corpus reports a named failure rather than a parse error.
+  A `mixed` scenario matches neither `known_bad_coverage` (which requires
+  `adversarial`) nor `false_positive_bound` (which requires `benign`), so it would
+  otherwise be checked by nothing. Classify each scenario as one or the other.
 - `metadata.campaign`: campaign or operator workflow label
 - `metadata.techniques`: MITRE ATT&CK technique IDs or internal technique labels
 - `metadata.tags`: free-form suite or debugging tags
@@ -1340,11 +1348,57 @@ What the experiment report captures:
 - aggregate detection rate, false positive rate, and detect-latency comparisons
 - lineage metadata (`parent_strategy_id`, mutation, rationale)
 - scenario regressions and technique regressions
-- offline gate verdicts for known-bad coverage, false-positive delta, and detect-latency delta
+- offline gate verdicts for known-bad coverage and false-positive delta
+
+Current gating set (`gates` in the report; `passed` reduces over it):
+
+- `known_bad_coverage`: candidate must not miss tracked adversarial scenarios the
+  baseline caught
+- `false_positive_delta`: candidate must stay within the manifest's benign
+  false-positive delta
+
+Both are counts over fixture content, so each computes the same value on any
+machine, under any load, on any architecture.
+
+Current non-gating observation set (`observations` in the report; nothing
+reduces over it):
+
+- `max_detect_latency_delta_us`: the candidate suite's worst detect latency minus
+  the baseline suite's, with the manifest's `gates.max_detect_latency_delta_us`
+  recorded beside it as an advisory reference point and `within_advisory_budget`
+  recorded as a fact rather than a verdict
+
+`max_detect_latency_delta_us` used to gate. It was removed from the gating set
+because the number it compares is a difference of two maxima over wall-clock
+`Instant` deltas. A uniform slowdown does cancel out, which is why it looked
+safe -- but the baseline suite and the candidate suite run one after the other,
+so anything that slows down only the second one moves the difference. A single
+20ms stall confined to the candidate suite flipped the gate, the experiment
+verdict, and the shadow verdict on identical fixtures; on an idle arm64 machine
+with nothing injected the nominal spread was already 1327us against the 2000us
+budget `experiments/office-python-parent-broadening.yaml` sets. A latency gate
+that can be trusted has to count work rather than read a clock.
+
+**If you set `gates.max_detect_latency_delta_us` in an experiment manifest
+expecting a hard bound, it no longer stops anything.** The key is deliberately
+unchanged and is still read, still compared, and still reported: it appears as
+`advisory_budget` in the report's `observations` block, in the shadow report's
+`observations` block, and under `Observations (non-gating, not part of Status)`
+in the rendered `experiment-result` and `shadow-result` output, with
+`within_advisory_budget: false` when the measured delta exceeds it. Alert on
+`within_advisory_budget` if you want a latency signal; do not expect an exit
+code. The manifests were left at their existing values so the recorded series
+stays comparable over time.
+
+What this changes downstream, in the operator's favour: a latency spread can no
+longer produce a failed experiment gate, and therefore can no longer produce a
+`blocked` promotion review packet, a spurious evolution pressure signal, or a
+`CanaryError::ShadowFailed` that refuses canary admission outright.
 
 Failure behavior:
 
-- `experiment-evaluate` exits nonzero when any offline experiment gate fails
+- `experiment-evaluate` exits nonzero when any offline experiment gate fails --
+  the latency observation is not a gate and cannot cause a nonzero exit
 - the persisted experiment report can still be loaded later with `experiment-result`
 
 ### Verification Corpora
@@ -1446,6 +1500,14 @@ Shadow reports capture:
 - detect-latency delta
 - the replay artifacts used as the comparison window
 - pass or fail shadow gates derived from the experiment manifest thresholds
+- a non-gating `observations` block carrying the detect-latency delta and its
+  advisory budget, copied from the experiment report
+
+Shadow gates are copied verbatim from the experiment report and `passed` reduces
+over `gates` only, so the `max_detect_latency_delta_us` demotion above applies
+identically here: it is recorded on the shadow artifact and gates nothing. This
+is the artifact `canary-admit` reads, so a latency spread can no longer refuse
+canary admission with `CanaryError::ShadowFailed`.
 
 Failure behavior:
 
