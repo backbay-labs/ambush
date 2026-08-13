@@ -39,12 +39,15 @@
 //!
 //! Four of the eight roles moved: `pounce`, `stalker`, `weaver`, `whisker`.
 //! `calico`, `kitten`, `sphinx` and `tom` are pinned inside `swarm-runtime` by
-//! `ingest/`, which calls into two of them from non-test code:
+//! `ingest/`, which calls into them from non-test code. One such call is left:
 //!
-//! - `ingest/mod.rs` stores a `tom_agent::GovernancePolicy`
 //! - `ingest/providence_handlers.rs` calls `kitten_agent::route_feedback_signal`
 //!
-//! Those are back-edges. Moving `tom` or `kitten` would put a normal
+//! The second, `ingest/mod.rs`'s `Arc<tom_agent::GovernancePolicy>`, was removed
+//! in SPLIT-05 by routing that surface through
+//! `swarm_policy::governance::GovernanceAuthority`; `tom`'s remaining holders in
+//! the root are both `#[cfg(test)]` and reach this crate over the dev-dependency
+//! edge. That is a back-edge. Moving `kitten` today would put a normal
 //! `swarm-agents` dependency in the root's manifest and produce the cycle above.
 //! `calico` is pinned transitively (`kitten_agent` parses calico payloads), and
 //! `sphinx` is pinned by `calico` -- moving `sphinx` alone would force nine

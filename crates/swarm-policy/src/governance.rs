@@ -43,6 +43,34 @@ pub struct GovernanceRuntimeEventRecord {
     pub details: serde_json::Value,
 }
 
+/// Where the governance quorum currently sits on the partition/heal path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartitionState {
+    Healthy,
+    Degraded,
+    Partitioned,
+    Healing,
+}
+
+/// The governance authority's own account of itself, as operators read it.
+///
+/// Moved down here from the concrete governance agent in SPLIT-05, so
+/// [`GovernanceAuthority::status_report`] can name its own return type. The ingest
+/// health surface renders these eight fields into `/healthz` and reads nothing else
+/// off the authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernanceStatusReport {
+    pub partition_state: PartitionState,
+    pub total_governors: usize,
+    pub healthy_governors: usize,
+    pub quorum_threshold: usize,
+    pub active_contingency_leases: usize,
+    pub unauthorized_partition_actions: usize,
+    pub last_transition_at_ms: Option<i64>,
+    pub last_reconciliation_report_id: Option<String>,
+}
+
 /// Not public API. Seals [`GovernanceAuthority`]; see the note on that trait.
 #[doc(hidden)]
 pub mod sealed {
@@ -57,9 +85,11 @@ pub mod sealed {
 
 /// Partition-time authorization and event drain, as the dispatcher needs them.
 ///
-/// Deliberately narrow: these two methods are the entire surface the dispatcher used
-/// of the concrete governance policy, and widening it would re-import the coupling
-/// this trait exists to remove.
+/// Deliberately narrow. The first four methods are the entire surface the dispatcher
+/// used of the concrete governance policy; [`GovernanceAuthority::status_report`] is
+/// the entire surface the ingest health endpoint used of it (SPLIT-05). Widening it
+/// beyond what a named consumer already called would re-import the coupling this
+/// trait exists to remove.
 ///
 /// # What the trait widened, and why it is sealed
 ///
@@ -106,4 +136,12 @@ pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
 
     /// Take the governance events queued since the last drain.
     fn drain_runtime_events(&self) -> Vec<GovernanceRuntimeEventRecord>;
+
+    /// Snapshot of quorum health, for the operator-facing health surface.
+    ///
+    /// Read-only and verdict-free: it reports what the authority already decided and
+    /// authorizes nothing. It is on this trait rather than a second one because the
+    /// ingest surface holds the same authority object the dispatcher does, and one
+    /// sealed governance trait keeps the enumerable-implementers property in one place.
+    fn status_report(&self) -> GovernanceStatusReport;
 }

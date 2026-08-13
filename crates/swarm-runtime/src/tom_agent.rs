@@ -19,33 +19,17 @@ use swarm_core::types::{AgentId, ResponseAction, SwarmAction};
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
 use swarm_policy::ActionRequest;
 use swarm_policy::governance::{GovernanceAuthority, GovernanceRuntimeEventRecord};
+// Both types are declared in `swarm-policy` as of SPLIT-05, so `GovernanceAuthority`
+// can name its own return type. Re-exported rather than merely imported, because the
+// paths `swarm_runtime::tom_agent::{PartitionState, GovernanceStatusReport}` are what
+// this crate's callers and integration tests already spell.
+pub use swarm_policy::governance::{GovernanceStatusReport, PartitionState};
 use swarm_policy::static_gate::scope_for_response_action;
 
 const DEFAULT_CONTINGENCY_LEASE_TTL_MS: i64 = 300_000;
 const DEFAULT_CONTINGENCY_BLAST_RADIUS_CAP: usize = 1;
 const CONTINGENCY_LEASE_SCHEMA_VERSION: u32 = 1;
 const MAX_RECONCILIATION_REPORTS: usize = 16;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PartitionState {
-    Healthy,
-    Degraded,
-    Partitioned,
-    Healing,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GovernanceStatusReport {
-    pub partition_state: PartitionState,
-    pub total_governors: usize,
-    pub healthy_governors: usize,
-    pub quorum_threshold: usize,
-    pub active_contingency_leases: usize,
-    pub unauthorized_partition_actions: usize,
-    pub last_transition_at_ms: Option<i64>,
-    pub last_reconciliation_report_id: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContingencyLease {
@@ -1323,6 +1307,16 @@ impl GovernanceAuthority for GovernancePolicy {
             .into_iter()
             .map(governance_runtime_event_record)
             .collect()
+    }
+
+    // The one method whose inherent twin has the SAME return type, so the
+    // compile-error safety net described above does not apply to it. It resolves to
+    // the inherent method because inherent impls are probed before trait impls for a
+    // `Type::method(..)` path; if that ever changed, the recursion would be caught by
+    // `healthz_includes_governance_partition_component`, which reaches this method
+    // through a `dyn GovernanceAuthority` and asserts on the rendered fields.
+    fn status_report(&self) -> GovernanceStatusReport {
+        GovernancePolicy::status_report(self)
     }
 }
 

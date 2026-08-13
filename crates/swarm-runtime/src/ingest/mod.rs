@@ -57,7 +57,6 @@ use crate::service::{
 };
 use crate::startup_attestation::StartupAttestationReport;
 use crate::threat_intel_runtime::SharedThreatIntelFeedHealth;
-use crate::tom_agent::GovernancePolicy;
 use crate::{RuntimeError, StrategyProposalRouteError, SwarmRuntime};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -83,6 +82,7 @@ use swarm_core::pheromone::EscalationRecord;
 use swarm_core::types::AgentId;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
+use swarm_policy::governance::GovernanceAuthority;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::DispatchingExecutor;
 use swarm_spine::{
@@ -1326,7 +1326,7 @@ pub struct IngestState {
     demo_runs: Arc<Mutex<DemoRunRegistry>>,
     providence_adapter: Arc<ArcSwap<Option<Arc<ProvidenceIncidentAdapter>>>>,
     providence_task_started: Arc<AtomicBool>,
-    governance_policy: Option<Arc<GovernancePolicy>>,
+    governance_policy: Option<Arc<dyn GovernanceAuthority>>,
     startup_attestation: Option<Arc<StartupAttestationReport>>,
     anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
     runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
@@ -1664,7 +1664,16 @@ impl IngestState {
         self
     }
 
-    pub fn with_governance_policy(mut self, governance_policy: Arc<GovernancePolicy>) -> Self {
+    /// Install the governance authority whose quorum health `/healthz` reports.
+    ///
+    /// Takes `Arc<impl GovernanceAuthority>` rather than `Arc<dyn ..>` for the same
+    /// reason `AgentDispatcher::with_governance_policy` does: every existing
+    /// `Arc<GovernancePolicy>` call site is unchanged, because an inference variable
+    /// is not an unsizing coercion site.
+    pub fn with_governance_policy(
+        mut self,
+        governance_policy: Arc<impl GovernanceAuthority + 'static>,
+    ) -> Self {
         self.governance_policy = Some(governance_policy);
         self
     }

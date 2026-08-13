@@ -12,12 +12,17 @@
 //! not, and are declared below with a marker on each -- `calico_agent`,
 //! `kitten_agent`, `sphinx_agent`, `tom_agent`.
 //!
-//! They are pinned by `ingest/`, which calls into two of them from NON-TEST
-//! code: `ingest/mod.rs:61` stores a `tom_agent::GovernancePolicy`, and
-//! `ingest/providence_handlers.rs:2` calls
-//! `kitten_agent::route_feedback_signal`. Those are back-edges. Moving either
-//! role would put a normal `swarm-agents` entry in this crate's
-//! `[dependencies]`, and Cargo rejects that outright:
+//! They are pinned by `ingest/`, which calls into them from NON-TEST code. One
+//! such call remains, `ingest/providence_handlers.rs:2` ->
+//! `kitten_agent::route_feedback_signal`; the other, `ingest/mod.rs`'s
+//! `Arc<tom_agent::GovernancePolicy>`, was removed in SPLIT-05 by routing that
+//! surface through `swarm_policy::governance::GovernanceAuthority`. What still
+//! holds `tom` here is test-only and moves with the tests: `ingest/tests.rs:31`
+//! leaves with `ingest/`, and `dispatcher.rs:1409` is a `#[cfg(test)]` module
+//! that can reach `swarm_agents` through the dev-dependency edge this crate
+//! already carries. Non-test back-edges are what Cargo rejects; moving a role
+//! that still has one would put a normal `swarm-agents` entry in this crate's
+//! `[dependencies]`, and that fails outright:
 //!
 //! ```text
 //! error: cyclic package dependency: package `swarm-agents` depends on itself.
