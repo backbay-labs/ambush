@@ -489,6 +489,24 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Fail closed with no governor key. Without one this policy cannot issue the
+        // receipt that authorizes a destructive action: `issue_governance_receipt`
+        // returns `None` on an empty keyring and every downstream arm of this function
+        // used to fall through to `Allow`. This check sits AHEAD of the partition
+        // branch on purpose - `active_contingency_leases` is rehydrated from disk by
+        // `with_persistence` before any governor registers, so the partition branch
+        // would otherwise authorize a destructive action off a state file alone.
+        if state.governors.is_empty() {
+            return GovernanceDecision::Veto {
+                governing_agent_id: state
+                    .governing_agent_id
+                    .clone()
+                    .unwrap_or_else(|| AgentId::new("tom", "unconfigured")),
+                reason: "blocked destructive action because no governor signing key is registered"
+                    .to_string(),
+                receipt: None,
+            };
+        }
         if state.partition_state == PartitionState::Partitioned {
             if let Some(lease) = preview_matching_contingency_lease(&state, action, now_ms()) {
                 return GovernanceDecision::Allow {
@@ -531,19 +549,18 @@ impl GovernancePolicy {
         });
 
         match reason {
-            Some(reason) => {
-                let Some(governing_agent_id) = governing_agent_id else {
-                    return GovernanceDecision::Allow {
-                        receipt,
-                        contingency_lease: None,
-                    };
-                };
-                GovernanceDecision::Veto {
-                    governing_agent_id,
-                    reason,
-                    receipt,
-                }
-            }
+            // A missing `governing_agent_id` is a labelling problem, not grounds to
+            // permit the action: this used to `return Allow` with the veto reason
+            // discarded. The keyring is non-empty by the guard above, so
+            // `register_governor` has run and has already set `governing_agent_id`;
+            // the fallback mirrors the partition branch and cannot be reached through
+            // the public API.
+            Some(reason) => GovernanceDecision::Veto {
+                governing_agent_id: governing_agent_id
+                    .unwrap_or_else(|| AgentId::new("tom", "unconfigured")),
+                reason,
+                receipt,
+            },
             None => GovernanceDecision::Allow {
                 receipt,
                 contingency_lease: None,
@@ -1448,6 +1465,130 @@ mod tests {
                 );
             }
             other => panic!("expected governance approval with receipt, got {other:?}"),
+        }
+    }
+
+    // The keyless configuration is not hypothetical. `swarm_detect` registers exactly
+    // one governor (crates/swarm-runtime-http/src/bin/swarm_detect.rs:815) through
+    // `register_persisted_runtime_agent`, which returns `Ok(None)` and lets boot
+    // continue when the Tom identity is not admitted by the identity registry. The
+    // pouncer is registered separately, so the runtime can serve with a pouncer and no
+    // governor. `PounceAgent::new_with_signing_key` also installs a keyless
+    // `GovernancePolicy::default()` unless `.with_governance_policy(..)` is called.
+    #[test]
+    fn governance_policy_vetoes_destructive_action_without_a_registered_governor() {
+        let policy = GovernancePolicy::default();
+
+        let decision = policy.can_act(&ResponseAction::BlockEgress {
+            target: "203.0.113.10".to_string(),
+        });
+        match decision {
+            GovernanceDecision::Veto {
+                governing_agent_id,
+                reason,
+                receipt,
+            } => {
+                assert_eq!(governing_agent_id, AgentId::new("tom", "unconfigured"));
+                assert!(
+                    reason.contains("no governor signing key is registered"),
+                    "veto reason should name the cause, got {reason}"
+                );
+                assert!(
+                    receipt.is_none(),
+                    "a keyless policy cannot issue a receipt, got {receipt:?}"
+                );
+            }
+            other => panic!("expected keyless governance to refuse, got {other:?}"),
+        }
+
+        // The guard must not become a blanket refusal: non-destructive actions never
+        // needed a governance receipt and still do not.
+        assert!(matches!(
+            policy.can_act(&ResponseAction::DeployDecoy {
+                decoy_type: "honeypot".to_string(),
+                target_zone: "dmz".to_string(),
+            }),
+            GovernanceDecision::Allow {
+                receipt: None,
+                contingency_lease: None
+            }
+        ));
+    }
+
+    // The partition branch of `can_act` authorizes off `active_contingency_leases`,
+    // which `with_persistence` rehydrates from disk before any governor registers.
+    // A restart whose Tom admission fails therefore reaches a keyless policy holding
+    // live leases: the refusal has to be checked ahead of the partition branch, not
+    // after it.
+    #[test]
+    fn keyless_policy_reloaded_into_a_partition_refuses_persisted_leases() {
+        let base_ms = super::now_ms();
+        let path = std::env::temp_dir().join(format!(
+            "swarm-governance-keyless-{}-{base_ms}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let config = GovernancePolicyConfig {
+            contingency_lease_ttl_ms: 600_000,
+            contingency_blast_radius_cap: 1,
+        };
+
+        let keyed = GovernancePolicy::with_persistence(config.clone(), &path).unwrap();
+        keyed.register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[19; 32]),
+        );
+        keyed.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
+        keyed.observe_health(
+            &AgentId::new("tom", "primary"),
+            &[AgentHealthEntry {
+                id: "tom-primary".to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            base_ms + 1_000,
+        );
+        assert_eq!(
+            keyed.status_report().partition_state,
+            PartitionState::Partitioned
+        );
+        let action = ResponseAction::IsolateHost {
+            host_id: "host-77".to_string(),
+        };
+        assert!(
+            matches!(
+                keyed.can_act(&action),
+                GovernanceDecision::Allow {
+                    contingency_lease: Some(_),
+                    ..
+                }
+            ),
+            "precondition: the keyed policy staged a redeemable lease before the restart"
+        );
+
+        // Restart with the same state file, Tom admission failing: no governor registers.
+        let keyless = GovernancePolicy::with_persistence(config, &path).unwrap();
+        assert_eq!(
+            keyless.status_report().partition_state,
+            PartitionState::Partitioned,
+            "precondition: the partition and its leases were rehydrated from disk"
+        );
+        assert_eq!(
+            keyless.status_report().active_contingency_leases,
+            super::destructive_action_kinds().len(),
+            "precondition: one live lease per destructive action kind survived the restart"
+        );
+
+        let decision = keyless.can_act(&action);
+        let _ = std::fs::remove_file(&path);
+        match decision {
+            GovernanceDecision::Veto { reason, .. } => assert!(
+                reason.contains("no governor signing key is registered"),
+                "veto reason should name the cause, got {reason}"
+            ),
+            other => {
+                panic!("expected a keyless policy to refuse a disk-rehydrated lease, got {other:?}")
+            }
         }
     }
 
