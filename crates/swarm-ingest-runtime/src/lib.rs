@@ -51,3 +51,28 @@
 //! decided where `HttpRateLimiter` belongs: both that crate and this one mount a
 //! rate-limited surface at different heights, so the limiter could live in
 //! neither and went down to `swarm_core::http_rate_limit` instead (SPLIT-05).
+//!
+//! # `#[cfg(test)]` on the root is invisible from here
+//!
+//! The forward edge is a NORMAL dependency, so this crate links the root's
+//! non-test build. Nothing `swarm-runtime` gates behind `#[cfg(test)]` exists
+//! in that build -- not even a `pub` one, which fails as "does not exist"
+//! rather than as "is private", so a visibility keyword is not evidence of
+//! reachability:
+//!
+//! ```text
+//! error[E0432]: unresolved import
+//!   `swarm_runtime::kitten_agent::load_feedback_signal_records`
+//!   no `load_feedback_signal_records` in `kitten_agent`
+//! ```
+//!
+//! This binds the tests as much as the code: `ingest/tests.rs` moves with
+//! `ingest/` and becomes a unit test of THIS crate, where its `crate::` paths
+//! become `swarm_runtime::` paths under exactly the same rule. SPLIT-05 hit one
+//! such path and resolved it by moving the read half of the kitten feedback
+//! store down to its only caller, rather than ungating the root's helper and
+//! making a test-only reader permanent public API.
+//!
+//! The root still declares `#[cfg(test)] pub` surface that reads as reachable
+//! and is not -- `providence.rs` gates a whole `pub mod tests` that way -- so
+//! any later move here has to be probed against the non-test build.
