@@ -5,6 +5,7 @@
 
 pub mod adapters;
 pub mod config;
+pub mod containment;
 pub mod crowdstrike_rtr;
 pub mod dead_letter;
 pub mod dispatch;
@@ -26,15 +27,21 @@ pub use config::{
     NotificationRateLimitConfig, NotificationRoutingConfig, QuietHoursConfig,
     ResponseAdapterConfig, RetryConfig, RoutingRule, SiemForwardConfig, WebhookConfig,
 };
+pub use containment::{
+    CONTAINMENT_LEASE_SCHEMA_VERSION, ContainmentLease, ContainmentLeaseError,
+    ContainmentLeaseStore, ContainmentStoreError, ContainmentTtl, FileContainmentLeaseStore,
+    MemoryContainmentLeaseStore,
+};
 pub use crowdstrike_rtr::CrowdStrikeRtrAdapter;
 pub use dead_letter::{DeadLetterEntry, DeadLetterJournal};
 pub use dispatch::DispatchingExecutor;
-pub use http_edr::HttpEdrAdapter;
+pub use http_edr::{HttpEdrAdapter, HttpEdrRollbackExecutor};
 pub use notification::{NotificationError, NotificationReplayResult, NotificationRouter};
 pub use resilience::{CircuitBreakerState, ResilientExecutor};
 pub use rollback::{
-    ContainmentLease, ContainmentLedger, RollbackExecutor, RollbackReceipt, RollbackStepOutcome,
-    RollbackTrigger, SandboxRollbackExecutor,
+    ContainmentInverse, InverseGap, RollbackExecutor, RollbackReceipt, RollbackStepOutcome,
+    RollbackStepStatus, RollbackTrigger, SandboxRollbackExecutor, plan_is_reversible,
+    resolve_inverse,
 };
 pub use siem::{SiemFindingForwarder, SiemForwardAdapter, SwarmFindingEnvelope};
 pub use splunk_hec::{SplunkHecAdapter, SwarmFindingBatchEnvelope};
