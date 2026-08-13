@@ -45,6 +45,7 @@ use swarm_policy::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
     PolicyVerdict,
 };
+use swarm_response::containment::{ContainmentTtl, MemoryContainmentLeaseStore};
 use swarm_response::{
     DispatchingExecutor, ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt,
     ResponseStatus,
@@ -999,6 +1000,14 @@ async fn unsupported_webhook_action_fails_closed_in_runtime_audit() -> Result<()
             },
             None,
         )?,
+    )
+    // `terminate_user_session` is a containment, and an enforced containment
+    // with no lease store is now refused BEFORE the adapter is reached. This
+    // test is about the ADAPTER's unsupported-action refusal, so the lease store
+    // has to be present for that refusal to be the one under test.
+    .with_containment_store(
+        Arc::new(MemoryContainmentLeaseStore::new()),
+        ContainmentTtl::from_config_ms(900_000).unwrap(),
     );
     let request = sample_request(
         ResponseAction::TerminateUserSession {

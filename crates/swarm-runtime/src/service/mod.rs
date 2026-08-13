@@ -94,7 +94,7 @@ use swarm_spine::{
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 use tracing::Instrument as _;
 
-mod preview;
+pub(crate) mod preview;
 mod runtime_service;
 mod stack;
 mod status;

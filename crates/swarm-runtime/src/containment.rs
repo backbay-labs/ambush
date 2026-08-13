@@ -1,0 +1,671 @@
+//! Releasing a containment: on operator demand, and on lease expiry.
+//!
+//! ONE FUNCTION DOES BOTH. [`release_lease`] is the whole release path; the TTL
+//! sweep calls it per expired lease and a manual release calls it once. Two code
+//! paths for the same act is how a lane ends up with a manual release that
+//! records a receipt and an automatic one that does not, and no reviewer can see
+//! the difference from either side.
+//!
+//! THE CLOCK IS A PARAMETER, EVERYWHERE IN THIS MODULE. `sweep(now_ms)` and
+//! `release_lease(.., now_ms)` take the instant they act at; only
+//! [`ContainmentSweep::run_until_shutdown`] reads a clock, once per tick, at the
+//! call site. This is the shape `prune_expired_contingency_leases(state,
+//! now_ms)` already has in `swarm-agents`, and it is deliberate: this repo has
+//! nine shipped defects where a verdict was decided by wall-clock, and
+//! `dispatch_integration.rs`'s `thread::sleep(2000)` against a 1000ms TTL is
+//! documented in 1c4d728 as the anti-pattern. A sweep whose expiry test could
+//! only be exercised by sleeping would be untestable in exactly the same way.
+//!
+//! Owns: choosing which leases to release and when, and closing them against
+//! their receipts.
+//!
+//! Does not own: executing the inverse (that is `swarm_response::rollback`), the
+//! lease record (that is `swarm_response::containment`), or opening a lease
+//! (that is `SwarmRuntime`, at the moment a containment executes).
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::sync::watch;
+use tokio::time::MissedTickBehavior;
+
+use swarm_response::containment::{
+    ContainmentLeaseError, ContainmentLeaseStore, ContainmentStoreError, ContainmentTtl,
+    FileContainmentLeaseStore, MemoryContainmentLeaseStore,
+};
+use swarm_response::rollback::{RollbackExecutor, RollbackReceipt, RollbackTrigger};
+use swarm_response::{ExecutionMode, ResponseError};
+
+/// The response actions that leave a target in a changed state until something
+/// undoes it.
+///
+/// These are the four the roadmap names, and they are exactly the four for which
+/// `build_rehearsal_preview` derives an inverse plan. Everything else either
+/// changes nothing durable (`TriggerEdrScan`, `Escalate`) or is out of scope for
+/// this lane. Adding a containment action means adding it here AND adding an arm
+/// to `swarm_response::rollback::resolve_inverse`; adding it only here produces
+/// a lease whose expiry closes with an `Unsupported` step rather than a silent
+/// claim of reversal.
+pub fn is_containment_action(action: &swarm_core::types::ResponseAction) -> bool {
+    use swarm_core::types::ResponseAction;
+    matches!(
+        action,
+        ResponseAction::QuarantineFile { .. }
+            | ResponseAction::SuspendProcess { .. }
+            | ResponseAction::IsolateHost { .. }
+            | ResponseAction::TerminateUserSession { .. }
+    )
+}
+
+/// A lease store and TTL built from configuration.
+///
+/// Returned as a pair because [`SwarmRuntime::with_containment_store`] takes
+/// both; see its doc for why neither is useful alone.
+///
+/// [`SwarmRuntime::with_containment_store`]: crate::SwarmRuntime::with_containment_store
+pub type ContainmentBindingFromConfig = (Arc<dyn ContainmentLeaseStore>, ContainmentTtl);
+
+/// Build the lease store and TTL a runtime should hold, from configuration.
+///
+/// A configured `lease_store_path` gets a file store; no path gets an in-memory
+/// one. The in-memory case is NOT free: a restart forgets every open lease, so
+/// nothing will ever sweep those containments and they hold until an operator
+/// acts. That is why `rulesets/default.yaml` ships a path and
+/// `docs/CONFIGURATION.md` says what omitting it costs.
+pub fn containment_binding_from_config(
+    settings: &swarm_core::config::ContainmentSettings,
+) -> Result<ContainmentBindingFromConfig, ContainmentLeaseError> {
+    let ttl = ContainmentTtl::from_config_ms(settings.lease_ttl_ms)?;
+    let store: Arc<dyn ContainmentLeaseStore> = match settings.lease_store_path.as_deref() {
+        Some(path) if !path.trim().is_empty() => Arc::new(FileContainmentLeaseStore::open(path)),
+        _ => Arc::new(MemoryContainmentLeaseStore::new()),
+    };
+    Ok((store, ttl))
+}
+
+/// Errors raised while releasing a containment.
+#[derive(Debug, thiserror::Error)]
+pub enum ContainmentReleaseError {
+    #[error("no open containment lease `{lease_id}`")]
+    UnknownLease { lease_id: String },
+
+    #[error(transparent)]
+    Store(#[from] ContainmentStoreError),
+
+    #[error("rollback of containment lease `{lease_id}` failed: {source}")]
+    Rollback {
+        lease_id: String,
+        #[source]
+        source: ResponseError,
+    },
+}
+
+/// Release one containment: execute its inverse, then close the lease against
+/// the receipt that records what the inverse actually did.
+///
+/// ORDER MATTERS AND IS NOT AN ACCIDENT. The lease closes only after the
+/// executor returns. If the inverse could not be issued at all, the lease STAYS
+/// OPEN and the next sweep retries it: a lease closed against a rollback that
+/// never ran would erase the only record that the host is still contained.
+///
+/// A receipt that comes back but reports the containment was NOT restored --
+/// an irreversible action, or an adapter with no mapping -- does close the
+/// lease. The expiry has passed and retrying cannot change the answer; the
+/// receipt says plainly what happened and `fully_reversed()` is false on it.
+pub async fn release_lease(
+    store: &dyn ContainmentLeaseStore,
+    executor: &dyn RollbackExecutor,
+    mode: ExecutionMode,
+    lease_id: &str,
+    trigger: RollbackTrigger,
+    now_ms: i64,
+) -> Result<RollbackReceipt, ContainmentReleaseError> {
+    let Some(lease) = store.get(lease_id)? else {
+        return Err(ContainmentReleaseError::UnknownLease {
+            lease_id: lease_id.to_string(),
+        });
+    };
+
+    let receipt = executor
+        .rollback(&lease, trigger, mode, now_ms)
+        .await
+        .map_err(|source| ContainmentReleaseError::Rollback {
+            lease_id: lease_id.to_string(),
+            source,
+        })?;
+
+    store.close(&receipt)?;
+
+    if receipt.fully_reversed() {
+        tracing::info!(
+            module = module_path!(),
+            lease_id = %receipt.lease_id,
+            rollback_id = %receipt.rollback_id,
+            origin_receipt_id = %receipt.origin_receipt_id,
+            trigger = receipt.trigger.as_str(),
+            "containment released"
+        );
+    } else {
+        tracing::warn!(
+            module = module_path!(),
+            lease_id = %receipt.lease_id,
+            rollback_id = %receipt.rollback_id,
+            origin_receipt_id = %receipt.origin_receipt_id,
+            trigger = receipt.trigger.as_str(),
+            summary = %receipt.summary,
+            "containment lease closed WITHOUT full restoration; the effect may still be in place"
+        );
+    }
+
+    Ok(receipt)
+}
+
+/// What one sweep did.
+#[derive(Debug, Default)]
+pub struct ContainmentSweepReport {
+    /// Leases found expired at the swept instant.
+    pub expired: usize,
+    /// Receipts produced, including receipts that report no restoration.
+    pub receipts: Vec<RollbackReceipt>,
+    /// Leases that could not be released, and why. These stay open.
+    pub failures: Vec<(String, String)>,
+}
+
+impl ContainmentSweepReport {
+    /// Leases whose pre-containment state was actually restored.
+    pub fn restored(&self) -> usize {
+        self.receipts
+            .iter()
+            .filter(|receipt| receipt.fully_reversed())
+            .count()
+    }
+}
+
+/// Releases containment leases whose expiry has passed.
+#[derive(Clone)]
+pub struct ContainmentSweep {
+    store: Arc<dyn ContainmentLeaseStore>,
+    executor: Arc<dyn RollbackExecutor>,
+    mode: ExecutionMode,
+}
+
+impl std::fmt::Debug for ContainmentSweep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContainmentSweep")
+            .field("store", &self.store)
+            .field("executor", &self.executor)
+            .field("mode", &self.mode)
+            .finish()
+    }
+}
+
+impl ContainmentSweep {
+    pub fn new(
+        store: Arc<dyn ContainmentLeaseStore>,
+        executor: Arc<dyn RollbackExecutor>,
+        mode: ExecutionMode,
+    ) -> Self {
+        Self {
+            store,
+            executor,
+            mode,
+        }
+    }
+
+    /// Release one named lease early. Same function the sweep uses.
+    pub async fn release(
+        &self,
+        lease_id: &str,
+        now_ms: i64,
+    ) -> Result<RollbackReceipt, ContainmentReleaseError> {
+        release_lease(
+            self.store.as_ref(),
+            self.executor.as_ref(),
+            self.mode,
+            lease_id,
+            RollbackTrigger::Manual,
+            now_ms,
+        )
+        .await
+    }
+
+    /// Release every lease expired at `now_ms`.
+    ///
+    /// One lease failing does not abort the pass and does not close that lease.
+    /// A sweep that stopped at the first failure would leave later leases
+    /// contained indefinitely because of an unrelated host being unreachable.
+    pub async fn sweep(&self, now_ms: i64) -> ContainmentSweepReport {
+        let expired = match self.store.expired(now_ms) {
+            Ok(expired) => expired,
+            Err(error) => {
+                return ContainmentSweepReport {
+                    expired: 0,
+                    receipts: Vec::new(),
+                    failures: vec![("<store>".to_string(), error.to_string())],
+                };
+            }
+        };
+
+        let mut report = ContainmentSweepReport {
+            expired: expired.len(),
+            ..Default::default()
+        };
+
+        for lease in expired {
+            match release_lease(
+                self.store.as_ref(),
+                self.executor.as_ref(),
+                self.mode,
+                lease.lease_id(),
+                RollbackTrigger::Expiry,
+                now_ms,
+            )
+            .await
+            {
+                Ok(receipt) => report.receipts.push(receipt),
+                Err(error) => {
+                    tracing::warn!(
+                        module = module_path!(),
+                        lease_id = %lease.lease_id(),
+                        reason = %error,
+                        "expired containment lease could not be released; it stays open"
+                    );
+                    report
+                        .failures
+                        .push((lease.lease_id().to_string(), error.to_string()));
+                }
+            }
+        }
+
+        report
+    }
+
+    /// Sweep on an interval until shutdown.
+    ///
+    /// The ONLY clock read in this module, and it is read here rather than
+    /// inside `sweep` so the verdict "this lease was expired" stays a pure
+    /// function of a supplied instant. Structure copied from
+    /// `ConcentrationMonitor::run_until_shutdown`.
+    pub async fn run_until_shutdown(&self, interval_ms: u64, mut shutdown: watch::Receiver<bool>) {
+        let mut interval = tokio::time::interval(Duration::from_millis(interval_ms.max(1)));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+                _ = interval.tick() => {
+                    if *shutdown.borrow() {
+                        break;
+                    }
+                    let report = self.sweep(crate::runtime_events::now_ms()).await;
+                    if report.expired > 0 {
+                        tracing::info!(
+                            module = module_path!(),
+                            expired = report.expired,
+                            restored = report.restored(),
+                            failures = report.failures.len(),
+                            "containment sweep completed"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use swarm_core::types::{
+        ResponseAction, ResponseBlastRadiusImpact, ResponseBlastRadiusPreview,
+        ResponseRehearsalPreview, ResponseRehearsalScopeKind, ResponseRollbackPreview,
+        ResponseRollbackStep, ResponseRollbackStepKind,
+    };
+    use swarm_response::containment::{
+        ContainmentLease, ContainmentTtl, MemoryContainmentLeaseStore,
+    };
+    use swarm_response::rollback::{RollbackStepOutcome, RollbackStepStatus};
+    use swarm_response::{ResponseStatus, SandboxRollbackExecutor};
+
+    fn preview() -> ResponseRehearsalPreview {
+        ResponseRehearsalPreview {
+            rehearsal_id: "rehearsal:test".to_string(),
+            source_bundle_id: "bundle:test".to_string(),
+            prepared_at_ms: 1_000,
+            simulated_only: true,
+            blast_radius: ResponseBlastRadiusPreview {
+                scope_kind: ResponseRehearsalScopeKind::Host,
+                scope_value: "host-1".to_string(),
+                impact: ResponseBlastRadiusImpact::HostConnectivityIsolated,
+                max_affected_scopes: 1,
+                affected_capabilities: vec!["network_connectivity".to_string()],
+                summary: "isolates one host".to_string(),
+            },
+            rollback: ResponseRollbackPreview {
+                required: true,
+                summary: "restore connectivity".to_string(),
+                steps: vec![ResponseRollbackStep {
+                    kind: ResponseRollbackStepKind::RestoreHostConnectivity,
+                    summary: "restore host-1".to_string(),
+                }],
+            },
+        }
+    }
+
+    fn lease(lease_id: &str, issued_at_ms: i64, ttl_ms: i64) -> ContainmentLease {
+        ContainmentLease::open(
+            lease_id,
+            ResponseAction::IsolateHost {
+                host_id: "host-1".to_string(),
+            },
+            format!("resp:{lease_id}"),
+            None,
+            &preview(),
+            issued_at_ms,
+            ContainmentTtl::from_config_ms(ttl_ms).unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// Records what it was asked to reverse and reports a real restoration, so a
+    /// test can tell "the sweep called the executor" from "the sweep closed the
+    /// lease anyway".
+    #[derive(Debug, Default)]
+    struct RecordingExecutor {
+        calls: AtomicUsize,
+        seen: Mutex<Vec<(String, RollbackTrigger, i64)>>,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl RollbackExecutor for RecordingExecutor {
+        async fn rollback(
+            &self,
+            lease: &ContainmentLease,
+            trigger: RollbackTrigger,
+            mode: ExecutionMode,
+            completed_at_ms: i64,
+        ) -> Result<RollbackReceipt, ResponseError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen.lock().unwrap().push((
+                lease.lease_id().to_string(),
+                trigger,
+                completed_at_ms,
+            ));
+            if self.fail {
+                return Err(ResponseError::unavailable(
+                    lease.action_kind(),
+                    mode,
+                    "edr unreachable",
+                ));
+            }
+            Ok(RollbackReceipt::from_steps(
+                lease,
+                trigger,
+                mode,
+                completed_at_ms,
+                vec![RollbackStepOutcome {
+                    kind: ResponseRollbackStepKind::RestoreHostConnectivity,
+                    status: RollbackStepStatus::Reversed,
+                    detail: "restored".to_string(),
+                }],
+            ))
+        }
+    }
+
+    fn sweep_with(
+        executor: Arc<RecordingExecutor>,
+    ) -> (Arc<MemoryContainmentLeaseStore>, ContainmentSweep) {
+        let store = Arc::new(MemoryContainmentLeaseStore::new());
+        let sweep = ContainmentSweep::new(store.clone(), executor, ExecutionMode::Enforced);
+        (store, sweep)
+    }
+
+    #[tokio::test]
+    async fn a_sweep_before_expiry_releases_nothing_and_one_at_expiry_releases() {
+        let executor = Arc::new(RecordingExecutor::default());
+        let (store, sweep) = sweep_with(executor.clone());
+        store.open_lease(&lease("lease-1", 1_000, 4_000)).unwrap();
+
+        // Both instants are literals. No sleeping, no wall clock: the verdict
+        // is a pure function of the supplied `now_ms`.
+        let before = sweep.sweep(4_999).await;
+        assert_eq!(before.expired, 0);
+        assert!(before.receipts.is_empty());
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(store.open_leases().unwrap().len(), 1);
+
+        let at = sweep.sweep(5_000).await;
+        assert_eq!(at.expired, 1);
+        assert_eq!(at.receipts.len(), 1);
+        assert_eq!(at.restored(), 1);
+        assert_eq!(at.receipts[0].trigger, RollbackTrigger::Expiry);
+        assert_eq!(at.receipts[0].completed_at_ms, 5_000);
+        assert_eq!(at.receipts[0].origin_receipt_id, "resp:lease-1");
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert!(store.open_leases().unwrap().is_empty());
+        assert_eq!(store.closed_receipts().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_lease_whose_inverse_could_not_be_issued_stays_open() {
+        let executor = Arc::new(RecordingExecutor {
+            fail: true,
+            ..Default::default()
+        });
+        let (store, sweep) = sweep_with(executor.clone());
+        store.open_lease(&lease("lease-1", 1_000, 4_000)).unwrap();
+
+        let report = sweep.sweep(5_000).await;
+        assert_eq!(report.expired, 1);
+        assert!(report.receipts.is_empty());
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].0, "lease-1");
+        assert!(
+            report.failures[0].1.contains("edr unreachable"),
+            "unexpected failure: {}",
+            report.failures[0].1
+        );
+        assert_eq!(
+            store.open_leases().unwrap().len(),
+            1,
+            "a lease closed against a rollback that never ran erases the only record that the \
+             host is still contained"
+        );
+        assert!(store.closed_receipts().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_unreachable_lease_does_not_strand_the_others() {
+        // Fails the first call, succeeds afterwards, so the pass must continue
+        // past the failure to release the second lease.
+        #[derive(Debug, Default)]
+        struct FailFirst {
+            calls: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl RollbackExecutor for FailFirst {
+            async fn rollback(
+                &self,
+                lease: &ContainmentLease,
+                trigger: RollbackTrigger,
+                mode: ExecutionMode,
+                completed_at_ms: i64,
+            ) -> Result<RollbackReceipt, ResponseError> {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(ResponseError::unavailable(
+                        lease.action_kind(),
+                        mode,
+                        "edr unreachable",
+                    ));
+                }
+                Ok(RollbackReceipt::from_steps(
+                    lease,
+                    trigger,
+                    mode,
+                    completed_at_ms,
+                    vec![RollbackStepOutcome {
+                        kind: ResponseRollbackStepKind::RestoreHostConnectivity,
+                        status: RollbackStepStatus::Reversed,
+                        detail: "restored".to_string(),
+                    }],
+                ))
+            }
+        }
+
+        let store = Arc::new(MemoryContainmentLeaseStore::new());
+        let sweep = ContainmentSweep::new(
+            store.clone(),
+            Arc::new(FailFirst::default()),
+            ExecutionMode::Enforced,
+        );
+        store.open_lease(&lease("lease-a", 1_000, 1_000)).unwrap();
+        store.open_lease(&lease("lease-b", 2_000, 1_000)).unwrap();
+
+        let report = sweep.sweep(9_000).await;
+        assert_eq!(report.expired, 2);
+        assert_eq!(report.receipts.len(), 1);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].0, "lease-a");
+        assert_eq!(report.receipts[0].lease_id, "lease-b");
+    }
+
+    #[tokio::test]
+    async fn a_manual_release_and_an_expiry_sweep_run_the_same_function() {
+        let executor = Arc::new(RecordingExecutor::default());
+        let (store, sweep) = sweep_with(executor.clone());
+        store
+            .open_lease(&lease("lease-manual", 1_000, 9_000))
+            .unwrap();
+        store
+            .open_lease(&lease("lease-expiry", 1_000, 1_000))
+            .unwrap();
+
+        let manual = sweep.release("lease-manual", 3_000).await.unwrap();
+        let swept = sweep.sweep(3_000).await;
+
+        assert_eq!(manual.trigger, RollbackTrigger::Manual);
+        assert_eq!(manual.completed_at_ms, 3_000);
+        assert_eq!(swept.receipts.len(), 1);
+        assert_eq!(swept.receipts[0].trigger, RollbackTrigger::Expiry);
+
+        // Both went through the executor, in the order the two triggers fired,
+        // stamped with the instant each was told to act at. A manual path that
+        // closed the lease without executing would show one call here.
+        let seen = executor.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![
+                ("lease-manual".to_string(), RollbackTrigger::Manual, 3_000),
+                ("lease-expiry".to_string(), RollbackTrigger::Expiry, 3_000),
+            ]
+        );
+        assert!(store.open_leases().unwrap().is_empty());
+        assert_eq!(store.closed_receipts().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn releasing_an_unknown_lease_is_an_error_not_a_silent_success() {
+        let executor = Arc::new(RecordingExecutor::default());
+        let (_store, sweep) = sweep_with(executor.clone());
+        let error = sweep.release("nope", 1_000).await.unwrap_err();
+        assert!(
+            matches!(error, ContainmentReleaseError::UnknownLease { .. }),
+            "unexpected error: {error}"
+        );
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn an_irreversible_lease_closes_but_its_receipt_reports_no_restoration() {
+        let store = Arc::new(MemoryContainmentLeaseStore::new());
+        let sweep = ContainmentSweep::new(
+            store.clone(),
+            Arc::new(SandboxRollbackExecutor),
+            ExecutionMode::Enforced,
+        );
+        let mut irreversible = preview();
+        irreversible.rollback.required = false;
+        irreversible.rollback.steps = vec![ResponseRollbackStep {
+            kind: ResponseRollbackStepKind::ReauthenticateUserSession,
+            summary: "allow the principal to authenticate again".to_string(),
+        }];
+        store
+            .open_lease(
+                &ContainmentLease::open(
+                    "lease-session",
+                    ResponseAction::TerminateUserSession {
+                        host_id: "host-1".to_string(),
+                        session_id: "sess-1".to_string(),
+                    },
+                    "resp:lease-session",
+                    None,
+                    &irreversible,
+                    1_000,
+                    ContainmentTtl::from_config_ms(1_000).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let report = sweep.sweep(5_000).await;
+        assert_eq!(report.expired, 1);
+        assert_eq!(report.receipts.len(), 1);
+        assert_eq!(
+            report.restored(),
+            0,
+            "the sweep must not count an irreversible action as restored"
+        );
+        assert_eq!(report.receipts[0].status, ResponseStatus::Failed);
+        assert!(!report.receipts[0].fully_reversed());
+        assert!(store.open_leases().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_background_loop_releases_an_expired_lease_with_no_operator_action() {
+        let executor = Arc::new(RecordingExecutor::default());
+        let (store, sweep) = sweep_with(executor.clone());
+        // Already expired against any plausible wall clock: `now_ms()` is
+        // milliseconds since the epoch, and this lease lapsed in 1970.
+        store.open_lease(&lease("lease-1", 1_000, 1_000)).unwrap();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let loop_sweep = sweep.clone();
+        let handle = tokio::spawn(async move {
+            loop_sweep.run_until_shutdown(5, shutdown_rx).await;
+        });
+
+        // DELIBERATE: no assertion is made on elapsed time. The 10s is a hang
+        // detector, not a verdict on speed -- "the loop closed it without an
+        // operator" is monotone in time and cannot flip on a slow runner.
+        let closed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if store.open_leases().unwrap().is_empty() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(
+            closed.is_ok(),
+            "the background sweep never released the expired lease"
+        );
+
+        let _ = shutdown_tx.send(true);
+        let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+
+        let receipts = store.closed_receipts().unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].trigger, RollbackTrigger::Expiry);
+        assert!(executor.calls.load(Ordering::SeqCst) >= 1);
+    }
+}

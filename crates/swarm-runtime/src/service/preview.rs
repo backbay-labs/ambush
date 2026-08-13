@@ -84,7 +84,7 @@ pub(super) fn merge_rehearsal_receipt_chain(
     }
 }
 
-pub(super) fn build_rehearsal_preview(
+pub(crate) fn build_rehearsal_preview(
     request: &ActionRequest,
     source_bundle_id: &str,
     prepared_at_ms: i64,
