@@ -13,51 +13,7 @@ pub use demo::{
 };
 
 use crate::anti_tamper::AntiTamperReport;
-use crate::approval::{
-    ApprovalError, ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule,
-};
-use crate::bridge_runtime::{SharedBridgeHealth, bridge_health_report};
-use crate::canary::DefaultCanaryHarness;
-use crate::config::{
-    RuntimeConfigError, load_config_unresolved, resolve_outbound_secrets, resolve_secret_dir_path,
-};
 use crate::control::{ControlError, build_composite_detector};
-use crate::correlation::CorrelationEngine;
-use crate::detection::metrics::CriticalPathMetrics;
-use crate::dispatcher::{GovernanceVetoRoute, RequestResponseRouter, approval_context_now};
-use crate::dispatcher::{
-    StrategyProposalOutcome, StrategyProposalRoute, StrategyProposalRouteReport,
-    StrategyProposalRouter,
-};
-use crate::drafting::DefaultEvolutionDraftingHarness;
-use crate::evasion_coverage::{
-    EvasionCoverageError, EvasionCoverageSnapshot, evaluate_repo_evasion_coverage,
-    resolve_repo_root,
-};
-use crate::evolution::{
-    DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultFormalSafetyGate,
-    EvolutionProposalDecisionAction, EvolutionProposalReviewState, FormalSafetyGate,
-    StrategyGenome,
-};
-use crate::evolution_status::DefaultEvolutionStatusHarness;
-use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
-use crate::mutation::DefaultEvolutionMutationHarness;
-use crate::providence::{
-    PROVIDENCE_CHANNEL, ProvidenceContextScope, ProvidenceHealthStatus, ProvidenceIncidentAdapter,
-    ProvidenceRuntimeContext, verify_providence_context_token,
-};
-use crate::runtime_events::{
-    AsyncLaneStatusSnapshot, RuntimeEvent, RuntimeEventBroadcaster, RuntimeThreatConcentration,
-    now_ms,
-};
-use crate::selection::DefaultEvolutionSelectionHarness;
-use crate::service::{
-    ConfiguredRuntimeStack, RuntimeDegradationSignals, RuntimeDegradationStatus, ServiceError,
-    derive_runtime_degradation_status,
-};
-use crate::startup_attestation::StartupAttestationReport;
-use crate::threat_intel_runtime::SharedThreatIntelFeedHealth;
-use crate::{RuntimeError, StrategyProposalRouteError, SwarmRuntime};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use axum::extract::{Json, State, rejection::JsonRejection};
@@ -85,6 +41,50 @@ use swarm_policy::configurable_gate::ConfigurableApprovalGate;
 use swarm_policy::governance::GovernanceAuthority;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::DispatchingExecutor;
+use swarm_runtime::approval::{
+    ApprovalError, ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule,
+};
+use swarm_runtime::bridge_runtime::{SharedBridgeHealth, bridge_health_report};
+use swarm_runtime::canary::DefaultCanaryHarness;
+use swarm_runtime::config::{
+    RuntimeConfigError, load_config_unresolved, resolve_outbound_secrets, resolve_secret_dir_path,
+};
+use swarm_runtime::correlation::CorrelationEngine;
+use swarm_runtime::detection::metrics::CriticalPathMetrics;
+use swarm_runtime::dispatcher::{GovernanceVetoRoute, RequestResponseRouter};
+use swarm_runtime::dispatcher::{
+    StrategyProposalOutcome, StrategyProposalRoute, StrategyProposalRouteReport,
+    StrategyProposalRouter,
+};
+use swarm_runtime::drafting::DefaultEvolutionDraftingHarness;
+use swarm_runtime::evasion_coverage::{
+    EvasionCoverageError, EvasionCoverageSnapshot, evaluate_repo_evasion_coverage,
+    resolve_repo_root,
+};
+use swarm_runtime::evolution::{
+    DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultFormalSafetyGate,
+    EvolutionProposalDecisionAction, EvolutionProposalReviewState, FormalSafetyGate,
+    StrategyGenome,
+};
+use swarm_runtime::evolution_status::DefaultEvolutionStatusHarness;
+use swarm_runtime::investigation::{InvestigationCoordinator, SummaryInvestigator};
+use swarm_runtime::mutation::DefaultEvolutionMutationHarness;
+use swarm_runtime::providence::{
+    PROVIDENCE_CHANNEL, ProvidenceContextScope, ProvidenceHealthStatus, ProvidenceIncidentAdapter,
+    ProvidenceRuntimeContext, verify_providence_context_token,
+};
+use swarm_runtime::runtime_events::{
+    AsyncLaneStatusSnapshot, RuntimeEvent, RuntimeEventBroadcaster, RuntimeThreatConcentration,
+    now_ms,
+};
+use swarm_runtime::selection::DefaultEvolutionSelectionHarness;
+use swarm_runtime::service::{
+    ConfiguredRuntimeStack, RuntimeDegradationSignals, RuntimeDegradationStatus, ServiceError,
+    derive_runtime_degradation_status,
+};
+use swarm_runtime::startup_attestation::StartupAttestationReport;
+use swarm_runtime::threat_intel_runtime::SharedThreatIntelFeedHealth;
+use swarm_runtime::{RuntimeError, StrategyProposalRouteError, SwarmRuntime};
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
     ConfiguredReplayBundleStore, CorrelatedIncident, ReplayBundleStore,
@@ -116,6 +116,23 @@ type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send 
 
 struct IngestRuntimeRequestResponseRouter {
     runtime: Arc<ArcSwap<IngestRequestRuntime>>,
+}
+
+/// Moved verbatim from `swarm_runtime::dispatcher::approval_context_now` in SPLIT-05.
+///
+/// It was `pub(crate)` on the root and these two routes were its only callers, so
+/// it followed them across the crate line rather than becoming permanent public
+/// API on a crate this phase is dismantling. The one substitution is the clock:
+/// the original called `dispatcher`'s private `unix_timestamp_millis`, and
+/// `runtime_events::now_ms` -- already imported here, and already `pub` -- has a
+/// byte-identical body.
+fn approval_context_now(live_mode: bool) -> ApprovalContext {
+    ApprovalContext {
+        live_mode,
+        receipt_chain: Vec::new(),
+        correlation_id: None,
+        now_ms: now_ms(),
+    }
 }
 
 #[async_trait]
@@ -276,9 +293,9 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             selection.create_selection(&payload.ranking_id, &packet.packet_id)?;
 
         let experiment =
-            crate::replay::load_detector_experiment_manifest(&payload.experiment_path)?;
+            swarm_runtime::replay::load_detector_experiment_manifest(&payload.experiment_path)?;
         let verification_store =
-            crate::replay::FileVerificationStore::open(&paths.verification_results_dir)?;
+            swarm_runtime::replay::FileVerificationStore::open(&paths.verification_results_dir)?;
         let verification = verification_store
             .load(&validation.report.verification_id)?
             .ok_or_else(|| StrategyProposalRouteError::MissingArtifact {
@@ -286,7 +303,7 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
                 artifact_id: validation.report.verification_id.clone(),
                 strategy_id: proposal.strategy_id.clone(),
             })?;
-        let shadow_store = crate::replay::FileShadowStore::open(&paths.shadow_results_dir)?;
+        let shadow_store = swarm_runtime::replay::FileShadowStore::open(&paths.shadow_results_dir)?;
         let shadow = shadow_store
             .load(&validation.report.shadow_id)?
             .ok_or_else(|| StrategyProposalRouteError::MissingArtifact {
@@ -405,7 +422,7 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
         // Attach assurance lineage to the queue proposal so the handoff
         // gate recognises the candidate as safe to launch.
         {
-            let queue_store = crate::evolution::FileEvolutionProposalStore::open(
+            let queue_store = swarm_runtime::evolution::FileEvolutionProposalStore::open(
                 &paths.evolution_queue_results_dir,
             )?;
             let mut proposal_report = queue_store
@@ -417,25 +434,31 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
                 })?
                 .report;
             if proposal_report.assurance.is_none() {
-                proposal_report.assurance =
-                    Some(crate::evolution::EvolutionProposalAssuranceSummary {
-                        decision: crate::evolution::EvolutionProposalAssuranceDecision::Passed,
-                        coverage: crate::evolution::EvolutionProposalAssuranceCoverageSummary {
-                            detector: proposal.strategy_id.clone(),
-                            suite_name: None,
-                            corpus_version: None,
-                            required_catch_rate: config.evolution.assurance.min_detector_catch_rate,
-                            actual_catch_rate: None,
-                            actionable_gap_count: 0,
-                        },
-                        solver: crate::evolution::EvolutionProposalAssuranceSolverSummary {
+                proposal_report.assurance = Some(
+                    swarm_runtime::evolution::EvolutionProposalAssuranceSummary {
+                        decision:
+                            swarm_runtime::evolution::EvolutionProposalAssuranceDecision::Passed,
+                        coverage:
+                            swarm_runtime::evolution::EvolutionProposalAssuranceCoverageSummary {
+                                detector: proposal.strategy_id.clone(),
+                                suite_name: None,
+                                corpus_version: None,
+                                required_catch_rate: config
+                                    .evolution
+                                    .assurance
+                                    .min_detector_catch_rate,
+                                actual_catch_rate: None,
+                                actionable_gap_count: 0,
+                            },
+                        solver: swarm_runtime::evolution::EvolutionProposalAssuranceSolverSummary {
                             required: false,
                             status: None,
                             allowed_statuses: Vec::new(),
                         },
                         harvested_case_ids: Vec::new(),
                         waiver: None,
-                    });
+                    },
+                );
                 queue_store.persist(&proposal_report)?;
             }
         }
@@ -879,7 +902,9 @@ fn resolve_strategy_proposal_paths(
     }
 }
 
-fn safety_rejection_summary(report: &crate::evolution::FormalSafetyVerificationReport) -> String {
+fn safety_rejection_summary(
+    report: &swarm_runtime::evolution::FormalSafetyVerificationReport,
+) -> String {
     let reasons = report
         .invariants
         .iter()
@@ -917,7 +942,7 @@ fn attach_formal_safety_bundle_hashes(
     proof_results_dir: &Path,
     proof_id: Option<&str>,
     bundle_sha256: &[String],
-) -> Result<(), crate::evolution::EvolutionQueueError> {
+) -> Result<(), swarm_runtime::evolution::EvolutionQueueError> {
     let Some(proof_id) = proof_id else {
         return Ok(());
     };
@@ -1033,7 +1058,7 @@ async fn process_runtime_event(
                 .process_event_with_finding_observer(
                     detector.as_ref(),
                     &event,
-                    crate::service::EventExecutionContext {
+                    swarm_runtime::service::EventExecutionContext {
                         agent_id: &signing_agent_id,
                         approval: &approval,
                         signing_key: &state.signing_key,
@@ -1122,7 +1147,7 @@ async fn process_demo_replay_step(
     run_id: &str,
     requested_by: &AgentId,
     step_index: usize,
-    step: crate::replay::ReplayScenarioStep,
+    step: swarm_runtime::replay::ReplayScenarioStep,
 ) -> Result<(), IngestProcessingError> {
     let stack = state.stack.load_full();
     let approval = ApprovalContext {
@@ -1141,7 +1166,7 @@ async fn process_demo_replay_step(
         .process_event_with_finding_observer(
             detector.as_ref(),
             &step.event,
-            crate::service::EventExecutionContext {
+            swarm_runtime::service::EventExecutionContext {
                 agent_id: &signing_agent_id,
                 approval: &approval,
                 signing_key: &state.signing_key,

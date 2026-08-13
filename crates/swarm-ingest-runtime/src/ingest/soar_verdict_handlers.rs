@@ -3,8 +3,6 @@ use crate::ingest::providence_handlers::{
     ProvidenceFeedbackError, apply_providence_feedback, enrich_feedback_target,
     false_positive_measurement, verify_providence_feedback_signature,
 };
-use crate::providence::resolve_feedback_target;
-use crate::runtime_events::now_ms;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -15,6 +13,8 @@ use serde_json::{Value, json};
 use swarm_core::types::{
     SoarSourceSystem, SoarVerdictLineage, SwarmProvidenceFeedbackRequest, SwarmSoarVerdictRequest,
 };
+use swarm_runtime::providence::resolve_feedback_target;
+use swarm_runtime::runtime_events::now_ms;
 use swarm_spine::{AnalystFeedbackAuditEntry, IncidentStore};
 
 pub(crate) const SOAR_VERDICT_CHANNEL: &str = "soar_verdict_webhook";

@@ -46,9 +46,10 @@
 // here. They are `pub(crate)`, NOT `pub`: the shared source needs the paths to
 // resolve inside this crate, and nothing outside it should reach `swarm-runtime`
 // through `swarm-runtime-http` when it can depend on `swarm-runtime` directly.
+pub(crate) use swarm_ingest_runtime::control;
 pub(crate) use swarm_runtime::{
-    agent_identity, approval, canary, config, control, drafting, evolution, evolution_status,
-    mutation, promotion, replay, selection, strategy,
+    agent_identity, approval, canary, config, drafting, evolution, evolution_status, mutation,
+    promotion, replay, selection, strategy,
 };
 // `evidence`, `governance_prep`, `operator_maintenance` and `portfolio` left
 // `swarm-runtime`

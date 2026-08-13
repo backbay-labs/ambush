@@ -11,13 +11,13 @@ use swarm_crypto::{
     CryptoError, DetachedSignature, Ed25519Signer, canonical_json_bytes, normalize_canonical_json,
     sha256_hex, verify_detached_signature,
 };
-use swarm_runtime::canary::{CanaryRunLookup, FileCanaryStore};
-use swarm_runtime::config::{RuntimeConfigError, load_config};
-use swarm_runtime::control::{
+use swarm_ingest_runtime::control::{
     ControlError, DefaultControlPlane, IncidentArtifactView, IncidentLookupSelector,
     InvestigationArtifactView, InvestigationLookupSelector, ReplayArtifactView,
     ReplayLookupSelector,
 };
+use swarm_runtime::canary::{CanaryRunLookup, FileCanaryStore};
+use swarm_runtime::config::{RuntimeConfigError, load_config};
 use swarm_runtime::promotion::{
     FileProductionPromotionStore, ProductionPromotionLookup, ProductionPromotionStatus,
     ProductionPromotionStoreError,
@@ -1936,12 +1936,12 @@ mod tests {
         TelemetrySourceConfig,
     };
     use swarm_core::types::{AgentId, Severity};
+    use swarm_ingest_runtime::control::DefaultControlPlane;
     use swarm_policy::ApprovalContext;
     use swarm_runtime::RuntimeMode;
     use swarm_runtime::canary::{
         CanaryAssignment, CanaryMetrics, CanaryRecommendation, CanaryRunReport, CanaryRunStatus,
     };
-    use swarm_runtime::control::DefaultControlPlane;
     use swarm_runtime::promotion::{
         FileProductionPromotionStore, ProductionPromotionAssignment, ProductionPromotionMetrics,
         ProductionPromotionRecommendation, ProductionPromotionReport, ProductionPromotionStatus,

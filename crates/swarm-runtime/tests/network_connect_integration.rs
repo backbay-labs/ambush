@@ -5,10 +5,10 @@ use serde_json::json;
 use swarm_core::config::SwarmConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::AgentId;
+use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_pheromone::substrate::validate_deposit_signature;
 use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::detection::detect_and_deposit;
 use swarm_whisker::{NetworkConnectEvent, TelemetryEvent, TelemetryPayload};
 

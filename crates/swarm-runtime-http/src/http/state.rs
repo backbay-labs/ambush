@@ -48,9 +48,9 @@ use swarm_evolution::evidence::{DefaultEvidenceHarness, OperatorEvidenceReadServ
 use swarm_evolution::governance_prep::DefaultEvolutionGovernancePrepHarness;
 use swarm_evolution::operator_maintenance::{OperatorMaintenanceError, OperatorMaintenanceService};
 use swarm_evolution::portfolio::DefaultEvolutionPortfolioHarness;
+use swarm_ingest_runtime::control::{ControlError, DefaultControlPlane};
 use swarm_runtime::approval::{ApprovalError, DefaultApprovalHarness};
 use swarm_runtime::config::{RuntimeConfigError, load_config};
-use swarm_runtime::control::{ControlError, DefaultControlPlane};
 use swarm_runtime::detection::metrics::CriticalPathMetrics;
 use swarm_runtime_workbench::review_workbench::{
     DefaultReviewWorkbenchHarness, ReviewWorkbenchError,

@@ -14,9 +14,9 @@ use swarm_core::config::{
     TelemetrySourceConfig,
 };
 use swarm_core::types::{AgentId, ResponseAction, Severity};
+use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::ApprovalContext;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::investigation::SummaryInvestigator;
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};

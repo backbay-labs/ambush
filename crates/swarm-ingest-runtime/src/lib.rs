@@ -76,3 +76,13 @@
 //! The root still declares `#[cfg(test)] pub` surface that reads as reachable
 //! and is not -- `providence.rs` gates a whole `pub mod tests` that way -- so
 //! any later move here has to be probed against the non-test build.
+
+// Carried over from `swarm-runtime`'s crate root, where `control.rs` lived until
+// SPLIT-05 and where this same `#![allow]` sits at `lib.rs:79`. `ControlError`
+// moved here with `control.rs`, so the 23 sites the lint fires on moved with it;
+// the allow is part of that code's existing configuration, not a new exemption.
+#![allow(clippy::result_large_err)]
+
+pub mod anti_tamper;
+pub mod control;
+pub mod ingest;

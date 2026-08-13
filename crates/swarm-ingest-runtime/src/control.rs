@@ -1,19 +1,6 @@
-use crate::approval::{ApprovalError, DefaultApprovalHarness};
-use crate::config::{
-    DetectorProfileError, RuntimeConfigError, kill_chain_sequence_profile, load_config,
-    validate_all_detector_profiles,
-};
-use crate::detector_factory::{DetectorFactoryError, build_detector_from_strategy};
-use crate::evolution_status::{DefaultEvolutionStatusHarness, EvolutionStatusError};
 use crate::ingest::{
     FirstRunWizardError, FirstRunWizardReport, FirstRunWizardRequest, IngestBuildError,
     IngestState, run_first_run_wizard,
-};
-use crate::investigation::SummaryInvestigator;
-use crate::sequence_detector::{KILL_CHAIN_SEQUENCE_STRATEGY_ID, KillChainSequenceDetector};
-use crate::service::{
-    ConfiguredRuntimeStack, OperatorStatusReport, ResponsePlaybookPreviewReport,
-    ResponsePlaybookPreviewRequest, ServiceError,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -35,6 +22,21 @@ use swarm_ingest_json::{
 use swarm_pheromone::{PheromoneSubstrate, SubstrateError};
 use swarm_response::{
     DeadLetterEntry, DispatchingExecutor, NotificationError, NotificationReplayResult,
+};
+use swarm_runtime::approval::{ApprovalError, DefaultApprovalHarness};
+use swarm_runtime::config::{
+    DetectorProfileError, RuntimeConfigError, kill_chain_sequence_profile, load_config,
+    validate_all_detector_profiles,
+};
+use swarm_runtime::detector_factory::{DetectorFactoryError, build_detector_from_strategy};
+use swarm_runtime::evolution_status::{DefaultEvolutionStatusHarness, EvolutionStatusError};
+use swarm_runtime::investigation::SummaryInvestigator;
+use swarm_runtime::sequence_detector::{
+    KILL_CHAIN_SEQUENCE_STRATEGY_ID, KillChainSequenceDetector,
+};
+use swarm_runtime::service::{
+    ConfiguredRuntimeStack, OperatorStatusReport, ResponsePlaybookPreviewReport,
+    ResponsePlaybookPreviewRequest, ServiceError,
 };
 use swarm_spine::{
     CorrelatedIncident, IncidentRecord, InvestigationBundle, InvestigationBundleRecord,
@@ -1528,7 +1530,7 @@ async fn probe_socket_endpoint(endpoint: &str, timeout_ms: u64) -> Result<String
 
 fn detector_readiness_from_config(
     config: &SwarmConfig,
-    runtime: &crate::SwarmRuntime<
+    runtime: &swarm_runtime::SwarmRuntime<
         swarm_policy::configurable_gate::ConfigurableApprovalGate,
         swarm_response::DispatchingExecutor,
     >,
@@ -1547,7 +1549,7 @@ fn detector_readiness_from_config(
 
 fn probe_detector_activation(
     config: &SwarmConfig,
-    runtime: &crate::SwarmRuntime<
+    runtime: &swarm_runtime::SwarmRuntime<
         swarm_policy::configurable_gate::ConfigurableApprovalGate,
         swarm_response::DispatchingExecutor,
     >,
@@ -1657,9 +1659,6 @@ mod tests {
         FirstRunStatus, FirstRunWizardOptions, FirstRunWizardPaths, IncidentLookupSelector,
         InvestigationLookupSelector, OperatorControlOutput, ReplayLookupSelector, render_output,
     };
-    use crate::RuntimeMode;
-    use crate::escalation::ConcentrationMonitor;
-    use crate::service::{EventExecutionContext, ResponsePlaybookPreviewRequest};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1679,6 +1678,9 @@ mod tests {
     use swarm_crypto::Ed25519Signer;
     use swarm_pheromone::PheromoneSubstrate;
     use swarm_policy::ApprovalContext;
+    use swarm_runtime::RuntimeMode;
+    use swarm_runtime::escalation::ConcentrationMonitor;
+    use swarm_runtime::service::{EventExecutionContext, ResponsePlaybookPreviewRequest};
     use swarm_spine::{
         CorrelatedIncident, FalsePositiveMeasurement, IncidentMemberDecision, IncidentStore,
     };

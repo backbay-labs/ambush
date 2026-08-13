@@ -17,10 +17,10 @@ use swarm_core::config::{
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::AgentId;
 use swarm_core::{InfrastructureHealthEvent, TelemetryPayload};
+use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, DepositQuery, PheromoneSubstrate};
 use swarm_runtime::bridge_runtime::{BridgeRuntimeRegistry, bridge_health_report};
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};

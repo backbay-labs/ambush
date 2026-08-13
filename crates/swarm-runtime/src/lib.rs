@@ -82,13 +82,11 @@ extern crate self as swarm_runtime;
 
 pub mod agent_identity;
 pub mod alert_tuning;
-pub mod anti_tamper;
 pub mod approval;
 pub mod bridge_runtime;
 pub mod calico_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod canary;
 pub mod config;
-pub mod control;
 pub mod correlation;
 pub mod detection;
 pub mod detector_factory;
@@ -99,7 +97,6 @@ pub mod evasion_coverage;
 pub mod evolution;
 pub mod evolution_status;
 pub mod http;
-pub mod ingest;
 pub mod investigation;
 pub mod kitten_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod mutation;

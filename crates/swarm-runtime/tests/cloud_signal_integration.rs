@@ -12,6 +12,7 @@ use swarm_core::config::{
 };
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{AgentId, ResponseAction};
+use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_pheromone::substrate::validate_deposit_signature;
 use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
 use swarm_policy::ApprovalContext;
@@ -19,7 +20,6 @@ use swarm_policy::static_gate::StaticApprovalGate;
 use swarm_response::adapters::SandboxExecutor;
 use swarm_runtime::bridge_runtime::{BridgeRuntimeRegistry, bridge_health_report};
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::detection::detect_and_deposit;
 use swarm_runtime::investigation::{InvestigationOutcome, InvestigationStrategy};
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};

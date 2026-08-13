@@ -17,7 +17,7 @@ pub mod config {
 }
 
 pub mod control {
-    pub use swarm_runtime::control::*;
+    pub use swarm_ingest_runtime::control::*;
 }
 
 pub mod drafting {

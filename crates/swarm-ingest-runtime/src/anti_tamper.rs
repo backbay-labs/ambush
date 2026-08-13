@@ -1,9 +1,9 @@
 use crate::ingest::IngestState;
-use crate::runtime_events::{RuntimeEvent, now_ms};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::time::Duration;
 use swarm_core::config::{RuntimeAntiTamperConfig, RuntimeMode};
+use swarm_runtime::runtime_events::{RuntimeEvent, now_ms};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AntiTamperReport {

@@ -18,9 +18,9 @@ use swarm_core::agent::{
 };
 use swarm_core::types::{AgentId, ResponseAction, Severity, SwarmAction};
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+use swarm_policy::ActionRequest;
 use swarm_policy::governance::GovernanceAuthority;
 use swarm_policy::static_gate::scope_for_response_action;
-use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_spine::AuditTrail;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -1378,15 +1378,6 @@ fn unix_timestamp_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
-}
-
-pub(crate) fn approval_context_now(live_mode: bool) -> ApprovalContext {
-    ApprovalContext {
-        live_mode,
-        receipt_chain: Vec::new(),
-        correlation_id: None,
-        now_ms: unix_timestamp_millis(),
-    }
 }
 
 fn unix_timestamp_millis() -> i64 {

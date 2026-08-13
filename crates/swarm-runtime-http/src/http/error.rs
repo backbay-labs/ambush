@@ -8,8 +8,8 @@ use swarm_evolution::evidence::EvidenceError;
 use swarm_evolution::governance_prep::EvolutionGovernancePrepError;
 use swarm_evolution::operator_maintenance::OperatorMaintenanceError;
 use swarm_evolution::portfolio::EvolutionPortfolioError;
+use swarm_ingest_runtime::control::ControlError;
 use swarm_runtime::approval::ApprovalError;
-use swarm_runtime::control::ControlError;
 use swarm_runtime::service::{ReadinessError, ServiceError};
 use swarm_runtime_workbench::review_workbench::ReviewWorkbenchError;
 
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn control_service_readiness_error_maps_to_internal_api_error() {
-        let error = super::map_control_error(swarm_runtime::control::ControlError::Service(
+        let error = super::map_control_error(swarm_ingest_runtime::control::ControlError::Service(
             swarm_runtime::service::ServiceError::Readiness {
                 component: "substrate",
                 source: swarm_runtime::service::ReadinessError::SubstrateNotDurable {

@@ -33,7 +33,8 @@ pub mod governance_prep;
 pub mod operator_maintenance;
 pub mod portfolio;
 
+pub use swarm_ingest_runtime::control;
 pub use swarm_runtime::{
-    RuntimeMode, canary, config, control, detector_factory, drafting, evasion_coverage, evolution,
-    mutation, promotion, replay, selection, service, strategy,
+    RuntimeMode, canary, config, detector_factory, drafting, evasion_coverage, evolution, mutation,
+    promotion, replay, selection, service, strategy,
 };

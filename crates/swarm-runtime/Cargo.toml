@@ -63,6 +63,12 @@ z3 = { version = "0.20", optional = true, features = ["gh-release"] }
 # normal dependency here is a Cargo cycle and is rejected outright. The root's
 # integration tests construct concrete agents; its non-test code does not.
 swarm-agents.workspace = true
+# Dev-only for the same reason, and the same way round: `swarm-ingest-runtime`
+# depends on this crate, so a normal entry here is the Cargo cycle SPLIT-05 is
+# organised around. The root's integration tests, examples and benches still
+# drive the ingest router, `control` and `anti_tamper`; its lib and bins do not
+# name them at all.
+swarm-ingest-runtime.workspace = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 tower.workspace = true
 

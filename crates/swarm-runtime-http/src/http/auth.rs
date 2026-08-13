@@ -7,7 +7,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use std::sync::Arc;
 use swarm_core::config::{OperatorScope, SwarmConfig};
-use swarm_runtime::control::{
+use swarm_ingest_runtime::control::{
     OPERATOR_API_SCHEMA_VERSION_HEADER, resolve_operator_api_schema_version,
 };
 use zeroize::Zeroizing;

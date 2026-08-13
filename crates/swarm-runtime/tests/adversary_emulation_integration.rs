@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::SwarmConfig;
 use swarm_core::types::AgentId;
+use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_policy::ApprovalContext;
 use swarm_policy::static_gate::StaticApprovalGate;
 use swarm_response::adapters::SandboxExecutor;
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::evasion_coverage::summarize_repo_adversary_emulation_coverage;
 use swarm_runtime::investigation::SummaryInvestigator;
 use swarm_runtime::replay::{

@@ -8,27 +8,8 @@ use super::{
     DemoReplayRequest, DemoReplayResponse, IngestRequest, IngestRequestError, IngestResponse,
     IngestState, StrategyProposalRoute, detect_http_router, ingest_router, validate_and_parse,
 };
-use crate::StrategyProposalRouteError;
 use crate::anti_tamper::AntiTamperReport;
-use crate::approval::DefaultApprovalHarness;
-use crate::bridge_runtime::SharedBridgeHealth;
-use crate::config::{CURRENT_SCHEMA_VERSION, write_debug_test_config_signature};
 use crate::control::CURRENT_OPERATOR_API_SCHEMA_VERSION;
-use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
-use crate::evasion_coverage::EvasionCoverageSnapshot;
-use crate::evolution::DefaultEvolutionProofHarness;
-use crate::mutation::{
-    DefaultEvolutionMutationHarness, EvolutionMutationProfileOverrides,
-    EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
-};
-use crate::replay::{
-    DefaultReplayHarness, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
-    ReplayScenarioMetadata, ReplayScenarioStep,
-};
-use crate::runtime_events::{ReplayEventPhase, RuntimeEvent, RuntimeEventBroadcaster, now_ms};
-use crate::startup_attestation::{StartupAttestationComponentReport, StartupAttestationReport};
-use crate::strategy::DefaultStrategyScorecardHarness;
-use crate::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 use arc_swap::ArcSwap;
 use axum::body::{Body, to_bytes};
 use axum::extract::State;
@@ -66,6 +47,29 @@ use swarm_core::types::{
 use swarm_crypto::Ed25519Signer;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_response::SwarmFindingEnvelope;
+use swarm_runtime::StrategyProposalRouteError;
+use swarm_runtime::approval::DefaultApprovalHarness;
+use swarm_runtime::bridge_runtime::SharedBridgeHealth;
+use swarm_runtime::config::{CURRENT_SCHEMA_VERSION, write_debug_test_config_signature};
+use swarm_runtime::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
+use swarm_runtime::evasion_coverage::EvasionCoverageSnapshot;
+use swarm_runtime::evolution::DefaultEvolutionProofHarness;
+use swarm_runtime::mutation::{
+    DefaultEvolutionMutationHarness, EvolutionMutationProfileOverrides,
+    EvolutionMutationSpecCreateRequest, EvolutionMutationVariantCreateRequest,
+};
+use swarm_runtime::replay::{
+    DefaultReplayHarness, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
+    ReplayScenarioMetadata, ReplayScenarioStep,
+};
+use swarm_runtime::runtime_events::{
+    ReplayEventPhase, RuntimeEvent, RuntimeEventBroadcaster, now_ms,
+};
+use swarm_runtime::startup_attestation::{
+    StartupAttestationComponentReport, StartupAttestationReport,
+};
+use swarm_runtime::strategy::DefaultStrategyScorecardHarness;
+use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 use swarm_spine::{
     CorrelatedIncident, FalsePositiveMeasurement, IncidentStore, InvestigationBundle,
     InvestigationBundleStore, ReplayBundleStore,
@@ -200,9 +204,10 @@ fn enable_platform_api(config: &mut SwarmConfig) {
 
 fn mint_platform_context_token(
     config: &SwarmConfig,
-    scope: crate::providence::ProvidenceContextScope,
+    scope: swarm_runtime::providence::ProvidenceContextScope,
 ) -> String {
-    crate::providence::mint_providence_context_token(&config.operator, scope, now_ms()).unwrap()
+    swarm_runtime::providence::mint_providence_context_token(&config.operator, scope, now_ms())
+        .unwrap()
 }
 
 fn authorized_platform_api_request(
@@ -965,7 +970,7 @@ async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_l
         .unwrap();
     assert_eq!(
         stored_candidate.queue_review_state,
-        Some(crate::evolution::EvolutionProposalReviewState::AcceptedForCanary)
+        Some(swarm_runtime::evolution::EvolutionProposalReviewState::AcceptedForCanary)
     );
     assert!(!stored_candidate.ready_for_review);
     assert_eq!(paths.canary_results_dir, root.join("canaries"));
@@ -1299,9 +1304,9 @@ fn resolve_demo_scope_rejects_requested_fields_outside_token_scope() {
             "scope-test-secret-material",
         );
     }
-    let token = crate::providence::mint_providence_context_token(
+    let token = swarm_runtime::providence::mint_providence_context_token(
         &config.operator,
-        crate::providence::ProvidenceContextScope {
+        swarm_runtime::providence::ProvidenceContextScope {
             hunt_id: Some("evt-scope-1".to_string()),
             ..Default::default()
         },
@@ -1963,7 +1968,7 @@ async fn platform_api_read_routes_accept_context_token_for_scoped_queries() {
     enable_platform_api(&mut config);
     let token = mint_platform_context_token(
         &config,
-        crate::providence::ProvidenceContextScope {
+        swarm_runtime::providence::ProvidenceContextScope {
             incident_id: None,
             hunt_id: Some("evt-platform-1".to_string()),
             finding_id: Some("finding-evt-platform-1".to_string()),
@@ -3093,9 +3098,9 @@ async fn demo_widget_endpoint_sets_embed_headers_and_renders_scoped_context() {
             "widget-context-secret-material",
         );
     }
-    let token = crate::providence::mint_providence_context_token(
+    let token = swarm_runtime::providence::mint_providence_context_token(
         &config.operator,
-        crate::providence::ProvidenceContextScope {
+        swarm_runtime::providence::ProvidenceContextScope {
             incident_id: None,
             hunt_id: Some("evt-widget-1".to_string()),
             finding_id: Some("finding-evt-widget-1".to_string()),
@@ -3321,7 +3326,7 @@ async fn providence_webhook_payload_includes_runtime_context_and_links() {
         Some("execution")
     );
     let dashboard_token = query_value(dashboard, "context_token").unwrap();
-    let claims = crate::providence::verify_providence_context_token(
+    let claims = swarm_runtime::providence::verify_providence_context_token(
         "providence-link-secret-material",
         &dashboard_token,
         now_ms(),
@@ -3478,12 +3483,12 @@ async fn events_stream_filters_scoped_runtime_events_for_widget_context() {
 
 mod providence_callback {
     use super::*;
-    use crate::providence::PROVIDENCE_CHANNEL;
     use swarm_core::types::{
         ProvidenceCallbackEvent, ProvidenceIncidentStatus, ProvidenceReconciliationOutcome,
         SwarmProvidenceCallbackRequest,
     };
     use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
+    use swarm_runtime::providence::PROVIDENCE_CHANNEL;
 
     const CALLBACK_SECRET: &str = "providence-callback-secret";
     const CALLBACK_HEADER: &str = "X-Swarm-Signature";
@@ -3648,17 +3653,17 @@ mod providence_callback {
 
 mod providence_feedback {
     use super::*;
-    use crate::drafting::EvolutionValidationBundleStatus;
-    use crate::evolution::{EvolutionProposalProofStatus, EvolutionProposalReviewState};
-    use crate::kitten_agent::KittenFeedbackSignalRecord;
-    use crate::mutation::{
-        EvolutionPopulationCandidate, EvolutionPopulationFitnessObjectives,
-        EvolutionPopulationState, FileEvolutionPopulationStore,
-    };
-    use crate::providence::PROVIDENCE_CHANNEL;
     use swarm_core::types::{AgentId, ProvidenceFeedbackAction, SwarmProvidenceFeedbackRequest};
     use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
     use swarm_pheromone::DepositSigningPayload;
+    use swarm_runtime::drafting::EvolutionValidationBundleStatus;
+    use swarm_runtime::evolution::{EvolutionProposalProofStatus, EvolutionProposalReviewState};
+    use swarm_runtime::kitten_agent::KittenFeedbackSignalRecord;
+    use swarm_runtime::mutation::{
+        EvolutionPopulationCandidate, EvolutionPopulationFitnessObjectives,
+        EvolutionPopulationState, FileEvolutionPopulationStore,
+    };
+    use swarm_runtime::providence::PROVIDENCE_CHANNEL;
 
     const FEEDBACK_SECRET: &str = "providence-feedback-secret";
     const FEEDBACK_HEADER: &str = "X-Swarm-Signature";
@@ -3668,7 +3673,7 @@ mod providence_feedback {
     ///
     /// The writer half (`FileKittenFeedbackStore::append`) is production code;
     /// the read half exists only for this assertion, so it lives here rather
-    /// than on `crate::kitten_agent`. A `#[cfg(test)]` item on the root is
+    /// than on `swarm_runtime::kitten_agent`. A `#[cfg(test)]` item on the root is
     /// unreachable from `swarm-ingest-runtime`, which depends on the root
     /// normally and therefore links its non-test build (SPLIT-05).
     fn load_feedback_signal_records(
@@ -4270,7 +4275,7 @@ mod providence_feedback {
         // HTTP 500. That signer pinning is a deliberate product property (966bae0), so
         // the fixture is what has to change.
         let kitten_identity =
-            crate::agent_identity::FileAgentKeyStore::open(applied_root.join("agent-keys"))
+            swarm_runtime::agent_identity::FileAgentKeyStore::open(applied_root.join("agent-keys"))
                 .unwrap()
                 .load_or_create(AgentRole::Kitten, "primary")
                 .unwrap();
@@ -4352,10 +4357,8 @@ mod providence_feedback {
 
         let pending_records =
             load_feedback_signal_records(pending_root.join("population")).unwrap();
-        assert!(
-            pending_records.iter().any(|record| record.disposition
-                == crate::kitten_agent::FeedbackSignalDisposition::Pending)
-        );
+        assert!(pending_records.iter().any(|record| record.disposition
+            == swarm_runtime::kitten_agent::FeedbackSignalDisposition::Pending));
     }
 }
 
@@ -4898,7 +4901,7 @@ async fn events_stream_can_filter_evolution_status_events() {
     let broadcaster = RuntimeEventBroadcaster::new(16);
     let publisher = broadcaster.clone();
     let app = detect_http_router(test_ingest_state().with_runtime_events(broadcaster.clone()));
-    let report = crate::evolution_status::DefaultEvolutionStatusHarness::from_config(
+    let report = swarm_runtime::evolution_status::DefaultEvolutionStatusHarness::from_config(
         "inline",
         test_config("suspicious_process_tree"),
     )

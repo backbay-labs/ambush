@@ -7,11 +7,11 @@ use swarm_core::agent::SwarmMode;
 use swarm_core::config::{PheromoneBackendConfig, SwarmConfig};
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{AgentId, Severity};
+use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_pheromone::{
     InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate, PheromoneSubstrate,
 };
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::detection::detect_and_deposit;
 use swarm_runtime::escalation::ConcentrationMonitor;
 use swarm_whisker::{

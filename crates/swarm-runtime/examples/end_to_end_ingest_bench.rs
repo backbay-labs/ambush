@@ -13,8 +13,8 @@ use swarm_core::config::{
     BundleStoreConfig, CorrelationConfig, InvestigationConfig, NotificationRoutingConfig,
     PheromoneBackendConfig, ResponseAdapterConfig, RuntimeMode, SwarmConfig, TelemetrySourceConfig,
 };
+use swarm_ingest_runtime::ingest::{IngestResponse, IngestState, detect_http_router};
 use swarm_runtime::config::load_config;
-use swarm_runtime::ingest::{IngestResponse, IngestState, detect_http_router};
 use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;

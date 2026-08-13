@@ -12,7 +12,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use swarm_core::config::OperatorScope;
 use swarm_core::pheromone::{ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType};
-use swarm_runtime::control::{
+use swarm_ingest_runtime::control::{
     ControlEnvelope, IncidentArtifactView, InvestigationArtifactView, ReplayArtifactView,
 };
 use swarm_runtime::detection::metrics::encode_metrics;

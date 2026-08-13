@@ -5,7 +5,7 @@ use clap::Parser;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
-use swarm_runtime::control::{
+use swarm_ingest_runtime::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
 };
 

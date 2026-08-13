@@ -1,16 +1,8 @@
-use crate::alert_tuning::{AlertTuningReport, build_alert_tuning_report};
 use crate::anti_tamper::AntiTamperReport;
-use crate::bridge_runtime::bridge_health_report;
 use crate::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
     resolve_operator_api_schema_version,
 };
-use crate::escalation::standard_threat_classes;
-use crate::evasion_coverage::EvasionCoverageSnapshot;
-use crate::http::tls_identity::TlsClientIdentity;
-use crate::providence::verify_providence_context_token;
-use crate::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
-use crate::service::{OperatorBearerTokenStatus, RuntimeDegradationStatus};
 use axum::Router;
 use axum::extract::{Extension, Json, Path as AxumPath, Query, State};
 use axum::http::{StatusCode, header};
@@ -38,6 +30,14 @@ use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{ProvidenceIncidentReconciliation, ResponseRehearsalPreview, Severity};
 use swarm_pheromone::{DepositQuery, PheromoneSubstrate};
 use swarm_response::SwarmFindingEnvelope;
+use swarm_runtime::alert_tuning::{AlertTuningReport, build_alert_tuning_report};
+use swarm_runtime::bridge_runtime::bridge_health_report;
+use swarm_runtime::escalation::standard_threat_classes;
+use swarm_runtime::evasion_coverage::EvasionCoverageSnapshot;
+use swarm_runtime::http::tls_identity::TlsClientIdentity;
+use swarm_runtime::providence::verify_providence_context_token;
+use swarm_runtime::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
+use swarm_runtime::service::{OperatorBearerTokenStatus, RuntimeDegradationStatus};
 use swarm_spine::{
     FalsePositiveMeasurementReport, IncidentStore, InvestigationBundleStore, InvestigationStatus,
     ReplayBundleLookup, ReplayBundleStore, summarize_false_positive_measurements,
@@ -571,7 +571,7 @@ fn percent_decode_query_value(raw: &str) -> String {
 
 pub(super) fn context_token_matches_platform_request(
     request: &axum::extract::Request,
-    scope: &crate::providence::ProvidenceContextScope,
+    scope: &swarm_runtime::providence::ProvidenceContextScope,
 ) -> bool {
     // Context tokens are scoped to the finding/incident the operator was
     // shown — they MUST NOT grant access to runtime health, bridge state, or

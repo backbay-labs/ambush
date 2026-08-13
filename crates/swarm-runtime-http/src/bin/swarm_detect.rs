@@ -10,20 +10,20 @@ use swarm_agents::weaver_agent::WeaverAgent;
 use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::agent::{AgentRole, SwarmAgent, SwarmModeState};
 use swarm_core::types::AgentId;
+use swarm_ingest_runtime::anti_tamper::{AntiTamperFailure, AntiTamperMonitor};
+use swarm_ingest_runtime::control::build_composite_detector;
+use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
 use swarm_policy::ApprovalContext;
 use swarm_runtime::agent_identity::{
     FileAgentIdentityRegistry, FileAgentKeyStore, PersistedAgentIdentity, RegistryAdmission,
     resolve_agent_key_dir, resolve_identity_registry_dir,
 };
-use swarm_runtime::anti_tamper::{AntiTamperFailure, AntiTamperMonitor};
 use swarm_runtime::approval::DefaultApprovalHarness;
 use swarm_runtime::bridge_runtime::BridgeRuntimeRegistry;
 use swarm_runtime::calico_agent::CalicoAgent;
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig, AgentRestartFactory};
 use swarm_runtime::escalation::ConcentrationMonitor;
-use swarm_runtime::ingest::{IngestState, detect_http_router};
 use swarm_runtime::investigation::SummaryInvestigator;
 use swarm_runtime::kitten_agent::KittenAgent;
 use swarm_runtime::replay::{ReplayScenarioInput, load_scenario_manifest, scenario_paths_in_dir};
@@ -1260,13 +1260,13 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use swarm_core::agent::{AgentRole, SwarmModeState};
+    use swarm_ingest_runtime::ingest::IngestState;
     use swarm_pheromone::ConfiguredPheromoneSubstrate;
     use swarm_runtime::agent_identity::{
         FileAgentIdentityRegistry, FileAgentKeyStore, resolve_agent_key_dir,
         resolve_identity_registry_dir,
     };
     use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
-    use swarm_runtime::ingest::IngestState;
     use swarm_runtime::runtime_events::RuntimeEventBroadcaster;
 
     #[test]

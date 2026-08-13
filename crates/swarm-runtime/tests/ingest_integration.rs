@@ -8,9 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::BridgeStatusSnapshot;
 use swarm_core::config::SwarmConfig;
 use swarm_core::config::{PheromoneBackendConfig, RuntimeMode};
+use swarm_ingest_runtime::ingest::IngestState;
+use swarm_ingest_runtime::ingest::detect_http_router;
 use swarm_runtime::config::{load_config, write_debug_test_config_signature};
-use swarm_runtime::ingest::IngestState;
-use swarm_runtime::ingest::detect_http_router;
 use swarm_runtime::startup_attestation::{
     StartupAttestationComponentReport, StartupAttestationReport,
 };
