@@ -77,6 +77,24 @@ pub struct PromotionConfig {
     /// Maximum allowed promoted detection volume across the observation window.
     #[serde(default = "default_promotion_max_total_detections")]
     pub max_total_detections: usize,
+    /// Refuse to promote a candidate whose assurance lineage carries no PROVED
+    /// solver result.
+    ///
+    /// DEFAULTS TO TRUE, AND THE DEFAULT IS THE MECHANISM. `rulesets/default.yaml`
+    /// cannot be given this key: its sha256 is inside the ed25519-signed
+    /// `rulesets/attestation.json`, verified at startup by
+    /// `swarm_runtime::startup_attestation`, and the signing key is deliberately
+    /// absent from this repository (see the comment on
+    /// `EvolutionAssuranceConfig`). `PromotionConfig` is `deny_unknown_fields`, so
+    /// omitting the key is legal, and omission must therefore resolve fail-closed.
+    /// A plain `#[serde(default)]` here would silently ship the gate OFF.
+    ///
+    /// Distinct from `evolution.assurance.require_solver_summary` in both name and
+    /// key path on purpose: that one decides whether a MISSING summary blocks the
+    /// queue proposal; this one decides whether a non-`proved` solver status
+    /// blocks production promotion, and it is not waivable.
+    #[serde(default = "default_promotion_require_solver_result")]
+    pub require_solver_result_for_promotion: bool,
 }
 
 impl Default for CanaryConfig {
@@ -105,6 +123,7 @@ impl Default for PromotionConfig {
             max_fallback_recovery_rate: default_promotion_max_fallback_recovery_rate(),
             max_detect_latency_us: default_promotion_max_detect_latency_us(),
             max_total_detections: default_promotion_max_total_detections(),
+            require_solver_result_for_promotion: default_promotion_require_solver_result(),
         }
     }
 }

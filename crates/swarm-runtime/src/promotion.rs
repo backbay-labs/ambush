@@ -6,7 +6,8 @@ use crate::detector_factory::{
     DetectorFactoryError, build_candidate_manifest_from_strategy, build_detector_from_candidate,
 };
 use crate::evolution::{
-    EvolutionProposalAssuranceSummary, assurance_gate_block_reason, render_assurance_summary_lines,
+    EvolutionProposalAssuranceSummary, EvolutionSolverProofStatus, assurance_gate_block_reason,
+    render_assurance_summary_lines, solver_proof_status_label,
 };
 use crate::replay::{DetectorCandidateManifest, ExperimentLineage};
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,10 @@ use swarm_whisker::stream::{evaluate_event, findings_to_deposits};
 use swarm_whisker::{DetectionFinding, TelemetryEvent};
 
 /// Errors surfaced by the controlled production-promotion lane.
+/// Printed on any promotion report whose assurance lineage records no solver
+/// status. An exact literal so an operator (and a test) can grep for it.
+pub const NO_SOLVER_RESULT_RECORDED: &str = "Solver result: NO SOLVER RESULT RECORDED";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProductionPromotionError {
     #[error(transparent)]
@@ -73,6 +78,34 @@ pub enum ProductionPromotionError {
 
     #[error("canary run `{run_id}` does not carry satisfied assurance lineage: {reason}")]
     AssuranceNotSatisfied { run_id: String, reason: String },
+
+    /// No solver result was recorded for the candidate being promoted.
+    ///
+    /// `recorded_status` distinguishes a STUB from an ABSENCE while rejecting both
+    /// identically: `None` means the assurance lineage carried no solver status at
+    /// all, `Some(Disabled)` means the solver lane was switched off and recorded
+    /// saying so. Neither is evidence, and the audit record should be able to say
+    /// which one happened.
+    #[error(
+        "canary run `{run_id}` cannot promote `{promoted_strategy_id}`: no solver result was \
+         recorded (status={recorded_status:?})"
+    )]
+    SolverResultMissing {
+        run_id: String,
+        promoted_strategy_id: String,
+        recorded_status: Option<EvolutionSolverProofStatus>,
+    },
+
+    /// A solver result exists and is not `proved` -- refuted, undecided, or errored.
+    #[error(
+        "canary run `{run_id}` cannot promote `{promoted_strategy_id}`: solver status \
+         `{status:?}` is not `proved`"
+    )]
+    SolverResultNotProved {
+        run_id: String,
+        promoted_strategy_id: String,
+        status: EvolutionSolverProofStatus,
+    },
 
     #[error("canary baseline mismatch: expected current production `{expected}`, found `{actual}`")]
     BaselineMismatch { expected: String, actual: String },
@@ -696,6 +729,34 @@ impl DefaultProductionPromotionHarness {
                 reason,
             });
         }
+        // DELIBERATELY AFTER the waiver-aware check above, and with no waiver
+        // lookup of its own. `assurance_gate_block_reason` short-circuits to `None`
+        // for ANY blocked decision carrying an active waiver, including one blocked
+        // solely because no solver ran. A bounded operator waiver can excuse a
+        // coverage shortfall; it cannot conjure a proof. So this gate sits
+        // downstream of the waiver and is not reachable by it.
+        if let Some(block) =
+            promotion_solver_block(&self.config, canary.report.assignment.assurance.as_ref())
+        {
+            let promoted_strategy_id = canary.report.assignment.candidate_strategy_id.clone();
+            let run_id = canary_run_id.to_string();
+            return Err(match block {
+                PromotionSolverBlock::Missing { recorded_status } => {
+                    ProductionPromotionError::SolverResultMissing {
+                        run_id,
+                        promoted_strategy_id,
+                        recorded_status,
+                    }
+                }
+                PromotionSolverBlock::NotProved { status } => {
+                    ProductionPromotionError::SolverResultNotProved {
+                        run_id,
+                        promoted_strategy_id,
+                        status,
+                    }
+                }
+            });
+        }
 
         let now_ms = now_ms();
         let previous_production_strategy_id =
@@ -1041,6 +1102,46 @@ fn promotion_assurance_block_reason(
     assurance_gate_block_reason(assurance, config, now_ms(), "promotion entry")
 }
 
+/// Why the solver gate refused, if it did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromotionSolverBlock {
+    Missing {
+        recorded_status: Option<EvolutionSolverProofStatus>,
+    },
+    NotProved {
+        status: EvolutionSolverProofStatus,
+    },
+}
+
+/// Refuse to promote a candidate that has no PROVED solver result.
+///
+/// `Disabled` is rejected through the SAME variant as an absent status, because
+/// "the solver lane was switched off" and "nothing recorded a solver result" are
+/// the same amount of evidence: none. `recorded_status` keeps the audit record
+/// able to tell them apart without letting the gate treat them differently.
+///
+/// `Timeout`, `ResourceLimit`, `Error` and `Counterexample` land in `NotProved`:
+/// a solver DID run and did not prove the property.
+fn promotion_solver_block(
+    config: &SwarmConfig,
+    assurance: Option<&EvolutionProposalAssuranceSummary>,
+) -> Option<PromotionSolverBlock> {
+    if !config.promotion.require_solver_result_for_promotion {
+        return None;
+    }
+    let status = assurance.and_then(|summary| summary.solver.status);
+    match status {
+        Some(EvolutionSolverProofStatus::Proved) => None,
+        None => Some(PromotionSolverBlock::Missing {
+            recorded_status: None,
+        }),
+        Some(EvolutionSolverProofStatus::Disabled) => Some(PromotionSolverBlock::Missing {
+            recorded_status: Some(EvolutionSolverProofStatus::Disabled),
+        }),
+        Some(status) => Some(PromotionSolverBlock::NotProved { status }),
+    }
+}
+
 pub fn render_production_promotion_report(report: &ProductionPromotionReport) -> String {
     let mut lines = vec![
         "Production Promotion Run".to_string(),
@@ -1095,6 +1196,30 @@ pub fn render_production_promotion_report(report: &ProductionPromotionReport) ->
     } else {
         lines.push("Assurance: unavailable".to_string());
     }
+
+    // UNCONDITIONAL. Every promotion report states its solver evidence, including
+    // when there is none -- an operator reading a report with no solver line
+    // cannot tell "proved" from "never asked". Kept out of
+    // `render_assurance_summary_lines`, which is shared with the canary and
+    // evolution-status reports; this obligation is the promotion report's.
+    lines.push(
+        match report
+            .assignment
+            .assurance
+            .as_ref()
+            .and_then(|assurance| assurance.solver.status)
+        {
+            Some(status) => format!(
+                "Solver result: {} | required_for_promotion={}",
+                solver_proof_status_label(status),
+                report
+                    .assignment
+                    .promotion
+                    .require_solver_result_for_promotion
+            ),
+            None => NO_SOLVER_RESULT_RECORDED.to_string(),
+        },
+    );
 
     if let Some(pending_review) = &report.pending_review {
         lines.push("PENDING HUMAN APPROVAL".to_string());
@@ -1577,23 +1702,24 @@ struct ProductionPromotionIndex {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        DefaultProductionPromotionHarness, FileProductionPromotionStore, ProductionPromotionError,
-        ProductionPromotionRecommendation, ProductionPromotionReport,
+        DefaultProductionPromotionHarness, FileProductionPromotionStore, NO_SOLVER_RESULT_RECORDED,
+        ProductionPromotionError, ProductionPromotionRecommendation, ProductionPromotionReport,
         ProductionPromotionRollbackTrigger, ProductionPromotionStatus, PromotionApprovalVoteRef,
-        PromotionConsensusReceipt, PromotionQuorumGateConfig, render_production_promotion_report,
-        validate_quorum_gate, verify_consensus_receipt_signature, verify_vote_signature,
+        PromotionConsensusReceipt, PromotionQuorumGateConfig, promotion_assurance_block_reason,
+        render_production_promotion_report, validate_quorum_gate,
+        verify_consensus_receipt_signature, verify_vote_signature,
     };
     use crate::canary::{
         CanaryAssignment, CanaryFindingPreview, CanaryRecommendation, CanaryRunReport,
         CanaryRunStatus, FileCanaryStore,
     };
     use crate::config::RuntimeMode;
-    use crate::evolution::assurance_summary_for_tests;
     use crate::evolution::{
         EvolutionProposalAssuranceCoverageSummary, EvolutionProposalAssuranceDecision,
         EvolutionProposalAssuranceSolverSummary, EvolutionProposalAssuranceSummary,
         build_assurance_waiver_summary,
     };
+    use crate::evolution::{EvolutionSolverProofStatus, assurance_summary_for_tests};
     use crate::replay::{DetectorCandidateManifest, ExperimentLineage};
     use std::fs;
     use std::path::PathBuf;
@@ -1700,6 +1826,10 @@ mod tests {
                 max_fallback_recovery_rate: 0.0,
                 max_detect_latency_us: 10_000,
                 max_total_detections: 4,
+                // TRUE, matching the shipped default. Setting this `false` here
+                // would yield a gate no test in this module could fail, which is
+                // this repository's signature defect.
+                require_solver_result_for_promotion: true,
             },
             evolution: swarm_core::config::EvolutionConfig::default(),
             deception: swarm_core::config::DeceptionConfig::default(),
@@ -1832,6 +1962,13 @@ mod tests {
             .unwrap_or_else(|| config.detection.strategy.clone())
     }
 
+    /// Happy-path lineage: assurance passed AND a solver proved the invariants.
+    ///
+    /// The solver status used to be `None` here, and every promotion test in this
+    /// module inherited it -- which is how a suite of green tests came to assert
+    /// that a candidate with no solver result promotes. The honest repair is to
+    /// give the fixture the evidence the gate asks for, NOT to switch the gate off
+    /// in `promotion_config()`.
     fn passed_assurance_summary() -> EvolutionProposalAssuranceSummary {
         assurance_summary_for_tests(
             EvolutionProposalAssuranceDecision::Passed,
@@ -1844,15 +1981,45 @@ mod tests {
                 actionable_gap_count: 0,
             },
             EvolutionProposalAssuranceSolverSummary {
-                required: false,
-                status: None,
-                allowed_statuses: Vec::new(),
+                required: true,
+                status: Some(EvolutionSolverProofStatus::Proved),
+                allowed_statuses: vec![EvolutionSolverProofStatus::Proved],
             },
             Vec::new(),
             None,
         )
     }
 
+    /// Assurance passed, but no solver ever ran. Used only by the negative tests.
+    fn assurance_summary_without_solver_result(
+        status: Option<EvolutionSolverProofStatus>,
+    ) -> EvolutionProposalAssuranceSummary {
+        assurance_summary_for_tests(
+            EvolutionProposalAssuranceDecision::Passed,
+            EvolutionProposalAssuranceCoverageSummary {
+                detector: "office_baseline_control".to_string(),
+                suite_name: Some("evasion-breadth-v1".to_string()),
+                corpus_version: Some("2026-04-03".to_string()),
+                required_catch_rate: 0.75,
+                actual_catch_rate: Some(1.0),
+                actionable_gap_count: 0,
+            },
+            EvolutionProposalAssuranceSolverSummary {
+                required: true,
+                status,
+                allowed_statuses: vec![EvolutionSolverProofStatus::Proved],
+            },
+            Vec::new(),
+            None,
+        )
+    }
+
+    /// A blocked assurance decision carrying an active bounded operator waiver.
+    ///
+    /// `solver.status` stays `None` DELIBERATELY. A waiver excuses a coverage
+    /// shortfall; it cannot conjure a proof, and
+    /// `an_active_waiver_does_not_waive_the_promotion_solver_gate` is the test that
+    /// pins that. Giving this fixture a proved status would make that test vacuous.
     fn waived_assurance_summary(
         operator_id: &str,
         secret_material: &str,
@@ -2109,7 +2276,7 @@ mod tests {
     }
 
     #[test]
-    fn promotion_accepts_canary_with_active_waived_assurance_lineage() {
+    fn an_active_waiver_does_not_waive_the_promotion_solver_gate() {
         let root = unique_temp_dir("waived-assurance");
         let results_dir = root.join("promotions");
         let mut config = promotion_config();
@@ -2130,13 +2297,187 @@ mod tests {
             &results_dir,
         )
         .unwrap();
-        let started = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+        // INVERTED FROM ITS PREVIOUS ASSERTION, deliberately.
+        //
+        // This test used to assert `ProductionPromotionStatus::Active` -- i.e. that
+        // an active bounded waiver carried a candidate with NO solver result all the
+        // way into production. `assurance_gate_block_reason` short-circuits to `None`
+        // for any waived decision, and there was no second gate behind it.
+        //
+        // A waiver is an operator accepting a known, bounded coverage shortfall. It
+        // is not a substitute for a proof, and it must not be able to manufacture
+        // one. The solver gate therefore sits downstream of the waiver check and
+        // performs no waiver lookup of its own.
+        let error = harness
+            .start_run(&canaries_dir, &canary_run_id)
+            .unwrap_err();
 
-        assert_eq!(started.report.status, ProductionPromotionStatus::Active);
-        assert!(render_production_promotion_report(&started.report).contains("Assurance waiver:"));
         assert!(
-            render_production_promotion_report(&started.report)
-                .contains("Waiver reason: bounded promotion waiver")
+            matches!(
+                error,
+                ProductionPromotionError::SolverResultMissing {
+                    recorded_status: None,
+                    ..
+                }
+            ),
+            "an active waiver must not waive the solver gate, got {error:?}"
+        );
+
+        // The waiver itself is still valid and still recognised -- the assurance gate
+        // above it passed. Only the solver gate refused.
+        assert!(
+            promotion_assurance_block_reason(
+                &config_for_waiver_assertion(&operator_id),
+                ready_canary.assignment.assurance.as_ref(),
+            )
+            .is_none(),
+            "the waiver must still satisfy the assurance gate; otherwise this test \
+             would pass for the wrong reason"
+        );
+    }
+
+    /// Rebuild the config the waiver test used, so the assertion above proves the
+    /// waiver was ACCEPTED by the assurance gate and refused only by the solver one.
+    fn config_for_waiver_assertion(operator_id: &str) -> SwarmConfig {
+        let mut config = promotion_config();
+        config.evolution.assurance.waiver.allowed_operator_ids = vec![operator_id.to_string()];
+        config
+    }
+
+    #[test]
+    fn promotion_rejects_canary_with_no_solver_result() {
+        let root = unique_temp_dir("no-solver-result");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let mut ready_canary = ready_canary_report(&config, control_candidate());
+        ready_canary.assignment.assurance = Some(assurance_summary_without_solver_result(None));
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let error = harness
+            .start_run(&canaries_dir, &canary_run_id)
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                ProductionPromotionError::SolverResultMissing {
+                    recorded_status: None,
+                    ..
+                }
+            ),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn promotion_rejects_disabled_solver_identically_to_a_missing_one() {
+        let root = unique_temp_dir("disabled-solver");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let mut ready_canary = ready_canary_report(&config, control_candidate());
+        ready_canary.assignment.assurance = Some(assurance_summary_without_solver_result(Some(
+            EvolutionSolverProofStatus::Disabled,
+        )));
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let error = harness
+            .start_run(&canaries_dir, &canary_run_id)
+            .unwrap_err();
+
+        // SAME variant as the missing case: "the solver lane was switched off" and
+        // "nothing recorded a solver result" are the same amount of evidence. The
+        // `recorded_status` payload is what keeps the audit record able to tell a
+        // stub from an absence without the gate treating them differently.
+        assert!(
+            matches!(
+                error,
+                ProductionPromotionError::SolverResultMissing {
+                    recorded_status: Some(EvolutionSolverProofStatus::Disabled),
+                    ..
+                }
+            ),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn promotion_rejects_an_undecided_solver_result_as_not_proved() {
+        let root = unique_temp_dir("unproved-solver");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let mut ready_canary = ready_canary_report(&config, control_candidate());
+        // The solver DID run and did not prove the property. Distinct from the
+        // missing case, and distinct from a refutation.
+        ready_canary.assignment.assurance = Some(assurance_summary_without_solver_result(Some(
+            EvolutionSolverProofStatus::ResourceLimit,
+        )));
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let error = harness
+            .start_run(&canaries_dir, &canary_run_id)
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                ProductionPromotionError::SolverResultNotProved {
+                    status: EvolutionSolverProofStatus::ResourceLimit,
+                    ..
+                }
+            ),
+            "got {error:?}"
+        );
+    }
+
+    #[test]
+    fn every_promotion_report_states_its_solver_evidence() {
+        let root = unique_temp_dir("solver-report-line");
+        let results_dir = root.join("promotions");
+        let config = promotion_config();
+        let ready_canary = ready_canary_report(&config, control_candidate());
+        let (canaries_dir, canary_run_id) = persist_ready_canary(&root, &ready_canary);
+
+        let harness = DefaultProductionPromotionHarness::from_config(
+            "rulesets/default.yaml",
+            config,
+            &results_dir,
+        )
+        .unwrap();
+        let started = harness.start_run(&canaries_dir, &canary_run_id).unwrap();
+        let rendered = render_production_promotion_report(&started.report);
+
+        assert!(
+            rendered.contains("Solver result: proved"),
+            "promotion report must name its solver evidence, got:\n{rendered}"
+        );
+        assert!(!rendered.contains(NO_SOLVER_RESULT_RECORDED));
+
+        // The negative arm has to exist too, or an operator cannot tell "proved"
+        // from "never asked" by reading the report.
+        let mut without_solver = started.report.clone();
+        without_solver.assignment.assurance = Some(assurance_summary_without_solver_result(None));
+        let rendered = render_production_promotion_report(&without_solver);
+        assert!(
+            rendered.contains(NO_SOLVER_RESULT_RECORDED),
+            "got:\n{rendered}"
         );
     }
 

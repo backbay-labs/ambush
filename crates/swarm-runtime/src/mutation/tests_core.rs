@@ -2495,6 +2495,35 @@ fn tracked_default_ruleset_still_loads_with_its_speed_weight() {
     config.validate().unwrap();
 }
 
+/// The curated ruleset OMITS `promotion.require_solver_result_for_promotion`, and
+/// must still resolve it to `true`.
+///
+/// `rulesets/default.yaml` cannot be given the key: its sha256 is inside the
+/// ed25519-signed `rulesets/attestation.json`, asserted by
+/// `startup_attestation::tests::repo_ruleset_attestation_matches_checked_in_files`
+/// and verified at runtime startup, and the signing key is deliberately absent
+/// from this repository. So "defaults true in the curated ruleset" can only mean
+/// "a ruleset that omits the key resolves to true", and the serde default is the
+/// mechanism rather than a shortcut.
+///
+/// This test is the guard on the real regression: someone writing
+/// `#[serde(default)]` instead of `#[serde(default = "...")]` would silently ship
+/// every deployment with the promotion solver gate OFF, and nothing else in the
+/// suite would notice.
+#[test]
+fn tracked_default_ruleset_resolves_the_promotion_solver_gate_to_enabled() {
+    let raw = std::fs::read_to_string(repo_root().join("rulesets/default.yaml")).unwrap();
+    assert!(
+        !raw.contains("require_solver_result_for_promotion"),
+        "the curated ruleset must NOT carry this key -- it is frozen by the signed \
+         attestation, and this test only means anything while the key is absent"
+    );
+
+    let config = sample_config();
+    assert!(config.promotion.require_solver_result_for_promotion);
+    config.validate().unwrap();
+}
+
 fn latency_population_candidate(
     strategy_id: &str,
     objectives: EvolutionPopulationFitnessObjectives,

@@ -1443,6 +1443,8 @@ mod tests {
                 max_fallback_recovery_rate: 0.20,
                 max_detect_latency_us: 10_000,
                 max_total_detections: 12,
+                // TRUE, matching the shipped default.
+                require_solver_result_for_promotion: true,
             },
             evolution: swarm_core::config::EvolutionConfig::default(),
             deception: swarm_core::config::DeceptionConfig::default(),

@@ -328,6 +328,12 @@ pub(super) const fn default_promotion_max_total_detections() -> usize {
     12
 }
 
+/// Fail closed. See `PromotionConfig::require_solver_result_for_promotion` for why
+/// this default is the only way the curated ruleset can carry the value.
+pub(super) const fn default_promotion_require_solver_result() -> bool {
+    true
+}
+
 pub(super) const fn default_evolution_observation_window_secs() -> u64 {
     3_600
 }
