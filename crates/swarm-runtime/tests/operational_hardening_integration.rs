@@ -55,6 +55,7 @@ fn base_config() -> SwarmConfig {
             partition_contingency_lease_ttl_ms: 300_000,
             partition_contingency_blast_radius_cap: 1,
             max_dead_letter_bytes: None,
+            containment: Default::default(),
         },
         detection: DetectionConfig {
             strategy: "suspicious_process_tree".to_string(),
@@ -148,6 +149,7 @@ fn secret_rotation_and_dead_letter_rotation_cycle_without_data_loss() {
         runtime: RuntimeSettings {
             secret_dir: Some(secret_dir.display().to_string()),
             max_dead_letter_bytes: Some(max_dead_letter_bytes),
+            containment: Default::default(),
             ..base_config().runtime
         },
         ..base_config()

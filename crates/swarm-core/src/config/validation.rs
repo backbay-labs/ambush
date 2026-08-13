@@ -349,6 +349,32 @@ impl SwarmConfig {
                 reason: "must be greater than zero".to_string(),
             });
         }
+        if self.runtime.containment.lease_ttl_ms <= 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.containment.lease_ttl_ms",
+                reason: "must be greater than zero; a containment with no bound cannot be \
+                         released automatically"
+                    .to_string(),
+            });
+        }
+        if self.runtime.containment.sweep_interval_ms == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.containment.sweep_interval_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self
+            .runtime
+            .containment
+            .lease_store_path
+            .as_ref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.containment.lease_store_path",
+                reason: "must not be empty when set; omit the key for in-memory leases".to_string(),
+            });
+        }
 
         self.response_adapter.validate()?;
         if let Some(config) = &self.siem_forward {

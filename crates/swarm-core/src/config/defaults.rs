@@ -20,6 +20,16 @@ pub(super) const fn default_partition_contingency_blast_radius_cap() -> usize {
     1
 }
 
+/// Fifteen minutes. Long enough for an analyst to look at an alert, short enough
+/// that a false positive un-contains itself the same shift.
+pub(super) const fn default_containment_lease_ttl_ms() -> i64 {
+    900_000
+}
+
+pub(super) const fn default_containment_sweep_interval_ms() -> u64 {
+    30_000
+}
+
 pub(super) const fn default_drain_timeout_ms() -> u64 {
     30_000
 }

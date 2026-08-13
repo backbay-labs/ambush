@@ -53,6 +53,7 @@ fn integration_config() -> SwarmConfig {
             partition_contingency_lease_ttl_ms: 300_000,
             partition_contingency_blast_radius_cap: 1,
             max_dead_letter_bytes: None,
+            containment: Default::default(),
         },
         detection: DetectionConfig {
             strategy: "suspicious_process_tree".to_string(),

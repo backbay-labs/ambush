@@ -43,6 +43,7 @@ fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
             partition_contingency_lease_ttl_ms: 300_000,
             partition_contingency_blast_radius_cap: 1,
             max_dead_letter_bytes: None,
+            containment: Default::default(),
         },
         detection: super::DetectionConfig {
             strategy: "suspicious_process_tree".to_string(),
@@ -124,6 +125,67 @@ fn jet_stream_backend_requires_positive_connect_timeout() {
         error.to_string(),
         "invalid field `pheromone.backend.connect_timeout_ms`: must be greater than zero"
     );
+}
+
+#[test]
+fn containment_lease_ttl_must_be_positive() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.runtime.containment.lease_ttl_ms = 0;
+
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `runtime.containment.lease_ttl_ms`: must be greater than zero; a \
+         containment with no bound cannot be released automatically"
+    );
+}
+
+#[test]
+fn containment_sweep_interval_must_be_positive() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.runtime.containment.sweep_interval_ms = 0;
+
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `runtime.containment.sweep_interval_ms`: must be greater than zero"
+    );
+}
+
+#[test]
+fn containment_lease_store_path_must_not_be_blank_when_set() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.runtime.containment.lease_store_path = Some("   ".to_string());
+
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `runtime.containment.lease_store_path`: must not be empty when set; omit \
+         the key for in-memory leases"
+    );
+}
+
+/// The containment block is optional on the wire under `deny_unknown_fields`,
+/// and its absence takes the shipped bounds rather than zeroes.
+///
+/// This matters because `rulesets/default.yaml` is digest-signed and carries no
+/// containment block: if the keys were required the shipped ruleset would stop
+/// loading, and if they defaulted to zero the validation above would reject it.
+#[test]
+fn a_runtime_block_with_no_containment_keys_loads_with_bounded_defaults() {
+    let json = serde_json::json!({
+        "mode": "detect_only",
+        "telemetry_sources": [],
+        "max_in_flight_actions": 4,
+    });
+    let settings: RuntimeSettings = serde_json::from_value(json).unwrap();
+    assert_eq!(settings.containment.lease_ttl_ms, 900_000);
+    assert_eq!(settings.containment.sweep_interval_ms, 30_000);
+    assert_eq!(settings.containment.lease_store_path, None);
+    assert!(settings.containment.lease_ttl_ms > 0);
 }
 
 #[test]

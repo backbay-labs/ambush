@@ -55,6 +55,54 @@ pub struct RuntimeSettings {
     /// suffix and a fresh file is started. When `None` (default), no rotation.
     #[serde(default)]
     pub max_dead_letter_bytes: Option<u64>,
+    /// Bounds and storage for reversible containment (QRT-01..03).
+    #[serde(default)]
+    pub containment: ContainmentSettings,
+}
+
+/// How long a containment may hold, how often expiry is checked, and where open
+/// containments are recorded.
+///
+/// Separate from the flat runtime keys because these three only make sense
+/// together: a TTL with nowhere to record the lease bounds nothing, and a sweep
+/// interval with no TTL has nothing to sweep.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainmentSettings {
+    /// Maximum time a containment stays in effect before the sweep releases it.
+    /// Must be strictly positive: this is the bound that makes autonomous
+    /// containment acceptable.
+    #[serde(default = "default_containment_lease_ttl_ms")]
+    pub lease_ttl_ms: i64,
+    /// How often expired leases are checked for. The worst-case time a
+    /// containment outlives its TTL is therefore `lease_ttl_ms + this`.
+    #[serde(default = "default_containment_sweep_interval_ms")]
+    pub sweep_interval_ms: u64,
+    /// Where open leases are persisted.
+    ///
+    /// `None` keeps them in memory only, which means a restart FORGETS every
+    /// open containment and no sweep will ever release it -- the host stays
+    /// contained until an operator intervenes. Acceptable for tests and
+    /// `detect_only`; set a path for any deployment that enforces.
+    ///
+    /// `rulesets/default.yaml` does NOT set it, and cannot: that file is
+    /// digest-signed by `rulesets/default.yaml.sig.json` and the signing key is
+    /// not in the repository, so adding a key to it fails its own load gate.
+    /// Every field here is `#[serde(default)]` for that reason -- the shipped
+    /// ruleset keeps loading, and a deployment adds the block to its own config.
+    /// See `docs/CONFIGURATION.md`.
+    #[serde(default)]
+    pub lease_store_path: Option<String>,
+}
+
+impl Default for ContainmentSettings {
+    fn default() -> Self {
+        Self {
+            lease_ttl_ms: default_containment_lease_ttl_ms(),
+            sweep_interval_ms: default_containment_sweep_interval_ms(),
+            lease_store_path: None,
+        }
+    }
 }
 
 /// Bounded runtime-owned recent-event retention for temporal sequence matching.

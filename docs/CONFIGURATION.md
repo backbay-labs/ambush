@@ -65,6 +65,16 @@ runtime:
   governance_degraded_tick_threshold: 3
   partition_contingency_lease_ttl_ms: 300000
   partition_contingency_blast_radius_cap: 1
+  # NOTE: `rulesets/default.yaml` does NOT carry this block. That file is
+  # digest-signed (`rulesets/default.yaml.sig.json`) and the signing key is not
+  # in the repository, so it cannot be edited without breaking its own gate --
+  # the same constraint tracked as task #23. Every key below is
+  # `#[serde(default)]`, so the shipped ruleset still loads; a deployment that
+  # wants a durable lease store has to add the block to its own config.
+  containment:
+    lease_ttl_ms: 900000
+    sweep_interval_ms: 30000
+    lease_store_path: ./data/containment-leases.json
   secret_dir: /var/run/swarm-secrets
 
 detection:
@@ -316,6 +326,9 @@ profile matrix is documented here as the canonical operator reference.
 - `governance_degraded_tick_threshold`: number of consecutive degraded governance-health observations before Tom marks the committee as degraded instead of healthy.
 - `partition_contingency_lease_ttl_ms`: default lifetime for pre-staged contingency leases that can be redeemed only while the committee is partitioned.
 - `partition_contingency_blast_radius_cap`: maximum number of distinct scopes or hosts one contingency lease can authorize before further destructive actions fail closed.
+- `containment.lease_ttl_ms`: how long a containment (`quarantine_file`, `isolate_host`, `suspend_process`, `terminate_user_session`) may hold before the sweep releases it. Must be greater than zero: this bound is what makes autonomous containment reversible rather than permanent.
+- `containment.sweep_interval_ms`: how often expired leases are checked for. A containment can therefore outlive its TTL by at most `lease_ttl_ms + sweep_interval_ms`.
+- `containment.lease_store_path`: where open leases are persisted. **Set this for any `mode: live_response` deployment.** Omitting it keeps leases in memory only, so a restart forgets every open containment and no sweep will ever release those hosts; an operator has to release them by hand. `detect_only` needs no store, because nothing it does takes effect.
 - `secret_dir`: optional directory used for file-backed `@secret:` references. Relative paths resolve relative to the config file location.
 - `anti_tamper.enabled`: turns the runtime self-monitor on or off. The shipped default is `true`.
 - `anti_tamper.check_interval_ms`: polling interval for Linux anti-tamper checks.
@@ -720,6 +733,11 @@ keys rather than a broad abstract autonomy schema:
 - `runtime.partition_contingency_lease_ttl_ms` and
   `runtime.partition_contingency_blast_radius_cap`: the bounded contingency
   lease contract for partition-era destructive response.
+- `runtime.containment.lease_ttl_ms`, `runtime.containment.sweep_interval_ms`
+  and `runtime.containment.lease_store_path`: the bounded, reversible
+  containment contract. A `live_response` runtime REFUSES a containment it
+  cannot lease, before it executes, so these keys gate whether the four
+  containment actions run at all.
 - `identity.agent_key_dir`: persisted Ed25519 key root for runtime-owned agent
   identities.
 - `identity.registry_dir`: persisted admission registry and rotation continuity

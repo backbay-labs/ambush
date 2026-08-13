@@ -41,6 +41,12 @@ where
     }
 
     /// Build the runtime stack from policy, response, and investigation components.
+    ///
+    /// This is where a deployment's containment lease store is attached. Without
+    /// it every enforced containment would be refused, since `SwarmRuntime` fails
+    /// closed on a containment it cannot bound -- so a stack built through
+    /// [`Self::from_runtime`] with a bare `SwarmRuntime` gets `detect_only`
+    /// behaviour for the four containment actions and nothing else.
     pub fn from_components(
         config: SwarmConfig,
         policy: P,
@@ -48,7 +54,20 @@ where
         strategy: Strategy,
     ) -> Result<Self, ServiceError> {
         let mode = config.runtime.mode;
-        Self::from_runtime(config, SwarmRuntime::new(mode, policy, response), strategy)
+        let (containment_store, containment_ttl) =
+            crate::containment::containment_binding_from_config(&config.runtime.containment)
+                .map_err(|error| {
+                    ServiceError::Runtime(RuntimeError::ContainmentRefused {
+                        action: "<startup>",
+                        reason: error.to_string(),
+                    })
+                })?;
+        Self::from_runtime(
+            config,
+            SwarmRuntime::new(mode, policy, response)
+                .with_containment_store(containment_store, containment_ttl),
+            strategy,
+        )
     }
 
     /// Run the critical path, persist the replay bundle, and queue async investigation.

@@ -997,6 +997,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .run_until_shutdown(CONCENTRATION_MONITOR_INTERVAL_MS, monitor_shutdown)
                 .await;
         }));
+        // The TTL sweep. Without it a containment lease is a record with no
+        // consequence: it would expire and nothing would notice, which is the
+        // state this lane exists to leave behind.
+        //
+        // The store comes from the RUNTIME, not from config: for an in-memory
+        // store a second instance built here would be a different map, and the
+        // sweep would find nothing while reporting clean passes.
+        let mut containment_sweep_handle = match state.current_containment_store() {
+            Some(store) => {
+                let settings = state.current_containment_settings();
+                match swarm_runtime::containment::rollback_executor_from_config(
+                    &state.current_response_adapter_config(),
+                ) {
+                    Ok(executor) => {
+                        let sweep = swarm_runtime::containment::ContainmentSweep::new(
+                            store,
+                            executor,
+                            state.current_execution_mode(),
+                        );
+                        let sweep_shutdown = shutdown_rx.clone();
+                        let interval_ms = settings.sweep_interval_ms;
+                        tracing::info!(
+                            module = module_path!(),
+                            interval_ms,
+                            lease_ttl_ms = settings.lease_ttl_ms,
+                            "containment sweep started"
+                        );
+                        Some(tokio::spawn(async move {
+                            sweep.run_until_shutdown(interval_ms, sweep_shutdown).await;
+                        }))
+                    }
+                    Err(error) => {
+                        // Loud, not fatal: the runtime still refuses containments
+                        // it cannot lease, so nothing new gets contained. What is
+                        // lost is automatic release of anything already open.
+                        tracing::error!(
+                            module = module_path!(),
+                            reason = %error,
+                            "containment sweep NOT started; open containments will not expire"
+                        );
+                        None
+                    }
+                }
+            }
+            None => {
+                tracing::warn!(
+                    module = module_path!(),
+                    "no containment lease store configured; containment sweep not started"
+                );
+                None
+            }
+        };
         let bridge_metrics = state.current_prometheus_metrics();
         // KNOWN LIMITATION: telemetry bridge workers are also spawned once from
         // the initial `runtime.telemetry_sources` config. `reload_from_disk()`
@@ -1042,6 +1094,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = monitor_handle.take() {
                     await_background_task("concentration_monitor", handle).await;
+                }
+                if let Some(handle) = containment_sweep_handle.take() {
+                    await_background_task("containment_sweep", handle).await;
                 }
                 if let Some(handles) = bridge_handles.take() {
                     await_background_tasks("bridge", handles).await;
@@ -1097,6 +1152,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = monitor_handle.take() {
                     await_background_task("concentration_monitor", handle).await;
+                }
+                if let Some(handle) = containment_sweep_handle.take() {
+                    await_background_task("containment_sweep", handle).await;
                 }
                 if let Some(handles) = bridge_handles.take() {
                     await_background_tasks("bridge", handles).await;
