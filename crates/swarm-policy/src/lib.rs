@@ -5,6 +5,35 @@
 //! - define the request shape for live response actions
 //! - evaluate those requests against a static policy gate
 //! - mint short-lived capability leases for authorized execution
+//!
+//! ## Owns
+//!
+//! - The request, verdict and lease shapes every live-response decision passes
+//!   through: [`ActionRequest`], [`PolicyVerdict`], [`CapabilityLease`].
+//! - The deterministic authorization decision itself: [`static_gate`] and
+//!   [`configurable_gate`], including the fail-closed path for malformed,
+//!   expired or under-evidenced requests.
+//! - Who may act during a partition: the [`governance::GovernanceAuthority`]
+//!   trait the dispatcher authorizes through.
+//!
+//! ## Does not own
+//!
+//! - Execution. A verdict is a value; `swarm-response` performs the action and
+//!   `swarm-spine` records that it happened.
+//! - Detection, telemetry, the pheromone substrate, receipts, replay, the CLI,
+//!   or any HTTP surface.
+//! - Transport. This crate is in the trusted computing base (ADR 0009) and must
+//!   never name `axum`, `clap`, `hyper` or `reqwest` in any dependency section,
+//!   in any dependency kind.
+//! - Anything downstream of the TCB. A dependency on `swarm-runtime`,
+//!   `swarm-runtime-http`, `swarm-cli` or any other crate that sits above the
+//!   TCB inverts the layering, dev-dependencies included.
+//! - The advisory lane. `swarm-runtime`'s correlation and memory modules must
+//!   never reach a policy decision, so a verdict never depends on how much
+//!   optional context happened to be available (TCBOUND-04).
+//!
+//! The three bans above are enforced by `tools/check-workspace-layering.sh`,
+//! which runs in CI and carries a fixture proving it fails when they are broken.
 
 pub mod configurable_gate;
 pub mod governance;

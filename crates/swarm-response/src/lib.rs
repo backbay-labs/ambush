@@ -2,6 +2,41 @@
 //!
 //! The first milestone is intentionally small: expose a single trait for
 //! adapters that execute capability-scoped actions and emit signed receipts.
+//!
+//! ## Owns
+//!
+//! - Performing the action: the adapter trait and its implementations
+//!   ([`adapters`], [`http_edr`], [`crowdstrike_rtr`], [`webhook`]) and the
+//!   dispatch path that drives them ([`dispatch`]).
+//! - Undoing the action: containment leases, their expiry, and the inverse
+//!   plans that reverse them ([`containment`], [`rollback`]).
+//! - The receipt for what was attempted, including failure and simulated
+//!   outcomes, plus the outbound resilience around a live effect
+//!   ([`resilience`], [`dead_letter`]).
+//! - Fan-out of finished findings to operators and SIEMs ([`notification`],
+//!   [`siem`], [`splunk_hec`]).
+//!
+//! ## Does not own
+//!
+//! - Deciding whether the action is allowed. Every adapter is handed a
+//!   [`CapabilityLease`] minted by `swarm-policy`; this crate never re-decides
+//!   and never fabricates one.
+//! - Detection, correlation, or scoring.
+//! - The audit chain. It emits receipts; `swarm-spine` chains and signs them.
+//! - The advisory lane. `swarm-runtime`'s correlation and memory modules must
+//!   never reach the dispatch path, so what gets executed never depends on how
+//!   much optional context happened to be available (TCBOUND-04), and that ban
+//!   covers dev-dependencies too.
+//!
+//! NOT in the trusted computing base, deliberately. This crate declares
+//! `reqwest` because a live-response adapter has to talk to an EDR, and that is
+//! precisely why the *decision* lives one crate down in `swarm-policy` where no
+//! transport is reachable. The one consequence worth stating: `swarm-spine`
+//! declares this crate, so `reqwest` and `hyper` are reachable from the TCB
+//! through it — see this crate's entry in ADR 0009.
+//!
+//! The advisory-lane ban is enforced by `tools/check-workspace-layering.sh`,
+//! which runs in CI and carries a fixture proving it fails when it is broken.
 
 pub mod adapters;
 pub mod config;

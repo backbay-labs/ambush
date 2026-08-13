@@ -1,4 +1,32 @@
 //! Production cryptographic primitives plus compatibility helpers for existing callers.
+//!
+//! ## Owns
+//!
+//! - Ed25519 keypairs, signing and verification ([`signing`]).
+//! - SHA-256 and HMAC-SHA-256 ([`hashing`]), and the Merkle tree and inclusion
+//!   proofs the audit trail is built from ([`merkle`]).
+//! - Canonical JSON ([`canonical`]) — the byte sequence every signature in this
+//!   system is taken over. Two callers that disagree about canonicalization
+//!   produce receipts that verify against nothing, so the encoding lives here
+//!   and nowhere else.
+//!
+//! ## Does not own
+//!
+//! - Key custody, rotation or storage. This crate holds no keystore and reads
+//!   no files; it operates on material handed to it.
+//! - What a signature *means*. `swarm-spine` decides what gets signed and what
+//!   a valid chain link asserts.
+//! - Randomness policy beyond accepting a `rand_core` source from the caller.
+//! - Transport. This crate is the deepest member of the trusted computing base
+//!   (ADR 0009) — everything above it inherits whatever it links — and must
+//!   never name `axum`, `clap`, `hyper` or `reqwest` in any dependency section,
+//!   in any dependency kind.
+//! - Anything downstream of the TCB. No crate that sits above the TCB may
+//!   appear in this manifest, dev-dependencies included. Today this crate has
+//!   no workspace dependencies at all, which is the strongest form of that.
+//!
+//! The two bans above are enforced by `tools/check-workspace-layering.sh`,
+//! which runs in CI and carries a fixture proving it fails when they are broken.
 
 pub mod canonical;
 pub mod error;

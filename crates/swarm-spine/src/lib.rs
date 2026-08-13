@@ -3,6 +3,45 @@
 //! The first milestone does not need the full upstream envelope or
 //! checkpoint machinery. It needs a small, serializable record format
 //! that captures what happened in the critical lane and can be replayed.
+//!
+//! ## Owns
+//!
+//! - The signed envelope format and its verification ([`envelope`]), the
+//!   issuer chain ([`chain`]) and the witnessed checkpoints over it
+//!   ([`checkpoint`]). These decide what "this happened and has not been
+//!   altered" means for the whole system.
+//! - The audit record shapes for one handled event: [`PolicyRecord`],
+//!   [`AuditResponseRecord`] and the replay bundle store ([`store`]).
+//! - Durable incident and investigation records ([`incident`],
+//!   [`investigation`]) — the persisted evidence, not the analysis that
+//!   produces it.
+//!
+//! ## Does not own
+//!
+//! - Deciding anything. It records verdicts from `swarm-policy` and receipts
+//!   from `swarm-response`; it does not authorize, execute, or re-rank.
+//! - Correlation. `CorrelatedIncident` is a record type defined here and
+//!   *assembled* by `swarm-runtime`'s correlation module, which depends on this
+//!   crate and not the other way round.
+//! - Cryptographic primitives, which are `swarm-crypto`'s.
+//! - Transport. This crate is in the trusted computing base (ADR 0009) and must
+//!   never name `axum`, `clap`, `hyper` or `reqwest` in any dependency section,
+//!   in any dependency kind.
+//! - Anything downstream of the TCB: `swarm-runtime`, `swarm-runtime-http`,
+//!   `swarm-cli`, `swarm-pheromone`, `swarm-agents` and the ingest crates all
+//!   sit above this one, dev-dependencies included.
+//!
+//! ONE MEASURED DEVIATION, recorded rather than hidden: this crate declares
+//! `swarm-response` (its envelopes embed `ResponseReceipt` and
+//! `ResponseFailure`), and `swarm-response` declares `reqwest` for the HTTP EDR
+//! adapter, so `cargo tree -p swarm-spine -i reqwest -e normal` prints a path
+//! today and the TCB reaches `reqwest` and `hyper` on its resolved normal
+//! graph. Those two edges are on the accepted baseline in
+//! `tools/check-workspace-layering.sh`; a third fails the build. ADR 0009 says
+//! what closes them.
+//!
+//! The bans above are enforced by `tools/check-workspace-layering.sh`, which
+//! runs in CI and carries a fixture proving it fails when they are broken.
 
 pub mod chain;
 pub mod checkpoint;
