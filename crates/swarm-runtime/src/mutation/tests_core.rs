@@ -2495,6 +2495,114 @@ fn tracked_default_ruleset_still_loads_with_its_speed_weight() {
     config.validate().unwrap();
 }
 
+/// The curated ruleset OMITS `promotion.require_solver_result_for_promotion`, and
+/// must still resolve it to `true`.
+///
+/// `rulesets/default.yaml` cannot be given the key: its sha256 is inside the
+/// ed25519-signed `rulesets/attestation.json`, asserted by
+/// `startup_attestation::tests::repo_ruleset_attestation_matches_checked_in_files`
+/// and verified at runtime startup, and the signing key is deliberately absent
+/// from this repository. So "defaults true in the curated ruleset" can only mean
+/// "a ruleset that omits the key resolves to true", and the serde default is the
+/// mechanism rather than a shortcut.
+///
+/// This test is the guard on the real regression: someone writing
+/// `#[serde(default)]` instead of `#[serde(default = "...")]` would silently ship
+/// every deployment with the promotion solver gate OFF, and nothing else in the
+/// suite would notice.
+#[test]
+fn tracked_default_ruleset_resolves_the_promotion_solver_gate_to_enabled() {
+    let raw = std::fs::read_to_string(repo_root().join("rulesets/default.yaml")).unwrap();
+    assert!(
+        !raw.contains("require_solver_result_for_promotion"),
+        "the curated ruleset must NOT carry this key -- it is frozen by the signed \
+         attestation, and this test only means anything while the key is absent"
+    );
+
+    let config = sample_config();
+    assert!(config.promotion.require_solver_result_for_promotion);
+    config.validate().unwrap();
+}
+
+/// PINS A DELIBERATE, SURPRISING CONSEQUENCE: with the curated ruleset exactly as
+/// shipped, the promotion solver gate refuses EVERY promotion.
+///
+/// The chain, each link measured rather than assumed:
+///   1. `rulesets/default.yaml` names one invariant bundle,
+///      `safety/office-detector-admission.yaml`.
+///   2. That bundle declares only `coverage_floor`, `fp_ceiling`,
+///      `latency_budget` and `parameter_bounds` invariants -- no `custom_z3`.
+///   3. Solver artifacts are produced ONLY by the two `custom_z3` arms in
+///      `evolution::formal_safety`, so the curated run produces none.
+///   4. No artifacts -> `summarize_solver_artifacts` -> `None` -> assurance
+///      records `solver.status: None`.
+///   5. `require_solver_result_for_promotion` defaults true, so
+///      `promotion_solver_block` returns `Missing { recorded_status: None }`.
+///
+/// `enable_z3: false` in the same ruleset closes the door a second time.
+///
+/// This is fail-closed, which is the direction CLAUDE.md requires, and it is what
+/// ZGATE-02 literally asks for. But it means the automated promotion lane is OFF
+/// in the shipped configuration until an operator adds a `custom_z3` invariant to
+/// their admission bundle AND enables z3 -- and the curated ruleset cannot simply
+/// be edited to do so, because its sha256 is inside the signed attestation.
+///
+/// Without this test the next person to touch the evolution lane spends a day on
+/// "promotion never works" before finding the cause. If you are here because this
+/// test failed, the shipped posture CHANGED: update the roadmap and STATE.md, do
+/// not just re-point the assertion.
+#[test]
+fn curated_ruleset_produces_no_solver_result_so_promotion_is_refused() {
+    let raw = std::fs::read_to_string(repo_root().join("rulesets/default.yaml")).unwrap();
+    let curated: serde_yaml::Value = serde_yaml::from_str(&raw).unwrap();
+
+    let safety_gate = &curated["evolution"]["safety_gate"];
+    assert_eq!(
+        safety_gate["enable_z3"].as_bool(),
+        Some(false),
+        "the curated ruleset is expected to ship with z3 disabled"
+    );
+
+    let bundles = safety_gate["invariant_bundle_paths"]
+        .as_sequence()
+        .expect("curated ruleset must name its invariant bundles");
+    assert!(!bundles.is_empty(), "no bundles named at all");
+
+    let mut declared_types = Vec::new();
+    for bundle in bundles {
+        let rel = bundle.as_str().expect("bundle path must be a string");
+        let bundle_raw = std::fs::read_to_string(repo_root().join("rulesets").join(rel)).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&bundle_raw).unwrap();
+        for invariant in parsed["invariants"]
+            .as_sequence()
+            .expect("bundle must declare invariants")
+        {
+            declared_types.push(
+                invariant["type"]
+                    .as_str()
+                    .expect("invariant must declare a type")
+                    .to_string(),
+            );
+        }
+    }
+
+    assert!(
+        !declared_types.iter().any(|kind| kind == "custom_z3"),
+        "the curated bundles declare {declared_types:?}. If a `custom_z3` invariant \
+         was added, the shipped promotion posture just changed from 'always refused' \
+         to 'depends on the solver' -- update this test, the roadmap and STATE.md \
+         deliberately rather than re-pointing the assertion"
+    );
+
+    // The consequence, stated as an assertion rather than left in prose: the gate
+    // is on, and nothing in the curated configuration can satisfy it.
+    let config = sample_config();
+    assert!(
+        config.promotion.require_solver_result_for_promotion,
+        "gate must be on for this test to mean anything"
+    );
+}
+
 fn latency_population_candidate(
     strategy_id: &str,
     objectives: EvolutionPopulationFitnessObjectives,

@@ -1258,6 +1258,7 @@ mod tests {
         DefaultCanaryHarness, FileCanaryStore, render_canary_run_report,
     };
     use crate::config::RuntimeMode;
+    use crate::evolution::assurance_summary_for_tests;
     use crate::evolution::{
         EvolutionProposalAssuranceCoverageSummary, EvolutionProposalAssuranceDecision,
         EvolutionProposalAssuranceSolverSummary, EvolutionProposalAssuranceSummary,
@@ -1404,9 +1405,9 @@ mod tests {
     }
 
     fn blocked_assurance_summary() -> EvolutionProposalAssuranceSummary {
-        EvolutionProposalAssuranceSummary {
-            decision: EvolutionProposalAssuranceDecision::Blocked,
-            coverage: EvolutionProposalAssuranceCoverageSummary {
+        assurance_summary_for_tests(
+            EvolutionProposalAssuranceDecision::Blocked,
+            EvolutionProposalAssuranceCoverageSummary {
                 detector: "office_baseline_control".to_string(),
                 suite_name: Some("evasion-breadth-v1".to_string()),
                 corpus_version: Some("2026-04-03".to_string()),
@@ -1414,14 +1415,14 @@ mod tests {
                 actual_catch_rate: Some(0.25),
                 actionable_gap_count: 2,
             },
-            solver: EvolutionProposalAssuranceSolverSummary {
+            EvolutionProposalAssuranceSolverSummary {
                 required: true,
                 status: None,
                 allowed_statuses: Vec::new(),
             },
-            harvested_case_ids: vec!["case-a".to_string()],
-            waiver: None,
-        }
+            vec!["case-a".to_string()],
+            None,
+        )
     }
 
     fn waived_assurance_summary(

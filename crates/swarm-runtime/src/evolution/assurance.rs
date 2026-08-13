@@ -3,6 +3,109 @@ use super::types::{
 };
 use super::*;
 
+/// Evaluator identity stamped on a summary minted by [`evaluate_proposal_assurance`].
+const EVALUATED_BY_ASSURANCE_GATE: &str = "evaluate_proposal_assurance";
+
+/// Evaluator identity restored onto a summary read back from a persisted artifact.
+const RESTORED_FROM_ARTIFACT: &str = "restored_from_persisted_artifact";
+
+/// Provenance stamp recording which evaluation produced an
+/// [`EvolutionProposalAssuranceSummary`].
+///
+/// The inner field is private to this module and there is no public constructor,
+/// so a summary literal cannot be written anywhere outside `evolution/assurance.rs`.
+/// That is the point: promotion authorizes on the summary's recorded `decision`
+/// (`assurance_gate_block_reason` reads that field and nothing else), so a caller
+/// able to write the struct down is a caller able to mint a passing attestation for
+/// a gate that never ran. `swarm-ingest-runtime` did exactly that.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvolutionAssuranceEvaluationProvenance {
+    evaluated_by: String,
+}
+
+impl EvolutionAssuranceEvaluationProvenance {
+    /// Name of the evaluation that produced the enclosing summary.
+    pub fn evaluated_by(&self) -> &str {
+        &self.evaluated_by
+    }
+}
+
+/// Provenance restored when a summary is deserialized from a persisted artifact.
+///
+/// Private to this module on purpose. Deserialization is the one lifecycle step
+/// besides evaluation that legitimately yields a summary -- the artifact it reads
+/// was written by an evaluation -- and routing it through a private function keeps
+/// `#[serde(default = ...)]` from doubling as a public constructor.
+fn restored_assurance_provenance() -> EvolutionAssuranceEvaluationProvenance {
+    EvolutionAssuranceEvaluationProvenance {
+        evaluated_by: RESTORED_FROM_ARTIFACT.to_string(),
+    }
+}
+
+/// Shared assurance summary persisted alongside one queued proposal.
+///
+/// `decision` and `provenance` are private and have no setters outside this
+/// module: `decision` is the field every downstream gate authorizes on, and
+/// `provenance` is what makes the struct unconstructible elsewhere. The remaining
+/// fields stay public because they are evidence, not authority -- nothing gates on
+/// them, and the waiver lane in `harnesses.rs` writes `waiver` after the fact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvolutionProposalAssuranceSummary {
+    decision: EvolutionProposalAssuranceDecision,
+    pub coverage: EvolutionProposalAssuranceCoverageSummary,
+    pub solver: EvolutionProposalAssuranceSolverSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harvested_case_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiver: Option<EvolutionAssuranceWaiverSummary>,
+    #[serde(default = "restored_assurance_provenance")]
+    provenance: EvolutionAssuranceEvaluationProvenance,
+}
+
+impl EvolutionProposalAssuranceSummary {
+    /// The recorded assurance verdict. Every promotion-lane gate reads this.
+    pub fn decision(&self) -> EvolutionProposalAssuranceDecision {
+        self.decision
+    }
+
+    /// Which evaluation produced this summary.
+    pub fn provenance(&self) -> &EvolutionAssuranceEvaluationProvenance {
+        &self.provenance
+    }
+}
+
+/// Build a summary from fixture data without running an evaluation.
+///
+/// `#[cfg(test)]` so it cannot leak into a production path. Test-only, because a
+/// production caller reaching for this is exactly the defect the private fields
+/// exist to prevent.
+#[cfg(test)]
+pub(crate) fn assurance_summary_for_tests(
+    decision: EvolutionProposalAssuranceDecision,
+    coverage: EvolutionProposalAssuranceCoverageSummary,
+    solver: EvolutionProposalAssuranceSolverSummary,
+    harvested_case_ids: Vec<String>,
+    waiver: Option<EvolutionAssuranceWaiverSummary>,
+) -> EvolutionProposalAssuranceSummary {
+    EvolutionProposalAssuranceSummary {
+        decision,
+        coverage,
+        solver,
+        harvested_case_ids,
+        waiver,
+        provenance: EvolutionAssuranceEvaluationProvenance {
+            evaluated_by: "assurance_summary_for_tests".to_string(),
+        },
+    }
+}
+
+#[cfg(test)]
+impl EvolutionProposalAssuranceSummary {
+    pub(crate) fn set_decision_for_tests(&mut self, decision: EvolutionProposalAssuranceDecision) {
+        self.decision = decision;
+    }
+}
+
 pub(crate) fn evaluate_proposal_assurance(
     config_path: &Path,
     config: &SwarmConfig,
@@ -144,6 +247,9 @@ pub(crate) fn evaluate_proposal_assurance(
         },
         harvested_case_ids: Vec::new(),
         waiver: None,
+        provenance: EvolutionAssuranceEvaluationProvenance {
+            evaluated_by: EVALUATED_BY_ASSURANCE_GATE.to_string(),
+        },
     }
 }
 

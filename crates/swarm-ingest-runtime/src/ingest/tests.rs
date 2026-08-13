@@ -674,9 +674,14 @@ fn redirect_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.paths.evolution_population_results_dir =
         root.join("evolution-population").display().to_string();
     config.evolution.paths.canary_results_dir = root.join("canaries").display().to_string();
-    // The assurance harvest store is NOT under `evolution.paths`, so it is easy
-    // to miss here; left on its repo-relative default it writes into the
-    // checked-out crate root.
+    // The assurance harvest store is NOT under `evolution.paths`, so it is not
+    // covered by the loop above. Left alone it resolves relative to the config
+    // file -- which for a test pointed at the repo's own `rulesets/default.yaml`
+    // means the harvester writes scenario YAML into `rulesets/data/`, dirtying the
+    // working tree and breaking `repo_ruleset_attestation_matches_checked_in_files`.
+    // The assurance harvest store is NOT under `evolution.paths`, so it is easy to
+    // miss here; left on its repo-relative default it writes into the checked-out
+    // crate root.
     config.evolution.assurance.harvest.results_dir =
         root.join("assurance-cases").display().to_string();
 }
@@ -777,11 +782,34 @@ fn live_response_config(strategy: &str) -> SwarmConfig {
     config
 }
 
-#[tokio::test]
-async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_lane() {
-    let root = temp_dir("strategy-router");
+/// Everything the two `route_kitten_candidate` cases assert on.
+struct RoutedKittenCandidate {
+    report: super::StrategyProposalRouteReport,
+    /// `queue_review_state` recorded against the population candidate.
+    stored_review_state: Option<swarm_runtime::evolution::EvolutionProposalReviewState>,
+    stored_ready_for_review: bool,
+    canary_results_dir: PathBuf,
+    expected_canary_results_dir: PathBuf,
+    /// Assurance summary persisted on the queue proposal, if the route wrote one.
+    queue_assurance: Option<swarm_runtime::evolution::EvolutionProposalAssuranceSummary>,
+    queue_blocking_reasons: Vec<swarm_runtime::evolution::EvolutionProposalBlockingReason>,
+}
+
+/// Drive one kitten candidate through the whole automated admission lane.
+///
+/// `min_detector_catch_rate` is the ONLY knob: it is the assurance coverage floor
+/// the candidate is judged against. The `office_baseline_control` candidate's
+/// measured catch rate against the repo evasion corpus is ~0.143, so a floor above
+/// that must block the route and a floor below it must not. Both cases run the
+/// same code path; nothing about the gate is switched off.
+async fn route_kitten_candidate(
+    label: &str,
+    min_detector_catch_rate: f64,
+) -> RoutedKittenCandidate {
+    let root = temp_dir(label);
     let config_path = repo_root().join("rulesets/default.yaml");
     let mut config = test_config("suspicious_process_tree");
+    config.evolution.assurance.min_detector_catch_rate = min_detector_catch_rate;
     configure_evolution_paths(&mut config, &root);
     let state = IngestState::from_config(&config_path, config.clone()).unwrap();
     let paths = super::resolve_strategy_proposal_paths(&config_path, &config);
@@ -953,12 +981,6 @@ async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_l
         .await
         .unwrap();
 
-    assert_eq!(report.outcome, super::StrategyProposalOutcome::Accepted);
-    assert!(report.selection_id.is_some());
-    assert!(report.bridge_id.is_some());
-    assert!(report.handoff_id.is_some());
-    assert!(report.canary_run_id.is_some());
-
     let stored_population = mutation
         .load_population(&config.evolution.paths.evolution_population_results_dir)
         .unwrap()
@@ -968,12 +990,119 @@ async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_l
         .iter()
         .find(|candidate| candidate.strategy_id == "office_router_candidate")
         .unwrap();
+
+    let queue_proposal = bridge_queue_proposal(&paths, report.bridge_id.as_deref());
+
+    RoutedKittenCandidate {
+        stored_review_state: stored_candidate.queue_review_state,
+        stored_ready_for_review: stored_candidate.ready_for_review,
+        canary_results_dir: paths.canary_results_dir.clone(),
+        expected_canary_results_dir: root.join("canaries"),
+        queue_assurance: queue_proposal
+            .as_ref()
+            .and_then(|proposal| proposal.assurance.clone()),
+        queue_blocking_reasons: queue_proposal
+            .map(|proposal| proposal.blocking_reasons)
+            .unwrap_or_default(),
+        report,
+    }
+}
+
+/// Load the queue proposal the bridge minted for this run, so a test can read the
+/// assurance summary that was actually persisted rather than the one it expected.
+fn bridge_queue_proposal(
+    paths: &super::StrategyProposalPaths,
+    bridge_id: Option<&str>,
+) -> Option<swarm_runtime::evolution::EvolutionProposalReport> {
+    bridge_id?;
+    let store = swarm_runtime::evolution::FileEvolutionProposalStore::open(
+        &paths.evolution_queue_results_dir,
+    )
+    .unwrap();
+    let list = store.list(None, None).unwrap();
+    let proposal_id = list.proposals.first()?.proposal_id.clone();
+    store
+        .load(&proposal_id)
+        .unwrap()
+        .map(|lookup| lookup.report)
+}
+
+#[tokio::test]
+async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_lane() {
+    // Floor below the candidate's measured 0.143 catch rate: assurance genuinely
+    // passes rather than being switched off.
+    let routed = route_kitten_candidate("strategy-router", 0.10).await;
+
     assert_eq!(
-        stored_candidate.queue_review_state,
+        routed.report.outcome,
+        super::StrategyProposalOutcome::Accepted
+    );
+    assert!(routed.report.selection_id.is_some());
+    assert!(routed.report.bridge_id.is_some());
+    assert!(routed.report.handoff_id.is_some());
+    assert!(routed.report.canary_run_id.is_some());
+
+    // The persisted assurance summary must come from the evaluator, not from the
+    // route writing one down. This is the assertion the fabricated summary passed
+    // while the gate had never run.
+    let assurance = routed.queue_assurance.expect("route persisted assurance");
+    assert_eq!(
+        assurance.decision(),
+        swarm_runtime::evolution::EvolutionProposalAssuranceDecision::Passed
+    );
+    assert_eq!(
+        assurance.provenance().evaluated_by(),
+        "evaluate_proposal_assurance"
+    );
+    // The fabrication reported no coverage evidence at all (`suite_name: None`,
+    // `actual_catch_rate: None`); a real evaluation cannot.
+    assert!(assurance.coverage.suite_name.is_some());
+    assert!(assurance.coverage.actual_catch_rate.is_some());
+
+    assert_eq!(
+        routed.stored_review_state,
         Some(swarm_runtime::evolution::EvolutionProposalReviewState::AcceptedForCanary)
     );
-    assert!(!stored_candidate.ready_for_review);
-    assert_eq!(paths.canary_results_dir, root.join("canaries"));
+    assert!(!routed.stored_ready_for_review);
+    assert_eq!(
+        routed.canary_results_dir,
+        routed.expected_canary_results_dir
+    );
+}
+
+#[tokio::test]
+async fn strategy_proposal_router_blocks_candidate_that_fails_the_assurance_gate() {
+    // Floor above the candidate's measured 0.143 catch rate. Everything else is
+    // identical to the admitting case, so the only thing under test is whether the
+    // assurance gate runs on this route at all.
+    let routed = route_kitten_candidate("strategy-router-blocked", 0.25).await;
+
+    assert_eq!(
+        routed.report.outcome,
+        super::StrategyProposalOutcome::Blocked
+    );
+    assert!(routed.report.handoff_id.is_none());
+    assert!(routed.report.canary_run_id.is_none());
+
+    let assurance = routed.queue_assurance.expect("route persisted assurance");
+    assert_eq!(
+        assurance.decision(),
+        swarm_runtime::evolution::EvolutionProposalAssuranceDecision::Blocked
+    );
+    assert!(
+        routed
+            .queue_blocking_reasons
+            .iter()
+            .any(|reason| reason.source == "assurance" && reason.name == "coverage_floor_not_met"),
+        "expected a coverage_floor_not_met reason, got {:?}",
+        routed.queue_blocking_reasons
+    );
+    // The blocked verdict must be written through to the durable review state, or
+    // the queue record still reads `accepted_for_canary` to any later reader.
+    assert_eq!(
+        routed.stored_review_state,
+        Some(swarm_runtime::evolution::EvolutionProposalReviewState::Blocked)
+    );
 }
 
 #[tokio::test]

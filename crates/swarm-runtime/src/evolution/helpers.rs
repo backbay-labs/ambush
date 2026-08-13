@@ -246,6 +246,7 @@ pub(crate) fn solver_proof_status_label(status: EvolutionSolverProofStatus) -> &
         EvolutionSolverProofStatus::Proved => "proved",
         EvolutionSolverProofStatus::Counterexample => "counterexample",
         EvolutionSolverProofStatus::Timeout => "timeout",
+        EvolutionSolverProofStatus::ResourceLimit => "resource_limit",
         EvolutionSolverProofStatus::Disabled => "disabled",
         EvolutionSolverProofStatus::Error => "error",
     }
@@ -260,6 +261,9 @@ pub(crate) fn map_assurance_solver_status(
             EvolutionSolverProofStatus::Counterexample
         }
         EvolutionAssuranceSolverStatusConfig::Timeout => EvolutionSolverProofStatus::Timeout,
+        EvolutionAssuranceSolverStatusConfig::ResourceLimit => {
+            EvolutionSolverProofStatus::ResourceLimit
+        }
         EvolutionAssuranceSolverStatusConfig::Disabled => EvolutionSolverProofStatus::Disabled,
         EvolutionAssuranceSolverStatusConfig::Error => EvolutionSolverProofStatus::Error,
     }

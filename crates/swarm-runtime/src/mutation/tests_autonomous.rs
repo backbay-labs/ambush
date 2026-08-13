@@ -1,4 +1,5 @@
 use super::test_support::*;
+use crate::evolution::assurance_summary_for_tests;
 
 #[tokio::test]
 async fn mutation_ranking_orders_ready_candidate_first() {
@@ -150,9 +151,9 @@ async fn mutation_ranking_orders_ready_candidate_first() {
         .load(&promotion.report.queue_proposal_id)
         .unwrap()
         .unwrap();
-    proposal.report.assurance = Some(EvolutionProposalAssuranceSummary {
-        decision: EvolutionProposalAssuranceDecision::Blocked,
-        coverage: EvolutionProposalAssuranceCoverageSummary {
+    proposal.report.assurance = Some(assurance_summary_for_tests(
+        EvolutionProposalAssuranceDecision::Blocked,
+        EvolutionProposalAssuranceCoverageSummary {
             detector: "suspicious_process_tree".to_string(),
             suite_name: Some("evasion-breadth-v1".to_string()),
             corpus_version: Some("test".to_string()),
@@ -160,14 +161,14 @@ async fn mutation_ranking_orders_ready_candidate_first() {
             actual_catch_rate: Some(0.25),
             actionable_gap_count: 2,
         },
-        solver: EvolutionProposalAssuranceSolverSummary {
+        EvolutionProposalAssuranceSolverSummary {
             required: false,
             status: None,
             allowed_statuses: Vec::new(),
         },
-        harvested_case_ids: vec!["case-a".to_string(), "case-b".to_string()],
-        waiver: None,
-    });
+        vec!["case-a".to_string(), "case-b".to_string()],
+        None,
+    ));
     queue_store.persist(&proposal.report).unwrap();
     let ranking = mutation
         .rank_candidates(&queue_dir, &validation_batch.report.validation_batch_id, 1)

@@ -77,12 +77,22 @@ impl DefaultFormalSafetyGate {
         let created_at_ms = now_ms();
         let invariants = verdicts
             .iter()
+            // THREE-WAY, not two. The durable proof is the audit record, and a
+            // two-valued claim wrote "failed" over every undecided invariant --
+            // an assertion the evaluation never made.
             .map(|verdict| EvolutionProofInvariant {
                 name: verdict.name.clone(),
-                claim: if verdict.passed {
-                    format!("formal safety invariant `{}` passed", verdict.name)
-                } else {
-                    format!("formal safety invariant `{}` failed", verdict.name)
+                claim: match verdict.outcome() {
+                    FormalSafetyInvariantOutcome::Proved => {
+                        format!("formal safety invariant `{}` passed", verdict.name)
+                    }
+                    FormalSafetyInvariantOutcome::Refuted => {
+                        format!("formal safety invariant `{}` failed", verdict.name)
+                    }
+                    FormalSafetyInvariantOutcome::Unproved => format!(
+                        "formal safety invariant `{}` was NOT DECIDED (unproved, not refuted)",
+                        verdict.name
+                    ),
                 },
                 details: verdict.details.clone(),
                 counterexamples: verdict.counterexamples.clone(),
@@ -114,10 +124,17 @@ impl DefaultFormalSafetyGate {
             candidate_description: candidate.experiment.candidate.description().to_string(),
             lineage: candidate.experiment.lineage.clone(),
             corpus_name: candidate.verification.corpus_name.clone(),
-            proof_system: if solver_summary.is_some() {
-                "formal_safety_gate_v2+z3_smt_v1".to_string()
-            } else {
-                "formal_safety_gate_v2".to_string()
+            // The stamp names what actually decided this proof. It used to read
+            // `+z3_smt_v1` whenever a solver summary EXISTED -- including when
+            // every artifact in it was `Disabled`, i.e. when z3 had not run at
+            // all. A proof that names a solver it never invoked is a false
+            // attestation in a durable, hashed artifact.
+            proof_system: match solver_summary.map(|summary| summary.status) {
+                None => "formal_safety_gate_v2".to_string(),
+                Some(EvolutionSolverProofStatus::Disabled) => {
+                    "formal_safety_gate_v2+z3_smt_v1_not_run".to_string()
+                }
+                Some(_) => "formal_safety_gate_v2+z3_smt_v1".to_string(),
             },
             experiment_manifest_sha256,
             strategy_genome_sha256: sha256_hex(&candidate.experiment.candidate)?,
@@ -185,7 +202,7 @@ impl FormalSafetyGate for DefaultFormalSafetyGate {
         };
 
         Ok(FormalSafetyVerificationReport {
-            passed: verdicts.iter().all(|verdict| verdict.passed),
+            passed: verdicts.iter().all(|verdict| verdict.passed()),
             bundle_paths,
             bundle_sha256,
             invariants: verdicts,
@@ -531,6 +548,86 @@ fn z3_timeout_ms() -> u64 {
         .unwrap_or(DEFAULT_Z3_TIMEOUT_MS)
 }
 
+/// Deterministic solver work budget, in z3 resource units.
+///
+/// This is the budget that DECIDES: `rlimit` counts solver steps, so the same
+/// query against the same z3 build gives up at the same point on a fast machine
+/// and a slow one. The wall-clock `timeout` stays set as a backstop for a solver
+/// that hangs outside its own accounting, but a verdict must not depend on it.
+fn z3_rlimit() -> u64 {
+    std::env::var("SWARM_EVOLUTION_Z3_RLIMIT")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_Z3_RLIMIT)
+}
+
+/// Classify a z3 `unknown` result from its `reason_unknown` string.
+///
+/// DELIBERATELY OUTSIDE `#[cfg(feature = "z3")]`. The arm that calls it is not:
+/// until the `solver-z3` CI job landed alongside this change, nothing in CI
+/// compiled the feature at all, and a classifier that only exists inside the cfg
+/// block is a classifier no test can reach. Keeping it here means the mapping is
+/// covered by the default-feature test suite as well as the solver lane.
+///
+/// CLASSIFIES ON THE NUMBERS, NOT THE STRING. The first version of this matched
+/// `reason_unknown` for "resource limit"/"resource limits" and mapped
+/// "canceled" to `Timeout`. Measured against real z3 0.20 with the budget
+/// exhausted (`SWARM_EVOLUTION_Z3_RLIMIT=1`), the persisted artifact was
+/// `(Timeout, Some("canceled"), rlimit=1, rlimit_count=Some(12), duration_ms=7)`:
+/// z3 reports rlimit exhaustion through `Params::set_u32("rlimit", ..)` as the
+/// generic `canceled`, so `ResourceLimit` was UNREACHABLE on the shipped path
+/// and the durable operator-facing detail claimed the solver "hit the
+/// wall-clock backstop after 7ms (timeout=30000ms)" -- asserting the opposite of
+/// what stopped it. The test that pinned the mapping asserted a string z3 never
+/// emits here, so it reported success over a region it never inspected.
+///
+/// `rlimit_count >= rlimit` is decidable from the artifact itself and holds
+/// whichever spelling a z3 build uses, so the string is now only consulted when
+/// the counters cannot settle it. The `resource limit` spellings are kept
+/// because some entry points do answer `(get-info :reason-unknown)` that way.
+/// Neither outcome is a refutation.
+// Called only from the `#[cfg(feature = "z3")]` arm and from the unit tests. The
+// `allow` is the price of keeping it OUT of the cfg block, which is the whole
+// point: inside, no default-feature test could reach it.
+#[cfg_attr(not(feature = "z3"), allow(dead_code))]
+pub(super) fn classify_unknown(
+    reason_unknown: Option<&str>,
+    rlimit: u64,
+    rlimit_count: Option<u64>,
+) -> EvolutionSolverProofStatus {
+    // The counters decide first, and they decide regardless of spelling: if the
+    // solver consumed its whole deterministic budget, the budget is what stopped
+    // it, whatever string this z3 build chose to report.
+    let exhausted_budget =
+        matches!(rlimit_count, Some(consumed) if rlimit > 0 && consumed >= rlimit);
+
+    let Some(reason) = reason_unknown else {
+        return if exhausted_budget {
+            EvolutionSolverProofStatus::ResourceLimit
+        } else {
+            EvolutionSolverProofStatus::Error
+        };
+    };
+    let normalized = reason.to_ascii_lowercase();
+    if normalized.contains("resource limit") || normalized.contains("resource limits") {
+        EvolutionSolverProofStatus::ResourceLimit
+    } else if normalized.contains("timeout") || normalized.contains("canceled") {
+        // "canceled" is what z3 0.20 actually reports for rlimit exhaustion, so
+        // the counters -- not this string -- separate the deterministic budget
+        // from the wall-clock backstop.
+        if exhausted_budget {
+            EvolutionSolverProofStatus::ResourceLimit
+        } else {
+            EvolutionSolverProofStatus::Timeout
+        }
+    } else if exhausted_budget {
+        EvolutionSolverProofStatus::ResourceLimit
+    } else {
+        EvolutionSolverProofStatus::Error
+    }
+}
+
 fn compile_custom_z3_query(
     bundle_path: &Path,
     query: &str,
@@ -594,21 +691,26 @@ fn json_value_to_smt_literal(
     }
 }
 
-fn build_solver_artifact(
+pub(super) fn build_solver_artifact(
     invariant_name: &str,
     status: EvolutionSolverProofStatus,
-    timeout_ms: u64,
-    duration_ms: u64,
+    budget: &SolverBudget,
     compiled_query: &str,
     counterexamples: Vec<EvolutionSolverCounterexample>,
     reason_unknown: Option<String>,
 ) -> Result<EvolutionSolverInvariantArtifact, FormalSafetyGateError> {
     let compiled_query_sha256 = sha256_hex(&compiled_query)?;
+    // `duration_ms` is DELIBERATELY NOT in the attestation payload. It is wall
+    // clock, so including it made the attestation hash of a reproducible proof
+    // differ between two runs of the same query -- the hash could never be used to
+    // recognise the same result twice. `rlimit` and `rlimit_count` replace it:
+    // both are deterministic solver accounting.
     let attestation_sha256 = sha256_hex(&SolverArtifactAttestationPayload {
         invariant_name: invariant_name.to_string(),
         status,
-        timeout_ms,
-        duration_ms,
+        timeout_ms: budget.timeout_ms,
+        rlimit: budget.rlimit,
+        rlimit_count: budget.rlimit_count,
         compiled_query_sha256: compiled_query_sha256.clone(),
         reason_unknown: reason_unknown.clone(),
         counterexamples: counterexamples.clone(),
@@ -617,8 +719,10 @@ fn build_solver_artifact(
         invariant_name: invariant_name.to_string(),
         solver: "z3".to_string(),
         status,
-        timeout_ms,
-        duration_ms,
+        timeout_ms: budget.timeout_ms,
+        rlimit: budget.rlimit,
+        rlimit_count: budget.rlimit_count,
+        duration_ms: budget.duration_ms,
         compiled_query_sha256,
         attestation_sha256,
         counterexamples,
@@ -626,7 +730,7 @@ fn build_solver_artifact(
     })
 }
 
-fn summarize_solver_artifacts(
+pub(super) fn summarize_solver_artifacts(
     artifacts: &[EvolutionSolverInvariantArtifact],
 ) -> Result<Option<EvolutionSolverProofSummary>, FormalSafetyGateError> {
     if artifacts.is_empty() {
@@ -649,6 +753,10 @@ fn summarize_solver_artifacts(
         .iter()
         .filter(|artifact| artifact.status == EvolutionSolverProofStatus::Timeout)
         .count();
+    let resource_limited_count = artifacts
+        .iter()
+        .filter(|artifact| artifact.status == EvolutionSolverProofStatus::ResourceLimit)
+        .count();
     let disabled_count = artifacts
         .iter()
         .filter(|artifact| artifact.status == EvolutionSolverProofStatus::Disabled)
@@ -657,8 +765,13 @@ fn summarize_solver_artifacts(
         .iter()
         .filter(|artifact| artifact.status == EvolutionSolverProofStatus::Error)
         .count();
+    // `ResourceLimit` sits next to `Timeout` at the top of the precedence, above
+    // `Counterexample`: an aggregate that reported a refutation while some other
+    // invariant went undecided would overstate what the proof established.
     let status = if timed_out_count > 0 {
         EvolutionSolverProofStatus::Timeout
+    } else if resource_limited_count > 0 {
+        EvolutionSolverProofStatus::ResourceLimit
     } else if counterexample_invariant_count > 0 {
         EvolutionSolverProofStatus::Counterexample
     } else if error_count > 0 {
@@ -687,6 +800,7 @@ fn summarize_solver_artifacts(
         counterexample_invariant_count,
         counterexample_binding_count,
         timed_out_count,
+        resource_limited_count,
         disabled_count,
         error_count,
         timeout_ms,
@@ -703,6 +817,7 @@ fn evaluate_custom_z3_invariant(
     z3_enabled: bool,
 ) -> Result<FormalSafetyInvariantEvaluation, FormalSafetyGateError> {
     let timeout_ms = z3_timeout_ms();
+    let rlimit = z3_rlimit();
     let compiled_query = compile_custom_z3_query(bundle_path, query, candidate_value)?;
     evaluate_custom_z3_invariant_impl(
         bundle_path,
@@ -710,6 +825,7 @@ fn evaluate_custom_z3_invariant(
         compiled_query,
         candidate,
         timeout_ms,
+        rlimit,
         z3_enabled,
     )
 }
@@ -721,6 +837,7 @@ fn evaluate_custom_z3_invariant_impl(
     compiled_query: String,
     candidate: &StrategyGenome,
     timeout_ms: u64,
+    rlimit: u64,
     z3_enabled: bool,
 ) -> Result<FormalSafetyInvariantEvaluation, FormalSafetyGateError> {
     if !z3_enabled {
@@ -730,42 +847,53 @@ fn evaluate_custom_z3_invariant_impl(
             compiled_query,
             candidate,
             timeout_ms,
+            rlimit,
         );
     }
 
     let started_at = std::time::Instant::now();
     let mut config = Z3Config::new();
+    // Wall-clock backstop only: a solver that hangs outside its own accounting
+    // must still be killable. The DECIDING budget is `rlimit` below.
     config.set_timeout_msec(timeout_ms);
     with_z3_config(&config, || {
         let solver = Z3Solver::new();
         let mut params = Z3Params::new();
-        params.set_u32("timeout", timeout_ms as u32);
+        params.set_u32("timeout", u32::try_from(timeout_ms).unwrap_or(u32::MAX));
+        params.set_u32("rlimit", u32::try_from(rlimit).unwrap_or(u32::MAX));
         solver.set_params(&params);
         solver.from_string(compiled_query.clone());
         let result = solver.check();
         let duration_ms = started_at.elapsed().as_millis() as u64;
+        let rlimit_count = consumed_rlimit(&solver);
+
+        let budget = SolverBudget {
+            timeout_ms,
+            rlimit,
+            rlimit_count,
+            duration_ms,
+        };
 
         match result {
             SatResult::Unsat => {
                 let artifact = build_solver_artifact(
                     name,
                     EvolutionSolverProofStatus::Proved,
-                    timeout_ms,
-                    duration_ms,
+                    &budget,
                     &compiled_query,
                     Vec::new(),
                     None,
                 )?;
                 Ok(FormalSafetyInvariantEvaluation {
-                    verdict: FormalSafetyInvariantVerdict {
-                        name: name.to_string(),
-                        passed: true,
-                        details: format!(
-                            "custom_z3 invariant proved with Z3 in {duration_ms}ms (timeout={}ms)",
-                            timeout_ms
+                    verdict: FormalSafetyInvariantVerdict::proved(
+                        name,
+                        format!(
+                            "custom_z3 invariant proved with Z3 (rlimit_count={}, rlimit={rlimit})",
+                            rlimit_count
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "unreported".to_string())
                         ),
-                        counterexamples: Vec::new(),
-                    },
+                    ),
                     solver_artifact: Some(artifact),
                 })
             }
@@ -777,20 +905,16 @@ fn evaluate_custom_z3_invariant_impl(
                 let artifact = build_solver_artifact(
                     name,
                     EvolutionSolverProofStatus::Counterexample,
-                    timeout_ms,
-                    duration_ms,
+                    &budget,
                     &compiled_query,
                     counterexamples.clone(),
                     None,
                 )?;
                 Ok(FormalSafetyInvariantEvaluation {
-                    verdict: FormalSafetyInvariantVerdict {
-                        name: name.to_string(),
-                        passed: false,
-                        details: format!(
-                            "custom_z3 invariant produced a counterexample in {duration_ms}ms"
-                        ),
-                        counterexamples: counterexamples
+                    verdict: FormalSafetyInvariantVerdict::refuted(
+                        name,
+                        "custom_z3 invariant produced a counterexample",
+                        counterexamples
                             .iter()
                             .map(|counterexample| VerificationCounterexample {
                                 subject: counterexample.name.clone(),
@@ -798,62 +922,109 @@ fn evaluate_custom_z3_invariant_impl(
                                 details: counterexample.value.clone(),
                             })
                             .collect(),
-                    },
+                    ),
                     solver_artifact: Some(artifact),
                 })
             }
             SatResult::Unknown => {
+                // NOT A REFUTATION. This arm used to emit `passed: false` with a
+                // SYNTHESIZED `VerificationCounterexample` whose `subject` was the
+                // candidate's own strategy id and whose `details` was the timeout
+                // message -- so `persist_formal_safety_proof` wrote
+                // "formal safety invariant `X` failed" into the durable proof with
+                // a fabricated witness attached, for a query z3 never decided.
+                //
+                // `FormalSafetyInvariantVerdict::unproved` takes no counterexamples
+                // at all. `passed` stays false, so the lane still fails closed; only
+                // the claim changes, from refuted to not-decided.
                 let reason_unknown = solver.get_reason_unknown();
-                let status = if reason_unknown
-                    .as_deref()
-                    .map(|reason| {
-                        let normalized = reason.to_ascii_lowercase();
-                        normalized.contains("timeout") || normalized.contains("canceled")
-                    })
-                    .unwrap_or(false)
-                {
-                    EvolutionSolverProofStatus::Timeout
-                } else {
-                    EvolutionSolverProofStatus::Error
-                };
-                let details = if status == EvolutionSolverProofStatus::Timeout {
-                    format!(
-                        "custom_z3 invariant timed out after {duration_ms}ms (timeout={}ms)",
-                        timeout_ms
-                    )
-                } else {
-                    format!(
-                        "custom_z3 invariant returned unknown after {duration_ms}ms ({})",
-                        reason_unknown
-                            .clone()
-                            .unwrap_or_else(|| "no solver reason provided".to_string())
-                    )
-                };
+                let status = classify_unknown(
+                    reason_unknown.as_deref(),
+                    budget.rlimit,
+                    budget.rlimit_count,
+                );
+                let details = unknown_details(status, &budget, reason_unknown.as_deref());
                 let artifact = build_solver_artifact(
                     name,
                     status,
-                    timeout_ms,
-                    duration_ms,
+                    &budget,
                     &compiled_query,
                     Vec::new(),
                     reason_unknown.clone(),
                 )?;
                 Ok(FormalSafetyInvariantEvaluation {
-                    verdict: FormalSafetyInvariantVerdict {
-                        name: name.to_string(),
-                        passed: false,
-                        details: details.clone(),
-                        counterexamples: vec![VerificationCounterexample {
-                            subject: candidate.strategy_id.clone(),
-                            reference: bundle_path.display().to_string(),
-                            details,
-                        }],
-                    },
+                    verdict: FormalSafetyInvariantVerdict::unproved(name, details),
                     solver_artifact: Some(artifact),
                 })
             }
         }
     })
+}
+
+/// Read the work z3 says it consumed.
+///
+/// The statistics key is NOT stable across z3 releases (the SMT-LIB surface
+/// prints `:rlimit-count`, the C API has used `rlimit count`), so this scans the
+/// entries for either spelling rather than hardcoding one, and returns `None`
+/// rather than panicking when neither is present. A missing counter degrades the
+/// artifact's evidence; it must not degrade the run.
+#[cfg(feature = "z3")]
+fn consumed_rlimit(solver: &Z3Solver) -> Option<u64> {
+    let statistics = solver.get_statistics();
+    statistics.entries().into_iter().find_map(|entry| {
+        let key = entry.key.to_ascii_lowercase().replace(['-', '_'], " ");
+        if key != "rlimit count" {
+            return None;
+        }
+        match entry.value {
+            z3::StatisticsValue::UInt(value) => Some(u64::from(value)),
+            z3::StatisticsValue::Double(value) if value >= 0.0 => Some(value as u64),
+            z3::StatisticsValue::Double(_) => None,
+        }
+    })
+}
+
+/// The budget a single solver run was given, and what it actually used.
+pub(super) struct SolverBudget {
+    pub(super) timeout_ms: u64,
+    pub(super) rlimit: u64,
+    pub(super) rlimit_count: Option<u64>,
+    pub(super) duration_ms: u64,
+}
+
+/// Operator-facing text for an undecided run.
+///
+/// Leads with the DETERMINISTIC number (`rlimit_count`) for the resource-limit
+/// case, and names the wall clock only where the wall clock is genuinely what
+/// stopped the run.
+#[cfg_attr(not(feature = "z3"), allow(dead_code))]
+fn unknown_details(
+    status: EvolutionSolverProofStatus,
+    budget: &SolverBudget,
+    reason_unknown: Option<&str>,
+) -> String {
+    let consumed = budget
+        .rlimit_count
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unreported".to_string());
+    match status {
+        EvolutionSolverProofStatus::ResourceLimit => format!(
+            "custom_z3 invariant UNPROVED: solver exhausted its resource budget \
+             (rlimit_count={consumed}, rlimit={}). This is not a refutation.",
+            budget.rlimit
+        ),
+        EvolutionSolverProofStatus::Timeout => format!(
+            "custom_z3 invariant UNPROVED: solver hit the wall-clock backstop after \
+             {}ms (timeout={}ms, rlimit_count={consumed}). This is not a refutation, \
+             and unlike the resource budget it is not reproducible across machines.",
+            budget.duration_ms, budget.timeout_ms
+        ),
+        _ => format!(
+            "custom_z3 invariant UNPROVED: solver returned unknown ({}) with \
+             rlimit_count={consumed}. This is not a refutation.",
+            reason_unknown.unwrap_or("no solver reason provided")
+        ),
+    }
 }
 
 #[cfg(not(feature = "z3"))]
@@ -863,42 +1034,58 @@ fn evaluate_custom_z3_invariant_impl(
     compiled_query: String,
     candidate: &StrategyGenome,
     timeout_ms: u64,
+    rlimit: u64,
     _z3_enabled: bool,
 ) -> Result<FormalSafetyInvariantEvaluation, FormalSafetyGateError> {
-    disabled_custom_z3_evaluation(bundle_path, name, compiled_query, candidate, timeout_ms)
+    disabled_custom_z3_evaluation(
+        bundle_path,
+        name,
+        compiled_query,
+        candidate,
+        timeout_ms,
+        rlimit,
+    )
 }
 
+/// The solver did not run, because the build or the config disabled it.
+///
+/// SAME DEFECT AS THE `SatResult::Unknown` ARM, and this is the copy the
+/// default-feature build actually compiles: it used to synthesize a
+/// `VerificationCounterexample` naming the candidate's own strategy id, so the
+/// durable proof recorded "formal safety invariant `X` failed" with a fabricated
+/// witness for an invariant nothing had evaluated. `Unproved` carries no
+/// counterexamples; the lane still fails closed on `passed() == false`.
 fn disabled_custom_z3_evaluation(
-    bundle_path: &Path,
+    _bundle_path: &Path,
     name: &str,
     compiled_query: String,
-    candidate: &StrategyGenome,
+    _candidate: &StrategyGenome,
     timeout_ms: u64,
+    rlimit: u64,
 ) -> Result<FormalSafetyInvariantEvaluation, FormalSafetyGateError> {
+    // The budget is recorded even though nothing spent it, so the artifact says
+    // what the run WOULD have been given. `rlimit_count: None` is what says it
+    // never ran.
+    let budget = SolverBudget {
+        timeout_ms,
+        rlimit,
+        rlimit_count: None,
+        duration_ms: 0,
+    };
     let artifact = build_solver_artifact(
         name,
         EvolutionSolverProofStatus::Disabled,
-        timeout_ms,
-        0,
+        &budget,
         &compiled_query,
         Vec::new(),
         Some("the optional Z3-backed verifier is not enabled in this build or config".to_string()),
     )?;
     Ok(FormalSafetyInvariantEvaluation {
-        verdict: FormalSafetyInvariantVerdict {
-            name: name.to_string(),
-            passed: false,
-            details:
-                "custom_z3 invariants require the optional Z3-backed verifier, which is not enabled in this build"
-                    .to_string(),
-            counterexamples: vec![VerificationCounterexample {
-                subject: candidate.strategy_id.clone(),
-                reference: bundle_path.display().to_string(),
-                details:
-                    "custom_z3 invariant cannot be evaluated without the optional solver lane"
-                        .to_string(),
-            }],
-        },
+        verdict: FormalSafetyInvariantVerdict::unproved(
+            name,
+            "custom_z3 invariant UNPROVED: the optional Z3-backed verifier is not enabled \
+             in this build or config, so nothing evaluated it. This is not a refutation.",
+        ),
         solver_artifact: Some(artifact),
     })
 }
@@ -986,27 +1173,28 @@ fn evaluate_coverage_floor(
                 ),
             }]
         });
-    Ok(FormalSafetyInvariantVerdict {
-        name: name.to_string(),
-        passed: ratio >= min_ratio,
-        details: if ratio >= min_ratio {
+    // Two-valued on purpose: the coverage ratio is measured from the verification
+    // report, so failing it IS a refutation and `counterexamples` is the witness.
+    // Only the solver arms can be undecided.
+    Ok(if ratio >= min_ratio {
+        FormalSafetyInvariantVerdict::proved(
+            name,
             format!(
                 "candidate preserved {:.2}% of the required {}",
                 ratio * 100.0,
                 details_suffix
-            )
-        } else {
+            ),
+        )
+    } else {
+        FormalSafetyInvariantVerdict::refuted(
+            name,
             format!(
                 "candidate preserved only {:.2}% of the required {}",
                 ratio * 100.0,
                 details_suffix
-            )
-        },
-        counterexamples: if ratio >= min_ratio {
-            Vec::new()
-        } else {
-            counterexamples
-        },
+            ),
+            counterexamples,
+        )
     })
 }
 
@@ -1039,25 +1227,23 @@ fn evaluate_fp_ceiling(
                 details: "verification invariant `false_positive_bound` was not found".to_string(),
             }]
         });
-    Ok(FormalSafetyInvariantVerdict {
-        name: name.to_string(),
-        passed: actual <= max_rate,
-        details: if actual <= max_rate {
+    Ok(if actual <= max_rate {
+        FormalSafetyInvariantVerdict::proved(
+            name,
             format!(
                 "candidate false-positive rate {:.4} stayed within ceiling {:.4}",
                 actual, max_rate
-            )
-        } else {
+            ),
+        )
+    } else {
+        FormalSafetyInvariantVerdict::refuted(
+            name,
             format!(
                 "candidate false-positive rate {:.4} exceeded ceiling {:.4}",
                 actual, max_rate
-            )
-        },
-        counterexamples: if actual <= max_rate {
-            Vec::new()
-        } else {
-            counterexamples
-        },
+            ),
+            counterexamples,
+        )
     })
 }
 
@@ -1105,39 +1291,28 @@ fn evaluate_latency_budget(
         .iter()
         .find(|entry| entry.name == "detect_latency_budget");
     let Some(observation) = observation else {
-        return Ok(FormalSafetyInvariantVerdict {
-            name: name.to_string(),
-            passed: false,
-            details: "verification recorded no `detect_latency_budget` observation".to_string(),
-            counterexamples: vec![VerificationCounterexample {
-                subject: candidate.strategy_id.clone(),
-                reference: candidate.verification.verification_id.clone(),
-                details: "verification observation `detect_latency_budget` was not found"
-                    .to_string(),
-            }],
-        });
+        // Missing evidence is not adverse evidence: the observation is absent, so
+        // nothing was measured and nothing was refuted.
+        return Ok(FormalSafetyInvariantVerdict::unproved(
+            name,
+            "verification recorded no `detect_latency_budget` observation, so the invariant \
+             was NOT DECIDED",
+        ));
     };
     let observed = observation.observed.as_u64();
     let Some(observed) = observed else {
-        return Ok(FormalSafetyInvariantVerdict {
-            name: name.to_string(),
-            passed: false,
-            details: "`detect_latency_budget` observation carried no numeric measurement"
-                .to_string(),
-            counterexamples: vec![VerificationCounterexample {
-                subject: candidate.strategy_id.clone(),
-                reference: candidate.verification.verification_id.clone(),
-                details: format!(
-                    "expected an unsigned measurement, got `{}`",
-                    observation.observed
-                ),
-            }],
-        });
+        return Ok(FormalSafetyInvariantVerdict::unproved(
+            name,
+            format!(
+                "`detect_latency_budget` observation carried no numeric measurement \
+                 (got `{}`), so the invariant was NOT DECIDED",
+                observation.observed
+            ),
+        ));
     };
-    Ok(FormalSafetyInvariantVerdict {
-        name: name.to_string(),
-        passed: true,
-        details: if observed <= advisory_max_detect_latency_us {
+    Ok(FormalSafetyInvariantVerdict::proved(
+        name,
+        if observed <= advisory_max_detect_latency_us {
             format!(
                 "candidate recorded detect latency {}us, within the advisory budget {}us \
                  (advisory: wall-clock latency does not gate admission)",
@@ -1150,8 +1325,7 @@ fn evaluate_latency_budget(
                 observed, advisory_max_detect_latency_us
             )
         },
-        counterexamples: Vec::new(),
-    })
+    ))
 }
 
 fn evaluate_parameter_bounds(
@@ -1162,28 +1336,24 @@ fn evaluate_parameter_bounds(
     candidate_value: &JsonValue,
 ) -> FormalSafetyInvariantVerdict {
     let Some(value) = candidate_value.pointer(json_pointer) else {
-        return FormalSafetyInvariantVerdict {
-            name: name.to_string(),
-            passed: false,
-            details: format!("candidate genome does not contain json pointer `{json_pointer}`"),
-            counterexamples: vec![VerificationCounterexample {
-                subject: name.to_string(),
-                reference: json_pointer.to_string(),
-                details: "pointer was missing from the candidate genome".to_string(),
-            }],
-        };
+        // The pointer is absent, so the bound was compared against nothing. Not
+        // decided -- still fails closed, but claims no counterexample.
+        return FormalSafetyInvariantVerdict::unproved(
+            name,
+            format!(
+                "candidate genome does not contain json pointer `{json_pointer}`, so the \
+                 bound was NOT DECIDED"
+            ),
+        );
     };
     let Some(number) = value.as_f64() else {
-        return FormalSafetyInvariantVerdict {
-            name: name.to_string(),
-            passed: false,
-            details: format!("candidate value at `{json_pointer}` is not numeric"),
-            counterexamples: vec![VerificationCounterexample {
-                subject: name.to_string(),
-                reference: json_pointer.to_string(),
-                details: format!("encountered non-numeric value `{value}`"),
-            }],
-        };
+        return FormalSafetyInvariantVerdict::unproved(
+            name,
+            format!(
+                "candidate value at `{json_pointer}` is not numeric (`{value}`), so the \
+                 bound was NOT DECIDED"
+            ),
+        );
     };
 
     let mut details = Vec::new();
@@ -1201,33 +1371,34 @@ fn evaluate_parameter_bounds(
         details.push(format!("value {number:.4} exceeds maximum {max:.4}"));
     }
 
-    FormalSafetyInvariantVerdict {
-        name: name.to_string(),
-        passed,
-        details: if passed {
-            let mut bounds = Vec::new();
-            if let Some(min) = min {
-                bounds.push(format!("min={min:.4}"));
-            }
-            if let Some(max) = max {
-                bounds.push(format!("max={max:.4}"));
-            }
+    // A numeric value that sits outside its bound IS refuted, and the bound itself
+    // is the witness. Only the missing-pointer and non-numeric arms above are
+    // undecided.
+    if passed {
+        let mut bounds = Vec::new();
+        if let Some(min) = min {
+            bounds.push(format!("min={min:.4}"));
+        }
+        if let Some(max) = max {
+            bounds.push(format!("max={max:.4}"));
+        }
+        FormalSafetyInvariantVerdict::proved(
+            name,
             format!(
                 "candidate value at `{json_pointer}` ({number:.4}) satisfied {}",
                 bounds.join(", ")
-            )
-        } else {
-            details.join("; ")
-        },
-        counterexamples: if passed {
-            Vec::new()
-        } else {
+            ),
+        )
+    } else {
+        FormalSafetyInvariantVerdict::refuted(
+            name,
+            details.join("; "),
             vec![VerificationCounterexample {
                 subject: name.to_string(),
                 reference: json_pointer.to_string(),
                 details: details.join("; "),
-            }]
-        },
+            }],
+        )
     }
 }
 
@@ -1271,7 +1442,8 @@ struct SolverArtifactAttestationPayload {
     invariant_name: String,
     status: EvolutionSolverProofStatus,
     timeout_ms: u64,
-    duration_ms: u64,
+    rlimit: u64,
+    rlimit_count: Option<u64>,
     compiled_query_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason_unknown: Option<String>,
