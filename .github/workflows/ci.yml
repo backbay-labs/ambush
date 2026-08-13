@@ -194,6 +194,16 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      # ingest::tests::generated_python_client_smoke_tests_live_platform_router
+      # shells out to `uv` to exercise the GENERATED python client in
+      # clients/python/ against a live platform router. Without uv on PATH the
+      # test failed `Os { code: 2, kind: NotFound }` on every CI run since the
+      # pipeline first executed, and it was the last remaining failure in this
+      # job. A smoke test for a shipped artifact that never runs in CI is not a
+      # gate, so the toolchain is installed rather than the test skipped.
+      - name: Install uv (python toolchain for the generated-client smoke test)
+        uses: astral-sh/setup-uv@v5
+
       - name: Run tests (workspace, parallel)
         run: cargo test --workspace --exclude swarm-runtime
 
