@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 ## Current Position
 
-**Current Phase:** 320 — Reversible Quarantine Execution (v1.78.1); phase 283 (TCB Boundary) is the remaining v1.78 phase
+**Current Phase:** 320 — Reversible Quarantine Execution (v1.78.1); phase 283 (TCB Boundary) COMPLETE 2026-08-13, so v1.78 has no open phases
 **Total Phases:** 4 (280-283), plus 320-322 in v1.78.1
 **Current Plan:** None started yet
 **Total Plans in Phase:** TBD
@@ -35,7 +35,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 **Last Activity:** 2026-08-13
 **Last Activity Description:** Merged phase 282 (0a09358) into main after a five-lens adversarial review — 15 findings raised, 9 survived independent refutation, 3 fixed as merge blockers. Then measured phases 320/321/322 against the code and found three of their recorded statuses false.
 
-Progress: v1.78 phases 280/281/282 complete, 283 open; v1.78.1 phases 320/321/322 open
+Progress: v1.78 phases 280/281/282/283 complete; v1.78.1 phases 320/321/322 open
 
 ## Memory
 
@@ -66,6 +66,9 @@ Progress: v1.78 phases 280/281/282 complete, 283 open; v1.78.1 phases 320/321/32
 - LOC MEASUREMENT DEFECT, recorded 2026-08-13 (task #14): `crates/swarm-cli/src/core.inc` is 5,413 lines, `#[path]`-included by TWO crates, and counted by no `*.rs` glob. swarm-cli measures 177 and compiles 5,590; swarm-runtime-http measures 10,450 and compiles 15,863. Neither breaches SPLIT-06's 20,000 today, but the clause "no workspace crate exceeds 20,000 LOC, measured and recorded" is being checked by an instrument that cannot see two crates — this repo's catalogued failure mode applied to a LOC gate. Also confirmed: `swarm-cli`'s manifest has no `swarm-agents`, `swarm-response` or `swarm-policy` dependency while `swarm-runtime-http`'s has all three, so the shared file compiles under the intersection and can never name those crates' types. That constrains what the CLI can ever express, and is now a criterion on INCFIX-02.
 - MERGE EVIDENCE for 282, measured not asserted: fmt/build/clippy `--all-targets -D warnings` all exit 0 with zero warnings; test lane 1 564 passed 0 failed, lane 2 562 passed 0 failed; and the test NAME SET is byte-identical to main's green CI run 31709806943 in BOTH directions — 1152 names, 0 added, 0 lost. That last check is the one that matters for a 47-rename code motion: commit b86576d records that root `#[cfg(test)]` items go invisible across a new crate edge, and a count alone would hide N lost against N gained.
 - - Merged tree gates: `cargo build --workspace` exit 0, `cargo fmt --all -- --check` exit 0 (after one style commit), `cargo clippy --workspace --all-targets -- -D warnings` exit 0 with zero warnings.
+- v1.78 phase 283 COMPLETE 2026-08-13. ADR `docs/decisions/0009-trusted-computing-base-boundary.md` names `swarm-policy` + `swarm-crypto` + `swarm-spine` as the TCB in negative-space form; all six trust-sensitive crates carry `## Owns` / `## Does not own`; `tools/check-workspace-layering.sh` enforces the boundary from `cargo metadata` and is wired into the `panic-contract` job. TWO REQUIREMENT PATHS WERE STALE AND WERE CORRECTED RATHER THAN CREATED: `docs/adr/` does not exist (ADRs are `docs/decisions/0001-0008`, and the requirement's filename would have collided in number with `0001-rust-first-runtime.md`), and `scripts/` does not exist (gates are in `tools/`, and `check-gates-wired.sh` only enumerates `tools/check-*.sh`, so a gate at the requirement's path would have been invisible to the gate that catches unrun gates).
+- TCB MEASUREMENT WORTH KEEPING, 2026-08-13: the TCB is NOT transport-free on the resolved graph and never was. `cargo tree -p swarm-spine -i reqwest -e normal` prints `reqwest <- swarm-response <- swarm-spine`, and `hyper` follows. `swarm-spine` declares `swarm-response` because its envelopes embed `ResponseReceipt`/`ResponseFailure`, and `swarm-response` declares `reqwest` for the HTTP EDR adapter. `swarm-policy` and `swarm-crypto` are clean under both readings. So the transport rule is stated over DECLARED edges (all three kinds) and the RESOLVED rule is baselined at exactly those two edges — a third fails the build, and a baseline entry that stops holding also fails it. Closing them is a trait inversion of `swarm-spine -> swarm-response`, not a gate change.
+- Phase 283's gate was proved able to fail before being trusted to pass, both ways. A fixture runs on EVERY invocation: a real miniature cargo workspace (real crate names, stub path crates literally named `axum`/`clap`/`hyper`/`reqwest`, so no registry and no network), real `cargo metadata`, and the SAME rule engine with the SAME policy and baseline — one control that must exit 0 plus nine broken variants, four of which are inversions cargo itself accepts (dev cycles, build cycles, transitive transport edges). Separately observed against the REAL tree: `clap` in `swarm-policy`'s `[dependencies]` plus `swarm-runtime` in its `[dev-dependencies]` produced five diagnostics, and disabling the CI step was observed to fail `check-gates-wired.sh`.
 
 ## Issues
 
