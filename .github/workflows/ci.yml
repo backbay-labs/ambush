@@ -47,6 +47,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # `fetch-depth: 0` for the visibility baseline check at the end of this
+          # job: it compares declarations against the phase-282 baseline commit
+          # 742206d, and the default depth-1 checkout does not contain it. The
+          # script fails loudly rather than passing when the commit is missing,
+          # so a shallow clone here is a red job, not a silent one.
+          fetch-depth: 0
 
       - name: Cache cargo home
         uses: actions/cache@v4
@@ -85,6 +92,16 @@ jobs:
       # is a single dated allowlist entry, deferred to phase 282.
       - name: Check for non-.rs Rust source
         run: bash tools/check-no-include-files.sh
+
+      # SPLIT-05. Phase 282's no-widening invariant, re-baselined at the three
+      # widenings ADR 0006 records and accepts, and enforced instead of asserted:
+      # an item that was `pub(crate)`/`pub(super)`/`pub(in ...)` at 742206d and is
+      # `pub` now fails this step unless it is one of the three. `pub` on a crate
+      # is public API forever, so the fourth one is worth a review rather than a
+      # commit message. Needs history -- see `fetch-depth: 0` on this job's
+      # checkout.
+      - name: Check visibility baseline
+        run: bash tools/check-visibility-baseline.sh
 
   build:
     runs-on: ubuntu-latest
