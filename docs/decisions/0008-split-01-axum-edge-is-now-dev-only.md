@@ -6,6 +6,17 @@ Accepted on 2026-08-13. Supersedes
 `0002-split-01-open-until-split-05.md`, whose verification step is now
 misleading (see "Consequences").
 
+Amended on 2026-08-13 after review, on the measurement in the Context section
+and its two downstream restatements. As first written this ADR said "six dev
+targets" and listed six files. Both numbers were wrong and the command that
+produced them is not reproducible: it is **five** dev targets across **seven**
+files, and `crates/swarm-runtime/tests/ingest_integration.rs` was missing from
+the list. See "Counting the dev targets" below for why the original command
+under-reports, and "ADR 0002 predicted a deletion that was never reachable" for
+what the corrected count does to ADR 0002's forecast. The decision itself --
+the line moves to `[dev-dependencies]`, the checkbox is the phase owner's -- is
+unchanged.
+
 ## Context
 
 ADR 0002 held SPLIT-01 open on one line. SPLIT-01 names six transport
@@ -25,19 +36,104 @@ $ cargo check -p swarm-runtime --lib 2>&1 | grep -c '^error'
 ```
 
 Zero, where ADR 0002 measured 52. No lib or bin target in this crate names
-`axum`. Six dev targets still do, which is why the line moved to
-`[dev-dependencies]` rather than being deleted:
+`axum`. Dev targets still do, which is why the line moved to
+`[dev-dependencies]` rather than being deleted.
+
+### Counting the dev targets
+
+Two things make the naive count wrong, and the first version of this ADR hit
+both.
+
+`--keep-going` is required. Without it cargo stops scheduling new units once a
+target fails, so what gets reported depends on which units happened to be in
+flight. Re-running the command this ADR originally printed, verbatim, on this
+tree returns three of the seven files:
 
 ```
 $ cargo check -p swarm-runtime --all-targets --message-format=short 2>&1 \
     | grep 'unresolved import `axum`' | sort -u
-crates/swarm-runtime/examples/end_to_end_ingest_bench.rs:3:5
-crates/swarm-runtime/src/providence.rs:1318:9          # inside #[cfg(test)] mod tests
-crates/swarm-runtime/src/service/tests_support.rs:16:9 # include!d only under #[cfg(test)]
-crates/swarm-runtime/src/threat_intel_runtime.rs:281:9 # inside #[cfg(test)] mod tests
-crates/swarm-runtime/tests/bridge_registry_integration.rs:3:5
-crates/swarm-runtime/tests/dispatch_integration.rs:5:5
+crates/swarm-runtime/examples/end_to_end_ingest_bench.rs:3:5: error[E0432]: ...
+crates/swarm-runtime/tests/bridge_registry_integration.rs:3:5: error[E0432]: ...
+crates/swarm-runtime/tests/dispatch_integration.rs:5:5: error[E0432]: ...
 ```
+
+The grep must not be for `unresolved import`. Three of the seven files raise
+`E0433: cannot find module or crate` rather than `E0432: unresolved import`,
+depending on the shape of the `use` -- 17 E0433 against 6 E0432 in the run
+below. Both messages carry the same tail, so match on that instead:
+
+```
+$ sed -i '' '/^axum.workspace = true$/d' crates/swarm-runtime/Cargo.toml
+$ cargo check -p swarm-runtime --all-targets --keep-going --message-format=short \
+    2>&1 | grep 'unresolved module or unlinked crate `axum`' | cut -d: -f1 | sort -u
+crates/swarm-runtime/examples/end_to_end_ingest_bench.rs
+crates/swarm-runtime/src/providence.rs                    # inside #[cfg(test)] mod tests
+crates/swarm-runtime/src/service/tests_support.rs         # include!d only under #[cfg(test)]
+crates/swarm-runtime/src/threat_intel_runtime.rs          # inside #[cfg(test)] mod tests
+crates/swarm-runtime/tests/bridge_registry_integration.rs
+crates/swarm-runtime/tests/dispatch_integration.rs
+crates/swarm-runtime/tests/ingest_integration.rs
+```
+
+Seven files, but not seven targets: the three under `src/` are all `#[cfg(test)]`
+code compiled into the single `lib test` target. Cargo's own tally is the
+target-level answer:
+
+```
+$ cargo check -p swarm-runtime --all-targets --keep-going 2>&1 \
+    | grep '^error: could not compile' | sort -u
+error: could not compile `swarm-runtime` (example "end_to_end_ingest_bench") due to 1 previous error
+error: could not compile `swarm-runtime` (lib test) due to 14 previous errors
+error: could not compile `swarm-runtime` (test "bridge_registry_integration") due to 3 previous errors
+error: could not compile `swarm-runtime` (test "dispatch_integration") due to 3 previous errors
+error: could not compile `swarm-runtime` (test "ingest_integration") due to 26 previous errors
+```
+
+**Five dev targets, across seven files.** Every error in that run is
+axum-rooted -- 6 E0432, 17 E0433, and 18 E0277 cascading off the unresolved
+`axum::body::to_bytes` -- and no fourth error code appears, so those five
+targets are exactly the ones this line holds up and nothing else is hiding
+behind them.
+
+### ADR 0002 predicted a deletion that was never reachable
+
+ADR 0002's Decision says "SPLIT-05 is where the `axum` line is expected to be
+**deleted**". That outcome was not available, and the reason is visible in ADR
+0002's own method: its 52-error measurement was `cargo check -p swarm-runtime
+--lib`, which compiles neither `tests/`, nor `examples/`, nor `#[cfg(test)]`
+modules. It could not see any of the seven files above -- and all seven already
+named `axum` at ADR 0002's own commit:
+
+```
+$ git grep -nE '^[[:space:]]*use axum' 8a7beeb -- crates/swarm-runtime/examples \
+    crates/swarm-runtime/tests crates/swarm-runtime/src/providence.rs \
+    crates/swarm-runtime/src/threat_intel_runtime.rs \
+    crates/swarm-runtime/src/service/tests_support.rs
+crates/swarm-runtime/examples/end_to_end_ingest_bench.rs:3:use axum::serve;
+crates/swarm-runtime/src/providence.rs:1316:    use axum::extract::{Path, State};
+crates/swarm-runtime/src/providence.rs:1317:    use axum::http::StatusCode;
+crates/swarm-runtime/src/providence.rs:1318:    use axum::routing::{get, put};
+crates/swarm-runtime/src/providence.rs:1319:    use axum::{Json, Router};
+crates/swarm-runtime/src/service/tests_support.rs:12:    use axum::body::to_bytes;
+crates/swarm-runtime/src/service/tests_support.rs:13:    use axum::extract::{Request, State};
+crates/swarm-runtime/src/service/tests_support.rs:14:    use axum::http::{HeaderMap, StatusCode, header};
+crates/swarm-runtime/src/service/tests_support.rs:15:    use axum::routing::post;
+crates/swarm-runtime/src/service/tests_support.rs:16:    use axum::{Json, Router};
+crates/swarm-runtime/src/threat_intel_runtime.rs:281:    use axum::{Json, Router, routing::get};
+crates/swarm-runtime/tests/bridge_registry_integration.rs:3:use axum::{Router, routing::get};
+crates/swarm-runtime/tests/dispatch_integration.rs:5:use axum::{Json, Router, routing::post};
+crates/swarm-runtime/tests/ingest_integration.rs:1:use axum::body::{Body, to_bytes};
+crates/swarm-runtime/tests/ingest_integration.rs:2:use axum::http::{Request, StatusCode};
+```
+
+(`8a7beeb` is the commit that added ADR 0002.)
+
+So "delete the line" and "keep the tests" were in conflict on the day ADR 0002
+was written, and SPLIT-05 could not have resolved it, because the blocker was
+never in `ingest/`. What SPLIT-05 changed is which manifest SECTION the line
+belongs in. That is the whole of what this ADR claims, and it is why the
+forecast it inherited cannot be met by any amount of further code motion in
+`ingest/`.
 
 ## Decision
 
@@ -84,6 +180,16 @@ Read that way, this change does not close SPLIT-01 and the checkbox stays
 unchecked. Read as intent — get the transport closure out of the composition
 root's production surface — it closes the part a manifest edit can close.
 
+The literal reading now has a price attached, which it did not when ADR 0002
+posed the question. Taking `axum` out of the manifest ENTIRELY means relocating
+five dev targets across seven files. Three of those files are `#[cfg(test)]`
+code living inside production `src/` files — `providence.rs`,
+`threat_intel_runtime.rs`, and the `service/tests_support.rs` that one of them
+`include!`s — so it is not a manifest edit at all: it is code motion in the
+remainder crate, over files that SPLIT-01's own file set (`http/`, `serve.rs`,
+`operator_http.rs`) does not contain. Whatever the ruling is, it should be
+priced against that rather than against a one-line deletion.
+
 Deciding between those readings reassigns requirement scope and edits
 `.planning/REQUIREMENTS.md`. Neither is an implementer's to do, and this ADR does
 not do it. It is the same scope question ADR 0002 left open, now with the code
@@ -123,3 +229,8 @@ cargo tree -p swarm-runtime -i axum -e dev
 # Section-aware replacement for ADR 0002's grep: must print dev-dependencies.
 awk '/^\[/{s=$0} /^axum/{print s}' crates/swarm-runtime/Cargo.toml
 ```
+
+Enumerating the five dev targets that hold the line in `[dev-dependencies]` is
+deliberately not in this block: it deletes the manifest line first, so it is
+destructive and belongs in a scratch checkout. The exact command, and the two
+reasons the naive form under-reports, are in "Counting the dev targets" above.

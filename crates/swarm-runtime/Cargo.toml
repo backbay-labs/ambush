@@ -58,12 +58,14 @@ z3 = { version = "0.20", optional = true, features = ["gh-release"] }
 #     $ cargo check -p swarm-runtime --lib 2>&1 | grep -c '^error'
 #     0
 #
-# Six dev targets still name it, and that is why the line moved here rather than
-# being deleted: `providence.rs` and `threat_intel_runtime.rs` each stand up a
-# server inside a `#[cfg(test)] mod tests`, `service/tests_support.rs` is
-# `include!`d only under one, and `tests/dispatch_integration.rs`,
-# `tests/bridge_registry_integration.rs` and
-# `examples/end_to_end_ingest_bench.rs` are dev targets outright.
+# Five dev targets, across seven files, still name it, and that is why the line
+# moved here rather than being deleted. Three of the files are `#[cfg(test)]`
+# code inside `src/`, so they all compile into the one `lib test` target:
+# `providence.rs` and `threat_intel_runtime.rs` each stand up a server inside a
+# `#[cfg(test)] mod tests`, and `service/tests_support.rs` is `include!`d only
+# under one of those. The other four files are dev targets outright:
+# `tests/dispatch_integration.rs`, `tests/bridge_registry_integration.rs`,
+# `tests/ingest_integration.rs` and `examples/end_to_end_ingest_bench.rs`.
 #
 # NOT A GRAPH REMOVAL, AND IT CANNOT BE ONE HERE. `axum` is still built for this
 # crate's normal profile through `swarm-ingest-tetragon -> tonic -> axum`; tonic

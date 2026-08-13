@@ -43,11 +43,15 @@
 //! $ sed -i '' '/^axum.workspace = true$/d' crates/swarm-runtime/Cargo.toml
 //! $ cargo check -p swarm-runtime --lib 2>&1 | grep -c '^error'
 //! 0
-//! $ cargo check -p swarm-runtime --all-targets 2>&1 | grep '^error' -A2
+//! $ cargo check -p swarm-runtime --all-targets --keep-going 2>&1 | grep '^error' -A2
 //! error[E0432]: unresolved import `axum`
 //!  --> crates/swarm-runtime/tests/dispatch_integration.rs:5:5
 //! ...
 //! ```
+//!
+//! (`--keep-going` is load-bearing in that second command: without it cargo
+//! stops scheduling units at the first failing target and the list comes back
+//! short. See ADR 0008's "Counting the dev targets".)
 //!
 //! So every `axum` use left in this crate is a test, an example or a bench --
 //! `providence.rs` and `threat_intel_runtime.rs` each spin one up inside a
@@ -56,11 +60,12 @@
 //!
 //! THE LINE HAS SINCE MOVED to `[dev-dependencies]`, on a tree where nothing
 //! else was moving, which is the only condition under which the measurement
-//! above proves anything. Six dev targets hold it there, so it moved rather
-//! than being deleted. Note what that does and does not buy: it stops this
-//! crate NAMING `axum` outside dev targets, but `axum` is still compiled for
-//! the normal profile via `swarm-ingest-tetragon -> tonic -> axum`, so the
-//! graph-level removal SPLIT-01's prose implies is not what landed.
+//! above proves anything. Five dev targets, across seven files, hold it there,
+//! so it moved rather than being deleted. Note what that does and does not
+//! buy: it stops this crate NAMING `axum` outside dev targets, but `axum` is
+//! still compiled for the normal profile via `swarm-ingest-tetragon -> tonic
+//! -> axum`, so the graph-level removal SPLIT-01's prose implies is not what
+//! landed.
 //! `docs/decisions/0008-split-01-axum-edge-is-now-dev-only.md` records that,
 //! and supersedes `0002-split-01-open-until-split-05.md`.
 pub mod tls_identity;
