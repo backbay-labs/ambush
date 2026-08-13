@@ -135,12 +135,23 @@ pub struct EvolutionAssuranceConfig {
 }
 
 /// Repo-owned solver-proof outcomes allowed by the assurance policy.
+///
+/// Mirrors `EvolutionSolverProofStatus` in swarm-runtime, and is SERIALIZED into
+/// `evolution.assurance.allowed_solver_statuses`. Its parent
+/// `EvolutionAssuranceConfig` is `deny_unknown_fields`, so a deployed ruleset
+/// naming a variant this enum no longer has stops parsing outright: add variants,
+/// never rename or remove them.
+///
+/// `ResourceLimit` is the deterministic half of "the solver gave up" -- it counts
+/// solver work rather than wall-clock time, so it lands identically on a fast and
+/// a slow machine. Neither it nor `Timeout` is a refutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvolutionAssuranceSolverStatusConfig {
     Proved,
     Counterexample,
     Timeout,
+    ResourceLimit,
     Disabled,
     Error,
 }

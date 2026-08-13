@@ -82,12 +82,24 @@ pub struct EvolutionProofInvariant {
 }
 
 /// Durable status captured for one solver-backed invariant.
+///
+/// SERIALIZED. Adding a variant is safe; renaming or removing one is not -- a
+/// deployed ruleset listing the old spelling under
+/// `evolution.assurance.allowed_solver_statuses` would stop parsing, because
+/// `EvolutionAssuranceConfig` is `deny_unknown_fields`.
+///
+/// `ResourceLimit` and `Timeout` both mean UNPROVED, never refuted. They are
+/// separate because only one of them is reproducible: `ResourceLimit` is z3
+/// exhausting its `rlimit` work budget, which counts solver steps and lands in the
+/// same place on a fast machine and a slow one; `Timeout` is the wall-clock
+/// backstop, which does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvolutionSolverProofStatus {
     Proved,
     Counterexample,
     Timeout,
+    ResourceLimit,
     Disabled,
     Error,
 }
@@ -105,7 +117,21 @@ pub struct EvolutionSolverInvariantArtifact {
     pub invariant_name: String,
     pub solver: String,
     pub status: EvolutionSolverProofStatus,
+    /// Wall-clock backstop handed to z3, in milliseconds.
+    ///
+    /// INFORMATIONAL SINCE THE RLIMIT CHANGE. It still bounds how long a hung
+    /// solver can hold the lane, but it no longer decides the verdict: a run that
+    /// ends because this elapsed is `Timeout`, a run that ends because `rlimit`
+    /// below was exhausted is `ResourceLimit`, and only the second is reproducible
+    /// across machines. Recorded so an operator can tell which budget bit.
     pub timeout_ms: u64,
+    /// Deterministic solver work budget (z3 `rlimit`), in z3 resource units.
+    #[serde(default)]
+    pub rlimit: u64,
+    /// Work z3 reported consuming, when its statistics exposed the counter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rlimit_count: Option<u64>,
+    /// Observed wall-clock duration. INFORMATIONAL: not reproducible, gates nothing.
     pub duration_ms: u64,
     pub compiled_query_sha256: String,
     pub attestation_sha256: String,
@@ -124,6 +150,13 @@ pub struct EvolutionSolverProofSummary {
     pub counterexample_invariant_count: usize,
     pub counterexample_binding_count: usize,
     pub timed_out_count: usize,
+    /// Invariants that exhausted the deterministic `rlimit` work budget.
+    ///
+    /// Counted separately from `timed_out_count` because these are the UNPROVED
+    /// results that are reproducible; a wall-clock timeout on a loaded machine is
+    /// not. `#[serde(default)]` so proofs written before the rlimit change load.
+    #[serde(default)]
+    pub resource_limited_count: usize,
     pub disabled_count: usize,
     pub error_count: usize,
     pub timeout_ms: u64,
@@ -255,13 +288,84 @@ pub struct StrategyGenome {
     pub shadow: StrategyShadowReport,
 }
 
+/// What an invariant evaluation actually established.
+///
+/// `passed: bool` cannot express this. It has two values and the evaluation has
+/// three outcomes, so "the solver ran out of budget" and "the property is false"
+/// collapsed onto the same `false` -- and the durable proof then recorded the
+/// former as `formal safety invariant `X` failed`, with a synthesized
+/// counterexample standing in for evidence that does not exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormalSafetyInvariantOutcome {
+    /// The invariant holds.
+    Proved,
+    /// The invariant is false, and `counterexamples` is the witness.
+    Refuted,
+    /// Not decided. NEVER readable as a refutation: the lane still fails closed,
+    /// but no counterexample is claimed, because none was found.
+    Unproved,
+}
+
 /// One evaluated formal-safety invariant verdict.
+///
+/// `outcome` and `passed` are private and set together by the three constructors,
+/// so `passed == (outcome == Proved)` holds by construction rather than by every
+/// call site remembering.
 #[derive(Debug, Clone)]
 pub struct FormalSafetyInvariantVerdict {
     pub name: String,
-    pub passed: bool,
+    passed: bool,
+    outcome: FormalSafetyInvariantOutcome,
     pub details: String,
     pub counterexamples: Vec<VerificationCounterexample>,
+}
+
+impl FormalSafetyInvariantVerdict {
+    /// The invariant holds.
+    pub fn proved(name: impl Into<String>, details: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            passed: true,
+            outcome: FormalSafetyInvariantOutcome::Proved,
+            details: details.into(),
+            counterexamples: Vec::new(),
+        }
+    }
+
+    /// The invariant is false; `counterexamples` is the witness that makes it so.
+    pub fn refuted(
+        name: impl Into<String>,
+        details: impl Into<String>,
+        counterexamples: Vec<VerificationCounterexample>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            passed: false,
+            outcome: FormalSafetyInvariantOutcome::Refuted,
+            details: details.into(),
+            counterexamples,
+        }
+    }
+
+    /// The evaluation did not decide. Takes no counterexamples ON PURPOSE.
+    pub fn unproved(name: impl Into<String>, details: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            passed: false,
+            outcome: FormalSafetyInvariantOutcome::Unproved,
+            details: details.into(),
+            counterexamples: Vec::new(),
+        }
+    }
+
+    /// True only for `Proved`. Every gate keeps failing closed on `Unproved`.
+    pub fn passed(&self) -> bool {
+        self.passed
+    }
+
+    pub fn outcome(&self) -> FormalSafetyInvariantOutcome {
+        self.outcome
+    }
 }
 
 /// Full formal-safety decision over one candidate genome.

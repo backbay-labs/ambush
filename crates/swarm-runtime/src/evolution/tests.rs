@@ -9,7 +9,8 @@ use super::{
     EvolutionProposalCreateRequest, EvolutionProposalDecisionAction, EvolutionProposalProofStatus,
     EvolutionProposalReviewState, EvolutionSolverCounterexample, EvolutionSolverInvariantArtifact,
     EvolutionSolverProofStatus, FileEvolutionProofStore, FileEvolutionProposalStore,
-    FormalSafetyGate, StrategyGenome, assurance_gate_block_reason, assurance_rollout_state,
+    FormalSafetyGate, FormalSafetyInvariantOutcome, FormalSafetyInvariantVerdict, StrategyGenome,
+    VerificationCounterexample, assurance_gate_block_reason, assurance_rollout_state,
     assurance_summary_for_tests, build_assurance_waiver_summary, persist_harvested_assurance_cases,
     render_evolution_handoff, render_evolution_proof, render_evolution_proposal,
     render_evolution_proposal_list, validate_assurance_waiver,
@@ -276,7 +277,7 @@ async fn formal_safety_gate_accepts_repo_owned_bundle_for_verified_candidate() {
     assert!(report.passed);
     assert_eq!(report.bundle_paths.len(), 1);
     assert!(report.invariants.len() >= 5);
-    assert!(report.invariants.iter().all(|invariant| invariant.passed));
+    assert!(report.invariants.iter().all(|invariant| invariant.passed()));
 }
 
 #[tokio::test]
@@ -325,10 +326,9 @@ async fn formal_safety_gate_rejects_candidate_when_parameter_bounds_violate_repo
 
     assert!(!report.passed);
     assert!(
-        report
-            .invariants
-            .iter()
-            .any(|invariant| { invariant.name == "medium_confidence_bounds" && !invariant.passed })
+        report.invariants.iter().any(|invariant| {
+            invariant.name == "medium_confidence_bounds" && !invariant.passed()
+        })
     );
 }
 
@@ -372,6 +372,235 @@ async fn z3_custom_invariant_fails_closed_without_feature() {
     );
 }
 
+/// A z3-off build must record UNPROVED, never REFUTED, and must not invent a
+/// counterexample to stand in for evidence it does not have.
+///
+/// This is the copy of the defect the DEFAULT-FEATURE build compiles. The twin
+/// inside `#[cfg(feature = "z3")]` -- the `SatResult::Unknown` arm -- is covered by
+/// `classify_unknown_never_reports_a_refutation` below plus the `solver-z3` CI job.
+#[cfg(not(feature = "z3"))]
+#[tokio::test]
+async fn z3_disabled_records_unproved_without_synthesising_a_counterexample() {
+    let root = unique_temp_dir("z3-unproved");
+    let proofs_dir = root.join("proofs");
+    let config_path = repo_root().join("rulesets/default.yaml");
+    let bundle_path = write_custom_z3_bundle(
+        &root,
+        "z3_unproved_guardrail",
+        "(declare-const medium_confidence Real)\n(assert (= medium_confidence {{/candidate/profile/medium_confidence_threshold}}))\n(assert (> medium_confidence 1.5))",
+    );
+    let mut config = sample_config();
+    config.evolution.safety_gate.enable_z3 = true;
+    config.evolution.safety_gate.invariant_bundle_paths = vec![bundle_path.display().to_string()];
+    config.evolution.paths.evolution_proof_results_dir = proofs_dir.display().to_string();
+    let candidate = verified_strategy_genome(&root, &config_path, &config).await;
+    let gate = DefaultFormalSafetyGate::from_config(config_path, config);
+
+    let report = gate.verify(&candidate).unwrap();
+
+    let verdict = report
+        .invariants
+        .iter()
+        .find(|invariant| invariant.name == "z3_unproved_guardrail")
+        .expect("the custom_z3 invariant produced a verdict");
+
+    // Still fails closed.
+    assert!(!verdict.passed());
+    // But it is NOT a refutation, and carries no fabricated witness.
+    assert_eq!(verdict.outcome(), FormalSafetyInvariantOutcome::Unproved);
+    assert!(
+        verdict.counterexamples.is_empty(),
+        "a solver that never ran cannot have produced a counterexample, got {:?}",
+        verdict.counterexamples
+    );
+
+    // The durable proof is the audit record, so the claim must say the same thing.
+    let proof_store = FileEvolutionProofStore::open(&proofs_dir).unwrap();
+    let proof = proof_store
+        .load(report.persisted_proof_id.as_deref().unwrap())
+        .unwrap()
+        .unwrap();
+    let invariant = proof
+        .report
+        .invariants
+        .iter()
+        .find(|entry| entry.name == "z3_unproved_guardrail")
+        .expect("the proof recorded the custom_z3 invariant");
+    assert!(
+        invariant.claim.contains("NOT DECIDED"),
+        "proof claim must not read as a refutation, got `{}`",
+        invariant.claim
+    );
+    assert!(!invariant.claim.contains("failed"));
+    assert!(invariant.counterexamples.is_empty());
+
+    // And the proof must not name a solver it never invoked.
+    assert_eq!(
+        proof.report.proof_system,
+        "formal_safety_gate_v2+z3_smt_v1_not_run"
+    );
+}
+
+/// Every mapping from z3's `reason_unknown` string to a durable status, checked
+/// against the one property that matters: no `unknown` result is ever a
+/// refutation, and the reproducible cause is distinguishable from the wall-clock
+/// one.
+///
+/// This test exists OUTSIDE `#[cfg(feature = "z3")]` because `classify_unknown`
+/// does. Inside the cfg block it would run only in the `solver-z3` job; here it
+/// runs in every lane.
+#[test]
+fn classify_unknown_never_reports_a_refutation() {
+    let cases = [
+        // z3's own wording for rlimit exhaustion, both spellings it uses.
+        (
+            Some("max. resource limit exceeded"),
+            EvolutionSolverProofStatus::ResourceLimit,
+        ),
+        (
+            Some("(resource limits reached)"),
+            EvolutionSolverProofStatus::ResourceLimit,
+        ),
+        (Some("timeout"), EvolutionSolverProofStatus::Timeout),
+        (Some("canceled"), EvolutionSolverProofStatus::Timeout),
+        (Some("smt tactic failed"), EvolutionSolverProofStatus::Error),
+        (None, EvolutionSolverProofStatus::Error),
+    ];
+
+    for (reason, expected) in cases {
+        let status = super::formal_safety::classify_unknown(reason);
+        assert_eq!(status, expected, "reason_unknown={reason:?}");
+        assert_ne!(
+            status,
+            EvolutionSolverProofStatus::Counterexample,
+            "an undecided solver result must never be recorded as a refutation \
+             (reason_unknown={reason:?})"
+        );
+        assert_ne!(
+            status,
+            EvolutionSolverProofStatus::Proved,
+            "an undecided solver result must never be recorded as proved \
+             (reason_unknown={reason:?})"
+        );
+    }
+
+    // The whole reason `ResourceLimit` is a separate variant: it is the
+    // reproducible one. Collapsing it onto `Timeout` would put a verdict back on
+    // the wall clock.
+    assert_ne!(
+        super::formal_safety::classify_unknown(Some("max. resource limit exceeded")),
+        super::formal_safety::classify_unknown(Some("timeout"))
+    );
+}
+
+/// `FormalSafetyInvariantVerdict::unproved` takes no counterexamples, and
+/// `passed()` still says false, so the lane keeps failing closed.
+#[test]
+fn unproved_verdicts_fail_closed_without_claiming_a_counterexample() {
+    let unproved = FormalSafetyInvariantVerdict::unproved("inv", "solver gave up");
+    assert!(!unproved.passed());
+    assert_eq!(unproved.outcome(), FormalSafetyInvariantOutcome::Unproved);
+    assert!(unproved.counterexamples.is_empty());
+
+    let refuted = FormalSafetyInvariantVerdict::refuted(
+        "inv",
+        "property is false",
+        vec![VerificationCounterexample {
+            subject: "x".to_string(),
+            reference: "y".to_string(),
+            details: "z".to_string(),
+        }],
+    );
+    assert!(!refuted.passed());
+    assert_eq!(refuted.outcome(), FormalSafetyInvariantOutcome::Refuted);
+    assert_eq!(refuted.counterexamples.len(), 1);
+
+    // Both are `passed() == false`; only `outcome()` separates them. That is the
+    // distinction the durable proof claim now reads.
+    assert_eq!(unproved.passed(), refuted.passed());
+    assert_ne!(unproved.outcome(), refuted.outcome());
+
+    let proved = FormalSafetyInvariantVerdict::proved("inv", "holds");
+    assert!(proved.passed());
+    assert_eq!(proved.outcome(), FormalSafetyInvariantOutcome::Proved);
+}
+
+/// The aggregate must not report a refutation while some invariant went
+/// undecided, and must not lose the `ResourceLimit` cause.
+#[test]
+fn solver_summary_ranks_resource_limit_above_a_counterexample() {
+    let artifacts = vec![
+        solver_artifact_for_tests("a", EvolutionSolverProofStatus::Counterexample),
+        solver_artifact_for_tests("b", EvolutionSolverProofStatus::ResourceLimit),
+    ];
+    let summary = super::formal_safety::summarize_solver_artifacts(&artifacts)
+        .unwrap()
+        .unwrap();
+    assert_eq!(summary.status, EvolutionSolverProofStatus::ResourceLimit);
+    assert_eq!(summary.resource_limited_count, 1);
+    assert_eq!(summary.counterexample_invariant_count, 1);
+}
+
+fn solver_artifact_for_tests(
+    name: &str,
+    status: EvolutionSolverProofStatus,
+) -> EvolutionSolverInvariantArtifact {
+    EvolutionSolverInvariantArtifact {
+        invariant_name: name.to_string(),
+        solver: "z3".to_string(),
+        status,
+        timeout_ms: 1_000,
+        rlimit: 10_000,
+        rlimit_count: Some(10_000),
+        duration_ms: 7,
+        compiled_query_sha256: "0".repeat(64),
+        attestation_sha256: "0".repeat(64),
+        counterexamples: Vec::new(),
+        reason_unknown: None,
+    }
+}
+
+/// The solver artifact's attestation hash must be a function of the solver's
+/// deterministic accounting, not of how loaded the machine was.
+#[test]
+fn solver_artifact_attestation_ignores_wall_clock_duration() {
+    let mut fast = solver_artifact_for_tests("inv", EvolutionSolverProofStatus::Proved);
+    let mut slow = solver_artifact_for_tests("inv", EvolutionSolverProofStatus::Proved);
+    fast.duration_ms = 3;
+    slow.duration_ms = 29_000;
+
+    let rebuild = |artifact: &EvolutionSolverInvariantArtifact| {
+        super::formal_safety::build_solver_artifact(
+            &artifact.invariant_name,
+            artifact.status,
+            &super::formal_safety::SolverBudget {
+                timeout_ms: artifact.timeout_ms,
+                rlimit: artifact.rlimit,
+                rlimit_count: artifact.rlimit_count,
+                duration_ms: artifact.duration_ms,
+            },
+            "(assert true)",
+            Vec::new(),
+            None,
+        )
+        .unwrap()
+    };
+
+    let fast = rebuild(&fast);
+    let slow = rebuild(&slow);
+    assert_ne!(fast.duration_ms, slow.duration_ms);
+    assert_eq!(
+        fast.attestation_sha256, slow.attestation_sha256,
+        "two runs of the same query must attest identically regardless of wall clock"
+    );
+
+    // But a different amount of solver WORK is a different result.
+    let mut cheaper = fast.clone();
+    cheaper.rlimit_count = Some(1);
+    let cheaper = rebuild(&cheaper);
+    assert_ne!(fast.attestation_sha256, cheaper.attestation_sha256);
+}
+
 #[cfg(feature = "z3")]
 #[tokio::test]
 async fn z3_custom_invariant_proves_unsat_and_persists_proof() {
@@ -411,6 +640,24 @@ async fn z3_custom_invariant_proves_unsat_and_persists_proof() {
         Some(EvolutionSolverProofStatus::Proved)
     );
     assert!(render_evolution_proof(&proof.report).contains("Solver: proved"));
+
+    // THE STATISTICS KEY IS NOT PART OF Z3'S STABLE SURFACE. `consumed_rlimit`
+    // scans `Statistics::entries()` for `rlimit count` under either spelling and
+    // returns `None` rather than panicking when neither is present -- which means
+    // a key rename would silently drop the deterministic evidence and nothing
+    // would notice. This assertion is what notices. It can only run under
+    // `--features z3`, i.e. in the `solver-z3` CI job.
+    let artifact = proof
+        .report
+        .solver_artifacts
+        .first()
+        .expect("a solver artifact was persisted");
+    assert!(
+        artifact.rlimit_count.is_some(),
+        "z3 statistics no longer expose an `rlimit count` entry, so the reproducible \
+         work measurement was lost; consumed_rlimit needs the new key"
+    );
+    assert_eq!(artifact.rlimit, super::DEFAULT_Z3_RLIMIT);
 }
 
 #[cfg(feature = "z3")]
@@ -1987,7 +2234,7 @@ async fn formal_safety_gate_admits_candidate_whose_detect_stage_ran_slow() {
         .find(|invariant| invariant.name == "detect_latency_budget")
         .expect("admission ruleset pins a detect_latency_budget invariant");
     assert!(
-        latency.passed,
+        latency.passed(),
         "a slow detect stage must not decide admission; verdict details: {}",
         latency.details
     );
@@ -1997,7 +2244,7 @@ async fn formal_safety_gate_admits_candidate_whose_detect_stage_ran_slow() {
         report
             .invariants
             .iter()
-            .filter(|invariant| !invariant.passed)
+            .filter(|invariant| !invariant.passed())
             .map(|invariant| (invariant.name.clone(), invariant.details.clone()))
             .collect::<Vec<_>>()
     );
@@ -2056,6 +2303,8 @@ async fn harvested_solver_counterexample_declares_a_class_a_safety_invariant_rea
         solver: "custom_z3".to_string(),
         status: EvolutionSolverProofStatus::Counterexample,
         timeout_ms: 1_000,
+        rlimit: 10_000,
+        rlimit_count: Some(42),
         duration_ms: 1,
         compiled_query_sha256: "0".repeat(64),
         attestation_sha256: "0".repeat(64),

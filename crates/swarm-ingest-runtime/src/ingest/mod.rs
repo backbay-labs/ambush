@@ -326,7 +326,7 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             let reasons = safety
                 .invariants
                 .iter()
-                .filter(|invariant| !invariant.passed)
+                .filter(|invariant| !invariant.passed())
                 .map(|invariant| invariant.name.clone())
                 .collect::<Vec<_>>();
             let summary = safety_rejection_summary(&safety);
@@ -929,7 +929,7 @@ fn safety_rejection_summary(
     let reasons = report
         .invariants
         .iter()
-        .filter(|invariant| !invariant.passed)
+        .filter(|invariant| !invariant.passed())
         .map(|invariant| {
             let counterexamples = invariant
                 .counterexamples

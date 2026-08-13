@@ -31,7 +31,16 @@ use swarm_crypto::{
 #[cfg(feature = "z3")]
 use z3::{Config as Z3Config, Params as Z3Params, SatResult, Solver as Z3Solver, with_z3_config};
 
+/// Wall-clock backstop for a hung solver. NOT the deciding budget -- see
+/// `DEFAULT_Z3_RLIMIT`.
 const DEFAULT_Z3_TIMEOUT_MS: u64 = 30_000;
+
+/// Deterministic solver work budget, in z3 resource units.
+///
+/// Chosen to be generous relative to the `custom_z3` bundles this repository
+/// ships (the two in-tree bundles finish in well under 10^4 units) while still
+/// bounding a pathological query. Override with `SWARM_EVOLUTION_Z3_RLIMIT`.
+const DEFAULT_Z3_RLIMIT: u64 = 10_000_000;
 
 #[path = "evolution/assurance.rs"]
 mod assurance;
