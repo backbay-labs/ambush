@@ -103,6 +103,24 @@ jobs:
       - name: Check visibility baseline
         run: bash tools/check-visibility-baseline.sh
 
+      # Task #15. Three check scripts existed for months and were invoked by no
+      # workflow at all, and tools/verify-release-hardening.sh -- which proves
+      # the flags that harden the two binaries the container ships -- had never
+      # run anywhere. Nothing detected any of it; a human read the directory.
+      #
+      # A gate that never runs is not a gate. This makes the omission mechanical
+      # rather than something someone has to notice. No toolchain needed beyond
+      # python3, so it belongs in this job for the reason stated at the top of
+      # it: fast static checks live here.
+      #
+      # It is NOT a grep. `grep -q tools/x.sh .github/workflows/*.yml` counts a
+      # comment, an `on: paths:` filter and a step under `if: false` as "wired";
+      # this walks jobs -> steps -> `run:` scalars, and only a real command
+      # counts. Counting a name-match as a behaviour-match is the pattern
+      # .planning/STATE.md records three times.
+      - name: Check every gate script is wired into a workflow
+        run: bash tools/check-gates-wired.sh
+
   build:
     runs-on: ubuntu-latest
     steps:
