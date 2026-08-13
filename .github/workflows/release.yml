@@ -78,10 +78,56 @@ jobs:
           path: artifacts/sbom/*.cdx.json
           if-no-files-found: error
 
+  release-hardening:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Task #15. This script proves that `-C panic=abort` and
+      # `-C overflow-checks=on` actually reach the release rustc invocations for
+      # swarm_detect and swarmctl -- and it ran in no workflow at all.
+      #
+      # Which mattered here specifically: `publish-container` below cosign-signs
+      # and attests an image whose binaries come from Dockerfile:8,
+      #
+      #   cargo build --locked --release -p swarm-runtime-http \
+      #     --bin swarm_detect --bin swarmctl
+      #
+      # the exact command this script runs and inspects. The only thing making
+      # those flags true is `[profile.release]` in Cargo.toml:139-141, and a
+      # profile key is one edit away from silently not applying to the binary
+      # you ship. Signing and attesting an unhardened binary is worse than not
+      # signing it: the signature asserts provenance, and nothing asserted the
+      # hardening. The script does not reuse the shared target cache -- it sets
+      # its own CARGO_TARGET_DIR under mktemp -d so the `-v` log it greps is a
+      # full, unmemoized set of rustc invocations rather than a cached subset.
+      - name: Verify release hardening flags reach the shipped binaries
+        run: bash tools/verify-release-hardening.sh
+
   publish-container:
     needs:
       - changelog
       - sbom
+      - release-hardening
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}

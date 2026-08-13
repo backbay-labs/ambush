@@ -103,6 +103,24 @@ jobs:
       - name: Check visibility baseline
         run: bash tools/check-visibility-baseline.sh
 
+      # Task #15. Three check scripts existed for months and were invoked by no
+      # workflow at all, and tools/verify-release-hardening.sh -- which proves
+      # the flags that harden the two binaries the container ships -- had never
+      # run anywhere. Nothing detected any of it; a human read the directory.
+      #
+      # A gate that never runs is not a gate. This makes the omission mechanical
+      # rather than something someone has to notice. No toolchain needed beyond
+      # python3, so it belongs in this job for the reason stated at the top of
+      # it: fast static checks live here.
+      #
+      # It is NOT a grep. `grep -q tools/x.sh .github/workflows/*.yml` counts a
+      # comment, an `on: paths:` filter and a step under `if: false` as "wired";
+      # this walks jobs -> steps -> `run:` scalars, and only a real command
+      # counts. Counting a name-match as a behaviour-match is the pattern
+      # .planning/STATE.md records three times.
+      - name: Check every gate script is wired into a workflow
+        run: bash tools/check-gates-wired.sh
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -260,92 +278,15 @@ jobs:
       # one, and the gate would be inert on exactly the runs most likely to
       # leave the tree dirty.
       #
-      # This step used to compute `ignored_count`, echo it, and then assert ONLY
-      # on `git status --porcelain`. That made it inert for the regression it
-      # exists to catch, for two independent reasons:
-      #
-      #   1. the leaked store roots had been `git rm --cached`-ed AND added to
-      #      .gitignore, so a recurrence is ignored and `--porcelain` stays
-      #      empty;
-      #   2. `git status` NEVER reports an empty directory, ignored or not, and
-      #      the two leaks that survived phase 284 created only empty
-      #      directories -- `crates/swarm-runtime/data/evolution-population/`
-      #      and `.../evolution-assurance-cases/{reports,scenarios}/`.
-      #
-      # So the assertions below are on things that actually change when the
-      # suite dirties the tree. `find` is used for the store roots precisely
-      # because it is immune to .gitignore and does see empty directories.
+      # The four assertions moved to tools/check-worktree-clean.sh, byte for
+      # byte and comment for comment, so the proof-surfaces job can run the
+      # SAME four rather than a paraphrase. The history that makes two of them
+      # look redundant -- `git status` never reporting an empty directory, and
+      # the leaked store roots being gitignored so `--porcelain` went quiet --
+      # moved with them and is the reason neither is safe to delete.
       - name: Assert the suite left the working tree clean
         if: always()
-        run: |
-          status=0
-
-          echo "== tracked files =="
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::the test run mutated tracked files"
-            git status --porcelain
-            status=1
-          else
-            echo "clean"
-          fi
-
-          echo "== crate-local store roots (ignore-proof, sees empty dirs) =="
-          crate_residue="$(
-            find crates -maxdepth 2 \
-              \( -name data -type d -o -name dead-letter.jsonl -type f \) \
-              -print | sort
-          )"
-          if [ -n "$crate_residue" ]; then
-            echo "::error::the test run created store roots inside crates/"
-            printf '%s\n' "$crate_residue" | while IFS= read -r path; do
-              find "$path" -print | sort
-            done
-            status=1
-          else
-            echo "clean"
-          fi
-
-          echo "== untracked and ignored residue outside target/ =="
-          # `--ignored=matching -uall` is required: the default `--ignored`
-          # collapses to the ignored DIRECTORY and omits empty ones entirely.
-          # Restricted to `??`/`!!` so it reports residue only; modified tracked
-          # files are the first check's business.
-          tree_residue="$(
-            git status --porcelain --ignored=matching -uall \
-              | grep -E '^(\?\?|!!) ' \
-              | grep -v '^!! target/' || true
-          )"
-          if [ -n "$tree_residue" ]; then
-            echo "::error::the test run left files in the working tree"
-            echo "$tree_residue"
-            status=1
-          else
-            echo "clean"
-          fi
-
-          echo "== stray empty directories anywhere in the tree =="
-          # git cannot track an empty directory, so a fresh checkout has exactly
-          # zero of them (verified on 4fdcd22). Any empty directory is therefore
-          # residue by construction. This is the only check of the four that is
-          # not scoped to a path list: `rulesets/data/deception-lifecycle` slipped
-          # past the other three because they look under `crates/` (and because
-          # `git status` never reports an empty directory, ignored or not).
-          # Do NOT replace this with `find crates rulesets -name data`: `rulesets/data`
-          # is a tracked directory and would fail the gate permanently.
-          empty_dirs="$(
-            find . -type d -empty \
-              -not -path './.git/*' -not -path './target/*' \
-              -print | sort
-          )"
-          if [ -n "$empty_dirs" ]; then
-            echo "::error::the test run created empty directories in the checkout"
-            printf '%s\n' "$empty_dirs"
-            status=1
-          else
-            echo "clean"
-          fi
-
-          exit "$status"
+        run: bash tools/check-worktree-clean.sh "the test run"
 
   fixture-freshness:
     runs-on: ubuntu-latest
@@ -373,6 +314,131 @@ jobs:
 
       - name: Check detector experiment fixture freshness
         run: bash tools/check-fixture-freshness.sh
+
+  platform-contract:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Restore shared target cache
+        uses: actions/cache@v4
+        with:
+          path: target/ci
+          key: cargo-target-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # tools/check-platform-openapi.sh validates the committed spec through
+      # `uvx --from openapi-spec-validator`, so it needs uv on PATH for the same
+      # reason 64cb1be installed it in the test job.
+      - name: Install uv (uvx runs the OpenAPI validator)
+        uses: astral-sh/setup-uv@v5
+
+      # Task #15. This script existed and no workflow ran it. Nothing else in
+      # the repo checks that docs/openapi/v2-platform-openapi.json is valid
+      # OpenAPI 3.1, or that it still matches what generate_platform_openapi
+      # emits -- and clients/python/ is GENERATED FROM THAT FILE, so a stale
+      # spec ships a wrong client while every other gate stays green.
+      #
+      # ITS OWN JOB, not a step appended to `test`. A step only runs when the
+      # preceding steps of its job succeeded, so putting it there means any red
+      # test masks a broken API contract. It is also the only job besides `test`
+      # that needs uv and outbound PyPI, which is cleaner isolated: when PyPI is
+      # having a day, exactly one job goes red.
+      - name: Check platform OpenAPI contract
+        run: bash tools/check-platform-openapi.sh
+
+  proof-surfaces:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Restore shared target cache
+        uses: actions/cache@v4
+        with:
+          path: target/ci
+          key: cargo-target-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Task #15. python3 only; ubuntu-latest ships it and four already-wired
+      # check scripts rely on it. No services, no network.
+      #
+      # The tests this runs also run in the `test` job, so the CI minutes are
+      # NOT justified by the tests -- they are justified by the comparison
+      # against docs/benchmarks/stigmergic-feedback-baseline.json, which nothing
+      # else performs. behavioral_anomaly.rs asserts only that the sigma counts
+      # are ordered and non-zero; the published 3-sigma=2 / 2-sigma=4 /
+      # 1-sigma=13 were pinned nowhere until this step.
+      #
+      # NOT a step in `benchmark`: that job's hot-path step is followed by an
+      # `if: always()` artifact upload, and appending here would let a criterion
+      # regression mask a baseline regression. NOT in `test`: a red test would
+      # skip it.
+      - name: Check stigmergic feedback benchmark against its tracked baseline
+        run: bash tools/check-stigmergic-feedback-benchmark.sh
+
+      # `!cancelled()` rather than chaining: these two gates are independent, and
+      # a red stigmergic baseline must not hide an adversary-coverage regression.
+      #
+      # Its marginal value over the `test` job, which already runs both of its
+      # cargo test lines: generate_adversary_emulation_report has never executed
+      # in CI at all -- nothing else exercises that bin, its serialization, or
+      # its behaviour from the repo root -- and the published 23 techniques / 4
+      # detected / 19 partial / 0 not_covered / 100% were asserted nowhere.
+      - name: Check adversary emulation coverage against its tracked baseline
+        if: ${{ !cancelled() }}
+        run: bash tools/check-adversary-emulation-coverage.sh
+
+      # Same four assertions the test job carries, for the same reason: these
+      # gates run cargo test and a report generator, so their residue footprint
+      # has to be measured, not assumed. `if: always()` for the reason spelled
+      # out on the test job's copy.
+      - name: Assert the proof surfaces left the working tree clean
+        if: always()
+        run: bash tools/check-worktree-clean.sh "the proof-surface run"
 
   jetstream:
     needs:

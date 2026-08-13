@@ -519,16 +519,21 @@ milestone history. Neither is part of the active contract; see
 ## Contributing
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. Before opening a pull
-request, run the same gate CI runs:
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. The fast local loop before
+opening a pull request is:
 
 ```bash
 cargo fmt --all -- --check && \
-bash tools/check-runtime-panic-contract.sh && \
 cargo clippy --workspace --all-targets -- -D warnings && \
 cargo build --workspace --all-targets && \
 cargo test --workspace
 ```
+
+That is a **subset**, not the gate. CI also runs twelve repo-owned `tools/check-*.sh` scripts,
+plus `tools/verify-release-hardening.sh` on the release workflow.
+[CONTRIBUTING.md](CONTRIBUTING.md) lists all of them with their prerequisites and the order to
+run them in, and `tools/check-gates-wired.sh` fails the build if any of them stops being
+invoked by a workflow.
 
 ## License
 

@@ -27,15 +27,64 @@ Rust edition 2024, stable toolchain. The JetStream substrate suite needs a local
 
 ## The gate
 
-CI runs this. Run it locally before opening a pull request.
+Everything in this section runs in CI. An earlier version of this list named five commands and
+called itself "the gate", omitting six scripts CI was already running — so if you change what CI
+runs, change this list too. `tools/check-gates-wired.sh` enforces the other direction: a
+`tools/check-*.sh` or `tools/verify-*.sh` that no workflow invokes fails the build. Three of them
+had drifted out of CI entirely before that gate existed.
+
+### The fast loop
 
 ```bash
 cargo fmt --all -- --check
-bash tools/check-runtime-panic-contract.sh
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --all-targets
-cargo test --workspace
+cargo test --workspace --exclude swarm-runtime --exclude swarm-ingest-runtime
+cargo test -p swarm-runtime -p swarm-ingest-runtime -- --test-threads=1
 ```
+
+The two test lanes are split deliberately: `ingest::tests` mutates shared `SWARM_*_TEST_TOKEN`
+environment variables and the race is cargo-test-thread-scoped, so those two crates run serially.
+`cargo test --workspace` in one lane is fine locally and is what CI splits.
+
+### Static gates (no toolchain beyond `python3`)
+
+```bash
+bash tools/check-runtime-panic-contract.sh
+bash tools/check-no-committed-keys.sh
+bash tools/check-no-include-files.sh
+bash tools/check-visibility-baseline.sh   # needs full history; a shallow clone fails it loudly
+bash tools/check-gates-wired.sh
+```
+
+### Build- and test-backed gates
+
+```bash
+bash tools/check-fixture-freshness.sh
+bash tools/check-platform-openapi.sh      # needs `uv` on PATH and outbound network (PyPI)
+bash tools/check-stigmergic-feedback-benchmark.sh
+bash tools/check-adversary-emulation-coverage.sh
+bash tools/check-supply-chain.sh          # needs cargo-deny and cargo-audit installed
+bash tools/check-hot-path-regression.sh   # Criterion; the slowest of these by a wide margin
+```
+
+### Residue
+
+```bash
+bash tools/check-worktree-clean.sh
+```
+
+Run this **last**, and **not** in the same working tree as
+`tools/check-hot-path-regression.sh` without cleaning up first: that gate writes
+`artifacts/benchmarks/hot-path-regression.log`, `.gitignore`'s `*.log` rule makes it an
+ignored-but-present file, and the residue assertion reports it. In CI the two live in different
+jobs, so they never meet. `rm -rf artifacts` between them locally.
+
+Do not paper over this with `for gate in tools/check-*.sh; do bash "$gate"; done`. That loop
+fails for the reason above, and a loop over a glob is also how a gate that no longer exists stops
+being noticed.
+
+### Separate lanes
 
 The JetStream and multi-instance suites are ignored by default and run separately:
 
@@ -43,6 +92,10 @@ The JetStream and multi-instance suites are ignored by default and run separatel
 bash tools/with-nats-jetstream.sh cargo test -p swarm-pheromone \
   --test jetstream --test multi_instance -- --ignored
 ```
+
+`tools/verify-release-hardening.sh` runs on the release workflow only. It does a full `--release`
+build and proves `-C panic=abort` and `-C overflow-checks=on` reach the two binaries the
+container ships, before that image is signed and attested.
 
 Supply chain is enforced with `cargo deny` and `cargo audit` through
 `tools/check-supply-chain.sh`. A new dependency needs a reason in the pull request description.

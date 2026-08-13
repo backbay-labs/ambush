@@ -2,6 +2,9 @@
 
 **Generated:** 2026-04-13
 **Command:** `cargo run -q -p swarm-runtime --bin generate_adversary_emulation_report -- --output /tmp/adversary-emulation-report.json`
+**Tracked baseline:** `docs/benchmarks/adversary-emulation-baseline.json`
+**Enforced by:** `tools/check-adversary-emulation-coverage.sh`, in the
+`proof-surfaces` job of `.github/workflows/ci.yml`
 
 ## Scope
 
@@ -27,9 +30,31 @@ That wrapper runs:
 
 ```bash
 cargo test -p swarm-runtime --test adversary_emulation_integration -- --nocapture
-cargo test -p swarm-runtime repo_adversary_emulation_coverage_report_meets_floor --lib -- --nocapture
-cargo run -q -p swarm-runtime --bin generate_adversary_emulation_report -- --output /tmp/adversary-emulation-report.json
+cargo test -p swarm-runtime --lib -- --exact \
+  evasion_coverage::tests::repo_adversary_emulation_coverage_report_meets_floor --nocapture
+cargo run -q -p swarm-runtime --bin generate_adversary_emulation_report -- --output <tmp>
 ```
+
+then asserts that each named test actually executed, and compares the generated
+report field by field against `adversary-emulation-baseline.json`. The
+comparison is what makes the table below falsifiable: the Rust test asserts only
+`scenario_count == 7`, `technique_count >= 20` and `coverage_percent >= 0.60`,
+so before the baseline existed a corpus that lost two techniques still reported
+"Adversary emulation coverage OK: 7 scenarios, 21 techniques, 100.00%" and
+exited 0 while this document claimed 23.
+
+### Regenerating the baseline
+
+```bash
+cargo run -q -p swarm-runtime --bin generate_adversary_emulation_report -- --output /tmp/report.json
+```
+
+Copy the scalar fields, the sorted `techniques` list and the sorted `detected`
+subset out of `/tmp/report.json` into
+`docs/benchmarks/adversary-emulation-baseline.json`, and update the Results
+table below from the same run. Populate the baseline from the report, never from
+this table — a baseline seeded from a document is a gate that enforces whatever
+the document happened to say.
 
 ## Scenario-To-Detector Mapping
 
@@ -60,6 +85,10 @@ events.
 
 The checked-in proof exceeds the required floor of 60% mapped technique
 coverage.
+
+Every row above was re-measured on 2026-08-13 against a real report run and
+matched. All six are now compared exactly on every CI run; before that only the
+`7` and the two floors were asserted anywhere in the repository.
 
 ## Interpretation
 
