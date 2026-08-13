@@ -668,8 +668,15 @@ extraction SPLIT-01..05 names landed in full, `swarm-runtime` is **31,681**
 | | | | `bin/` | 78 |
 | | | | **total** | **31,681** |
 
-`service/` alone is 5,663 and SPLIT-01's own text requires it to stay. There is
-no arrangement of SPLIT-01..05 that reaches 25,000.
+Twenty-three modules. `service/` alone is 5,663 and SPLIT-01's own text requires
+it to stay. There is no arrangement of SPLIT-01..05 that reaches 25,000.
+
+Two rows are worth flagging as movable-in-principle, and neither closes the gap.
+`red_swarm.rs` (385) is in no SPLIT's named file set, so this table counts it as
+staying; §3's analysis says it is named only by `kitten_agent` and so could
+travel with the lane, which would make the floor 31,296. `evolution_status.rs`
+(2,251) is likewise unnamed by any SPLIT and, per SEAM-02, stays by design as a
+consumer of the extracted lane. Even removing both leaves 29,045.
 
 **Self-contradictory.** SPLIT-06 also asks that no workspace crate exceed 20,000.
 Landing SPLIT-04's seven in `swarm-evolution` gives
