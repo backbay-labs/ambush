@@ -1,3 +1,4 @@
+use crate::bridge_runtime::bridge_health_report;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -22,7 +23,6 @@ use swarm_core::types::{
 use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
 use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate};
 use swarm_response::notification::AggregatedNotification;
-use swarm_runtime::bridge_runtime::bridge_health_report;
 use swarm_runtime::kitten_agent::route_feedback_signal;
 use swarm_runtime::providence::{
     PROVIDENCE_CHANNEL, ProvidenceContextScope, ProvidenceFeedbackTarget,
@@ -593,7 +593,7 @@ pub(super) fn build_providence_notification_payload(
         &std::sync::Arc<arc_swap::ArcSwap<Vec<swarm_core::agent::AgentHealthEntry>>>,
     >,
     mode_state: Option<&std::sync::Arc<arc_swap::ArcSwap<SwarmModeState>>>,
-    bridge_health: Option<&swarm_runtime::bridge_runtime::SharedBridgeHealth>,
+    bridge_health: Option<&crate::bridge_runtime::SharedBridgeHealth>,
 ) -> Value {
     let threat_class = super::threat_class_slug(&aggregate.threat_class);
     let mode_state = mode_state

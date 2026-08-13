@@ -1,4 +1,5 @@
 use crate::anti_tamper::AntiTamperReport;
+use crate::bridge_runtime::bridge_health_report;
 use crate::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
     resolve_operator_api_schema_version,
@@ -31,7 +32,6 @@ use swarm_core::types::{ProvidenceIncidentReconciliation, ResponseRehearsalPrevi
 use swarm_pheromone::{DepositQuery, PheromoneSubstrate};
 use swarm_response::SwarmFindingEnvelope;
 use swarm_runtime::alert_tuning::{AlertTuningReport, build_alert_tuning_report};
-use swarm_runtime::bridge_runtime::bridge_health_report;
 use swarm_runtime::escalation::standard_threat_classes;
 use swarm_runtime::evasion_coverage::EvasionCoverageSnapshot;
 use swarm_runtime::http::tls_identity::TlsClientIdentity;

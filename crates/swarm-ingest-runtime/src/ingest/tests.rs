@@ -9,6 +9,7 @@ use super::{
     IngestState, StrategyProposalRoute, detect_http_router, ingest_router, validate_and_parse,
 };
 use crate::anti_tamper::AntiTamperReport;
+use crate::bridge_runtime::SharedBridgeHealth;
 use crate::control::CURRENT_OPERATOR_API_SCHEMA_VERSION;
 use arc_swap::ArcSwap;
 use axum::body::{Body, to_bytes};
@@ -49,7 +50,6 @@ use swarm_pheromone::PheromoneSubstrate;
 use swarm_response::SwarmFindingEnvelope;
 use swarm_runtime::StrategyProposalRouteError;
 use swarm_runtime::approval::DefaultApprovalHarness;
-use swarm_runtime::bridge_runtime::SharedBridgeHealth;
 use swarm_runtime::config::{CURRENT_SCHEMA_VERSION, write_debug_test_config_signature};
 use swarm_runtime::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
 use swarm_runtime::evasion_coverage::EvasionCoverageSnapshot;

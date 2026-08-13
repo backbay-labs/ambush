@@ -1,4 +1,5 @@
 use crate::anti_tamper::AntiTamperReport;
+use crate::bridge_runtime::bridge_health_report;
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
@@ -11,7 +12,6 @@ use std::time::Duration;
 use swarm_core::agent::{AgentHealth, AgentHealthEntry};
 use swarm_core::config::{ResponseAdapterConfig, RuntimeMode};
 use swarm_pheromone::PheromoneSubstrate;
-use swarm_runtime::bridge_runtime::bridge_health_report;
 use swarm_runtime::config::CURRENT_SCHEMA_VERSION;
 use swarm_runtime::detection::metrics::encode_metrics;
 use swarm_runtime::evasion_coverage::publish_snapshot_to_metrics;

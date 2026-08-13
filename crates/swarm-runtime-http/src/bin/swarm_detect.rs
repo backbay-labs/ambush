@@ -11,6 +11,7 @@ use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::agent::{AgentRole, SwarmAgent, SwarmModeState};
 use swarm_core::types::AgentId;
 use swarm_ingest_runtime::anti_tamper::{AntiTamperFailure, AntiTamperMonitor};
+use swarm_ingest_runtime::bridge_runtime::BridgeRuntimeRegistry;
 use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
 use swarm_policy::ApprovalContext;
@@ -19,7 +20,6 @@ use swarm_runtime::agent_identity::{
     resolve_agent_key_dir, resolve_identity_registry_dir,
 };
 use swarm_runtime::approval::DefaultApprovalHarness;
-use swarm_runtime::bridge_runtime::BridgeRuntimeRegistry;
 use swarm_runtime::calico_agent::CalicoAgent;
 use swarm_runtime::config::load_config;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig, AgentRestartFactory};

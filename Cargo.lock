@@ -3067,6 +3067,8 @@ dependencies = [
  "swarm-core",
  "swarm-crypto",
  "swarm-ingest-json",
+ "swarm-ingest-sentinel",
+ "swarm-ingest-tetragon",
  "swarm-pheromone",
  "swarm-policy",
  "swarm-response",

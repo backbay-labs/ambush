@@ -84,5 +84,6 @@
 #![allow(clippy::result_large_err)]
 
 pub mod anti_tamper;
+pub mod bridge_runtime;
 pub mod control;
 pub mod ingest;

@@ -83,7 +83,6 @@ extern crate self as swarm_runtime;
 pub mod agent_identity;
 pub mod alert_tuning;
 pub mod approval;
-pub mod bridge_runtime;
 pub mod calico_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod canary;
 pub mod config;

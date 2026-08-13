@@ -13,6 +13,7 @@ pub use demo::{
 };
 
 use crate::anti_tamper::AntiTamperReport;
+use crate::bridge_runtime::{SharedBridgeHealth, bridge_health_report};
 use crate::control::{ControlError, build_composite_detector};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -44,7 +45,6 @@ use swarm_response::DispatchingExecutor;
 use swarm_runtime::approval::{
     ApprovalError, ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule,
 };
-use swarm_runtime::bridge_runtime::{SharedBridgeHealth, bridge_health_report};
 use swarm_runtime::canary::DefaultCanaryHarness;
 use swarm_runtime::config::{
     RuntimeConfigError, load_config_unresolved, resolve_outbound_secrets, resolve_secret_dir_path,

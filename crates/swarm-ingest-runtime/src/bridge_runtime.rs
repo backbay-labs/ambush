@@ -1,4 +1,3 @@
-use crate::detection::metrics::CriticalPathMetrics;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use swarm_core::config::{SwarmConfig, TelemetryBridgeConfig, TetragonBridgeConfig};
@@ -11,6 +10,7 @@ use swarm_ingest_json::{
 };
 use swarm_ingest_sentinel::SentinelBridge;
 use swarm_ingest_tetragon::{BridgeConfig as TetragonRuntimeConfig, TetragonBridge};
+use swarm_runtime::detection::metrics::CriticalPathMetrics;
 use tokio::sync::{mpsc, watch};
 
 type BoxedTelemetryBridge = Box<dyn TelemetryBridge>;
@@ -276,13 +276,13 @@ fn tetragon_runtime_config(config: &TetragonBridgeConfig) -> TetragonRuntimeConf
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{BridgeRuntimeRegistry, bridge_health_report};
-    use crate::config::load_config;
-    use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use axum::{Router, routing::get};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use swarm_core::TelemetryPayload;
+    use swarm_runtime::config::load_config;
+    use swarm_runtime::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use tokio::net::TcpListener;
     use tokio::sync::{mpsc, watch};
 
