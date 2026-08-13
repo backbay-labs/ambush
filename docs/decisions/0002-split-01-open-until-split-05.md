@@ -2,7 +2,17 @@
 
 ## Status
 
-Accepted on 2026-08-12.
+**Superseded on 2026-08-13 by
+[`0008-split-01-axum-edge-is-now-dev-only.md`](0008-split-01-axum-edge-is-now-dev-only.md).**
+Accepted on 2026-08-12. The Context below is kept as the record of what was
+measured that day; the forecast in the Decision -- that SPLIT-05 would DELETE the
+`axum` line -- was never reachable, and ADR 0008 shows why with the measurement
+this ADR's `--lib` probe could not see.
+
+The Verification block at the foot of this file was amended the same day. Leaving
+it in place was the more dangerous option: run unchanged at a tree where SPLIT-01
+is closed, it reports SPLIT-01 open. Read that block before running anything from
+this ADR.
 
 ## Context
 
@@ -90,8 +100,37 @@ establish, since nothing in `swarm-runtime` may depend on `swarm-runtime-http`.
 
 ## Verification
 
+**Amended 2026-08-13: do not run the original command.** It was
+
 ```sh
 # Requirement still open while this prints a line; if it prints nothing,
 # SPLIT-05 has landed the deletion and this ADR is spent.
 grep -nE '^axum' crates/swarm-runtime/Cargo.toml
+```
+
+and it fails in the unsafe direction. `grep` cannot see which manifest section a
+line falls in, so the surviving DEV-dependency reads exactly like the
+normal-dependency edge that ADR 0002 was written about. Measured at cc5b169:
+
+```
+$ grep -nE '^axum' crates/swarm-runtime/Cargo.toml
+75:axum.workspace = true
+$ grep -n '^\[' crates/swarm-runtime/Cargo.toml
+1:[package]
+8:[features]
+12:[dependencies]
+49:[dev-dependencies]
+100:[[bench]]
+104:[lints]
+```
+
+Line 75 is inside `[dev-dependencies]`. Following the instruction above, a reader
+concludes SPLIT-01 is still open on a tree where the normal edge is gone -- the
+misreading ADR 0008 exists to disarm. Use ADR 0008's Verification block, whose
+section-aware replacement for this command is:
+
+```sh
+# Prints `[dev-dependencies]`. Anything else -- `[dependencies]` above all --
+# means the normal edge is back and ADR 0008 no longer holds.
+awk '/^\[/{s=$0} /^axum/{print s}' crates/swarm-runtime/Cargo.toml
 ```

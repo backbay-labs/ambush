@@ -2,7 +2,23 @@
 
 ## Status
 
-Accepted on 2026-08-12.
+Accepted on 2026-08-12. Amended on 2026-08-13 after review, on the Verification
+block only. The decision stands, the cycle is unchanged, and the Context
+measurements are left exactly as taken on 12 August. Two of the four commands
+there had drifted out of agreement with the tree:
+
+- "Forward edge: production consumers inside the root. Currently 20." returns 15
+  at cc5b169. **Nothing addressed the cycle.** Five consumers left the CRATE in
+  two later extractions: `evidence.rs`, `governance_prep.rs` and `portfolio.rs`
+  to `swarm-evolution` (SPLIT-04, 1db4191/e870ecd/0431315), and `ingest/mod.rs`
+  and `ingest/demo.rs` to `swarm-ingest-runtime` (SPLIT-05, d5ae8bd). A consumer
+  in another crate does not stop being a consumer; it stops being counted by a
+  command scoped to `crates/swarm-runtime/src/`.
+- The prose-audit command's single expected hit is now
+  `swarm-runtime-workbench/src/lib.rs:27`, not `:24`.
+
+The other two commands -- the return edge and the identifier-form cycle probe --
+still print what this ADR says they print.
 
 ## Context
 
@@ -251,7 +267,9 @@ in the package graph, not the module graph.
 # deliberately absent -- it is #[cfg(test)] at replay/mod.rs:25-26.
 grep -n "use crate::" crates/swarm-runtime/src/replay/{types,harness,verification}.rs
 
-# Forward edge: production consumers inside the root. Currently 20.
+# Forward edge: production consumers inside the root. 20 on 2026-08-12; 15 at
+# cc5b169, and the drop is five consumers LEAVING THE CRATE (SPLIT-04, SPLIT-05),
+# not the cycle being addressed. See Status.
 grep -rl "crate::replay" --include="*.rs" crates/swarm-runtime/src/ \
   | grep -v "/src/replay/" | grep -vE "test" | wc -l
 
@@ -260,6 +278,6 @@ grep -rl "crate::replay" --include="*.rs" crates/swarm-runtime/src/ \
 grep -rn "swarm_runtime_http\|crate::http" crates/swarm-runtime-workbench/src/ --include='*.rs'
 
 # Widened to the hyphenated spelling, for the prose audit: expects exactly one
-# hit, the doc comment at lib.rs:24.
+# hit, the doc comment at lib.rs:27 (lib.rs:24 when this ADR was written).
 grep -rn "swarm.runtime.http" crates/swarm-runtime-workbench/src/ --include='*.rs'
 ```

@@ -2,6 +2,19 @@
 
 ## Status
 
+**Partially superseded on 2026-08-13 by
+[`0007-split-03-kitten-pinned-by-a-private-method-not-by-ingest.md`](0007-split-03-kitten-pinned-by-a-private-method-not-by-ingest.md).**
+ADR 0007 supersedes the pin recorded here for `tom`, which was real and is now
+discharged -- `tom` moved once `ingest/` left -- and REPLACES the pin recorded
+for `calico`, `kitten` and `sphinx` with a different one: a private method on the
+composition root, not `ingest/`. It does not change this ADR's account of why the
+four could not move before SPLIT-05, which is why the Context below stands.
+
+The exit criterion in the Consequences section has moved with that. It shows
+`ls crates/swarm-runtime/src/*_agent.rs | wc -l` printing 4; at cc5b169 it prints
+3, because `tom` left. It still has to reach 0, and ADR 0007 is where the
+remaining three are argued.
+
 Accepted on 2026-08-12. Amended on 2026-08-12 after review, on two points in the
 Decision section: it named `kitten`'s inline test module as a consumer of the
 dev-dependency edge, which is false, and it did not record the alternative to

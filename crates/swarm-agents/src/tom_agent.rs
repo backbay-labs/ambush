@@ -1292,15 +1292,32 @@ fn now_ms() -> i64 {
 // whole point of SPLIT-03: the dispatcher publishes governance events without ever
 // naming a governance type.
 //
-// Both methods delegate to the inherent methods of the same name. Inherent impls are
-// probed before trait impls, so `GovernancePolicy::method(self, ..)` resolves to the
-// inherent one; the return types also differ, so a mis-resolution would be a compile
-// error rather than a silent recursion.
 // `GovernanceAuthority` is sealed so the set of types that can authorize a
 // destructive action during a governance partition stays enumerable. See
 // `swarm_policy::governance::GovernanceAuthority`.
 impl swarm_policy::governance::sealed::SealedGovernanceAuthority for GovernancePolicy {}
 
+// All FIVE methods below delegate to the inherent method of the same name. Inherent
+// impls are probed before trait impls, so `GovernancePolicy::method(self, ..)`
+// resolves to the inherent one.
+//
+// A differing return type would make a mis-resolution a compile error, but that
+// covers only two of the five: `authorize_partition_request`
+// (`Result<Option<ContingencyLease>, String>` inherent, `Result<bool, String>` here)
+// and `drain_runtime_events` (`Vec<GovernanceRuntimeEvent>` inherent,
+// `Vec<GovernanceRuntimeEventRecord>` here). `is_partitioned`, `note_partition_veto`
+// and `status_report` have identical signatures on both sides, so for those three a
+// mis-resolution is a silent infinite recursion, not a diagnostic.
+//
+// The `deny` below covers all five, which is why the guarantee is stated once here
+// instead of per-method. `unconditional_recursion` is warn-by-default, so without
+// the attribute these three were protected only by CI's `-D warnings` and not by a
+// plain `cargo build`. Measured both ways by rewriting the `is_partitioned` body as
+// `<Self as GovernanceAuthority>::is_partitioned(self)`: with this attribute
+// `cargo build -p swarm-agents` exits 101 on `error: function cannot return without
+// recursing`; with the attribute removed the same body exits 0 and only warns, so
+// the recursion ships.
+#[deny(unconditional_recursion)]
 impl GovernanceAuthority for GovernancePolicy {
     fn authorize_partition_request(
         &self,
@@ -1326,11 +1343,10 @@ impl GovernanceAuthority for GovernancePolicy {
             .collect()
     }
 
-    // The one method whose inherent twin has the SAME return type, so the
-    // compile-error safety net described above does not apply to it. It resolves to
-    // the inherent method because inherent impls are probed before trait impls for a
-    // `Type::method(..)` path; if that ever changed, the recursion would be caught by
-    // `healthz_includes_governance_partition_component`, which reaches this method
+    // One of the three whose inherent twin has the SAME return type, so the
+    // `deny(unconditional_recursion)` above is what stands between a mis-resolution
+    // here and a silent hang. There is a runtime backstop too, if the lint is ever
+    // weakened: `healthz_includes_governance_partition_component` reaches this method
     // through a `dyn GovernanceAuthority` and asserts on the rendered fields.
     fn status_report(&self) -> GovernanceStatusReport {
         GovernancePolicy::status_report(self)

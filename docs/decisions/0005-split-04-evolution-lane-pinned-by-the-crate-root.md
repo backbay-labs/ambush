@@ -2,10 +2,11 @@
 
 ## Status
 
-Accepted on 2026-08-12. Revised on 2026-08-12 in response to review; see
-[Revision history](#revision-history) for what changed and why. The revision
-strengthens the pin and withdraws one false uniqueness claim. It does not change
-what shipped.
+Accepted on 2026-08-12. Revised on 2026-08-12 in response to review, and again
+on 2026-08-13; see [Revision history](#revision-history) for what changed and
+why. The first revision strengthens the pin and withdraws one false uniqueness
+claim; the second repoints a verification command that had stopped running.
+Neither changes what shipped.
 
 ## Context
 
@@ -370,12 +371,19 @@ split `review_workbench`. No consumer's public API changed.
 grep -nE 'crate::(canary|drafting|evolution|mutation|selection)::' \
   crates/swarm-runtime/src/lib.rs
 
-# Progress measure for the seven. Sums to 58 today and has to reach 0; the
-# lib.rs term is the one that no extraction can retire.
+# Progress measure for the seven. Summed to 58 on 2026-08-12 and has to reach 0;
+# the lib.rs term is the one that no extraction can retire.
+#
+# REPOINTED 2026-08-13. It used to name crates/swarm-runtime/src/ingest, which
+# SPLIT-05 (d5ae8bd) moved to swarm-ingest-runtime, so the command exited 2 on a
+# missing path -- a progress measure that had stopped measuring. `ingest/`'s 20
+# is retired rather than relocated: an extracted consumer spells the lane
+# `swarm_runtime::<module>` and would re-spell it again if the seven moved, so it
+# no longer pins anything. That is exactly the distinction the "no extraction can
+# retire" clause draws around lib.rs. Sums to 39 at cc5b169 (7 + 12 + 1 + 19).
 grep -rcE 'crate::(canary|drafting|evolution|mutation|promotion|selection|strategy)::' \
-  crates/swarm-runtime/src/lib.rs crates/swarm-runtime/src/ingest \
-  crates/swarm-runtime/src/kitten_agent.rs crates/swarm-runtime/src/sphinx_agent.rs \
-  crates/swarm-runtime/src/evolution_status.rs
+  crates/swarm-runtime/src/lib.rs crates/swarm-runtime/src/kitten_agent.rs \
+  crates/swarm-runtime/src/sphinx_agent.rs crates/swarm-runtime/src/evolution_status.rs
 ```
 
 ## Revision history
@@ -405,3 +413,11 @@ grep -rcE 'crate::(canary|drafting|evolution|mutation|promotion|selection|strate
      `StrategyProposalRouteError` boundary inverted the way SPLIT-03 inverted
      `AgentTickError`. Recorded in the Decision section and re-pointed in the
      phase's open-task list.
+- **2026-08-13, verification repointed after review.** No change to the argument
+  or to shipped code. The progress-measure command named
+  `crates/swarm-runtime/src/ingest`, a path SPLIT-05 deleted on the same branch,
+  so it exited 2 instead of measuring. The `ingest` term is dropped rather than
+  redirected at the new crate -- see the comment on the command for why an
+  extracted consumer stops being part of the pin. Measured 58 -> 39, of which
+  -20 is `ingest/` leaving and +1 is a `crate::evolution::` import added to
+  `evolution_status.rs`'s test module.
