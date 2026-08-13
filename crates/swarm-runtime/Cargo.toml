@@ -11,30 +11,6 @@ z3 = ["dep:z3"]
 
 [dependencies]
 async-trait.workspace = true
-# STILL NOT REMOVED BY SPLIT-01, BUT NO LONGER FOR THE ORIGINAL REASON. SPLIT-01
-# names six transport dependencies to take out of this manifest; five left with
-# the moved code (`hyper` and `hyper-util` are now reachable only through `axum`
-# and `tonic`, `tokio-rustls` only through `async-nats`, and `rustls-pemfile`
-# and `x509-parser` are out of this crate's graph entirely). `axum` stayed
-# because two things named it in NON-TEST code: `ingest/`, in six files, and
-# `http/rate_limit.rs`. Both are gone -- the rate limiter went down to
-# `swarm_core::http_rate_limit`, and `ingest/` went out to
-# `swarm-ingest-runtime` -- and with them the reason this line sits under
-# `[dependencies]`:
-#
-#     $ sed -i '' '/^axum.workspace = true$/d' crates/swarm-runtime/Cargo.toml
-#     $ cargo check -p swarm-runtime --lib 2>&1 | grep -c '^error'
-#     0
-#
-# Every remaining `axum` use in this crate is under `#[cfg(test)]`, or in
-# `tests/`, `examples/` or `benches/`, so the correct home for this line is
-# `[dev-dependencies]`.
-#
-# IT IS LEFT HERE ON PURPOSE. SPLIT-05 was code motion; relocating this line is
-# a manifest change and belongs to SPLIT-06, which measures it on a tree where
-# nothing else is moving. Deleting it as a side effect of a file move is the
-# version of this fix that cannot be checked. See `src/http/mod.rs`.
-axum.workspace = true
 anyhow.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 ed25519-dalek.workspace = true
@@ -71,6 +47,30 @@ zeroize.workspace = true
 z3 = { version = "0.20", optional = true, features = ["gh-release"] }
 
 [dev-dependencies]
+# DEV-ONLY SINCE SPLIT-01. This is the sixth of the six transport dependencies
+# SPLIT-01 names; the other five left with the moved code and none of them is
+# reachable from this manifest any more. `axum` could not follow them out while
+# `ingest/` (six files) and `http/rate_limit.rs` named it in NON-TEST code. The
+# rate limiter went down to `swarm_core::http_rate_limit` and `ingest/` went out
+# to `swarm-ingest-runtime`, so no lib or bin target here names `axum` now:
+#
+#     $ sed -i '' '/^axum.workspace = true$/d' crates/swarm-runtime/Cargo.toml
+#     $ cargo check -p swarm-runtime --lib 2>&1 | grep -c '^error'
+#     0
+#
+# Six dev targets still name it, and that is why the line moved here rather than
+# being deleted: `providence.rs` and `threat_intel_runtime.rs` each stand up a
+# server inside a `#[cfg(test)] mod tests`, `service/tests_support.rs` is
+# `include!`d only under one, and `tests/dispatch_integration.rs`,
+# `tests/bridge_registry_integration.rs` and
+# `examples/end_to_end_ingest_bench.rs` are dev targets outright.
+#
+# NOT A GRAPH REMOVAL, AND IT CANNOT BE ONE HERE. `axum` is still built for this
+# crate's normal profile through `swarm-ingest-tetragon -> tonic -> axum`; tonic
+# uses it for its own server routing. What this line controls is whether
+# `swarm-runtime` may NAME `axum`, and after this it may not outside dev targets.
+# See `docs/decisions/0008-split-01-axum-edge-is-now-dev-only.md`.
+axum.workspace = true
 # Dev-only, and it must stay dev-only. `swarm-agents` depends on this crate, so a
 # normal dependency here is a Cargo cycle and is rejected outright. The root's
 # integration tests construct concrete agents; its non-test code does not.

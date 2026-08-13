@@ -29,7 +29,7 @@
 //! the rate limiter in `swarm-core` if a third consumer ever appears below it;
 //! nothing forces that today.
 //!
-//! # The `axum` edge that outlived SPLIT-01
+//! # The `axum` edge that outlived SPLIT-01, and no longer does
 //!
 //! SPLIT-01 undertook to take six transport dependencies out of
 //! `swarm-runtime`'s manifest. Five left with the moved code; `axum` did not.
@@ -51,14 +51,16 @@
 //!
 //! So every `axum` use left in this crate is a test, an example or a bench --
 //! `providence.rs` and `threat_intel_runtime.rs` each spin one up inside a
-//! `#[cfg(test)] mod tests` to stand in for a remote server -- and the edge is a
-//! dev-dependency wearing a normal dependency's clothes.
+//! `#[cfg(test)] mod tests` to stand in for a remote server -- and the edge was
+//! a dev-dependency wearing a normal dependency's clothes.
 //!
-//! THE MANIFEST LINE IS DELIBERATELY LEFT IN PLACE HERE. SPLIT-05 was code
-//! motion, and moving `axum` from `[dependencies]` to `[dev-dependencies]` is a
-//! manifest change whose correctness is exactly the measurement above; it is
-//! SPLIT-06's to make and to prove, on a tree where nothing else is moving.
-//! `docs/decisions/0002-split-01-open-until-split-05.md` holds SPLIT-01 open
-//! until it lands. What SPLIT-05 changed is that the blocker the ADR names is
-//! gone: no non-test code in this crate holds the edge any more.
+//! THE LINE HAS SINCE MOVED to `[dev-dependencies]`, on a tree where nothing
+//! else was moving, which is the only condition under which the measurement
+//! above proves anything. Six dev targets hold it there, so it moved rather
+//! than being deleted. Note what that does and does not buy: it stops this
+//! crate NAMING `axum` outside dev targets, but `axum` is still compiled for
+//! the normal profile via `swarm-ingest-tetragon -> tonic -> axum`, so the
+//! graph-level removal SPLIT-01's prose implies is not what landed.
+//! `docs/decisions/0008-split-01-axum-edge-is-now-dev-only.md` records that,
+//! and supersedes `0002-split-01-open-until-split-05.md`.
 pub mod tls_identity;
