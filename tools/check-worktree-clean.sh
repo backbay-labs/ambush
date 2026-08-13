@@ -86,7 +86,8 @@ echo "== untracked and ignored residue outside target/ =="
 tree_residue="$(
   git status --porcelain --ignored=matching -uall \
     | grep -E '^(\?\?|!!) ' \
-    | grep -v '^!! target/' || true
+    | grep -v '^!! target/' \
+    | grep -v '^!! \.claude/' || true
 )"
 if [ -n "$tree_residue" ]; then
   echo "::error::${LABEL} left files in the working tree"
@@ -105,9 +106,17 @@ echo "== stray empty directories anywhere in the tree =="
 # `git status` never reports an empty directory, ignored or not).
 # Do NOT replace this with `find crates rulesets -name data`: `rulesets/data`
 # is a tracked directory and would fail the gate permanently.
+# `.claude/` is excluded from both scans, and it is the one exclusion here that
+# is NOT about ignoring residue: `.claude/worktrees/` holds nested git worktrees,
+# each a SEPARATE checkout with its own `target/`. Their build artifacts are not
+# this checkout's residue, and scanning them made the gate fail on any machine
+# that had ever run an agent worktree -- i.e. it reported a violation that no
+# test run caused. A gate that cries wolf locally gets ignored locally, which
+# costs exactly the CI-only coverage this script was lifted out of ci.yml to
+# escape. CI is unaffected either way: a fresh checkout has no `.claude/`.
 empty_dirs="$(
   find . -type d -empty \
-    -not -path './.git/*' -not -path './target/*' \
+    -not -path './.git/*' -not -path './target/*' -not -path './.claude/*' \
     -print | sort
 )"
 if [ -n "$empty_dirs" ]; then
