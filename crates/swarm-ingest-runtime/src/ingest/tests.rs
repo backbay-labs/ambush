@@ -2607,6 +2607,20 @@ async fn platform_runtime_status_rejects_unsupported_schema_version_header() {
 async fn platform_asset_posture_endpoint_returns_host_filtered_posture() {
     let mut config = test_config("suspicious_process_tree");
     enable_platform_api(&mut config);
+    // The shipped alert_threshold is 2.0 and this test seeds exactly two sources at
+    // confidence 1.0, so `total_strength >= alert_threshold` was a knife-edge float
+    // equality that held ONLY while the handler's clock read landed in the same second
+    // as the seeding. `strength_at` decays as confidence * 0.5^(elapsed / 3600), so one
+    // second of elapsed time gives 1.999615 and the endpoint reports Normal instead of
+    // Alert. Measured: 2 failures in 150 unforced local runs, and forcing `now - 1`
+    // reproduces CI run 31725573487's failure exactly (same assert, Normal vs Alert).
+    //
+    // Lowering the threshold for this test restores a margin decay cannot cross inside a
+    // test run (2.0 -> 1.5 survives ~1490s), while keeping what the test is actually
+    // about: two DISTINCT sources at min_sources_for_escalation clearing the alert
+    // threshold, and not reaching incident_threshold. Do not raise it back to a value
+    // the seeded strength meets exactly -- that is what made this flaky.
+    config.pheromone.alert_threshold = 1.5;
     let state = IngestState::from_config(temp_path("platform-posture"), config).unwrap();
 
     let now = super::unix_timestamp_secs();
@@ -2669,7 +2683,16 @@ async fn platform_asset_posture_endpoint_returns_host_filtered_posture() {
         .find(|summary| summary.threat_class == ThreatClass::Execution)
         .unwrap();
     assert_eq!(execution.distinct_sources, 2);
-    assert!(execution.total_strength >= 2.0);
+    // Two deposits at confidence 1.0 sum to 2.0 at zero elapsed and decay from there, so
+    // this is bounded on both sides rather than asserted at the boundary: `>= 2.0` was
+    // the second wall-clock-decided assertion in this test and failed for the same
+    // reason as the escalation_level one above. The lower bound is the alert threshold
+    // this test configures; the upper bound still catches a double-count.
+    assert!(
+        execution.total_strength > 1.5 && execution.total_strength <= 2.0,
+        "expected two decaying full-strength sources above the alert threshold, got {}",
+        execution.total_strength
+    );
 }
 
 #[tokio::test]
