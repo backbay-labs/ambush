@@ -64,6 +64,7 @@ use std::time::Instant;
 use swarm_core::BridgeStatusReport;
 use swarm_core::agent::SwarmMode;
 use swarm_core::config::{ResponsePlaybookRuleResolution, RuntimeDegradationLevel, SwarmConfig};
+use swarm_core::http_rate_limit::HttpRateLimitStatus;
 use swarm_core::observability::with_trace_id;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::telemetry::TelemetryPayload;

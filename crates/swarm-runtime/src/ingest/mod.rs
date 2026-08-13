@@ -40,7 +40,6 @@ use crate::evolution::{
     StrategyGenome,
 };
 use crate::evolution_status::DefaultEvolutionStatusHarness;
-use crate::http::rate_limit::HttpRateLimiter;
 use crate::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use crate::mutation::DefaultEvolutionMutationHarness;
 use crate::providence::{
@@ -79,6 +78,7 @@ use swarm_core::agent::{AgentHealthEntry, SwarmModeState};
 use swarm_core::config::{
     OperatorSurfaceConfig, ResponseAdapterConfig, RuntimeAntiTamperConfig, RuntimeMode, SwarmConfig,
 };
+use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_core::pheromone::EscalationRecord;
 use swarm_core::types::AgentId;
 use swarm_pheromone::PheromoneSubstrate;

@@ -2973,9 +2973,11 @@ name = "swarm-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "ed25519-dalek",
  "hex",
+ "http",
  "serde",
  "serde_json",
  "sha2",

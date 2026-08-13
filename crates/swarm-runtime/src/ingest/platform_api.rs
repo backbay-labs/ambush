@@ -7,11 +7,10 @@ use crate::control::{
 };
 use crate::escalation::standard_threat_classes;
 use crate::evasion_coverage::EvasionCoverageSnapshot;
-use crate::http::rate_limit::HttpRateLimitRejection;
 use crate::http::tls_identity::TlsClientIdentity;
 use crate::providence::verify_providence_context_token;
 use crate::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
-use crate::service::{HttpRateLimitStatus, OperatorBearerTokenStatus, RuntimeDegradationStatus};
+use crate::service::{OperatorBearerTokenStatus, RuntimeDegradationStatus};
 use axum::Router;
 use axum::extract::{Extension, Json, Path as AxumPath, Query, State};
 use axum::http::{StatusCode, header};
@@ -31,6 +30,9 @@ use swarm_core::ThreatClass;
 use swarm_core::agent::{AgentHealthEntry, SwarmMode, SwarmModeState};
 use swarm_core::config::{
     OperatorScope, OperatorSurfaceConfig, PlatformApiConfig, PlatformApiScope,
+};
+use swarm_core::http_rate_limit::{
+    HttpRateLimitRejection, HttpRateLimitStatus, HttpRateLimitThreshold,
 };
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{ProvidenceIncidentReconciliation, ResponseRehearsalPreview, Severity};
@@ -992,10 +994,10 @@ fn map_platform_rate_limit_rejection(rejection: HttpRateLimitRejection) -> Platf
     )
 }
 
-fn rate_limit_threshold_label(threshold: crate::service::HttpRateLimitThreshold) -> &'static str {
+fn rate_limit_threshold_label(threshold: HttpRateLimitThreshold) -> &'static str {
     match threshold {
-        crate::service::HttpRateLimitThreshold::Burst => "burst",
-        crate::service::HttpRateLimitThreshold::Sustained => "sustained",
+        HttpRateLimitThreshold::Burst => "burst",
+        HttpRateLimitThreshold::Sustained => "sustained",
     }
 }
 

@@ -3,13 +3,13 @@ use axum::Json;
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Serialize;
+use swarm_core::http_rate_limit::HttpRateLimitRejection;
 use swarm_evolution::evidence::EvidenceError;
 use swarm_evolution::governance_prep::EvolutionGovernancePrepError;
 use swarm_evolution::operator_maintenance::OperatorMaintenanceError;
 use swarm_evolution::portfolio::EvolutionPortfolioError;
 use swarm_runtime::approval::ApprovalError;
 use swarm_runtime::control::ControlError;
-use swarm_runtime::http::rate_limit::HttpRateLimitRejection;
 use swarm_runtime::service::{ReadinessError, ServiceError};
 use swarm_runtime_workbench::review_workbench::ReviewWorkbenchError;
 
@@ -183,11 +183,11 @@ pub(super) fn map_operator_rate_limit_rejection(
 }
 
 fn rate_limit_threshold_label(
-    threshold: swarm_runtime::service::HttpRateLimitThreshold,
+    threshold: swarm_core::http_rate_limit::HttpRateLimitThreshold,
 ) -> &'static str {
     match threshold {
-        swarm_runtime::service::HttpRateLimitThreshold::Burst => "burst",
-        swarm_runtime::service::HttpRateLimitThreshold::Sustained => "sustained",
+        swarm_core::http_rate_limit::HttpRateLimitThreshold::Burst => "burst",
+        swarm_core::http_rate_limit::HttpRateLimitThreshold::Sustained => "sustained",
     }
 }
 

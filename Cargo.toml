@@ -59,6 +59,7 @@ async-trait = "0.1"
 futures-util = "0.3"
 async-nats = "0.47"
 axum = "0.8"
+http = "1"
 tower = { version = "0.5", features = ["util"] }
 prometheus-client = "0.23"
 tonic = "0.13"

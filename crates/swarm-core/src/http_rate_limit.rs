@@ -1,15 +1,86 @@
+//! Per-source HTTP rate limiting, shared by every HTTP surface in the tree.
+//!
+//! # Why this lives in `swarm-core` (SPLIT-05, phase 282)
+//!
+//! The limiter used to be `swarm_runtime::http::rate_limit`. SPLIT-01 moved the
+//! rest of `http/` up into `swarm-runtime-http` and deliberately left this
+//! module behind, because `ingest/` -- which was still in the composition root
+//! -- holds an `HttpRateLimiter` for the platform API surface and maps its
+//! `HttpRateLimitRejection` onto a 429.
+//!
+//! SPLIT-05 takes `ingest/` out into `swarm-ingest-runtime`, and the settled
+//! layering is:
+//!
+//! ```text
+//! swarm-runtime-http -> swarm-ingest-runtime -> swarm-runtime -> swarm-core
+//! ```
+//!
+//! Two surfaces need the limiter and they sit at different heights: the
+//! operator surface in `swarm-runtime-http` (top) and the platform API surface
+//! in `swarm-ingest-runtime` (middle). So the limiter cannot live in either of
+//! them without the other acquiring a dependency that points back down the
+//! stack:
+//!
+//! - in `swarm-runtime-http`, `swarm-ingest-runtime` would have to depend on a
+//!   crate that already depends on it, which Cargo rejects outright;
+//! - in `swarm-ingest-runtime`, it would still be above `swarm-runtime`, whose
+//!   `service` module embeds [`HttpRateLimitStatus`] in its operator status
+//!   report.
+//!
+//! `swarm-core` is the only position that both surfaces can reach downward, and
+//! it is where the limiter's own configuration type,
+//! [`crate::config::HttpRateLimitConfig`], already lived. Same precedent as
+//! SPLIT-02's `OperatorSurfacePaths` and SPLIT-05's own `BridgeStatusReport`:
+//! shared data and the primitive that produces it go down into `swarm-core`,
+//! the transport that mounts them stays up.
+//!
+//! # `http` rather than `axum`
+//!
+//! `check_request` takes an [`http::HeaderMap`]. It used to be spelled
+//! `axum::http::HeaderMap`, which is a re-export of exactly this type from
+//! exactly this crate, so every call site is unchanged and no coercion was
+//! introduced. Naming `http` directly keeps the web framework out of
+//! `swarm-core`; `axum` still depends on `http`, so nothing new is compiled.
+
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use arc_swap::ArcSwap;
-use axum::http::HeaderMap;
-use swarm_core::config::HttpRateLimitConfig;
+use http::HeaderMap;
+use serde::{Deserialize, Serialize};
 
-use crate::service::{HttpRateLimitStatus, HttpRateLimitThreshold, HttpRateLimitViolationRecord};
+use crate::config::HttpRateLimitConfig;
 
 const MAX_TRACKED_SOURCES: usize = 4_096;
 const MAX_RECENT_VIOLATIONS: usize = 64;
+
+/// Which of the two configured windows a request tripped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpRateLimitThreshold {
+    Burst,
+    Sustained,
+}
+
+/// One recorded rejection, retained for the operator status surface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpRateLimitViolationRecord {
+    pub source: String,
+    pub path: String,
+    pub threshold: HttpRateLimitThreshold,
+    pub observed_at_ms: i64,
+    pub retry_after_ms: u64,
+}
+
+/// A limiter's configuration and recent violations, as reported to operators.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpRateLimitStatus {
+    pub surface: String,
+    pub config: HttpRateLimitConfig,
+    #[serde(default)]
+    pub recent_violations: Vec<HttpRateLimitViolationRecord>,
+}
 
 #[derive(Debug, Clone)]
 pub struct HttpRateLimiter {

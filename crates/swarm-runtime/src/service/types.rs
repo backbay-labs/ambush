@@ -249,30 +249,6 @@ pub struct OperatorBearerTokenStatus {
     pub expired: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HttpRateLimitThreshold {
-    Burst,
-    Sustained,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpRateLimitViolationRecord {
-    pub source: String,
-    pub path: String,
-    pub threshold: HttpRateLimitThreshold,
-    pub observed_at_ms: i64,
-    pub retry_after_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpRateLimitStatus {
-    pub surface: String,
-    pub config: swarm_core::config::HttpRateLimitConfig,
-    #[serde(default)]
-    pub recent_violations: Vec<HttpRateLimitViolationRecord>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvestigationReviewStatus {
     pub queue: InvestigationQueueSnapshot,
