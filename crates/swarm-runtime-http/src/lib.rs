@@ -12,24 +12,34 @@
 //! Nothing in `swarm-runtime` may depend on this crate. If a runtime module
 //! needs something from here, the item is in the wrong crate.
 //!
-//! # What did NOT move, and why `axum` is still below this line
+//! # Where `axum` ended up
 //!
-//! `axum` is still a direct dependency of `swarm-runtime`, and this crate did
-//! not change that. `ingest/` -- `mod.rs`, `health.rs`, `demo.rs`,
-//! `platform_api.rs`, `providence_handlers.rs`, `soar_verdict_handlers.rs` --
-//! builds axum routers and handlers in NON-TEST code, and `swarm-runtime`'s own
-//! `control.rs` and `anti_tamper.rs` consume `crate::ingest` in non-test code
-//! in turn. Lifting `ingest` up here would invert those two edges, which is a
-//! trait-boundary change, not a code move. Until that happens the runtime keeps
-//! `axum`; the five heavier transport crates above are gone either way, and
-//! `rustls-pemfile` and `x509-parser` are now unreachable from
-//! `cargo tree -p swarm-runtime` entirely.
+//! `swarm-runtime`'s manifest no longer carries `axum` as a normal dependency:
+//! it is a `[dev-dependencies]` entry there, and no lib or bin target in the
+//! composition root names it. The other five -- `hyper`, `hyper-util`,
+//! `rustls-pemfile`, `tokio-rustls`, `x509-parser` -- are gone from that
+//! manifest entirely.
 //!
-//! That leaves SPLIT-01's six-dependency clause one dependency short, which is a
-//! scope question rather than a code one. It is recorded in
-//! `docs/decisions/0002-split-01-open-until-split-05.md`: SPLIT-01 stays open
-//! until SPLIT-05 deletes the `axum` line. `swarm_runtime::http`'s module doc
-//! carries the per-file measurement behind that decision.
+//! One NORMAL edge to `axum` survives and cannot be removed here, because it
+//! does not run through this crate at all:
+//!
+//! ```text
+//! $ cargo tree -p swarm-runtime -e normal -i axum
+//! axum v0.8.9
+//! └── tonic v0.13.1
+//!     └── swarm-ingest-tetragon
+//!         └── swarm-runtime
+//! ```
+//!
+//! So `axum` is still COMPILED for the composition root's normal profile, and
+//! the manifest change is a naming boundary rather than a graph removal. That
+//! distinction is the whole subject of
+//! `docs/decisions/0008-split-01-axum-edge-is-now-dev-only.md`, which supersedes
+//! ADR 0002 and retracts its forecast that SPLIT-05 would delete the line --
+//! the blocker was never in `ingest/`, so extracting `ingest/` could not have
+//! reached it. Do not follow ADR 0002's verification step; a bare
+//! `grep '^axum' crates/swarm-runtime/Cargo.toml` cannot see manifest sections
+//! and reports the dev-dependency as though the requirement were still open.
 //!
 //! `result_large_err` is allowed crate-wide here for the same reason it is
 //! allowed in `swarm-runtime`, whose `lib.rs` carries the identical attribute:
