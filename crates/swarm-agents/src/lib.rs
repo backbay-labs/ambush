@@ -38,8 +38,8 @@
 //! # Which roles live here
 //!
 //! Five of the eight roles are here: `pounce`, `stalker`, `tom`, `weaver`,
-//! `whisker`. Three are not yet -- `calico`, `kitten`, `sphinx` -- and they are a
-//! closed group that has to cross in one commit.
+//! `whisker`. Three are not -- `calico`, `kitten`, `sphinx` -- and they are a
+//! closed group, still pinned, that has to cross in one commit when it crosses.
 //!
 //! `tom` came across on its own because it names nothing in the composition root:
 //!
@@ -54,27 +54,56 @@
 //! sealed::SealedGovernanceAuthority` and `GovernanceAuthority` -- so the seal is
 //! satisfied from here exactly as it was from there.
 //!
-//! The other three cannot be split apart. `sphinx` and `kitten` both read
-//! `calico`, and all nine of the `calico_agent` items they read are `pub(crate)`:
+//! The other three did not come. ADR 0004 costed their move at nine `pub(crate)`
+//! `calico_agent` items and said to wait for `ingest/`; `ingest/` left, and a
+//! different pin turned out to be underneath it. `kitten_agent.rs:828` calls
+//! `EvolutionDetectorGenome::strategy()`, which is `pub(crate)` in
+//! `swarm_runtime::mutation::types` and has 12 other callers that all stay
+//! there, so the move needs a fourth widening against a baseline of three:
 //!
 //! ```text
-//! sphinx -> calico   CalicoDeceptionInteractionPayload, CalicoDeceptionInventoryPayload,
-//!                    CalicoLifecycleStage, CalicoMonitoringPayload,
-//!                    CALICO_DECEPTION_INTERACTION_SCHEMA, CALICO_DECEPTION_INVENTORY_SCHEMA,
-//!                    CALICO_DECEPTION_INVENTORY_THREAT_CLASS,
-//!                    parse_calico_deception_interaction, parse_calico_deception_inventory
-//!                    -- every one of the nine `pub(crate)` items the file declares
-//! kitten -> calico   parse_calico_deception_interaction (non-test),
-//!                    CalicoDeceptionInteractionPayload, CalicoLifecycleStage,
-//!                    CALICO_DECEPTION_INTERACTION_SCHEMA (test)
-//! kitten -> sphinx   SphinxAgent (test)
+//! error[E0624]: method `strategy` is private
+//!    --> crates/swarm-agents/src/kitten_agent.rs:828:61
+//!     |
+//! 828 |                     serde_json::Value::from(detector_genome.strategy()),
+//!     |                                                             ^^^^^^^^ private method
+//!     |
+//!    ::: crates/swarm-runtime/src/mutation/types.rs:137:5
+//!     |
+//! 137 |     pub(crate) fn strategy(&self) -> &'static str {
+//!     |     --------------------------------------------- private method defined here
 //! ```
 //!
-//! Moving `calico` first puts `swarm_agents::calico_agent` in the root's non-test
-//! code and Cargo rejects the manifest. Moving either reader first leaves it
-//! naming `swarm_runtime::calico_agent::*` across the crate line, which widens
-//! those `pub(crate)` items to permanent public API. One commit for the three is
-//! the only order that is neither a cycle nor a widening.
+//! That call is a METHOD on an already-`pub` type from an already-`pub`
+//! accessor, so it carries no `crate::` path and no path grep finds it. ADR 0007
+//! records the pin and why the widening is not taken as a side effect of a file
+//! move.
+//!
+//! When they do come, they come as one commit. `sphinx` and `kitten` both read
+//! `calico`, and every one of the nine `pub(crate)` items `calico_agent.rs`
+//! declares is read across those edges:
+//!
+//! ```text
+//! sphinx -> calico   all nine
+//! kitten -> calico   parse_calico_deception_interaction (non-test), and
+//!                    CalicoDeceptionInteractionPayload, CalicoLifecycleStage,
+//!                    CALICO_DECEPTION_INTERACTION_SCHEMA from its test module
+//! kitten -> sphinx   SphinxAgent (test module)
+//! ```
+//!
+//! Moving `calico` first leaves `swarm_agents::calico_agent` named from the
+//! root's non-test code, and Cargo rejects the manifest before compiling
+//! anything:
+//!
+//! ```text
+//! error: cyclic package dependency: package `swarm-agents` depends on itself.
+//! ```
+//!
+//! Moving either reader first leaves it naming `swarm_runtime::calico_agent::*`
+//! across the crate line, and a re-export cannot launder a `pub(crate)` item
+//! (`error[E0364]`), so all nine would become permanent public API to buy an
+//! ordering. Together they stay `pub(crate)` inside THIS crate, which is what
+//! ADR 0004 meant by waiting.
 
 pub mod pounce_agent;
 pub mod stalker_agent;

@@ -6,14 +6,16 @@
 //!
 //! # Three agent roles are still declared here (SPLIT-03, phase 282)
 //!
+//! **Not because of `ingest/` any more. See ADR 0007.**
+//!
 //! SPLIT-03 moved the `*_agent` role implementations to `swarm-agents`, so that
 //! consumers of the composition root stop compiling behaviour they never call.
 //! Five of the eight have gone: `pounce`, `stalker`, `weaver`, `whisker`, and now
 //! `tom`. Three did not, and are declared below with a marker on each --
 //! `calico_agent`, `kitten_agent`, `sphinx_agent`.
 //!
-//! THEY ARE NO LONGER PINNED. `ingest/` was what held them, and SPLIT-05 took it
-//! out of this crate. The one non-test back-edge ADR 0004 named --
+//! `ingest/` NO LONGER HOLDS THEM. It was the pin ADR 0004 recorded, and SPLIT-05
+//! took it out of this crate. The one non-test back-edge ADR 0004 named --
 //! `ingest/providence_handlers.rs` -> `kitten_agent::route_feedback_signal` --
 //! is now a forward edge from `swarm-ingest-runtime` into this crate, which is
 //! the direction Cargo permits. Nothing outside the three files names them here
@@ -25,14 +27,28 @@
 //! $
 //! ```
 //!
-//! What remains is a closed group: `sphinx` and `kitten` read `calico`,
-//! `kitten`'s test module reads `sphinx`, and nothing else in this crate reads
-//! any of them. The three move to `swarm-agents` together, in one commit, with
-//! no widening -- the nine `pub(crate)` `calico_agent` items ADR 0004 costed stay
-//! `pub(crate)` once `calico` and `sphinx` are in the same crate again, which was
-//! the whole reason for waiting. Splitting that commit up is what costs: moving
-//! `calico` first puts `swarm_agents::calico_agent` in this crate's non-test code
-//! and Cargo rejects the manifest, and moving either reader first widens the nine.
+//! SOMETHING ELSE HOLDS THEM. `kitten_agent.rs:828`, inside
+//! `fn build_population_proposal` and 1,697 lines above the file's
+//! `#[cfg(test)]` module, calls `EvolutionDetectorGenome::strategy()` --
+//! `pub(crate)` at `mutation/types.rs:137`. Moving the file produces
+//! `error[E0624]: method 'strategy' is private`, and the only mechanical fix is
+//! a FOURTH widening against a baseline of three. ADR 0007 records why that is
+//! not taken here.
+//!
+//! A PATH GREP CANNOT SEE THAT PIN, which is why the grep above reads clean.
+//! `strategy()` is called as a method on a value of an already-`pub` type
+//! obtained from an already-`pub` accessor, so no `crate::` path appears at the
+//! call site or in the import block. Only the compiler finds this class of pin:
+//! `git mv` the three files, repoint their `crate::` paths, and read
+//! `cargo check -p swarm-agents --all-targets`.
+//!
+//! The three also have to move as ONE commit whenever they do move. `sphinx` and
+//! `kitten` read `calico`, `kitten`'s test module reads `sphinx`, and nothing
+//! else in this crate reads any of them. Moving `calico` first puts
+//! `swarm_agents::calico_agent` in this crate's non-test code and Cargo rejects
+//! the manifest; moving either reader first widens all nine of `calico_agent`'s
+//! `pub(crate)` items to permanent public API. Together they stay `pub(crate)`,
+//! which was the whole reason ADR 0004 said to wait.
 //!
 //! `tom` did not have to wait for the group. It named nothing in this crate --
 //! `grep -oE '(crate|super)::[A-Za-z_:]+' src/tom_agent.rs` printed only its own
@@ -42,15 +58,20 @@
 //! was `#[cfg(test)]` and now reaches `swarm_agents::tom_agent` through the
 //! dev-dependency edge this crate already carries.
 //!
-//! IF THIS CHANGES: nothing here blocks it any more, so the next SPLIT-03 commit
-//! is the one that deletes this section. The progress measure is unchanged --
-//! `ls crates/swarm-runtime/src/*_agent.rs | wc -l` prints 3 today and has to
-//! reach 0 -- but it is now a matter of doing the move, not of unblocking it.
-//! The argument for why it was blocked, and what it would have cost to force
-//! `sphinx` out early, is in
-//! `docs/decisions/0004-split-03-four-of-eight-agents-pinned-by-ingest.md`;
+//! IF THIS CHANGES: SPLIT-03 unblocks when SPLIT-04 moves `mutation/` to
+//! `swarm-evolution`, which puts `strategy()` and its 12 remaining callers on
+//! the far side of the same crate line and leaves `kitten` reading ordinary
+//! public API of a leaf crate. The alternative is a recorded decision to widen
+//! `strategy()`, with an allowlist line in
+//! `tools/check-visibility-baseline.sh`. The progress measure is
+//! `ls crates/swarm-runtime/src/*_agent.rs | wc -l`: it prints 3 today, printed
+//! 4 before `tom` moved, and has to reach 0.
+//! `docs/decisions/0004-split-03-four-of-eight-agents-pinned-by-ingest.md`
+//! records the original `ingest/` pin,
 //! `docs/decisions/0006-split-05-ingest-extraction-and-its-three-widenings.md`
-//! records the unpinning.
+//! its removal, and
+//! `docs/decisions/0007-split-03-kitten-pinned-by-a-private-method-not-by-ingest.md`
+//! the pin that replaced it.
 //!
 //! # Seven evolution modules are still declared here (SPLIT-04, phase 282)
 //!
@@ -97,7 +118,7 @@ extern crate self as swarm_runtime;
 pub mod agent_identity;
 pub mod alert_tuning;
 pub mod approval;
-pub mod calico_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
+pub mod calico_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
 pub mod canary;
 pub mod config;
 pub mod correlation;
@@ -111,7 +132,7 @@ pub mod evolution;
 pub mod evolution_status;
 pub mod http;
 pub mod investigation;
-pub mod kitten_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
+pub mod kitten_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
 pub mod mutation;
 pub mod promotion;
 pub mod providence;
@@ -121,7 +142,7 @@ pub mod runtime_events;
 pub mod selection;
 pub mod sequence_detector;
 pub mod service;
-pub mod sphinx_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
+pub mod sphinx_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
 pub mod startup_attestation;
 pub mod strategy;
 pub mod threat_intel_runtime;
