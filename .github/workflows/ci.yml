@@ -121,6 +121,36 @@ jobs:
       - name: Check every gate script is wired into a workflow
         run: bash tools/check-gates-wired.sh
 
+      # TCBOUND-03 / TCBOUND-04. `swarm-policy`, `swarm-crypto` and
+      # `swarm-spine` are the trusted computing base (ADR 0009): if any of the
+      # three is wrong, every other assurance in the system is decoration. They
+      # were dependency-clean by review attention and by nothing else, with six
+      # milestones of capability queued to be built around them.
+      #
+      # In THIS job, not `build`, because it needs no build artifacts -- it
+      # reads `cargo metadata`, which resolves without compiling -- and because
+      # this job is where the fast static checks live. It does need the
+      # toolchain, which this job already installs. Measured 6.3s wall clock in
+      # a warm worktree, ten `cargo metadata` runs included.
+      #
+      # It is not a manifest grep. Rule 3 reads the RESOLVED normal graph, which
+      # is how it catches a transport that arrives through `swarm-core` without
+      # any TCB manifest changing -- the case ADR 0008 shows a declared-edge
+      # reading cannot see. The rule-by-rule declared/resolved ruling, and the
+      # one measured deviation the shipped tree already carries
+      # (`swarm-spine -> swarm-response -> reqwest -> hyper`), are in ADR 0009.
+      #
+      # THE FIXTURE IS THE POINT. A layering script that has never been observed
+      # to fail is the eleventh entry in .planning/STATE.md's defect catalogue.
+      # Every invocation generates a real miniature cargo workspace, runs the
+      # SAME rule engine with the SAME policy and baseline over it, proves the
+      # clean fixture exits 0, then breaks it nine ways and proves each break is
+      # caught with the right diagnostic. Four of the nine are cases cargo
+      # itself accepts (dev cycles, build cycles, transitive transport edges),
+      # so they are violations nothing else in this pipeline would reject.
+      - name: Check the trusted-computing-base layering boundary
+        run: bash tools/check-workspace-layering.sh
+
   build:
     runs-on: ubuntu-latest
     steps:
