@@ -288,6 +288,89 @@ jobs:
         if: always()
         run: bash tools/check-worktree-clean.sh "the test run"
 
+  # THE SOLVER LANE, WHICH NO JOB ABOVE COMPILES.
+  #
+  # `swarm-runtime` and `swarm-evolution` both declare an optional `z3` feature
+  # (`z3 = ["dep:z3"]`). Every step above builds with default features, so
+  # everything under `#[cfg(feature = "z3")]` -- which is the ENTIRE real solver
+  # implementation, `evaluate_custom_z3_invariant_impl` in
+  # `crates/swarm-runtime/src/evolution/formal_safety.rs`, plus the three tests
+  # that exercise it -- was never compiled, never linted and never run anywhere in
+  # this pipeline. `grep -c z3 .github/workflows/ci.yml` was 0.
+  #
+  # That is the same shape as the python-client smoke test in the `test` job
+  # above: a lane that exists in the repository and is executed by nothing. It is
+  # worse here, because the code it covers is what decides whether an evolved
+  # detector is formally safe.
+  #
+  # SCOPE. This job compiles, lints and RUNS the feature. It is not a
+  # type-check-only lane: `cargo test --features z3` below executes
+  # `z3_custom_invariant_proves_unsat_and_persists_proof` and
+  # `z3_proof_persists_machine_readable_counterexample`, so the solver is
+  # exercised end to end and not merely proved to parse.
+  #
+  # PROVISIONING. `z3 = { version = "0.20", features = ["gh-release"] }`, so
+  # `z3-sys`'s build script DOWNLOADS a prebuilt z3 from GitHub releases rather
+  # than needing libz3-dev or a source build. Measured in this worktree: a cold
+  # `cargo check -p swarm-runtime --features z3 --all-targets` finished in 58s and
+  # the test run in 1m06s. The download is a network fetch at build time; it is
+  # cached with the other build artifacts by the same key the sibling jobs use.
+  # If GitHub releases ever becomes unreachable this job fails loudly, which is
+  # the correct failure -- silently not compiling the solver is what this job
+  # exists to end.
+  solver-z3:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Restore shared target cache
+        uses: actions/cache@v4
+        with:
+          path: target/ci
+          key: cargo-target-z3-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            cargo-target-z3-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # `--all-targets` so the `#[cfg(feature = "z3")]` TESTS are linted too, not
+      # just the library. Without it the three z3 tests stay unlinted even here.
+      - name: Lint the solver lane with clippy
+        run: >
+          cargo clippy -p swarm-runtime -p swarm-evolution
+          --features swarm-runtime/z3,swarm-evolution/z3
+          --all-targets -- -D warnings
+
+      # Serial for the same reason the sibling `test` job runs swarm-runtime
+      # serially: nothing has proved its tests are parallel-safe.
+      - name: Run the solver lane
+        run: cargo test -p swarm-runtime --features z3 -- --test-threads=1
+
+      - name: Assert the solver lane left the working tree clean
+        if: always()
+        run: bash tools/check-worktree-clean.sh "the z3 solver lane"
+
   fixture-freshness:
     runs-on: ubuntu-latest
     steps:
