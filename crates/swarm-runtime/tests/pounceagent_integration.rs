@@ -182,6 +182,19 @@ fn request_actions(actions: &[SwarmAction]) -> Vec<&ResponseAction> {
         .collect()
 }
 
+// A pouncer built with `PounceAgent::new` alone carries a keyless
+// `GovernancePolicy::default()`, which refuses every destructive action. The tests
+// below are about playbook selection, branch ordering and evidence lineage, not about
+// governance, so they register a governor and let the receipt-backed Allow path run.
+fn healthy_governance_policy() -> Arc<GovernancePolicy> {
+    let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
+    policy.register_governor(
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&[17; 32]),
+    );
+    policy
+}
+
 fn sample_partition_governance_policy() -> Arc<GovernancePolicy> {
     let base_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -211,7 +224,8 @@ fn sample_partition_governance_policy() -> Arc<GovernancePolicy> {
 #[tokio::test]
 async fn pounceagent_emits_request_response_for_alert_and_incident() {
     let config = test_config();
-    let mut agent = PounceAgent::new(AgentId::new("pouncer", "primary"), config.response_playbook);
+    let mut agent = PounceAgent::new(AgentId::new("pouncer", "primary"), config.response_playbook)
+        .with_governance_policy(healthy_governance_policy());
 
     let alert_env = env(
         SwarmMode::Alert,
@@ -379,7 +393,8 @@ async fn response_playbook_selects_actions_by_threat_severity_and_confidence() {
 
 #[tokio::test]
 async fn response_playbook_branches_emit_ordered_actions_from_runtime_context() {
-    let mut agent = PounceAgent::new(AgentId::new("pouncer", "branching"), branching_playbook());
+    let mut agent = PounceAgent::new(AgentId::new("pouncer", "branching"), branching_playbook())
+        .with_governance_policy(healthy_governance_policy());
 
     let incident_env = env(
         SwarmMode::Incident,
