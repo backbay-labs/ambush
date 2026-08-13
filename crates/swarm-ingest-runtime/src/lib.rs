@@ -116,8 +116,9 @@
 //! and `escalation::standard_threat_classes` were `pub(crate)` on `swarm-runtime`
 //! and are now `pub`, because `control.rs` and `ingest/` call them from here and
 //! none of the three could follow their caller: two are still called inside the
-//! root, and the third dispatches to fourteen `pub(crate)` validators that would
-//! have had to be widened instead. A fourth,
+//! root, and the third dispatches to fourteen per-profile validators -- thirteen
+//! of them still `pub(crate)`, and each with callers elsewhere in the root --
+//! that would have had to be widened instead. A fourth,
 //! `dispatcher::approval_context_now`, did follow its caller and is a private
 //! `fn` in `ingest/mod.rs`. The full accounting, and the inversion that was
 //! weighed and declined, is in

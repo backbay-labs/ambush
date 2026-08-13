@@ -77,9 +77,20 @@ z3 = { version = "0.20", optional = true, features = ["gh-release"] }
 swarm-agents.workspace = true
 # Dev-only for the same reason, and the same way round: `swarm-ingest-runtime`
 # depends on this crate, so a normal entry here is the Cargo cycle SPLIT-05 is
-# organised around. The root's integration tests, examples and benches still
-# drive the ingest router, `control` and `anti_tamper`; its lib and bins do not
-# name them at all.
+# organised around. This crate's lib, bins and benches name none of it; exactly
+# thirteen dev targets do, and they are counted rather than estimated:
+#
+#     $ for d in tests examples benches; do
+#         printf '%s %s\n' "$(grep -rl swarm_ingest_runtime crates/swarm-runtime/$d | wc -l)" "$d"
+#       done
+#     12 tests
+#     1 examples
+#     0 benches
+#
+# Ten of the thirteen want one free function, `control::build_composite_detector`,
+# and never touch the router. Letting all thirteen follow the code would delete
+# this entry; it is not done, because ten of them are `swarm-runtime` integration
+# tests and would then be filed under the wrong crate. See ADR 0006.
 swarm-ingest-runtime.workspace = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 tower.workspace = true

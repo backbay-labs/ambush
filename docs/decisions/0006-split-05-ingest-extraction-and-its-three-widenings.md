@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted on 2026-08-12.
+Accepted on 2026-08-12. Amended on 2026-08-13 after review, on two points, both
+of them disclosure rather than substance: the `[dev-dependencies]` reverse edge
+is now measured instead of estimated, and the no-widening invariant this ADR
+breaks is escalated below as **OPEN, pending phase-owner sign-off** rather than
+being treated as settled by the reviewer who checked the justifications.
 
 ## Context
 
@@ -81,8 +85,65 @@ $ cargo tree -p swarm-runtime -e normal --prefix none | grep -c swarm-ingest-run
 0
 ```
 
-`swarm-runtime` carries the reverse entry under `[dev-dependencies]` only, for
-the ten integration tests, one example and one bench that still drive the router.
+### `swarm-runtime` does depend on `swarm-ingest-runtime`, as a dev-dependency
+
+That reverse entry is real and it is stated here rather than left to be found.
+Cargo permits a dev cycle where it rejects a normal one, so the forward-edge rule
+holds for everything that ships and is broken for nothing at all only in the
+sense that test targets are not part of the library graph:
+
+```
+$ cargo metadata --format-version 1 | (extract dependency kinds)
+swarm-ingest-runtime  -> swarm-runtime         kind=normal
+swarm-runtime         -> swarm-ingest-runtime  kind=dev
+
+$ cargo tree -p swarm-runtime -e normal --prefix none | grep -c swarm-ingest-runtime
+0
+$ cargo tree -p swarm-runtime -e dev --prefix none | grep -c swarm-ingest-runtime
+1
+```
+
+It follows the precedent `swarm-agents` set on this branch, which carries the
+same shape for the same reason and predates this phase (`swarm-runtime ->
+swarm-agents kind=dev`, present at `b86576d`). This is now the second one.
+
+Thirteen dev targets need it -- twelve integration tests and one example. No
+bench does; the earlier draft of this ADR said "one bench" and that was wrong:
+
+```
+$ for d in tests examples benches; do
+    printf '%s %s\n' "$(grep -rl swarm_ingest_runtime crates/swarm-runtime/$d | wc -l)" "$d"; done
+12 tests
+1 examples
+0 benches
+```
+
+Ten of the thirteen reach for a single free function and never touch the router:
+
+```
+$ grep -rho 'use swarm_ingest_runtime::.*' crates/swarm-runtime/{tests,examples} | sort | uniq -c
+  10 use swarm_ingest_runtime::control::build_composite_detector;
+   3 use swarm_ingest_runtime::ingest::IngestState;
+   2 use swarm_ingest_runtime::bridge_runtime::{BridgeRuntimeRegistry, bridge_health_report};
+   1 use swarm_ingest_runtime::ingest::{IngestResponse, IngestState, detect_http_router};
+   1 use swarm_ingest_runtime::ingest::detect_http_router;
+```
+
+The alternative is to let those thirteen files follow the code into
+`swarm-ingest-runtime`, which would delete the edge outright. It is NOT taken
+here, and the reason is that it would misfile ten of the thirteen: files named
+`recruitment_integration.rs`, `multi_agent_pipeline_integration.rs`,
+`multi_strategy_integration.rs` and so on are `swarm-runtime` integration tests
+that happen to build their detector with `control::build_composite_detector`.
+Moving them to assert against `swarm-runtime` from inside `swarm-ingest-runtime`
+trades a dev edge Cargo sanctions for a test suite filed under the wrong crate,
+and a partial move -- taking only the three that drive the router or the bridge
+registry -- leaves the edge in place and buys nothing. Both lanes are serial, so
+either move is gate-neutral: the sum stays 1126 and no name changes.
+
+This is recorded as a decision to revisit, not as an invariant. The edge is the
+right shape to delete when `build_composite_detector` finds a home that is not
+`control.rs`, which is a refactor and not this phase's business.
 
 ### Three items were widened. This is the first widening on the branch.
 
@@ -93,7 +154,7 @@ were already `pub`:
 | Item | Was | Needed by | Why it cannot follow its caller |
 | --- | --- | --- | --- |
 | `config::kill_chain_sequence_profile` | `pub(crate)` | `control.rs:1559` | Still called at `config.rs:1037`, `service/mod.rs:39`, `service/runtime_service.rs:69` |
-| `config::validate_all_detector_profiles` | `pub(crate)` | `control.rs:716` | Sole caller, but its body dispatches to 14 `pub(crate)` per-profile validators in `config.rs`; moving it widens 14 items instead of 1 |
+| `config::validate_all_detector_profiles` | `pub(crate)` | `control.rs:716` | Sole caller, but its body dispatches to 14 per-profile validators in `config.rs`, 13 of them still `pub(crate)`, and every one of the 13 has callers elsewhere in the root; moving it widens 13 items instead of 1 |
 | `escalation::standard_threat_classes` | `pub(crate)` | `ingest/demo.rs`, `ingest/platform_api.rs` | Still called at `escalation.rs:110` and `:271`; duplicating the 12-variant list in the new crate creates two orderings that can silently diverge |
 
 A fourth candidate did NOT need widening and is recorded because it is the shape
@@ -131,6 +192,80 @@ inversion either way.
 
 All three are reversible in one keyword each when `config` and `escalation`
 themselves leave the root, and none of them adds a type to the public surface.
+
+### The branch's no-widening invariant is broken, and that needs sign-off
+
+Phase 282 was briefed with an invariant stated as a command, and the command was
+required to keep exiting 1. It does not:
+
+```
+$ git diff 742206d..HEAD | grep -E '^-.*(pub\(crate\)|pub\(super\)|pub\(in )'
+-    pub(super) bridge_health: Option<crate::bridge_runtime::BridgeStatusReport>,
+-pub(crate) fn kill_chain_sequence_profile(
+-pub(crate) fn validate_all_detector_profiles(
+-pub(crate) fn approval_context_now(live_mode: bool) -> ApprovalContext {
+-pub(crate) fn standard_threat_classes() -> Vec<ThreatClass> {
+$ echo $?
+0
+```
+
+Five lines, exit 0. Three of the five are the widenings this ADR is named for.
+The other two are not widenings, and are itemised so the count is not read as
+five regressions:
+
+- `pub(super) bridge_health` is a type-path edit. The field is `pub(super)` on
+  both sides; only its type moved down to `swarm-core`:
+
+  ```
+  $ git diff 742206d..HEAD -M | grep -E '^[-+].*bridge_health: Option<'
+  -    pub(super) bridge_health: Option<crate::bridge_runtime::BridgeStatusReport>,
+  +    pub(super) bridge_health: Option<swarm_core::BridgeStatusReport>,
+  ```
+
+- `approval_context_now` is a narrowing: `pub(crate)` in `dispatcher.rs` before,
+  a private `fn` in `ingest/mod.rs` now.
+
+Nothing else was promoted. Scanning the extraction for silent private-to-`pub`
+changes returns the three and two lines of doc-comment prose:
+
+```
+$ git diff b86576d..HEAD -M -- crates/swarm-runtime/src | grep -E '^\+.*\bpub\b'
++pub fn kill_chain_sequence_profile(
++pub fn validate_all_detector_profiles(
++pub fn standard_threat_classes() -> Vec<ThreatClass> {
++//! with no widening -- the nine `pub(crate)` `calico_agent` items ADR 0004
++//! costed stay `pub(crate)` once `calico` and `sphinx` are in the same crate
+```
+
+**A narrow facade is not an escape hatch here, and this is worth stating because
+it is the first thing to reach for.** A re-export cannot widen the item behind
+it, so the item has to be `pub` before any facade can name it:
+
+```
+$ echo 'pub use crate::config::suspicious_process_tree_profile;' >> crates/swarm-runtime/src/lib.rs
+$ cargo check -p swarm-runtime --lib
+error[E0364]: `suspicious_process_tree_profile` is only public within the crate,
+              and cannot be re-exported outside
+```
+
+**What is being asked of the phase owner.** The brief said to keep the invariant
+true and it is not true. Three `pub` items on a crate are public API until
+something takes them away, and a reviewer agreeing that each one is individually
+unavoidable is not the same act as granting the exception. This ADR records the
+break rather than absorbing it. The two live options:
+
+1. **Accept, and restate the invariant.** SPLIT-05 stands as committed. The rule
+   for the rest of phase 282 becomes "no widening beyond the three named here",
+   checked by the same command against a known baseline of five hits. Each of
+   the three is deleted by one keyword when `config` and `escalation` leave the
+   root, which the remaining SPLITs already intend.
+2. **Reverse the shape.** `control.rs` stays in the composition root and
+   `control -> ingest` is inverted behind a trait, which removes two of the
+   three. That is the option costed above and declined: it changes two public
+   `ControlError` variants and a public struct field, so it is a refactor, and
+   refactor-plus-extraction in one task is precisely what stalled the previous
+   attempt at SPLIT-05. `escalation::standard_threat_classes` is `ingest`'s and
+   survives the inversion either way, so option 2 buys two of three, not three.
 
 ### The serial test lane had to follow `ingest::tests`
 
