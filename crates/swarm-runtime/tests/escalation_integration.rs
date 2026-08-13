@@ -472,7 +472,30 @@ async fn threat_intel_enriched_dns_detection_triggers_alert_escalation() {
 
 #[tokio::test]
 async fn cross_strategy_findings_from_one_agent_trigger_alert_escalation() {
-    let config = test_config();
+    // Both findings below carry confidence 1.0, so the concentration this test builds
+    // is EXACTLY 2.0 -- and `test_config()`'s alert_threshold is also exactly 2.0,
+    // compared with `>=` in `PheromoneConcentration::exceeds_threshold`. That is a
+    // zero-margin verdict. `strength_at` decays as confidence * 0.5^(elapsed / 3600),
+    // so a single second between the deposits and the evaluation yields
+    // 2 * 0.5^(1/3600) = 1.999615 and the monitor reports Normal instead of Alert.
+    // Measured, not inferred: forcing `evaluate_all(event.timestamp + 1)` fails with
+    // `left: Normal right: Alert` -- the same signature as the ninth wall-clock site
+    // fixed in b966aa8.
+    //
+    // Nothing reads a clock on this path today: `resolve_deposits` stamps deposits
+    // with `event.timestamp` and the monitor is handed that same literal, so the
+    // elapsed time is structurally zero and the test is latent rather than flaky. It
+    // stops being latent the moment a deposit is stamped with ingest time instead of
+    // event time, which is exactly what the platform API path already does. Give the
+    // threshold a margin decay cannot cross inside a run: at 1.5 the verdict survives
+    // 3600 * log2(2 / 1.5) = 1494s of decay. Do not raise it back to a value the
+    // seeded strength meets exactly.
+    //
+    // What the test is about is unchanged: two findings from DIFFERENT strategies
+    // emitted by ONE agent become two distinct strategy-scoped sources, so
+    // min_sources_for_escalation = 2 is satisfied without a second physical agent.
+    let mut config = test_config();
+    config.alert_threshold = 1.5;
     let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
     let detector = StaticDetector {
         findings: vec![
@@ -511,6 +534,15 @@ async fn cross_strategy_findings_from_one_agent_trigger_alert_escalation() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].mode, SwarmMode::Alert);
     assert_eq!(records[0].distinct_sources, 2);
+    // Bounded on BOTH sides rather than at the boundary. Two distinct strategy-scoped
+    // sources at confidence 1.0 sum to 2.0 at zero elapsed and decay from there: the
+    // lower bound is the alert threshold this test configures, and the upper bound
+    // still catches a double count of the same finding.
+    assert!(
+        records[0].total_strength > 1.5 && records[0].total_strength <= 2.0,
+        "expected two decaying full-strength cross-strategy sources above the alert threshold, got {}",
+        records[0].total_strength
+    );
 }
 
 #[tokio::test]
