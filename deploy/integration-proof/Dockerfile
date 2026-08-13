@@ -12,7 +12,8 @@ COPY rulesets/ rulesets/
 COPY deploy/integration-proof/ deploy/integration-proof/
 COPY deploy/integration-proof/runtime.yaml integration-proof/runtime.yaml
 
-RUN cargo build -p swarm-runtime --bin swarm_detect --bin swarmctl --bin swarm_debug_attest \
+RUN cargo build -p swarm-runtime-http --bin swarm_detect --bin swarmctl \
+    && cargo build -p swarm-runtime --bin swarm_debug_attest \
     && cargo run -p swarm-runtime --bin swarm_debug_attest -- \
         --binary /app/target/debug/swarm_detect \
         --config /app/integration-proof/runtime.yaml

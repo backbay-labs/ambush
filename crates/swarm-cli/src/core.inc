@@ -48,7 +48,7 @@ use crate::mutation::{
     render_evolution_mutation_materialization_batch, render_evolution_mutation_ranking,
     render_evolution_mutation_spec, render_evolution_mutation_validation_batch,
 };
-use crate::operator_http::{LocalOperatorSurface, OperatorSurfacePaths};
+use crate::operator_http::LocalOperatorSurface;
 use crate::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction,
     EvolutionPortfolioEntryCreateRequest, EvolutionPortfolioEntryReviewState,
@@ -84,8 +84,8 @@ use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use swarm_core::agent::{AgentRole, SwarmMode};
 use swarm_core::config::{
-    ConfigValidationError, PheromoneBackendConfig, ResponseAdapterConfig, RuntimeMode,
-    SiemForwardConfig, SwarmConfig,
+    ConfigValidationError, OperatorSurfacePaths, PheromoneBackendConfig, ResponseAdapterConfig,
+    RuntimeMode, SiemForwardConfig, SwarmConfig,
 };
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::Severity;

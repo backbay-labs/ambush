@@ -2910,6 +2910,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "swarm-agents"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ed25519-dalek",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "swarm-consensus",
+ "swarm-core",
+ "swarm-crypto",
+ "swarm-pheromone",
+ "swarm-policy",
+ "swarm-response",
+ "swarm-runtime",
+ "swarm-spine",
+ "swarm-whisker",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swarm-cli"
 version = "0.1.0"
 dependencies = [
@@ -2923,7 +2946,11 @@ dependencies = [
  "serde_json",
  "swarm-core",
  "swarm-crypto",
+ "swarm-evolution",
+ "swarm-ingest-runtime",
  "swarm-runtime",
+ "swarm-runtime-http",
+ "swarm-runtime-workbench",
  "tokio",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -2950,9 +2977,11 @@ name = "swarm-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "ed25519-dalek",
  "hex",
+ "http",
  "serde",
  "serde_json",
  "sha2",
@@ -2988,6 +3017,7 @@ dependencies = [
  "sha2",
  "swarm-core",
  "swarm-crypto",
+ "swarm-ingest-runtime",
  "swarm-policy",
  "swarm-runtime",
  "swarm-whisker",
@@ -3018,6 +3048,45 @@ dependencies = [
  "swarm-core",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "swarm-ingest-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "axum",
+ "clap",
+ "ed25519-dalek",
+ "hex",
+ "rand_core 0.6.4",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "swarm-agents",
+ "swarm-core",
+ "swarm-crypto",
+ "swarm-ingest-json",
+ "swarm-ingest-sentinel",
+ "swarm-ingest-tetragon",
+ "swarm-pheromone",
+ "swarm-policy",
+ "swarm-response",
+ "swarm-runtime",
+ "swarm-spine",
+ "swarm-whisker",
+ "sysinfo",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -3125,26 +3194,20 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "hex",
- "hyper",
- "hyper-util",
- "notify",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "prometheus-client",
  "rand_core 0.6.4",
- "rcgen",
  "reqwest",
- "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
+ "swarm-agents",
  "swarm-consensus",
  "swarm-core",
  "swarm-crypto",
  "swarm-guard",
  "swarm-ingest-json",
+ "swarm-ingest-runtime",
  "swarm-ingest-sentinel",
  "swarm-ingest-taxii",
  "swarm-ingest-tetragon",
@@ -3156,16 +3219,69 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.18",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
+ "tower",
+ "tracing",
+ "uuid",
+ "z3",
+ "zeroize",
+]
+
+[[package]]
+name = "swarm-runtime-http"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "axum",
+ "clap",
+ "ed25519-dalek",
+ "hyper",
+ "hyper-util",
+ "notify",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rand_core 0.6.4",
+ "rcgen",
+ "reqwest",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "swarm-agents",
+ "swarm-core",
+ "swarm-crypto",
+ "swarm-evolution",
+ "swarm-ingest-runtime",
+ "swarm-pheromone",
+ "swarm-policy",
+ "swarm-response",
+ "swarm-runtime",
+ "swarm-runtime-workbench",
+ "swarm-spine",
+ "swarm-whisker",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-rustls",
  "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "uuid",
  "x509-parser",
- "z3",
  "zeroize",
+]
+
+[[package]]
+name = "swarm-runtime-workbench"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "swarm-core",
+ "swarm-crypto",
+ "swarm-evolution",
+ "swarm-runtime",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

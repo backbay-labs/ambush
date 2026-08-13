@@ -40,7 +40,7 @@
 ---
 
 ```sh
-cargo install --git https://github.com/backbay-labs/ambush swarm-runtime --bin swarmctl
+cargo install --git https://github.com/backbay-labs/ambush swarm-runtime-http --bin swarmctl
 ```
 
 ## What is Ambush
@@ -132,7 +132,7 @@ Run a full hunt against recorded telemetry, read the receipts, then point it at 
 ### 1. Install
 
 ```sh
-cargo install --git https://github.com/backbay-labs/ambush swarm-runtime --bin swarmctl
+cargo install --git https://github.com/backbay-labs/ambush swarm-runtime-http --bin swarmctl
 ```
 
 <sub>Or from source: <code>git clone https://github.com/backbay-labs/ambush && cd ambush && cargo build --release</code>, then use <code>./target/release/swarmctl</code>.</sub>
@@ -302,7 +302,7 @@ Authorized or denied, every outcome produces a signed receipt.
 
 ### The codebase
 
-Fifteen crates, one workspace, `unwrap_used` and `expect_used` denied across all of them.
+Twenty crates, one workspace, `unwrap_used` and `expect_used` denied across all of them.
 
 | Crate | What lives there |
 | --- | --- |
@@ -314,13 +314,18 @@ Fifteen crates, one workspace, `unwrap_used` and `expect_used` denied across all
 | `swarm-pheromone` | The substrate: deposit, evaporation, concentration, and the JetStream backend |
 | `swarm-policy` | The deterministic gate, static and configurable, with lease and approval context |
 | `swarm-response` | Adapters (sandbox, EDR, webhook), SIEM forwarding, notification, resilience, and dead letters |
-| `swarm-runtime` | Composition root: agents, dispatcher, HTTP surfaces, replay, evolution harnesses, `swarmctl` |
-| `swarm-evolution` | Mutation, selection, portfolio, canary, promotion, evidence, and governance prep |
+| `swarm-runtime` | Composition root: dispatcher, config, control, approval, replay, and the evolution lane the crate root still pins |
+| `swarm-runtime-http` | The authenticated operator HTTP surface, the TLS server loop, and the `swarm_detect` and `swarmctl` binaries |
+| `swarm-runtime-workbench` | The offline review workbench |
+| `swarm-ingest-runtime` | Telemetry ingest, the platform API surface, bridge runtime, and anti-tamper |
+| `swarm-agents` | Role implementations extracted from the composition root behind the sealed `swarm_core::agent` boundary |
+| `swarm-ingest-taxii` | STIX/TAXII threat-intel feed ingestion |
+| `swarm-evolution` | Owns evidence, governance prep, operator maintenance, and portfolio; re-exports the rest of the evolution lane, which the runtime crate root still pins (ADR 0005) |
 | `swarm-guard` | Forbidden paths, path normalization, egress allowlists, secret-leak and shell-command checks |
 | `swarm-spine` | Envelopes, receipt chain, checkpoints, investigation and incident stores |
 | `swarm-crypto` | Ed25519 signing, canonical JSON, hashing, and Merkle helpers |
 | `swarm-consensus` | Quorum primitives for the governance lane |
-| `swarm-cli` | The extracted operator CLI surface over runtime-owned service APIs |
+| `swarm-cli` | The operator CLI command surface itself, over runtime-owned service APIs; `swarm-runtime-http` builds it into the `swarmctl` binary |
 
 Contracts live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 [docs/AGENTS.md](docs/AGENTS.md), [docs/CONSENSUS.md](docs/CONSENSUS.md),

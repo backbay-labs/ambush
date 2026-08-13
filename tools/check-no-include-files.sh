@@ -90,7 +90,7 @@ import tempfile
 #
 # 2026-08-11 -- phase 281 / INCFIX-03. crates/swarm-cli/src/core.inc is 5,394
 # lines of Rust included by TWO crates (crates/swarm-cli/src/lib.rs:79 and
-# crates/swarm-runtime/src/cli/mod.rs:1, the latter reaching across the
+# crates/swarm-runtime-http/src/cli/mod.rs:1, the latter reaching across the
 # workspace with `../../../`). Splitting a file with two owners is a different
 # and larger change than the three single-owner files phase 281 converted, so
 # the human scoped it out to phase 282.

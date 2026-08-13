@@ -46,7 +46,7 @@ helm template "$RELEASE" "$CHART" -f "$VALUES" --show-only templates/configmap.y
   | sed -n '/^  config.yaml: |$/,$p' \
   | sed '1d;s/^    //' > "$RENDERED"
 
-cargo run -p swarm-runtime --bin swarmctl -- validate --config "$RENDERED" --json
+cargo run -p swarm-runtime-http --bin swarmctl -- validate --config "$RENDERED" --json
 
 kubectl -n "$NAMESPACE" get deploy,sts,pvc
 kubectl -n "$NAMESPACE" port-forward deploy/"$RELEASE"-swarm-team-six 9090:9090
@@ -312,7 +312,7 @@ curl -sf http://127.0.0.1:9090/healthz | jq .
 #### Verification Commands
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- validate --config "$RENDERED" --json
+cargo run -p swarm-runtime-http --bin swarmctl -- validate --config "$RENDERED" --json
 curl -sf http://127.0.0.1:9090/healthz | jq .
 ```
 

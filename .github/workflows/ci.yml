@@ -47,6 +47,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # `fetch-depth: 0` for the visibility baseline check at the end of this
+          # job: it compares declarations against the phase-282 baseline commit
+          # 742206d, and the default depth-1 checkout does not contain it. The
+          # script fails loudly rather than passing when the commit is missing,
+          # so a shallow clone here is a red job, not a silent one.
+          fetch-depth: 0
 
       - name: Cache cargo home
         uses: actions/cache@v4
@@ -85,6 +92,16 @@ jobs:
       # is a single dated allowlist entry, deferred to phase 282.
       - name: Check for non-.rs Rust source
         run: bash tools/check-no-include-files.sh
+
+      # SPLIT-05. Phase 282's no-widening invariant, re-baselined at the three
+      # widenings ADR 0006 records and accepts, and enforced instead of asserted:
+      # an item that was `pub(crate)`/`pub(super)`/`pub(in ...)` at 742206d and is
+      # `pub` now fails this step unless it is one of the three. `pub` on a crate
+      # is public API forever, so the fourth one is worth a review rather than a
+      # commit message. Needs history -- see `fetch-depth: 0` on this job's
+      # checkout.
+      - name: Check visibility baseline
+        run: bash tools/check-visibility-baseline.sh
 
   build:
     runs-on: ubuntu-latest
@@ -205,15 +222,35 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Run tests (workspace, parallel)
-        run: cargo test --workspace --exclude swarm-runtime
+        run: cargo test --workspace --exclude swarm-runtime --exclude swarm-ingest-runtime
 
-      # swarm-runtime's `ingest::tests` module mutates shared `SWARM_*_TEST_TOKEN`
-      # environment variables across its platform_api tests; the env race is
-      # cargo-test-thread-scoped, so this single crate runs serially. Tracked as
+      # The `ingest::tests` module mutates shared `SWARM_*_TEST_TOKEN` environment
+      # variables across its platform_api tests; the env race is
+      # cargo-test-thread-scoped, so the crates holding it run serially. Tracked as
       # follow-up to scope the lock inside the affected tests instead of the whole
       # crate.
-      - name: Run swarm-runtime tests (serial, env-var race workaround)
-        run: cargo test -p swarm-runtime -- --test-threads=1
+      #
+      # `swarm-ingest-runtime` IS ON THIS LINE BECAUSE `ingest::tests` IS. SPLIT-05
+      # moved `ingest/` out of `swarm-runtime`, and its 115 unit tests went with it
+      # -- so the module this workaround was written for is now in the new crate and
+      # the serial lane has to follow it. Leaving it in the parallel step above
+      # reintroduces the exact race this step exists to avoid, at roughly 3 runs in
+      # 5:
+      #
+      #   $ for i in 1 2 3 4 5; do cargo test -p swarm-ingest-runtime --lib; done
+      #   test result: FAILED. 113 passed; 2 failed
+      #   test result: ok.     115 passed; 0 failed
+      #   test result: FAILED. 114 passed; 1 failed
+      #   test result: ok.     115 passed; 0 failed
+      #   test result: FAILED. 114 passed; 1 failed
+      #
+      #   $ for i in 1 2 3 4 5; do cargo test -p swarm-ingest-runtime --lib -- --test-threads=1; done
+      #   test result: ok. 115 passed; 0 failed   (x5)
+      #
+      # `swarm-runtime` stays on the line too: nothing proved its remaining tests are
+      # parallel-safe, and this phase is not the place to find out.
+      - name: Run ingest and runtime tests (serial, env-var race workaround)
+        run: cargo test -p swarm-runtime -p swarm-ingest-runtime -- --test-threads=1
 
       # FIXTURE-04. Test call sites, not the production config shape, keep the
       # suite out of the working tree, so a NEW test can silently reintroduce

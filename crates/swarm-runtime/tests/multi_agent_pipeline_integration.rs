@@ -4,6 +4,9 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use swarm_agents::stalker_agent::StalkerAgent;
+use swarm_agents::weaver_agent::WeaverAgent;
+use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::config::{
     AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
     DetectorProfilesConfig, InvestigationConfig, OperatorSurfaceConfig, PheromoneBackendConfig,
@@ -11,15 +14,12 @@ use swarm_core::config::{
     TelemetrySourceConfig,
 };
 use swarm_core::types::{AgentId, ResponseAction, Severity};
+use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::ApprovalContext;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::investigation::SummaryInvestigator;
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
-use swarm_runtime::stalker_agent::StalkerAgent;
-use swarm_runtime::weaver_agent::WeaverAgent;
-use swarm_runtime::whisker_agent::WhiskerAgent;
 use swarm_spine::IncidentStore;
 use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 

@@ -8,7 +8,7 @@ TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/swarm-release-hardening.XXXXXX")"
 trap 'rm -rf "$TARGET_DIR"' EXIT
 
 BUILD_LOG="$TARGET_DIR/release-build.log"
-CARGO_TARGET_DIR="$TARGET_DIR" cargo build -v -p swarm-runtime --release --bin swarm_detect --bin swarmctl >"$BUILD_LOG" 2>&1
+CARGO_TARGET_DIR="$TARGET_DIR" cargo build -v -p swarm-runtime-http --release --bin swarm_detect --bin swarmctl >"$BUILD_LOG" 2>&1
 
 verify_bin() {
     local bin="$1"

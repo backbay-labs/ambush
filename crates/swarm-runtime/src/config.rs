@@ -836,7 +836,7 @@ pub(crate) fn suspicious_process_tree_profile(
     )
 }
 
-pub(crate) fn kill_chain_sequence_profile(
+pub fn kill_chain_sequence_profile(
     config: &DetectionConfig,
 ) -> Result<KillChainSequenceProfile, DetectorProfileError> {
     resolve_detector_profile(
@@ -1075,7 +1075,7 @@ pub(crate) fn validate_detector_profiles(
     Ok(())
 }
 
-pub(crate) fn validate_all_detector_profiles(
+pub fn validate_all_detector_profiles(
     config: &DetectionConfig,
 ) -> Result<(), DetectorProfileError> {
     for strategy in config.active_strategies() {

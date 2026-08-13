@@ -282,29 +282,6 @@ impl FileKittenFeedbackStore {
         writeln!(file, "{line}")
             .map_err(|error| format!("failed to append kitten feedback signal: {error}"))
     }
-
-    #[cfg(test)]
-    fn load(&self) -> Result<Vec<KittenFeedbackSignalRecord>, String> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-        let raw = fs::read_to_string(&self.path)
-            .map_err(|error| format!("failed to read kitten feedback store: {error}"))?;
-        raw.lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| {
-                serde_json::from_str(line)
-                    .map_err(|error| format!("failed to parse kitten feedback signal: {error}"))
-            })
-            .collect()
-    }
-}
-
-#[cfg(test)]
-pub fn load_feedback_signal_records(
-    root: impl AsRef<Path>,
-) -> Result<Vec<KittenFeedbackSignalRecord>, String> {
-    FileKittenFeedbackStore::open(root)?.load()
 }
 
 pub fn route_feedback_signal(

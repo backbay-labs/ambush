@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod http_rate_limit;
 pub mod observability;
 pub mod pheromone;
 pub mod signed_state;
@@ -19,6 +20,10 @@ pub mod verdict;
 pub use agent::{
     AgentFinding, AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmEvent, SwarmMode,
     SwarmModeState,
+};
+pub use http_rate_limit::{
+    HttpRateLimitRejection, HttpRateLimitStatus, HttpRateLimitThreshold,
+    HttpRateLimitViolationRecord, HttpRateLimiter,
 };
 pub use pheromone::{
     BehavioralBaselineSnapshot, BehavioralFrequencyEntry, BehavioralHostBaseline,
@@ -31,11 +36,12 @@ pub use signed_state::{
     SignedStateStatement, VerifiedSignedState,
 };
 pub use telemetry::{
-    AuthenticationEventData, BridgeHealth, CloudTrailEvent, DnsQueryEvent, ExhaustedResource,
-    FilePersistenceEvent, InfrastructureHealthEvent, KubernetesAuditEvent, NetworkConnectEvent,
-    ProcessMemoryAccessEvent, ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent,
-    ResourceExhaustionEvent, TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult,
-    TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity,
+    AuthenticationEventData, BridgeHealth, BridgeStatusReport, BridgeStatusSnapshot,
+    CloudTrailEvent, DnsQueryEvent, ExhaustedResource, FilePersistenceEvent,
+    InfrastructureHealthEvent, KubernetesAuditEvent, NetworkConnectEvent, ProcessMemoryAccessEvent,
+    ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent,
+    TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult, TelemetryEvent, TelemetryPayload,
+    ThermalAnomalyEvent, ThermalSeverity,
 };
 pub use types::{
     AgentId, EscalationEvent, HuntId, ProvidenceCallbackAuditEntry, ProvidenceCallbackEvent,

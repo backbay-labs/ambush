@@ -1,0 +1,51 @@
+[package]
+name = "swarm-runtime-http"
+description = "Operator HTTP surface and TLS transport for the Ambush runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arc-swap.workspace = true
+axum.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+ed25519-dalek.workspace = true
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "http1", "tokio"] }
+notify.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+rand_core.workspace = true
+reqwest.workspace = true
+rustls-pemfile = "2"
+serde.workspace = true
+serde_json.workspace = true
+swarm-agents.workspace = true
+swarm-core.workspace = true
+swarm-crypto.workspace = true
+swarm-evolution.workspace = true
+swarm-pheromone.workspace = true
+swarm-policy.workspace = true
+swarm-response.workspace = true
+swarm-ingest-runtime.workspace = true
+swarm-runtime.workspace = true
+swarm-runtime-workbench.workspace = true
+swarm-spine.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls = "0.26"
+tower.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+x509-parser = "0.16"
+zeroize.workspace = true
+
+[dev-dependencies]
+rcgen = "0.13"
+serde_yaml.workspace = true
+swarm-whisker.workspace = true
+
+[lints]
+workspace = true

@@ -12,6 +12,10 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use swarm_agents::pounce_agent::PounceAgent;
+use swarm_agents::tom_agent::{
+    ContingencyLease, GovernanceDecision, GovernancePolicy, GovernancePolicyConfig,
+};
 use swarm_consensus::{
     ConsensusCommit, ConsensusCommittee, ConsensusGovernanceReceipt, ConsensusProposal,
     GovernanceReceiptDecision,
@@ -52,8 +56,6 @@ use swarm_runtime::{
         AgentDispatcher, AgentDispatcherConfig, GovernanceVetoRoute, RequestResponseRouter,
     },
     escalation::ConcentrationMonitor,
-    pounce_agent::PounceAgent,
-    tom_agent::{ContingencyLease, GovernanceDecision, GovernancePolicy, GovernancePolicyConfig},
 };
 use swarm_spine::{AuditResponseRecord, AuditTrail};
 use swarm_whisker::DetectionFinding;

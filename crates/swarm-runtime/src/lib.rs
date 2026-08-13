@@ -3,20 +3,124 @@
 //! This crate is the intended composition root for the production runtime:
 //! detection stays in Rust, policy stays deterministic, and live response
 //! execution is capability-scoped.
+//!
+//! # Three agent roles are still declared here (SPLIT-03, phase 282)
+//!
+//! **Not because of `ingest/` any more. See ADR 0007.**
+//!
+//! SPLIT-03 moved the `*_agent` role implementations to `swarm-agents`, so that
+//! consumers of the composition root stop compiling behaviour they never call.
+//! Five of the eight have gone: `pounce`, `stalker`, `weaver`, `whisker`, and now
+//! `tom`. Three did not, and are declared below with a marker on each --
+//! `calico_agent`, `kitten_agent`, `sphinx_agent`.
+//!
+//! `ingest/` NO LONGER HOLDS THEM. It was the pin ADR 0004 recorded, and SPLIT-05
+//! took it out of this crate. The one non-test back-edge ADR 0004 named --
+//! `ingest/providence_handlers.rs` -> `kitten_agent::route_feedback_signal` --
+//! is now a forward edge from `swarm-ingest-runtime` into this crate, which is
+//! the direction Cargo permits. Nothing outside the three files names them here
+//! at all, in test code or otherwise:
+//!
+//! ```text
+//! $ grep -rn --include='*.rs' 'crate::\(calico\|kitten\|sphinx\)_agent' \
+//!     crates/swarm-runtime/src/ | grep -v '_agent.rs:' | grep -v '//!'
+//! $
+//! ```
+//!
+//! SOMETHING ELSE HOLDS THEM. `kitten_agent.rs:828`, inside
+//! `fn build_population_proposal` and 1,697 lines above the file's
+//! `#[cfg(test)]` module, calls `EvolutionDetectorGenome::strategy()` --
+//! `pub(crate)` at `mutation/types.rs:137`. Moving the file produces
+//! `error[E0624]: method 'strategy' is private`, and the only mechanical fix is
+//! a FOURTH widening against a baseline of three. ADR 0007 records why that is
+//! not taken here.
+//!
+//! A PATH GREP CANNOT SEE THAT PIN, which is why the grep above reads clean.
+//! `strategy()` is called as a method on a value of an already-`pub` type
+//! obtained from an already-`pub` accessor, so no `crate::` path appears at the
+//! call site or in the import block. Only the compiler finds this class of pin:
+//! `git mv` the three files, repoint their `crate::` paths, and read
+//! `cargo check -p swarm-agents --all-targets`.
+//!
+//! The three also have to move as ONE commit whenever they do move. `sphinx` and
+//! `kitten` read `calico`, `kitten`'s test module reads `sphinx`, and nothing
+//! else in this crate reads any of them. Moving `calico` first puts
+//! `swarm_agents::calico_agent` in this crate's non-test code and Cargo rejects
+//! the manifest; moving either reader first widens all nine of `calico_agent`'s
+//! `pub(crate)` items to permanent public API. Together they stay `pub(crate)`,
+//! which was the whole reason ADR 0004 said to wait.
+//!
+//! `tom` did not have to wait for the group. It named nothing in this crate --
+//! `grep -oE '(crate|super)::[A-Za-z_:]+' src/tom_agent.rs` printed only its own
+//! file-local `super::now_ms` -- and its `GovernanceAuthority` and
+//! `SealedGovernanceAuthority` impls name `swarm-policy` directly, so the seal is
+//! satisfied from `swarm-agents` unchanged. `dispatcher.rs`'s one reference to it
+//! was `#[cfg(test)]` and now reaches `swarm_agents::tom_agent` through the
+//! dev-dependency edge this crate already carries.
+//!
+//! IF THIS CHANGES: SPLIT-03 unblocks when SPLIT-04 moves `mutation/` to
+//! `swarm-evolution`, which puts `strategy()` and its 12 remaining callers on
+//! the far side of the same crate line and leaves `kitten` reading ordinary
+//! public API of a leaf crate. The alternative is a recorded decision to widen
+//! `strategy()`, with an allowlist line in
+//! `tools/check-visibility-baseline.sh`. The progress measure is
+//! `ls crates/swarm-runtime/src/*_agent.rs | wc -l`: it prints 3 today, printed
+//! 4 before `tom` moved, and has to reach 0.
+//! `docs/decisions/0004-split-03-four-of-eight-agents-pinned-by-ingest.md`
+//! records the original `ingest/` pin,
+//! `docs/decisions/0006-split-05-ingest-extraction-and-its-three-widenings.md`
+//! its removal, and
+//! `docs/decisions/0007-split-03-kitten-pinned-by-a-private-method-not-by-ingest.md`
+//! the pin that replaced it.
+//!
+//! # Seven evolution modules are still declared here (SPLIT-04, phase 282)
+//!
+//! SPLIT-04 moved the evolution lane's leaf modules to `swarm-evolution`:
+//! `evidence`, `governance_prep`, `operator_maintenance` and `portfolio`. Seven
+//! of the ten modules it named did not go -- `canary`, `drafting`, `evolution`,
+//! `mutation`, `promotion`, `selection`, `strategy` -- because the edge runs
+//! `swarm-evolution -> swarm-runtime` (the lane reads `crate::replay`, which
+//! stays), so anything this crate still names cannot move.
+//!
+//! Three other files here name those seven (`kitten_agent.rs`,
+//! `sphinx_agent.rs`, `evolution_status.rs` -- `ingest/mod.rs` and
+//! `ingest/tests.rs` left with SPLIT-05), but they are
+//! corroborating, not load-bearing: **this file alone pins all seven**, in
+//! three steps. `StrategyProposalRouteError` below names `drafting`,
+//! `mutation`, `selection`, `evolution` and `canary` by `#[from]`; `strategy`
+//! is named by four of those five; `promotion` is named by `strategy.rs` and
+//! by nothing else in the crate. Reversing the crate edge instead is rejected
+//! outright:
+//!
+//! ```text
+//! error: cyclic package dependency: package `swarm-runtime` depends on itself.
+//! ```
+//!
+//! IF THIS CHANGES: SPLIT-04 does NOT unblock when `ingest/` leaves -- the
+//! crate root outlives every extraction in phase 282. It unblocks when
+//! `StrategyProposalRouteError` stops naming the lane's concrete error types,
+//! which needs the sealed-boundary inversion SPLIT-03 applied to
+//! `swarm_core::agent::AgentTickError`, because `dispatcher.rs`'s
+//! `StrategyProposalRouter` trait keeps the enum here too. The progress measure
+//! is
+//! `grep -rcE 'crate::(canary|drafting|evolution|mutation|promotion|selection|strategy)::'
+//! src/lib.rs src/kitten_agent.rs src/sphinx_agent.rs src/evolution_status.rs`:
+//! it sums to 38 today and has to reach 0. It read 58 over five files before
+//! SPLIT-05; the 20 that went are `ingest/`'s, and they left the crate rather
+//! than being removed, so the drop measures the extraction and not progress on
+//! SPLIT-04's blocker. The full argument, and what SPLIT-04
+//! did and did not buy for replay, is in
+//! `docs/decisions/0005-split-04-evolution-lane-pinned-by-the-crate-root.md`.
 #![allow(clippy::result_large_err)]
 
 extern crate self as swarm_runtime;
 
 pub mod agent_identity;
 pub mod alert_tuning;
-pub mod anti_tamper;
 pub mod approval;
-pub mod bridge_runtime;
-pub mod calico_agent;
+pub mod calico_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
 pub mod canary;
-pub mod cli;
 pub mod config;
-pub mod control;
 pub mod correlation;
 pub mod detection;
 pub mod detector_factory;
@@ -24,44 +128,36 @@ pub mod dispatcher;
 pub mod drafting;
 pub mod escalation;
 pub mod evasion_coverage;
-pub mod evidence;
 pub mod evolution;
 pub mod evolution_status;
-pub mod governance_prep;
 pub mod http;
-pub mod ingest;
 pub mod investigation;
-pub mod kitten_agent;
+pub mod kitten_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
 pub mod mutation;
-pub mod operator_http;
-pub mod operator_maintenance;
-pub mod portfolio;
-pub mod pounce_agent;
 pub mod promotion;
 pub mod providence;
 pub mod red_swarm;
 pub mod replay;
-pub mod review_workbench;
 pub mod runtime_events;
 pub mod selection;
 pub mod sequence_detector;
-pub mod serve;
 pub mod service;
-pub mod sphinx_agent;
-pub mod stalker_agent;
+pub mod sphinx_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
 pub mod startup_attestation;
 pub mod strategy;
 pub mod threat_intel_runtime;
-pub mod tom_agent;
-pub mod weaver_agent;
-pub mod whisker_agent;
-pub mod workbench;
 
-use std::any::Any;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use swarm_consensus::ConsensusGovernanceReceipt;
-use swarm_core::agent::{AgentRole, SwarmError};
+// Re-exported so `crate::AgentTickBoundaryError` and friends keep resolving inside
+// this crate. The definitions moved to `swarm_core::agent` in SPLIT-03: the
+// composition root must not name concrete agent types, and the agents must not
+// import back out of the root. See `swarm_core::agent::AgentTickError`.
+pub use swarm_core::agent::{
+    AgentPanicBoundaryError, AgentTickBoundaryError, AgentTickError, agent_tick_error_boundary,
+    agent_tick_error_role, agent_tick_panic_error,
+};
 pub use swarm_core::config::RuntimeMode;
 use swarm_core::config::TemporalEventWindowConfig;
 use swarm_core::types::AgentId;
@@ -84,98 +180,6 @@ pub enum RuntimeError {
 
     #[error(transparent)]
     Response(#[from] ResponseError),
-}
-
-/// Typed boundary errors surfaced from runtime-owned agent ticks.
-#[derive(Debug, thiserror::Error)]
-pub enum AgentTickBoundaryError {
-    #[error(transparent)]
-    Panic(#[from] AgentPanicBoundaryError),
-
-    #[error(transparent)]
-    Sphinx(#[from] crate::sphinx_agent::SphinxAgentTickError),
-
-    #[error(transparent)]
-    Stalker(#[from] crate::stalker_agent::StalkerAgentTickError),
-}
-
-impl AgentTickBoundaryError {
-    pub fn boundary(&self) -> &'static str {
-        match self {
-            Self::Panic(_) => "panic",
-            Self::Sphinx(error) => error.boundary(),
-            Self::Stalker(error) => error.boundary(),
-        }
-    }
-
-    pub fn role(&self) -> AgentRole {
-        match self {
-            Self::Panic(error) => error.role,
-            Self::Sphinx(_) => AgentRole::Sphinx,
-            Self::Stalker(_) => AgentRole::Stalker,
-        }
-    }
-}
-
-pub fn agent_tick_error_boundary(error: &SwarmError) -> Option<&'static str> {
-    match error {
-        SwarmError::Internal(error) => error
-            .downcast_ref::<AgentTickBoundaryError>()
-            .map(AgentTickBoundaryError::boundary),
-        _ => None,
-    }
-}
-
-pub fn agent_tick_error_role(error: &SwarmError) -> Option<AgentRole> {
-    match error {
-        SwarmError::Internal(error) => error
-            .downcast_ref::<AgentTickBoundaryError>()
-            .map(AgentTickBoundaryError::role),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("agent `{agent_id}` ({role:?}) panicked during tick: {message}")]
-pub struct AgentPanicBoundaryError {
-    pub agent_id: AgentId,
-    pub role: AgentRole,
-    pub message: String,
-}
-
-impl AgentPanicBoundaryError {
-    pub fn new(agent_id: AgentId, role: AgentRole, payload: Box<dyn Any + Send>) -> Self {
-        Self {
-            agent_id,
-            role,
-            message: panic_payload_message(payload.as_ref()),
-        }
-    }
-}
-
-fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        return (*message).to_string();
-    }
-    "non-string panic payload".to_string()
-}
-
-pub fn agent_tick_panic_error(
-    agent_id: &AgentId,
-    role: AgentRole,
-    payload: Box<dyn Any + Send>,
-) -> SwarmError {
-    SwarmError::Internal(
-        AgentTickBoundaryError::from(AgentPanicBoundaryError::new(
-            agent_id.clone(),
-            role,
-            payload,
-        ))
-        .into(),
-    )
 }
 
 /// Typed boundary errors surfaced while routing Kitten strategy proposals.

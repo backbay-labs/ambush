@@ -312,7 +312,7 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
     }
 }
 
-pub(crate) fn standard_threat_classes() -> Vec<ThreatClass> {
+pub fn standard_threat_classes() -> Vec<ThreatClass> {
     vec![
         ThreatClass::LateralMovement,
         ThreatClass::DataExfiltration,

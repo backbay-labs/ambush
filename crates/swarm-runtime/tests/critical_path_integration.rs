@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::config::SwarmConfig;
 use swarm_core::types::{AgentId, ResponseAction};
+use swarm_ingest_runtime::control::build_composite_detector;
+use swarm_ingest_runtime::ingest::IngestState;
 use swarm_policy::static_gate::StaticApprovalGate;
 use swarm_policy::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
@@ -14,14 +16,12 @@ use swarm_policy::{
 use swarm_response::adapters::SandboxExecutor;
 use swarm_runtime::StrategyProposalRouteError;
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::dispatcher::{StrategyProposalOutcome, StrategyProposalRoute};
 use swarm_runtime::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
 use swarm_runtime::evasion_coverage::{
     actionable_gaps_for_detector, evaluate_repo_evasion_coverage,
 };
 use swarm_runtime::evolution::DefaultEvolutionProofHarness;
-use swarm_runtime::ingest::IngestState;
 use swarm_runtime::investigation::{
     InvestigationOutcome, InvestigationStrategy, SummaryInvestigator,
 };

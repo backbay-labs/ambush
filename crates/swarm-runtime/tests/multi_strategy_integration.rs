@@ -11,10 +11,10 @@ use swarm_core::telemetry::{
     ThermalSeverity,
 };
 use swarm_core::types::{AgentId, EscalationEvent, Severity};
+use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_pheromone::substrate::validate_deposit_signature;
 use swarm_pheromone::{InMemoryPheromoneSubstrate, PheromoneSubstrate};
 use swarm_runtime::config::load_config;
-use swarm_runtime::control::build_composite_detector;
 use swarm_runtime::detection::detect_and_deposit;
 use swarm_runtime::escalation::ConcentrationMonitor;
 use swarm_whisker::{

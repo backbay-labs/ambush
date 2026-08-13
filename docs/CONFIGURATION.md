@@ -481,17 +481,17 @@ The repo now ships a CLI-backed control surface in `swarmctl` for runtime review
 Examples:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- status --config rulesets/default.yaml
-cargo run -p swarm-runtime --bin swarmctl -- --json replay --receipt-id receipt-123 --config rulesets/default.yaml
-cargo run -p swarm-runtime --bin swarmctl -- investigation --hunt-id evt-123 --config rulesets/default.yaml
-cargo run -p swarm-runtime --bin swarmctl -- incident --incident-id incident:evt-123:1 --config rulesets/default.yaml
-cargo run -p swarm-runtime --bin swarmctl -- validate --config rulesets/default.yaml
-cargo run -p swarm-runtime --bin swarmctl -- validate --config rulesets/default.yaml --check-endpoints --json
-cargo run -p swarm-runtime --bin swarmctl -- readiness --config rulesets/default.yaml
-cargo run -p swarm-runtime --bin swarmctl -- first-run --config rulesets/default.yaml
-cargo run -p swarm-runtime --bin swarmctl -- playbook-preview --config rulesets/default.yaml --threat-class execution --severity HIGH --confidence 0.97 --mode incident --json
-cargo run -p swarm-runtime --bin swarmctl -- init --mode detect_only
-cargo run -p swarm-runtime --bin swarmctl -- init --mode live_response --output rulesets/custom-live.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- status --config rulesets/default.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- --json replay --receipt-id receipt-123 --config rulesets/default.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- investigation --hunt-id evt-123 --config rulesets/default.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- incident --incident-id incident:evt-123:1 --config rulesets/default.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- validate --config rulesets/default.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- validate --config rulesets/default.yaml --check-endpoints --json
+cargo run -p swarm-runtime-http --bin swarmctl -- readiness --config rulesets/default.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- first-run --config rulesets/default.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- playbook-preview --config rulesets/default.yaml --threat-class execution --severity HIGH --confidence 0.97 --mode incident --json
+cargo run -p swarm-runtime-http --bin swarmctl -- init --mode detect_only
+cargo run -p swarm-runtime-http --bin swarmctl -- init --mode live_response --output rulesets/custom-live.yaml
 ```
 
 The CLI labels output by origin:
@@ -908,7 +908,7 @@ export SWARM_OPERATOR_REHEARSE_TOKEN=replace-me-with-a-rehearse-secret
 export SWARM_OPERATOR_APPROVE_TOKEN=replace-me-with-an-approve-secret
 export SWARM_OPERATOR_MAINT_TOKEN=replace-me-with-a-maintenance-secret
 
-cargo run -p swarm-runtime --bin swarmctl -- serve \
+cargo run -p swarm-runtime-http --bin swarmctl -- serve \
   --config rulesets/default.yaml \
   --evolution-portfolio-results-dir data/evolution-portfolios \
   --evolution-governance-review-packet-results-dir data/evolution-governance-review-packets \
@@ -1124,37 +1124,37 @@ curl -X POST \
 `swarmctl` exposes the same repo-owned artifacts directly:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- review-session-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-session-create \
   --title "red cross-lane review" \
   --artifact-ref "promotion_review:PROMOTION_REVIEW_ID" \
   --artifact-ref "canary_run:CANARY_RUN_ID" \
   --artifact-ref "production_promotion:PRODUCTION_PROMOTION_ID"
 
-cargo run -p swarm-runtime --bin swarmctl -- review-session-list
+cargo run -p swarm-runtime-http --bin swarmctl -- review-session-list
 
-cargo run -p swarm-runtime --bin swarmctl -- review-session-export \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-session-export \
   --session-id REVIEW_SESSION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- review-capsule-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-capsule-create \
   --session-id REVIEW_SESSION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- review-capsule-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-capsule-create \
   --readiness-id REVIEW_SESSION_READINESS_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- review-capsule-import \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-capsule-import \
   --source-path /tmp/review_capsule.json
 
-cargo run -p swarm-runtime --bin swarmctl -- review-delegation-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-delegation-create \
   --import-id REVIEW_CAPSULE_IMPORT_ID \
   --reason "preserve signed review continuity for external inspection"
 
-cargo run -p swarm-runtime --bin swarmctl -- review-session-promotion-readiness \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-session-promotion-readiness \
   --session-id REVIEW_SESSION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- review-session-promotion-readiness-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-session-promotion-readiness-result \
   --readiness-id REVIEW_SESSION_READINESS_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- review-session-handoff-reverify \
+cargo run -p swarm-runtime-http --bin swarmctl -- review-session-handoff-reverify \
   --session-id REVIEW_SESSION_ID \
   --reason "re-verify selected evidence before maintenance review" \
   --artifact-ref "evidence_bundle:EVIDENCE_BUNDLE_ID"
@@ -1205,20 +1205,20 @@ Examples:
 ```bash
 export SWARM_EVIDENCE_SIGNING_KEY=replace-me-with-a-local-secret
 
-cargo run -p swarm-runtime --bin swarmctl -- evidence-export \
+cargo run -p swarm-runtime-http --bin swarmctl -- evidence-export \
   --kind production-promotion \
   --id YOUR_PROMOTION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evidence-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evidence-result \
   --bundle-id evidence:production_promotion:YOUR_PROMOTION_ID:local-evidence-signer
 
-cargo run -p swarm-runtime --bin swarmctl -- evidence-list \
+cargo run -p swarm-runtime-http --bin swarmctl -- evidence-list \
   --kind production-promotion
 
-cargo run -p swarm-runtime --bin swarmctl -- evidence-verify \
+cargo run -p swarm-runtime-http --bin swarmctl -- evidence-verify \
   --bundle-id evidence:production_promotion:YOUR_PROMOTION_ID:local-evidence-signer
 
-cargo run -p swarm-runtime --bin swarmctl -- evidence-verification-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evidence-verification-result \
   --verification-id evidence_verification:evidence:production_promotion:YOUR_PROMOTION_ID:local-evidence-signer
 ```
 
@@ -1232,10 +1232,10 @@ Verification stays fail-closed:
 Promotion evidence packets reuse existing rollout state and signed evidence instead of regenerating artifacts:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- promotion-evidence-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-evidence-create \
   --promotion-id YOUR_PROMOTION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- promotion-evidence-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-evidence-result \
   --packet-id promotion_evidence:YOUR_PROMOTION_ID
 ```
 
@@ -1294,9 +1294,9 @@ Replay results are written under `data/replay-runs/` by default.
 Examples:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- replay-run --scenario scenarios/office-dropper-correlation.yaml
-cargo run -p swarm-runtime --bin swarmctl -- replay-result --scenario scenarios/office-dropper-correlation.yaml
-cargo run -p swarm-runtime --bin swarmctl -- --json replay-result --run-id replay_run:office_dropper_correlation:1700000100000
+cargo run -p swarm-runtime-http --bin swarmctl -- replay-run --scenario scenarios/office-dropper-correlation.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- replay-result --scenario scenarios/office-dropper-correlation.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- --json replay-result --run-id replay_run:office_dropper_correlation:1700000100000
 ```
 
 Scenario manifests currently support two input modes:
@@ -1319,10 +1319,10 @@ Replay evaluation compares replay-run bundles against the expectations embedded 
 Examples:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --scenario scenarios/office-dropper-correlation.yaml
-cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --run-id replay_run:office_dropper_correlation:1700000100000
-cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --scenarios-dir scenarios
-cargo run -p swarm-runtime --bin swarmctl -- replay-evaluate --suite scenario-suites/hellcat-office-v1.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- replay-evaluate --scenario scenarios/office-dropper-correlation.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- replay-evaluate --run-id replay_run:office_dropper_correlation:1700000100000
+cargo run -p swarm-runtime-http --bin swarmctl -- replay-evaluate --scenarios-dir scenarios
+cargo run -p swarm-runtime-http --bin swarmctl -- replay-evaluate --suite scenario-suites/hellcat-office-v1.yaml
 ```
 
 Failure behavior:
@@ -1391,9 +1391,9 @@ Experiment results are written under `data/experiments/` by default.
 Examples:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- experiment-evaluate --experiment experiments/office-baseline-control.yaml
-cargo run -p swarm-runtime --bin swarmctl -- experiment-evaluate --experiment experiments/office-python-parent-broadening.yaml
-cargo run -p swarm-runtime --bin swarmctl -- experiment-result --experiment-id experiment:office_baseline_control:office_baseline_control
+cargo run -p swarm-runtime-http --bin swarmctl -- experiment-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- experiment-evaluate --experiment experiments/office-python-parent-broadening.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- experiment-result --experiment-id experiment:office_baseline_control:office_baseline_control
 ```
 
 What the experiment report captures:
@@ -1488,9 +1488,9 @@ Verification results are written under `data/verifications/` by default.
 Examples:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate --experiment experiments/office-baseline-control.yaml
-cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate --experiment experiments/office-python-parent-broadening.yaml
-cargo run -p swarm-runtime --bin swarmctl -- verification-result --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
+cargo run -p swarm-runtime-http --bin swarmctl -- verification-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- verification-evaluate --experiment experiments/office-python-parent-broadening.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- verification-result --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
 ```
 
 Current gating invariant set (`invariants` in the report; `passed` is exactly
@@ -1553,8 +1553,8 @@ Shadow results are written under `data/shadows/` by default.
 Examples:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- shadow-evaluate --experiment experiments/office-baseline-control.yaml
-cargo run -p swarm-runtime --bin swarmctl -- shadow-result --shadow-id shadow:office_baseline_control:office_baseline_control:2026-04-03
+cargo run -p swarm-runtime-http --bin swarmctl -- shadow-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- shadow-result --shadow-id shadow:office_baseline_control:office_baseline_control:2026-04-03
 ```
 
 Shadow reports capture:
@@ -1587,8 +1587,8 @@ Promotion review packets are written under `data/promotion-reviews/` by default.
 Examples:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- promotion-review-create --experiment experiments/office-baseline-control.yaml --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1 --shadow-id shadow:office_baseline_control:office_baseline_control:2026-04-03
-cargo run -p swarm-runtime --bin swarmctl -- promotion-review-result --review-id promotion_review:office_baseline_control:office_baseline_control:2026-04-03
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-review-create --experiment experiments/office-baseline-control.yaml --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1 --shadow-id shadow:office_baseline_control:office_baseline_control:2026-04-03
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-review-result --review-id promotion_review:office_baseline_control:office_baseline_control:2026-04-03
 ```
 
 Packets capture:
@@ -1657,23 +1657,23 @@ clock; that is a cost model, and it is not this field.
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate --experiment experiments/office-baseline-control.yaml
-cargo run -p swarm-runtime --bin swarmctl -- shadow-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- verification-evaluate --experiment experiments/office-baseline-control.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- shadow-evaluate --experiment experiments/office-baseline-control.yaml
 
-cargo run -p swarm-runtime --bin swarmctl -- canary-start \
+cargo run -p swarm-runtime-http --bin swarmctl -- canary-start \
   --experiment experiments/office-baseline-control.yaml \
   --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1 \
   --shadow-id shadow:office_baseline_control:office_baseline_control:office_detector_safety_v1
 
-cargo run -p swarm-runtime --bin swarmctl -- canary-event \
+cargo run -p swarm-runtime-http --bin swarmctl -- canary-event \
   --run-id YOUR_CANARY_RUN_ID \
   --event fixtures/canary/word-powershell.yaml
 
-cargo run -p swarm-runtime --bin swarmctl -- canary-event \
+cargo run -p swarm-runtime-http --bin swarmctl -- canary-event \
   --run-id YOUR_CANARY_RUN_ID \
   --event fixtures/canary/outlook-cmd.yaml
 
-cargo run -p swarm-runtime --bin swarmctl -- canary-result --run-id YOUR_CANARY_RUN_ID
+cargo run -p swarm-runtime-http --bin swarmctl -- canary-result --run-id YOUR_CANARY_RUN_ID
 ```
 
 Automatic failure behavior:
@@ -1685,8 +1685,8 @@ Automatic failure behavior:
 Manual operator actions:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- canary-halt --run-id YOUR_CANARY_RUN_ID --reason "operator requested stop"
-cargo run -p swarm-runtime --bin swarmctl -- canary-rollback --run-id YOUR_CANARY_RUN_ID --reason "candidate diverged from baseline"
+cargo run -p swarm-runtime-http --bin swarmctl -- canary-halt --run-id YOUR_CANARY_RUN_ID --reason "operator requested stop"
+cargo run -p swarm-runtime-http --bin swarmctl -- canary-rollback --run-id YOUR_CANARY_RUN_ID --reason "candidate diverged from baseline"
 ```
 
 This milestone still stops short of fleet-wide promotion. The canary artifact is the handoff into the next decision step, not the promotion itself.
@@ -1733,20 +1733,20 @@ instead.
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- canary-result --run-id YOUR_CANARY_RUN_ID
+cargo run -p swarm-runtime-http --bin swarmctl -- canary-result --run-id YOUR_CANARY_RUN_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- promotion-start \
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-start \
   --canary-run-id YOUR_CANARY_RUN_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- promotion-event \
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-event \
   --promotion-id YOUR_PROMOTION_ID \
   --event fixtures/canary/word-powershell.yaml
 
-cargo run -p swarm-runtime --bin swarmctl -- promotion-event \
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-event \
   --promotion-id YOUR_PROMOTION_ID \
   --event fixtures/canary/outlook-cmd.yaml
 
-cargo run -p swarm-runtime --bin swarmctl -- promotion-result --promotion-id YOUR_PROMOTION_ID
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-result --promotion-id YOUR_PROMOTION_ID
 ```
 
 Automatic failure behavior:
@@ -1758,8 +1758,8 @@ Automatic failure behavior:
 Manual operator actions:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- promotion-halt --promotion-id YOUR_PROMOTION_ID --reason "operator requested stop"
-cargo run -p swarm-runtime --bin swarmctl -- promotion-rollback --promotion-id YOUR_PROMOTION_ID --reason "promoted detector diverged from fallback baseline"
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-halt --promotion-id YOUR_PROMOTION_ID --reason "operator requested stop"
+cargo run -p swarm-runtime-http --bin swarmctl -- promotion-rollback --promotion-id YOUR_PROMOTION_ID --reason "promoted detector diverged from fallback baseline"
 ```
 
 This milestone still stops short of quorum governance or partial-fleet rollout. The production-promotion artifact is the bounded single-node promotion record, not a distributed approval system.
@@ -1780,16 +1780,16 @@ Strategy-memory artifacts are written under `data/strategy-memory/` by default.
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- strategy-memory-canary \
+cargo run -p swarm-runtime-http --bin swarmctl -- strategy-memory-canary \
   --run-id YOUR_CANARY_RUN_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- strategy-memory-promotion \
+cargo run -p swarm-runtime-http --bin swarmctl -- strategy-memory-promotion \
   --promotion-id YOUR_PROMOTION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- strategy-memory-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- strategy-memory-result \
   --memory-id strategy_memory:promotion:YOUR_PROMOTION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- strategy-memory-history \
+cargo run -p swarm-runtime-http --bin swarmctl -- strategy-memory-history \
   --strategy-id office_baseline_control
 ```
 
@@ -1806,11 +1806,11 @@ Advisory scorecards are written under `data/strategy-scorecards/` by default.
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- strategy-scorecard-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- strategy-scorecard-create \
   --experiment experiments/office-baseline-control.yaml \
   --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
 
-cargo run -p swarm-runtime --bin swarmctl -- strategy-scorecard-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- strategy-scorecard-result \
   --scorecard-id YOUR_SCORECARD_ID
 ```
 
@@ -1847,28 +1847,28 @@ The current slice stays narrow:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- strategy-scorecard-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- strategy-scorecard-create \
   --experiment experiments/office-baseline-control.yaml \
   --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-pressure-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-pressure-create \
   --scorecard-id YOUR_SCORECARD_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-pressure-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-pressure-result \
   --pressure-id YOUR_PRESSURE_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-draft-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-draft-create \
   --pressure-id YOUR_PRESSURE_ID \
   --strategy-id office_memory_followup_v1 \
   --strategy-description "tighten process ancestry while keeping office controls" \
   --mutation memory_gap_followup \
   --rationale "scorecard fell back to replay because live evidence is sparse"
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-draft-promote \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-draft-promote \
   --draft-id YOUR_DRAFT_ID \
   --reason "queue this draft for explicit operator review"
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-draft-promotion-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-draft-promotion-result \
   --promotion-id YOUR_PROMOTION_ID
 ```
 
@@ -1905,12 +1905,12 @@ Current mutation-spec semantics:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-mutation-create \
   --draft-id YOUR_DRAFT_ID \
   --base-experiment experiments/office-baseline-control.yaml \
   --rationale "compare explicit parent and threshold variants"
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-add-variant \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-mutation-add-variant \
   --mutation-spec-id YOUR_MUTATION_SPEC_ID \
   --variant-id tighter-thresholds \
   --strategy-id office_mutation_threshold_v1 \
@@ -1920,7 +1920,7 @@ cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-add-variant \
   --high-confidence-threshold 0.98 \
   --medium-confidence-threshold 0.92
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-mutation-result \
   --mutation-spec-id YOUR_MUTATION_SPEC_ID
 ```
 
@@ -1947,16 +1947,16 @@ Current batch semantics:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-materialize-batch \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-mutation-materialize-batch \
   --mutation-spec-id YOUR_MUTATION_SPEC_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-materialization-batch-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-mutation-materialization-batch-result \
   --batch-id YOUR_BATCH_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-validate-batch \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-mutation-validate-batch \
   --batch-id YOUR_BATCH_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-mutation-validation-batch-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-mutation-validation-batch-result \
   --validation-batch-id YOUR_VALIDATION_BATCH_ID
 ```
 
@@ -1982,11 +1982,11 @@ Current ranking semantics:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-rank-candidates \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-rank-candidates \
   --validation-batch-id YOUR_VALIDATION_BATCH_ID \
   --shortlist-count 2
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-ranking-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-ranking-result \
   --ranking-id YOUR_RANKING_ID
 ```
 
@@ -2013,26 +2013,26 @@ Current selection and bridge semantics:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-selection-create \
   --ranking-id YOUR_RANKING_ID \
   --packet-id YOUR_PACKET_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-selection-result \
   --selection-id YOUR_SELECTION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-list \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-selection-list \
   --review-state pending-review
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-decision \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-selection-decision \
   --selection-id YOUR_SELECTION_ID \
   --decision accept-for-canary \
   --reason "accept the selected ranked candidate for rollout bridging"
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-bridge \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-selection-bridge \
   --selection-id YOUR_SELECTION_ID \
   --reason "bridge the accepted selection into the existing queue and handoff lane"
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-selection-bridge-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-selection-bridge-result \
   --bridge-id YOUR_BRIDGE_ID
 ```
 
@@ -2075,7 +2075,7 @@ Current portfolio semantics:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-portfolio-create \
   --name "office cross cohort shortlist" \
   --rationale "compare ready candidates across two cohorts before governance prep" \
   --selection-id SELECTION_ID_ONE \
@@ -2083,24 +2083,24 @@ cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-create \
   --cohort hellcat.office_loader \
   --cohort operator.maintenance
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-portfolio-result \
   --portfolio-id YOUR_PORTFOLIO_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-list \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-portfolio-list \
   --review-state pending-review
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-decision \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-portfolio-decision \
   --portfolio-id YOUR_PORTFOLIO_ID \
   --entry-id YOUR_ENTRY_ID \
   --decision include \
   --reason "keep this shortlisted candidate in the curated portfolio"
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-governance-packet-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-governance-packet-create \
   --portfolio-id YOUR_PORTFOLIO_ID \
   --entry-id YOUR_ENTRY_ID \
   --reason "prepare this curated entry for later governance-backed review"
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-governance-packet-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-governance-packet-result \
   --packet-id YOUR_PACKET_ID
 ```
 
@@ -2144,31 +2144,31 @@ Current packet-set and history semantics:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-packet-set-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-packet-set-create \
   --name "office governance cohort set" \
   --rationale "group ready and blocked governance packets for one operator review pass" \
   --packet-id PACKET_ID_ONE \
   --packet-id PACKET_ID_TWO
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-packet-set-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-packet-set-result \
   --packet-set-id YOUR_PACKET_SET_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-packet-set-list \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-packet-set-list \
   --cohort hellcat.office_loader
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-packet-set-split \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-packet-set-split \
   --packet-set-id YOUR_PACKET_SET_ID \
   --name "office red subset" \
   --rationale "review the red cohort separately" \
   --packet-id PACKET_ID_ONE
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-history-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-portfolio-history-create \
   --packet-set-id YOUR_PACKET_SET_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-history-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-portfolio-history-result \
   --history-id YOUR_HISTORY_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-portfolio-history-list \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-portfolio-history-list \
   --cohort hellcat.office_loader
 ```
 
@@ -2209,24 +2209,24 @@ This bridge stays explicit and operator-triggered:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-materialize \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-materialize \
   --draft-id YOUR_DRAFT_ID \
   --base-experiment experiments/office-baseline-control.yaml
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-materialization-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-materialization-result \
   --materialization-id YOUR_MATERIALIZATION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-validation-refresh \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-validation-refresh \
   --materialization-id YOUR_MATERIALIZATION_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-validation-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-validation-result \
   --validation-bundle-id YOUR_VALIDATION_BUNDLE_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-reconcile \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-queue-reconcile \
   --promotion-id YOUR_PROMOTION_ID \
   --validation-bundle-id YOUR_VALIDATION_BUNDLE_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-reconciliation-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-queue-reconciliation-result \
   --reconciliation-id YOUR_RECONCILIATION_ID
 ```
 
@@ -2285,14 +2285,14 @@ Evolution proof artifacts are written under `data/evolution-proofs/` by default.
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- verification-evaluate \
+cargo run -p swarm-runtime-http --bin swarmctl -- verification-evaluate \
   --experiment experiments/office-baseline-control.yaml
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-proof-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-proof-create \
   --experiment experiments/office-baseline-control.yaml \
   --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-proof-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-proof-result \
   --proof-id YOUR_PROOF_ID
 ```
 
@@ -2308,19 +2308,19 @@ Evolution queue artifacts are written under `data/evolution-queue/` by default.
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-queue-create \
   --experiment experiments/office-baseline-control.yaml \
   --verification-id verification:office_baseline_control:office_baseline_control:office_detector_safety_v1 \
   --proof-id YOUR_PROOF_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-list --review-state pending-review
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-queue-list --review-state pending-review
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-decision \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-queue-decision \
   --proposal-id YOUR_PROPOSAL_ID \
   --decision accept-for-canary \
   --reason "control candidate is ready for bounded canary"
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-queue-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-queue-result \
   --proposal-id YOUR_PROPOSAL_ID
 ```
 
@@ -2352,14 +2352,14 @@ The current slice stays deliberately conservative:
 Example operator flow:
 
 ```bash
-cargo run -p swarm-runtime --bin swarmctl -- evolution-handoff-create \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-handoff-create \
   --proposal-id YOUR_ACCEPTED_PROPOSAL_ID \
   --shadow-id YOUR_SHADOW_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-handoff-result \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-handoff-result \
   --handoff-id YOUR_HANDOFF_ID
 
-cargo run -p swarm-runtime --bin swarmctl -- evolution-handoff-launch-canary \
+cargo run -p swarm-runtime-http --bin swarmctl -- evolution-handoff-launch-canary \
   --handoff-id YOUR_HANDOFF_ID
 ```
 

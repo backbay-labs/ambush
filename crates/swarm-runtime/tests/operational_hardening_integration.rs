@@ -14,9 +14,9 @@ use swarm_core::config::{
     RuntimeSettings, SwarmConfig, TelemetrySourceConfig,
 };
 use swarm_core::types::Severity;
+use swarm_ingest_runtime::ingest::IngestState;
 use swarm_response::ExecutionMode;
 use swarm_response::dead_letter::{DeadLetterEntry, DeadLetterJournal};
-use swarm_runtime::ingest::IngestState;
 
 fn unique_suffix() -> String {
     format!(

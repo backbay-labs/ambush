@@ -1,8 +1,11 @@
-//! The `SwarmAgent` trait and agent role definitions.
+//! The `SwarmAgent` trait, agent role definitions, and the typed tick-failure
+//! boundary the runtime observes agents through.
 
 use async_trait::async_trait;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::fmt;
 
 use crate::pheromone::{PheromoneDeposit, ThreatClass};
 use crate::types::{AgentId, SwarmAction};
@@ -202,6 +205,195 @@ pub enum SwarmError {
 
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
+}
+
+/// Not public API. Seals [`AgentTickError`]; see the note on that trait.
+#[doc(hidden)]
+pub mod sealed {
+    /// Supertrait of [`super::AgentTickError`], carrying no contract of its own.
+    ///
+    /// Its only job is to make implementing `AgentTickError` require naming a
+    /// `#[doc(hidden)]` item, so the set of types that can emit an `error_boundary`
+    /// telemetry label stays enumerable and every addition is explicit.
+    pub trait SealedAgentTickError {}
+}
+
+/// A typed tick failure owned by an agent implementation.
+///
+/// # Why this exists (SPLIT-03, phase 282)
+///
+/// `AgentTickBoundaryError` used to be an enum in `swarm-runtime`'s lib.rs with one
+/// variant per concrete agent error type (`Sphinx(SphinxAgentTickError)`,
+/// `Stalker(StalkerAgentTickError)`). That made the composition root name concrete
+/// agent types while the agent files imported back into config, correlation,
+/// investigation, replay and the evolution cluster. The coupling was BIDIRECTIONAL,
+/// so no extraction order fixed it -- whichever crate was cut first would need the
+/// other. The root had to stop naming agents at all.
+///
+/// It now names this trait instead. An agent crate implements `AgentTickError` for
+/// its own error type and depends on `swarm-core`; the runtime observes the failure
+/// through `boundary()` and `role()` and depends on `swarm-core`. Neither depends on
+/// the other, so the edge that was a cycle is now two edges into a shared leaf.
+///
+/// The two methods are the entire contract the runtime ever used, and they are the
+/// contract it still uses: `boundary()` feeds the `error_boundary` label on restart
+/// and health telemetry, `role()` attributes the failure to an agent role.
+///
+/// # What the trait widened, and why it is sealed
+///
+/// Replacing a closed enum with a `pub` trait opens an extension point that did not
+/// exist before. The `error_boundary` telemetry label is derived from `boundary()`
+/// (see the `agent tick failed` / `agent tick panicked` sites in the dispatcher), and
+/// its value domain used to be fixed by the crate that owned the enum: the three
+/// strings `SphinxAgentTickError` returns, the four `StalkerAgentTickError` returns,
+/// and `"panic"`. An arbitrary implementation can return any `&'static str`, so the
+/// label domain would otherwise be unbounded and the set of label sources would grow
+/// silently with any crate that imports `swarm-core`.
+///
+/// The trait is therefore sealed: it requires [`sealed::SealedAgentTickError`], which
+/// lives in a `#[doc(hidden)]` module and is not part of the documented API. An
+/// implementer must write that impl too, so every source of a boundary label stays
+/// enumerable with `grep -rn SealedAgentTickError`, and adding one is a deliberate,
+/// reviewable act rather than a side effect of depending on this crate.
+///
+/// The seal is a deliberate-act barrier, not a capability boundary. Rust cannot
+/// restrict an impl to a named set of crates, and this trait must stay implementable
+/// from whichever crate the agents are extracted into (that is the entire point of
+/// SPLIT-03), so a determined downstream crate can still name the hidden module. What
+/// the seal buys is that it cannot happen by accident or unnoticed.
+pub trait AgentTickError:
+    sealed::SealedAgentTickError + std::error::Error + Send + Sync + 'static
+{
+    /// Stable identifier for the subsystem boundary this failure crossed.
+    ///
+    /// Used as a telemetry label, so the returned strings are part of the observable
+    /// contract and must stay stable across refactors.
+    fn boundary(&self) -> &'static str;
+
+    /// Role of the agent that raised the failure.
+    fn role(&self) -> AgentRole;
+}
+
+/// Typed boundary errors surfaced from runtime-owned agent ticks.
+#[derive(Debug)]
+pub enum AgentTickBoundaryError {
+    /// An agent panicked and the dispatcher caught it at the tick boundary.
+    Panic(AgentPanicBoundaryError),
+    /// An agent returned a typed failure of its own. See [`AgentTickError`].
+    Agent(Box<dyn AgentTickError>),
+}
+
+impl AgentTickBoundaryError {
+    /// Wrap an agent-owned typed tick failure.
+    pub fn agent(error: impl AgentTickError) -> Self {
+        Self::Agent(Box::new(error))
+    }
+
+    pub fn boundary(&self) -> &'static str {
+        match self {
+            Self::Panic(_) => "panic",
+            Self::Agent(error) => error.boundary(),
+        }
+    }
+
+    pub fn role(&self) -> AgentRole {
+        match self {
+            Self::Panic(error) => error.role,
+            Self::Agent(error) => error.role(),
+        }
+    }
+}
+
+impl From<AgentPanicBoundaryError> for AgentTickBoundaryError {
+    fn from(error: AgentPanicBoundaryError) -> Self {
+        Self::Panic(error)
+    }
+}
+
+// `#[derive(thiserror::Error)]` with `#[error(transparent)]` cannot express this
+// enum: the `Agent` variant holds a `Box<dyn AgentTickError>`, and a boxed trait
+// object does not implement `std::error::Error` (the std impl is
+// `impl<T: Error> Error for Box<T>`, which requires `T: Sized`). The two impls below
+// reproduce `transparent` exactly, so the Display text and the `source()` chain are
+// unchanged from the derived version this replaced: Display forwards to the inner
+// error, and `source()` returns the inner error's SOURCE, not the inner error.
+impl fmt::Display for AgentTickBoundaryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Panic(error) => fmt::Display::fmt(error, f),
+            Self::Agent(error) => fmt::Display::fmt(&**error, f),
+        }
+    }
+}
+
+impl std::error::Error for AgentTickBoundaryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Panic(error) => std::error::Error::source(error),
+            Self::Agent(error) => std::error::Error::source(&**error),
+        }
+    }
+}
+
+pub fn agent_tick_error_boundary(error: &SwarmError) -> Option<&'static str> {
+    match error {
+        SwarmError::Internal(error) => error
+            .downcast_ref::<AgentTickBoundaryError>()
+            .map(AgentTickBoundaryError::boundary),
+        _ => None,
+    }
+}
+
+pub fn agent_tick_error_role(error: &SwarmError) -> Option<AgentRole> {
+    match error {
+        SwarmError::Internal(error) => error
+            .downcast_ref::<AgentTickBoundaryError>()
+            .map(AgentTickBoundaryError::role),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("agent `{agent_id}` ({role:?}) panicked during tick: {message}")]
+pub struct AgentPanicBoundaryError {
+    pub agent_id: AgentId,
+    pub role: AgentRole,
+    pub message: String,
+}
+
+impl AgentPanicBoundaryError {
+    pub fn new(agent_id: AgentId, role: AgentRole, payload: Box<dyn Any + Send>) -> Self {
+        Self {
+            agent_id,
+            role,
+            message: panic_payload_message(payload.as_ref()),
+        }
+    }
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return (*message).to_string();
+    }
+    "non-string panic payload".to_string()
+}
+
+pub fn agent_tick_panic_error(
+    agent_id: &AgentId,
+    role: AgentRole,
+    payload: Box<dyn Any + Send>,
+) -> SwarmError {
+    SwarmError::Internal(
+        AgentTickBoundaryError::from(AgentPanicBoundaryError::new(
+            agent_id.clone(),
+            role,
+            payload,
+        ))
+        .into(),
+    )
 }
 
 #[cfg(test)]

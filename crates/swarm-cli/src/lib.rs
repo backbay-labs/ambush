@@ -17,7 +17,7 @@ pub mod config {
 }
 
 pub mod control {
-    pub use swarm_runtime::control::*;
+    pub use swarm_ingest_runtime::control::*;
 }
 
 pub mod drafting {
@@ -25,7 +25,7 @@ pub mod drafting {
 }
 
 pub mod evidence {
-    pub use swarm_runtime::evidence::*;
+    pub use swarm_evolution::evidence::*;
 }
 
 pub mod evolution {
@@ -37,7 +37,7 @@ pub mod evolution_status {
 }
 
 pub mod governance_prep {
-    pub use swarm_runtime::governance_prep::*;
+    pub use swarm_evolution::governance_prep::*;
 }
 
 pub mod mutation {
@@ -45,15 +45,15 @@ pub mod mutation {
 }
 
 pub mod operator_http {
-    pub use swarm_runtime::operator_http::*;
+    pub use swarm_runtime_http::operator_http::*;
 }
 
 pub mod operator_maintenance {
-    pub use swarm_runtime::operator_maintenance::*;
+    pub use swarm_evolution::operator_maintenance::*;
 }
 
 pub mod portfolio {
-    pub use swarm_runtime::portfolio::*;
+    pub use swarm_evolution::portfolio::*;
 }
 
 pub mod promotion {
@@ -65,7 +65,7 @@ pub mod replay {
 }
 
 pub mod review_workbench {
-    pub use swarm_runtime::review_workbench::*;
+    pub use swarm_runtime_workbench::review_workbench::*;
 }
 
 pub mod selection {
