@@ -2848,12 +2848,19 @@ mod tests {
         };
         let detector = BehavioralAnomalyDetector::from_profile(profile.clone()).unwrap();
 
-        for index in 0..16 {
+        // Named and printed below so tools/check-stigmergic-feedback-benchmark.sh
+        // can compare it against `sigma_shift_bounds.warm_observation_count` in
+        // docs/benchmarks/stigmergic-feedback-baseline.json. The sigma counts
+        // below are only meaningful relative to how warm the baseline was, and
+        // a published number no gate reads is decoration.
+        let warm_observations: i64 = 16;
+
+        for index in 0..warm_observations {
             assert!(
                 detector
                     .evaluate(&network_event(
                         &format!("warm-network-{index}"),
-                        1_800_004_000 + index as i64,
+                        1_800_004_000 + index,
                         "svchost.exe",
                         "10.0.0.5",
                         443,
@@ -2916,7 +2923,9 @@ mod tests {
         let sigma_2 = sigma_2.expect("2 sigma threshold should be crossed");
         let sigma_1 = sigma_1.expect("1 sigma threshold should be crossed");
 
-        println!("sigma_3={sigma_3} sigma_2={sigma_2} sigma_1={sigma_1}");
+        println!(
+            "warm_observations={warm_observations} sigma_3={sigma_3} sigma_2={sigma_2} sigma_1={sigma_1}"
+        );
         assert!(sigma_3 > 0);
         assert!(sigma_2 >= sigma_3);
         assert!(sigma_1 >= sigma_2);

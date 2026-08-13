@@ -351,6 +351,65 @@ jobs:
       - name: Check platform OpenAPI contract
         run: bash tools/check-platform-openapi.sh
 
+  proof-surfaces:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Restore shared target cache
+        uses: actions/cache@v4
+        with:
+          path: target/ci
+          key: cargo-target-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Task #15. python3 only; ubuntu-latest ships it and four already-wired
+      # check scripts rely on it. No services, no network.
+      #
+      # The tests this runs also run in the `test` job, so the CI minutes are
+      # NOT justified by the tests -- they are justified by the comparison
+      # against docs/benchmarks/stigmergic-feedback-baseline.json, which nothing
+      # else performs. behavioral_anomaly.rs asserts only that the sigma counts
+      # are ordered and non-zero; the published 3-sigma=2 / 2-sigma=4 /
+      # 1-sigma=13 were pinned nowhere until this step.
+      #
+      # NOT a step in `benchmark`: that job's hot-path step is followed by an
+      # `if: always()` artifact upload, and appending here would let a criterion
+      # regression mask a baseline regression. NOT in `test`: a red test would
+      # skip it.
+      - name: Check stigmergic feedback benchmark against its tracked baseline
+        run: bash tools/check-stigmergic-feedback-benchmark.sh
+
+      # Same four assertions the test job carries, for the same reason: these
+      # gates run cargo test and a report generator, so their residue footprint
+      # has to be measured, not assumed. `if: always()` for the reason spelled
+      # out on the test job's copy.
+      - name: Assert the proof surfaces left the working tree clean
+        if: always()
+        run: bash tools/check-worktree-clean.sh "the proof-surface run"
+
   jetstream:
     needs:
       - build
