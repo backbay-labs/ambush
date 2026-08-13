@@ -402,6 +402,18 @@ jobs:
       - name: Check stigmergic feedback benchmark against its tracked baseline
         run: bash tools/check-stigmergic-feedback-benchmark.sh
 
+      # `!cancelled()` rather than chaining: these two gates are independent, and
+      # a red stigmergic baseline must not hide an adversary-coverage regression.
+      #
+      # Its marginal value over the `test` job, which already runs both of its
+      # cargo test lines: generate_adversary_emulation_report has never executed
+      # in CI at all -- nothing else exercises that bin, its serialization, or
+      # its behaviour from the repo root -- and the published 23 techniques / 4
+      # detected / 19 partial / 0 not_covered / 100% were asserted nowhere.
+      - name: Check adversary emulation coverage against its tracked baseline
+        if: ${{ !cancelled() }}
+        run: bash tools/check-adversary-emulation-coverage.sh
+
       # Same four assertions the test job carries, for the same reason: these
       # gates run cargo test and a report generator, so their residue footprint
       # has to be measured, not assumed. `if: always()` for the reason spelled

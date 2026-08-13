@@ -1,0 +1,51 @@
+{
+  "generated_at": "2026-08-13",
+  "generated_from": "cargo run -q -p swarm-runtime --bin generate_adversary_emulation_report -- --output <path>",
+  "enforced_by": "tools/check-adversary-emulation-coverage.sh",
+  "note": "Every value here was read out of a real report run, not copied from docs/benchmarks/adversary-emulation-coverage.md. The markdown table and this file were cross-checked against the same run and agree.",
+  "suite_name": "evasion_breadth_v1",
+  "suite_path": "scenario-suites/evasion-breadth-v1.yaml",
+  "corpus_version": "2026-04-10",
+  "scenario_count": 7,
+  "technique_count": 23,
+  "detected_technique_count": 4,
+  "partial_technique_count": 19,
+  "not_covered_technique_count": 0,
+  "coverage_percent": 1.0,
+  "detected_techniques": [
+    "T1048.003",
+    "T1204.002",
+    "T1218.005",
+    "T1218.011"
+  ],
+  "techniques": [
+    "T1003.001",
+    "T1003.002",
+    "T1021.001",
+    "T1021.003",
+    "T1021.006",
+    "T1047",
+    "T1048.003",
+    "T1053.003",
+    "T1053.005",
+    "T1053.006",
+    "T1055",
+    "T1055.012",
+    "T1059.001",
+    "T1071.001",
+    "T1071.004",
+    "T1105",
+    "T1106",
+    "T1204.002",
+    "T1218.005",
+    "T1218.011",
+    "T1547.001",
+    "T1558.003",
+    "T1620"
+  ],
+  "floors": {
+    "min_scenario_count": 7,
+    "min_technique_count": 20,
+    "min_coverage_percent": 0.6
+  }
+}
