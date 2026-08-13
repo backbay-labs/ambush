@@ -12,35 +12,37 @@
 //! not, and are declared below with a marker on each -- `calico_agent`,
 //! `kitten_agent`, `sphinx_agent`, `tom_agent`.
 //!
-//! They are pinned by `ingest/`, which calls into them from NON-TEST code. One
-//! such call remains, `ingest/providence_handlers.rs:2` ->
-//! `kitten_agent::route_feedback_signal`; the other, `ingest/mod.rs`'s
-//! `Arc<tom_agent::GovernancePolicy>`, was removed in SPLIT-05 by routing that
-//! surface through `swarm_policy::governance::GovernanceAuthority`. What still
-//! holds `tom` here is test-only and moves with the tests: `ingest/tests.rs:31`
-//! leaves with `ingest/`, and `dispatcher.rs:1409` is a `#[cfg(test)]` module
-//! that can reach `swarm_agents` through the dev-dependency edge this crate
-//! already carries. Non-test back-edges are what Cargo rejects; moving a role
-//! that still has one would put a normal `swarm-agents` entry in this crate's
-//! `[dependencies]`, and that fails outright:
+//! THEY ARE NO LONGER PINNED. `ingest/` was what held them, and SPLIT-05 took it
+//! out of this crate. The one non-test back-edge ADR 0004 named --
+//! `ingest/providence_handlers.rs` -> `kitten_agent::route_feedback_signal` --
+//! is now a forward edge from `swarm-ingest-runtime` into this crate, which is
+//! the direction Cargo permits. Nothing outside the four files names them from
+//! non-test code here:
 //!
 //! ```text
-//! error: cyclic package dependency: package `swarm-agents` depends on itself.
+//! $ grep -rn --include='*.rs' 'crate::\(calico\|kitten\|sphinx\|tom\)_agent' \
+//!     crates/swarm-runtime/src/ | grep -v '_agent.rs:' | grep -v '//!'
+//! crates/swarm-runtime/src/dispatcher.rs:1400: use crate::tom_agent::{...};
 //! ```
 //!
-//! `calico` is pinned transitively -- `kitten_agent.rs:2` parses calico
-//! payloads -- and `sphinx` reads nine `pub(crate)` items out of `calico_agent`,
-//! so moving `sphinx` alone would turn all nine into permanent public API of
-//! this crate, four of them to serve a test module.
+//! and that single hit opens at `dispatcher.rs:1390` under `#[cfg(test)]`, so it
+//! can reach `swarm_agents` through the dev-dependency edge this crate already
+//! carries. What remains is a closed group: `sphinx` and `kitten` read `calico`,
+//! `kitten`'s test module reads `sphinx`, and nothing else in this crate reads
+//! any of them. All four can move to `swarm-agents` together, in one commit,
+//! with no widening -- the nine `pub(crate)` `calico_agent` items ADR 0004
+//! costed stay `pub(crate)` once `calico` and `sphinx` are in the same crate
+//! again, which was the whole reason for waiting.
 //!
-//! IF THIS CHANGES: `ingest/` belongs to SPLIT-05 (`swarm-ingest-runtime`). When
-//! it leaves, all four roles follow it out and this section goes with them.
-//! Until then SPLIT-03 is 4-of-8 by role and 1,593-of-12,215 by line, and the
-//! progress measure is `ls crates/swarm-runtime/src/*_agent.rs | wc -l`: it
-//! prints 4 today and has to reach 0. The full argument -- including what it
-//! would have cost to force `sphinx` out early, and the alternative weighed for
-//! the dev-dependency edge that carries the root's integration tests -- is in
-//! `docs/decisions/0004-split-03-four-of-eight-agents-pinned-by-ingest.md`.
+//! IF THIS CHANGES: nothing here blocks it any more, so the next SPLIT-03 commit
+//! is the one that deletes this section. The progress measure is unchanged --
+//! `ls crates/swarm-runtime/src/*_agent.rs | wc -l` prints 4 today and has to
+//! reach 0 -- but it is now a matter of doing the move, not of unblocking it.
+//! The argument for why it was blocked, and what it would have cost to force
+//! `sphinx` out early, is in
+//! `docs/decisions/0004-split-03-four-of-eight-agents-pinned-by-ingest.md`;
+//! `docs/decisions/0006-split-05-ingest-extraction-and-its-three-widenings.md`
+//! records the unpinning.
 //!
 //! # Seven evolution modules are still declared here (SPLIT-04, phase 282)
 //!
@@ -51,8 +53,9 @@
 //! `swarm-evolution -> swarm-runtime` (the lane reads `crate::replay`, which
 //! stays), so anything this crate still names cannot move.
 //!
-//! Five other files here name those seven (`ingest/mod.rs`, `ingest/tests.rs`,
-//! `kitten_agent.rs`, `sphinx_agent.rs`, `evolution_status.rs`), but they are
+//! Three other files here name those seven (`kitten_agent.rs`,
+//! `sphinx_agent.rs`, `evolution_status.rs` -- `ingest/mod.rs` and
+//! `ingest/tests.rs` left with SPLIT-05), but they are
 //! corroborating, not load-bearing: **this file alone pins all seven**, in
 //! three steps. `StrategyProposalRouteError` below names `drafting`,
 //! `mutation`, `selection`, `evolution` and `canary` by `#[from]`; `strategy`
@@ -72,8 +75,11 @@
 //! `StrategyProposalRouter` trait keeps the enum here too. The progress measure
 //! is
 //! `grep -rcE 'crate::(canary|drafting|evolution|mutation|promotion|selection|strategy)::'
-//! src/lib.rs src/ingest src/kitten_agent.rs src/sphinx_agent.rs src/evolution_status.rs`:
-//! it sums to 58 today and has to reach 0. The full argument, and what SPLIT-04
+//! src/lib.rs src/kitten_agent.rs src/sphinx_agent.rs src/evolution_status.rs`:
+//! it sums to 38 today and has to reach 0. It read 58 over five files before
+//! SPLIT-05; the 20 that went are `ingest/`'s, and they left the crate rather
+//! than being removed, so the drop measures the extraction and not progress on
+//! SPLIT-04's blocker. The full argument, and what SPLIT-04
 //! did and did not buy for replay, is in
 //! `docs/decisions/0005-split-04-evolution-lane-pinned-by-the-crate-root.md`.
 #![allow(clippy::result_large_err)]

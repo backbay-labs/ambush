@@ -19,25 +19,46 @@
 //! `HttpRateLimitViolationRecord` -- went with it, because `service`'s operator
 //! status report embeds the first as a field and so cannot follow ingest out.
 //!
-//! `TlsClientIdentity` still stays: it is produced by the TLS accept loop in
-//! `swarm-runtime-http` and read back by `ingest/platform_api.rs`, so it is
-//! below both and this is still the lowest crate that both can reach. It moves
-//! when `ingest/` does, or down into `swarm-core` beside the rate limiter --
-//! whichever SPLIT-05's remaining step finds cheaper.
+//! `TlsClientIdentity` still stays, and now for a settled reason rather than a
+//! pending one. It is produced by the TLS accept loop in `swarm-runtime-http`
+//! and read back by `swarm-ingest-runtime`'s `ingest/platform_api.rs`. Those are
+//! the top and middle of `swarm-runtime-http -> swarm-ingest-runtime ->
+//! swarm-runtime`, so this crate is the lowest position both can reach and it
+//! did NOT follow `ingest/` out: putting it in the middle crate would leave the
+//! type defined above one of its two consumers. It could still go down beside
+//! the rate limiter in `swarm-core` if a third consumer ever appears below it;
+//! nothing forces that today.
 //!
 //! # The `axum` edge that outlived SPLIT-01
 //!
 //! SPLIT-01 undertook to take six transport dependencies out of
 //! `swarm-runtime`'s manifest. Five left with the moved code; `axum` did not.
-//! The attribution is reproducible rather than a judgement call: delete the
-//! `axum` line from `crates/swarm-runtime/Cargo.toml` and run
-//! `cargo check -p swarm-runtime --lib`. Before SPLIT-05 that yielded 52
-//! errors, of which exactly one was in `rate_limit.rs` and the other 51 were in
-//! `ingest/`. With the rate limiter moved, every remaining error is in
-//! `ingest/`, so the whole of the surviving `axum` edge now belongs to the file
-//! set SPLIT-05 extracts and nothing else in this crate holds it.
+//! The attribution has always been reproducible rather than a judgement call:
+//! delete the `axum` line from `crates/swarm-runtime/Cargo.toml` and run
+//! `cargo check -p swarm-runtime --lib`. Before SPLIT-05 that yielded 52 errors,
+//! one in `rate_limit.rs` and 51 in `ingest/`. After the rate limiter moved,
+//! all 51 remaining were in `ingest/`. With `ingest/` extracted it yields none:
 //!
+//! ```text
+//! $ sed -i '' '/^axum.workspace = true$/d' crates/swarm-runtime/Cargo.toml
+//! $ cargo check -p swarm-runtime --lib 2>&1 | grep -c '^error'
+//! 0
+//! $ cargo check -p swarm-runtime --all-targets 2>&1 | grep '^error' -A2
+//! error[E0432]: unresolved import `axum`
+//!  --> crates/swarm-runtime/tests/dispatch_integration.rs:5:5
+//! ...
+//! ```
+//!
+//! So every `axum` use left in this crate is a test, an example or a bench --
+//! `providence.rs` and `threat_intel_runtime.rs` each spin one up inside a
+//! `#[cfg(test)] mod tests` to stand in for a remote server -- and the edge is a
+//! dev-dependency wearing a normal dependency's clothes.
+//!
+//! THE MANIFEST LINE IS DELIBERATELY LEFT IN PLACE HERE. SPLIT-05 was code
+//! motion, and moving `axum` from `[dependencies]` to `[dev-dependencies]` is a
+//! manifest change whose correctness is exactly the measurement above; it is
+//! SPLIT-06's to make and to prove, on a tree where nothing else is moving.
 //! `docs/decisions/0002-split-01-open-until-split-05.md` holds SPLIT-01 open
-//! until that deletion lands. The phase owner may still prefer to amend the
-//! requirement instead; recording that supersedes the ADR and this note with it.
+//! until it lands. What SPLIT-05 changed is that the blocker the ADR names is
+//! gone: no non-test code in this crate holds the edge any more.
 pub mod tls_identity;
