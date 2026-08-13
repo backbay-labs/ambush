@@ -374,6 +374,60 @@ jobs:
       - name: Check detector experiment fixture freshness
         run: bash tools/check-fixture-freshness.sh
 
+  platform-contract:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Restore shared target cache
+        uses: actions/cache@v4
+        with:
+          path: target/ci
+          key: cargo-target-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # tools/check-platform-openapi.sh validates the committed spec through
+      # `uvx --from openapi-spec-validator`, so it needs uv on PATH for the same
+      # reason 64cb1be installed it in the test job.
+      - name: Install uv (uvx runs the OpenAPI validator)
+        uses: astral-sh/setup-uv@v5
+
+      # Task #15. This script existed and no workflow ran it. Nothing else in
+      # the repo checks that docs/openapi/v2-platform-openapi.json is valid
+      # OpenAPI 3.1, or that it still matches what generate_platform_openapi
+      # emits -- and clients/python/ is GENERATED FROM THAT FILE, so a stale
+      # spec ships a wrong client while every other gate stays green.
+      #
+      # ITS OWN JOB, not a step appended to `test`. A step only runs when the
+      # preceding steps of its job succeeded, so putting it there means any red
+      # test masks a broken API contract. It is also the only job besides `test`
+      # that needs uv and outbound PyPI, which is cleaner isolated: when PyPI is
+      # having a day, exactly one job goes red.
+      - name: Check platform OpenAPI contract
+        run: bash tools/check-platform-openapi.sh
+
   jetstream:
     needs:
       - build
