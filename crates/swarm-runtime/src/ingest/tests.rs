@@ -3650,7 +3650,7 @@ mod providence_feedback {
     use super::*;
     use crate::drafting::EvolutionValidationBundleStatus;
     use crate::evolution::{EvolutionProposalProofStatus, EvolutionProposalReviewState};
-    use crate::kitten_agent::load_feedback_signal_records;
+    use crate::kitten_agent::KittenFeedbackSignalRecord;
     use crate::mutation::{
         EvolutionPopulationCandidate, EvolutionPopulationFitnessObjectives,
         EvolutionPopulationState, FileEvolutionPopulationStore,
@@ -3662,6 +3662,32 @@ mod providence_feedback {
 
     const FEEDBACK_SECRET: &str = "providence-feedback-secret";
     const FEEDBACK_HEADER: &str = "X-Swarm-Signature";
+    const FEEDBACK_SIGNALS_FILE: &str = "feedback-signals.jsonl";
+
+    /// Reads back what `kitten_agent::route_feedback_signal` appended.
+    ///
+    /// The writer half (`FileKittenFeedbackStore::append`) is production code;
+    /// the read half exists only for this assertion, so it lives here rather
+    /// than on `crate::kitten_agent`. A `#[cfg(test)]` item on the root is
+    /// unreachable from `swarm-ingest-runtime`, which depends on the root
+    /// normally and therefore links its non-test build (SPLIT-05).
+    fn load_feedback_signal_records(
+        root: impl AsRef<Path>,
+    ) -> Result<Vec<KittenFeedbackSignalRecord>, String> {
+        let path = root.as_ref().join(FEEDBACK_SIGNALS_FILE);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let raw = fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read kitten feedback store: {error}"))?;
+        raw.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str(line)
+                    .map_err(|error| format!("failed to parse kitten feedback signal: {error}"))
+            })
+            .collect()
+    }
 
     fn temp_dir(label: &str) -> PathBuf {
         let dir = super::temp_path(label).with_extension("dir");
