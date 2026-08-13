@@ -70,8 +70,12 @@ pub type ContainmentBindingFromConfig = (Arc<dyn ContainmentLeaseStore>, Contain
 /// A configured `lease_store_path` gets a file store; no path gets an in-memory
 /// one. The in-memory case is NOT free: a restart forgets every open lease, so
 /// nothing will ever sweep those containments and they hold until an operator
-/// acts. That is why `rulesets/default.yaml` ships a path and
-/// `docs/CONFIGURATION.md` says what omitting it costs.
+/// acts.
+///
+/// The shipped `rulesets/default.yaml` does NOT set a path and cannot -- it is
+/// digest-signed and the key is not in the repo -- so a `live_response`
+/// deployment has to set one in its own config. `docs/CONFIGURATION.md` says
+/// that, and says what omitting it costs.
 pub fn containment_binding_from_config(
     settings: &swarm_core::config::ContainmentSettings,
 ) -> Result<ContainmentBindingFromConfig, ContainmentLeaseError> {
@@ -81,6 +85,36 @@ pub fn containment_binding_from_config(
         _ => Arc::new(MemoryContainmentLeaseStore::new()),
     };
     Ok((store, ttl))
+}
+
+/// Build the rollback executor that matches the configured response adapter.
+///
+/// The inverse has to go out through the same integration the forward action
+/// did, so this mirrors `DispatchingExecutor::from_config` arm for arm.
+///
+/// TWO ARMS RETURN A SANDBOX EXECUTOR THAT CANNOT UNDO ANYTHING, AND SAY SO.
+/// `webhook` is a notification transport with no inverse endpoint, and
+/// `crowdstrike_rtr` handles only `IsolateHost`/`KillProcess`/`QuarantineFile`
+/// on the way out (`crowdstrike_rtr.rs:453-481`), so it could not reverse
+/// `SuspendProcess` or `TerminateUserSession` even with a mapping written. On
+/// those deployments a lease still bounds the containment and still expires --
+/// its rollback receipt just reports `Simulated`/`Irreversible` rather than
+/// `Reversed`, which is the true statement. Wiring a real CrowdStrike inverse is
+/// follow-up work, not something to fake here.
+pub fn rollback_executor_from_config(
+    adapter: &swarm_core::config::ResponseAdapterConfig,
+) -> Result<Arc<dyn RollbackExecutor>, ResponseError> {
+    use swarm_core::config::ResponseAdapterConfig;
+    Ok(match adapter {
+        ResponseAdapterConfig::HttpEdr { config } => Arc::new(
+            swarm_response::http_edr::HttpEdrRollbackExecutor::new(config.clone())?,
+        ),
+        ResponseAdapterConfig::Sandbox
+        | ResponseAdapterConfig::Webhook { .. }
+        | ResponseAdapterConfig::CrowdStrikeRtr { .. } => {
+            Arc::new(swarm_response::rollback::SandboxRollbackExecutor)
+        }
+    })
 }
 
 /// Errors raised while releasing a containment.
@@ -426,6 +460,101 @@ mod tests {
         let store = Arc::new(MemoryContainmentLeaseStore::new());
         let sweep = ContainmentSweep::new(store.clone(), executor, ExecutionMode::Enforced);
         (store, sweep)
+    }
+
+    #[test]
+    fn a_configured_path_gets_a_durable_store_and_no_path_gets_an_in_memory_one() {
+        use swarm_core::config::ContainmentSettings;
+
+        let (memory, ttl) =
+            containment_binding_from_config(&ContainmentSettings::default()).unwrap();
+        assert_eq!(ttl.get(), 900_000);
+        assert_eq!(
+            format!("{memory:?}"),
+            format!("{:?}", MemoryContainmentLeaseStore::new()),
+            "no configured path must not silently produce a file store"
+        );
+
+        let path = std::env::temp_dir().join("swarm-containment-binding.json");
+        let (file, ttl) = containment_binding_from_config(&ContainmentSettings {
+            lease_ttl_ms: 1_234,
+            sweep_interval_ms: 10,
+            lease_store_path: Some(path.display().to_string()),
+        })
+        .unwrap();
+        assert_eq!(ttl.get(), 1_234);
+        assert!(
+            format!("{file:?}").contains("FileContainmentLeaseStore"),
+            "a configured path must produce a durable store, got {file:?}"
+        );
+
+        // The TTL is the bound; a non-positive one must not build a runtime.
+        let error = containment_binding_from_config(&ContainmentSettings {
+            lease_ttl_ms: 0,
+            ..ContainmentSettings::default()
+        })
+        .expect_err("a zero ttl cannot bound a containment");
+        assert!(
+            matches!(error, ContainmentLeaseError::NonPositiveTtl { .. }),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn only_the_http_edr_deployment_gets_an_executor_that_can_touch_a_host() {
+        use swarm_core::config::{
+            CircuitBreakerConfig, CrowdStrikeRtrConfig, HttpEdrConfig, ResponseAdapterConfig,
+            RetryConfig, WebhookConfig,
+        };
+
+        let http = rollback_executor_from_config(&ResponseAdapterConfig::HttpEdr {
+            config: HttpEdrConfig {
+                endpoint: "http://127.0.0.1:9/".to_string(),
+                auth_token: "secret".to_string().into(),
+                timeout_ms: 50,
+                retry: RetryConfig::default(),
+                circuit_breaker: CircuitBreakerConfig::default(),
+                dead_letter_path: "./dead-letter.jsonl".to_string(),
+            },
+        })
+        .unwrap();
+        assert!(format!("{http:?}").contains("HttpEdrRollbackExecutor"));
+
+        // The other three fall back to the sandbox executor, which never reports
+        // `Reversed`. That is the honest answer for a webhook (no inverse
+        // endpoint) and for CrowdStrike RTR (its forward adapter covers only
+        // three of the actions), not a gap being papered over.
+        for adapter in [
+            ResponseAdapterConfig::Sandbox,
+            ResponseAdapterConfig::Webhook {
+                config: WebhookConfig {
+                    url: "http://127.0.0.1:9/".to_string(),
+                    timeout_ms: 50,
+                    channel: None,
+                    auth_token: None,
+                    retry: RetryConfig::default(),
+                    circuit_breaker: CircuitBreakerConfig::default(),
+                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                },
+            },
+            ResponseAdapterConfig::CrowdStrikeRtr {
+                config: CrowdStrikeRtrConfig {
+                    base_url: "http://127.0.0.1:9/".to_string(),
+                    client_id: "id".to_string().into(),
+                    client_secret: "secret".to_string().into(),
+                    timeout_ms: 50,
+                    retry: RetryConfig::default(),
+                    circuit_breaker: CircuitBreakerConfig::default(),
+                    dead_letter_path: "./dead-letter.jsonl".to_string(),
+                },
+            },
+        ] {
+            let executor = rollback_executor_from_config(&adapter).unwrap();
+            assert!(
+                format!("{executor:?}").contains("SandboxRollbackExecutor"),
+                "unexpected executor for {adapter:?}: {executor:?}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -1760,6 +1760,52 @@ impl IngestState {
         self.stack.load_full().service.config.pheromone.clone()
     }
 
+    /// The lease store the CURRENT runtime writes containment leases to.
+    ///
+    /// Must be read from the runtime rather than rebuilt from config: for an
+    /// in-memory store a second instance is a different map, so a sweep built
+    /// beside the runtime would find nothing and silently release nothing.
+    ///
+    /// KNOWN LIMITATION, and it is the in-memory case only. `stack` is an
+    /// `ArcSwap`, so `reload_from_disk()` replaces the runtime and with it the
+    /// store. A file-backed store reopens the same document and loses nothing; an
+    /// in-memory one starts empty, so any containment open at reload time is
+    /// orphaned and no sweep will ever release it. That is one of the reasons
+    /// `docs/CONFIGURATION.md` tells a `live_response` deployment to configure
+    /// `runtime.containment.lease_store_path`.
+    pub fn current_containment_store(
+        &self,
+    ) -> Option<Arc<dyn swarm_response::containment::ContainmentLeaseStore>> {
+        self.stack
+            .load_full()
+            .service
+            .runtime
+            .containment_store()
+            .cloned()
+    }
+
+    /// Whether the current runtime enforces or simulates. The sweep needs this
+    /// so a `detect_only` daemon never issues a real inverse.
+    pub fn current_execution_mode(&self) -> swarm_response::ExecutionMode {
+        match self.stack.load_full().service.config.runtime.mode {
+            swarm_core::config::RuntimeMode::DetectOnly => swarm_response::ExecutionMode::DryRun,
+            swarm_core::config::RuntimeMode::LiveResponse => {
+                swarm_response::ExecutionMode::Enforced
+            }
+        }
+    }
+
+    /// Containment bounds from the current config.
+    pub fn current_containment_settings(&self) -> swarm_core::config::ContainmentSettings {
+        self.stack
+            .load_full()
+            .service
+            .config
+            .runtime
+            .containment
+            .clone()
+    }
+
     pub fn current_response_adapter_config(&self) -> ResponseAdapterConfig {
         self.stack
             .load_full()
