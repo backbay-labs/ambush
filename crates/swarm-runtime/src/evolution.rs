@@ -51,6 +51,7 @@ mod tests;
 #[path = "evolution/types.rs"]
 mod types;
 
+pub use assurance::{EvolutionAssuranceEvaluationProvenance, EvolutionProposalAssuranceSummary};
 pub use formal_safety::{DefaultEvolutionProofHarness, DefaultFormalSafetyGate};
 pub use harnesses::{DefaultEvolutionHandoffHarness, DefaultEvolutionQueueHarness};
 pub use render::{

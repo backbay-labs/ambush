@@ -3149,6 +3149,7 @@ mod tests {
         render_evolution_materialization, render_evolution_pressure,
         render_evolution_queue_reconciliation, render_evolution_validation_bundle,
     };
+    use crate::evolution::assurance_summary_for_tests;
     use crate::evolution::{
         DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness,
         EvolutionProposalAssuranceCoverageSummary, EvolutionProposalAssuranceDecision,
@@ -3174,9 +3175,9 @@ mod tests {
     }
 
     fn passed_assurance_summary() -> EvolutionProposalAssuranceSummary {
-        EvolutionProposalAssuranceSummary {
-            decision: EvolutionProposalAssuranceDecision::Passed,
-            coverage: EvolutionProposalAssuranceCoverageSummary {
+        assurance_summary_for_tests(
+            EvolutionProposalAssuranceDecision::Passed,
+            EvolutionProposalAssuranceCoverageSummary {
                 detector: "office_baseline_control".to_string(),
                 suite_name: Some("evasion-breadth-v1".to_string()),
                 corpus_version: Some("2026-04-03".to_string()),
@@ -3184,14 +3185,14 @@ mod tests {
                 actual_catch_rate: Some(1.0),
                 actionable_gap_count: 0,
             },
-            solver: EvolutionProposalAssuranceSolverSummary {
+            EvolutionProposalAssuranceSolverSummary {
                 required: false,
                 status: None,
                 allowed_statuses: Vec::new(),
             },
-            harvested_case_ids: Vec::new(),
-            waiver: None,
-        }
+            Vec::new(),
+            None,
+        )
     }
 
     fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {

@@ -458,17 +458,12 @@ pub struct EvolutionProposalAssuranceSolverSummary {
     pub allowed_statuses: Vec<EvolutionSolverProofStatus>,
 }
 
-/// Shared assurance summary persisted alongside one queued proposal.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EvolutionProposalAssuranceSummary {
-    pub decision: EvolutionProposalAssuranceDecision,
-    pub coverage: EvolutionProposalAssuranceCoverageSummary,
-    pub solver: EvolutionProposalAssuranceSolverSummary,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub harvested_case_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub waiver: Option<EvolutionAssuranceWaiverSummary>,
-}
+// `EvolutionProposalAssuranceSummary` deliberately does NOT live here.
+//
+// It is the record promotion trusts, so it is defined in `evolution/assurance.rs`
+// next to the evaluator that produces it, with a private provenance field. That
+// placement is what makes a summary impossible to write down anywhere else --
+// see the type's own doc comment for the defect it closes.
 
 /// Signed bounded waiver attached to one blocked assurance decision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -205,6 +205,13 @@ fn configure_evolution_paths(config: &mut SwarmConfig, root: &Path) {
     config.evolution.paths.evolution_population_results_dir =
         root.join("evolution-population").display().to_string();
     config.evolution.paths.canary_results_dir = root.join("canaries").display().to_string();
+    // The assurance harvest store is NOT under `evolution.paths`, so it is not
+    // covered by the loop above. Left alone it resolves relative to the config
+    // file -- which for a test pointed at the repo's own `rulesets/default.yaml`
+    // means the harvester writes scenario YAML into `rulesets/data/`, dirtying the
+    // working tree and breaking `repo_ruleset_attestation_matches_checked_in_files`.
+    config.evolution.assurance.harvest.results_dir =
+        root.join("assurance-cases").display().to_string();
 }
 
 fn suspicious_event(event_id: &str) -> TelemetryEvent {
@@ -605,6 +612,20 @@ async fn evasion_to_canary_routes_gap_driven_candidate_into_existing_lane()
             })
             .collect(),
     };
+
+    // This test is about ROUTING: does a gap-driven candidate reach the canary
+    // lane. The candidate it routes is the unimproved control profile, whose
+    // measured `suspicious_process_tree` catch rate (~0.143) is below the shipped
+    // 0.25 assurance floor -- by construction, since the test's own premise above
+    // is that the detector HAS actionable evasion gaps.
+    //
+    // Until the assurance gate actually ran on this route it did not matter; the
+    // route fabricated a passing summary. Now it does, so the floor is set below
+    // the measured rate to keep the subject of this test the routing and not the
+    // coverage verdict. The shipped floor is kept, and the block asserted, by
+    // `strategy_proposal_router_blocks_candidate_that_fails_the_assurance_gate`
+    // in swarm-ingest-runtime.
+    config.evolution.assurance.min_detector_catch_rate = 0.10;
 
     let (_, _, signing_key) = execution_context();
     let state = IngestState::from_config_with_signing_key(

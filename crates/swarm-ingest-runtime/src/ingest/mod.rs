@@ -62,9 +62,9 @@ use swarm_runtime::evasion_coverage::{
     resolve_repo_root,
 };
 use swarm_runtime::evolution::{
-    DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultFormalSafetyGate,
-    EvolutionProposalDecisionAction, EvolutionProposalReviewState, FormalSafetyGate,
-    StrategyGenome,
+    DefaultEvolutionHandoffHarness, DefaultEvolutionProofHarness, DefaultEvolutionQueueHarness,
+    DefaultFormalSafetyGate, EvolutionProposalAssuranceDecision, EvolutionProposalDecisionAction,
+    EvolutionProposalReviewState, FormalSafetyGate, StrategyGenome,
 };
 use swarm_runtime::evolution_status::DefaultEvolutionStatusHarness;
 use swarm_runtime::investigation::{InvestigationCoordinator, SummaryInvestigator};
@@ -419,48 +419,69 @@ impl StrategyProposalRouter for IngestRuntimeStrategyProposalRouter {
             }
         })?;
 
-        // Attach assurance lineage to the queue proposal so the handoff
-        // gate recognises the candidate as safe to launch.
-        {
-            let queue_store = swarm_runtime::evolution::FileEvolutionProposalStore::open(
-                &paths.evolution_queue_results_dir,
+        // RUN the assurance gate over the queued proposal. This block used to
+        // FABRICATE a `decision: Passed` summary with `solver: { status: None }`
+        // whenever `assurance` was absent -- which it always is on this route,
+        // because `bridge_selection` mints the proposal with `assurance: None`.
+        // Promotion authorizes on that recorded decision and nothing else
+        // (`assurance_gate_block_reason` reads only `summary.decision`), so the
+        // fabrication both skipped the gate and wrote down that it had passed.
+        //
+        // The summary type can no longer be written down outside its evaluator, so
+        // the only way to fill `assurance` is to evaluate. If a future caller drops
+        // this call entirely the route fails CLOSED rather than open:
+        // `assurance: None` makes `assurance_rollout_state` return `Blocked`, and
+        // `create_handoff` refuses on that.
+        let queue_harness = DefaultEvolutionQueueHarness::from_config(
+            self.config_path.as_ref().clone(),
+            config.clone(),
+            &paths.evolution_queue_results_dir,
+        )?;
+        let assured = queue_harness.evaluate_and_persist_proposal_assurance(
+            &queue_proposal_id,
+            &paths.evolution_proof_results_dir,
+        )?;
+        let assurance_decision = assured
+            .report
+            .assurance
+            .as_ref()
+            .map(|summary| summary.decision());
+        if assurance_decision != Some(EvolutionProposalAssuranceDecision::Passed) {
+            let reasons = assured
+                .report
+                .blocking_reasons
+                .iter()
+                .filter(|reason| reason.source == "assurance")
+                .map(|reason| reason.name.clone())
+                .collect::<Vec<_>>();
+            let summary = format!(
+                "assurance gate blocked the candidate: {}",
+                assured
+                    .report
+                    .blocking_reasons
+                    .iter()
+                    .filter(|reason| reason.source == "assurance")
+                    .map(|reason| reason.details.clone())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+            let _ = mutation.record_population_candidate_review_outcome(
+                &paths.evolution_population_results_dir,
+                &proposal.strategy_id,
+                EvolutionProposalReviewState::Blocked,
+                &summary,
+                &reasons,
+                now_ms(),
             )?;
-            let mut proposal_report = queue_store
-                .load(&queue_proposal_id)?
-                .ok_or_else(|| StrategyProposalRouteError::MissingArtifact {
-                    artifact: "queue_proposal",
-                    artifact_id: queue_proposal_id.clone(),
-                    strategy_id: proposal.strategy_id.clone(),
-                })?
-                .report;
-            if proposal_report.assurance.is_none() {
-                proposal_report.assurance = Some(
-                    swarm_runtime::evolution::EvolutionProposalAssuranceSummary {
-                        decision:
-                            swarm_runtime::evolution::EvolutionProposalAssuranceDecision::Passed,
-                        coverage:
-                            swarm_runtime::evolution::EvolutionProposalAssuranceCoverageSummary {
-                                detector: proposal.strategy_id.clone(),
-                                suite_name: None,
-                                corpus_version: None,
-                                required_catch_rate: config
-                                    .evolution
-                                    .assurance
-                                    .min_detector_catch_rate,
-                                actual_catch_rate: None,
-                                actionable_gap_count: 0,
-                            },
-                        solver: swarm_runtime::evolution::EvolutionProposalAssuranceSolverSummary {
-                            required: false,
-                            status: None,
-                            allowed_statuses: Vec::new(),
-                        },
-                        harvested_case_ids: Vec::new(),
-                        waiver: None,
-                    },
-                );
-                queue_store.persist(&proposal_report)?;
-            }
+            self.publish_evolution_status(&config, "assurance_gate_blocked");
+            return Ok(StrategyProposalRouteReport {
+                strategy_id: proposal.strategy_id,
+                outcome: StrategyProposalOutcome::Blocked,
+                selection_id: Some(accepted.report.selection_id),
+                bridge_id: Some(bridge.report.bridge_id),
+                handoff_id: None,
+                canary_run_id: None,
+            });
         }
 
         let handoff_harness = DefaultEvolutionHandoffHarness::from_config(

@@ -14,7 +14,7 @@ pub(super) use crate::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraft
 pub(super) use crate::evolution::{
     DefaultEvolutionProofHarness, EvolutionProposalAssuranceCoverageSummary,
     EvolutionProposalAssuranceDecision, EvolutionProposalAssuranceSolverSummary,
-    EvolutionProposalAssuranceSummary, FileEvolutionProposalStore,
+    FileEvolutionProposalStore,
 };
 pub(super) use crate::replay::{DefaultReplayHarness, DetectorCandidateManifest};
 pub(super) use crate::strategy::DefaultStrategyScorecardHarness;

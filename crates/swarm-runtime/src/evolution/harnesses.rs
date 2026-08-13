@@ -175,6 +175,90 @@ impl DefaultEvolutionQueueHarness {
         Ok(EvolutionProposalLookup { record, report })
     }
 
+    /// Run the assurance gate over an already-queued proposal and persist the result.
+    ///
+    /// WHY THIS EXISTS
+    ///   `create_proposal` is the manual/CLI entry point and evaluates assurance
+    ///   inline. The automated evolution route does not go through it: the ranked
+    ///   candidate is minted straight into the queue by
+    ///   `EvolutionRankedCandidateSelectionHarness::bridge_selection`, which has
+    ///   neither a config nor a proof store and so leaves `assurance: None`.
+    ///   `swarm-ingest-runtime` used to close that gap by WRITING a
+    ///   `decision: Passed` summary itself, which is an attestation for a gate
+    ///   that never ran. This method is the real evaluation that replaces it.
+    ///
+    /// It re-derives everything from the proposal's own recorded lineage --
+    /// `experiment_path` and `proof.proof_id` -- rather than from caller-supplied
+    /// arguments, so an evaluation cannot be pointed at a different candidate's
+    /// evidence than the one being admitted.
+    ///
+    /// A `Blocked` outcome is written through to `review_state`, so a proposal
+    /// that fails assurance cannot stay `AcceptedForCanary` on disk.
+    pub fn evaluate_and_persist_proposal_assurance(
+        &self,
+        proposal_id: &str,
+        proof_results_dir: impl AsRef<Path>,
+    ) -> Result<EvolutionProposalLookup, EvolutionQueueError> {
+        let mut lookup =
+            self.store
+                .load(proposal_id)?
+                .ok_or_else(|| EvolutionQueueError::ProposalNotFound {
+                    proposal_id: proposal_id.to_string(),
+                })?;
+
+        let manifest =
+            load_detector_experiment_manifest(PathBuf::from(&lookup.report.experiment_path))?;
+        let proof_store = FileEvolutionProofStore::open(proof_results_dir)?;
+        let proof = match lookup.report.proof.as_ref() {
+            Some(summary) => proof_store.load(&summary.proof_id)?,
+            None => None,
+        };
+
+        let mut blocking_reasons = Vec::new();
+        let mut assurance = evaluate_proposal_assurance(
+            &self.config_path,
+            &self.config,
+            &manifest,
+            proof.as_ref().map(|lookup| &lookup.report),
+            &mut blocking_reasons,
+        );
+        assurance.harvested_case_ids = persist_harvested_assurance_cases(
+            &self.config_path,
+            &self.config,
+            &lookup.report.proposal_id,
+            lookup.report.created_at_ms,
+            &manifest,
+            None,
+            proof.as_ref().map(|lookup| &lookup.report),
+            &assurance,
+        )?;
+
+        let decision = assurance.decision();
+        // Replace, do not append: a re-evaluation supersedes the previous one, and
+        // leaving stale `assurance` reasons behind would keep a proposal blocked on
+        // a finding the current evaluation no longer makes.
+        lookup
+            .report
+            .blocking_reasons
+            .retain(|reason| reason.source != "assurance");
+        lookup.report.blocking_reasons.extend(blocking_reasons);
+        lookup.report.assurance = Some(assurance);
+        // No `decision_history` entry: `EvolutionProposalDecisionAction` is a
+        // serialized enum with no `Block` variant, and adding one to widen an
+        // operator-decision vocabulary for a machine verdict would misfile it.
+        // The auditable record here is the persisted assurance summary (which now
+        // carries its own provenance) plus the `assurance`-sourced blocking reasons.
+        if decision == EvolutionProposalAssuranceDecision::Blocked {
+            lookup.report.review_state = EvolutionProposalReviewState::Blocked;
+        }
+
+        let record = self.store.persist(&lookup.report)?;
+        Ok(EvolutionProposalLookup {
+            record,
+            report: lookup.report,
+        })
+    }
+
     pub fn load_proposal(
         &self,
         proposal_id: &str,
@@ -332,7 +416,7 @@ impl DefaultEvolutionQueueHarness {
                 reason: "proposal does not carry assurance lineage".to_string(),
             }
         })?;
-        if assurance.decision != EvolutionProposalAssuranceDecision::Blocked {
+        if assurance.decision() != EvolutionProposalAssuranceDecision::Blocked {
             return Err(EvolutionQueueError::InvalidAssuranceWaiver {
                 proposal_id: proposal_id.to_string(),
                 reason: "only blocked assurance decisions can be waived".to_string(),

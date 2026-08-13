@@ -1107,7 +1107,7 @@ fn build_assurance_summary(
         latest_proposal_id: Some(proposal.report.proposal_id.clone()),
         latest_handoff_id: latest_handoff.map(|handoff| handoff.handoff_id.clone()),
         rollout_state,
-        decision: assurance.map(|summary| summary.decision),
+        decision: assurance.map(|summary| summary.decision()),
         blocked_reason_count: proposal_blocked_reason_count.max(handoff_blocked_reason_count),
         detector: assurance.map(|summary| summary.coverage.detector.clone()),
         required_catch_rate: assurance.map(|summary| summary.coverage.required_catch_rate),
@@ -1332,6 +1332,7 @@ mod tests {
     };
     use crate::canary::{CanaryRecommendation, CanaryRunRecord, CanaryRunStatus};
     use crate::drafting::EvolutionValidationBundleStatus;
+    use crate::evolution::assurance_summary_for_tests;
     use crate::evolution::{
         EvolutionAssuranceRolloutState, EvolutionHandoffReport, EvolutionHandoffStatus,
         EvolutionProofReport, EvolutionProposalAssuranceCoverageSummary,
@@ -1885,9 +1886,9 @@ mod tests {
                     invariant_count: 1,
                 }),
                 advisory: None,
-                assurance: Some(EvolutionProposalAssuranceSummary {
-                    decision: EvolutionProposalAssuranceDecision::Blocked,
-                    coverage: EvolutionProposalAssuranceCoverageSummary {
+                assurance: Some(assurance_summary_for_tests(
+                    EvolutionProposalAssuranceDecision::Blocked,
+                    EvolutionProposalAssuranceCoverageSummary {
                         detector: "strategy-a".to_string(),
                         suite_name: Some("evasion-breadth-v1".to_string()),
                         corpus_version: Some("2026-04-03".to_string()),
@@ -1895,14 +1896,14 @@ mod tests {
                         actual_catch_rate: Some(0.25),
                         actionable_gap_count: 2,
                     },
-                    solver: EvolutionProposalAssuranceSolverSummary {
+                    EvolutionProposalAssuranceSolverSummary {
                         required: true,
                         status: Some(EvolutionSolverProofStatus::Timeout),
                         allowed_statuses: vec![EvolutionSolverProofStatus::Proved],
                     },
-                    harvested_case_ids: vec!["case-a".to_string(), "case-b".to_string()],
-                    waiver: None,
-                }),
+                    vec!["case-a".to_string(), "case-b".to_string()],
+                    None,
+                )),
                 review_state: EvolutionProposalReviewState::Blocked,
                 blocking_reasons: vec![EvolutionProposalBlockingReason {
                     source: "assurance".to_string(),
@@ -1938,9 +1939,9 @@ mod tests {
                     invariant_count: 1,
                 },
                 advisory: None,
-                assurance: Some(EvolutionProposalAssuranceSummary {
-                    decision: EvolutionProposalAssuranceDecision::Blocked,
-                    coverage: EvolutionProposalAssuranceCoverageSummary {
+                assurance: Some(assurance_summary_for_tests(
+                    EvolutionProposalAssuranceDecision::Blocked,
+                    EvolutionProposalAssuranceCoverageSummary {
                         detector: "strategy-a".to_string(),
                         suite_name: Some("evasion-breadth-v1".to_string()),
                         corpus_version: Some("2026-04-03".to_string()),
@@ -1948,14 +1949,14 @@ mod tests {
                         actual_catch_rate: Some(0.25),
                         actionable_gap_count: 2,
                     },
-                    solver: EvolutionProposalAssuranceSolverSummary {
+                    EvolutionProposalAssuranceSolverSummary {
                         required: true,
                         status: Some(EvolutionSolverProofStatus::Timeout),
                         allowed_statuses: vec![EvolutionSolverProofStatus::Proved],
                     },
-                    harvested_case_ids: vec!["case-a".to_string(), "case-b".to_string()],
-                    waiver: None,
-                }),
+                    vec!["case-a".to_string(), "case-b".to_string()],
+                    None,
+                )),
                 shadow_id: "shadow-a".to_string(),
                 shadow_passed: false,
                 suite_name: "evasion-breadth-v1".to_string(),
@@ -2123,9 +2124,9 @@ mod tests {
             population_dir.display().to_string();
         config.evolution.paths.evolution_proof_results_dir = proof_dir.display().to_string();
 
-        let mut assurance = EvolutionProposalAssuranceSummary {
-            decision: EvolutionProposalAssuranceDecision::Blocked,
-            coverage: EvolutionProposalAssuranceCoverageSummary {
+        let mut assurance = assurance_summary_for_tests(
+            EvolutionProposalAssuranceDecision::Blocked,
+            EvolutionProposalAssuranceCoverageSummary {
                 detector: "strategy-a".to_string(),
                 suite_name: Some("evasion-breadth-v1".to_string()),
                 corpus_version: Some("2026-04-03".to_string()),
@@ -2133,14 +2134,14 @@ mod tests {
                 actual_catch_rate: Some(0.25),
                 actionable_gap_count: 2,
             },
-            solver: EvolutionProposalAssuranceSolverSummary {
+            EvolutionProposalAssuranceSolverSummary {
                 required: true,
                 status: Some(EvolutionSolverProofStatus::Timeout),
                 allowed_statuses: vec![EvolutionSolverProofStatus::Proved],
             },
-            harvested_case_ids: vec!["case-a".to_string(), "case-b".to_string()],
-            waiver: None,
-        };
+            vec!["case-a".to_string(), "case-b".to_string()],
+            None,
+        );
         assurance.waiver = Some(active_waiver(&operator_id, secret_material, &assurance));
 
         FileEvolutionProposalStore::open(&queue_dir)

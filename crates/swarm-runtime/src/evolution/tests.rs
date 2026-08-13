@@ -10,9 +10,9 @@ use super::{
     EvolutionProposalReviewState, EvolutionSolverCounterexample, EvolutionSolverInvariantArtifact,
     EvolutionSolverProofStatus, FileEvolutionProofStore, FileEvolutionProposalStore,
     FormalSafetyGate, StrategyGenome, assurance_gate_block_reason, assurance_rollout_state,
-    build_assurance_waiver_summary, persist_harvested_assurance_cases, render_evolution_handoff,
-    render_evolution_proof, render_evolution_proposal, render_evolution_proposal_list,
-    validate_assurance_waiver,
+    assurance_summary_for_tests, build_assurance_waiver_summary, persist_harvested_assurance_cases,
+    render_evolution_handoff, render_evolution_proof, render_evolution_proposal,
+    render_evolution_proposal_list, validate_assurance_waiver,
 };
 use crate::canary::DefaultCanaryHarness;
 use crate::replay::{DefaultReplayHarness, FileVerificationStore};
@@ -34,9 +34,9 @@ fn sample_config() -> SwarmConfig {
 }
 
 fn passed_assurance_summary() -> EvolutionProposalAssuranceSummary {
-    EvolutionProposalAssuranceSummary {
-        decision: EvolutionProposalAssuranceDecision::Passed,
-        coverage: EvolutionProposalAssuranceCoverageSummary {
+    assurance_summary_for_tests(
+        EvolutionProposalAssuranceDecision::Passed,
+        EvolutionProposalAssuranceCoverageSummary {
             detector: "office_baseline_control".to_string(),
             suite_name: Some("evasion-breadth-v1".to_string()),
             corpus_version: Some("2026-04-03".to_string()),
@@ -44,14 +44,14 @@ fn passed_assurance_summary() -> EvolutionProposalAssuranceSummary {
             actual_catch_rate: Some(1.0),
             actionable_gap_count: 0,
         },
-        solver: EvolutionProposalAssuranceSolverSummary {
+        EvolutionProposalAssuranceSolverSummary {
             required: false,
             status: None,
             allowed_statuses: Vec::new(),
         },
-        harvested_case_ids: Vec::new(),
-        waiver: None,
-    }
+        Vec::new(),
+        None,
+    )
 }
 
 fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
@@ -137,7 +137,7 @@ fn persist_blocked_assurance_proposal(queue_dir: &Path, proposal_id: &str) {
     let store = FileEvolutionProposalStore::open(queue_dir).unwrap();
     let mut tampered = store.load(proposal_id).unwrap().unwrap().report;
     let mut assurance = tampered.assurance.unwrap();
-    assurance.decision = EvolutionProposalAssuranceDecision::Blocked;
+    assurance.set_decision_for_tests(EvolutionProposalAssuranceDecision::Blocked);
     assurance.coverage.actual_catch_rate = Some(0.25);
     assurance.coverage.actionable_gap_count = 2;
     assurance.harvested_case_ids = vec!["case-a".to_string(), "case-b".to_string()];
@@ -514,7 +514,7 @@ async fn evolution_queue_creates_pending_review_proposal() {
             .report
             .assurance
             .as_ref()
-            .map(|summary| summary.decision),
+            .map(|summary| summary.decision()),
         Some(EvolutionProposalAssuranceDecision::Passed)
     );
     assert!(render_evolution_proposal(&proposal.report).contains("Evolution Proposal"));
@@ -642,7 +642,7 @@ async fn evolution_queue_blocks_when_assurance_coverage_floor_is_not_met() {
             .report
             .assurance
             .as_ref()
-            .map(|summary| summary.decision),
+            .map(|summary| summary.decision()),
         Some(EvolutionProposalAssuranceDecision::Blocked)
     );
     assert!(
@@ -717,7 +717,7 @@ async fn evolution_queue_blocks_when_solver_summary_is_required() {
             .report
             .assurance
             .as_ref()
-            .map(|summary| summary.decision),
+            .map(|summary| summary.decision()),
         Some(EvolutionProposalAssuranceDecision::Blocked)
     );
     assert!(
@@ -1240,7 +1240,7 @@ async fn evolution_handoff_blocks_when_assurance_lineage_is_unsatisfied() {
         .unwrap()
         .report;
     let mut assurance = tampered.assurance.unwrap();
-    assurance.decision = EvolutionProposalAssuranceDecision::Blocked;
+    assurance.set_decision_for_tests(EvolutionProposalAssuranceDecision::Blocked);
     assurance.harvested_case_ids = vec!["case-a".to_string()];
     tampered.assurance = Some(assurance);
     tampered.blocking_reasons = Vec::new();
@@ -1669,9 +1669,9 @@ async fn evolution_handoff_launch_rejects_missing_assurance_lineage() {
 // --- Assurance gate unit tests ---
 
 fn blocked_assurance_summary(gap_count: usize) -> EvolutionProposalAssuranceSummary {
-    EvolutionProposalAssuranceSummary {
-        decision: EvolutionProposalAssuranceDecision::Blocked,
-        coverage: EvolutionProposalAssuranceCoverageSummary {
+    assurance_summary_for_tests(
+        EvolutionProposalAssuranceDecision::Blocked,
+        EvolutionProposalAssuranceCoverageSummary {
             detector: "office_baseline_control".to_string(),
             suite_name: Some("evasion-breadth-v1".to_string()),
             corpus_version: Some("2026-04-03".to_string()),
@@ -1679,14 +1679,14 @@ fn blocked_assurance_summary(gap_count: usize) -> EvolutionProposalAssuranceSumm
             actual_catch_rate: Some(0.50),
             actionable_gap_count: gap_count,
         },
-        solver: EvolutionProposalAssuranceSolverSummary {
+        EvolutionProposalAssuranceSolverSummary {
             required: false,
             status: None,
             allowed_statuses: Vec::new(),
         },
-        harvested_case_ids: Vec::new(),
-        waiver: None,
-    }
+        Vec::new(),
+        None,
+    )
 }
 
 fn waiver_config() -> SwarmConfig {
@@ -2071,7 +2071,7 @@ async fn harvested_solver_counterexample_declares_a_class_a_safety_invariant_rea
     // Blocked, but with the coverage half already satisfied, so the solver
     // harvest is the only thing that runs and the only thing that writes.
     let mut assurance = passed_assurance_summary();
-    assurance.decision = EvolutionProposalAssuranceDecision::Blocked;
+    assurance.set_decision_for_tests(EvolutionProposalAssuranceDecision::Blocked);
 
     let case_ids = persist_harvested_assurance_cases(
         &config_path,
