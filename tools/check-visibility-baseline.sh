@@ -127,23 +127,43 @@ HEAD_REV="${STS_VISIBILITY_HEAD_REV:-}"
 # caught. Splitting the key further (by enclosing `impl` block) is the fix if
 # that ever matters; it did not seem worth the parser.
 ALLOWED_FILE="$(mktemp "${TMPDIR:-/tmp}/swarm-visibility-allowed-XXXXXX")"
+WIDENINGS_FILE=""
+COLLISIONS_FILE=""
 BASE_RESTRICTED="$(mktemp "${TMPDIR:-/tmp}/swarm-visibility-base-restricted-XXXXXX")"
 BASE_PUB="$(mktemp "${TMPDIR:-/tmp}/swarm-visibility-base-pub-XXXXXX")"
 HEAD_PUB="$(mktemp "${TMPDIR:-/tmp}/swarm-visibility-head-pub-XXXXXX")"
 RESTRICTED_ONLY="$(mktemp "${TMPDIR:-/tmp}/swarm-visibility-restricted-only-XXXXXX")"
 WIDENED="$(mktemp "${TMPDIR:-/tmp}/swarm-visibility-widened-XXXXXX")"
-trap 'rm -f "$ALLOWED_FILE" "$BASE_RESTRICTED" "$BASE_PUB" "$HEAD_PUB" "$RESTRICTED_ONLY" "$WIDENED"' EXIT
+trap 'rm -f "$ALLOWED_FILE" "$WIDENINGS_FILE" "$COLLISIONS_FILE" "$BASE_RESTRICTED" "$BASE_PUB" "$HEAD_PUB" "$RESTRICTED_ONLY" "$WIDENED"' EXIT
 
-cat >"$ALLOWED_FILE" <<'EOF'
+# The two groups are kept in SEPARATE heredocs so the success line can COUNT
+# them instead of stating them. The first version of that line read
+# "3 accepted widenings and 5 same-file name collisions" with both numbers as
+# string literals, which meant two proposed success criteria elsewhere in the
+# repo ("still reports three accepted widenings, not four") could not fail on
+# the condition they named: add a fourth widening AND its allowlist line and the
+# script exits 0 while still printing "3". The gate's invariant was always
+# enforced -- a non-allowlisted widening exits 1, a stale allowlist line exits 1
+# -- but a count nobody derives is a claim, not a measurement, and this repo has
+# shipped ten defects of that exact shape.
+WIDENINGS_FILE="$(mktemp "${TMPDIR:-/tmp}/swarm-visibility-widenings-XXXXXX")"
+COLLISIONS_FILE="$(mktemp "${TMPDIR:-/tmp}/swarm-visibility-collisions-XXXXXX")"
+
+cat >"$WIDENINGS_FILE" <<'EOF'
 config.rs fn kill_chain_sequence_profile
 config.rs fn validate_all_detector_profiles
+escalation.rs fn standard_threat_classes
+EOF
+
+cat >"$COLLISIONS_FILE" <<'EOF'
 config/bridges.rs fn validate
 config/response.rs fn validate
-escalation.rs fn standard_threat_classes
 evolution/stores.rs fn open
 evolution/stores.rs fn persist
 substrate.rs fn set_admitted_identities
 EOF
+
+cat "$WIDENINGS_FILE" "$COLLISIONS_FILE" >"$ALLOWED_FILE"
 sort -o "$ALLOWED_FILE" "$ALLOWED_FILE"
 
 if ! git rev-parse --verify --quiet "${BASE_REV}^{commit}" >/dev/null; then
@@ -279,6 +299,8 @@ if [[ "$status" -ne 0 ]]; then
   exit "$status"
 fi
 
-# 3 accepted widenings + 5 same-file name collisions; the message separates them
-# because "8 accepted widenings" would misreport the invariant's actual state.
-echo "visibility baseline holds in ${near}: 3 accepted widenings and 5 same-file name collisions since ${BASE_REV}, no others"
+# Both counts are DERIVED from the two allowlist groups, never written as
+# literals: a success line whose numbers are typed in is a claim the gate cannot
+# check, and this file exists because a gate that could not fail printed
+# "no others" over 152 exempt declarations.
+echo "visibility baseline holds in ${near}: $(wc -l <"$WIDENINGS_FILE" | tr -d ' ') accepted widenings and $(wc -l <"$COLLISIONS_FILE" | tr -d ' ') same-file name collisions since ${BASE_REV}, no others"
