@@ -24,6 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 use swarm_core::BridgeStatusSnapshot;
 use swarm_core::ThreatClass;
 use swarm_core::agent::AgentHealthEntry;
@@ -69,7 +70,6 @@ use swarm_runtime::startup_attestation::{
     StartupAttestationComponentReport, StartupAttestationReport,
 };
 use swarm_runtime::strategy::DefaultStrategyScorecardHarness;
-use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 use swarm_spine::{
     CorrelatedIncident, FalsePositiveMeasurement, IncidentStore, InvestigationBundle,
     InvestigationBundleStore, ReplayBundleStore,

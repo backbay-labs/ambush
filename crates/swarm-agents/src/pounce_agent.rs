@@ -1,3 +1,4 @@
+use crate::tom_agent::{GovernanceDecision, GovernancePolicy};
 use async_trait::async_trait;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
@@ -13,7 +14,6 @@ use swarm_core::config::{
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{AgentId, HuntId, ResponseAction, SwarmAction};
 use swarm_policy::static_gate::scope_for_response_action;
-use swarm_runtime::tom_agent::{GovernanceDecision, GovernancePolicy};
 
 pub struct PounceAgent {
     id: AgentId,

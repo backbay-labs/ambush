@@ -4,12 +4,12 @@ use ed25519_dalek::SigningKey;
 use serde_json::json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
-use swarm_core::agent::{AgentHealth, AgentHealthEntry, AgentRole};
-use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
-use swarm_runtime::tom_agent::{
+use swarm_agents::tom_agent::{
     GovernanceDecision, GovernancePolicy, GovernancePolicyConfig, GovernanceRuntimeEvent,
     PartitionState,
 };
+use swarm_core::agent::{AgentHealth, AgentHealthEntry, AgentRole};
+use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 
 fn unique_persistence_path() -> std::path::PathBuf {
     let suffix = SystemTime::now()

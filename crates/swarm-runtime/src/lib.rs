@@ -4,39 +4,47 @@
 //! detection stays in Rust, policy stays deterministic, and live response
 //! execution is capability-scoped.
 //!
-//! # Four agent roles are still declared here (SPLIT-03, phase 282)
+//! # Three agent roles are still declared here (SPLIT-03, phase 282)
 //!
 //! SPLIT-03 moved the `*_agent` role implementations to `swarm-agents`, so that
 //! consumers of the composition root stop compiling behaviour they never call.
-//! Four of the eight went: `pounce`, `stalker`, `weaver`, `whisker`. Four did
-//! not, and are declared below with a marker on each -- `calico_agent`,
-//! `kitten_agent`, `sphinx_agent`, `tom_agent`.
+//! Five of the eight have gone: `pounce`, `stalker`, `weaver`, `whisker`, and now
+//! `tom`. Three did not, and are declared below with a marker on each --
+//! `calico_agent`, `kitten_agent`, `sphinx_agent`.
 //!
 //! THEY ARE NO LONGER PINNED. `ingest/` was what held them, and SPLIT-05 took it
 //! out of this crate. The one non-test back-edge ADR 0004 named --
 //! `ingest/providence_handlers.rs` -> `kitten_agent::route_feedback_signal` --
 //! is now a forward edge from `swarm-ingest-runtime` into this crate, which is
-//! the direction Cargo permits. Nothing outside the four files names them from
-//! non-test code here:
+//! the direction Cargo permits. Nothing outside the three files names them here
+//! at all, in test code or otherwise:
 //!
 //! ```text
-//! $ grep -rn --include='*.rs' 'crate::\(calico\|kitten\|sphinx\|tom\)_agent' \
+//! $ grep -rn --include='*.rs' 'crate::\(calico\|kitten\|sphinx\)_agent' \
 //!     crates/swarm-runtime/src/ | grep -v '_agent.rs:' | grep -v '//!'
-//! crates/swarm-runtime/src/dispatcher.rs:1400: use crate::tom_agent::{...};
+//! $
 //! ```
 //!
-//! and that single hit opens at `dispatcher.rs:1390` under `#[cfg(test)]`, so it
-//! can reach `swarm_agents` through the dev-dependency edge this crate already
-//! carries. What remains is a closed group: `sphinx` and `kitten` read `calico`,
+//! What remains is a closed group: `sphinx` and `kitten` read `calico`,
 //! `kitten`'s test module reads `sphinx`, and nothing else in this crate reads
-//! any of them. All four can move to `swarm-agents` together, in one commit,
-//! with no widening -- the nine `pub(crate)` `calico_agent` items ADR 0004
-//! costed stay `pub(crate)` once `calico` and `sphinx` are in the same crate
-//! again, which was the whole reason for waiting.
+//! any of them. The three move to `swarm-agents` together, in one commit, with
+//! no widening -- the nine `pub(crate)` `calico_agent` items ADR 0004 costed stay
+//! `pub(crate)` once `calico` and `sphinx` are in the same crate again, which was
+//! the whole reason for waiting. Splitting that commit up is what costs: moving
+//! `calico` first puts `swarm_agents::calico_agent` in this crate's non-test code
+//! and Cargo rejects the manifest, and moving either reader first widens the nine.
+//!
+//! `tom` did not have to wait for the group. It named nothing in this crate --
+//! `grep -oE '(crate|super)::[A-Za-z_:]+' src/tom_agent.rs` printed only its own
+//! file-local `super::now_ms` -- and its `GovernanceAuthority` and
+//! `SealedGovernanceAuthority` impls name `swarm-policy` directly, so the seal is
+//! satisfied from `swarm-agents` unchanged. `dispatcher.rs`'s one reference to it
+//! was `#[cfg(test)]` and now reaches `swarm_agents::tom_agent` through the
+//! dev-dependency edge this crate already carries.
 //!
 //! IF THIS CHANGES: nothing here blocks it any more, so the next SPLIT-03 commit
 //! is the one that deletes this section. The progress measure is unchanged --
-//! `ls crates/swarm-runtime/src/*_agent.rs | wc -l` prints 4 today and has to
+//! `ls crates/swarm-runtime/src/*_agent.rs | wc -l` prints 3 today and has to
 //! reach 0 -- but it is now a matter of doing the move, not of unblocking it.
 //! The argument for why it was blocked, and what it would have cost to force
 //! `sphinx` out early, is in
@@ -117,7 +125,6 @@ pub mod sphinx_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 pub mod startup_attestation;
 pub mod strategy;
 pub mod threat_intel_runtime;
-pub mod tom_agent; // pinned by `ingest/` until SPLIT-05; see the crate doc
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

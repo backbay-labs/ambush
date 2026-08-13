@@ -35,29 +35,49 @@
 //! keep constructing concrete agents; it is not a licence to name them in
 //! non-test code.
 //!
-//! # Why only four roles live here
+//! # Which roles live here
 //!
-//! Four of the eight roles moved: `pounce`, `stalker`, `weaver`, `whisker`.
-//! `calico`, `kitten`, `sphinx` and `tom` are pinned inside `swarm-runtime` by
-//! `ingest/`, which calls into them from non-test code. One such call is left:
+//! Five of the eight roles are here: `pounce`, `stalker`, `tom`, `weaver`,
+//! `whisker`. Three are not yet -- `calico`, `kitten`, `sphinx` -- and they are a
+//! closed group that has to cross in one commit.
 //!
-//! - `ingest/providence_handlers.rs` calls `kitten_agent::route_feedback_signal`
+//! `tom` came across on its own because it names nothing in the composition root:
 //!
-//! The second, `ingest/mod.rs`'s `Arc<tom_agent::GovernancePolicy>`, was removed
-//! in SPLIT-05 by routing that surface through
-//! `swarm_policy::governance::GovernanceAuthority`; `tom`'s remaining holders in
-//! the root are both `#[cfg(test)]` and reach this crate over the dev-dependency
-//! edge. That is a back-edge. Moving `kitten` today would put a normal
-//! `swarm-agents` dependency in the root's manifest and produce the cycle above.
-//! `calico` is pinned transitively (`kitten_agent` parses calico payloads), and
-//! `sphinx` is pinned by `calico` -- moving `sphinx` alone would force nine
-//! `pub(crate)` items in `calico_agent` to become permanent public API purely to
-//! satisfy an ordering constraint.
+//! ```text
+//! $ grep -oE '(crate|super)::[A-Za-z_:]+' crates/swarm-runtime/src/tom_agent.rs | sort -u
+//! super::now_ms
+//! ```
 //!
-//! `ingest/` is SPLIT-05's file set. The remaining four roles follow it, not this
-//! commit.
+//! and `super::now_ms` is `tom_agent`'s own file-local helper, reached from its
+//! `#[cfg(test)]` module. Its two trait impls both name their traits through the
+//! defining crate rather than through the root -- `swarm_policy::governance::
+//! sealed::SealedGovernanceAuthority` and `GovernanceAuthority` -- so the seal is
+//! satisfied from here exactly as it was from there.
+//!
+//! The other three cannot be split apart. `sphinx` and `kitten` both read
+//! `calico`, and all nine of the `calico_agent` items they read are `pub(crate)`:
+//!
+//! ```text
+//! sphinx -> calico   CalicoDeceptionInteractionPayload, CalicoDeceptionInventoryPayload,
+//!                    CalicoLifecycleStage, CalicoMonitoringPayload,
+//!                    CALICO_DECEPTION_INTERACTION_SCHEMA, CALICO_DECEPTION_INVENTORY_SCHEMA,
+//!                    CALICO_DECEPTION_INVENTORY_THREAT_CLASS,
+//!                    parse_calico_deception_interaction, parse_calico_deception_inventory
+//!                    -- every one of the nine `pub(crate)` items the file declares
+//! kitten -> calico   parse_calico_deception_interaction (non-test),
+//!                    CalicoDeceptionInteractionPayload, CalicoLifecycleStage,
+//!                    CALICO_DECEPTION_INTERACTION_SCHEMA (test)
+//! kitten -> sphinx   SphinxAgent (test)
+//! ```
+//!
+//! Moving `calico` first puts `swarm_agents::calico_agent` in the root's non-test
+//! code and Cargo rejects the manifest. Moving either reader first leaves it
+//! naming `swarm_runtime::calico_agent::*` across the crate line, which widens
+//! those `pub(crate)` items to permanent public API. One commit for the three is
+//! the only order that is neither a cycle nor a widening.
 
 pub mod pounce_agent;
 pub mod stalker_agent;
+pub mod tom_agent;
 pub mod weaver_agent;
 pub mod whisker_agent;

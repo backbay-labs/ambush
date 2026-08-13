@@ -94,9 +94,10 @@ pub mod sealed {
 /// # What the trait widened, and why it is sealed
 ///
 /// This is a security-relevant extension point, and it did not exist before SPLIT-03.
-/// The dispatcher used to install one concrete type,
-/// `swarm_runtime::tom_agent::GovernancePolicy`, whose enforcement logic is the only
-/// thing that could answer [`GovernanceAuthority::authorize_partition_request`]. That
+/// The dispatcher used to install one concrete type, `tom_agent::GovernancePolicy`
+/// (`swarm_runtime::` then, `swarm_agents::` since SPLIT-03 moved the role out), whose
+/// enforcement logic is the only thing that could answer
+/// [`GovernanceAuthority::authorize_partition_request`]. That
 /// method returning `Ok(true)` is what lets a destructive action proceed while the
 /// governance quorum is partitioned, so an arbitrary implementation installed through
 /// `AgentDispatcher::with_governance_policy` could approve every partition-time

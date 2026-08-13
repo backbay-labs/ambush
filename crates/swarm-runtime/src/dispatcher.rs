@@ -1397,7 +1397,6 @@ mod tests {
     };
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
-    use crate::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
     use crate::{
         StrategyProposalRouteError, agent_tick_error_boundary, agent_tick_error_role,
         agent_tick_panic_error,
@@ -1409,6 +1408,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+    use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
     use swarm_core::agent::{
         AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
         SwarmEvent,

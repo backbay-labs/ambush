@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use swarm_agents::pounce_agent::PounceAgent;
 use swarm_agents::stalker_agent::StalkerAgent;
+use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
 use swarm_agents::weaver_agent::WeaverAgent;
 use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::agent::{AgentRole, SwarmAgent, SwarmModeState};
@@ -32,7 +33,6 @@ use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
 use swarm_runtime::sphinx_agent::SphinxAgent;
 use swarm_runtime::startup_attestation::{StartupAttestationFailure, StartupAttestationReport};
 use swarm_runtime::threat_intel_runtime::ThreatIntelFeedRuntimeRegistry;
-use swarm_runtime::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
 use swarm_runtime_http::serve::serve_with_listener;
 
 const RELOAD_DEBOUNCE_MS: u64 = 500;

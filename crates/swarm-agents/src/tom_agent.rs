@@ -21,8 +21,8 @@ use swarm_policy::ActionRequest;
 use swarm_policy::governance::{GovernanceAuthority, GovernanceRuntimeEventRecord};
 // Both types are declared in `swarm-policy` as of SPLIT-05, so `GovernanceAuthority`
 // can name its own return type. Re-exported rather than merely imported, because the
-// paths `swarm_runtime::tom_agent::{PartitionState, GovernanceStatusReport}` are what
-// this crate's callers and integration tests already spell.
+// paths `swarm_agents::tom_agent::{PartitionState, GovernanceStatusReport}` are what
+// this module's callers and integration tests already spell.
 pub use swarm_policy::governance::{GovernanceStatusReport, PartitionState};
 use swarm_policy::static_gate::scope_for_response_action;
 
