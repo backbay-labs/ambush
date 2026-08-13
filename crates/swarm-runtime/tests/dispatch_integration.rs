@@ -1269,7 +1269,25 @@ async fn partitioned_request_response_rejects_expired_contingency_lease()
         .expect("current time should be after unix epoch")
         .as_millis() as i64;
     let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
-        contingency_lease_ttl_ms: 200,
+        // 1000ms, was 200ms. This test needs the lease to be ALIVE when `can_act`
+        // issues it and EXPIRED after the sleep, so two margins must hold at once:
+        //   setup_time < ttl        (or the lease is already dead at issue)
+        //   sleep       > ttl       (or it has not expired when re-checked)
+        // At 200/250 the second margin was 50ms and the first was whatever the
+        // machine took. On a shared CI runner the FIRST one broke: the lease expired
+        // during setup and `can_act` returned Veto("...without active contingency
+        // lease"), panicking at the `other =>` arm. Locally it passed 5/5 in 0.3s.
+        // 1000/2000 gives ~1000ms of slack on both sides for ~2s of wall clock.
+        //
+        // The real fix is not here. `GovernancePolicy::can_act` reads the clock
+        // itself (tom_agent.rs:508, `preview_matching_contingency_lease(.., now_ms())`)
+        // while the lease's expiry derives from the caller-supplied `base_ms`, so
+        // setup time is charged against the TTL and no test can advance time without
+        // sleeping. v1.81 phase 292's DCORE-02 requires precisely that seam --
+        // "can_act no longer calls now_ms() internally; the clock is caller-supplied"
+        // -- at which point this becomes two supplied timestamps and the race is gone
+        // rather than merely widened.
+        contingency_lease_ttl_ms: 1000,
         contingency_blast_radius_cap: 1,
     }));
     governance_policy.register_governor(
@@ -1296,7 +1314,8 @@ async fn partitioned_request_response_rejects_expired_contingency_lease()
         } => lease,
         other => panic!("expected contingency lease, got {other:?}"),
     };
-    std::thread::sleep(Duration::from_millis(250));
+    // 2000ms against a 1000ms TTL: 1000ms past expiry, matching the setup-side slack.
+    std::thread::sleep(Duration::from_millis(2000));
 
     let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
     let executor = RecordingExecutor::default();

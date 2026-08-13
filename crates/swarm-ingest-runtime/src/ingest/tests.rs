@@ -2777,7 +2777,11 @@ async fn generated_python_client_smoke_tests_live_platform_router() {
     })
     .await
     .unwrap()
-    .unwrap();
+    .expect(
+        "`uv` must be on PATH for the generated python client smoke test. CI installs it in \
+         the test job; locally see https://docs.astral.sh/uv/. Without this message the \
+         absence surfaced as a bare NotFound naming neither the tool nor the reason.",
+    );
 
     let _ = shutdown_tx.send(());
     let _ = server.await;
