@@ -899,10 +899,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 #### Z3-Backed Promotion Gate
 
 - [ ] **ZGATE-01**: `require_solver_result_for_promotion` is added to config, distinct from `evolution.assurance.require_solver_summary`, defaulting to `true` in the curated ruleset.
-- [ ] **ZGATE-02**: `crates/swarm-evolution/src/promotion.rs` rejects a candidate whose `solver_summary` is `None` when the gate is enabled; today `promotion.rs` never references `solver_summary` at all (verified: 0 occurrences).
+- [ ] **ZGATE-02**: `crates/swarm-runtime/src/promotion.rs` rejects a candidate whose `solver_summary` is `None` when the gate is enabled; today `promotion.rs` never references `solver_summary` at all (verified: 0 occurrences). PATH CORRECTED 2026-08-13: `crates/swarm-evolution/src/promotion.rs` does not exist and never did — that crate owns four modules and re-exports `promotion` from `swarm-runtime` (`swarm-evolution/src/lib.rs:36-39`). The 0-occurrence measurement is correct for the real file, which is 2,901 lines and also has 0 occurrences of `z3`.
 - [ ] **ZGATE-03**: A `CustomZ3` bundle evaluated through the `z3`-feature-off path counts as no solver result, so a build without the feature fails closed rather than promoting on an unverified stub.
 - [ ] **ZGATE-04**: The promotion report prints the solver proof id and attestation hash, or an explicit "NO SOLVER RESULT RECORDED" line.
-- [ ] **ZGATE-05**: `crates/swarm-evolution/tests/promotion_solver_gate.rs` covers denied-missing-summary, denied-feature-disabled, and allowed-with-proof, asserting on concrete variants rather than log lines.
+- [ ] **ZGATE-05**: `crates/swarm-runtime/tests/promotion_solver_gate.rs` covers denied-missing-summary, denied-feature-disabled, and allowed-with-proof, asserting on concrete variants rather than log lines. PATH CORRECTED 2026-08-13: `crates/swarm-evolution/tests/` does not exist. A test at the original path would compile, since `swarm_evolution::promotion` is a live re-export, but it would sit under a crate containing none of the code it exercises and would silently change meaning when a later SPLIT moves `promotion` for real.
 
 ### Provenance Memory And Correlation (v1.82)
 
@@ -942,7 +942,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 - [x] **BFT-01**: `recommended_max_faulty` in `crates/swarm-consensus/src/lib.rs:65` is corrected from `(committee_size - 1) / 2` to `(committee_size - 1) / 3` to match the module's own documented 2f+1-of-3f+1 model; a regression table asserts `recommended_max_faulty(4)==1`, `(7)==2`, `(10)==3`, `(13)==4`.
 - [x] **BFT-02**: A round with a correctly sized `3f+1` committee still reaches `commits.len() == committee.threshold()` after excluding the maximum tolerable number of Byzantine members; today `ConsensusCommittee::threshold()` never shrinks after `exclude_sender`, so ejecting one bad actor can strand a round below its own threshold, and the existing Byzantine test never asserts the round still commits.
-- [ ] **BFT-03**: `simulate_governance_commit` (which today takes `governors: &BTreeMap<AgentId, SigningKey>`, holding every governor's private key in one process) is removed from the production path; governors exchange `ConsensusSignedEnvelope` over the pheromone substrate, and no production path holds more than one governor's key in memory.
+- [ ] **BFT-03**: `simulate_governance_commit` (at `crates/swarm-agents/src/tom_agent.rs:1132` after phase 282, which today takes `governors: &BTreeMap<AgentId, SigningKey>`, holding every governor's private key in one process — note this describes the TYPE, not the deployed topology: production registers exactly one governor, so `state.governors.len() == 1` and every multi-key invocation is from tests) is removed from the production path; governors exchange `ConsensusSignedEnvelope` over the pheromone substrate, and no production path holds more than one governor's key in memory.
 - [ ] **BFT-04**: `GovernancePolicy::can_act` drives authorization through the networked round while preserving the existing `GovernanceDecision::{Allow, Veto}` API and receipt shape, so `dispatcher.rs` and the documented receipt-backed flow are unchanged for callers.
 - [ ] **BFT-05**: A seeded message-loss and delay harness proves commit completes within `round_timeout_ms * (max_faulty + 1)` in the common case, and the phase states explicitly which fault classes it did not exercise.
 
@@ -973,8 +973,11 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Reversible Quarantine Execution
 
-- [x] **QRT-01**: `crates/swarm-response` gains a real executor for `QuarantineFile`, `SuspendProcess`, `IsolateHost`, and `TerminateUserSession` that persists a quarantine lease carrying blast radius, rollback plan, governance receipt, and expiry; today `ResponseBlastRadiusPreview` and `ResponseRollbackPreview` exist and are surfaced over HTTP, but no rollback executor exists anywhere in `swarm-response` (verified: zero non-preview rollback references).
-- [x] **QRT-02**: `execute_rollback` performs the concrete inverse action per rollback step kind and emits a rollback receipt chained to the original governance receipt id.
+- [ ] **QRT-01**: `crates/swarm-response` gains a real executor for `QuarantineFile`, `SuspendProcess`, `IsolateHost`, and `TerminateUserSession` that persists a quarantine lease carrying blast radius, rollback plan, governance receipt, and expiry.
+  UNCHECKED 2026-08-13, was marked `[x]` in error. 4d03543 added the TYPES (`ContainmentLease`, `ContainmentLedger`, `RollbackExecutor`, `RollbackReceipt`) and nothing that uses them: `rg -l 'ContainmentLease|ContainmentLedger|RollbackExecutor|RollbackReceipt|RollbackTrigger'` returns exactly `crates/swarm-response/src/lib.rs` (the re-export at :35-38) and `crates/swarm-response/src/rollback.rs` (the definitions plus their own `#[cfg(test)]` tests). Zero production code constructs a lease, so "persists a quarantine lease" is unmet for all four actions. The original trailing clause ("no rollback executor exists anywhere in `swarm-response`, verified: zero non-preview rollback references") was true before 4d03543 and is now false; the accurate measurement is that rollback types exist and are constructed only in tests.
+- [ ] **QRT-02**: The rollback executor performs the concrete inverse action per rollback step kind and emits a rollback receipt chained to the original governance receipt id.
+  UNCHECKED 2026-08-13, was marked `[x]` in error, and RENAMED: there is no symbol `execute_rollback` anywhere in the tree (`rg execute_rollback` -> 0 hits). The shipped API is the trait method `RollbackExecutor::rollback` at `crates/swarm-response/src/rollback.rs:110`. Half of this is real and half is not: the receipt chaining exists (`origin_receipt_id` at rollback.rs:165), but `SandboxRollbackExecutor::rollback` (rollback.rs:126-179) never branches on `ResponseRollbackStepKind` — it copies `step.kind` into the outcome and performs no side effect at all. There is no adapter-backed rollback executor.
+  Two constraints for the implementer, both measured: `CrowdStrikeRtrAdapter::execute` (crowdstrike_rtr.rs:453-481) handles only `IsolateHost`, `KillProcess` and `QuarantineFile`, so `SuspendProcess` and `TerminateUserSession` hit `unsupported_receipt` and cannot be reversed on a CrowdStrike deployment. And `TerminateUserSession`'s inverse is not an inverse — `service/preview.rs:295-305` says outright "the terminated session cannot be resumed" — so `RollbackReceipt::fully_reversed()` would overclaim for it.
 - [ ] **QRT-03**: Every quarantine lease carries a mandatory expiry mirroring the existing contingency-lease TTL pattern; a background sweep rolls back automatically on expiry with zero operator action.
 - [ ] **QRT-04**: `swarmctl quarantine release <lease_id>` performs manual early rollback through the same governance signing path; an integration test executes containment, verifies effect, rolls back both manually and by TTL, and verifies both receipts.
 
@@ -1533,8 +1536,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | DISTGOV-02 | Phase 303 | Pending |
 | DISTGOV-03 | Phase 303 | Pending |
 | DISTGOV-04 | Phase 303 | Pending |
-| QRT-01 | Phase 320 | Satisfied |
-| QRT-02 | Phase 320 | Satisfied |
+| QRT-01 | Phase 320 | Pending |
+| QRT-02 | Phase 320 | Pending |
 | QRT-03 | Phase 320 | Pending |
 | QRT-04 | Phase 320 | Pending |
 | IFC-01 | Phase 305 | Pending |

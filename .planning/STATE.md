@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.78
 milestone_name: Runtime Decomposition And TCB Boundary
-current_phase: 282
-current_phase_name: Crate Extraction From swarm-runtime
+current_phase: 320
+current_phase_name: Reversible Quarantine Execution
 current_plan: null
 status: active
-last_updated: "2026-08-10T00:00:00Z"
-last_activity: 2026-08-10
+last_updated: "2026-08-13T00:00:00Z"
+last_activity: 2026-08-13
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 0
   completed_plans: 0
-  percent: 75
+  percent: 100
 ---
 
 # State
@@ -27,15 +27,15 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 ## Current Position
 
-**Current Phase:** 282 — Crate Extraction From swarm-runtime
+**Current Phase:** 320 — Reversible Quarantine Execution (v1.78.1); phase 283 (TCB Boundary) is the remaining v1.78 phase
 **Total Phases:** 4 (280-283), plus 320-322 in v1.78.1
 **Current Plan:** None started yet
 **Total Plans in Phase:** TBD
 **Status:** Ready to plan
-**Last Activity:** 2026-08-10
-**Last Activity Description:** Merged PR #1 (feat/milestones-v1.74-v1.77, 29 commits) into main, making one authoritative ref carrying both the shipped v1.75-v1.77 implementation and the v1.78-v1.87 plan.
+**Last Activity:** 2026-08-13
+**Last Activity Description:** Merged phase 282 (0a09358) into main after a five-lens adversarial review — 15 findings raised, 9 survived independent refutation, 3 fixed as merge blockers. Then measured phases 320/321/322 against the code and found three of their recorded statuses false.
 
-Progress: [░░░░░░░░░░] 0%
+Progress: v1.78 phases 280/281/282 complete, 283 open; v1.78.1 phases 320/321/322 open
 
 ## Memory
 
@@ -57,7 +57,9 @@ Progress: [░░░░░░░░░░] 0%
 - v1.77 completed CrowdStrike RTR execution, Splunk HEC finding delivery, the compose-backed detect -> respond -> deliver proof, and the integration architecture validation pass.
 - The repo-owned proof now passes end-to-end through `bash tools/run-integration-proof.sh`, producing a replay bundle plus mocked CrowdStrike RTR and Splunk HEC delivery artifacts.
 - 2026-08-10: PR #1 merged into main. The v1.78-v1.87 roadmap was authored against the branch tree, not main's - its LOC premises (97,709 .rs / 22,762 .inc / 115,156 combined) match the branch exactly and main not at all. The merge preserves main's two shipped fixes: BFT (n-1)/3 (f55c3bd) and ContainmentLease/RollbackExecutor (4d03543).
-- Merged tree gates: `cargo build --workspace` exit 0, `cargo fmt --all -- --check` exit 0 (after one style commit), `cargo clippy --workspace --all-targets -- -D warnings` exit 0 with zero warnings.
+- v1.78 phase 282 COMPLETE (partial by design) and MERGED to main 2026-08-13 as 0a09358. `swarm-runtime/src` 120,431 -> 77,868 LOC; 16 -> 20 crates (`swarm-runtime-http` 10,381, `swarm-ingest-runtime` 17,956, `swarm-evolution` 7,066 real source replacing the facade, `swarm-runtime-workbench` 4,064, `swarm-agents` 3,366). Three cycles broken first: sealed `swarm_core::agent` tick trait, `OperatorSurfacePaths` moved to swarm-core, sealed `swarm_policy::governance::GovernanceAuthority` replacing the dispatcher's concrete Tom handle.
+- MERGE EVIDENCE for 282, measured not asserted: fmt/build/clippy `--all-targets -D warnings` all exit 0 with zero warnings; test lane 1 564 passed 0 failed, lane 2 562 passed 0 failed; and the test NAME SET is byte-identical to main's green CI run 31709806943 in BOTH directions — 1152 names, 0 added, 0 lost. That last check is the one that matters for a 47-rename code motion: commit b86576d records that root `#[cfg(test)]` items go invisible across a new crate edge, and a count alone would hide N lost against N gained.
+- - Merged tree gates: `cargo build --workspace` exit 0, `cargo fmt --all -- --check` exit 0 (after one style commit), `cargo clippy --workspace --all-targets -- -D warnings` exit 0 with zero warnings.
 
 ## Issues
 
@@ -78,14 +80,20 @@ Progress: [░░░░░░░░░░] 0%
 - Phase 284 COMPLETE 2026-08-11 (FIXTURE-01..04). The suite no longer writes into the repository: a full G1+G2 leaves all four drift assertions clean. Parallel phase work is now unblocked.
 - The kitten_agent flake was NOT prior-run state. `Option::unwrap_or` evaluates eagerly, so `load_source_seed` scanned every manifest under `experiments/` even when given an override, racing four `mutation::tests_autonomous` tests that write transient files there. 11 failures in 107 runs.
 - The CI drift gate now carries four assertions; the fourth (no empty directories anywhere) is unscoped and is what catches leaks the path-scoped checks miss.
-- Phase 320 is 2/4: QRT-01 and QRT-02 shipped in 4d03543. QRT-03 (TTL sweep) and QRT-04 (`swarmctl quarantine release`) remain.
-- Phase 321 is 2/5, NOT complete: f55c3bd's own message says "Implements BFT-01 and BFT-02". BFT-03 (remove `simulate_governance_commit`'s co-located-key path, still live at `crates/swarm-runtime/src/tom_agent.rs:1147`), BFT-04, and BFT-05 remain.
-- Phase 322 cannot run where it is sequenced: it gates `crates/swarm-evolution/src/promotion.rs`, which does not exist on the merged tree (`swarm-evolution` is the 8-line facade). Phase 282 must restore real source first.
+- CORRECTED 2026-08-13: phase 320 is 0/4, not 2/4. 4d03543 shipped TYPES ONLY — `rg -l 'ContainmentLease|ContainmentLedger|RollbackExecutor|RollbackReceipt'` returns only `swarm-response/src/lib.rs` (the re-export) and `swarm-response/src/rollback.rs` (definitions plus their `#[cfg(test)]` tests). Zero production code constructs a lease. `SandboxRollbackExecutor::rollback` never branches on `ResponseRollbackStepKind` and performs no side effect. The roadmap's own "highest-blast-radius gap" — containment with no undo — is fully open. See task #19.
+- Phase 321 is 2/5, NOT complete: f55c3bd's own message says "Implements BFT-01 and BFT-02". BFT-03, BFT-04, and BFT-05 remain. PATH CORRECTED 2026-08-13: `simulate_governance_commit` is at `crates/swarm-agents/src/tom_agent.rs:1132` after phase 282, not `swarm-runtime/src/tom_agent.rs:1147`.
+- CORRECTED 2026-08-13, was wrong on all three counts: phase 322 CAN run and always could. `promotion.rs` exists at `crates/swarm-runtime/src/promotion.rs` (2,901 lines) and phase 282 was never going to move it — ADR 0005 records that the crate root closes over all seven pinned evolution modules. The facade was 40 lines, not 8. The requirement text simply names the wrong path.
 - BFT-04 has no matching success criterion in the phase 321 ROADMAP block; criteria 1-4 cover BFT-01, BFT-02, BFT-03, BFT-05 only.
 - Phases 295, 300, and 304 are orphan roadmap rows with no body block and no mapped requirements; they are superseded by 322, 321, and 320 respectively.
 - `.gitignore` covers `crates/swarm-runtime/data/evolution-assurance-cases/reports/` but not the `crates/swarm-evolution/` twin, and the tracked `index.json` points at gitignored directories, so it dangles on a clean clone.
 - v1.74 remains deferred rather than completed; its structural-integrity work is preserved for later re-activation.
+- 2026-08-13: phase 282's own new gate `tools/check-visibility-baseline.sh` COULD NOT FAIL, found by the pre-merge review and fixed in 8186a08. Two holes, each proven by construction: (a) `const` was an item keyword but not a modifier, so every `pub const fn` normalized to the one token `const fn` — 90 restricted const fns invisible; (b) keys were `<keyword> <name>` with no path, and the baseline-`pub` exclusion then dropped any name shared anywhere in 20 crates — 20 tokens covering 152 of 829 restricted declarations, 18% of the surface, while the success line said "no others". Now keyed on `<path-under-src> <keyword> <name>` with the exclusion deleted outright. Subpath keying was chosen over crate keying because crate keying opens a NEW hole phase 283 will hit: a widening riding along with a cross-crate move keys to the old crate at baseline and the new one at HEAD, so it never matches. Verified by four constructed probes including that one.
+- METHOD NOTE, second instance of the same lesson: the wall-clock sweep failed three times by grepping identifiers. This gate failed the same way — it compared NAMES where it claimed to compare ITEMS. When a check subtracts one set from another, state what the subtraction MEANS in terms of identity, then construct a violation and confirm it exits non-zero. `tools/check-visibility-baseline.sh` now carries a self-test that pins its parser on every run, because a NORMALIZE regression is indistinguishable from a clean tree.
+- OPEN (task #17), CRITICAL and live: the automated evolution route reaches production promotion having never run the solver gate, and PERSISTS A FABRICATED ATTESTATION saying it passed. `selection.rs:1045` mints a proposal with `assurance: None, review_state: AcceptedForCanary` without calling `evaluate_proposal_assurance`; `crates/swarm-ingest-runtime/src/ingest/mod.rs:436-463` then fabricates `EvolutionProposalAssuranceSummary { decision: Passed, solver: { required: false, status: None } }` and writes it. `promotion.rs:690` does call `promotion_assurance_block_reason`, but that only reads the recorded `decision` field. So ZGATE-01/02 are the ONLY gate on that route, not a redundant second one.
+- OPEN (task #18), CRITICAL and live: `GovernancePolicy::can_act` fails OPEN when no governor signing key is registered, against CLAUDE.md's "live response must fail closed" contract. Production registers exactly one governor today (`swarm-runtime-http/src/bin/swarm_detect.rs:815` is the only `AgentRole::Tom` registration), so `state.governors.len() == 1` and the multi-key leak BFT-03 describes is a property of the TYPE, not of the deployment.
+- OPEN (task #20): CI never passes `--features z3`, so the entire solver lane (`evolution/formal_safety.rs:717-857`) is uncompiled, unlinted and unrun. Task #13's rlimit fix would land completely unverified. Same shape as task #11's python smoke test. Wire the lane WITH the fix, not after.
+- CORRECTED 2026-08-13: there are TEN `tools/check-*.sh` and CI runs SEVEN, not "nine and six" — phase 282 added and wired `check-visibility-baseline.sh` in the same commit. The three unwired ones are as filed (task #15), but wiring them AS-IS adds zero coverage: `check-adversary-emulation-coverage.sh` and `check-stigmergic-feedback-benchmark.sh` invoke `cargo test <filter>`, which exits 0 when the filter matches nothing, and every test they name already runs in the existing `test` job. Their published numbers (23 techniques, 100%) are asserted nowhere.
 
 ## Next Command
 
-Plan and execute Phase 282 (Crate Extraction From swarm-runtime). It now also owns INCFIX-02 and crates/swarm-cli/src/core.inc.
+Plan and execute Phase 320 (Reversible Quarantine Execution), which is 0/4 rather than 2/4 — see the correction above. Phase 283 (TCB Boundary) is the remaining v1.78 phase and is unblocked by 282's merge. Implementation-ready plans for 320, 321, 322 and task #15 were produced 2026-08-13 and each was independently critiqued; they carry measured file:line and name the requirement text that is factually wrong about the code.

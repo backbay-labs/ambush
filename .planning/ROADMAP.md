@@ -943,7 +943,7 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 
 - [x] **Phase 280: Verification Gate Repair** - Replace crate-wide clippy opt-outs with reviewed per-call-site allows, widen the panic contract beyond swarm-runtime, and stop the supply-chain check suppressing its own findings. (GATEFIX-02, GATEFIX-03, GATEFIX-04)
 - [x] **Phase 281: core.inc Elimination** - Replace the four 22,762-line `.inc` include files with ordinary modules and decompose the CLI into one module per command domain. (INCFIX-01, INCFIX-02, INCFIX-03)
-- [ ] **Phase 282: Crate Extraction From swarm-runtime** - Break three known dependency cycles, then extract HTTP, replay, workbench, agents, ingest, and the evolution lane into real crates. (SPLIT-01, SPLIT-03, SPLIT-06)
+- [x] **Phase 282: Crate Extraction From swarm-runtime** - Break three known dependency cycles, then extract HTTP, workbench, agents, ingest, and part of the evolution lane into real crates. Complete-as-scoped and merged 2026-08-13 (0a09358); SPLIT-02's replay half, 5 of 8 agents and 7 of 10 evolution modules do NOT move, each blocked by a trait inversion rather than by ordering, recorded in ADRs 0002-0008. (SPLIT-01, SPLIT-03, SPLIT-05)
 - [ ] **Phase 283: TCB Boundary And Layering Enforcement** - Name `swarm-policy` + `swarm-crypto` + `swarm-spine` as the trusted base and enforce the boundary in CI. (TCBOUND-01, TCBOUND-02, TCBOUND-03, TCBOUND-04)
 
 ### Phase 280: Verification Gate Repair
@@ -990,7 +990,7 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** Turn one 115,156-LOC crate (97,709 excluding `.inc`) into several. The seams exist as modules but three of them are cyclically coupled, so this phase breaks the cycles before cutting the crates.
 **Requirements:** SPLIT-01, SPLIT-02, SPLIT-03, SPLIT-04, SPLIT-05, SPLIT-06
 **Depends on:** Phase 281
-**Status:** Not started
+**Status:** Complete as scoped 2026-08-13, merged as 0a09358. MEASURED per criterion 4: swarm-runtime/src 120,431 -> 77,868; swarm-ingest-runtime 17,956; swarm-runtime-http 10,381; swarm-evolution 7,066 (real source, replacing the facade); swarm-runtime-workbench 4,064; swarm-agents 3,366. SPLIT-02's replay half, 5 of 8 agents and 7 of 10 evolution modules did NOT move: each needs a trait inversion, not code motion, and neither inversion can ride inside an extraction diff. SPLIT-06's LOC targets are arithmetically unreachable with the extractions SPLIT-01..05 name AND self-contradictory (landing SPLIT-04's seven modules in swarm-evolution breaches the same requirement's own 20,000 ceiling); re-derive them from coupling, not from a budget. Tracked as task #14.
 **Plans:** TBD
 **Success Criteria**:
 1. ORDERING CORRECTED 2026-08-12. The roadmap sequenced the self-contained extractions (http, replay, workbench) before the deeply-coupled ones (agents, evolution, ingest); the dependencies run the OTHER WAY and that order cannot work. Proven in part A by making Cargo say it: extracting replay while the evolution lane is still inside swarm-runtime yields `error: cyclic package dependency: package swarm-runtime depends on itself. Cycle: swarm-runtime -> swarm-runtime-replay -> swarm-runtime -> swarm-cli`, because replay imports `crate::service` which this criterion requires to STAY. 52 non-test references reach back into `crate::replay` from 24 files, overwhelmingly the evolution lane. A compile probe commenting out `pub mod replay;` produces 36 errors across 20 files.
@@ -1029,13 +1029,15 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 
 ### Phase 320: Reversible Quarantine Execution
 
-**Goal:** `QuarantineFile` dispatches to real EDR adapters while no rollback executor exists anywhere in `swarm-response` (verified: zero non-preview rollback references). The system can contain a host and cannot un-contain it. This is the highest-blast-radius gap in the codebase.
+**Goal:** `QuarantineFile` dispatches to real EDR adapters while nothing can reverse it. The system can contain a host and cannot un-contain it. This is the highest-blast-radius gap in the codebase.
+RESTATED 2026-08-13 to measured reality, the way 742206d restated phase 282 criterion 4: the original "no rollback executor exists anywhere in `swarm-response`" was true before 4d03543 and is false now. What is true today is that rollback TYPES exist and are constructed only in tests — zero production constructors of `ContainmentLease`, and `SandboxRollbackExecutor::rollback` never branches on `ResponseRollbackStepKind`, so it performs no inverse action.
 **Requirements:** QRT-01, QRT-02, QRT-03, QRT-04
 **Depends on:** v1.78 milestone complete
-**Status:** In progress - QRT-01/QRT-02 shipped in 4d03543; QRT-03/QRT-04 open
+**Status:** NOT STARTED. Corrected 2026-08-13: 4d03543 shipped types only — zero production code constructs a ContainmentLease, and SandboxRollbackExecutor::rollback performs no side effect. Phase 320 is 0/4, not 2/4. See task #19.
 **Plans:** TBD
 **Success Criteria**:
 1. Execute-and-rollback coverage exists for quarantine, suspend, isolate, and session-terminate, persisting a lease carrying blast radius, rollback plan, governance receipt, and expiry.
+   BASELINE MEASURED 2026-08-13, criterion is 0/4 not 4/4: all four actions EXECUTE (SandboxExecutor adapters.rs:19-35; HttpEdrAdapter http_edr.rs:68/89/128/140; WebhookAdapter webhook.rs:72-99) and all four have a DERIVED inverse plan (service/preview.rs:157, :268, :383, :462), but zero have executable rollback and zero persist a lease. Two known limits to state rather than paper over: CrowdStrike can reverse only 2 of the 4 (crowdstrike_rtr.rs:453-481), and `TerminateUserSession` has no true inverse — preview.rs:295-305 says the terminated session cannot be resumed.
 2. A lease past its TTL is auto-rolled-back by the background sweep within one sweep interval with no operator action.
 3. `swarmctl quarantine release <lease_id>` performs manual early rollback through the same governance signing path, and a tampered rollback receipt fails verification.
 4. An end-to-end test executes containment then both manual and TTL rollback and asserts the target resource is fully restored to its pre-containment state.
@@ -1045,7 +1047,7 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 **Goal:** `recommended_max_faulty` returns `(n-1)/2` instead of `(n-1)/3` at `crates/swarm-consensus/src/lib.rs:65`, and committee threshold never shrinks after exclusion, so ejecting one Byzantine member can strand a round below its own threshold. This is a live liveness defect in the path that gates destructive response.
 **Requirements:** BFT-01, BFT-02, BFT-03, BFT-04, BFT-05
 **Depends on:** Phase 320
-**Status:** In progress - BFT-01/BFT-02 shipped in f55c3bd; BFT-03/BFT-04/BFT-05 open
+**Status:** In progress - BFT-01/BFT-02 shipped in f55c3bd; BFT-03/BFT-04/BFT-05 open. The Goal paragraph below is STALE and contradicts this line: f55c3bd already fixed `recommended_max_faulty`, now at `crates/swarm-consensus/src/lib.rs:70` returning `(committee_size - 1) / 3`. Also in scope, found 2026-08-13: `can_act` fails OPEN when no governor key is registered (task #18), against CLAUDE.md's fail-closed contract.
 **Plans:** TBD
 **Success Criteria**:
 1. `recommended_max_faulty` computes `(n-1)/3`, with a regression table asserting 4->1, 7->2, 10->3, 13->4.
@@ -1055,7 +1057,9 @@ completed on 2026-04-12, and the next milestone has not been activated yet.
 
 ### Phase 322: Promotion Solver Gate
 
-**Goal:** `crates/swarm-evolution/src/promotion.rs` never references `solver_summary` (verified: zero occurrences), so an evolved detector can reach production with no recorded solver result while the Z3 lane runs and is ignored.
+**Goal:** `crates/swarm-runtime/src/promotion.rs` never references `solver_summary` (verified: zero occurrences), so an evolved detector can reach production with no recorded solver result while the Z3 lane runs and is ignored.
+PATH CORRECTED and BLOCKER WITHDRAWN 2026-08-13: this phase is executable now and always was. `crates/swarm-evolution/src/promotion.rs` does not exist; the real file is `crates/swarm-runtime/src/promotion.rs`, 2,901 lines, and its 0-occurrence measurement holds. STATE.md's claim that phase 282 had to "restore real source first" was wrong on all three counts.
+DEFECT FOUND 2026-08-13 that changes this phase's shape (task #17): the bypass is not merely a missing gate. `selection.rs:1045` mints a proposal with `assurance: None, review_state: AcceptedForCanary` without calling `evaluate_proposal_assurance`, and `crates/swarm-ingest-runtime/src/ingest/mod.rs:436-463` then FABRICATES `EvolutionProposalAssuranceSummary { decision: Passed, solver: { required: false, status: None } }` and persists it. So the automated route reaches promotion having never run the solver gate AND leaves an audit record affirming that it passed. Closing that fabrication is the part that closes the hole; ZGATE-01/02 alone would protect a route that is already protected.
 **Requirements:** ZGATE-01, ZGATE-02, ZGATE-03, ZGATE-04, ZGATE-05
 **Depends on:** Phase 321
 **Status:** Not started
