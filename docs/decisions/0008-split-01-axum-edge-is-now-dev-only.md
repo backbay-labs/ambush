@@ -41,26 +41,56 @@ Zero, where ADR 0002 measured 52. No lib or bin target in this crate names
 
 ### Counting the dev targets
 
-Two things make the naive count wrong, and the first version of this ADR hit
-both.
+Two independent defects make the naive count wrong, and the first version of
+this ADR hit both. They fail in different ways, which is the part worth
+recording: the **grep pattern** sets a ceiling on how many files can ever be
+reported, and **`--keep-going`** decides whether a run reliably reaches that
+ceiling.
 
-`--keep-going` is required. Without it cargo stops scheduling new units once a
-target fails, so what gets reported depends on which units happened to be in
-flight. Re-running the command this ADR originally printed, verbatim, on this
-tree returns three of the seven files:
+#### The grep pattern sets the ceiling, and alone explains the missing file
+
+The grep must not be for `unresolved import`. Deleting the `axum` line and
+compiling every target raises two different resolution errors, and which one a
+file gets depends on the shape of its `use`:
+
+- `use axum::{Json, Router};` or `use axum::serve;` names an item at the crate
+  root, so it is the import that is unresolved: **E0432**.
+- `use axum::extract::{Path, State};` names a module *path* through the absent
+  crate, so resolution fails at the path before any import is formed: **E0433**.
+
+Six of the seven files contain at least one `use` of the first shape and so
+raise E0432; five of those six raise E0433 as well, which is why a naive grep
+sees them perfectly well. Exactly **one** file --
+`crates/swarm-runtime/tests/ingest_integration.rs` -- contains only the second
+shape (`use axum::body::{Body, to_bytes};` and
+`use axum::http::{Request, StatusCode};`) and so raises E0433 alone. Comparing
+the two file sets from the `--keep-going` run below:
 
 ```
-$ cargo check -p swarm-runtime --all-targets --message-format=short 2>&1 \
-    | grep 'unresolved import `axum`' | sort -u
-crates/swarm-runtime/examples/end_to_end_ingest_bench.rs:3:5: error[E0432]: ...
-crates/swarm-runtime/tests/bridge_registry_integration.rs:3:5: error[E0432]: ...
-crates/swarm-runtime/tests/dispatch_integration.rs:5:5: error[E0432]: ...
+$ comm -13 e432.files e433.files      # E0433 but NOT E0432 -- invisible to the naive grep
+crates/swarm-runtime/tests/ingest_integration.rs
+
+$ comm -12 e432.files e433.files      # both codes
+crates/swarm-runtime/src/providence.rs
+crates/swarm-runtime/src/service/tests_support.rs
+crates/swarm-runtime/src/threat_intel_runtime.rs
+crates/swarm-runtime/tests/bridge_registry_integration.rs
+crates/swarm-runtime/tests/dispatch_integration.rs
+
+$ comm -23 e432.files e433.files      # E0432 only
+crates/swarm-runtime/examples/end_to_end_ingest_bench.rs
 ```
 
-The grep must not be for `unresolved import`. Three of the seven files raise
-`E0433: cannot find module or crate` rather than `E0432: unresolved import`,
-depending on the shape of the `use` -- 17 E0433 against 6 E0432 in the run
-below. Both messages carry the same tail, so match on that instead:
+So a grep for `unresolved import` can report at most **six** files however the
+build is scheduled, and the single file it can never see is exactly the one the
+first version of this ADR was missing. The pattern alone fully accounts for that
+omission; no appeal to scheduling is needed to explain it.
+
+Note that the error-code census below (6 E0432, 17 E0433) counts *errors*, not
+files. Seventeen E0433 errors arise across six files, so the census cannot be
+read as a file count -- an earlier revision of this section inferred "three
+files" from it and was wrong on both the number and the direction. Both messages
+carry the same tail, so match on that instead:
 
 ```
 $ sed -i '' '/^axum.workspace = true$/d' crates/swarm-runtime/Cargo.toml
@@ -94,6 +124,34 @@ axum-rooted -- 6 E0432, 17 E0433, and 18 E0277 cascading off the unresolved
 `axum::body::to_bytes` -- and no fourth error code appears, so those five
 targets are exactly the ones this line holds up and nothing else is hiding
 behind them.
+
+#### `--keep-going` decides whether a run reaches the ceiling
+
+`--keep-going` appears in every command above, and it is load-bearing. Without
+it cargo stops scheduling new units once a target fails, so what gets reported
+depends on which units happened to be in flight. The result is **not stable and
+must not be recorded as a single number.** Measured on this tree with
+`cargo clean -p swarm-runtime` before every run, counting distinct files. Each
+column is its own independent series of three cold trials -- the rows are not
+paired runs, so read down a column, not across:
+
+| cold trial | naive grep, no `--keep-going` | tail grep, no `--keep-going` | tail grep, `--keep-going` |
+| ---------- | --- | --- | --- |
+| 1 | 6 | 3 | 7 |
+| 2 | 2 | 2 | 7 |
+| 3 | 2 | 5 | 7 |
+
+On a warm tree the naive command returned 6, and the six files it named were
+exactly the six this amendment was raised to correct. Only the `--keep-going`
+column is stable: across all three cold trials it returned the identical
+seven-file set, byte for byte.
+
+An earlier revision of this section reported the naive command as returning "three
+of the seven files" and printed a fixed three-line listing. That is one draw from
+the distribution above, not a property of the tree. Recording it as a constant
+repeats the defect this amendment exists to correct, so the honest statement is
+the one this table makes: **without `--keep-going` the count is nondeterministic
+(2-6 observed); with it, seven files, every time.**
 
 ### ADR 0002 predicted a deletion that was never reachable
 
@@ -233,4 +291,6 @@ awk '/^\[/{s=$0} /^axum/{print s}' crates/swarm-runtime/Cargo.toml
 Enumerating the five dev targets that hold the line in `[dev-dependencies]` is
 deliberately not in this block: it deletes the manifest line first, so it is
 destructive and belongs in a scratch checkout. The exact command, and the two
-reasons the naive form under-reports, are in "Counting the dev targets" above.
+reasons the naive form under-reports -- a ceiling set by the grep pattern and a
+scheduling race closed by `--keep-going` -- are in "Counting the dev targets"
+above.
