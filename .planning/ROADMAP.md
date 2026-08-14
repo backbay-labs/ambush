@@ -1045,9 +1045,9 @@ MEASURED at cc5b169: swarm-runtime/src 80,615 (up 2,747 since the merge, phase 3
 **Goal:** Repair three defects reachable in the running system today before thirty-five phases of capability are built on top of them: containment with no undo, a Byzantine threshold that can deadlock governance, and a promotion gate that ignores its own solver results.
 **Executable phases:** 320-322
 
-- [ ] **Phase 320: Reversible Quarantine Execution** - Promote the preview-only blast-radius and rollback model into a real executor with TTL auto-revert and a receipt-chained undo path. (QRT-01, QRT-02, QRT-03, QRT-04)
-- [ ] **Phase 321: BFT Correctness Repair** - Fix the `(n-1)/2` sizing bug, make the single-governor-key property structural, and measure what a seeded loss/delay corpus actually shows about the commit bound. (BFT-01, BFT-02, BFT-03, BFT-04, BFT-05)
-- [ ] **Phase 322: Promotion Solver Gate** - Make the production promotion path read the solver results the Z3 lane already produces. (ZGATE-01, ZGATE-02, ZGATE-03, ZGATE-04, ZGATE-05)
+- [x] **Phase 320: Reversible Quarantine Execution** - Promote the preview-only blast-radius and rollback model into a real executor with TTL auto-revert and a receipt-chained undo path. (QRT-01, QRT-02, QRT-03, QRT-04)
+- [~] **Phase 321: BFT Correctness Repair** - Fix the `(n-1)/2` sizing bug, make the single-governor-key property structural, and measure what a seeded loss/delay corpus actually shows about the commit bound. (BFT-01, BFT-02, BFT-03, BFT-04, BFT-05)
+- [x] **Phase 322: Promotion Solver Gate** - Make the production promotion path read the solver results the Z3 lane already produces. (ZGATE-01, ZGATE-02, ZGATE-03, ZGATE-04, ZGATE-05)
 
 ### Phase 320: Reversible Quarantine Execution
 

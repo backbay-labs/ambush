@@ -1,13 +1,13 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.78
-milestone_name: Runtime Decomposition And TCB Boundary
-current_phase: 320
-current_phase_name: Reversible Quarantine Execution
+milestone: v1.79
+milestone_name: Assurance Foundation
+current_phase: 285
+current_phase_name: Assumption Registry And Invariant Mapping
 current_plan: null
 status: active
-last_updated: "2026-08-13T00:00:00Z"
-last_activity: 2026-08-13
+last_updated: "2026-08-14T00:00:00Z"
+last_activity: 2026-08-14
 progress:
   total_phases: 4
   completed_phases: 4
@@ -123,6 +123,10 @@ Progress: v1.78 phases 280/281/282/283 COMPLETE. v1.78.1: phase 320 complete (QR
 - THE `disabled`-IN-`allowed_solver_statuses` INCONSISTENCY IS COHERENT, and is now enforced rather than argued. `rulesets/default.yaml:236-238` allows `disabled` at the ASSURANCE layer while it can no longer pass the PROMOTION gate. Those answer different questions -- may this proposal continue through the evolution lane, versus may this candidate become production -- and the gap between them is the fail-closed margin. It is only coherent while `promotion_solver_block` stays indifferent to that allow-list, which the frozen ruleset makes impossible to fix by editing config. So `the_assurance_allow_list_cannot_authorize_a_promotion` hands the gate a lineage recording `allowed_statuses: [proved, disabled]` with a matching config allow-list and requires the refusal anyway. Rewiring `promotion_solver_block` to read `config.evolution.assurance.allowed_solver_statuses` fails THAT test and only that test (measured) -- the other three carry `allowed_statuses: [proved]` and would stay green, which is exactly why it is a separate test.
 - METHOD NOTE, third instance: `ResourceLimit` shipped UNREACHABLE. The classifier matched `reason_unknown` for "resource limit", but real z3 0.20 reports rlimit exhaustion as the generic "canceled" -- measured `(Timeout, Some("canceled"), rlimit=1, rlimit_count=Some(12), duration_ms=7)`. So the durable record claimed the solver "hit the wall-clock backstop after 7ms (timeout=30000ms)", asserting the opposite of what stopped it, and the test pinning the mapping asserted a string z3 never emits. Now classified on the COUNTERS (`rlimit_count >= rlimit`), which is decidable from the artifact regardless of spelling. THE LESSON, same as the identifier-grep sweeps: do not pin a mapping against a string you have not seen the dependency actually emit.
 - NINTH wall-clock site found and fixed (b966aa8, task #22 tracks the remaining sweep). CI failed on a docs-only commit whose crates/ tree was byte-identical to a merge that had passed CI seven minutes earlier. The posture test seeded two deposits at confidence 1.0 against an alert_threshold of exactly 2.0, with both seed and handler reading the clock at SECOND resolution: elapsed 0s -> 2.000000 >= 2.0 -> Alert, elapsed 1s -> 1.999615 -> Normal. Forcing `now - 1` reproduced CI's failure byte-identically; unforced it failed 2 in 150 runs, and 0 in 200 after the fix. The same test had TWO such assertions, not one.
+- 2026-08-14: v1.78.1 closed but for one deliberate partial. Phase 320 COMPLETE (QRT-01..04, ce1ddd1 + cf48f7a) — containment opens a bounded lease before the action executes, TTL sweeps release it, and an authenticated operator HTTP route releases it early through the SAME `release_lease` both paths share. Phase 322 COMPLETE (6de4933). Phase 321 PARTIAL BY CHOICE: BFT-01/02/05 done and BFT-03's single-key property structural, but the pheromone-substrate exchange and the networked round are deferred rather than pre-empting v1.83's VRF-02, which replaces `proposer_for` outright.
+- THE MERGE LESSON, worth more than any single fix here: three parallel worktrees off one base produced a merge that was TEXTUALLY CLEAN AND SEMANTICALLY BROKEN. BFT-03 deleted `simulate_governance_commit` and replaced the keyring; QRT-04 added `attest_release`, which called both. Git saw different regions and merged without conflict; the result did not compile, and two more collisions of the same shape followed (`register_governor` became fallible, a test dropped the Result). Run the full stack on the COMBINED tree — three green branches prove nothing about their merge.
+- SECURITY, fixed in cf48f7a: the manual-release route let the request body supply `now_ms`, which flowed into `ConsensusGovernanceReceipt::issue` as `payload.issued_at_ms` — inside a signed, chain-advancing record. Any principal holding `maintenance` could write an arbitrary timestamp into durable governance state and make the chain non-monotonic, with every signature still verifying, because the value is SIGNED RATHER THAN CHECKED. The governance stamp now comes from the host clock; the caller's value still decides expiry so tests stay decidable from integer literals.
+- OPEN (task #27), pre-existing and now documented in three places: rollback attestation verification has NO TRUST ANCHOR. `ConsensusGovernanceReceipt::verify` checks the signature against a public key CARRIED INSIDE THE RECEIPT, so a full re-attestation by a freshly minted key passes. What the current checks do buy is that a PARTIAL rewrite fails — and that is not nothing: mutation M2 showed a receipt whose `steps[0].status` was rewritten Reversed -> Failed verifying against a genuine, unmodified signature, so the SIGNATURE ALONE does not catch a body rewrite; the subject binding is what does. `attestation_verified: true` means "this attestation matches this body", NOT "a governor we trust authorized this".
 
 ## Next Command
 
