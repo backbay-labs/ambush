@@ -46,10 +46,23 @@
 #
 # WHY `[[bans.skip]]` ENTRIES CARRY NO EXPIRY
 #   Because an exact-version skip is self-invalidating, and that was measured
-#   rather than assumed. This parser rejects wildcard, range, and open specs: the
-#   only accepted form is `<crate>@<x.y.z>`. cargo-deny then supplies two distinct
+#   rather than assumed. This parser accepts `<crate>@<SemVer 2.0>` -- including
+#   valid prerelease and build metadata -- and rejects wildcard, range, operator,
+#   partial, and invalid SemVer specs. cargo-deny then supplies two distinct
 #   stale-waiver checks, and all three failure modes were constructed and observed
 #   on 2026-08-14:
+#
+#     fixture@1.2.3                         -> fixture = =1.2.3
+#     fixture-prerelease@1.2.3-alpha.1      -> fixture-prerelease = =1.2.3-alpha.1
+#     fixture-build@1.2.3+build.7            -> fixture-build = =1.2.3
+#     fixture-both@1.2.3-alpha.1+build.7     -> fixture-both = =1.2.3-alpha.1
+#     serde_yaml@0.9.34+deprecated           -> serde_yaml = =0.9.34
+#
+#   Those are cargo-deny 0.19.4's own `unmatched-skip` / `unnecessary-skip`
+#   renderings. The leading `=` is the exact selector evidence. cargo-deny follows
+#   SemVer precedence by normalizing build metadata out of matching, but accepts
+#   it in a valid version string; changing the real serde_yaml fixture's core from
+#   0.9.34 to 0.9.33 changes `unnecessary-skip` to `unmatched-skip`.
 #
 #     thiserror@1.0.69 -> thiserror@1.0.68 (the skip no longer matches the lock):
 #       error[duplicate]: found 2 duplicate entries for crate 'thiserror'
@@ -188,11 +201,16 @@ MIN_FIELD_CHARS = 24
 
 ADVISORY_ID = re.compile(r"RUSTSEC-[0-9]{4}-[0-9]{4}")
 DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+SEMVER_PRERELEASE_ID = (
+    r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+)
+SEMVER_BUILD_ID = r"[0-9A-Za-z-]+"
 EXACT_SKIP_SPEC = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9_-]*@"
-    r"(?:0|[1-9][0-9]*)\."
-    r"(?:0|[1-9][0-9]*)\."
-    r"(?:0|[1-9][0-9]*)$"
+    r"\A[A-Za-z0-9][A-Za-z0-9_-]*@"
+    rf"{SEMVER_NUMBER}\.{SEMVER_NUMBER}\.{SEMVER_NUMBER}"
+    rf"(?:-{SEMVER_PRERELEASE_ID}(?:\.{SEMVER_PRERELEASE_ID})*)?"
+    rf"(?:\+{SEMVER_BUILD_ID}(?:\.{SEMVER_BUILD_ID})*)?\Z"
 )
 
 # Executable grammar fixtures. These run before deny.toml is inspected so a
@@ -200,11 +218,31 @@ EXACT_SKIP_SPEC = re.compile(
 # reject. The exact control prevents a regex that rejects everything from
 # masquerading as a stricter gate.
 SKIP_SPEC_FIXTURES = (
+    # Exact SemVer 2.0 versions, including the forms cargo-deny 0.19.4 was
+    # observed accepting as exact selectors.
+    ("fixture@1.2.3", True),
+    ("fixture@1.2.3-alpha.1", True),
+    ("fixture@1.2.3+build.7", True),
+    ("fixture@1.2.3-alpha.1+build.7", True),
+    ("serde_yaml@0.9.34+deprecated", True),
+    # Wildcards, partials, and operators are not exact versions.
     ("fixture@*", False),
     ("fixture@1", False),
     ("fixture@^1", False),
     ("fixture@~1.3", False),
-    ("fixture@1.2.3", True),
+    ("fixture@=1.2.3", False),
+    ("fixture@>=1.2.3", False),
+    ("fixture@1.2.*", False),
+    # SemVer 2.0 forbids leading zeroes in numeric identifiers and empty
+    # prerelease/build identifiers.
+    ("fixture@01.2.3", False),
+    ("fixture@1.02.3", False),
+    ("fixture@1.2.03", False),
+    ("fixture@1.2.3-01", False),
+    ("fixture@1.2.3-alpha..1", False),
+    ("fixture@1.2.3+build..7", False),
+    ("fixture@1.2.3-", False),
+    ("fixture@1.2.3+", False),
 )
 
 for fixture, expected in SKIP_SPEC_FIXTURES:
@@ -362,9 +400,11 @@ for index, entry in enumerate(skips):
     if EXACT_SKIP_SPEC.fullmatch(spec) is None:
         problem(
             where,
-            "`crate` must be an exact `<crate>@<x.y.z>` spec; wildcard, range, "
-            "partial, prerelease, and open version requirements are forbidden "
-            "because they can keep matching after the reviewed version moves",
+            "`crate` must be an exact `<crate>@<SemVer 2.0>` spec; valid "
+            "prerelease and build metadata are accepted, but wildcard, range, "
+            "operator, partial, and invalid SemVer requirements are forbidden "
+            "because they can keep matching after the reviewed version moves "
+            "or do not identify one valid version",
         )
     reason = entry.get("reason", "")
     if not isinstance(reason, str) or not reason.strip():
