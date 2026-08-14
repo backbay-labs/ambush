@@ -52,6 +52,9 @@ pub mod siem;
 pub mod splunk_hec;
 pub mod webhook;
 
+#[cfg(test)]
+mod test_paths;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use swarm_core::types::AgentId;

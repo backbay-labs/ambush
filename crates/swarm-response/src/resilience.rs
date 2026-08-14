@@ -271,15 +271,14 @@ fn now_ms() -> i64 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::ResilientExecutor;
+    use crate::test_paths::temp_jsonl_path as temp_path;
     use crate::{
         DeadLetterJournal, ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt,
         ResponseStatus,
     };
     use async_trait::async_trait;
-    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
     use swarm_core::config::{CircuitBreakerConfig, RetryConfig};
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
     use swarm_policy::{ActionRequest, CapabilityLease};
@@ -326,17 +325,6 @@ mod tests {
             action: "block_egress".to_string(),
             scope: Some("203.0.113.10".to_string()),
         }
-    }
-
-    fn temp_path(label: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "swarm-response-{label}-{}-{nanos}.jsonl",
-            std::process::id()
-        ))
     }
 
     #[tokio::test]

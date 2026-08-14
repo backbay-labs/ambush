@@ -86,6 +86,11 @@ struct NotificationAggregateState {
     key: NotificationAggregateKey,
     first_seen_ms: i64,
     last_seen_ms: i64,
+    /// The clock reading at or after which this aggregate may be flushed:
+    /// `first_seen_ms + dedup_window_ms`. Held on the aggregate rather than
+    /// implied by a sleeping task so that "the window has elapsed" is a
+    /// comparison against a caller-supplied `now_ms`, not a wall-clock wait.
+    flush_due_ms: i64,
     highest_severity: swarm_core::types::Severity,
     count: usize,
     sample_finding: SwarmFindingEnvelope,
@@ -141,55 +146,110 @@ impl NotificationRouter {
         !self.inner.channels.is_empty() && !self.inner.routing.rules.is_empty()
     }
 
+    /// Aggregate `finding` and schedule the dedup-window flush against the wall
+    /// clock.
+    ///
+    /// This is the wall-clock wrapper. The decision it delegates -- *has the
+    /// dedup window elapsed?* -- lives in [`Self::flush_due`], which takes the
+    /// clock reading as a parameter, so callers that must be deterministic
+    /// (tests, replay) can drive the same code path without sleeping.
     pub async fn route_finding(&self, finding: &DetectionFinding) {
-        if !self.is_enabled() {
-            return;
+        let opened = self.route_finding_at(finding, current_time_ms()).await;
+        if opened {
+            let router = self.clone();
+            let delay_ms = self.inner.routing.dedup_window_ms;
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                // `sleep` never returns early, so by construction the wall clock
+                // has passed every deadline opened at or before the schedule
+                // point. `flush_due` still re-checks each one, and leaves any
+                // aggregate opened later in this same window alone.
+                if let Err(error) = router.flush_due(current_time_ms()).await {
+                    tracing::error!(reason = %error, "failed to flush notification aggregate");
+                }
+            });
         }
-        let now_ms = current_time_ms();
+    }
+
+    /// Aggregate `finding` using an explicit clock reading, without scheduling
+    /// anything.
+    ///
+    /// Returns whether at least one new aggregate was opened -- i.e. whether a
+    /// flush now needs to be driven for a deadline that did not exist before.
+    /// Findings folded into an already-open aggregate return `false`: their
+    /// deadline was set by the finding that opened it.
+    async fn route_finding_at(&self, finding: &DetectionFinding, now_ms: i64) -> bool {
+        if !self.is_enabled() {
+            return false;
+        }
         let sample = SwarmFindingEnvelope::from(finding);
         let matched_channels = self.matching_channels(finding, now_ms);
+        let flush_due_ms = now_ms.saturating_add_unsigned(self.inner.routing.dedup_window_ms);
+        let mut opened = false;
         for channel in matched_channels {
             let key = NotificationAggregateKey {
                 channel: channel.clone(),
                 strategy_id: finding.strategy_id.clone(),
                 threat_class: finding.threat_class.clone(),
             };
-            let should_schedule = {
-                let mut aggregates = self.inner.aggregates.lock().await;
-                if let Some(existing) = aggregates.get_mut(&key) {
-                    existing.last_seen_ms = now_ms;
-                    existing.count = existing.count.saturating_add(1);
-                    if finding.severity > existing.highest_severity {
-                        existing.highest_severity = finding.severity;
-                    }
-                    existing.sample_finding = sample.clone();
-                    false
-                } else {
-                    aggregates.insert(
-                        key.clone(),
-                        NotificationAggregateState {
-                            key: key.clone(),
-                            first_seen_ms: now_ms,
-                            last_seen_ms: now_ms,
-                            highest_severity: finding.severity,
-                            count: 1,
-                            sample_finding: sample.clone(),
-                        },
-                    );
-                    true
+            let mut aggregates = self.inner.aggregates.lock().await;
+            if let Some(existing) = aggregates.get_mut(&key) {
+                existing.last_seen_ms = now_ms;
+                existing.count = existing.count.saturating_add(1);
+                if finding.severity > existing.highest_severity {
+                    existing.highest_severity = finding.severity;
                 }
-            };
-            if should_schedule {
-                let router = self.clone();
-                let delay_ms = self.inner.routing.dedup_window_ms;
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    if let Err(error) = router.flush_key(key).await {
-                        tracing::error!(reason = %error, "failed to flush notification aggregate");
-                    }
-                });
+                existing.sample_finding = sample.clone();
+            } else {
+                aggregates.insert(
+                    key.clone(),
+                    NotificationAggregateState {
+                        key: key.clone(),
+                        first_seen_ms: now_ms,
+                        last_seen_ms: now_ms,
+                        flush_due_ms,
+                        highest_severity: finding.severity,
+                        count: 1,
+                        sample_finding: sample.clone(),
+                    },
+                );
+                opened = true;
             }
         }
+        opened
+    }
+
+    /// Flush every aggregate whose dedup window closed at or before `now_ms`,
+    /// and report how many were delivered, dead-lettered, or otherwise
+    /// consumed.
+    ///
+    /// Aggregates still inside their window are left untouched, so this is safe
+    /// to call at any cadence.
+    async fn flush_due(&self, now_ms: i64) -> Result<usize, NotificationError> {
+        let mut due = {
+            let aggregates = self.inner.aggregates.lock().await;
+            aggregates
+                .values()
+                .filter(|state| state.flush_due_ms <= now_ms)
+                .map(|state| (state.flush_due_ms, state.key.clone()))
+                .collect::<Vec<_>>()
+        };
+        // `aggregates` is a HashMap, so iteration order is not stable. Flush in
+        // deadline order (channel and strategy breaking ties) or a rate limit
+        // would dead-letter an arbitrary member of a due batch.
+        due.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.channel.cmp(&right.1.channel))
+                .then_with(|| left.1.strategy_id.cmp(&right.1.strategy_id))
+        });
+        let mut flushed = 0usize;
+        for (_, key) in due {
+            if self.flush_key(key).await? {
+                flushed += 1;
+            }
+        }
+        Ok(flushed)
     }
 
     pub async fn list_dead_letters(
@@ -265,12 +325,14 @@ impl NotificationRouter {
         matched
     }
 
-    async fn flush_key(&self, key: NotificationAggregateKey) -> Result<(), NotificationError> {
+    /// Drain one aggregate and deliver it. Returns whether an aggregate was
+    /// still present -- a concurrent flush may have taken it first.
+    async fn flush_key(&self, key: NotificationAggregateKey) -> Result<bool, NotificationError> {
         let Some(aggregate) = ({
             let mut aggregates = self.inner.aggregates.lock().await;
             aggregates.remove(&key)
         }) else {
-            return Ok(());
+            return Ok(false);
         };
 
         let payload = AggregatedNotification {
@@ -296,7 +358,7 @@ impl NotificationRouter {
                 "quiet hours active".to_string(),
                 payload,
             );
-            return Ok(());
+            return Ok(true);
         }
 
         if !self
@@ -309,7 +371,7 @@ impl NotificationRouter {
                 "notification rate limit exceeded".to_string(),
                 payload,
             );
-            return Ok(());
+            return Ok(true);
         }
 
         if let Err(summary) = self
@@ -324,7 +386,7 @@ impl NotificationRouter {
             );
         }
 
-        Ok(())
+        Ok(true)
     }
 
     fn channel_payload(&self, channel: &str, aggregate: &AggregatedNotification) -> Option<Value> {
@@ -512,11 +574,12 @@ fn current_time_ms() -> i64 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{NotificationRouter, current_time_ms};
+    use super::NotificationRouter;
     use crate::config::{
         NotificationChannelConfig, NotificationRateLimitConfig, NotificationRoutingConfig,
         RoutingRule,
     };
+    use crate::test_paths::temp_jsonl_path_string;
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode, header};
     use axum::routing::post;
@@ -524,11 +587,15 @@ mod tests {
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::Severity;
     use swarm_whisker::DetectionFinding;
     use tokio::sync::{Mutex, oneshot};
+
+    /// A fixed clock reading every test routes against. Nothing here reads the
+    /// wall clock, so every deadline in these tests is arithmetic on this value.
+    const BASE_MS: i64 = 1_700_000_000_000;
 
     #[derive(Clone, Default)]
     struct CaptureState {
@@ -613,10 +680,7 @@ mod tests {
                     window_ms: 1_000,
                 },
                 quiet_hours: None,
-                dead_letter_path: std::env::temp_dir()
-                    .join(format!("notify-dedup-{}.jsonl", std::process::id()))
-                    .display()
-                    .to_string(),
+                dead_letter_path: temp_jsonl_path_string("notify-dedup"),
             },
         );
         let router = NotificationRouter::new(
@@ -634,21 +698,41 @@ mod tests {
             None,
         );
 
-        router
-            .route_finding(&finding("event-1", "suspicious_process_tree"))
-            .await;
-        router
-            .route_finding(&finding("event-2", "suspicious_process_tree"))
-            .await;
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        // Both findings land inside the 20ms dedup window opened by the first.
+        assert!(
+            router
+                .route_finding_at(&finding("event-1", "suspicious_process_tree"), BASE_MS)
+                .await,
+            "the first finding must open a new aggregate"
+        );
+        assert!(
+            !router
+                .route_finding_at(&finding("event-2", "suspicious_process_tree"), BASE_MS + 5)
+                .await,
+            "the second finding must fold into the open aggregate, not open a second one"
+        );
+
+        // One millisecond before the window closes there is nothing to send.
+        // This is the boundary the old 40ms sleep could only hope for.
+        assert_eq!(router.flush_due(BASE_MS + 19).await.unwrap(), 0);
+        assert!(state.payloads.lock().await.is_empty());
+
+        assert_eq!(router.flush_due(BASE_MS + 20).await.unwrap(), 1);
 
         let payloads = state.payloads.lock().await.clone();
         assert_eq!(payloads.len(), 1);
         assert_eq!(payloads[0]["count"], 2);
+        assert_eq!(payloads[0]["first_seen_ms"], BASE_MS);
+        assert_eq!(payloads[0]["last_seen_ms"], BASE_MS + 5);
         assert_eq!(
             state.auth.lock().await.clone(),
             Some("Bearer notify-secret".to_string())
         );
+
+        // The aggregate was drained, so a second flush at the same reading is a
+        // no-op rather than a duplicate delivery.
+        assert_eq!(router.flush_due(BASE_MS + 20).await.unwrap(), 0);
+        assert_eq!(state.payloads.lock().await.len(), 1);
 
         let _ = shutdown_tx.send(());
         handle.abort();
@@ -657,10 +741,7 @@ mod tests {
     #[tokio::test]
     async fn router_writes_and_replays_rate_limited_notifications() {
         let (target_url, state, shutdown_tx, handle) = spawn_server().await;
-        let dead_letter_path = std::env::temp_dir()
-            .join(format!("notify-rate-limit-{}.jsonl", current_time_ms()))
-            .display()
-            .to_string();
+        let dead_letter_path = temp_jsonl_path_string("notify-rate-limit");
         let mut channels = BTreeMap::new();
         channels.insert(
             "soc".to_string(),
@@ -692,17 +773,29 @@ mod tests {
             None,
         );
 
+        // First aggregate: inside the rate limit, so it is delivered.
         router
-            .route_finding(&finding("event-1", "strategy-a"))
+            .route_finding_at(&finding("event-1", "strategy-a"), BASE_MS)
             .await;
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(router.flush_due(BASE_MS + 10).await.unwrap(), 1);
+        assert_eq!(state.payloads.lock().await.len(), 1);
+
+        // Second aggregate, 20ms later and so still inside the 10s rate-limit
+        // window: refused, and dead-lettered rather than dropped.
         router
-            .route_finding(&finding("event-2", "strategy-b"))
+            .route_finding_at(&finding("event-2", "strategy-b"), BASE_MS + 20)
             .await;
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(router.flush_due(BASE_MS + 30).await.unwrap(), 1);
+        assert_eq!(
+            state.payloads.lock().await.len(),
+            1,
+            "the rate-limited aggregate must not reach the channel"
+        );
 
         let entries = router.list_dead_letters("soc", None).await.unwrap();
         assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].last_error, "notification rate limit exceeded");
+        assert_eq!(entries[0].timestamp_ms, BASE_MS + 20);
 
         let results = router.replay_dead_letters("soc", None).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -732,10 +825,7 @@ mod tests {
                     window_ms: 1_000,
                 },
                 quiet_hours: None,
-                dead_letter_path: std::env::temp_dir()
-                    .join(format!("notify-providence-{}.jsonl", current_time_ms()))
-                    .display()
-                    .to_string(),
+                dead_letter_path: temp_jsonl_path_string("notify-providence"),
             },
         );
         let router = NotificationRouter::new(
@@ -763,9 +853,9 @@ mod tests {
         });
 
         router
-            .route_finding(&finding("event-1", "suspicious_process_tree"))
+            .route_finding_at(&finding("event-1", "suspicious_process_tree"), BASE_MS)
             .await;
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(router.flush_due(BASE_MS + 10).await.unwrap(), 1);
 
         let payloads = state.payloads.lock().await.clone();
         assert_eq!(payloads.len(), 1);
@@ -796,13 +886,7 @@ mod tests {
                     window_ms: 1_000,
                 },
                 quiet_hours: None,
-                dead_letter_path: std::env::temp_dir()
-                    .join(format!(
-                        "notify-providence-signed-{}.jsonl",
-                        current_time_ms()
-                    ))
-                    .display()
-                    .to_string(),
+                dead_letter_path: temp_jsonl_path_string("notify-providence-signed"),
             },
         );
         let router = NotificationRouter::new(
@@ -831,9 +915,9 @@ mod tests {
         });
 
         router
-            .route_finding(&finding("event-9", "suspicious_process_tree"))
+            .route_finding_at(&finding("event-9", "suspicious_process_tree"), BASE_MS)
             .await;
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(router.flush_due(BASE_MS + 10).await.unwrap(), 1);
 
         let payloads = state.payloads.lock().await.clone();
         assert_eq!(payloads.len(), 1);
@@ -850,6 +934,144 @@ mod tests {
             )
         );
         assert_eq!(signature, Some(expected));
+
+        let _ = shutdown_tx.send(());
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn quiet_hours_dead_letter_the_aggregate_instead_of_sending_it() {
+        // The quiet-hours branch of `flush_key` decides on `last_seen_ms`, so it
+        // is only testable at all once the routing clock is a parameter: with
+        // the wall clock, this test would pass or fail depending on the hour the
+        // suite ran.
+        let (target_url, state, shutdown_tx, handle) = spawn_server().await;
+        let dead_letter_path = temp_jsonl_path_string("notify-quiet-hours");
+        let mut channels = BTreeMap::new();
+        channels.insert(
+            "soc".to_string(),
+            NotificationChannelConfig {
+                target_url,
+                auth_token: None,
+                request_signature: None,
+                timeout_ms: 500,
+                rate_limit: NotificationRateLimitConfig {
+                    max_notifications: 10,
+                    window_ms: 1_000,
+                },
+                quiet_hours: Some(crate::config::QuietHoursConfig {
+                    start_hour_utc: 22,
+                    end_hour_utc: 6,
+                }),
+                dead_letter_path: dead_letter_path.clone(),
+            },
+        );
+        let router = NotificationRouter::new(
+            channels,
+            NotificationRoutingConfig {
+                dedup_window_ms: 10,
+                rules: vec![RoutingRule {
+                    min_severity: Some(Severity::Low),
+                    threat_class: Some(ThreatClass::Execution),
+                    utc_start_hour: None,
+                    utc_end_hour: None,
+                    channels: vec!["soc".to_string()],
+                }],
+            },
+            None,
+        );
+
+        // 1970-01-02T23:00:00Z: inside the 22:00-06:00 quiet window.
+        let quiet_ms = 86_400_000 + 23 * 3_600_000;
+        router
+            .route_finding_at(&finding("event-quiet", "strategy-a"), quiet_ms)
+            .await;
+        assert_eq!(router.flush_due(quiet_ms + 10).await.unwrap(), 1);
+        assert!(
+            state.payloads.lock().await.is_empty(),
+            "a quiet-hours aggregate must not reach the channel"
+        );
+        let entries = router.list_dead_letters("soc", None).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].last_error, "quiet hours active");
+
+        // 1970-01-02T12:00:00Z: outside it, so the same aggregate is delivered.
+        let loud_ms = 86_400_000 + 12 * 3_600_000;
+        router
+            .route_finding_at(&finding("event-loud", "strategy-a"), loud_ms)
+            .await;
+        assert_eq!(router.flush_due(loud_ms + 10).await.unwrap(), 1);
+        assert_eq!(state.payloads.lock().await.len(), 1);
+        assert_eq!(
+            router.list_dead_letters("soc", None).await.unwrap().len(),
+            1,
+            "the delivered aggregate must not have been dead-lettered"
+        );
+
+        let _ = std::fs::remove_file(dead_letter_path);
+        let _ = shutdown_tx.send(());
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn scheduled_flush_delivers_without_an_explicit_drain() {
+        // Everything above drives `flush_due` directly, which would leave the
+        // wall-clock scheduler inside `route_finding` -- the path production
+        // actually uses -- untested. This test covers it, and is the only one
+        // here that touches real time. It uses time as a FAILURE BOUND: the
+        // verdict is "the payload arrived", and the deadline only decides how
+        // long to keep asking. A loaded machine makes it slower, never wrong.
+        let (target_url, state, shutdown_tx, handle) = spawn_server().await;
+        let mut channels = BTreeMap::new();
+        channels.insert(
+            "soc".to_string(),
+            NotificationChannelConfig {
+                target_url,
+                auth_token: None,
+                request_signature: None,
+                timeout_ms: 5_000,
+                rate_limit: NotificationRateLimitConfig {
+                    max_notifications: 10,
+                    window_ms: 1_000,
+                },
+                quiet_hours: None,
+                dead_letter_path: temp_jsonl_path_string("notify-scheduled"),
+            },
+        );
+        let router = NotificationRouter::new(
+            channels,
+            NotificationRoutingConfig {
+                dedup_window_ms: 10,
+                rules: vec![RoutingRule {
+                    min_severity: Some(Severity::Medium),
+                    threat_class: Some(ThreatClass::Execution),
+                    utc_start_hour: None,
+                    utc_end_hour: None,
+                    channels: vec!["soc".to_string()],
+                }],
+            },
+            None,
+        );
+
+        router
+            .route_finding(&finding("event-1", "suspicious_process_tree"))
+            .await;
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if state.payloads.lock().await.len() == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "route_finding scheduled no flush: nothing delivered within 30s"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let payloads = state.payloads.lock().await.clone();
+        assert_eq!(payloads[0]["count"], 1);
+        assert_eq!(payloads[0]["schema"], "swarm_notification");
 
         let _ = shutdown_tx.send(());
         handle.abort();
