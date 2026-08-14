@@ -570,6 +570,7 @@ mod tests {
     use crate::config::{CircuitBreakerConfig, CrowdStrikeRtrConfig, RetryConfig};
     use crate::dead_letter::DeadLetterJournal;
     use crate::dispatch::DispatchingExecutor;
+    use crate::test_paths::temp_jsonl_path_string as temp_jsonl_path;
     use crate::{ExecutionMode, ResponseExecutor, ResponseStatus};
     use axum::extract::{Form, Query, State};
     use axum::http::{HeaderMap, StatusCode, header};
@@ -579,7 +580,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::sync::Arc;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::Duration;
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
     use swarm_policy::{ActionRequest, CapabilityLease};
     use tokio::sync::{Mutex, oneshot};
@@ -748,20 +749,6 @@ mod tests {
             scope: Some("host-1".to_string()),
         };
         (request, lease)
-    }
-
-    fn temp_jsonl_path(label: &str) -> String {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir()
-            .join(format!(
-                "swarm-response-{label}-{}-{nanos}.jsonl",
-                std::process::id()
-            ))
-            .display()
-            .to_string()
     }
 
     #[tokio::test]

@@ -115,19 +115,8 @@ impl DeadLetterJournal {
 mod tests {
     use super::{DeadLetterEntry, DeadLetterJournal};
     use crate::ExecutionMode;
+    use crate::test_paths::temp_jsonl_path as temp_path;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_path(label: &str) -> std::path::PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "swarm-response-{label}-{}-{nanos}.jsonl",
-            std::process::id()
-        ))
-    }
 
     #[test]
     fn write_appends_jsonl_line() {

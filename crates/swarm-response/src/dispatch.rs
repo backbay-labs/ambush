@@ -153,6 +153,13 @@ mod tests {
     use crate::config::{
         CircuitBreakerConfig, HttpEdrConfig, ResponseAdapterConfig, RetryConfig, WebhookConfig,
     };
+    // A per-run dead-letter journal outside the repository:
+    // `DispatchingExecutor::from_config` opens the journal eagerly, so a test
+    // that takes the cwd-relative `./dead-letter.jsonl` default would create
+    // `crates/swarm-response/dead-letter.jsonl` in the checked-out tree. The
+    // file stays zero-byte on the success path, which is why `git status` never
+    // reported it.
+    use crate::test_paths::temp_jsonl_path_string as temp_jsonl_path;
     use crate::{ExecutionMode, ResponseExecutor, ResponseStatus};
     use axum::extract::State;
     use axum::http::{HeaderMap, StatusCode, header};
@@ -169,27 +176,6 @@ mod tests {
         auth: Arc<Mutex<Option<String>>>,
         payload: Arc<Mutex<Option<Value>>>,
         status: StatusCode,
-    }
-
-    /// A per-run dead-letter journal outside the repository.
-    ///
-    /// `DispatchingExecutor::from_config` opens the journal eagerly, so a test
-    /// that takes the cwd-relative `./dead-letter.jsonl` default creates
-    /// `crates/swarm-response/dead-letter.jsonl` in the checked-out tree. The
-    /// file stays zero-byte on the success path, which is why `git status` never
-    /// reported it.
-    fn temp_jsonl_path(label: &str) -> String {
-        std::env::temp_dir()
-            .join(format!(
-                "swarm-response-dispatch-{label}-{}-{}.jsonl",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ))
-            .display()
-            .to_string()
     }
 
     async fn handler(
