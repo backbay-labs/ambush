@@ -704,6 +704,79 @@ impl GovernancePolicy {
         Ok(Some(redeemed))
     }
 
+    /// Sign `subject` on the governance receipt chain and return the receipt.
+    ///
+    /// THE SAME SIGNING PATH, LITERALLY. This holds the same `Mutex<GovernanceState>`,
+    /// reads the same `governors` keyring, calls the same
+    /// [`simulate_governance_commit`], advances the same `previous_commit_hash` and
+    /// `receipt_counter`, issues through the same
+    /// [`ConsensusGovernanceReceipt::issue`], and persists through the same
+    /// `persist_locked`, as [`issue_governance_receipt`] and
+    /// [`issue_contingency_lease`] do. A release attested here sits in the same chain
+    /// as the governance receipt that authorized the containment being released; that
+    /// is what QRT-04's "the same governance signing path" has to mean to be worth
+    /// anything.
+    ///
+    /// THE PROPOSAL ID IS THE SUBJECT DIGEST, NOT A DERIVED LABEL. Both sibling
+    /// builders hash a payload of their own shape into `proposal_id`. This one hashes
+    /// the caller's `subject` verbatim, because the caller has to be able to
+    /// re-derive it: `swarm_runtime::containment::verify_release_attestation`
+    /// re-canonicalizes the rollback receipt and compares. Hashing anything else here
+    /// would leave a signature that verifies while covering an unknown body.
+    ///
+    /// `None` when no governor is registered -- there is no key to sign with, and a
+    /// fabricated signer would be worse than an unattested release.
+    pub fn attest_release(
+        &self,
+        subject: &serde_json::Value,
+        now_ms: i64,
+    ) -> Option<ConsensusGovernanceReceipt> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.governors.is_empty() {
+            return None;
+        }
+        let proposal = ConsensusProposal {
+            proposal_id: sha256_hex(&canonical_json_bytes(subject).ok()?),
+            payload: subject.clone(),
+        };
+        let (commit, committee) = match simulate_governance_commit(
+            &state.governors,
+            &state.previous_commit_hash,
+            proposal,
+            now_ms,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    reason = %error,
+                    module = module_path!(),
+                    "failed to build governance consensus receipt for a containment release"
+                );
+                return None;
+            }
+        };
+        let issued_by = state.governors.keys().next().cloned()?;
+        let signing_key = state.governors.get(&issued_by)?.clone();
+        let previous_commit_hash = state.previous_commit_hash.clone();
+        state.previous_commit_hash = commit.commit_hash.clone();
+        state.receipt_counter = state.receipt_counter.saturating_add(1);
+        let receipt = ConsensusGovernanceReceipt::issue(
+            &commit,
+            &previous_commit_hash,
+            &committee,
+            GovernanceReceiptDecision::Approve,
+            issued_by,
+            &signing_key,
+            now_ms,
+        )
+        .ok()?;
+        self.persist_locked(&state);
+        Some(receipt)
+    }
+
     pub fn note_partition_veto(&self, request: &ActionRequest, reason: &str, now_ms: i64) {
         let mut state = self
             .state
@@ -1297,19 +1370,21 @@ fn now_ms() -> i64 {
 // `swarm_policy::governance::GovernanceAuthority`.
 impl swarm_policy::governance::sealed::SealedGovernanceAuthority for GovernancePolicy {}
 
-// All FIVE methods below delegate to the inherent method of the same name. Inherent
+// All SIX methods below delegate to the inherent method of the same name. Inherent
 // impls are probed before trait impls, so `GovernancePolicy::method(self, ..)`
 // resolves to the inherent one.
 //
 // A differing return type would make a mis-resolution a compile error, but that
-// covers only two of the five: `authorize_partition_request`
+// covers only three of the six: `attest_release`
+// (`Option<ConsensusGovernanceReceipt>` inherent, `Option<serde_json::Value>` here),
+// `authorize_partition_request`
 // (`Result<Option<ContingencyLease>, String>` inherent, `Result<bool, String>` here)
 // and `drain_runtime_events` (`Vec<GovernanceRuntimeEvent>` inherent,
 // `Vec<GovernanceRuntimeEventRecord>` here). `is_partitioned`, `note_partition_veto`
 // and `status_report` have identical signatures on both sides, so for those three a
 // mis-resolution is a silent infinite recursion, not a diagnostic.
 //
-// The `deny` below covers all five, which is why the guarantee is stated once here
+// The `deny` below covers all six, which is why the guarantee is stated once here
 // instead of per-method. `unconditional_recursion` is warn-by-default, so without
 // the attribute these three were protected only by CI's `-D warnings` and not by a
 // plain `cargo build`. Measured both ways by rewriting the `is_partitioned` body as
@@ -1350,6 +1425,30 @@ impl GovernanceAuthority for GovernancePolicy {
     // through a `dyn GovernanceAuthority` and asserts on the rendered fields.
     fn status_report(&self) -> GovernanceStatusReport {
         GovernancePolicy::status_report(self)
+    }
+
+    /// The SIXTH method, and the second whose inherent twin has a different return
+    /// type (`Option<ConsensusGovernanceReceipt>` inherent, `Option<serde_json::Value>`
+    /// here), so a mis-resolution here is a compile error rather than a hang. The
+    /// `Value` is the serialized receipt; see the trait doc for why `swarm-policy`
+    /// cannot name the type.
+    fn attest_release(
+        &self,
+        subject: &serde_json::Value,
+        now_ms: i64,
+    ) -> Option<serde_json::Value> {
+        let receipt = GovernancePolicy::attest_release(self, subject, now_ms)?;
+        match serde_json::to_value(&receipt) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                tracing::warn!(
+                    reason = %error,
+                    module = module_path!(),
+                    "governance release receipt could not be serialized; the release is recorded unattested"
+                );
+                None
+            }
+        }
     }
 }
 

@@ -16,8 +16,9 @@ use crate::config::{
 };
 use crate::control::{
     ControlError, DefaultControlPlane, FirstRunStatus, FirstRunWizardOptions, FirstRunWizardPaths,
-    IncidentLookupSelector, InvestigationLookupSelector, OperatorControlOutput,
-    ReplayLookupSelector, render_output, resolve_operator_api_schema_version,
+    IncidentLookupSelector, InvestigationLookupSelector, OPERATOR_API_SCHEMA_VERSION_HEADER,
+    OperatorControlOutput, ReplayLookupSelector, render_output,
+    resolve_operator_api_schema_version,
 };
 use crate::drafting::{
     DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest,
@@ -48,7 +49,10 @@ use crate::mutation::{
     render_evolution_mutation_materialization_batch, render_evolution_mutation_ranking,
     render_evolution_mutation_spec, render_evolution_mutation_validation_batch,
 };
-use crate::operator_http::LocalOperatorSurface;
+use crate::operator_http::{
+    ContainmentLeaseListResponse, ContainmentReleaseRequest, ContainmentReleaseResponse,
+    LocalOperatorSurface,
+};
 use crate::portfolio::{
     DefaultEvolutionPortfolioHarness, EvolutionPortfolioDecisionAction,
     EvolutionPortfolioEntryCreateRequest, EvolutionPortfolioEntryReviewState,
@@ -84,8 +88,8 @@ use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use swarm_core::agent::{AgentRole, SwarmMode};
 use swarm_core::config::{
-    ConfigValidationError, OperatorSurfacePaths, PheromoneBackendConfig, ResponseAdapterConfig,
-    RuntimeMode, SiemForwardConfig, SwarmConfig,
+    ConfigValidationError, OperatorScope, OperatorSurfacePaths, PheromoneBackendConfig,
+    ResponseAdapterConfig, RuntimeMode, SiemForwardConfig, SwarmConfig,
 };
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::Severity;
@@ -103,6 +107,14 @@ pub struct Cli {
 
     #[arg(long = "output-schema-version", global = true)]
     output_schema_version: Option<u32>,
+
+    /// Base URL of the running `swarm_detect --serve` daemon.
+    ///
+    /// Only the `quarantine` subcommands use it; everything else in this CLI
+    /// runs locally against repo-owned artifacts. Defaults to
+    /// `operator_surface.runtime_base_url` from the config.
+    #[arg(long = "daemon-url", global = true)]
+    daemon_url: Option<String>,
 
     #[arg(long, global = true, default_value = "data/replay-runs")]
     replay_results_dir: std::path::PathBuf,
@@ -292,6 +304,7 @@ enum Command {
     Quickstart(QuickstartArgs),
     PlaybookPreview(PlaybookPreviewArgs),
     Identity(IdentityArgs),
+    Quarantine(QuarantineArgs),
     Serve,
     Status,
     Evolution(EvolutionArgs),
@@ -517,6 +530,36 @@ struct IdentityRotateArgs {
 
     #[arg(long)]
     active_until_ms: Option<i64>,
+}
+
+#[derive(Debug, Args)]
+struct QuarantineArgs {
+    #[command(subcommand)]
+    command: QuarantineCommand,
+}
+
+/// Operate on the containment leases a RUNNING daemon holds.
+///
+/// Both subcommands are HTTP clients of `swarm_detect --serve`, not local
+/// harnesses like the rest of this CLI. That is deliberate and it is the whole
+/// answer to QRT-04's recorded blocker: the daemon holds
+/// `previous_commit_hash` and `receipt_counter` in memory and persists them
+/// with an unlocked tmp-write plus rename, and it holds the lease store as an
+/// `Arc` that a second process cannot join. A local `quarantine release` would
+/// fork both. See `swarm_runtime_http::http::containment`.
+#[derive(Debug, Subcommand)]
+enum QuarantineCommand {
+    List,
+    Release(QuarantineReleaseArgs),
+}
+
+#[derive(Debug, Args)]
+struct QuarantineReleaseArgs {
+    lease_id: String,
+
+    /// The instant to release at. Defaults to now.
+    #[arg(long)]
+    now_ms: Option<i64>,
 }
 
 #[derive(Debug, Args)]
@@ -2947,6 +2990,191 @@ fn evolution_mutation_signing_key(
         .signing_key)
 }
 
+/// Resolve the daemon base URL and a bearer token that grants `maintenance`.
+///
+/// FAILS CLOSED, LOUDLY, AND SEPARATELY FOR EACH REASON. "No principal grants
+/// maintenance" and "the maintenance principal's token env is unset" are
+/// different operator mistakes with different fixes, so they are different
+/// messages rather than one "unauthorized" that sends the reader to the wrong
+/// file. Sending a request with no token would have earned a 401 from the
+/// daemon anyway; refusing here says which of the two is wrong.
+fn resolve_quarantine_endpoint(
+    config: &SwarmConfig,
+    override_url: Option<&str>,
+) -> Result<(String, String), std::io::Error> {
+    let base_url = override_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| config.operator.runtime_base_url.trim())
+        .trim_end_matches('/')
+        .to_string();
+    if base_url.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "no daemon base URL: set `operator_surface.runtime_base_url` in the config or pass \
+             --daemon-url",
+        ));
+    }
+
+    let principals = config.operator.auth.effective_principals();
+    let maintenance: Vec<_> = principals
+        .iter()
+        .filter(|principal| principal.scopes.contains(&OperatorScope::Maintenance))
+        .collect();
+    if maintenance.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "no configured operator principal grants the `maintenance` scope, which \
+             `quarantine release` requires; add it under `operator_surface.auth`",
+        ));
+    }
+    let mut tried = Vec::new();
+    for principal in &maintenance {
+        match std::env::var(&principal.token_env) {
+            Ok(token) if !token.trim().is_empty() => {
+                return Ok((base_url, token.trim().to_string()));
+            }
+            _ => tried.push(principal.token_env.clone()),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        format!(
+            "every operator principal granting `maintenance` has an unset or empty bearer token \
+             env ({}); export one before running `swarmctl quarantine`",
+            tried.join(", ")
+        ),
+    ))
+}
+
+/// Turn a non-2xx daemon response into an error carrying the daemon's own
+/// message.
+///
+/// The body matters. A 404 here means "no open containment lease `x`" and a 403
+/// means the token lacks `maintenance`; collapsing both to the status code
+/// would make the two indistinguishable at the terminal.
+async fn quarantine_http_error(
+    action: &str,
+    response: reqwest::Response,
+) -> Box<dyn std::error::Error> {
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|error| format!("<response body unreadable: {error}>"));
+    Box::new(std::io::Error::other(format!(
+        "{action} failed: daemon returned {status}: {body}"
+    )))
+}
+
+async fn run_quarantine_command(
+    cli: &Cli,
+    args: &QuarantineArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_config(&cli.config)?;
+    let (base_url, token) = resolve_quarantine_endpoint(&config, cli.daemon_url.as_deref())?;
+    let client = reqwest::Client::new();
+    let schema_version = resolve_operator_api_schema_version(cli.output_schema_version)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+
+    match &args.command {
+        QuarantineCommand::List => {
+            let response = client
+                .get(format!("{base_url}/v1/operator/containment/leases"))
+                .bearer_auth(&token)
+                .header(
+                    OPERATOR_API_SCHEMA_VERSION_HEADER,
+                    schema_version.to_string(),
+                )
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                return Err(quarantine_http_error("quarantine list", response).await);
+            }
+            let listing: ContainmentLeaseListResponse = response.json().await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&listing)?);
+            } else {
+                println!("{}", render_quarantine_list(&listing));
+            }
+        }
+        QuarantineCommand::Release(release) => {
+            let response = client
+                .post(format!(
+                    "{base_url}/v1/operator/containment/leases/{}/release",
+                    release.lease_id
+                ))
+                .bearer_auth(&token)
+                .header(
+                    OPERATOR_API_SCHEMA_VERSION_HEADER,
+                    schema_version.to_string(),
+                )
+                .json(&ContainmentReleaseRequest {
+                    now_ms: release.now_ms,
+                })
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                return Err(quarantine_http_error("quarantine release", response).await);
+            }
+            let released: ContainmentReleaseResponse = response.json().await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&released)?);
+            } else {
+                println!("{}", render_quarantine_release(&released));
+            }
+            // A release whose inverse did not land leaves the host contained.
+            // Exiting 0 on that would make a shell script treat an unfinished
+            // release as a finished one.
+            if !released.lease_closed {
+                return Err(Box::new(std::io::Error::other(format!(
+                    "containment lease `{}` is STILL OPEN: {}",
+                    release.lease_id, released.receipt.summary
+                ))));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_quarantine_list(listing: &ContainmentLeaseListResponse) -> String {
+    if listing.open_leases.is_empty() {
+        return "no open containment leases".to_string();
+    }
+    let mut out = format!("{} open containment lease(s)\n", listing.open_leases.len());
+    for view in &listing.open_leases {
+        out.push_str(&format!(
+            "  {}  {}  scope={}  expires_at_ms={}  remaining_ms={}{}\n",
+            view.lease.lease_id(),
+            view.lease.action_kind(),
+            view.lease.blast_radius().scope_value,
+            view.lease.expires_at_ms(),
+            view.remaining_ms,
+            if view.expired { "  EXPIRED" } else { "" },
+        ));
+    }
+    out
+}
+
+fn render_quarantine_release(released: &ContainmentReleaseResponse) -> String {
+    format!(
+        "rollback {}\n  lease {}\n  trigger {}\n  status {:?}\n  lease_closed {}\n  \
+         fully_reversed {}\n  governance attestation {}\n  {}",
+        released.receipt.rollback_id,
+        released.receipt.lease_id,
+        released.receipt.trigger.as_str(),
+        released.receipt.status,
+        released.lease_closed,
+        released.fully_reversed,
+        match &released.attestation_error {
+            None if released.attestation_verified => "VERIFIED".to_string(),
+            Some(reason) => format!("NOT VERIFIED: {reason}"),
+            None => "NOT VERIFIED".to_string(),
+        },
+        released.receipt.summary,
+    )
+}
+
 pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Command::Validate(args) => return run_validate_command(&cli.config, args, cli.json).await,
@@ -2965,6 +3193,7 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Identity(args) => return run_identity_command(&cli.config, args, cli.json),
+        Command::Quarantine(args) => return run_quarantine_command(&cli, args).await,
         _ => {}
     }
 
@@ -3108,7 +3337,8 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         | Command::FirstRun(_)
         | Command::Quickstart(_)
         | Command::PlaybookPreview(_)
-        | Command::Identity(_) => {
+        | Command::Identity(_)
+        | Command::Quarantine(_) => {
             unreachable!("handled before harness bootstrap")
         }
         Command::Serve => {
@@ -5061,9 +5291,9 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, build_validate_report,
-        evolution_mutation_signing_key, parse_review_artifact_ref_arg, render_init_template,
-        run_init_command, run_playbook_preview_command, run_quickstart_command,
-        run_readiness_command,
+        evolution_mutation_signing_key, load_config, parse_review_artifact_ref_arg,
+        render_init_template, resolve_quarantine_endpoint, run_init_command,
+        run_playbook_preview_command, run_quickstart_command, run_readiness_command,
     };
     use crate::config::write_debug_test_config_signature;
     use clap::Parser;
@@ -5409,5 +5639,112 @@ mod tests {
         assert_eq!(key_a.to_bytes(), key_a_again.to_bytes());
 
         fs::remove_dir_all(&base).ok();
+    }
+
+    /// A repo-shaped config on disk, so these tests exercise the real
+    /// `operator_surface` block rather than a struct literal that could drift
+    /// from what `swarmctl init` actually writes.
+    fn quarantine_test_config(label: &str) -> swarm_core::config::SwarmConfig {
+        let dir = unique_temp_dir(label);
+        let config_path = dir.join("config.yaml");
+        fs::write(&config_path, render_init_template(InitMode::DetectOnly)).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
+        load_config(&config_path).unwrap()
+    }
+
+    fn principal(
+        token_env: &str,
+        scopes: Vec<swarm_core::config::OperatorScope>,
+    ) -> swarm_core::config::OperatorPrincipalConfig {
+        swarm_core::config::OperatorPrincipalConfig {
+            operator_id: "quarantine-test".to_string(),
+            token_env: token_env.to_string(),
+            token_expires_at_ms: None,
+            scopes,
+        }
+    }
+
+    /// `swarmctl quarantine` refuses BEFORE sending, and says WHICH mistake was
+    /// made.
+    ///
+    /// The two failures are different operator errors with different fixes --
+    /// edit the config, versus export a variable -- so collapsing them into one
+    /// "unauthorized" would send the reader to the wrong file. Letting the
+    /// daemon answer 401 instead is not equivalent: by then the operator has
+    /// been told the wrong thing.
+    #[test]
+    fn quarantine_refuses_before_sending_when_no_principal_grants_maintenance() {
+        let mut config = quarantine_test_config("quarantine-unscoped");
+        config.operator.auth.principals = vec![principal(
+            "SWARM_QUARANTINE_TEST_READONLY_TOKEN",
+            vec![swarm_core::config::OperatorScope::Read],
+        )];
+        unsafe {
+            std::env::set_var(
+                "SWARM_QUARANTINE_TEST_READONLY_TOKEN",
+                "present-but-unscoped",
+            );
+        }
+
+        let error = resolve_quarantine_endpoint(&config, None).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            error
+                .to_string()
+                .contains("no configured operator principal grants the `maintenance` scope"),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn quarantine_refuses_before_sending_when_the_maintenance_token_env_is_unset() {
+        let mut config = quarantine_test_config("quarantine-no-token");
+        config.operator.auth.principals = vec![principal(
+            "SWARM_QUARANTINE_TEST_ABSENT_TOKEN",
+            vec![swarm_core::config::OperatorScope::Maintenance],
+        )];
+        unsafe {
+            std::env::remove_var("SWARM_QUARANTINE_TEST_ABSENT_TOKEN");
+        }
+
+        let error = resolve_quarantine_endpoint(&config, None).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            error
+                .to_string()
+                .contains("SWARM_QUARANTINE_TEST_ABSENT_TOKEN"),
+            "the diagnostic must name the variable to export: {error}"
+        );
+    }
+
+    #[test]
+    fn quarantine_resolves_the_daemon_url_and_trims_the_token() {
+        let mut config = quarantine_test_config("quarantine-resolve");
+        config.operator.runtime_base_url = "http://from-config:9090".to_string();
+        config.operator.auth.principals = vec![
+            principal(
+                "SWARM_QUARANTINE_TEST_UNSCOPED_TOKEN",
+                vec![swarm_core::config::OperatorScope::Read],
+            ),
+            principal(
+                "SWARM_QUARANTINE_TEST_PRESENT_TOKEN",
+                vec![swarm_core::config::OperatorScope::Maintenance],
+            ),
+        ];
+        unsafe {
+            std::env::set_var("SWARM_QUARANTINE_TEST_UNSCOPED_TOKEN", "wrong-token");
+            std::env::set_var("SWARM_QUARANTINE_TEST_PRESENT_TOKEN", "  responder-token\n");
+        }
+
+        let (from_config, token) = resolve_quarantine_endpoint(&config, None).unwrap();
+        assert_eq!(from_config, "http://from-config:9090");
+        // The MAINTENANCE principal's token, not merely the first one with a
+        // value set: sending the read-only token would earn a 403 the operator
+        // could not explain.
+        assert_eq!(token, "responder-token");
+
+        let (overridden, _) =
+            resolve_quarantine_endpoint(&config, Some("http://from-flag:7000/")).unwrap();
+        assert_eq!(overridden, "http://from-flag:7000");
     }
 }

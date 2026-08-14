@@ -115,6 +115,41 @@ pub mod sealed {
 /// from whichever crate the governance agent is extracted into (that is the entire
 /// point of SPLIT-03), so a determined downstream crate can still name the hidden
 /// module. What the seal buys is that it cannot happen by accident or unnoticed.
+///
+/// # The second widening: [`GovernanceAuthority::attest_release`] (QRT-04, ADR 0010)
+///
+/// The paragraph above says widening beyond what a named consumer already called
+/// re-imports the coupling this trait exists to remove. `attest_release` is widened
+/// past that bar deliberately, and this is the record of why.
+///
+/// QRT-04 requires a manual containment release to go "through the same governance
+/// signing path" as the rest of the audit chain. The signing path is the governor
+/// keyring plus the `previous_commit_hash` chain, and both live inside the concrete
+/// governance agent's `Mutex<GovernanceState>` -- reachable only from a type that
+/// implements this trait. The release path is `swarm_runtime::containment`, and
+/// `swarm-agents` depends on `swarm-runtime`, so the runtime cannot name
+/// `GovernancePolicy`. Either the release goes unsigned, or a second signer and a
+/// second chain appear beside the governance one, or this trait carries the request.
+/// A second chain over the same subject is the split-brain hazard QRT-04's own
+/// blocker note describes, so the trait carries it.
+///
+/// It is a *narrow* widening on purpose:
+///
+/// - It takes an opaque `serde_json::Value` subject and returns an opaque
+///   `serde_json::Value` receipt. `swarm-policy` is trusted-computing-base
+///   (`docs/decisions/0009-*`, `tools/check-workspace-layering.sh`) and its declared
+///   workspace dependencies are allow-listed down to `{swarm-core}`; naming
+///   `swarm_consensus::ConsensusGovernanceReceipt` here would add a TCB edge for a
+///   type this crate never inspects. `GovernanceRuntimeEventRecord::details` already
+///   carries governance receipts across this boundary the same way, and
+///   `swarm_runtime::dispatcher` already deserializes one out of a `Value`.
+/// - It renders no authorization verdict. `Ok(true)` from
+///   [`GovernanceAuthority::authorize_partition_request`] lets a destructive action
+///   proceed; the worst an implementation of `attest_release` can do is refuse to
+///   attest (`None`) or attest something. It cannot cause a containment, and it
+///   cannot prevent one being undone -- release proceeds either way, and an
+///   unattested release is recorded as unattested rather than silently equated with
+///   an attested one.
 pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
     /// Whether `request` may proceed while the governance quorum is partitioned.
     ///
@@ -145,4 +180,24 @@ pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
     /// ingest surface holds the same authority object the dispatcher does, and one
     /// sealed governance trait keeps the enumerable-implementers property in one place.
     fn status_report(&self) -> GovernanceStatusReport;
+
+    /// Sign `subject` on the governance receipt chain and return the receipt.
+    ///
+    /// `subject` is the canonical body being attested -- for QRT-04, a containment
+    /// rollback receipt with its own attestation field cleared. The returned value is
+    /// a serialized `swarm_consensus::ConsensusGovernanceReceipt`; see the trait doc
+    /// for why the types are opaque here.
+    ///
+    /// THE BINDING IS THE CALLER'S TO CHECK, AND IT IS CHECKABLE. An implementation
+    /// must set the attested commit's `proposal_id` to the sha256 of the canonical
+    /// `subject`, so a verifier that re-canonicalizes the subject can prove the
+    /// signature covers *this* body and not some other one. A verifier that only
+    /// checked the signature would accept a receipt lifted from a different release.
+    ///
+    /// `None` means no attestation was produced -- no governors are registered, or the
+    /// commit could not be built. It is NOT an authorization failure and callers must
+    /// not read it as one: the caller records the release as unattested, which is a
+    /// true statement, rather than treating absence as proof.
+    fn attest_release(&self, subject: &serde_json::Value, now_ms: i64)
+    -> Option<serde_json::Value>;
 }

@@ -29,9 +29,12 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 
+use swarm_consensus::ConsensusGovernanceReceipt;
+use swarm_crypto::{canonical_json_bytes, sha256_hex};
+use swarm_policy::governance::GovernanceAuthority;
 use swarm_response::containment::{
-    ContainmentLeaseError, ContainmentLeaseStore, ContainmentStoreError, ContainmentTtl,
-    FileContainmentLeaseStore, MemoryContainmentLeaseStore,
+    ContainmentLease, ContainmentLeaseError, ContainmentLeaseStore, ContainmentStoreError,
+    ContainmentTtl, FileContainmentLeaseStore, MemoryContainmentLeaseStore,
 };
 use swarm_response::rollback::{
     RollbackExecutor, RollbackReceipt, RollbackStepStatus, RollbackTrigger,
@@ -119,6 +122,168 @@ pub fn rollback_executor_from_config(
     })
 }
 
+/// Why a rollback receipt's governance attestation could not be trusted.
+///
+/// Every variant is a REFUSAL, including [`Self::Unattested`]. A verifier that
+/// answered "fine" for a receipt carrying no signature would be the eleventh
+/// entry in `.planning/STATE.md`: a check reporting success over a region it
+/// never inspected.
+#[derive(Debug, thiserror::Error)]
+pub enum ReleaseAttestationError {
+    #[error(
+        "rollback receipt `{rollback_id}` carries no governance attestation; it proves nothing \
+         about who authorized the release"
+    )]
+    Unattested { rollback_id: String },
+
+    #[error(
+        "rollback receipt `{rollback_id}` carries a malformed governance attestation: {source}"
+    )]
+    Malformed {
+        rollback_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("rollback receipt `{rollback_id}` could not be canonicalized: {source}")]
+    Canonicalization {
+        rollback_id: String,
+        #[source]
+        source: swarm_crypto::CryptoError,
+    },
+
+    #[error(
+        "governance attestation on rollback receipt `{rollback_id}` failed signature \
+         verification: {source}"
+    )]
+    Signature {
+        rollback_id: String,
+        #[source]
+        source: swarm_consensus::ConsensusError,
+    },
+
+    #[error(
+        "governance attestation on rollback receipt `{rollback_id}` was signed over subject \
+         `{attested}` but this receipt canonicalizes to `{derived}`; the signature does not cover \
+         this body"
+    )]
+    SubjectMismatch {
+        rollback_id: String,
+        attested: String,
+        derived: String,
+    },
+}
+
+/// The exact body a governance attestation is taken over.
+///
+/// The receipt with its own attestation field cleared, because a signature
+/// cannot cover itself. `governance_attestation` is
+/// `skip_serializing_if = "Option::is_none"`, so the cleared field is absent
+/// from the canonical bytes rather than present as `null` -- which is what lets
+/// a verifier rebuild the identical subject from a receipt that has since been
+/// stamped.
+fn release_subject(receipt: &RollbackReceipt) -> RollbackReceipt {
+    let mut subject = receipt.clone();
+    subject.governance_attestation = None;
+    subject
+}
+
+/// Digest of the canonical release subject: the value an attestation's
+/// `proposal_id` must equal.
+fn release_subject_id(receipt: &RollbackReceipt) -> Result<String, swarm_crypto::CryptoError> {
+    Ok(sha256_hex(&canonical_json_bytes(&release_subject(
+        receipt,
+    ))?))
+}
+
+/// Verify that a rollback receipt carries a governance attestation, that the
+/// signature is good, and that it was taken over THIS receipt.
+///
+/// BOTH CHECKS ARE LOAD BEARING AND NEITHER IMPLIES THE OTHER.
+/// [`ConsensusGovernanceReceipt::verify`] re-canonicalizes the governance
+/// payload and checks the detached ed25519 signature, so a mutated attestation
+/// fails there. But that payload names a commit, not a rollback -- it would
+/// verify just as happily attached to a DIFFERENT release, or to a rollback
+/// receipt whose steps had been rewritten from `Failed` to `Reversed`. The
+/// subject check is what binds the signature to this body: the attestation's
+/// `proposal_id` is the digest of the canonical receipt-minus-attestation, so
+/// mutating any field of the receipt moves the derived digest away from the
+/// signed one.
+pub fn verify_release_attestation(
+    receipt: &RollbackReceipt,
+) -> Result<ConsensusGovernanceReceipt, ReleaseAttestationError> {
+    let rollback_id = receipt.rollback_id.clone();
+    let Some(raw) = receipt.governance_attestation.as_ref() else {
+        return Err(ReleaseAttestationError::Unattested { rollback_id });
+    };
+    let attestation: ConsensusGovernanceReceipt =
+        serde_json::from_value(raw.clone()).map_err(|source| {
+            ReleaseAttestationError::Malformed {
+                rollback_id: rollback_id.clone(),
+                source,
+            }
+        })?;
+    attestation
+        .verify()
+        .map_err(|source| ReleaseAttestationError::Signature {
+            rollback_id: rollback_id.clone(),
+            source,
+        })?;
+    let derived = release_subject_id(receipt).map_err(|source| {
+        ReleaseAttestationError::Canonicalization {
+            rollback_id: rollback_id.clone(),
+            source,
+        }
+    })?;
+    if attestation.payload.proposal_id != derived {
+        return Err(ReleaseAttestationError::SubjectMismatch {
+            rollback_id,
+            attested: attestation.payload.proposal_id.clone(),
+            derived,
+        });
+    }
+    Ok(attestation)
+}
+
+/// Stamp a governance attestation onto a rollback receipt, in place.
+///
+/// Failure to attest is LOGGED AND TOLERATED, never fatal. A lease that has
+/// expired must be released whether or not a governor is available to co-sign
+/// the fact; refusing would leave a host contained because the audit trail was
+/// unavailable, which inverts the safety argument. What is not tolerated is
+/// pretending: the receipt goes to the store with `governance_attestation:
+/// None` and [`verify_release_attestation`] refuses it.
+fn attest_release_receipt(
+    governance: Option<&dyn GovernanceAuthority>,
+    receipt: &mut RollbackReceipt,
+    now_ms: i64,
+) {
+    let Some(governance) = governance else {
+        return;
+    };
+    let subject = match serde_json::to_value(release_subject(receipt)) {
+        Ok(subject) => subject,
+        Err(error) => {
+            tracing::warn!(
+                module = module_path!(),
+                rollback_id = %receipt.rollback_id,
+                reason = %error,
+                "containment release could not be serialized for attestation; recorded unattested"
+            );
+            return;
+        }
+    };
+    match governance.attest_release(&subject, now_ms) {
+        Some(attestation) => receipt.governance_attestation = Some(attestation),
+        None => tracing::warn!(
+            module = module_path!(),
+            rollback_id = %receipt.rollback_id,
+            lease_id = %receipt.lease_id,
+            "governance declined to attest this containment release; recorded unattested"
+        ),
+    }
+}
+
 /// Errors raised while releasing a containment.
 #[derive(Debug, thiserror::Error)]
 pub enum ContainmentReleaseError {
@@ -175,6 +340,7 @@ pub async fn release_lease(
     lease_id: &str,
     trigger: RollbackTrigger,
     now_ms: i64,
+    governance: Option<&dyn GovernanceAuthority>,
 ) -> Result<RollbackReceipt, ContainmentReleaseError> {
     let Some(lease) = store.get(lease_id)? else {
         return Err(ContainmentReleaseError::UnknownLease {
@@ -182,7 +348,7 @@ pub async fn release_lease(
         });
     };
 
-    let receipt = executor
+    let mut receipt = executor
         .rollback(&lease, trigger, mode, now_ms)
         .await
         .map_err(|source| ContainmentReleaseError::Rollback {
@@ -208,6 +374,22 @@ pub async fn release_lease(
         );
         return Ok(receipt);
     }
+
+    // ATTEST FIRST, THEN CLOSE, AND ONLY ON THIS PATH.
+    //
+    // First, because the attestation is part of the receipt: `store.close`
+    // takes the receipt by reference and persists a clone, so stamping after
+    // the close would leave the durable copy unattested while the copy returned
+    // to the caller carried a signature. Two records of one release disagreeing
+    // about whether it was attested is exactly the audit hazard this lane
+    // exists to remove.
+    //
+    // Only on this path, because the early return above is a release that did
+    // NOT happen -- the inverse failed, the lease stays open, and the next
+    // sweep retries. Attesting it would put a governance-signed record of a
+    // release into the chain for a host that is still contained, and would burn
+    // one chain link per retry against a flapping EDR.
+    attest_release_receipt(governance, &mut receipt, now_ms);
 
     store.close(&receipt)?;
 
@@ -256,12 +438,22 @@ impl ContainmentSweepReport {
     }
 }
 
-/// Releases containment leases whose expiry has passed.
+/// Releases containment leases whose expiry has passed, and the one object an
+/// operator-driven early release goes through.
+///
+/// ONE INSTANCE PER PROCESS, SHARED. The TTL task and the operator HTTP handler
+/// hold the same `Arc<ContainmentSweep>`, so they cannot be pointed at
+/// different stores, different executors, different execution modes or
+/// different governance authorities. That sharing is not decoration: with a
+/// `MemoryContainmentLeaseStore` a second instance is a different map, and a
+/// handler built beside the sweep would report "no open lease `x`" for every
+/// lease the daemon actually holds.
 #[derive(Clone)]
 pub struct ContainmentSweep {
     store: Arc<dyn ContainmentLeaseStore>,
     executor: Arc<dyn RollbackExecutor>,
     mode: ExecutionMode,
+    governance: Option<Arc<dyn GovernanceAuthority>>,
 }
 
 impl std::fmt::Debug for ContainmentSweep {
@@ -270,6 +462,7 @@ impl std::fmt::Debug for ContainmentSweep {
             .field("store", &self.store)
             .field("executor", &self.executor)
             .field("mode", &self.mode)
+            .field("governance", &self.governance.is_some())
             .finish()
     }
 }
@@ -284,7 +477,30 @@ impl ContainmentSweep {
             store,
             executor,
             mode,
+            governance: None,
         }
+    }
+
+    /// Attach the governance authority that co-signs every release this sweep
+    /// performs.
+    ///
+    /// It is attached to the SWEEP rather than passed per call, which is what
+    /// makes "manual and automatic release cannot diverge" structural rather
+    /// than a convention: [`Self::release`] and [`Self::sweep`] read the same
+    /// field, so there is no call site at which one could be attested and the
+    /// other not.
+    pub fn with_governance(mut self, governance: Arc<dyn GovernanceAuthority>) -> Self {
+        self.governance = Some(governance);
+        self
+    }
+
+    /// Every lease currently open, for the operator listing.
+    pub fn open_leases(&self) -> Result<Vec<ContainmentLease>, ContainmentStoreError> {
+        self.store.open_leases()
+    }
+
+    fn governance(&self) -> Option<&dyn GovernanceAuthority> {
+        self.governance.as_deref()
     }
 
     /// Release one named lease early. Same function the sweep uses.
@@ -300,6 +516,7 @@ impl ContainmentSweep {
             lease_id,
             RollbackTrigger::Manual,
             now_ms,
+            self.governance(),
         )
         .await
     }
@@ -334,6 +551,7 @@ impl ContainmentSweep {
                 lease.lease_id(),
                 RollbackTrigger::Expiry,
                 now_ms,
+                self.governance(),
             )
             .await
             {

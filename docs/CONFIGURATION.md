@@ -329,6 +329,44 @@ profile matrix is documented here as the canonical operator reference.
 - `containment.lease_ttl_ms`: how long a containment (`quarantine_file`, `isolate_host`, `suspend_process`, `terminate_user_session`) may hold before the sweep releases it. Must be greater than zero: this bound is what makes autonomous containment reversible rather than permanent.
 - `containment.sweep_interval_ms`: how often expired leases are checked for. A containment can therefore outlive its TTL by at most `lease_ttl_ms + sweep_interval_ms`.
 - `containment.lease_store_path`: where open leases are persisted. **Set this for any `mode: live_response` deployment.** Omitting it keeps leases in memory only, so a restart forgets every open containment and no sweep will ever release those hosts; an operator has to release them by hand. `detect_only` needs no store, because nothing it does takes effect.
+
+### Releasing a containment early
+
+A containment normally ends when its lease expires and the sweep releases it. An
+operator can end one sooner:
+
+```bash
+swarmctl quarantine list
+swarmctl quarantine release <lease_id>
+```
+
+Both talk to a RUNNING `swarm_detect --serve` over HTTP
+(`GET /v1/operator/containment/leases`,
+`POST /v1/operator/containment/leases/{lease_id}/release`) rather than touching
+the lease store locally. That is deliberate and
+`docs/decisions/0010-containment-release-goes-through-the-daemon.md` states why:
+the daemon holds the lease store as an in-process `Arc` and the governance
+receipt chain in memory, so a second writer would fork both. What this costs is
+that a release needs the daemon up; with it down, the lease's own TTL is the
+only thing that will end the containment.
+
+Requirements:
+
+- `operator_surface.enabled: true`, and `operator_surface.runtime_base_url`
+  pointing at the daemon's `--bind` address (or pass `--daemon-url`).
+- an `operator_surface.auth` principal granting the `maintenance` scope, with
+  its bearer token exported in the named env var. `swarmctl` refuses before
+  sending if no principal grants `maintenance`, and says so separately from
+  "the token env is unset", because those are different mistakes.
+- `runtime.containment.lease_store_path`, in practice. Without it the daemon's
+  leases live only in its own memory, which still works for release while the
+  process is up but is lost on restart.
+
+Every release — manual or by TTL — goes through the same
+`swarm_runtime::containment::release_lease` and is co-signed on the governance
+receipt chain by the same authority that authorized the containment. `swarmctl
+quarantine release` prints whether that attestation verified, and exits non-zero
+if the inverse did not land and the lease is therefore still open.
 - `secret_dir`: optional directory used for file-backed `@secret:` references. Relative paths resolve relative to the config file location.
 - `anti_tamper.enabled`: turns the runtime self-monitor on or off. The shipped default is `true`.
 - `anti_tamper.check_interval_ms`: polling interval for Linux anti-tamper checks.

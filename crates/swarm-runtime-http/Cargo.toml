@@ -43,8 +43,17 @@ x509-parser = "0.16"
 zeroize.workspace = true
 
 [dev-dependencies]
+# TEST-ONLY, both added for the QRT-04 containment-release tests in
+# `src/http/tests.rs`. `async-trait` is needed to write a `RollbackExecutor`
+# double that actually mutates a world, and `swarm-consensus` so the tests can
+# assert on the typed `ConsensusGovernanceReceipt` the governance authority
+# signs -- its chain linkage and its signature -- rather than on an opaque
+# `serde_json::Value` that would let a broken attestation read as fine.
+# Neither appears in this crate's non-test code.
+async-trait.workspace = true
 rcgen = "0.13"
 serde_yaml.workspace = true
+swarm-consensus.workspace = true
 swarm-whisker.workspace = true
 
 [lints]
