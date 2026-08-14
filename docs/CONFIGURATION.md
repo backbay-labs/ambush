@@ -330,6 +330,12 @@ profile matrix is documented here as the canonical operator reference.
 - `containment.sweep_interval_ms`: how often expired leases are checked for. A containment can therefore outlive its TTL by at most `lease_ttl_ms + sweep_interval_ms`.
 - `containment.lease_store_path`: where open leases are persisted. **Set this for any `mode: live_response` deployment.** Omitting it keeps leases in memory only, so a restart forgets every open containment and no sweep will ever release those hosts; an operator has to release them by hand. `detect_only` needs no store, because nothing it does takes effect.
 
+- `secret_dir`: optional directory used for file-backed `@secret:` references. Relative paths resolve relative to the config file location.
+- `anti_tamper.enabled`: turns the runtime self-monitor on or off. The shipped default is `true`.
+- `anti_tamper.check_interval_ms`: polling interval for Linux anti-tamper checks.
+- `anti_tamper.fail_closed_live_response`: when `true`, a Linux live-response runtime drains and shuts down after anti-tamper detects a debugger attach, probe failure, or unexpected library load.
+- `anti_tamper.allowed_library_prefixes`: path prefixes allowed to appear after the initial shared-library baseline without being treated as tamper.
+
 ### Releasing a containment early
 
 A containment normally ends when its lease expires and the sweep releases it. An
@@ -367,12 +373,6 @@ Every release — manual or by TTL — goes through the same
 receipt chain by the same authority that authorized the containment. `swarmctl
 quarantine release` prints whether that attestation verified, and exits non-zero
 if the inverse did not land and the lease is therefore still open.
-- `secret_dir`: optional directory used for file-backed `@secret:` references. Relative paths resolve relative to the config file location.
-- `anti_tamper.enabled`: turns the runtime self-monitor on or off. The shipped default is `true`.
-- `anti_tamper.check_interval_ms`: polling interval for Linux anti-tamper checks.
-- `anti_tamper.fail_closed_live_response`: when `true`, a Linux live-response runtime drains and shuts down after anti-tamper detects a debugger attach, probe failure, or unexpected library load.
-- `anti_tamper.allowed_library_prefixes`: path prefixes allowed to appear after the initial shared-library baseline without being treated as tamper.
-
 `swarm_detect` now also evaluates startup attestation before live-response mode can activate:
 
 - repo ruleset attestation lives at `rulesets/attestation.json` and signs the full checked-in `rulesets/**/*.yaml` set with the repo attestation key

@@ -122,6 +122,27 @@ independent checks:
 - the attestation's `proposal_id` must equal
   `sha256(canonical(receipt-with-attestation-cleared))`.
 
+There is a THIRD check that is absent, and this ADR names it rather than leaving
+it to be inferred from the two that are present. `ConsensusGovernanceReceipt::verify`
+checks the signature against `signature.public_key_hex` carried inside the
+receipt itself, so there is no trust anchor: nothing compares the signer to the
+configured governor set and nothing checks chain linkage. An attacker able to
+rewrite a stored receipt can also mint a keypair, recompute `proposal_id` over
+the rewritten subject, sign, and pass verification.
+
+What the two implemented checks buy is that a PARTIAL rewrite fails — body
+edited with the attestation left alone, or a valid attestation lifted from a
+different release. That is the realistic at-rest tampering case and it is what
+the tests exercise. A full re-attestation is not caught. `attestation_verified:
+true` therefore means "this attestation matches this body", NOT "a governor we
+trust authorized this".
+
+This is pre-existing `verify()` semantics shared with the dispatcher's
+`missing_governance_receipt_reason`, not a regression introduced here. Closing
+it requires the governor public keys to be reachable from the runtime, and
+`GovernanceStatusReport` does not carry them — another sealed-trait widening,
+tracked as a follow-up.
+
 Neither implies the other. Measured: with the second check disabled, a receipt
 whose `steps[0].status` had been rewritten from `Reversed` to `Failed`
 verified against a genuine, unmodified signature.

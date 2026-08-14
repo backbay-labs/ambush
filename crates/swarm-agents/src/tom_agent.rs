@@ -960,46 +960,35 @@ impl GovernancePolicy {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.governors.is_empty() {
-            return None;
-        }
+        // Rebased onto BFT-03's single-key path. This used to read
+        // `state.governors` and call `simulate_governance_commit` with the whole
+        // keyring; both are gone, and the round now runs through the transport
+        // exactly as `issue_governance_receipt` does. That is the point of the
+        // rebase rather than an incidental fix -- a second commit path here
+        // would be a second place for the release attestation to drift from the
+        // governance chain it is supposed to advance.
+        state.local_governor.as_ref()?;
         let proposal = ConsensusProposal {
             proposal_id: sha256_hex(&canonical_json_bytes(subject).ok()?),
             payload: subject.clone(),
         };
-        let (commit, committee) = match simulate_governance_commit(
-            &state.governors,
-            &state.previous_commit_hash,
+        match run_governance_round(
+            &mut state,
+            self.transport.as_ref(),
             proposal,
+            GovernanceReceiptDecision::Approve,
             now_ms,
         ) {
-            Ok(value) => value,
+            Ok(receipt) => Some(receipt),
             Err(error) => {
                 tracing::warn!(
                     reason = %error,
                     module = module_path!(),
                     "failed to build governance consensus receipt for a containment release"
                 );
-                return None;
+                None
             }
-        };
-        let issued_by = state.governors.keys().next().cloned()?;
-        let signing_key = state.governors.get(&issued_by)?.clone();
-        let previous_commit_hash = state.previous_commit_hash.clone();
-        state.previous_commit_hash = commit.commit_hash.clone();
-        state.receipt_counter = state.receipt_counter.saturating_add(1);
-        let receipt = ConsensusGovernanceReceipt::issue(
-            &commit,
-            &previous_commit_hash,
-            &committee,
-            GovernanceReceiptDecision::Approve,
-            issued_by,
-            &signing_key,
-            now_ms,
-        )
-        .ok()?;
-        self.persist_locked(&state);
-        Some(receipt)
+        }
     }
 
     pub fn note_partition_veto(&self, request: &ActionRequest, reason: &str, now_ms: i64) {

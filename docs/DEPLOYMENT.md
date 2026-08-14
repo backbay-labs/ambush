@@ -237,8 +237,13 @@ curl -fsS http://127.0.0.1:9090/healthz
   `proved` solver result it asks for: its one invariant bundle declares no
   `custom_z3` invariant and `evolution.safety_gate.enable_z3` is `false`. Every
   promotion attempt therefore fails with `no solver result was recorded`, and
-  every promotion report carries the literal line
-  `Solver result: NO SOLVER RESULT RECORDED`. This is fail-closed and intended:
+  NO PROMOTION REPORT IS PRODUCED AT ALL — `ProductionPromotionReport` is built
+  at one site, inside `start_run`, AFTER the solver gate, so a run that the gate
+  refuses never reaches it. The literal line
+  `Solver result: NO SOLVER RESULT RECORDED` is what a report shows where the
+  gate has been explicitly disabled with
+  `require_solver_result_for_promotion: false`; do not go looking for it in the
+  shipped configuration. This is fail-closed and intended:
   an evolved detector does not reach production without a recorded solver proof.
   Canary admission, rollback, and the operator review surfaces are unaffected.
   To turn automated promotion on you need a deployment-owned admission bundle

@@ -3161,10 +3161,14 @@ mod qrt_04 {
 
     fn governance_with_one_governor() -> Arc<GovernancePolicy> {
         let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
-        policy.register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[41; 32]),
-        );
+        // `register_governor` became fallible in BFT-03 -- it refuses a SECOND
+        // distinct signing key -- so the Result is handled rather than dropped.
+        policy
+            .register_governor(
+                AgentId::new("tom", "primary"),
+                SigningKey::from_bytes(&[41; 32]),
+            )
+            .expect("the first governor key must register");
         policy
     }
 

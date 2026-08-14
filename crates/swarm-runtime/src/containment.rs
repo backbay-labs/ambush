@@ -209,6 +209,29 @@ fn release_subject_id(receipt: &RollbackReceipt) -> Result<String, swarm_crypto:
 /// `proposal_id` is the digest of the canonical receipt-minus-attestation, so
 /// mutating any field of the receipt moves the derived digest away from the
 /// signed one.
+///
+/// WHAT THIS DOES NOT CHECK, AND IT MATTERS. There is no trust anchor.
+/// [`ConsensusGovernanceReceipt::verify`] checks the signature against
+/// `signature.public_key_hex` CARRIED INSIDE THE RECEIPT, and only that
+/// `payload.issued_by` derives from that same key. Nothing here compares the
+/// signer against the configured governor set, and nothing checks chain
+/// linkage. So an attacker who can rewrite a stored rollback receipt can also
+/// mint a fresh keypair, recompute `proposal_id` over the rewritten subject,
+/// sign it, and this function returns `Ok`.
+///
+/// What the two checks DO buy is that a PARTIAL rewrite fails: edit the body
+/// and leave the attestation alone, or lift a valid attestation from another
+/// release, and verification refuses. That is the realistic tampering case for
+/// an at-rest artifact, and it is what the tests exercise. A full
+/// re-attestation is not caught.
+///
+/// This is pre-existing `verify()` semantics shared with
+/// `missing_governance_receipt_reason` on the dispatcher path, not something
+/// this lane introduced. Closing it needs the governor public keys reachable
+/// from the runtime, and `GovernanceStatusReport` does not carry them -- so it
+/// is another sealed-trait widening rather than a small edit. Tracked as a
+/// follow-up; do not read `attestation_verified: true` as "a governor we trust
+/// authorized this".
 pub fn verify_release_attestation(
     receipt: &RollbackReceipt,
 ) -> Result<ConsensusGovernanceReceipt, ReleaseAttestationError> {
@@ -389,7 +412,23 @@ pub async fn release_lease(
     // sweep retries. Attesting it would put a governance-signed record of a
     // release into the chain for a host that is still contained, and would burn
     // one chain link per retry against a flapping EDR.
-    attest_release_receipt(governance, &mut receipt, now_ms);
+    // THE ATTESTATION IS STAMPED WITH THE SERVER'S CLOCK, NOT THE CALLER'S.
+    //
+    // `now_ms` is a parameter so expiry is decidable from integer literals in
+    // tests rather than from elapsed wall clock, and the manual-release HTTP
+    // route lets the request body supply it. That is fine for the rollback's
+    // own `completed_at_ms`, which is a record of the operation. It is NOT fine
+    // for the governance attestation: `attest_release` reaches
+    // `ConsensusGovernanceReceipt::issue(.., now_ms)`, landing as
+    // `payload.issued_at_ms` inside a SIGNED, CHAIN-ADVANCING record. Passing
+    // the caller's value there let any principal holding `maintenance` write an
+    // arbitrary timestamp into durable governance state and make the chain
+    // non-monotonic in `issued_at_ms` -- while every signature still verified,
+    // because the value is signed rather than checked.
+    //
+    // The caller's `now_ms` still decides WHETHER the lease is expired and what
+    // the rollback records; only the governance stamp is taken from the host.
+    attest_release_receipt(governance, &mut receipt, crate::runtime_events::now_ms());
 
     store.close(&receipt)?;
 

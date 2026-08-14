@@ -35,7 +35,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 **Last Activity:** 2026-08-13
 **Last Activity Description:** Merged phase 282 (0a09358) into main after a five-lens adversarial review — 15 findings raised, 9 survived independent refutation, 3 fixed as merge blockers. Then measured phases 320/321/322 against the code and found three of their recorded statuses false.
 
-Progress: v1.78 phases 280/281/282/283 complete; v1.78.1 phases 320/321/322 open
+Progress: v1.78 phases 280/281/282/283 COMPLETE. v1.78.1: phase 320 complete (QRT-01..04), phase 322 complete (ZGATE-01..05, ZGATE-03 restated to the consuming code and ZGATE-04 partial), phase 321 PARTIAL — BFT-01/02/05 done, BFT-03 single-key done with substrate exchange deferred, BFT-04 transport seam only, both deliberately not pre-empting v1.83's VRF-02.
 
 ## Memory
 
