@@ -45,26 +45,35 @@
 #   assessment with a new date.
 #
 # WHY `[[bans.skip]]` ENTRIES CARRY NO EXPIRY
-#   Because they are self-invalidating, and that was measured rather than assumed.
-#   A version-pinned skip stops matching the moment the pinned crate moves, and
-#   both halves of that were constructed and observed on 2026-08-14:
+#   Because an exact-version skip is self-invalidating, and that was measured
+#   rather than assumed. This parser rejects wildcard, range, and open specs: the
+#   only accepted form is `<crate>@<x.y.z>`. cargo-deny then supplies two distinct
+#   stale-waiver checks, and all three failure modes were constructed and observed
+#   on 2026-08-14:
 #
 #     thiserror@1.0.69 -> thiserror@1.0.68 (the skip no longer matches the lock):
 #       error[duplicate]: found 2 duplicate entries for crate 'thiserror'
 #       warning[unmatched-skip]: skipped crate 'thiserror = =1.0.68' was not encountered
 #       bans FAILED / EXIT=2
 #
-#     a skip for a crate that is not duplicated at all (serde@0.0.1), run with the
-#     `-D unmatched-skip` this gate now passes:
+#     a skip for a version absent from the graph (serde@0.0.1), run with
+#     `-D unmatched-skip`:
 #       error[unmatched-skip]: skipped crate 'serde = =0.0.1' was not encountered
 #       bans FAILED / EXIT=2
 #
-#   So a stale skip fails either through the duplicate it stopped covering or
-#   through `unmatched-skip`. A date-based expiry on top of that would only add
-#   calendar churn to a check the lockfile already makes.
+#     a skip for a version still present but no longer duplicated
+#     (serde@1.0.228), run with `-D unnecessary-skip`:
+#       error[unnecessary-skip]: skip 'serde = =1.0.228' applied to a crate
+#         with only one version
+#       bans FAILED / EXIT=2
+#     Without `-D`, the same diagnostic is a warning, `bans ok`, EXIT=0.
 #
-# WHY `-D advisory-not-detected` AND `-D unmatched-skip`
-#   Both are warnings by default, and a warning does not change the exit code:
+#   So a stale exact skip fails through the duplicate it stopped covering,
+#   `unmatched-skip`, or `unnecessary-skip`. A date-based expiry on top of that
+#   would only add calendar churn to a check the lockfile already makes.
+#
+# WHY `-D advisory-not-detected`, `-D unmatched-skip`, AND `-D unnecessary-skip`
+#   All three are warnings by default, and a warning does not change the exit code:
 #   with an ignore entry added for a real advisory against a crate this workspace
 #   does not carry, `cargo deny check advisories` printed
 #   `warning[advisory-not-detected]` and still exited 0 (measured 2026-08-14; the
@@ -72,7 +81,7 @@
 #   advisory exception that no longer matches anything is an exception nobody
 #   needs, and it was invisible to the gate. With `-D` the same input is
 #   `error[advisory-not-detected] ... advisories FAILED`, EXIT=1.
-#   These two flags are what makes "the exception should go when it is no longer
+#   These three flags are what makes "the exception should go when it is no longer
 #   needed" a mechanical outcome instead of a periodic human sweep. They also
 #   close the obvious way around this gate: switching cargo-deny's own detection
 #   off with `[advisories] unmaintained = "none"` while leaving the waivers in
@@ -179,6 +188,34 @@ MIN_FIELD_CHARS = 24
 
 ADVISORY_ID = re.compile(r"RUSTSEC-[0-9]{4}-[0-9]{4}")
 DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+EXACT_SKIP_SPEC = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_-]*@"
+    r"(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)$"
+)
+
+# Executable grammar fixtures. These run before deny.toml is inspected so a
+# future regex edit cannot silently admit the broad forms this policy exists to
+# reject. The exact control prevents a regex that rejects everything from
+# masquerading as a stricter gate.
+SKIP_SPEC_FIXTURES = (
+    ("fixture@*", False),
+    ("fixture@1", False),
+    ("fixture@^1", False),
+    ("fixture@~1.3", False),
+    ("fixture@1.2.3", True),
+)
+
+for fixture, expected in SKIP_SPEC_FIXTURES:
+    actual = EXACT_SKIP_SPEC.fullmatch(fixture) is not None
+    if actual != expected:
+        print(
+            "::error::internal exact-skip grammar fixture failed: "
+            f"{fixture!r} expected accepted={expected}, got accepted={actual}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 errors = []
 
@@ -322,11 +359,12 @@ for index, entry in enumerate(skips):
     if not isinstance(spec, str):
         spec = ""
     where = f"deny.toml [bans] skip `{spec or '<no crate>'}`"
-    if "@" not in spec and not any(c in spec for c in "=<>^~*"):
+    if EXACT_SKIP_SPEC.fullmatch(spec) is None:
         problem(
             where,
-            "`crate` has no version, so it waives every version of that crate "
-            "forever, which cannot fail and is not a gate",
+            "`crate` must be an exact `<crate>@<x.y.z>` spec; wildcard, range, "
+            "partial, prerelease, and open version requirements are forbidden "
+            "because they can keep matching after the reviewed version moves",
         )
     reason = entry.get("reason", "")
     if not isinstance(reason, str) or not reason.strip():
@@ -439,11 +477,11 @@ for entry in ignores:
 PY
 
 # `bans` runs with duplicates ENFORCED. Accepted duplicates are enumerated, dated
-# and justified as version-pinned `[[bans.skip]]` entries in deny.toml, so a new
-# duplicate -- or a skipped one moving version -- fails this gate. The two `-D`
-# flags escalate cargo-deny's own "this waiver matched nothing" warnings into
-# errors; see the header for the measured before/after.
-cargo deny check -D advisory-not-detected -D unmatched-skip \
+# and justified as exact-version `[[bans.skip]]` entries in deny.toml, so a new
+# duplicate -- or a skipped one moving version or ceasing to be a duplicate --
+# fails this gate. The three `-D` flags escalate cargo-deny's own stale-waiver
+# warnings into errors; see the header for the measured cases.
+cargo deny check -D advisory-not-detected -D unmatched-skip -D unnecessary-skip \
   advisories licenses bans sources
 
 # `cargo deny` honours features and targets; `cargo audit` reads the whole

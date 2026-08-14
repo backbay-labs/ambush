@@ -103,10 +103,12 @@ Supply chain is enforced with `cargo deny` and `cargo audit` through
 Waiving a supply-chain finding -- a RustSec advisory or a duplicate dependency -- means adding an
 entry to `deny.toml` with the metadata that gate parses out of its `reason`: `last-checked
 <YYYY-MM-DD>` and a `clears-when:` clause on either kind of entry, plus `expires <YYYY-MM-DD>` and a
-`blast-radius:` note on an `[advisories] ignore`. An expired advisory exception fails the build, and
-so does a waiver that no longer matches anything. Do not add `--ignore` to a `cargo audit`
-invocation: that list is derived from `deny.toml`, and a RustSec id written into a workflow or a
-`tools/*.sh` fails the gate as a second list that would drift.
+`blast-radius:` note on an `[advisories] ignore`. Duplicate skips must use the exact
+`<crate>@<x.y.z>` form; wildcard, range, partial, prerelease, and open requirements are rejected. An
+expired advisory exception fails the build; so do exact skips whose version is absent or is still
+present but no longer duplicated. Do not add `--ignore` to a `cargo audit` invocation: that list is
+derived from `deny.toml`, and a RustSec id written into a workflow or a `tools/*.sh` fails the gate
+as a second list that would drift.
 
 ## Conventions
 

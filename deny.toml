@@ -13,6 +13,7 @@ all-features = false
 #               blast-radius: <what this exposes>; clears-when: <the event that ends it>"
 #
 #   [[bans.skip]]
+#     crate = "<crate>@<x.y.z>"
 #     reason = "last-checked <YYYY-MM-DD>; pinned-by: <who holds the old major>; \
 #               clears-when: <the event that ends it>"
 #
@@ -23,14 +24,16 @@ all-features = false
 # An advisory exception past its `expires` date FAILS the gate, and the
 # last-checked..expires window is capped at 180 days, so a deadline cannot be
 # written far enough out to stop being one. A duplicate waiver below carries no
-# expiry because the version pin already is one: move the pin and cargo-deny
-# reports the duplicate it stopped covering, or `unmatched-skip` -- both measured,
-# both exit 2. See the header of tools/check-supply-chain.sh for the observed
-# output of each case.
+# expiry because the exact `crate@x.y.z` pin already is one: wildcard, range,
+# partial and open specs fail the metadata parser; move an accepted pin and
+# cargo-deny reports the duplicate it stopped covering or `unmatched-skip`; leave
+# the pinned version present after its duplicate disappears and
+# `unnecessary-skip` fires. All three stale-skip cases exit 2. See the header of
+# tools/check-supply-chain.sh for the observed output.
 #
-# The gate also runs `cargo deny check -D advisory-not-detected -D unmatched-skip`,
-# which turns cargo-deny's default warnings for a waiver that matches nothing into
-# errors. A waiver here that is no longer needed fails the build; it does not
+# The gate also runs `cargo deny check -D advisory-not-detected -D unmatched-skip
+# -D unnecessary-skip`, which turns cargo-deny's default stale-waiver warnings
+# into errors. A waiver here that is no longer needed fails the build; it does not
 # linger as a warning nobody reads.
 
 [advisories]
@@ -68,10 +71,13 @@ highlight = "all"
 #
 # `cargo deny check bans -A duplicate`, which tools/check-supply-chain.sh used to
 # pass, suppresses EVERY duplicate forever -- including ones that do not exist
-# yet. It cannot be made to fail, so it is not a gate. A version-pinned
-# `[[bans.skip]]` breaks the moment a NEW duplicate appears or a skipped one moves
-# version, which is the entire point of the check. Each entry names the dependency
-# that pins the old major so it can be retired when that dependency moves.
+# yet. It cannot be made to fail, so it is not a gate. Only an exact
+# `<crate>@<x.y.z>` `[[bans.skip]]` is accepted; wildcard, range, partial and open
+# specs are rejected before cargo-deny runs. An exact skip breaks when a NEW
+# duplicate appears, a skipped version moves, or the version remains but ceases to
+# be duplicated, which is the entire point of the check. Each entry names the
+# dependency that pins the old major so it can be retired when that dependency
+# moves.
 #
 # Reviewed 2026-08-11 (phase 280 / GATEFIX-04). Every `pinned-by` clause below was
 # re-traced with `cargo tree -i <crate>@<version> --target all -e normal
@@ -138,7 +144,7 @@ highlight = "all"
 # a duplicate-dependency cleanup is exactly the move this file refuses elsewhere,
 # so it is disclosed rather than taken. Closing it means one decision about what
 # the project will ship under, after which `all-features = true` plus five
-# version-pinned skips for the crates named above is a mechanical follow-up.
+# exact-version skips for the crates named above is a mechanical follow-up.
 #
 # ATTEMPTED AND DELIBERATELY REVERTED: migrating our own swarm-ingest-tetragon
 # from tonic/prost 0.13 to 0.14 (plus tonic-prost / tonic-prost-build) does

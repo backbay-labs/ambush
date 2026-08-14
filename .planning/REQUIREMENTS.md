@@ -859,8 +859,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Supply-Chain Hardening
 
-- [x] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition. Also an `expires` date: an exception whose deadline has passed FAILS `tools/check-supply-chain.sh` (constructed and observed), and the last-checked..expires window is capped at 180 days. `[[bans.skip]]` entries carry `last-checked` and `pinned-by`/`clears-when` under the same parser.
-- [x] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, and the `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift. Deduplicated by DERIVATION rather than comparison: the script reads `[advisories] ignore` and builds the `--ignore` flags from it, holds no id of its own, and fails if a RustSec id appears on any other enforcement surface.
+- [x] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition. Also an `expires` date: an exception whose deadline has passed FAILS `tools/check-supply-chain.sh` (constructed and observed), and the last-checked..expires window is capped at 180 days. `[[bans.skip]]` entries carry `last-checked` and `pinned-by`/`clears-when` under the same parser, and their crate specs must be exact `<crate>@<x.y.z>` pins; executable adversarial fixtures reject wildcard, partial, caret-range, and tilde-range forms.
+- [x] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, escalates cargo-deny's `unmatched-skip` and `unnecessary-skip` warnings so absent and no-longer-duplicate exact skips both fail, and deduplicates the `cargo audit --ignore` list against `deny.toml` so the two cannot drift. Deduplicated by DERIVATION rather than comparison: the script reads `[advisories] ignore` and builds the `--ignore` flags from it, holds no id of its own, and fails if a RustSec id appears on any other enforcement surface.
 
 ### Red Swarm (v1.80)
 
