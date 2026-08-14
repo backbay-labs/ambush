@@ -15,12 +15,19 @@ condition. `tools/check-mapping.sh` resolves both sets, requires every source
 marker to be attached to an executable decision inside the exact named
 function, and enforces set equality with the many-to-many assumption registry.
 
-Every mapped row has one negative test invoking the shared typed differential
-protocol. The protocol drives the real function, an unmutated mirror on the
-same typed violating probe, and a mirror with one registry-bound guard removed;
-it asserts real equals the control denial and the broken operation permits. It
-does not mechanically prove handwritten-mirror fidelity beyond those registered
-operations. The reproduced neutralization output is stored with the row in
+Every mapped row has one negative test whose registry-bound named case adapter
+implements the shared typed differential protocol. The protocol drives the
+adapter's real operation, an unmutated mirror on the same typed violating probe,
+and a mirror with one registry-bound guard removed; it asserts real equals the
+control denial and the broken operation permits. A separate compiled contract
+proves one call per role plus those assertion semantics, and the gate mutates the
+actual shared protocol to prove no-op, omitted/swapped-role, and removed or
+inverted-assertion variants fail. The gate also requires an exact fully-qualified
+public production-entry call inside every named real adapter, with indirect
+entry-to-private-guard reachability recorded explicitly. This is structural
+binding, not runtime instrumentation, and it does not mechanically prove
+handwritten-mirror fidelity beyond the registered probe. The reproduced
+neutralization output is stored with the row in
 [`negative-registry.toml`](negative-registry.toml); no claim is made that old
 outputs live in a commit message.
 

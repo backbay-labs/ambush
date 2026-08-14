@@ -524,16 +524,24 @@ fn broken_action_target_validation_permits_empty_fields_across_all_action_varian
         mutation: StaticMutation,
         control: StaticMutation::None,
         broken: StaticMutation::SkipActionTarget,
+        state: {
+            config: PolicyConfig = config,
+            context: ApprovalContext = context,
+        },
         probe: Vec<(&'static str, ActionRequest)> = probes,
         outcome: Vec<(&'static str, String)>,
-        real: |probe| {
+        real: |_state, probe| {
             probe.iter().map(|(label, request)| {
-                (*label, outcome(&StaticApprovalGate::from_config(&config).evaluate(request, &context)))
+                (*label, outcome(&swarm_policy::static_gate::StaticApprovalGate::evaluate(
+                    &StaticApprovalGate::from_config(config),
+                    request,
+                    context,
+                )))
             }).collect()
         },
-        mirror: |probe, mutation| {
+        mirror: |_state, probe, mutation| {
             probe.iter().map(|(label, request)| {
-                (*label, outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(request, &context)))
+                (*label, outcome(&MirroredStaticGate::from_config(config, mutation).evaluate(request, context)))
             }).collect()
         },
         denied: |outcomes| outcomes.iter().all(|(_, value)| value.starts_with("Err/")),
@@ -562,10 +570,16 @@ fn broken_deploy_decoy_minimum_permits_a_low_severity_deployment() {
         mutation: StaticMutation,
         control: StaticMutation::None,
         broken: StaticMutation::SkipDeployDecoyMinimum,
+        state: {
+            config: PolicyConfig = config,
+            context: ApprovalContext = context,
+        },
         probe: ActionRequest = probe,
         outcome: String,
-        real: |probe| outcome(&StaticApprovalGate::from_config(&config).evaluate(probe, &context)),
-        mirror: |probe, mutation| outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(probe, &context)),
+        real: |_state, probe| outcome(&swarm_policy::static_gate::StaticApprovalGate::evaluate(
+            &StaticApprovalGate::from_config(config), probe, context,
+        )),
+        mirror: |_state, probe, mutation| outcome(&MirroredStaticGate::from_config(config, mutation).evaluate(probe, context)),
         denied: |value| value == "Deny/static.deploy_decoy_min_severity",
         permitted: |value| value == "Allow/static.default_allow",
     }
@@ -596,10 +610,15 @@ fn broken_validate_request_permits_the_null_evidence_request_the_real_gate_refus
         mutation: StaticMutation,
         control: StaticMutation::None,
         broken: StaticMutation::SkipNullEvidence,
+        state: {
+            config: PolicyConfig = config,
+            real: StaticApprovalGate = real,
+            context: ApprovalContext = context,
+        },
         probe: ActionRequest = probe,
         outcome: String,
-        real: |probe| outcome(&real.evaluate(probe, &context)),
-        mirror: |probe, mutation| outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(probe, &context)),
+        real: |_state, probe| outcome(&swarm_policy::static_gate::StaticApprovalGate::evaluate(&*real, probe, context)),
+        mirror: |_state, probe, mutation| outcome(&MirroredStaticGate::from_config(config, mutation).evaluate(probe, context)),
         denied: |value| value.starts_with("Err/"),
         permitted: |value| value == "RequireHuman/static.human_gate",
     }
@@ -625,10 +644,15 @@ fn broken_minimum_severity_permits_the_low_severity_destructive_action_the_real_
         mutation: StaticMutation,
         control: StaticMutation::None,
         broken: StaticMutation::SkipMinimumSeverity,
+        state: {
+            config: PolicyConfig = config,
+            real: StaticApprovalGate = real,
+            context: ApprovalContext = context,
+        },
         probe: ActionRequest = probe,
         outcome: String,
-        real: |probe| outcome(&real.evaluate(probe, &context)),
-        mirror: |probe, mutation| outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(probe, &context)),
+        real: |_state, probe| outcome(&swarm_policy::static_gate::StaticApprovalGate::evaluate(&*real, probe, context)),
+        mirror: |_state, probe, mutation| outcome(&MirroredStaticGate::from_config(config, mutation).evaluate(probe, context)),
         denied: |value| value == "Deny/static.minimum_severity",
         permitted: |value| value == "Allow/static.default_allow",
     }
@@ -659,10 +683,15 @@ fn broken_human_gate_permits_immediate_execution_of_what_the_real_gate_holds() {
         mutation: StaticMutation,
         control: StaticMutation::None,
         broken: StaticMutation::SkipHumanGate,
+        state: {
+            config: PolicyConfig = config,
+            real: StaticApprovalGate = real,
+            context: ApprovalContext = context,
+        },
         probe: ActionRequest = probe,
         outcome: String,
-        real: |probe| outcome(&real.evaluate(probe, &context)),
-        mirror: |probe, mutation| outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(probe, &context)),
+        real: |_state, probe| outcome(&swarm_policy::static_gate::StaticApprovalGate::evaluate(&*real, probe, context)),
+        mirror: |_state, probe, mutation| outcome(&MirroredStaticGate::from_config(config, mutation).evaluate(probe, context)),
         denied: |value| value == "RequireHuman/static.human_gate",
         permitted: |value| value == "Allow/static.default_allow",
     }
@@ -694,21 +723,25 @@ fn broken_scope_rate_limit_permits_the_over_budget_action_the_real_gate_denies()
         mutation: StaticMutation,
         control: StaticMutation::None,
         broken: StaticMutation::SkipScopeRateLimit,
+        state: {
+            config: PolicyConfig = config,
+            context: ApprovalContext = context,
+        },
         probe: ActionRequest = probe,
         outcome: String,
-        real: |probe| {
-            let gate = StaticApprovalGate::from_config(&config);
+        real: |_state, probe| {
+            let gate = StaticApprovalGate::from_config(config);
             for _ in 0..config.max_actions_per_scope_per_minute {
-                let _ = gate.evaluate(probe, &context);
+                let _ = swarm_policy::static_gate::StaticApprovalGate::evaluate(&gate, probe, context);
             }
-            outcome(&gate.evaluate(probe, &context))
+            outcome(&swarm_policy::static_gate::StaticApprovalGate::evaluate(&gate, probe, context))
         },
-        mirror: |probe, mutation| {
-            let mut gate = MirroredStaticGate::from_config(&config, mutation);
+        mirror: |_state, probe, mutation| {
+            let mut gate = MirroredStaticGate::from_config(config, mutation);
             for _ in 0..config.max_actions_per_scope_per_minute {
-                let _ = gate.evaluate(probe, &context);
+                let _ = gate.evaluate(probe, context);
             }
-            outcome(&gate.evaluate(probe, &context))
+            outcome(&gate.evaluate(probe, context))
         },
         denied: |value| value == "Deny/static.scope_rate_limit",
         permitted: |value| value == "Allow/static.default_allow",
@@ -853,10 +886,16 @@ fn broken_empty_ruleset_arm_permits_the_action_the_real_gate_fails_closed_on() {
         mutation: ConfigurableMutation,
         control: ConfigurableMutation::None,
         broken: ConfigurableMutation::SkipEmptyRuleset,
+        state: {
+            config: PolicyConfig = config.clone(),
+            context: ApprovalContext = context.clone(),
+        },
         probe: ActionRequest = probe.clone(),
         outcome: String,
-        real: |probe| outcome(&ConfigurableApprovalGate::from_config(&config).evaluate(probe, &context)),
-        mirror: |probe, mutation| outcome(&MirroredConfigurableGate::new(&config, mutation).evaluate(probe, &context)),
+        real: |_state, probe| outcome(&swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate(
+            &ConfigurableApprovalGate::from_config(config), probe, context,
+        )),
+        mirror: |_state, probe, mutation| outcome(&MirroredConfigurableGate::new(config, mutation).evaluate(probe, context)),
         denied: |value| value == "Deny/configurable.fail_closed.empty_ruleset",
         permitted: |value| value == "Allow/static.default_allow",
     }
@@ -917,10 +956,16 @@ fn broken_time_window_admits_a_request_outside_the_configured_window() {
         mutation: ConfigurableMutation,
         control: ConfigurableMutation::None,
         broken: ConfigurableMutation::SkipTimeWindow,
+        state: {
+            config: PolicyConfig = config,
+            context: ApprovalContext = context,
+        },
         probe: ActionRequest = probe,
         outcome: String,
-        real: |probe| outcome(&ConfigurableApprovalGate::from_config(&config).evaluate(probe, &context)),
-        mirror: |probe, mutation| outcome(&MirroredConfigurableGate::new(&config, mutation).evaluate(probe, &context)),
+        real: |_state, probe| outcome(&swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate(
+            &ConfigurableApprovalGate::from_config(config), probe, context,
+        )),
+        mirror: |_state, probe, mutation| outcome(&MirroredConfigurableGate::new(config, mutation).evaluate(probe, context)),
         denied: |value| value == "Deny/execution-rule",
         permitted: |value| value == "Allow/execution-rule",
     }
@@ -943,17 +988,21 @@ fn broken_agent_rate_limit_admits_the_over_budget_request() {
         mutation: ConfigurableMutation,
         control: ConfigurableMutation::None,
         broken: ConfigurableMutation::SkipAgentRateLimit,
+        state: {
+            config: PolicyConfig = config,
+            context: ApprovalContext = context,
+        },
         probe: ActionRequest = probe,
         outcome: String,
-        real: |probe| {
-            let gate = ConfigurableApprovalGate::from_config(&config);
-            let _ = gate.evaluate(probe, &context);
-            outcome(&gate.evaluate(probe, &context))
+        real: |_state, probe| {
+            let gate = ConfigurableApprovalGate::from_config(config);
+            let _ = swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate(&gate, probe, context);
+            outcome(&swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate(&gate, probe, context))
         },
-        mirror: |probe, mutation| {
-            let mut gate = MirroredConfigurableGate::new(&config, mutation);
-            let _ = gate.evaluate(probe, &context);
-            outcome(&gate.evaluate(probe, &context))
+        mirror: |_state, probe, mutation| {
+            let mut gate = MirroredConfigurableGate::new(config, mutation);
+            let _ = gate.evaluate(probe, context);
+            outcome(&gate.evaluate(probe, context))
         },
         denied: |value| value == "Deny/execution-rule",
         permitted: |value| value == "Allow/execution-rule",
@@ -975,10 +1024,16 @@ fn broken_configured_deny_rule_turns_an_explicit_denial_into_allow() {
         mutation: ConfigurableMutation,
         control: ConfigurableMutation::None,
         broken: ConfigurableMutation::FlipDenyToAllow,
+        state: {
+            config: PolicyConfig = config,
+            context: ApprovalContext = context,
+        },
         probe: ActionRequest = probe,
         outcome: String,
-        real: |probe| outcome(&ConfigurableApprovalGate::from_config(&config).evaluate(probe, &context)),
-        mirror: |probe, mutation| outcome(&MirroredConfigurableGate::new(&config, mutation).evaluate(probe, &context)),
+        real: |_state, probe| outcome(&swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate(
+            &ConfigurableApprovalGate::from_config(config), probe, context,
+        )),
+        mirror: |_state, probe, mutation| outcome(&MirroredConfigurableGate::new(config, mutation).evaluate(probe, context)),
         denied: |value| value == "Deny/execution-rule",
         permitted: |value| value == "Allow/execution-rule",
     }

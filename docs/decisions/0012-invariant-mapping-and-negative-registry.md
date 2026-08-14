@@ -9,7 +9,7 @@ workflow job a protected required check.
 Supersedes nothing. Names invariants of the trusted computing base ADR 0009
 draws; adds no dependency edge to any TCB crate, so
 `tools/check-workspace-layering.sh` needed no new `TCB_ALLOWED_WORKSPACE_DEPS`
-entry. The four new test targets live in `crates/*/tests/` and use only
+entry. The five new test targets live in `crates/*/tests/` and use only
 dependencies those crates already declare.
 
 ## Context
@@ -72,14 +72,34 @@ on a row with no entry, an entry with no row, an entry naming a test file or tes
 function that does not exist, a test function carrying no adjacent `#[test]` or
 `#[tokio::test]` attribute, an ignored or conditionally disabled test, or a body
 that does not invoke exactly one shared typed differential protocol. The
-protocol's case type and exact `Mutation::None`/`Mutation::BrokenVariant`
-identities must match the registry. Comments, strings, locally shadowed macros,
+protocol's named case type, exact real adapter, public production entry and
+`Mutation::None`/`Mutation::BrokenVariant` identities must match the registry.
+For guards reached through a public API, the registry separately names the
+internal `production_fn`, public `production_entry`, and an explicit indirect
+reachability reason. Comments, strings, locally shadowed macros,
 decorative tokens, nonexistent modules/types, and production-shaped
 `.evaluate`/`black_box`/unrelated-assertion spoofs are adversarial self-test
 cases. For each of the four targets, Cargo `--list` discovery must equal the
 registry's exact test-name set. A separate whole-target execution must succeed
 with the exact registered passed count and zero failed or ignored; test-owned
 stdout is never accepted as per-name execution evidence.
+
+The protocol itself has a separate compiled five-test contract target. Its
+success case uses typed counters and role capture to prove exactly one real,
+one mirror(None), and one mirror(BrokenVariant) call. Four `#[should_panic]`
+cases prove real/control mismatch, a permitting real operation, a denying
+broken operation, and swapped role identities are rejected. The gate copies
+the actual `tests/negative_protocol.rs` and actual contract into a temporary
+crate, then applies thirteen source mutations: no-op and `if false` execution,
+each omitted operation, swapped mirror roles, and removed, inverted, or vacuous
+assertions. Every mutation must compile and fail the contract tests.
+
+Each registry entry also binds `CASE_TYPE::real` to the exact fully-qualified
+public production call written in that adapter. This is a structural source
+check; the compiled contract proves the adapter method is invoked once but does
+not runtime-instrument the production function called inside it. A public entry
+may reach a private mapped guard indirectly, which is recorded rather than
+misrepresented as a direct test call.
 
 The shared typed protocol makes each test do three things over one probe input:
 
