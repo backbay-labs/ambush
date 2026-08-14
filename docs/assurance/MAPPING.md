@@ -15,9 +15,12 @@ condition. `tools/check-mapping.sh` resolves both sets, requires every source
 marker to be attached to an executable decision inside the exact named
 function, and enforces set equality with the many-to-many assumption registry.
 
-Every mapped row has one negative test. The test drives the real function, an
-unmutated mirror on the same violating probe, and a mirror with one named guard
-removed. The reproduced neutralization output is stored with the row in
+Every mapped row has one negative test invoking the shared typed differential
+protocol. The protocol drives the real function, an unmutated mirror on the
+same typed violating probe, and a mirror with one registry-bound guard removed;
+it asserts real equals the control denial and the broken operation permits. It
+does not mechanically prove handwritten-mirror fidelity beyond those registered
+operations. The reproduced neutralization output is stored with the row in
 [`negative-registry.toml`](negative-registry.toml); no claim is made that old
 outputs live in a commit message.
 

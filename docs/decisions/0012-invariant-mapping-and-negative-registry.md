@@ -44,10 +44,11 @@ requirement-defined universe. Each row names an exact
 dependencies are many-to-many; forcing a one-assumption partition produced an
 incomplete blast radius and was removed in assurance review.
 
-`tools/check-mapping.sh` lexically removes Rust comments and literals, resolves
-each path through the compiled crate-root module graph — including inline and
+`tools/check-mapping.sh` obtains the four crates' compiled Rust source inventory
+from Cargo's rustc dep-info, lexically removes Rust comments and literals, and
+resolves each path through the crate-root module graph — including inline and
 `#[path]` modules, but excluding orphan source files — to the exact impl type and
-function body, and fails when it does not exist. It requires one
+function body. It requires one
 `// INVARIANT: <NAME>` marker immediately before an executable decision inside
 that exact function, and fails on any production marker with no row.
 
@@ -69,16 +70,18 @@ This is the substantive decision and the expensive one.
 `crates/*/tests/negative_*.rs` test, and `tools/check-negative-registry.sh` fails
 on a row with no entry, an entry with no row, an entry naming a test file or test
 function that does not exist, a test function carrying no adjacent `#[test]` or
-`#[tokio::test]` attribute, an ignored or cfg-disabled test, an assertion-free
-body, a missing named real/control/broken probe, or a `broken_variant` whose exact `Enum::Variant`
-identity is not executably defined outside the test and passed to a
-non-assertion call or constructor inside it. Comments, strings, decorative bare
-or qualified tokens, nonexistent modules and nonexistent types are adversarial
-self-test cases. Four batched Cargo invocations execute the exact registered
-test targets; the gate requires every registered name to report `ok` and each
-target summary to report zero ignored tests.
+`#[tokio::test]` attribute, an ignored or conditionally disabled test, or a body
+that does not invoke exactly one shared typed differential protocol. The
+protocol's case type and exact `Mutation::None`/`Mutation::BrokenVariant`
+identities must match the registry. Comments, strings, locally shadowed macros,
+decorative tokens, nonexistent modules/types, and production-shaped
+`.evaluate`/`black_box`/unrelated-assertion spoofs are adversarial self-test
+cases. For each of the four targets, Cargo `--list` discovery must equal the
+registry's exact test-name set. A separate whole-target execution must succeed
+with the exact registered passed count and zero failed or ignored; test-owned
+stdout is never accepted as per-name execution evidence.
 
-Each such test does three things over one probe input:
+The shared typed protocol makes each test do three things over one probe input:
 
 1. drives the **real** function and asserts it refuses;
 2. drives an **unmutated mirror** of that function and asserts it reproduces the
@@ -103,9 +106,10 @@ hole in them. A mirror in a test target cannot be linked into anything that
 ships.
 
 The cost is real and is stated rather than hidden: **nothing mechanical proves a
-mirror is faithful.** The control in step 2 and review are what stand in for it,
-and both check scripts say so in their headers rather than implying a guarantee
-they do not provide.
+handwritten mirror is faithful beyond the registered probe and operations.**
+The typed control in step 2 and review are what stand in for that broader proof,
+and the protocol plus both check scripts say so in their headers rather than
+implying a guarantee they do not provide.
 
 ### 4. Neutralization evidence is row-local and reproducible
 

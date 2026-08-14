@@ -1,14 +1,16 @@
-# One executable negative mutation per MAPPING.md row. The registry gate resolves
-# both production paths exactly, parses real test bodies after removing comments
-# and literals, and requires the named mutation to be defined outside and used
-# inside the attributed test. `permits` and `observed_when_neutralized` are
-# review prose, not mechanically interpreted assertions; the executable test is
-# the authority and the gate requires these fields only to be non-empty.
+# One executable negative mutation per MAPPING.md row. Each entry is bound to
+# an exact test, typed case identity, invariant identity, and mutation variant.
+# The shared Rust protocol owns the real, mirror(None), and
+# mirror(BrokenVariant) operations over one typed probe. `permits` and
+# `observed_when_neutralized` remain review prose rather than parsed stdout.
+# The protocol proves the registered differential; it cannot mechanically prove
+# a handwritten mirror faithful for inputs outside that registered probe.
 
-schema_version = 2
+schema_version = 3
 
 [[entry]]
 invariant = "POLICY-EMPTY-RULESET-DENIES"
+case_type = "POLICY_EMPTY_RULESET_DENIES"
 production_fn = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 entry_point = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -19,6 +21,7 @@ observed_when_neutralized = "Neutralizing SkipEmptyRuleset makes the final Allow
 
 [[entry]]
 invariant = "POLICY-RULE-TIME-WINDOW"
+case_type = "POLICY_RULE_TIME_WINDOW"
 production_fn = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 entry_point = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -29,6 +32,7 @@ observed_when_neutralized = "Neutralizing SkipTimeWindow changes the broken verd
 
 [[entry]]
 invariant = "POLICY-RULE-AGENT-RATE-LIMIT"
+case_type = "POLICY_RULE_AGENT_RATE_LIMIT"
 production_fn = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 entry_point = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -39,6 +43,7 @@ observed_when_neutralized = "Neutralizing SkipAgentRateLimit changes the second 
 
 [[entry]]
 invariant = "POLICY-CONFIGURED-DENY-RULE"
+case_type = "POLICY_CONFIGURED_DENY_RULE"
 production_fn = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 entry_point = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -49,6 +54,7 @@ observed_when_neutralized = "Neutralizing FlipDenyToAllow changes the broken ver
 
 [[entry]]
 invariant = "POLICY-NULL-EVIDENCE-REFUSED"
+case_type = "POLICY_NULL_EVIDENCE_REFUSED"
 production_fn = "swarm_policy::static_gate::StaticApprovalGate::validate_request"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -59,6 +65,7 @@ observed_when_neutralized = "Neutralizing SkipNullEvidence returns InvalidReques
 
 [[entry]]
 invariant = "POLICY-ACTION-TARGETS-NONEMPTY"
+case_type = "POLICY_ACTION_TARGETS_NONEMPTY"
 production_fn = "swarm_policy::static_gate::StaticApprovalGate::validate_request"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -69,6 +76,7 @@ observed_when_neutralized = "Neutralizing SkipActionTarget changes each of the 2
 
 [[entry]]
 invariant = "POLICY-DESTRUCTIVE-MIN-SEVERITY"
+case_type = "POLICY_DESTRUCTIVE_MIN_SEVERITY"
 production_fn = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -79,6 +87,7 @@ observed_when_neutralized = "Neutralizing SkipMinimumSeverity changes the broken
 
 [[entry]]
 invariant = "POLICY-DEPLOY-DECOY-MIN-SEVERITY"
+case_type = "POLICY_DEPLOY_DECOY_MIN_SEVERITY"
 production_fn = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -89,6 +98,7 @@ observed_when_neutralized = "Neutralizing SkipDeployDecoyMinimum changes the bro
 
 [[entry]]
 invariant = "POLICY-SCOPE-RATE-LIMIT"
+case_type = "POLICY_SCOPE_RATE_LIMIT"
 production_fn = "swarm_policy::static_gate::StaticApprovalGate::scope_rate_limit_decision"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -99,6 +109,7 @@ observed_when_neutralized = "Neutralizing SkipScopeRateLimit changes the sixth b
 
 [[entry]]
 invariant = "POLICY-DESTRUCTIVE-HUMAN-GATE"
+case_type = "POLICY_DESTRUCTIVE_HUMAN_GATE"
 production_fn = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
@@ -109,6 +120,7 @@ observed_when_neutralized = "Neutralizing SkipHumanGate changes the broken verdi
 
 [[entry]]
 invariant = "RESPONSE-TTL-STRICTLY-POSITIVE"
+case_type = "RESPONSE_TTL_STRICTLY_POSITIVE"
 production_fn = "swarm_response::containment::ContainmentTtl::from_config_ms"
 entry_point = "swarm_response::containment::ContainmentTtl::from_config_ms"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -119,6 +131,7 @@ observed_when_neutralized = "Neutralizing SkipPositiveCheck changes Ok(0) to Non
 
 [[entry]]
 invariant = "RESPONSE-LEASE-BOUNDED"
+case_type = "RESPONSE_LEASE_BOUNDED"
 production_fn = "swarm_response::containment::ContainmentLease::open"
 entry_point = "swarm_response::containment::ContainmentLease::open"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -129,6 +142,7 @@ observed_when_neutralized = "the broken derivation returns an expiry: UnboundedL
 
 [[entry]]
 invariant = "RESPONSE-STORED-LEASE-SCHEMA-KNOWN"
+case_type = "RESPONSE_STORED_LEASE_SCHEMA_KNOWN"
 production_fn = "swarm_response::containment::ContainmentLease::try_from"
 entry_point = "swarm_response::containment::ContainmentLease::try_from"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -139,6 +153,7 @@ observed_when_neutralized = "Neutralizing SkipSchemaVersion changes Ok(901000) t
 
 [[entry]]
 invariant = "RESPONSE-STORED-LEASE-BOUNDED"
+case_type = "RESPONSE_STORED_LEASE_BOUNDED"
 production_fn = "swarm_response::containment::ContainmentLease::try_from"
 entry_point = "swarm_response::containment::ContainmentLease::try_from"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -149,6 +164,7 @@ observed_when_neutralized = "Neutralizing SkipExpiryBound changes Ok(900) to con
 
 [[entry]]
 invariant = "RESPONSE-UNMAPPED-INVERSE-REFUSED"
+case_type = "RESPONSE_UNMAPPED_INVERSE_REFUSED"
 production_fn = "swarm_response::rollback::resolve_inverse"
 entry_point = "swarm_response::rollback::resolve_inverse"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -159,6 +175,7 @@ observed_when_neutralized = "Neutralizing InventUnmappedInverse changes Ok(inven
 
 [[entry]]
 invariant = "RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS"
+case_type = "RESPONSE_EMPTY_ROLLBACK_NOT_SUCCESS"
 production_fn = "swarm_response::rollback::RollbackReceipt::derive_status"
 entry_point = "swarm_response::rollback::RollbackReceipt::from_steps"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -169,6 +186,7 @@ observed_when_neutralized = "Neutralizing SkipEmptySteps changes Executed to Fai
 
 [[entry]]
 invariant = "RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS"
+case_type = "RESPONSE_ENFORCED_SIMULATION_NOT_SUCCESS"
 production_fn = "swarm_response::rollback::RollbackReceipt::derive_status"
 entry_point = "swarm_response::rollback::RollbackReceipt::from_steps"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -179,6 +197,7 @@ observed_when_neutralized = "Neutralizing SkipDryRunMode changes Simulated to Fa
 
 [[entry]]
 invariant = "RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS"
+case_type = "RESPONSE_PARTIAL_ROLLBACK_NOT_SUCCESS"
 production_fn = "swarm_response::rollback::RollbackReceipt::derive_status"
 entry_point = "swarm_response::rollback::RollbackReceipt::from_steps"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -189,6 +208,7 @@ observed_when_neutralized = "Neutralizing ReportPartialSuccess changes Executed 
 
 [[entry]]
 invariant = "RESPONSE-ROLLBACK-REQUIRES-STEPS"
+case_type = "RESPONSE_ROLLBACK_REQUIRES_STEPS"
 production_fn = "swarm_response::rollback::require_steps"
 entry_point = "swarm_response::rollback::SandboxRollbackExecutor::rollback"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -199,6 +219,7 @@ observed_when_neutralized = "Neutralizing SkipRequiredSteps changes Ok(()) to Er
 
 [[entry]]
 invariant = "RESPONSE-SANDBOX-NEVER-REVERSES"
+case_type = "RESPONSE_SANDBOX_NEVER_REVERSES"
 production_fn = "swarm_response::rollback::SandboxRollbackExecutor::rollback"
 entry_point = "swarm_response::rollback::SandboxRollbackExecutor::rollback"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -209,6 +230,7 @@ observed_when_neutralized = "Neutralizing ClaimEnforcedReversed changes Reversed
 
 [[entry]]
 invariant = "RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION"
+case_type = "RUNTIME_POLICY_ERROR_BLOCKS_EXECUTION"
 production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -219,6 +241,7 @@ observed_when_neutralized = "Neutralizing SkipPolicyError leaves the executor ca
 
 [[entry]]
 invariant = "RUNTIME-DENY-BLOCKS-EXECUTION"
+case_type = "RUNTIME_DENY_BLOCKS_EXECUTION"
 production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -229,6 +252,7 @@ observed_when_neutralized = "Neutralizing SkipDenyVerdict leaves the executor ca
 
 [[entry]]
 invariant = "RUNTIME-HUMAN-GATE-BLOCKS-LIVE"
+case_type = "RUNTIME_HUMAN_GATE_BLOCKS_LIVE"
 production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -239,6 +263,7 @@ observed_when_neutralized = "Neutralizing SkipHumanGateVerdict leaves the execut
 
 [[entry]]
 invariant = "RUNTIME-GUARD-REJECTION-BLOCKS-EXECUTION"
+case_type = "RUNTIME_GUARD_REJECTION_BLOCKS_EXECUTION"
 production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -249,6 +274,7 @@ observed_when_neutralized = "Neutralizing SkipGuardRejection leaves the executor
 
 [[entry]]
 invariant = "RUNTIME-CONTAINMENT-NEEDS-STORE"
+case_type = "RUNTIME_CONTAINMENT_NEEDS_STORE"
 production_fn = "swarm_runtime::SwarmRuntime::prepare_containment"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -259,6 +285,7 @@ observed_when_neutralized = "Neutralizing SkipContainmentStore leaves the execut
 
 [[entry]]
 invariant = "RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION"
+case_type = "RUNTIME_LEASE_ISSUE_ERROR_BLOCKS_EXECUTION"
 production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -269,6 +296,7 @@ observed_when_neutralized = "Neutralizing SkipLeaseIssueError leaves the executo
 
 [[entry]]
 invariant = "RUNTIME-EXPIRED-LEASE-REFUSED"
+case_type = "RUNTIME_EXPIRED_LEASE_REFUSED"
 production_fn = "swarm_runtime::ensure_active_lease"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -279,6 +307,7 @@ observed_when_neutralized = "Neutralizing SkipLeaseExpiry leaves the executor ca
 
 [[entry]]
 invariant = "RUNTIME-ADAPTER-ERROR-NOT-SUCCESS"
+case_type = "RUNTIME_ADAPTER_ERROR_NOT_SUCCESS"
 production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -289,6 +318,7 @@ observed_when_neutralized = "Neutralizing SkipAdapterError returns ResponseError
 
 [[entry]]
 invariant = "RUNTIME-FAILED-RECEIPT-NOT-SUCCESS"
+case_type = "RUNTIME_FAILED_RECEIPT_NOT_SUCCESS"
 production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -299,6 +329,7 @@ observed_when_neutralized = "Neutralizing SkipFailedReceiptStatus returns Respon
 
 [[entry]]
 invariant = "RUNTIME-RELEASE-SUBJECT-BOUND"
+case_type = "RUNTIME_RELEASE_SUBJECT_BOUND"
 production_fn = "swarm_runtime::containment::verify_release_attestation"
 entry_point = "swarm_runtime::containment::verify_release_attestation"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -309,6 +340,7 @@ observed_when_neutralized = "Neutralizing SkipSubjectBinding changes Ok(()) to s
 
 [[entry]]
 invariant = "RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE"
+case_type = "RUNTIME_FAILED_ROLLBACK_KEEPS_LEASE"
 production_fn = "swarm_runtime::containment::release_lease"
 entry_point = "swarm_runtime::containment::release_lease"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -319,6 +351,7 @@ observed_when_neutralized = "Neutralizing SkipFailedStepRetention makes the same
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-HASH-FIELD-REQUIRED"
+case_type = "SPINE_ENVELOPE_HASH_FIELD_REQUIRED"
 production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -329,6 +362,7 @@ observed_when_neutralized = "Neutralizing SkipHashFieldRequired changes Ok(true)
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-HASH-BOUND"
+case_type = "SPINE_ENVELOPE_HASH_BOUND"
 production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -339,6 +373,7 @@ observed_when_neutralized = "Neutralizing SkipHashBinding changes Ok(true) to ha
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-SIGNATURE-VALID"
+case_type = "SPINE_ENVELOPE_SIGNATURE_VALID"
 production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -349,6 +384,7 @@ observed_when_neutralized = "Neutralizing SkipSignatureCheck changes Ok(true) to
 
 [[entry]]
 invariant = "SPINE-CHAIN-PREV-FIELD-REQUIRED"
+case_type = "SPINE_CHAIN_PREV_FIELD_REQUIRED"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -359,6 +395,7 @@ observed_when_neutralized = "Neutralizing SkipPreviousHashFieldRequired changes 
 
 [[entry]]
 invariant = "SPINE-CHAIN-FIRST-SEQ"
+case_type = "SPINE_CHAIN_FIRST_SEQ"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -369,6 +406,7 @@ observed_when_neutralized = "Neutralizing SkipFirstSequence changes NewChain to 
 
 [[entry]]
 invariant = "SPINE-CHAIN-FIRST-PREV-NULL"
+case_type = "SPINE_CHAIN_FIRST_PREV_NULL"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -379,6 +417,7 @@ observed_when_neutralized = "Neutralizing SkipFirstPreviousHash changes NewChain
 
 [[entry]]
 invariant = "SPINE-CHAIN-ISSUER-BOUND"
+case_type = "SPINE_CHAIN_ISSUER_BOUND"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -389,6 +428,7 @@ observed_when_neutralized = "Neutralizing SkipIssuerBinding changes ValidContinu
 
 [[entry]]
 invariant = "SPINE-CHAIN-HEAD-NOT-OVERFLOWED"
+case_type = "SPINE_CHAIN_HEAD_NOT_OVERFLOWED"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -399,6 +439,7 @@ observed_when_neutralized = "Neutralizing WrapHeadSequence changes ValidContinua
 
 [[entry]]
 invariant = "SPINE-CHAIN-SEQ-MONOTONIC"
+case_type = "SPINE_CHAIN_SEQ_MONOTONIC"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -409,6 +450,7 @@ observed_when_neutralized = "Neutralizing SkipSequenceBinding makes the same wro
 
 [[entry]]
 invariant = "SPINE-CHAIN-PREV-HASH-BOUND"
+case_type = "SPINE_CHAIN_PREV_HASH_BOUND"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -419,6 +461,7 @@ observed_when_neutralized = "Neutralizing SkipPrevHashBinding changes ValidConti
 
 [[entry]]
 invariant = "RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED"
+case_type = "RESPONSE_MEMORY_DUPLICATE_LEASE_REFUSED"
 production_fn = "swarm_response::containment::ContainmentState::open_lease"
 entry_point = "swarm_response::containment::MemoryContainmentLeaseStore::open_lease"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -429,6 +472,7 @@ observed_when_neutralized = "The broken mirror changes AlreadyOpen to Ok on the 
 
 [[entry]]
 invariant = "RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED"
+case_type = "RESPONSE_MEMORY_CLOSE_UNKNOWN_LEASE_REFUSED"
 production_fn = "swarm_response::containment::ContainmentState::close"
 entry_point = "swarm_response::containment::MemoryContainmentLeaseStore::close"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -439,6 +483,7 @@ observed_when_neutralized = "The broken mirror changes NotOpen to Ok on the same
 
 [[entry]]
 invariant = "RESPONSE-FILE-DUPLICATE-LEASE-REFUSED"
+case_type = "RESPONSE_FILE_DUPLICATE_LEASE_REFUSED"
 production_fn = "swarm_response::containment::FileContainmentLeaseStore::open_lease"
 entry_point = "swarm_response::containment::FileContainmentLeaseStore::open_lease"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -449,6 +494,7 @@ observed_when_neutralized = "The broken mirror changes AlreadyOpen to Ok on the 
 
 [[entry]]
 invariant = "RESPONSE-FILE-CLOSE-UNKNOWN-LEASE-REFUSED"
+case_type = "RESPONSE_FILE_CLOSE_UNKNOWN_LEASE_REFUSED"
 production_fn = "swarm_response::containment::FileContainmentLeaseStore::close"
 entry_point = "swarm_response::containment::FileContainmentLeaseStore::close"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -459,6 +505,7 @@ observed_when_neutralized = "The broken mirror changes NotOpen to Ok on the same
 
 [[entry]]
 invariant = "RESPONSE-IRREVERSIBLE-INVERSE-REFUSED"
+case_type = "RESPONSE_IRREVERSIBLE_INVERSE_REFUSED"
 production_fn = "swarm_response::rollback::resolve_inverse"
 entry_point = "swarm_response::rollback::resolve_inverse"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
@@ -469,6 +516,7 @@ observed_when_neutralized = "The broken mirror changes Err(irreversible) to an i
 
 [[entry]]
 invariant = "RUNTIME-CONTAINMENT-PREVIEW-REQUIRED"
+case_type = "RUNTIME_CONTAINMENT_PREVIEW_REQUIRED"
 production_fn = "swarm_runtime::SwarmRuntime::prepare_containment"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -479,6 +527,7 @@ observed_when_neutralized = "The broken mirror changes ContainmentRefused with z
 
 [[entry]]
 invariant = "RUNTIME-RELEASE-ATTESTATION-REQUIRED"
+case_type = "RUNTIME_RELEASE_ATTESTATION_REQUIRED"
 production_fn = "swarm_runtime::containment::verify_release_attestation"
 entry_point = "swarm_runtime::containment::verify_release_attestation"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -489,6 +538,7 @@ observed_when_neutralized = "The broken mirror changes Unattested to Ok on the s
 
 [[entry]]
 invariant = "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED"
+case_type = "RUNTIME_RELEASE_ATTESTATION_WELL_FORMED"
 production_fn = "swarm_runtime::containment::verify_release_attestation"
 entry_point = "swarm_runtime::containment::verify_release_attestation"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -499,6 +549,7 @@ observed_when_neutralized = "The broken mirror changes Malformed to Ok on the sa
 
 [[entry]]
 invariant = "RUNTIME-RELEASE-SIGNATURE-VALID"
+case_type = "RUNTIME_RELEASE_SIGNATURE_VALID"
 production_fn = "swarm_runtime::containment::verify_release_attestation"
 entry_point = "swarm_runtime::containment::verify_release_attestation"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
@@ -509,6 +560,7 @@ observed_when_neutralized = "The broken mirror changes Signature failure to Ok o
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED"
+case_type = "SPINE_ENVELOPE_ISSUER_FIELD_REQUIRED"
 production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -519,6 +571,7 @@ observed_when_neutralized = "The broken mirror substitutes the authentic issuer 
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED"
+case_type = "SPINE_ENVELOPE_SIGNATURE_FIELD_REQUIRED"
 production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -529,6 +582,7 @@ observed_when_neutralized = "The broken mirror substitutes an authentic signatur
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-ISSUER-KEY-VALID"
+case_type = "SPINE_ENVELOPE_ISSUER_KEY_VALID"
 production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -539,6 +593,7 @@ observed_when_neutralized = "The broken mirror substitutes the authentic issuer 
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-SIGNATURE-WELL-FORMED"
+case_type = "SPINE_ENVELOPE_SIGNATURE_WELL_FORMED"
 production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -549,6 +604,7 @@ observed_when_neutralized = "The broken mirror substitutes an authentic signatur
 
 [[entry]]
 invariant = "SPINE-CHAIN-ISSUER-FIELD-REQUIRED"
+case_type = "SPINE_CHAIN_ISSUER_FIELD_REQUIRED"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -559,6 +615,7 @@ observed_when_neutralized = "The broken mirror substitutes the held-head issuer 
 
 [[entry]]
 invariant = "SPINE-CHAIN-SEQ-FIELD-REQUIRED"
+case_type = "SPINE_CHAIN_SEQ_FIELD_REQUIRED"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -569,6 +626,7 @@ observed_when_neutralized = "The broken mirror substitutes head plus one and cha
 
 [[entry]]
 invariant = "SPINE-CHAIN-PREV-TYPE-VALID"
+case_type = "SPINE_CHAIN_PREV_TYPE_VALID"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"

@@ -33,6 +33,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "../../../tests/negative_protocol.rs"]
+mod negative_protocol;
+
+use negative_protocol::assert_registered_negative_case;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use swarm_core::config::{
@@ -502,33 +506,38 @@ fn broken_action_target_validation_permits_empty_fields_across_all_action_varian
         ),
     ];
 
-    for (label, action) in probes {
-        let probe = request(
-            action,
-            Severity::Medium,
-            escalation_evidence(Severity::Medium),
-        );
-        let real = StaticApprovalGate::from_config(&config).evaluate(&probe, &context);
-        assert!(
-            matches!(real, Err(ApprovalError::InvalidRequest(_))),
-            "real gate admitted malformed {label}: {}",
-            outcome(&real)
-        );
-        let control = MirroredStaticGate::from_config(&config, StaticMutation::None)
-            .evaluate(&probe, &context);
-        assert_eq!(
-            outcome(&control),
-            outcome(&real),
-            "control drift for {label}"
-        );
-        let broken = MirroredStaticGate::from_config(&config, StaticMutation::SkipActionTarget)
-            .evaluate(&probe, &context)
-            .expect("without the action-target guard the malformed action reaches a verdict");
-        assert_eq!(
-            broken.verdict,
-            PolicyVerdict::Allow,
-            "broken mirror still refused malformed {label}"
-        );
+    let probes: Vec<(&'static str, ActionRequest)> = probes
+        .into_iter()
+        .map(|(label, action)| {
+            (
+                label,
+                request(
+                    action,
+                    Severity::Medium,
+                    escalation_evidence(Severity::Medium),
+                ),
+            )
+        })
+        .collect();
+    assert_registered_negative_case! {
+        case: POLICY_ACTION_TARGETS_NONEMPTY,
+        mutation: StaticMutation,
+        control: StaticMutation::None,
+        broken: StaticMutation::SkipActionTarget,
+        probe: Vec<(&'static str, ActionRequest)> = probes,
+        outcome: Vec<(&'static str, String)>,
+        real: |probe| {
+            probe.iter().map(|(label, request)| {
+                (*label, outcome(&StaticApprovalGate::from_config(&config).evaluate(request, &context)))
+            }).collect()
+        },
+        mirror: |probe, mutation| {
+            probe.iter().map(|(label, request)| {
+                (*label, outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(request, &context)))
+            }).collect()
+        },
+        denied: |outcomes| outcomes.iter().all(|(_, value)| value.starts_with("Err/")),
+        permitted: |outcomes| outcomes.iter().all(|(_, value)| value == "Allow/static.default_allow"),
     }
 }
 
@@ -548,20 +557,18 @@ fn broken_deploy_decoy_minimum_permits_a_low_severity_deployment() {
         escalation_evidence(Severity::Low),
     );
     let context = context(1_700_000_000_000);
-    let real = StaticApprovalGate::from_config(&config).evaluate(&probe, &context);
-    assert_eq!(
-        real.as_ref().unwrap().rule_name,
-        "static.deploy_decoy_min_severity"
-    );
-
-    let control =
-        MirroredStaticGate::from_config(&config, StaticMutation::None).evaluate(&probe, &context);
-    assert_eq!(outcome(&control), outcome(&real));
-
-    let broken = MirroredStaticGate::from_config(&config, StaticMutation::SkipDeployDecoyMinimum)
-        .evaluate(&probe, &context)
-        .expect("without the decoy minimum the low-severity action is admitted");
-    assert_eq!(broken.verdict, PolicyVerdict::Allow);
+    assert_registered_negative_case! {
+        case: POLICY_DEPLOY_DECOY_MIN_SEVERITY,
+        mutation: StaticMutation,
+        control: StaticMutation::None,
+        broken: StaticMutation::SkipDeployDecoyMinimum,
+        probe: ActionRequest = probe,
+        outcome: String,
+        real: |probe| outcome(&StaticApprovalGate::from_config(&config).evaluate(probe, &context)),
+        mirror: |probe, mutation| outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(probe, &context)),
+        denied: |value| value == "Deny/static.deploy_decoy_min_severity",
+        permitted: |value| value == "Allow/static.default_allow",
+    }
 }
 
 /// Verdict, or the error kind, flattened so the control can compare the real
@@ -584,32 +591,18 @@ fn broken_validate_request_permits_the_null_evidence_request_the_real_gate_refus
     let probe = request(isolate_host(), Severity::High, serde_json::Value::Null);
     let context = context(1_700_000_000_000);
 
-    let real_outcome = real.evaluate(&probe, &context);
-    assert!(
-        matches!(real_outcome, Err(ApprovalError::InvalidRequest(_))),
-        "the shipped gate must refuse a request carrying no evidence bundle, got {}",
-        outcome(&real_outcome)
-    );
-
-    let control =
-        MirroredStaticGate::from_config(&config, StaticMutation::None).evaluate(&probe, &context);
-    assert_eq!(
-        outcome(&control),
-        outcome(&real_outcome),
-        "the unmutated mirror must reproduce the real gate; if it does not, the \
-         mutation below proves nothing"
-    );
-
-    let broken = MirroredStaticGate::from_config(&config, StaticMutation::SkipNullEvidence)
-        .evaluate(&probe, &context);
-    let broken = broken.expect("the broken variant admits the request it should have refused");
-    assert_ne!(
-        broken.verdict,
-        PolicyVerdict::Deny,
-        "deleting the null-evidence arm must admit the request, otherwise the arm \
-         is not what refuses it"
-    );
-    assert_eq!(broken.rule_name, "static.human_gate");
+    assert_registered_negative_case! {
+        case: POLICY_NULL_EVIDENCE_REFUSED,
+        mutation: StaticMutation,
+        control: StaticMutation::None,
+        broken: StaticMutation::SkipNullEvidence,
+        probe: ActionRequest = probe,
+        outcome: String,
+        real: |probe| outcome(&real.evaluate(probe, &context)),
+        mirror: |probe, mutation| outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(probe, &context)),
+        denied: |value| value.starts_with("Err/"),
+        permitted: |value| value == "RequireHuman/static.human_gate",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -627,25 +620,18 @@ fn broken_minimum_severity_permits_the_low_severity_destructive_action_the_real_
     );
     let context = context(1_700_000_000_000);
 
-    let real_outcome = real.evaluate(&probe, &context);
-    let real_decision = real_outcome.as_ref().expect("evaluate returns a decision");
-    assert_eq!(real_decision.verdict, PolicyVerdict::Deny);
-    assert_eq!(real_decision.rule_name, "static.minimum_severity");
-
-    let control =
-        MirroredStaticGate::from_config(&config, StaticMutation::None).evaluate(&probe, &context);
-    assert_eq!(outcome(&control), outcome(&real_outcome));
-
-    let broken = MirroredStaticGate::from_config(&config, StaticMutation::SkipMinimumSeverity)
-        .evaluate(&probe, &context)
-        .expect("the broken variant renders a verdict");
-    assert_eq!(
-        broken.verdict,
-        PolicyVerdict::Allow,
-        "deleting the minimum-severity arm must let a Low-severity IsolateHost \
-         through to immediate execution"
-    );
-    assert_eq!(broken.rule_name, "static.default_allow");
+    assert_registered_negative_case! {
+        case: POLICY_DESTRUCTIVE_MIN_SEVERITY,
+        mutation: StaticMutation,
+        control: StaticMutation::None,
+        broken: StaticMutation::SkipMinimumSeverity,
+        probe: ActionRequest = probe,
+        outcome: String,
+        real: |probe| outcome(&real.evaluate(probe, &context)),
+        mirror: |probe, mutation| outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(probe, &context)),
+        denied: |value| value == "Deny/static.minimum_severity",
+        permitted: |value| value == "Allow/static.default_allow",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -668,30 +654,18 @@ fn broken_human_gate_permits_immediate_execution_of_what_the_real_gate_holds() {
     );
     let context = context(1_700_000_000_000);
 
-    let real_outcome = real.evaluate(&probe, &context);
-    let real_decision = real_outcome.as_ref().expect("evaluate returns a decision");
-    assert_eq!(
-        real_decision.verdict,
-        PolicyVerdict::RequireHuman,
-        "a Critical destructive action is held for a human, not executed"
-    );
-    assert_eq!(real_decision.rule_name, "static.human_gate");
-
-    let control =
-        MirroredStaticGate::from_config(&config, StaticMutation::None).evaluate(&probe, &context);
-    assert_eq!(outcome(&control), outcome(&real_outcome));
-
-    let broken = MirroredStaticGate::from_config(&config, StaticMutation::SkipHumanGate)
-        .evaluate(&probe, &context)
-        .expect("the broken variant renders a verdict");
-    assert_eq!(
-        broken.verdict,
-        PolicyVerdict::Allow,
-        "deleting the human-gate arm must turn a held action into an immediately \
-         executable one -- in LiveResponse mode `SwarmRuntime::authorize_and_execute` \
-         refuses RequireHuman and executes Allow, so this is the whole difference"
-    );
-    assert_eq!(broken.rule_name, "static.default_allow");
+    assert_registered_negative_case! {
+        case: POLICY_DESTRUCTIVE_HUMAN_GATE,
+        mutation: StaticMutation,
+        control: StaticMutation::None,
+        broken: StaticMutation::SkipHumanGate,
+        probe: ActionRequest = probe,
+        outcome: String,
+        real: |probe| outcome(&real.evaluate(probe, &context)),
+        mirror: |probe, mutation| outcome(&MirroredStaticGate::from_config(&config, mutation).evaluate(probe, &context)),
+        denied: |value| value == "RequireHuman/static.human_gate",
+        permitted: |value| value == "Allow/static.default_allow",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -715,37 +689,30 @@ fn broken_scope_rate_limit_permits_the_over_budget_action_the_real_gate_denies()
     );
     let context = context(1_700_000_000_000);
 
-    let real = StaticApprovalGate::from_config(&config);
-    let mut control = MirroredStaticGate::from_config(&config, StaticMutation::None);
-    let mut broken = MirroredStaticGate::from_config(&config, StaticMutation::SkipScopeRateLimit);
-
-    for attempt in 0..config.max_actions_per_scope_per_minute {
-        let allowed = real.evaluate(&probe, &context).expect("a decision");
-        assert_eq!(
-            allowed.verdict,
-            PolicyVerdict::Allow,
-            "attempt {attempt} is inside the budget"
-        );
-        control.evaluate(&probe, &context).expect("a decision");
-        broken.evaluate(&probe, &context).expect("a decision");
+    assert_registered_negative_case! {
+        case: POLICY_SCOPE_RATE_LIMIT,
+        mutation: StaticMutation,
+        control: StaticMutation::None,
+        broken: StaticMutation::SkipScopeRateLimit,
+        probe: ActionRequest = probe,
+        outcome: String,
+        real: |probe| {
+            let gate = StaticApprovalGate::from_config(&config);
+            for _ in 0..config.max_actions_per_scope_per_minute {
+                let _ = gate.evaluate(probe, &context);
+            }
+            outcome(&gate.evaluate(probe, &context))
+        },
+        mirror: |probe, mutation| {
+            let mut gate = MirroredStaticGate::from_config(&config, mutation);
+            for _ in 0..config.max_actions_per_scope_per_minute {
+                let _ = gate.evaluate(probe, &context);
+            }
+            outcome(&gate.evaluate(probe, &context))
+        },
+        denied: |value| value == "Deny/static.scope_rate_limit",
+        permitted: |value| value == "Allow/static.default_allow",
     }
-
-    let real_outcome = real.evaluate(&probe, &context);
-    let real_decision = real_outcome.as_ref().expect("a decision");
-    assert_eq!(real_decision.verdict, PolicyVerdict::Deny);
-    assert_eq!(real_decision.rule_name, "static.scope_rate_limit");
-
-    let control_outcome = control.evaluate(&probe, &context);
-    assert_eq!(outcome(&control_outcome), outcome(&real_outcome));
-
-    let broken_decision = broken.evaluate(&probe, &context).expect("a decision");
-    assert_eq!(
-        broken_decision.verdict,
-        PolicyVerdict::Allow,
-        "deleting the over-budget arm must let the sixth action in the same minute \
-         through against the same scope"
-    );
-    assert_eq!(broken_decision.rule_name, "static.default_allow");
 }
 
 // ---------------------------------------------------------------------------
@@ -881,32 +848,18 @@ fn broken_empty_ruleset_arm_permits_the_action_the_real_gate_fails_closed_on() {
     );
     let context = context(1_700_000_000_000);
 
-    let real = ConfigurableApprovalGate::from_config(&config);
-    let real_decision = real.evaluate(&probe, &context).expect("a decision");
-    assert_eq!(real_decision.verdict, PolicyVerdict::Deny);
-    assert_eq!(
-        real_decision.rule_name, "configurable.fail_closed.empty_ruleset",
-        "an unconfigured policy must refuse, not fall through"
-    );
-
-    let control = MirroredConfigurableGate::new(&config, ConfigurableMutation::None)
-        .evaluate(&probe, &context);
-    assert_eq!(
-        outcome(&control),
-        format!("{:?}/{}", real_decision.verdict, real_decision.rule_name),
-        "the unmutated mirror must reproduce the real gate on the same empty-ruleset probe"
-    );
-
-    let broken = MirroredConfigurableGate::new(&config, ConfigurableMutation::SkipEmptyRuleset)
-        .evaluate(&probe, &context)
-        .expect("a decision");
-    assert_eq!(
-        broken.verdict,
-        PolicyVerdict::Allow,
-        "without the empty-ruleset arm an unconfigured deployment authorizes a \
-         destructive action off the static fallback alone"
-    );
-    assert_eq!(broken.rule_name, "static.default_allow");
+    assert_registered_negative_case! {
+        case: POLICY_EMPTY_RULESET_DENIES,
+        mutation: ConfigurableMutation,
+        control: ConfigurableMutation::None,
+        broken: ConfigurableMutation::SkipEmptyRuleset,
+        probe: ActionRequest = probe.clone(),
+        outcome: String,
+        real: |probe| outcome(&ConfigurableApprovalGate::from_config(&config).evaluate(probe, &context)),
+        mirror: |probe, mutation| outcome(&MirroredConfigurableGate::new(&config, mutation).evaluate(probe, &context)),
+        denied: |value| value == "Deny/configurable.fail_closed.empty_ruleset",
+        permitted: |value| value == "Allow/static.default_allow",
+    }
 
     // The control for this row is the OTHER direction: with a rule loaded, the
     // real gate must reach the rule rather than the fail-closed arm. Without
@@ -959,15 +912,18 @@ fn broken_time_window_admits_a_request_outside_the_configured_window() {
         escalation_evidence(Severity::Medium),
     );
     let context = context(12 * 3_600_000);
-    let real = ConfigurableApprovalGate::from_config(&config).evaluate(&probe, &context);
-    assert_eq!(real.as_ref().unwrap().verdict, PolicyVerdict::Deny);
-    let control = MirroredConfigurableGate::new(&config, ConfigurableMutation::None)
-        .evaluate(&probe, &context);
-    assert_eq!(outcome(&control), outcome(&real));
-    let broken = MirroredConfigurableGate::new(&config, ConfigurableMutation::SkipTimeWindow)
-        .evaluate(&probe, &context)
-        .unwrap();
-    assert_eq!(broken.verdict, PolicyVerdict::Allow);
+    assert_registered_negative_case! {
+        case: POLICY_RULE_TIME_WINDOW,
+        mutation: ConfigurableMutation,
+        control: ConfigurableMutation::None,
+        broken: ConfigurableMutation::SkipTimeWindow,
+        probe: ActionRequest = probe,
+        outcome: String,
+        real: |probe| outcome(&ConfigurableApprovalGate::from_config(&config).evaluate(probe, &context)),
+        mirror: |probe, mutation| outcome(&MirroredConfigurableGate::new(&config, mutation).evaluate(probe, &context)),
+        denied: |value| value == "Deny/execution-rule",
+        permitted: |value| value == "Allow/execution-rule",
+    }
 }
 
 #[test]
@@ -982,29 +938,26 @@ fn broken_agent_rate_limit_admits_the_over_budget_request() {
         escalation_evidence(Severity::Medium),
     );
     let context = context(1_700_000_000_000);
-    let real = ConfigurableApprovalGate::from_config(&config);
-    let mut control = MirroredConfigurableGate::new(&config, ConfigurableMutation::None);
-    let mut broken =
-        MirroredConfigurableGate::new(&config, ConfigurableMutation::SkipAgentRateLimit);
-    assert_eq!(
-        real.evaluate(&probe, &context).unwrap().verdict,
-        PolicyVerdict::Allow
-    );
-    assert_eq!(
-        control.evaluate(&probe, &context).unwrap().verdict,
-        PolicyVerdict::Allow
-    );
-    assert_eq!(
-        broken.evaluate(&probe, &context).unwrap().verdict,
-        PolicyVerdict::Allow
-    );
-    let real_denial = real.evaluate(&probe, &context);
-    let control_denial = control.evaluate(&probe, &context);
-    assert_eq!(outcome(&control_denial), outcome(&real_denial));
-    assert_eq!(
-        broken.evaluate(&probe, &context).unwrap().verdict,
-        PolicyVerdict::Allow
-    );
+    assert_registered_negative_case! {
+        case: POLICY_RULE_AGENT_RATE_LIMIT,
+        mutation: ConfigurableMutation,
+        control: ConfigurableMutation::None,
+        broken: ConfigurableMutation::SkipAgentRateLimit,
+        probe: ActionRequest = probe,
+        outcome: String,
+        real: |probe| {
+            let gate = ConfigurableApprovalGate::from_config(&config);
+            let _ = gate.evaluate(probe, &context);
+            outcome(&gate.evaluate(probe, &context))
+        },
+        mirror: |probe, mutation| {
+            let mut gate = MirroredConfigurableGate::new(&config, mutation);
+            let _ = gate.evaluate(probe, &context);
+            outcome(&gate.evaluate(probe, &context))
+        },
+        denied: |value| value == "Deny/execution-rule",
+        permitted: |value| value == "Allow/execution-rule",
+    }
 }
 
 #[test]
@@ -1017,13 +970,16 @@ fn broken_configured_deny_rule_turns_an_explicit_denial_into_allow() {
         escalation_evidence(Severity::Medium),
     );
     let context = context(1_700_000_000_000);
-    let real = ConfigurableApprovalGate::from_config(&config).evaluate(&probe, &context);
-    assert_eq!(real.as_ref().unwrap().verdict, PolicyVerdict::Deny);
-    let control = MirroredConfigurableGate::new(&config, ConfigurableMutation::None)
-        .evaluate(&probe, &context);
-    assert_eq!(outcome(&control), outcome(&real));
-    let broken = MirroredConfigurableGate::new(&config, ConfigurableMutation::FlipDenyToAllow)
-        .evaluate(&probe, &context)
-        .unwrap();
-    assert_eq!(broken.verdict, PolicyVerdict::Allow);
+    assert_registered_negative_case! {
+        case: POLICY_CONFIGURED_DENY_RULE,
+        mutation: ConfigurableMutation,
+        control: ConfigurableMutation::None,
+        broken: ConfigurableMutation::FlipDenyToAllow,
+        probe: ActionRequest = probe,
+        outcome: String,
+        real: |probe| outcome(&ConfigurableApprovalGate::from_config(&config).evaluate(probe, &context)),
+        mirror: |probe, mutation| outcome(&MirroredConfigurableGate::new(&config, mutation).evaluate(probe, &context)),
+        denied: |value| value == "Deny/execution-rule",
+        permitted: |value| value == "Allow/execution-rule",
+    }
 }

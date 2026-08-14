@@ -182,11 +182,14 @@ jobs:
       # documentation form of the defect .planning/STATE.md catalogues twelve
       # times.
       #
-      # The mapping gate is lexical; the negative-registry gate additionally
-      # executes the four exact registered Cargo test targets to prove every
-      # named test ran and none was ignored. On a warm local worktree they were
-      # measured separately at 7.62s and 7.16s wall clock (2026-08-14); CI
-      # timing is cache- and machine-dependent.
+      # The mapping gate gets the compiled Rust source inventory from Cargo's
+      # rustc dep-info, then lexically binds source markers to executable guard
+      # expressions. The negative-registry gate binds each row to the shared
+      # typed differential protocol, requires exact Cargo --list set equality,
+      # and executes all four registered targets with exact passed/ignored
+      # summary counts. On a warm local worktree they were measured separately
+      # at 8.35s and 9.62s wall clock (2026-08-14); CI timing is cache- and
+      # machine-dependent.
       #
       # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
       # and refuse to scan it if a fixture misbehaves. These workflow steps are
@@ -194,7 +197,10 @@ jobs:
       # state and is tracked separately in Phase 285 acceptance. A gate that has
       # never been observed failing is not evidence; checked-in adversarial
       # fixtures exercise unmapped/deleted entries, spoofed source, orphan
-      # modules, ignored tests and missing differential calls on every run.
+      # modules, ignored tests and missing typed-protocol invocations on every
+      # run. The protocol proves the three registered operations execute over
+      # one typed probe; it cannot prove a handwritten mirror is otherwise a
+      # faithful copy of production.
       #
       # NOTE THE PATH. MAPPING-04/05 and FALSIFY-03/04 say `scripts/check-*.sh`.
       # There is no `scripts/` directory in this repository and never has been;

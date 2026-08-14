@@ -1,17 +1,21 @@
-"""Small Rust lexical helpers for the phase-285 assurance gates.
+"""Rust source-inventory and lexical helpers for the phase-285 assurance gates.
 
-This is deliberately not a Rust parser.  It performs the one job the gates need:
-remove comments and literals without changing byte offsets, then resolve concrete
-function bodies and executable identifier uses from the remaining token stream.
-Raw grep cannot make those distinctions and therefore cannot police evidence.
+Cargo/rustc dep-info is authoritative for the real tree's compiled source files.
+Within those files this deliberately small parser removes comments and literals
+without changing byte offsets, resolves the crate module graph, and identifies
+concrete function bodies and executable guard adjacency. Raw grep cannot make
+those distinctions and therefore cannot police evidence.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import json
 import pathlib
 import re
+import shlex
+import subprocess
 
 
 @dataclass(frozen=True)
@@ -243,6 +247,7 @@ class ModuleNode:
     start: int
     end: int
     child_base: pathlib.Path
+    path_base: pathlib.Path
     children: list["ModuleNode"]
 
 
@@ -262,6 +267,66 @@ def _depth_at(clean: str, start: int, position: int) -> int:
     return clean.count("{", start, position) - clean.count("}", start, position)
 
 
+@lru_cache(maxsize=1)
+def _active_rustc_cfg() -> frozenset[str]:
+    result = subprocess.run(
+        ["rustc", "--print", "cfg"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode:
+        raise RuntimeError(f"rustc --print cfg failed: {result.stderr}")
+    return frozenset(re.sub(r"\s+", "", line) for line in result.stdout.splitlines())
+
+
+def _split_cfg_arguments(value: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for index, char in enumerate(value):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(value[start:index])
+            start = index + 1
+    parts.append(value[start:])
+    return [part for part in parts if part]
+
+
+def _cfg_expression_enabled(expression: str) -> bool:
+    expression = re.sub(r"\s+", "", expression)
+    for operator in ("all", "any", "not"):
+        prefix = operator + "("
+        if expression.startswith(prefix) and expression.endswith(")"):
+            values = _split_cfg_arguments(expression[len(prefix):-1])
+            if operator == "all":
+                return all(_cfg_expression_enabled(value) for value in values)
+            if operator == "any":
+                return any(_cfg_expression_enabled(value) for value in values)
+            return len(values) == 1 and not _cfg_expression_enabled(values[0])
+    return expression in _active_rustc_cfg()
+
+
+def cfg_attributes_enabled(attributes: set[str]) -> bool:
+    for attribute in attributes:
+        if attribute.startswith("cfg(") and attribute.endswith(")"):
+            if not _cfg_expression_enabled(attribute[4:-1]):
+                return False
+        elif attribute.startswith("cfg_attr(") and attribute.endswith(")"):
+            parts = _split_cfg_arguments(attribute[9:-1])
+            if not parts:
+                return False
+            condition = _cfg_expression_enabled(parts[0])
+            if condition:
+                for nested in parts[1:]:
+                    if nested.startswith("cfg(") and not cfg_attributes_enabled({nested}):
+                        return False
+    return True
+
+
 def _module_children(node: ModuleNode) -> list[ModuleNode]:
     raw, clean = _source(str(node.path))
     pattern = re.compile(
@@ -276,8 +341,12 @@ def _module_children(node: ModuleNode) -> list[ModuleNode]:
         # A conditionally compiled declaration is not an unconditional member
         # of the production module graph.  Do not try to guess a target's cfg
         # environment: fail closed by making paths through it unresolvable.
-        clean_attrs = clean[match.start("attrs") : match.end("attrs")]
-        if re.search(r"#\s*\[\s*cfg(?:_attr)?\b", clean_attrs):
+        raw_attrs = raw[match.start("attrs") : match.end("attrs")]
+        attributes = {
+            re.sub(r"\s+", "", attribute)
+            for attribute in re.findall(r"#\s*\[\s*([^\]]+)\]", raw_attrs)
+        }
+        if not cfg_attributes_enabled(attributes):
             continue
         name = match.group("name")
         if match.group("kind") == "{":
@@ -291,13 +360,13 @@ def _module_children(node: ModuleNode) -> list[ModuleNode]:
                 opening + 1,
                 closing,
                 node.child_base / name,
+                node.child_base / name,
                 [],
             )
         else:
-            raw_attrs = raw[match.start("attrs") : match.end("attrs")]
             path_attr = re.search(r"\bpath\s*=\s*\"([^\"]+)\"", raw_attrs)
             candidates = (
-                [node.child_base / path_attr.group(1)]
+                [node.path_base / path_attr.group(1)]
                 if path_attr
                 else [node.child_base / f"{name}.rs", node.child_base / name / "mod.rs"]
             )
@@ -305,13 +374,14 @@ def _module_children(node: ModuleNode) -> list[ModuleNode]:
             if target is None:
                 continue
             _, target_clean = _source(str(target))
-            child_base = target.parent if target.name == "mod.rs" else target.parent / target.stem
+            child_base = target.parent if target.name == "mod.rs" else node.child_base / name
             child = ModuleNode(
                 target,
                 node.module + (name,),
                 0,
                 len(target_clean),
                 child_base,
+                target.parent,
                 [],
             )
         child.children = _module_children(child)
@@ -328,7 +398,7 @@ def _crate_graph(crate_src: str) -> ModuleNode | None:
     if not root_file.is_file():
         return None
     _, clean = _source(str(root_file))
-    root = ModuleNode(root_file, (), 0, len(clean), source_dir, [])
+    root = ModuleNode(root_file, (), 0, len(clean), source_dir, source_dir, [])
     root.children = _module_children(root)
     return root
 
@@ -339,9 +409,90 @@ def _walk_modules(node: ModuleNode):
         yield from _walk_modules(child)
 
 
+@lru_cache(maxsize=None)
+def _rustc_source_inventory(
+    repo_root: str, crate_names: tuple[str, ...]
+) -> frozenset[pathlib.Path] | None:
+    """Return rustc's actual default-build source inventory from dep-info.
+
+    Fixtures without a Cargo workspace use the module-graph fallback. A real
+    workspace never silently falls back: failure to obtain dep-info is a gate
+    failure, because a guessed inventory is exactly the evasion this check is
+    meant to prevent.
+    """
+
+    root = pathlib.Path(repo_root)
+    if not (root / "Cargo.toml").is_file():
+        return None
+    command = ["cargo", "check", "--lib"]
+    for crate in crate_names:
+        command.extend(("-p", crate))
+    command.append("--message-format=json")
+    result = subprocess.run(
+        command,
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode:
+        raise RuntimeError(f"cargo dep-info inventory failed: {result.stderr[-4000:]}")
+
+    wanted_targets = {crate.replace("-", "_") for crate in crate_names}
+    dep_files: dict[str, pathlib.Path] = {}
+    for line in result.stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        message = json.loads(line)
+        target = message.get("target", {})
+        name = target.get("name")
+        if message.get("reason") != "compiler-artifact" or name not in wanted_targets:
+            continue
+        if "lib" not in target.get("kind", []):
+            continue
+        artifact = next(
+            (pathlib.Path(value) for value in message.get("filenames", []) if value.endswith((".rmeta", ".rlib"))),
+            None,
+        )
+        if artifact is not None:
+            dep_files[name] = artifact.with_name(artifact.stem.removeprefix("lib") + ".d")
+    missing = wanted_targets - set(dep_files)
+    if missing:
+        raise RuntimeError(f"cargo emitted no lib dep-info artifact for {sorted(missing)}")
+
+    sources: set[pathlib.Path] = set()
+    for dep_file in dep_files.values():
+        if not dep_file.is_file():
+            raise RuntimeError(f"rustc dep-info file is absent: {dep_file}")
+        dep_text = dep_file.read_text(encoding="utf-8", errors="replace").replace("\\\n", " ")
+        first_rule = dep_text.splitlines()[0]
+        _, separator, dependencies = first_rule.partition(": ")
+        if not separator:
+            raise RuntimeError(f"rustc dep-info has no dependency rule: {dep_file}")
+        for value in shlex.split(dependencies):
+            candidate = pathlib.Path(value)
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            candidate = candidate.resolve()
+            if candidate.suffix == ".rs" and candidate.is_file():
+                sources.add(candidate)
+    return frozenset(sources)
+
+
 def reachable_rust_files(
     root: pathlib.Path, crate_names: set[str] | None = None
 ) -> set[pathlib.Path]:
+    if crate_names:
+        inventory = _rustc_source_inventory(
+            str(root.resolve()), tuple(sorted(crate_names))
+        )
+        if inventory is not None:
+            crate_roots = [(root / "crates" / crate / "src").resolve() for crate in crate_names]
+            return {
+                path
+                for path in inventory
+                if any(path.is_relative_to(crate_root) for crate_root in crate_roots)
+            }
     files: set[pathlib.Path] = set()
     for crate_src in sorted((root / "crates").glob("*/src")):
         if crate_names is not None and crate_src.parent.name not in crate_names:
@@ -381,7 +532,7 @@ def resolve_function(root: pathlib.Path, path_str: str) -> tuple[pathlib.Path, F
     else:
         return f"`{path_str}` does not end in function or Type::function"
 
-    _, clean = _source(str(node.path))
+    raw, clean = _source(str(node.path))
     nested_ranges = [
         (child.start, child.end)
         for child in node.children
@@ -394,10 +545,7 @@ def resolve_function(root: pathlib.Path, path_str: str) -> tuple[pathlib.Path, F
         and not any(start <= span.declaration_start < end for start, end in nested_ranges)
         and span.name == fn_name
         and span.type_name == type_name
-        and not any(
-            attribute.startswith("cfg(") or attribute.startswith("cfg_attr(")
-            for attribute in function_attributes(clean, span)
-        )
+        and cfg_attributes_enabled(function_attributes(raw, span))
     ]
     if len(candidates) != 1:
         target = f"{type_name}::{fn_name}" if type_name else fn_name
@@ -443,62 +591,34 @@ def function_attributes(clean: str, span: FunctionSpan) -> set[str]:
     }
 
 
-def assertion_count(clean: str, span: FunctionSpan) -> int:
-    body = clean[span.body_start : span.body_end + 1]
-    return len(re.findall(r"\b(?:assert|assert_eq|assert_ne|matches)!\s*\(", body))
+def function_has_conditional_owner(clean: str, span: FunctionSpan) -> bool:
+    """Return true when a function or any enclosing inline item has cfg state.
 
+    Cargo discovery is authoritative for the real targets. This structural
+    check makes module-level `cfg` disabling visible in the adversarial fixture
+    too, instead of looking only at attributes immediately above the function.
+    """
 
-def call_used(clean: str, symbol: str, span: FunctionSpan) -> bool:
-    body = clean[span.body_start : span.body_end + 1]
-    return bool(re.search(
-        r"(?:\.|::|\b)" + re.escape(symbol) + r"(?:\s*::\s*<[^>]+>)?\s*\(",
-        body,
-    ))
-
-
-def binding_declared(clean: str, prefix: str, span: FunctionSpan) -> bool:
-    body = clean[span.body_start : span.body_end + 1]
-    return bool(re.search(
-        r"\blet\s+(?:mut\s+)?" + re.escape(prefix) + r"(?:\b|_[A-Za-z0-9_]+)",
-        body,
-    ))
-
-
-def binding_uses(clean: str, binding: str, evidence: str, span: FunctionSpan) -> bool:
-    body = clean[span.body_start : span.body_end + 1]
-    match = re.search(r"\blet\s+(?:mut\s+)?" + re.escape(binding) + r"\b", body)
-    if match is None:
-        return False
-    end = body.find(";", match.end())
-    if end < 0:
-        end = len(body)
-    return bool(re.search(r"\b" + re.escape(evidence) + r"\b", body[match.end() : end]))
-
-
-def identifier_defined(clean: str, name: str, excluded: tuple[int, int] | None = None) -> bool:
-    chars = list(clean)
-    if excluded is not None:
-        _blank(chars, excluded[0], excluded[1])
-    outside = "".join(chars)
-    if re.search(
-        r"\b(?:fn|struct|enum|union|trait|type|const|static)\s+" + re.escape(name) + r"\b",
-        outside,
-    ):
-        return True
-    # Enum variants: an identifier at the start of a source line followed by a
-    # tuple/body/comma/discriminant.  Requiring a real token stream keeps a
-    # comment or string from fabricating this evidence.
-    return bool(
-        re.search(
-            r"(?m)^\s*" + re.escape(name) + r"\s*(?:[,({=])",
-            outside,
-        )
-    )
-
-
-def identifier_used(clean: str, name: str, span: FunctionSpan) -> bool:
-    body = clean[span.body_start : span.body_end + 1]
-    return bool(re.search(r"\b" + re.escape(name) + r"\b", body))
+    pattern = re.compile(r"#\s*\[\s*cfg(?:_attr)?\b[^\]]*\]")
+    for match in pattern.finditer(clean, 0, span.declaration_start):
+        cursor = match.end()
+        while True:
+            attribute = re.match(r"\s*#\s*\[[^\]]*\]", clean[cursor:])
+            if not attribute:
+                break
+            cursor += attribute.end()
+        opening = clean.find("{", cursor)
+        semicolon = clean.find(";", cursor)
+        if semicolon >= 0 and (opening < 0 or semicolon < opening):
+            end = semicolon + 1
+        elif opening >= 0:
+            closing = matching_brace(clean, opening)
+            end = len(clean) if closing is None else closing + 1
+        else:
+            continue
+        if match.start() <= span.declaration_start < end:
+            return True
+    return False
 
 
 def enum_variant_defined(
@@ -534,47 +654,6 @@ def enum_variant_defined(
             body,
         )
     )
-
-
-def mutation_used(clean: str, evidence: str, span: FunctionSpan) -> bool:
-    """Require exact enum evidence as an argument to a non-assertion call.
-
-    A bare `let _ = Mutation::RemoveGuard`, or the same path pasted into an
-    assertion, is decorative evidence: it does not drive a mirror. Requiring a
-    surrounding call/construction is still intentionally lexical, but closes
-    the token-presence evasion the assurance review demonstrated.
-    """
-
-    if not re.fullmatch(
-        r"[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*", evidence
-    ):
-        return False
-    body = clean[span.body_start : span.body_end + 1]
-    assertion_calls = {
-        "assert",
-        "assert_eq",
-        "assert_ne",
-        "debug_assert",
-        "debug_assert_eq",
-        "debug_assert_ne",
-        "matches",
-    }
-    for occurrence in re.finditer(r"\b" + re.escape(evidence) + r"\b", body):
-        stack: list[tuple[int, str | None]] = []
-        for index, char in enumerate(body[: occurrence.start()]):
-            if char == "(":
-                prefix = body[:index]
-                caller = re.search(
-                    r"(?:[A-Za-z_][A-Za-z0-9_]*::)*([A-Za-z_][A-Za-z0-9_]*)!?\s*$",
-                    prefix,
-                )
-                stack.append((index, caller.group(1) if caller else None))
-            elif char == ")" and stack:
-                stack.pop()
-        for _, caller in reversed(stack):
-            if caller is not None and caller not in assertion_calls:
-                return True
-    return False
 
 
 def next_code_line(clean: str, position: int) -> tuple[int, str] | None:

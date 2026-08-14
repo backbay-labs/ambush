@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Phase-285 invariant-map gate. It uses a Rust lexical sanitizer so comments and
-# literals cannot fabricate declarations, markers, or guard adjacency.
+# Phase-285 invariant-map gate. Cargo rustc dep-info supplies the compiled Rust
+# source inventory; a lexical sanitizer then prevents comments and literals
+# from fabricating declarations, markers, or guard adjacency. Differential
+# execution belongs to check-negative-registry.sh. Neither gate mechanically
+# proves a handwritten mirror faithful beyond its registered typed probe.
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -326,6 +329,7 @@ CASES = {
     "assumption_many_to_many_drift": "assumption-invariants-drift",
     "ghost_orphan_module": "row-path-unresolvable",
     "cfg_disabled_module": "row-path-unresolvable",
+    "nested_path_unmapped_marker": "marker-unmapped",
     "coordinated_invariant_deletion": "universe-invariant-drift",
     "delete_all_omissions": "universe-omission-drift",
 }
@@ -358,11 +362,63 @@ def mutate(root, case):
         mapping.write_text(mapping.read_text().replace("gate::Gate::evaluate", "ghost::ghost"))
         (root / "crates/fixture-crate/src/lib.rs").write_text("#[cfg(any())]\npub mod ghost;\npub mod gate;\n")
         (root / "crates/fixture-crate/src/ghost.rs").write_text("pub fn ghost() {}\n")
+    elif case == "nested_path_unmapped_marker":
+        crate = root / "crates/fixture-crate/src"
+        (crate / "lib.rs").write_text("pub mod gate;\npub mod mutation;\npub mod evolution;\n")
+        (crate / "mutation.rs").write_text('#[path = "mutation/autonomous.rs"]\npub mod autonomous;\n')
+        (crate / "evolution.rs").write_text('#[path = "evolution/assurance.rs"]\npub mod assurance;\n')
+        (crate / "mutation").mkdir()
+        (crate / "evolution").mkdir()
+        mutation_nested = "pub fn nested() { // INVARIANT: FIXTURE-MUTATION-GHOST\n if dangerous() {} }\n"
+        evolution_nested = "pub fn assurance() { // INVARIANT: FIXTURE-EVOLUTION-GHOST\n if dangerous() {} }\n"
+        (crate / "mutation/autonomous.rs").write_text(mutation_nested)
+        (crate / "evolution/assurance.rs").write_text(evolution_nested)
     elif case == "coordinated_invariant_deletion":
         mapping.write_text(mapping.read_text().replace(MAPPING.splitlines()[-1] + "\n", ""))
         src.write_text(src.read_text().replace("// INVARIANT: FIXTURE-ONE\n", ""))
         assumptions.write_text(assumptions.read_text().replace('invariants=["FIXTURE-ONE"]', 'invariants=[]'))
     elif case == "delete_all_omissions": omissions.write_text("schema_version=1\n")
+
+
+def module_resolution_self_tests(base):
+    cases = []
+
+    root_path = fixture(base / "root_path")
+    source = root_path / "crates/fixture-crate/src"
+    (source / "lib.rs").write_text('#[path = "alternate.rs"]\npub mod gate;\n')
+    (source / "alternate.rs").write_text(SOURCE)
+    cases.append(("root #[path]", resolve_function(root_path, "fixture_crate::gate::Gate::evaluate"), True))
+
+    nested_path = fixture(base / "nested_path")
+    source = nested_path / "crates/fixture-crate/src"
+    (source / "lib.rs").write_text("pub mod outer;\n")
+    (source / "outer.rs").write_text('#[path = "inner.rs"]\npub mod inner;\n')
+    (source / "inner.rs").write_text(SOURCE)
+    cases.append(("nested #[path]", resolve_function(nested_path, "fixture_crate::outer::inner::Gate::evaluate"), True))
+
+    inline = fixture(base / "inline")
+    source = inline / "crates/fixture-crate/src"
+    (source / "lib.rs").write_text('pub mod outer { #[path = "alternate.rs"] pub mod inner; }\n')
+    (source / "outer").mkdir()
+    (source / "outer/alternate.rs").write_text(SOURCE)
+    cases.append(("inline module", resolve_function(inline, "fixture_crate::outer::inner::Gate::evaluate"), True))
+
+    cfg_enabled = fixture(base / "cfg_enabled")
+    source = cfg_enabled / "crates/fixture-crate/src"
+    (source / "lib.rs").write_text("#[cfg(unix)]\npub mod gate;\n")
+    cases.append(("cfg-enabled module", resolve_function(cfg_enabled, "fixture_crate::gate::Gate::evaluate"), True))
+
+    cfg_disabled = fixture(base / "cfg_disabled_resolver")
+    source = cfg_disabled / "crates/fixture-crate/src"
+    (source / "lib.rs").write_text("#[cfg(any())]\npub mod gate;\n")
+    cases.append(("cfg-disabled module", resolve_function(cfg_disabled, "fixture_crate::gate::Gate::evaluate"), False))
+
+    failures = []
+    for label, result, should_resolve in cases:
+        resolved = not isinstance(result, str)
+        if resolved != should_resolve:
+            failures.append(f"{label}: expected resolved={should_resolve}, got {result}")
+    return failures
 
 
 def self_test():
@@ -375,9 +431,17 @@ def self_test():
             ok = False; print(f"mapping self-test clean failed: {report.violations}", file=sys.stderr)
         for case, expected in CASES.items():
             root = fixture(base / case); mutate(root, case)
-            codes = run_checks(root, 1, 1, 2).codes()
+            report = run_checks(root, 1, 1, 2)
+            codes = report.codes()
             if expected not in codes:
                 ok = False; print(f"mapping self-test {case}: expected {expected}, got {sorted(codes)}", file=sys.stderr)
+            if case == "nested_path_unmapped_marker":
+                messages = "\n".join(message for _, message in report.violations)
+                for marker in ("FIXTURE-MUTATION-GHOST", "FIXTURE-EVOLUTION-GHOST"):
+                    if marker not in messages:
+                        ok = False; print(f"mapping self-test {case}: compiled nested marker `{marker}` escaped", file=sys.stderr)
+        for failure in module_resolution_self_tests(base):
+            ok = False; print(f"mapping module-resolution self-test failed: {failure}", file=sys.stderr)
     return ok
 
 
@@ -390,5 +454,5 @@ if report.violations:
 rows = parse_rows(REPO_ROOT, Report())
 assumptions = load_toml(REPO_ROOT, ASSUMPTIONS_REL, "assumption", Report())
 omissions = load_toml(REPO_ROOT, OMISSIONS_REL, "omission", Report())
-print(f"check-mapping OK: {len(rows)} rows, {len(assumptions)} assumptions, {len(omissions)} enforced omissions; {len(CASES)+1} self-tests passed (1 clean control, {len(CASES)} adversarial)")
+print(f"check-mapping OK: {len(rows)} rows, {len(assumptions)} assumptions, {len(omissions)} enforced omissions; {len(CASES)+6} self-tests passed (1 clean control, 5 module-resolution controls, {len(CASES)} adversarial)")
 PY

@@ -22,6 +22,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "../../../tests/negative_protocol.rs"]
+mod negative_protocol;
+
+use negative_protocol::assert_registered_negative_case;
 use serde_json::{Value, json};
 use swarm_crypto::hashing::sha256_hex as sha256_hex_prefixed;
 use swarm_crypto::{Keypair, PublicKey, Signature};
@@ -161,16 +165,18 @@ fn broken_hash_field_requirement_admits_an_envelope_with_no_claimed_identity() {
     let keypair = signing_keypair(7);
     let mut missing = envelope(&keypair, 1, None);
     missing.as_object_mut().unwrap().remove("envelope_hash");
-    let real = verify_envelope(&missing).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_envelope(&missing, EnvelopeMutation::None);
-    assert!(!admitted(&control));
-    let broken = mirrored_verify_envelope(&missing, EnvelopeMutation::SkipHashFieldRequired);
-    assert!(
-        admitted(&broken),
-        "without the required-field guard the verifier silently substitutes its \
-         computed digest for the absent claimed identity: {broken:?}"
-    );
+    assert_registered_negative_case! {
+        case: SPINE_ENVELOPE_HASH_FIELD_REQUIRED,
+        mutation: EnvelopeMutation,
+        control: EnvelopeMutation::None,
+        broken: EnvelopeMutation::SkipHashFieldRequired,
+        probe: Value = missing,
+        outcome: bool,
+        real: |probe| verify_envelope(probe).unwrap_or(false),
+        mirror: |probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 fn admitted(result: &Result<bool, String>) -> bool {
@@ -196,27 +202,18 @@ fn broken_hash_binding_admits_the_forged_envelope_id_the_real_verifier_refuses()
     assert_ne!(forged_hash, genuine_hash);
     forged["envelope_hash"] = json!(forged_hash);
 
-    let real = verify_envelope(&forged);
-    assert!(
-        real.is_err(),
-        "the shipped verifier must refuse an envelope whose claimed hash is not \
-         the hash of its body, got {real:?}"
-    );
-
-    let control = mirrored_verify_envelope(&forged, EnvelopeMutation::None);
-    assert!(
-        !admitted(&control),
-        "the unmutated mirror must refuse it too; if it does not the mutation \
-         below proves nothing"
-    );
-
-    let broken = mirrored_verify_envelope(&forged, EnvelopeMutation::SkipHashBinding);
-    assert!(
-        admitted(&broken),
-        "without the hash comparison the signature alone verifies -- it is taken \
-         over the envelope MINUS envelope_hash and signature -- so a chain link \
-         pointing anywhere the attacker chooses is admitted: {broken:?}"
-    );
+    assert_registered_negative_case! {
+        case: SPINE_ENVELOPE_HASH_BOUND,
+        mutation: EnvelopeMutation,
+        control: EnvelopeMutation::None,
+        broken: EnvelopeMutation::SkipHashBinding,
+        probe: Value = forged,
+        outcome: bool,
+        real: |probe| verify_envelope(probe).unwrap_or(false),
+        mirror: |probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 
     // Control in the other direction: the untouched envelope is admitted by
     // both. Without this, a verifier that refused everything would pass the
@@ -238,12 +235,18 @@ fn broken_issuer_field_requirement_accepts_an_envelope_with_no_issuer() {
     let keypair = signing_keypair(7);
     let mut missing = envelope(&keypair, 1, None);
     missing.as_object_mut().unwrap().remove("issuer");
-    let real = verify_envelope(&missing).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_envelope(&missing, EnvelopeMutation::None);
-    assert!(!admitted(&control));
-    let broken = mirrored_verify_envelope(&missing, EnvelopeMutation::SkipIssuerFieldRequired);
-    assert!(admitted(&broken));
+    assert_registered_negative_case! {
+        case: SPINE_ENVELOPE_ISSUER_FIELD_REQUIRED,
+        mutation: EnvelopeMutation,
+        control: EnvelopeMutation::None,
+        broken: EnvelopeMutation::SkipIssuerFieldRequired,
+        probe: Value = missing,
+        outcome: bool,
+        real: |probe| verify_envelope(probe).unwrap_or(false),
+        mirror: |probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 #[test]
@@ -251,12 +254,18 @@ fn broken_signature_field_requirement_accepts_an_unsigned_envelope() {
     let keypair = signing_keypair(7);
     let mut missing = envelope(&keypair, 1, None);
     missing.as_object_mut().unwrap().remove("signature");
-    let real = verify_envelope(&missing).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_envelope(&missing, EnvelopeMutation::None);
-    assert!(!admitted(&control));
-    let broken = mirrored_verify_envelope(&missing, EnvelopeMutation::SkipSignatureFieldRequired);
-    assert!(admitted(&broken));
+    assert_registered_negative_case! {
+        case: SPINE_ENVELOPE_SIGNATURE_FIELD_REQUIRED,
+        mutation: EnvelopeMutation,
+        control: EnvelopeMutation::None,
+        broken: EnvelopeMutation::SkipSignatureFieldRequired,
+        probe: Value = missing,
+        outcome: bool,
+        real: |probe| verify_envelope(probe).unwrap_or(false),
+        mirror: |probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 #[test]
@@ -264,12 +273,18 @@ fn broken_issuer_key_validation_accepts_malformed_key_material() {
     let keypair = signing_keypair(7);
     let mut malformed = envelope(&keypair, 1, None);
     malformed["issuer"] = json!("swarm:ed25519:not-a-key");
-    let real = verify_envelope(&malformed).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_envelope(&malformed, EnvelopeMutation::None);
-    assert!(!admitted(&control));
-    let broken = mirrored_verify_envelope(&malformed, EnvelopeMutation::SkipIssuerKeyValidation);
-    assert!(admitted(&broken));
+    assert_registered_negative_case! {
+        case: SPINE_ENVELOPE_ISSUER_KEY_VALID,
+        mutation: EnvelopeMutation,
+        control: EnvelopeMutation::None,
+        broken: EnvelopeMutation::SkipIssuerKeyValidation,
+        probe: Value = malformed,
+        outcome: bool,
+        real: |probe| verify_envelope(probe).unwrap_or(false),
+        mirror: |probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 #[test]
@@ -277,12 +292,18 @@ fn broken_signature_decoding_accepts_malformed_signature_material() {
     let keypair = signing_keypair(7);
     let mut malformed = envelope(&keypair, 1, None);
     malformed["signature"] = json!("not-a-signature");
-    let real = verify_envelope(&malformed).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_envelope(&malformed, EnvelopeMutation::None);
-    assert!(!admitted(&control));
-    let broken = mirrored_verify_envelope(&malformed, EnvelopeMutation::SkipSignatureWellFormed);
-    assert!(admitted(&broken));
+    assert_registered_negative_case! {
+        case: SPINE_ENVELOPE_SIGNATURE_WELL_FORMED,
+        mutation: EnvelopeMutation,
+        control: EnvelopeMutation::None,
+        broken: EnvelopeMutation::SkipSignatureWellFormed,
+        probe: Value = malformed,
+        outcome: bool,
+        real: |probe| verify_envelope(probe).unwrap_or(false),
+        mirror: |probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -309,23 +330,18 @@ fn broken_signature_check_admits_the_reattributed_envelope_the_real_verifier_ref
     let recomputed = sha256_hex_prefixed(&envelope_signing_bytes(&unsigned).unwrap());
     forged["envelope_hash"] = json!(recomputed);
 
-    let real = verify_envelope(&forged);
-    assert_eq!(
-        real.ok(),
-        Some(false),
-        "the shipped verifier must reach the signature check -- not a hash \
-         mismatch -- and refuse there"
-    );
-
-    let control = mirrored_verify_envelope(&forged, EnvelopeMutation::None);
-    assert!(!admitted(&control), "the unmutated mirror must refuse too");
-
-    let broken = mirrored_verify_envelope(&forged, EnvelopeMutation::SkipSignatureCheck);
-    assert!(
-        admitted(&broken),
-        "without the signature check an envelope is attributed to whichever \
-         issuer the bytes claim, and the victim's key never touched it: {broken:?}"
-    );
+    assert_registered_negative_case! {
+        case: SPINE_ENVELOPE_SIGNATURE_VALID,
+        mutation: EnvelopeMutation,
+        control: EnvelopeMutation::None,
+        broken: EnvelopeMutation::SkipSignatureCheck,
+        probe: Value = forged,
+        outcome: bool,
+        real: |probe| verify_envelope(probe).unwrap_or(false),
+        mirror: |probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +481,23 @@ fn mirrored_verify_chain_link(
     }
 }
 
+struct ChainProbe {
+    envelope: Value,
+    head: Option<IssuerChainHead>,
+}
+
+fn real_chain_admitted(probe: &ChainProbe) -> bool {
+    verify_chain_link(&probe.envelope, probe.head.as_ref())
+        .map(|verdict| verdict.is_valid())
+        .unwrap_or(false)
+}
+
+fn mirrored_chain_admitted(probe: &ChainProbe, mutation: ChainMutation) -> bool {
+    mirrored_verify_chain_link(&probe.envelope, probe.head.as_ref(), mutation)
+        .map(|verdict| verdict.is_valid())
+        .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // SPINE-CHAIN-PREV-FIELD-REQUIRED
 // ---------------------------------------------------------------------------
@@ -477,14 +510,18 @@ fn broken_previous_hash_field_requirement_admits_an_ambiguous_first_link() {
         .as_object_mut()
         .unwrap()
         .remove("prev_envelope_hash");
-    let real = verify_chain_link(&missing, None).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_chain_link(&missing, None, ChainMutation::None);
-    assert!(control.is_err());
-    let broken =
-        mirrored_verify_chain_link(&missing, None, ChainMutation::SkipPreviousHashFieldRequired)
-            .unwrap();
-    assert_eq!(broken, ChainLinkVerdict::NewChain);
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_PREV_FIELD_REQUIRED,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipPreviousHashFieldRequired,
+        probe: ChainProbe = ChainProbe { envelope: missing, head: None },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -500,13 +537,18 @@ fn broken_head_overflow_guard_wraps_the_chain_back_to_zero() {
         envelope_hash: "0x".to_string() + &"aa".repeat(32),
     };
     let wrapped = envelope(&keypair, 0, Some(head.envelope_hash.clone()));
-    let real = verify_chain_link(&wrapped, Some(&head)).unwrap();
-    assert!(matches!(real, ChainLinkVerdict::InvalidChainHead { .. }));
-    let control = mirrored_verify_chain_link(&wrapped, Some(&head), ChainMutation::None).unwrap();
-    assert_eq!(control, real);
-    let broken =
-        mirrored_verify_chain_link(&wrapped, Some(&head), ChainMutation::WrapHeadSequence).unwrap();
-    assert_eq!(broken, ChainLinkVerdict::ValidContinuation);
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_HEAD_NOT_OVERFLOWED,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::WrapHeadSequence,
+        probe: ChainProbe = ChainProbe { envelope: wrapped, head: Some(head) },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 fn head_of(envelope: &Value) -> IssuerChainHead {
@@ -532,16 +574,18 @@ fn broken_chain_issuer_requirement_accepts_a_continuation_with_no_issuer() {
     let head = head_of(&first);
     let mut missing = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
     missing.as_object_mut().unwrap().remove("issuer");
-    let real = verify_chain_link(&missing, Some(&head)).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_chain_link(&missing, Some(&head), ChainMutation::None);
-    assert!(control.is_err());
-    let broken = mirrored_verify_chain_link(
-        &missing,
-        Some(&head),
-        ChainMutation::SkipIssuerFieldRequired,
-    );
-    assert_eq!(broken, Ok(ChainLinkVerdict::ValidContinuation));
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_ISSUER_FIELD_REQUIRED,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipIssuerFieldRequired,
+        probe: ChainProbe = ChainProbe { envelope: missing, head: Some(head) },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 #[test]
@@ -551,16 +595,18 @@ fn broken_chain_sequence_requirement_accepts_a_continuation_with_no_sequence() {
     let head = head_of(&first);
     let mut missing = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
     missing.as_object_mut().unwrap().remove("seq");
-    let real = verify_chain_link(&missing, Some(&head)).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_chain_link(&missing, Some(&head), ChainMutation::None);
-    assert!(control.is_err());
-    let broken = mirrored_verify_chain_link(
-        &missing,
-        Some(&head),
-        ChainMutation::SkipSequenceFieldRequired,
-    );
-    assert_eq!(broken, Ok(ChainLinkVerdict::ValidContinuation));
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_SEQ_FIELD_REQUIRED,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipSequenceFieldRequired,
+        probe: ChainProbe = ChainProbe { envelope: missing, head: Some(head) },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 #[test]
@@ -570,16 +616,18 @@ fn broken_predecessor_type_guard_accepts_a_non_string_chain_reference() {
     let head = head_of(&first);
     let mut wrong_type = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
     wrong_type["prev_envelope_hash"] = json!(7);
-    let real = verify_chain_link(&wrong_type, Some(&head)).map_err(|error| error.to_string());
-    assert!(real.is_err());
-    let control = mirrored_verify_chain_link(&wrong_type, Some(&head), ChainMutation::None);
-    assert!(control.is_err());
-    let broken = mirrored_verify_chain_link(
-        &wrong_type,
-        Some(&head),
-        ChainMutation::SkipPreviousHashTypeValidation,
-    );
-    assert_eq!(broken, Ok(ChainLinkVerdict::ValidContinuation));
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_PREV_TYPE_VALID,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipPreviousHashTypeValidation,
+        probe: ChainProbe = ChainProbe { envelope: wrong_type, head: Some(head) },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -598,30 +646,18 @@ fn broken_prev_hash_binding_admits_the_forked_link_the_real_verifier_rejects() {
     let forked = envelope(&keypair, 2, Some("0x".to_string() + &"cd".repeat(32)));
     assert!(verify_envelope(&forked).expect("the fork is correctly signed"));
 
-    let real = verify_chain_link(&forked, Some(&head)).expect("a verdict");
-    assert!(
-        matches!(real, ChainLinkVerdict::HashMismatch { .. }),
-        "the shipped verifier must refuse a link that does not name our head, got {real:?}"
-    );
-    assert!(!real.is_valid());
-
-    let control =
-        mirrored_verify_chain_link(&forked, Some(&head), ChainMutation::None).expect("a verdict");
-    assert_eq!(
-        control, real,
-        "the unmutated mirror must reproduce the real verdict"
-    );
-
-    let broken =
-        mirrored_verify_chain_link(&forked, Some(&head), ChainMutation::SkipPrevHashBinding)
-            .expect("a verdict");
-    assert_eq!(
-        broken,
-        ChainLinkVerdict::ValidContinuation,
-        "without the prev-hash comparison a validly signed envelope continuing \
-         some other history is accepted as ours"
-    );
-    assert!(broken.is_valid());
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_PREV_HASH_BOUND,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipPrevHashBinding,
+        probe: ChainProbe = ChainProbe { envelope: forked, head: Some(head.clone()) },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 
     // The real successor is accepted by both, so neither is refusing everything.
     let successor = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
@@ -649,38 +685,18 @@ fn broken_sequence_binding_admits_the_replayed_envelope_the_real_verifier_reject
     // its previous hash names the old head, so the prev-hash guard still refuses
     // it after the sequence guard is removed.
     let wrong_sequence = envelope(&keypair, 2, Some(head_at_two.envelope_hash.clone()));
-    let real = verify_chain_link(&wrong_sequence, Some(&head_at_two)).expect("a verdict");
-    assert_eq!(
-        real,
-        ChainLinkVerdict::SequenceMismatch {
-            expected_seq: 3,
-            actual_seq: 2,
-        },
-        "the shipped verifier must refuse a replay at the sequence check"
-    );
-    assert!(!real.is_valid());
-
-    let control =
-        mirrored_verify_chain_link(&wrong_sequence, Some(&head_at_two), ChainMutation::None)
-            .expect("a verdict");
-    assert_eq!(
-        control, real,
-        "the unmutated mirror must reproduce the real verdict"
-    );
-
-    let broken = mirrored_verify_chain_link(
-        &wrong_sequence,
-        Some(&head_at_two),
-        ChainMutation::SkipSequenceBinding,
-    )
-    .expect("a verdict");
-    assert_eq!(
-        broken,
-        ChainLinkVerdict::ValidContinuation,
-        "with the correct issuer and previous hash, removing only the sequence \
-         guard must admit the wrong sequence"
-    );
-    assert!(broken.is_valid());
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_SEQ_MONOTONIC,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipSequenceBinding,
+        probe: ChainProbe = ChainProbe { envelope: wrong_sequence, head: Some(head_at_two) },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -700,33 +716,18 @@ fn broken_issuer_binding_admits_the_cross_issuer_splice_the_real_verifier_reject
     let theirs_second = envelope(&theirs, 2, Some(head.envelope_hash.clone()));
     assert!(verify_envelope(&theirs_second).expect("their envelope is correctly signed"));
 
-    let real = verify_chain_link(&theirs_second, Some(&head)).expect("a verdict");
-    assert!(
-        matches!(real, ChainLinkVerdict::InvalidChainHead { .. }),
-        "the shipped verifier must refuse another issuer's envelope on our chain, got {real:?}"
-    );
-    assert!(!real.is_valid());
-
-    let control = mirrored_verify_chain_link(&theirs_second, Some(&head), ChainMutation::None)
-        .expect("a verdict");
-    assert_eq!(
-        control, real,
-        "the unmutated mirror must reproduce the real verdict"
-    );
-
-    let broken = mirrored_verify_chain_link(
-        &theirs_second,
-        Some(&head),
-        ChainMutation::SkipIssuerBinding,
-    )
-    .expect("a verdict");
-    assert_eq!(
-        broken,
-        ChainLinkVerdict::ValidContinuation,
-        "without the issuer guard any keyholder can extend any issuer's chain, \
-         because every other check is satisfiable from public data"
-    );
-    assert!(broken.is_valid());
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_ISSUER_BOUND,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipIssuerBinding,
+        probe: ChainProbe = ChainProbe { envelope: theirs_second, head: Some(head) },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -743,29 +744,18 @@ fn broken_first_sequence_guard_admits_the_truncated_history_the_real_verifier_re
     let truncated = envelope(&keypair, 99, None);
     assert!(verify_envelope(&truncated).expect("the envelope is correctly signed"));
 
-    let real = verify_chain_link(&truncated, None).expect("a verdict");
-    assert!(
-        matches!(real, ChainLinkVerdict::InvalidChainHead { .. }),
-        "a chain a verifier has never seen must start at seq=1, got {real:?}"
-    );
-    assert!(!real.is_valid());
-
-    let control =
-        mirrored_verify_chain_link(&truncated, None, ChainMutation::None).expect("a verdict");
-    assert_eq!(
-        control, real,
-        "the unmutated mirror must reproduce the real verdict"
-    );
-
-    let broken = mirrored_verify_chain_link(&truncated, None, ChainMutation::SkipFirstSequence)
-        .expect("a verdict");
-    assert_eq!(
-        broken,
-        ChainLinkVerdict::NewChain,
-        "without the shape guard an issuer can join at any height it likes and \
-         the missing prefix is never noticed"
-    );
-    assert!(broken.is_valid());
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_FIRST_SEQ,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipFirstSequence,
+        probe: ChainProbe = ChainProbe { envelope: truncated, head: None },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 
     // A real first envelope is accepted by both.
     let genuine_first = envelope(&keypair, 1, None);
@@ -785,25 +775,16 @@ fn broken_first_previous_hash_guard_admits_a_new_chain_linked_to_hidden_history(
     let linked_first = envelope(&keypair, 1, Some("0x".to_string() + &"ef".repeat(32)));
     assert!(verify_envelope(&linked_first).expect("the envelope is correctly signed"));
 
-    let real = verify_chain_link(&linked_first, None).expect("a verdict");
-    assert!(matches!(real, ChainLinkVerdict::InvalidChainHead { .. }));
-    assert!(!real.is_valid());
-
-    let control =
-        mirrored_verify_chain_link(&linked_first, None, ChainMutation::None).expect("a verdict");
-    assert_eq!(
-        control, real,
-        "the unmutated mirror must reproduce the real verdict"
-    );
-
-    let broken =
-        mirrored_verify_chain_link(&linked_first, None, ChainMutation::SkipFirstPreviousHash)
-            .expect("a verdict");
-    assert_eq!(
-        broken,
-        ChainLinkVerdict::NewChain,
-        "without the null-previous-hash guard a supposed first link can point at \
-         history this verifier has never seen"
-    );
-    assert!(broken.is_valid());
+    assert_registered_negative_case! {
+        case: SPINE_CHAIN_FIRST_PREV_NULL,
+        mutation: ChainMutation,
+        control: ChainMutation::None,
+        broken: ChainMutation::SkipFirstPreviousHash,
+        probe: ChainProbe = ChainProbe { envelope: linked_first, head: None },
+        outcome: bool,
+        real: |probe| real_chain_admitted(probe),
+        mirror: |probe, mutation| mirrored_chain_admitted(probe, mutation),
+        denied: |value| !value,
+        permitted: |value| *value,
+    }
 }
