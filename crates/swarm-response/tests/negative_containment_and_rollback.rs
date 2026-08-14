@@ -8,12 +8,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use serde_json::json;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::types::{
     ResponseAction, ResponseBlastRadiusImpact, ResponseBlastRadiusPreview,
     ResponseRehearsalPreview, ResponseRehearsalScopeKind, ResponseRollbackPreview,
     ResponseRollbackStep, ResponseRollbackStepKind,
 };
-use swarm_response::containment::{ContainmentLease, ContainmentLeaseError, ContainmentTtl};
+use swarm_response::containment::{
+    ContainmentLease, ContainmentLeaseError, ContainmentLeaseStore, ContainmentStoreError,
+    ContainmentTtl, FileContainmentLeaseStore, MemoryContainmentLeaseStore,
+};
 use swarm_response::rollback::{
     RollbackExecutor, RollbackReceipt, RollbackStepOutcome, RollbackStepStatus, RollbackTrigger,
     SandboxRollbackExecutor, resolve_inverse,
@@ -101,7 +106,8 @@ fn broken_ttl_check_permits_a_zero_lifetime() {
         control,
         Err(ContainmentLeaseError::NonPositiveTtl { ttl_ms: 0 })
     );
-    assert_eq!(mirrored_ttl(0, TtlMutation::SkipPositiveCheck), Ok(0));
+    let broken = mirrored_ttl(0, TtlMutation::SkipPositiveCheck);
+    assert_eq!(broken, Ok(0));
 }
 
 // ---------------------------------------------------------------------------
@@ -252,10 +258,8 @@ fn broken_schema_check_loads_a_lease_from_an_unknown_wire_version() {
     assert!(real.is_err());
     let control = mirrored_stored_lease_accepts(&wire, StoredLeaseMutation::None);
     assert!(control.is_err());
-    assert_eq!(
-        mirrored_stored_lease_accepts(&wire, StoredLeaseMutation::SkipSchemaVersion),
-        Ok(901_000)
-    );
+    let broken = mirrored_stored_lease_accepts(&wire, StoredLeaseMutation::SkipSchemaVersion);
+    assert_eq!(broken, Ok(901_000));
 }
 
 #[test]
@@ -294,6 +298,127 @@ fn broken_stored_lease_bound_accepts_the_already_expired_record_the_real_one_rej
     let clean = serde_json::to_value(lease(1_000, 900_000)).unwrap();
     let restored: ContainmentLease = serde_json::from_value(clean).unwrap();
     assert_eq!(restored.expires_at_ms(), 901_000);
+}
+
+// ---------------------------------------------------------------------------
+// RESPONSE-{MEMORY,FILE}-{DUPLICATE-LEASE,CLOSE-UNKNOWN-LEASE}-REFUSED
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoreMutation {
+    None,
+    SkipMemoryDuplicateOpen,
+    SkipMemoryNotOpenClose,
+    SkipFileDuplicateOpen,
+    SkipFileNotOpenClose,
+}
+
+fn mirrored_store_transition(
+    file_backed: bool,
+    already_open: bool,
+    close: bool,
+    mutation: StoreMutation,
+) -> Result<(), &'static str> {
+    let skip = matches!(
+        (file_backed, close, mutation),
+        (false, false, StoreMutation::SkipMemoryDuplicateOpen)
+            | (false, true, StoreMutation::SkipMemoryNotOpenClose)
+            | (true, false, StoreMutation::SkipFileDuplicateOpen)
+            | (true, true, StoreMutation::SkipFileNotOpenClose)
+    );
+    if !skip && ((!close && already_open) || (close && !already_open)) {
+        return Err(if close { "not open" } else { "already open" });
+    }
+    Ok(())
+}
+
+fn rollback_receipt_for(lease: &ContainmentLease) -> RollbackReceipt {
+    RollbackReceipt::from_steps(
+        lease,
+        RollbackTrigger::Manual,
+        ExecutionMode::Enforced,
+        2_000,
+        vec![RollbackStepOutcome {
+            kind: ResponseRollbackStepKind::ReleaseQuarantinedFile,
+            status: RollbackStepStatus::Reversed,
+            detail: "released".to_string(),
+        }],
+    )
+}
+
+fn unique_store_path(label: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is after the epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "swarm-phase285-{label}-{}-{nonce}.json",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn broken_memory_duplicate_guard_accepts_a_second_open_for_one_lease() {
+    let lease = lease(1_000, 900_000);
+    let store = MemoryContainmentLeaseStore::new();
+    store.open_lease(&lease).unwrap();
+    let real = store.open_lease(&lease);
+    assert!(matches!(
+        real,
+        Err(ContainmentStoreError::AlreadyOpen { .. })
+    ));
+    let control = mirrored_store_transition(false, true, false, StoreMutation::None);
+    assert_eq!(control, Err("already open"));
+    let broken =
+        mirrored_store_transition(false, true, false, StoreMutation::SkipMemoryDuplicateOpen);
+    assert_eq!(broken, Ok(()));
+}
+
+#[test]
+fn broken_memory_not_open_guard_closes_an_unknown_lease() {
+    let lease = lease(1_000, 900_000);
+    let receipt = rollback_receipt_for(&lease);
+    let store = MemoryContainmentLeaseStore::new();
+    let real = store.close(&receipt);
+    assert!(matches!(real, Err(ContainmentStoreError::NotOpen { .. })));
+    let control = mirrored_store_transition(false, false, true, StoreMutation::None);
+    assert_eq!(control, Err("not open"));
+    let broken =
+        mirrored_store_transition(false, false, true, StoreMutation::SkipMemoryNotOpenClose);
+    assert_eq!(broken, Ok(()));
+}
+
+#[test]
+fn broken_file_duplicate_guard_accepts_a_second_open_for_one_lease() {
+    let path = unique_store_path("duplicate");
+    let store = FileContainmentLeaseStore::open(&path);
+    let lease = lease(1_000, 900_000);
+    store.open_lease(&lease).unwrap();
+    let real = store.open_lease(&lease);
+    assert!(matches!(
+        real,
+        Err(ContainmentStoreError::AlreadyOpen { .. })
+    ));
+    let control = mirrored_store_transition(true, true, false, StoreMutation::None);
+    assert_eq!(control, Err("already open"));
+    let broken = mirrored_store_transition(true, true, false, StoreMutation::SkipFileDuplicateOpen);
+    assert_eq!(broken, Ok(()));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn broken_file_not_open_guard_closes_an_unknown_lease() {
+    let path = unique_store_path("not-open");
+    let store = FileContainmentLeaseStore::open(&path);
+    let lease = lease(1_000, 900_000);
+    let receipt = rollback_receipt_for(&lease);
+    let real = store.close(&receipt);
+    assert!(matches!(real, Err(ContainmentStoreError::NotOpen { .. })));
+    let control = mirrored_store_transition(true, false, true, StoreMutation::None);
+    assert_eq!(control, Err("not open"));
+    let broken = mirrored_store_transition(true, false, true, StoreMutation::SkipFileNotOpenClose);
+    assert_eq!(broken, Ok(()));
+    assert!(!path.exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -350,16 +475,16 @@ fn broken_empty_step_status_reports_success_without_any_inverse() {
         steps.clone(),
     );
     assert_eq!(real.status, ResponseStatus::Failed);
-    assert_eq!(
-        mirrored_derive_status(&steps, ExecutionMode::Enforced, DeriveStatusMutation::None),
-        real.status
+    let control =
+        mirrored_derive_status(&steps, ExecutionMode::Enforced, DeriveStatusMutation::None);
+    assert_eq!(control, real.status);
+    let broken = mirrored_derive_status(
+        &steps,
+        ExecutionMode::Enforced,
+        DeriveStatusMutation::SkipEmptySteps,
     );
     assert_eq!(
-        mirrored_derive_status(
-            &steps,
-            ExecutionMode::Enforced,
-            DeriveStatusMutation::SkipEmptySteps,
-        ),
+        broken,
         ResponseStatus::Executed,
         "without the empty-step guard the vacuous all-restored predicate reports success"
     );
@@ -381,18 +506,15 @@ fn broken_partial_status_reports_success_with_an_unsupported_inverse() {
         steps.clone(),
     );
     assert_eq!(real.status, ResponseStatus::Failed);
-    assert_eq!(
-        mirrored_derive_status(&steps, ExecutionMode::Enforced, DeriveStatusMutation::None),
-        real.status
+    let control =
+        mirrored_derive_status(&steps, ExecutionMode::Enforced, DeriveStatusMutation::None);
+    assert_eq!(control, real.status);
+    let broken = mirrored_derive_status(
+        &steps,
+        ExecutionMode::Enforced,
+        DeriveStatusMutation::ReportPartialSuccess,
     );
-    assert_eq!(
-        mirrored_derive_status(
-            &steps,
-            ExecutionMode::Enforced,
-            DeriveStatusMutation::ReportPartialSuccess,
-        ),
-        ResponseStatus::Executed
-    );
+    assert_eq!(broken, ResponseStatus::Executed);
 }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +525,7 @@ fn broken_partial_status_reports_success_with_an_unsupported_inverse() {
 enum InverseMutation {
     None,
     InventUnmappedInverse,
+    InventIrreversibleInverse,
 }
 
 fn mirrored_inverse(
@@ -415,24 +538,46 @@ fn mirrored_inverse(
             ResponseAction::QuarantineFile { .. },
             ResponseRollbackStepKind::ReleaseQuarantinedFile,
         ) => Ok("release_quarantined_file"),
+        (
+            ResponseAction::TerminateUserSession { .. },
+            ResponseRollbackStepKind::ReauthenticateUserSession,
+        ) if mutation == InverseMutation::InventIrreversibleInverse => {
+            Ok("reauthenticate_user_session")
+        }
+        (
+            ResponseAction::TerminateUserSession { .. },
+            ResponseRollbackStepKind::ReauthenticateUserSession,
+        ) => Err("irreversible"),
         _ if mutation == InverseMutation::InventUnmappedInverse => Ok("invented_inverse"),
         _ => Err("unmapped"),
     }
 }
 
 #[test]
+fn broken_irreversible_inverse_invents_a_fresh_session_as_a_reversal() {
+    let action = ResponseAction::TerminateUserSession {
+        host_id: "host-1".to_string(),
+        session_id: "session-1".to_string(),
+    };
+    let step = ResponseRollbackStepKind::ReauthenticateUserSession;
+    let real = resolve_inverse(&action, step);
+    assert!(real.is_err_and(|gap| format!("{gap:?}").contains("Irreversible")));
+    let control = mirrored_inverse(&action, step, InverseMutation::None);
+    assert_eq!(control, Err("irreversible"));
+    let broken = mirrored_inverse(&action, step, InverseMutation::InventIrreversibleInverse);
+    assert_eq!(broken, Ok("reauthenticate_user_session"));
+}
+
+#[test]
 fn broken_unmapped_inverse_fabricates_an_operation_for_a_mismatched_step() {
     let action = quarantine_action();
     let step = ResponseRollbackStepKind::ResumeProcess;
-    assert!(resolve_inverse(&action, step).is_err());
-    assert_eq!(
-        mirrored_inverse(&action, step, InverseMutation::None),
-        Err("unmapped")
-    );
-    assert_eq!(
-        mirrored_inverse(&action, step, InverseMutation::InventUnmappedInverse),
-        Ok("invented_inverse")
-    );
+    let real = resolve_inverse(&action, step);
+    assert!(real.is_err());
+    let control = mirrored_inverse(&action, step, InverseMutation::None);
+    assert_eq!(control, Err("unmapped"));
+    let broken = mirrored_inverse(&action, step, InverseMutation::InventUnmappedInverse);
+    assert_eq!(broken, Ok("invented_inverse"));
 }
 
 // ---------------------------------------------------------------------------
@@ -476,14 +621,10 @@ async fn broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan() {
         )
         .await;
     assert!(real.is_err());
-    assert_eq!(
-        mirrored_require_steps(&empty, RequireStepsMutation::None),
-        Err("no rollback steps")
-    );
-    assert_eq!(
-        mirrored_require_steps(&empty, RequireStepsMutation::SkipRequiredSteps),
-        Ok(())
-    );
+    let control = mirrored_require_steps(&empty, RequireStepsMutation::None);
+    assert_eq!(control, Err("no rollback steps"));
+    let broken = mirrored_require_steps(&empty, RequireStepsMutation::SkipRequiredSteps);
+    assert_eq!(broken, Ok(()));
 }
 
 #[test]

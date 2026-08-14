@@ -137,6 +137,8 @@ enum RuntimeMutation {
     /// `prepare_containment`'s "no lease store configured" refusal replaced by
     /// `Ok(None)`, which is what it returned before cc5b169.
     SkipContainmentStore,
+    /// A containment whose inverse preview cannot be derived is dispatched.
+    SkipContainmentPreviewError,
     /// An `ApprovalGate::evaluate` error is replaced by Allow.
     SkipPolicyError,
     /// An `ApprovalGate::issue_lease` error is replaced by a synthesized lease.
@@ -207,6 +209,22 @@ async fn mirrored_authorize_and_execute(
         return Err(RuntimeError::ContainmentRefused {
             action: request.action.kind(),
             reason: "no containment lease store is configured".to_string(),
+        });
+    }
+    if is_containment_action(&request.action)
+        && execution_mode == ExecutionMode::Enforced
+        && mutation != RuntimeMutation::SkipContainmentPreviewError
+        && matches!(
+            &request.action,
+            ResponseAction::QuarantineFile { host_id, file_path }
+                if host_id.trim().is_empty() || file_path.trim().is_empty()
+        )
+    {
+        return Err(RuntimeError::ContainmentRefused {
+            action: request.action.kind(),
+            reason: "its inverse plan could not be derived: failed to build rehearsal preview: \
+                     file_path must not be empty"
+                .to_string(),
         });
     }
 
@@ -1034,6 +1052,73 @@ async fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses
 }
 
 // ---------------------------------------------------------------------------
+// RUNTIME-CONTAINMENT-PREVIEW-REQUIRED
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn broken_preview_error_guard_dispatches_a_containment_with_no_inverse_plan() {
+    let gate = FixedVerdictGate {
+        verdict: PolicyVerdict::Allow,
+        lease_ttl_ms: 60_000,
+    };
+    let probe = request(
+        ResponseAction::QuarantineFile {
+            host_id: "host-1".to_string(),
+            file_path: "   ".to_string(),
+        },
+        Severity::High,
+    );
+    let context = context(1_700_000_000_000);
+    let store = Arc::new(MemoryContainmentLeaseStore::new());
+    let ttl = ContainmentTtl::from_config_ms(900_000).unwrap();
+
+    let real_calls = Arc::new(AtomicUsize::new(0));
+    let real_runtime = SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate.clone(),
+        RecordingExecutor {
+            calls: real_calls.clone(),
+        },
+    )
+    .with_containment_store(store.clone(), ttl);
+    let real = real_runtime.authorize_and_execute(&probe, &context).await;
+    assert!(matches!(real, Err(RuntimeError::ContainmentRefused { .. })));
+    assert_eq!(real_calls.load(Ordering::SeqCst), 0);
+
+    let control_calls = Arc::new(AtomicUsize::new(0));
+    let control = mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &RecordingExecutor {
+            calls: control_calls.clone(),
+        },
+        Some((store.as_ref(), ttl)),
+        &probe,
+        &context,
+        RuntimeMutation::None,
+    )
+    .await;
+    assert_eq!(outcome(&control), outcome(&real));
+    assert_eq!(control_calls.load(Ordering::SeqCst), 0);
+
+    let broken_calls = Arc::new(AtomicUsize::new(0));
+    let broken = mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &RecordingExecutor {
+            calls: broken_calls.clone(),
+        },
+        Some((store.as_ref(), ttl)),
+        &probe,
+        &context,
+        RuntimeMutation::SkipContainmentPreviewError,
+    )
+    .await;
+    assert!(broken.is_ok());
+    assert_eq!(broken_calls.load(Ordering::SeqCst), 1);
+}
+
+// ---------------------------------------------------------------------------
 // RUNTIME-RELEASE-SUBJECT-BOUND
 // ---------------------------------------------------------------------------
 
@@ -1092,6 +1177,9 @@ fn attest(receipt: &RollbackReceipt) -> serde_json::Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleaseAttestationMutation {
     None,
+    SkipAttestationRequired,
+    SkipMalformedAttestation,
+    SkipSignatureValidation,
     SkipSubjectBinding,
 }
 
@@ -1102,14 +1190,21 @@ fn mirrored_verify_release_attestation(
     receipt: &RollbackReceipt,
     mutation: ReleaseAttestationMutation,
 ) -> Result<(), String> {
-    let raw = receipt
-        .governance_attestation
-        .as_ref()
-        .ok_or("unattested")?
-        .clone();
-    let attestation: ConsensusGovernanceReceipt =
-        serde_json::from_value(raw).map_err(|error| error.to_string())?;
-    attestation.verify().map_err(|error| error.to_string())?;
+    let Some(raw) = receipt.governance_attestation.as_ref().cloned() else {
+        return if mutation == ReleaseAttestationMutation::SkipAttestationRequired {
+            Ok(())
+        } else {
+            Err("unattested".to_string())
+        };
+    };
+    let attestation: ConsensusGovernanceReceipt = match serde_json::from_value(raw) {
+        Ok(attestation) => attestation,
+        Err(_) if mutation == ReleaseAttestationMutation::SkipMalformedAttestation => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if mutation != ReleaseAttestationMutation::SkipSignatureValidation {
+        attestation.verify().map_err(|error| error.to_string())?;
+    }
     let mut subject = receipt.clone();
     subject.governance_attestation = None;
     let derived = sha256_hex(&canonical_json_bytes(&subject).map_err(|error| error.to_string())?);
@@ -1122,6 +1217,63 @@ fn mirrored_verify_release_attestation(
         ));
     }
     Ok(())
+}
+
+#[test]
+fn broken_attestation_requirement_accepts_an_unattested_release() {
+    let receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
+    let real = verify_release_attestation(&receipt);
+    assert!(matches!(
+        &real,
+        Err(ReleaseAttestationError::Unattested { .. })
+    ));
+    let control = mirrored_verify_release_attestation(&receipt, ReleaseAttestationMutation::None);
+    assert!(control.is_err());
+    let broken = mirrored_verify_release_attestation(
+        &receipt,
+        ReleaseAttestationMutation::SkipAttestationRequired,
+    );
+    assert!(broken.is_ok());
+}
+
+#[test]
+fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
+    let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
+    receipt.governance_attestation = Some(json!({"broken": true}));
+    let real = verify_release_attestation(&receipt);
+    assert!(matches!(
+        real,
+        Err(ReleaseAttestationError::Malformed { .. })
+    ));
+    let control = mirrored_verify_release_attestation(&receipt, ReleaseAttestationMutation::None);
+    assert!(control.is_err());
+    let broken = mirrored_verify_release_attestation(
+        &receipt,
+        ReleaseAttestationMutation::SkipMalformedAttestation,
+    );
+    assert!(broken.is_ok());
+}
+
+#[test]
+fn broken_release_signature_guard_accepts_a_bad_governor_signature() {
+    let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
+    let mut attestation: ConsensusGovernanceReceipt =
+        serde_json::from_value(attest(&receipt)).unwrap();
+    let impostor = Ed25519Signer::from_secret_material("negative-registry-impostor");
+    attestation.signature = impostor.sign(&canonical_json_bytes(&attestation.payload).unwrap());
+    receipt.governance_attestation = Some(serde_json::to_value(attestation).unwrap());
+    let real = verify_release_attestation(&receipt);
+    assert!(
+        matches!(real, Err(ReleaseAttestationError::Signature { .. })),
+        "unexpected result: {real:?}"
+    );
+    let control = mirrored_verify_release_attestation(&receipt, ReleaseAttestationMutation::None);
+    assert!(control.is_err());
+    let broken = mirrored_verify_release_attestation(
+        &receipt,
+        ReleaseAttestationMutation::SkipSignatureValidation,
+    );
+    assert!(broken.is_ok());
 }
 
 #[test]
@@ -1153,11 +1305,14 @@ fn broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuse
         "the unmutated mirror must refuse the same rewritten receipt: {control:?}"
     );
 
-    mirrored_verify_release_attestation(&rewritten, ReleaseAttestationMutation::SkipSubjectBinding)
-        .expect(
-            "without the subject binding a body rewrite passes on a genuine, \
+    let broken = mirrored_verify_release_attestation(
+        &rewritten,
+        ReleaseAttestationMutation::SkipSubjectBinding,
+    );
+    broken.expect(
+        "without the subject binding a body rewrite passes on a genuine, \
          unmodified signature -- the signature check ALONE does not catch it",
-        );
+    );
 }
 
 // ---------------------------------------------------------------------------

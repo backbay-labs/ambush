@@ -182,18 +182,19 @@ jobs:
       # documentation form of the defect .planning/STATE.md catalogues twelve
       # times.
       #
-      # IN THIS JOB for the reason stated at the top of it: python3 only, no
-      # toolchain, no build artifacts, no network. Measured 0.9s wall clock in a
-      # warm worktree with both self-tests included.
+      # The mapping gate is lexical; the negative-registry gate additionally
+      # executes the four exact registered Cargo test targets to prove every
+      # named test ran and none was ignored. On a warm local worktree they were
+      # measured separately at 7.62s and 7.16s wall clock (2026-08-14); CI
+      # timing is cache- and machine-dependent.
       #
       # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
       # and refuse to scan it if a fixture misbehaves. These workflow steps are
       # present here; protected-required-check status is repository setting
       # state and is tracked separately in Phase 285 acceptance. A gate that has
-      # never been observed failing is
-      # not evidence; each was also falsified against the REAL tree before
-      # landing (an unmapped marker, a renamed function path, a deleted registry
-      # entry), and those three observations are in the phase-285 commit body.
+      # never been observed failing is not evidence; checked-in adversarial
+      # fixtures exercise unmapped/deleted entries, spoofed source, orphan
+      # modules, ignored tests and missing differential calls on every run.
       #
       # NOTE THE PATH. MAPPING-04/05 and FALSIFY-03/04 say `scripts/check-*.sh`.
       # There is no `scripts/` directory in this repository and never has been;

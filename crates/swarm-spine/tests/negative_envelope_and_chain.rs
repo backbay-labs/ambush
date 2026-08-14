@@ -73,6 +73,14 @@ enum EnvelopeMutation {
     SkipSignatureCheck,
     /// A missing `envelope_hash` is defaulted to the computed digest.
     SkipHashFieldRequired,
+    /// A missing issuer is recovered from the authentic signing key.
+    SkipIssuerFieldRequired,
+    /// A missing signature is recovered from the authentic signing key.
+    SkipSignatureFieldRequired,
+    /// Malformed issuer material is replaced by the authentic issuer.
+    SkipIssuerKeyValidation,
+    /// Malformed signature material is replaced by an authentic signature.
+    SkipSignatureWellFormed,
 }
 
 /// Mirror of `verify_envelope`, copied from
@@ -82,15 +90,25 @@ enum EnvelopeMutation {
 /// function's contract: `Err` and `Ok(false)` are both refusals, and only
 /// `Ok(true)` admits an envelope into a chain.
 fn mirrored_verify_envelope(envelope: &Value, mutation: EnvelopeMutation) -> Result<bool, String> {
-    let issuer = envelope
+    let mut working = envelope.clone();
+    if matches!(
+        mutation,
+        EnvelopeMutation::SkipIssuerFieldRequired | EnvelopeMutation::SkipIssuerKeyValidation
+    ) {
+        working["issuer"] = json!(format!(
+            "swarm:ed25519:{}",
+            signing_keypair(7).public_key().to_hex()
+        ));
+    }
+    let issuer = working
         .get("issuer")
         .and_then(Value::as_str)
         .ok_or("missing issuer")?;
-    let signature_hex = envelope
-        .get("signature")
-        .and_then(Value::as_str)
-        .ok_or("missing signature")?;
-    let claimed_hash = envelope
+    let signature_hex = working.get("signature").and_then(Value::as_str);
+    if signature_hex.is_none() && mutation != EnvelopeMutation::SkipSignatureFieldRequired {
+        return Err("missing signature".to_string());
+    }
+    let claimed_hash = working
         .get("envelope_hash")
         .and_then(Value::as_str)
         .map(str::to_string);
@@ -100,15 +118,26 @@ fn mirrored_verify_envelope(envelope: &Value, mutation: EnvelopeMutation) -> Res
 
     let pubkey_hex = parse_issuer_pubkey_hex(issuer).map_err(|error| error.to_string())?;
     let public_key = PublicKey::from_hex(&pubkey_hex).map_err(|error| error.to_string())?;
-    let signature = Signature::from_hex(signature_hex).map_err(|error| error.to_string())?;
-
-    let mut unsigned = envelope.clone();
+    let mut unsigned = working.clone();
     if let Some(object) = unsigned.as_object_mut() {
         object.remove("envelope_hash");
         object.remove("signature");
     }
 
     let bytes = envelope_signing_bytes(&unsigned).map_err(|error| error.to_string())?;
+    let signature = match signature_hex {
+        Some(value) => match Signature::from_hex(value) {
+            Ok(signature) => signature,
+            Err(_) if mutation == EnvelopeMutation::SkipSignatureWellFormed => {
+                signing_keypair(7).sign(&bytes)
+            }
+            Err(error) => return Err(error.to_string()),
+        },
+        None if mutation == EnvelopeMutation::SkipSignatureFieldRequired => {
+            signing_keypair(7).sign(&bytes)
+        }
+        None => return Err("missing signature".to_string()),
+    };
     let computed_hash = sha256_hex_prefixed(&bytes);
     let claimed_hash = claimed_hash.unwrap_or_else(|| computed_hash.clone());
     if mutation != EnvelopeMutation::SkipHashBinding && computed_hash != claimed_hash {
@@ -201,7 +230,63 @@ fn broken_hash_binding_admits_the_forged_envelope_id_the_real_verifier_refuses()
 }
 
 // ---------------------------------------------------------------------------
-// SPINE-ENVELOPE-SIGNATURE-REQUIRED
+// SPINE-ENVELOPE-{ISSUER,SIGNATURE}-FIELD-REQUIRED and decoding guards
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_issuer_field_requirement_accepts_an_envelope_with_no_issuer() {
+    let keypair = signing_keypair(7);
+    let mut missing = envelope(&keypair, 1, None);
+    missing.as_object_mut().unwrap().remove("issuer");
+    let real = verify_envelope(&missing).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_envelope(&missing, EnvelopeMutation::None);
+    assert!(!admitted(&control));
+    let broken = mirrored_verify_envelope(&missing, EnvelopeMutation::SkipIssuerFieldRequired);
+    assert!(admitted(&broken));
+}
+
+#[test]
+fn broken_signature_field_requirement_accepts_an_unsigned_envelope() {
+    let keypair = signing_keypair(7);
+    let mut missing = envelope(&keypair, 1, None);
+    missing.as_object_mut().unwrap().remove("signature");
+    let real = verify_envelope(&missing).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_envelope(&missing, EnvelopeMutation::None);
+    assert!(!admitted(&control));
+    let broken = mirrored_verify_envelope(&missing, EnvelopeMutation::SkipSignatureFieldRequired);
+    assert!(admitted(&broken));
+}
+
+#[test]
+fn broken_issuer_key_validation_accepts_malformed_key_material() {
+    let keypair = signing_keypair(7);
+    let mut malformed = envelope(&keypair, 1, None);
+    malformed["issuer"] = json!("swarm:ed25519:not-a-key");
+    let real = verify_envelope(&malformed).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_envelope(&malformed, EnvelopeMutation::None);
+    assert!(!admitted(&control));
+    let broken = mirrored_verify_envelope(&malformed, EnvelopeMutation::SkipIssuerKeyValidation);
+    assert!(admitted(&broken));
+}
+
+#[test]
+fn broken_signature_decoding_accepts_malformed_signature_material() {
+    let keypair = signing_keypair(7);
+    let mut malformed = envelope(&keypair, 1, None);
+    malformed["signature"] = json!("not-a-signature");
+    let real = verify_envelope(&malformed).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_envelope(&malformed, EnvelopeMutation::None);
+    assert!(!admitted(&control));
+    let broken = mirrored_verify_envelope(&malformed, EnvelopeMutation::SkipSignatureWellFormed);
+    assert!(admitted(&broken));
+}
+
+// ---------------------------------------------------------------------------
+// SPINE-ENVELOPE-SIGNATURE-VALID
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -263,6 +348,12 @@ enum ChainMutation {
     SkipPrevHashBinding,
     /// A missing `prev_envelope_hash` field is treated as JSON null.
     SkipPreviousHashFieldRequired,
+    /// A missing issuer is recovered from the held head.
+    SkipIssuerFieldRequired,
+    /// A missing sequence is recovered from the expected next value.
+    SkipSequenceFieldRequired,
+    /// A non-string predecessor is recovered from the held head.
+    SkipPreviousHashTypeValidation,
     /// Head increment uses wrapping arithmetic instead of refusing overflow.
     WrapHeadSequence,
 }
@@ -274,14 +365,22 @@ fn mirrored_verify_chain_link(
     known_head: Option<&IssuerChainHead>,
     mutation: ChainMutation,
 ) -> Result<ChainLinkVerdict, String> {
-    let envelope_issuer = envelope
-        .get("issuer")
-        .and_then(Value::as_str)
-        .ok_or("missing issuer")?;
-    let seq = envelope
-        .get("seq")
-        .and_then(Value::as_u64)
-        .ok_or("missing seq")?;
+    let envelope_issuer = match envelope.get("issuer").and_then(Value::as_str) {
+        Some(issuer) => issuer.to_string(),
+        None if mutation == ChainMutation::SkipIssuerFieldRequired => known_head
+            .map(|head| head.issuer.clone())
+            .unwrap_or_else(|| {
+                format!("swarm:ed25519:{}", signing_keypair(7).public_key().to_hex())
+            }),
+        None => return Err("missing issuer".to_string()),
+    };
+    let seq = match envelope.get("seq").and_then(Value::as_u64) {
+        Some(seq) => seq,
+        None if mutation == ChainMutation::SkipSequenceFieldRequired => known_head
+            .map(|head| head.seq.saturating_add(1))
+            .unwrap_or(1),
+        None => return Err("missing seq".to_string()),
+    };
     let missing_prev = Value::Null;
     let prev_hash = match envelope.get("prev_envelope_hash") {
         Some(value) => value,
@@ -289,14 +388,16 @@ fn mirrored_verify_chain_link(
         None => return Err("missing prev_envelope_hash".to_string()),
     };
 
-    let prev_hash_str = if prev_hash.is_null() {
+    let prev_hash_str: Option<String> = if prev_hash.is_null() {
         None
     } else {
-        Some(
-            prev_hash
-                .as_str()
-                .ok_or("prev_envelope_hash is not a string")?,
-        )
+        match prev_hash.as_str() {
+            Some(value) => Some(value.to_string()),
+            None if mutation == ChainMutation::SkipPreviousHashTypeValidation => {
+                known_head.map(|head| head.envelope_hash.clone())
+            }
+            None => return Err("prev_envelope_hash is not a string".to_string()),
+        }
     };
 
     let normalize = |issuer: &str| {
@@ -321,7 +422,7 @@ fn mirrored_verify_chain_link(
         }
         Some(head) => {
             if mutation != ChainMutation::SkipIssuerBinding
-                && normalize(envelope_issuer) != normalize(&head.issuer)
+                && normalize(&envelope_issuer) != normalize(&head.issuer)
             {
                 return Ok(ChainLinkVerdict::InvalidChainHead {
                     reason: format!(
@@ -349,7 +450,7 @@ fn mirrored_verify_chain_link(
                 });
             }
 
-            let actual_prev_hash = prev_hash_str.unwrap_or("");
+            let actual_prev_hash = prev_hash_str.as_deref().unwrap_or("");
             if mutation != ChainMutation::SkipPrevHashBinding
                 && actual_prev_hash != head.envelope_hash
             {
@@ -380,11 +481,10 @@ fn broken_previous_hash_field_requirement_admits_an_ambiguous_first_link() {
     assert!(real.is_err());
     let control = mirrored_verify_chain_link(&missing, None, ChainMutation::None);
     assert!(control.is_err());
-    assert_eq!(
-        mirrored_verify_chain_link(&missing, None, ChainMutation::SkipPreviousHashFieldRequired,)
-            .unwrap(),
-        ChainLinkVerdict::NewChain
-    );
+    let broken =
+        mirrored_verify_chain_link(&missing, None, ChainMutation::SkipPreviousHashFieldRequired)
+            .unwrap();
+    assert_eq!(broken, ChainLinkVerdict::NewChain);
 }
 
 // ---------------------------------------------------------------------------
@@ -419,6 +519,67 @@ fn head_of(envelope: &Value) -> IssuerChainHead {
         seq: envelope.get("seq").and_then(Value::as_u64).expect("seq"),
         envelope_hash: envelope_hash_of(envelope),
     }
+}
+
+// ---------------------------------------------------------------------------
+// SPINE-CHAIN-{ISSUER,SEQ}-FIELD-REQUIRED and predecessor type
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_chain_issuer_requirement_accepts_a_continuation_with_no_issuer() {
+    let keypair = signing_keypair(7);
+    let first = envelope(&keypair, 1, None);
+    let head = head_of(&first);
+    let mut missing = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
+    missing.as_object_mut().unwrap().remove("issuer");
+    let real = verify_chain_link(&missing, Some(&head)).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_chain_link(&missing, Some(&head), ChainMutation::None);
+    assert!(control.is_err());
+    let broken = mirrored_verify_chain_link(
+        &missing,
+        Some(&head),
+        ChainMutation::SkipIssuerFieldRequired,
+    );
+    assert_eq!(broken, Ok(ChainLinkVerdict::ValidContinuation));
+}
+
+#[test]
+fn broken_chain_sequence_requirement_accepts_a_continuation_with_no_sequence() {
+    let keypair = signing_keypair(7);
+    let first = envelope(&keypair, 1, None);
+    let head = head_of(&first);
+    let mut missing = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
+    missing.as_object_mut().unwrap().remove("seq");
+    let real = verify_chain_link(&missing, Some(&head)).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_chain_link(&missing, Some(&head), ChainMutation::None);
+    assert!(control.is_err());
+    let broken = mirrored_verify_chain_link(
+        &missing,
+        Some(&head),
+        ChainMutation::SkipSequenceFieldRequired,
+    );
+    assert_eq!(broken, Ok(ChainLinkVerdict::ValidContinuation));
+}
+
+#[test]
+fn broken_predecessor_type_guard_accepts_a_non_string_chain_reference() {
+    let keypair = signing_keypair(7);
+    let first = envelope(&keypair, 1, None);
+    let head = head_of(&first);
+    let mut wrong_type = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
+    wrong_type["prev_envelope_hash"] = json!(7);
+    let real = verify_chain_link(&wrong_type, Some(&head)).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_chain_link(&wrong_type, Some(&head), ChainMutation::None);
+    assert!(control.is_err());
+    let broken = mirrored_verify_chain_link(
+        &wrong_type,
+        Some(&head),
+        ChainMutation::SkipPreviousHashTypeValidation,
+    );
+    assert_eq!(broken, Ok(ChainLinkVerdict::ValidContinuation));
 }
 
 // ---------------------------------------------------------------------------

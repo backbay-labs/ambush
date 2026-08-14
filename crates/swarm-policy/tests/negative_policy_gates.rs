@@ -114,10 +114,6 @@ enum StaticMutation {
 /// Mirror of `swarm_policy::static_gate::StaticApprovalGate`, copied from
 /// `crates/swarm-policy/src/static_gate.rs` with one guard removable.
 ///
-/// `validate_request` is mirrored only for the two arms the probes exercise
-/// (null evidence, empty `host_id`); the remaining per-action emptiness arms are
-/// the same shape and no probe reaches them, so copying all thirteen would add
-/// bulk without adding falsification.
 struct MirroredStaticGate {
     human_gate_severity: Severity,
     max_actions_per_scope_per_minute: usize,
@@ -159,13 +155,87 @@ impl MirroredStaticGate {
                 "evidence bundle must not be null".to_string(),
             ));
         }
+        let invalid_target = match &request.action {
+            ResponseAction::BlockEgress { target } if target.trim().is_empty() => {
+                Some("block target must not be empty")
+            }
+            ResponseAction::IsolateHost { host_id } if host_id.trim().is_empty() => {
+                Some("host_id must not be empty")
+            }
+            ResponseAction::RevokeCredential { credential_id }
+                if credential_id.trim().is_empty() =>
+            {
+                Some("credential_id must not be empty")
+            }
+            ResponseAction::SinkholeDns { domain } if domain.trim().is_empty() => {
+                Some("domain must not be empty")
+            }
+            ResponseAction::TerminateUserSession {
+                host_id,
+                session_id,
+            } if host_id.trim().is_empty() || session_id.trim().is_empty() => {
+                Some("host_id and session_id must not be empty")
+            }
+            ResponseAction::TriggerEdrScan {
+                host_id,
+                scan_profile,
+            } if host_id.trim().is_empty() || scan_profile.trim().is_empty() => {
+                Some("host_id and scan_profile must not be empty")
+            }
+            ResponseAction::InjectFirewallRule {
+                host_id,
+                rule_name,
+                direction,
+                cidr,
+                ..
+            } if host_id.trim().is_empty()
+                || rule_name.trim().is_empty()
+                || direction.trim().is_empty()
+                || cidr.trim().is_empty() =>
+            {
+                Some("host_id, rule_name, direction, and cidr must not be empty")
+            }
+            ResponseAction::QuarantineFile { host_id, file_path }
+                if host_id.trim().is_empty() || file_path.trim().is_empty() =>
+            {
+                Some("host_id and file_path must not be empty")
+            }
+            ResponseAction::KillProcess {
+                host_id,
+                process_name,
+            }
+            | ResponseAction::SuspendProcess {
+                host_id,
+                process_name,
+            } if host_id.trim().is_empty() || process_name.trim().is_empty() => {
+                Some("host_id and process_name must not be empty")
+            }
+            ResponseAction::DisableUserAccount { user_id }
+            | ResponseAction::ForcePasswordReset { user_id }
+                if user_id.trim().is_empty() =>
+            {
+                Some("user_id must not be empty")
+            }
+            ResponseAction::RemoveScheduledTask { host_id, task_name }
+                if host_id.trim().is_empty() || task_name.trim().is_empty() =>
+            {
+                Some("host_id and task_name must not be empty")
+            }
+            ResponseAction::DeployDecoy {
+                decoy_type,
+                target_zone,
+            } if decoy_type.trim().is_empty() || target_zone.trim().is_empty() => {
+                Some("decoy_type and target_zone must not be empty")
+            }
+            ResponseAction::Escalate { summary, .. } if summary.trim().is_empty() => {
+                Some("summary must not be empty")
+            }
+            _ => None,
+        };
         if self.mutation != StaticMutation::SkipActionTarget
-            && let ResponseAction::IsolateHost { host_id } = &request.action
-            && host_id.trim().is_empty()
+            && let Some(reason) = invalid_target
         {
-            return Err(ApprovalError::InvalidRequest(
-                "host_id must not be empty".to_string(),
-            ));
+            return Err(ApprovalError::InvalidRequest(reason.to_string()));
         }
         Ok(())
     }
@@ -253,27 +323,213 @@ impl MirroredStaticGate {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn broken_action_target_validation_permits_an_empty_host_identifier() {
+fn broken_action_target_validation_permits_empty_fields_across_all_action_variants() {
     let config = PolicyConfig::default();
-    let probe = request(
-        ResponseAction::IsolateHost {
-            host_id: "   ".to_string(),
-        },
-        Severity::Medium,
-        escalation_evidence(Severity::Medium),
-    );
     let context = context(1_700_000_000_000);
-    let real = StaticApprovalGate::from_config(&config).evaluate(&probe, &context);
-    assert!(matches!(real, Err(ApprovalError::InvalidRequest(_))));
+    let blank = || "   ".to_string();
+    let value = |text: &str| text.to_string();
+    let probes = vec![
+        (
+            "block.target",
+            ResponseAction::BlockEgress { target: blank() },
+        ),
+        (
+            "isolate.host",
+            ResponseAction::IsolateHost { host_id: blank() },
+        ),
+        (
+            "revoke.credential",
+            ResponseAction::RevokeCredential {
+                credential_id: blank(),
+            },
+        ),
+        (
+            "sinkhole.domain",
+            ResponseAction::SinkholeDns { domain: blank() },
+        ),
+        (
+            "session.host",
+            ResponseAction::TerminateUserSession {
+                host_id: blank(),
+                session_id: value("s-1"),
+            },
+        ),
+        (
+            "session.id",
+            ResponseAction::TerminateUserSession {
+                host_id: value("host-1"),
+                session_id: blank(),
+            },
+        ),
+        (
+            "scan.host",
+            ResponseAction::TriggerEdrScan {
+                host_id: blank(),
+                scan_profile: value("full"),
+            },
+        ),
+        (
+            "scan.profile",
+            ResponseAction::TriggerEdrScan {
+                host_id: value("host-1"),
+                scan_profile: blank(),
+            },
+        ),
+        (
+            "firewall.host",
+            ResponseAction::InjectFirewallRule {
+                host_id: blank(),
+                rule_name: value("deny"),
+                direction: value("out"),
+                cidr: value("192.0.2.0/24"),
+                port: None,
+            },
+        ),
+        (
+            "firewall.name",
+            ResponseAction::InjectFirewallRule {
+                host_id: value("host-1"),
+                rule_name: blank(),
+                direction: value("out"),
+                cidr: value("192.0.2.0/24"),
+                port: None,
+            },
+        ),
+        (
+            "firewall.direction",
+            ResponseAction::InjectFirewallRule {
+                host_id: value("host-1"),
+                rule_name: value("deny"),
+                direction: blank(),
+                cidr: value("192.0.2.0/24"),
+                port: None,
+            },
+        ),
+        (
+            "firewall.cidr",
+            ResponseAction::InjectFirewallRule {
+                host_id: value("host-1"),
+                rule_name: value("deny"),
+                direction: value("out"),
+                cidr: blank(),
+                port: None,
+            },
+        ),
+        (
+            "quarantine.host",
+            ResponseAction::QuarantineFile {
+                host_id: blank(),
+                file_path: value("/tmp/e"),
+            },
+        ),
+        (
+            "quarantine.path",
+            ResponseAction::QuarantineFile {
+                host_id: value("host-1"),
+                file_path: blank(),
+            },
+        ),
+        (
+            "kill.host",
+            ResponseAction::KillProcess {
+                host_id: blank(),
+                process_name: value("bad"),
+            },
+        ),
+        (
+            "kill.process",
+            ResponseAction::KillProcess {
+                host_id: value("host-1"),
+                process_name: blank(),
+            },
+        ),
+        (
+            "suspend.host",
+            ResponseAction::SuspendProcess {
+                host_id: blank(),
+                process_name: value("bad"),
+            },
+        ),
+        (
+            "suspend.process",
+            ResponseAction::SuspendProcess {
+                host_id: value("host-1"),
+                process_name: blank(),
+            },
+        ),
+        (
+            "disable.user",
+            ResponseAction::DisableUserAccount { user_id: blank() },
+        ),
+        (
+            "reset.user",
+            ResponseAction::ForcePasswordReset { user_id: blank() },
+        ),
+        (
+            "task.host",
+            ResponseAction::RemoveScheduledTask {
+                host_id: blank(),
+                task_name: value("evil"),
+            },
+        ),
+        (
+            "task.name",
+            ResponseAction::RemoveScheduledTask {
+                host_id: value("host-1"),
+                task_name: blank(),
+            },
+        ),
+        (
+            "decoy.type",
+            ResponseAction::DeployDecoy {
+                decoy_type: blank(),
+                target_zone: value("dmz"),
+            },
+        ),
+        (
+            "decoy.zone",
+            ResponseAction::DeployDecoy {
+                decoy_type: value("honeytoken"),
+                target_zone: blank(),
+            },
+        ),
+        (
+            "escalate.summary",
+            ResponseAction::Escalate {
+                summary: blank(),
+                urgency: Severity::Medium,
+            },
+        ),
+    ];
 
-    let control =
-        MirroredStaticGate::from_config(&config, StaticMutation::None).evaluate(&probe, &context);
-    assert_eq!(outcome(&control), outcome(&real));
-
-    let broken = MirroredStaticGate::from_config(&config, StaticMutation::SkipActionTarget)
-        .evaluate(&probe, &context)
-        .expect("without the action-target guard the malformed action reaches a verdict");
-    assert_eq!(broken.verdict, PolicyVerdict::Allow);
+    for (label, action) in probes {
+        let probe = request(
+            action,
+            Severity::Medium,
+            escalation_evidence(Severity::Medium),
+        );
+        let real = StaticApprovalGate::from_config(&config).evaluate(&probe, &context);
+        assert!(
+            matches!(real, Err(ApprovalError::InvalidRequest(_))),
+            "real gate admitted malformed {label}: {}",
+            outcome(&real)
+        );
+        let control = MirroredStaticGate::from_config(&config, StaticMutation::None)
+            .evaluate(&probe, &context);
+        assert_eq!(
+            outcome(&control),
+            outcome(&real),
+            "control drift for {label}"
+        );
+        let broken = MirroredStaticGate::from_config(&config, StaticMutation::SkipActionTarget)
+            .evaluate(&probe, &context)
+            .expect("without the action-target guard the malformed action reaches a verdict");
+        assert_eq!(
+            broken.verdict,
+            PolicyVerdict::Allow,
+            "broken mirror still refused malformed {label}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

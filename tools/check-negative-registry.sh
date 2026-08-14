@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -19,6 +20,10 @@ REPO_ROOT = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 from assurance_source import (  # noqa: E402
     enum_variant_defined,
+    assertion_count,
+    binding_declared,
+    call_used,
+    function_attributes,
     mutation_used,
     resolve_function,
     sanitize_rust,
@@ -55,7 +60,7 @@ def entries(root, report):
         report.violation("registry-unparseable", str(error)); return []
 
 
-def run_checks(root, minimum=12):
+def run_checks(root, minimum=12, execute_tests=False):
     report = Report(); mapped = rows(root, report); registered = entries(root, report)
     if not mapped: report.violation("no-rows", "mapping parsed to zero rows")
     if not registered: report.violation("no-entries", "registry parsed to zero entries")
@@ -96,6 +101,13 @@ def run_checks(root, minimum=12):
             report.violation("entry-test-fn-absent", f"entry `{invariant}` test `{test_name}` has no executable function body"); continue
         if test is None:
             report.violation("entry-test-fn-not-a-test", f"entry `{invariant}` `{test_name}` lacks adjacent #[test] or #[tokio::test]"); continue
+        attributes = function_attributes(clean, test)
+        if any(attribute.startswith("ignore") for attribute in attributes):
+            report.violation("entry-test-ignored", f"entry `{invariant}` test `{test_name}` is #[ignore]")
+        if any(attribute.startswith("cfg(") or attribute.startswith("cfg_attr(") for attribute in attributes):
+            report.violation("entry-test-cfg-disabled", f"entry `{invariant}` test `{test_name}` has disabling conditional attributes")
+        if assertion_count(clean, test) < 2:
+            report.violation("entry-test-no-assertions", f"entry `{invariant}` test `{test_name}` has fewer than two executable assertions")
 
         broken = entry.get("broken_variant", "")
         if not broken:
@@ -104,12 +116,54 @@ def run_checks(root, minimum=12):
             report.violation("entry-broken-variant-undefined", f"entry `{invariant}` mutation `{broken}` has no exact executable Enum::Variant definition outside its test")
         if not mutation_used(clean, broken, test):
             report.violation("entry-broken-variant-unused", f"entry `{invariant}` mutation `{broken}` is not passed to a non-assertion call or constructor inside its test")
+        enum_name = broken.split("::", 1)[0]
+        control_variant = f"{enum_name}::None"
+        if not enum_variant_defined(clean, control_variant, (test.declaration_start, test.body_end + 1)):
+            report.violation("entry-control-variant-undefined", f"entry `{invariant}` has no `{control_variant}` control")
+        elif not mutation_used(clean, control_variant, test):
+            report.violation("entry-control-variant-unused", f"entry `{invariant}` does not drive `{control_variant}` through a mirror")
+        entry_symbol = str(entry.get("entry_point", "")).rsplit("::", 1)[-1]
+        real_symbol = "from_value" if entry_symbol == "try_from" else entry_symbol
+        if not call_used(clean, real_symbol, test):
+            report.violation("entry-real-call-missing", f"entry `{invariant}` test does not call real entry symbol `{real_symbol}`")
+        if not binding_declared(clean, "real", test):
+            report.violation("entry-real-binding-missing", f"entry `{invariant}` has no named real probe binding")
+        if not binding_declared(clean, "control", test):
+            report.violation("entry-control-binding-missing", f"entry `{invariant}` has no named control probe binding")
+        if not binding_declared(clean, "broken", test):
+            report.violation("entry-broken-binding-missing", f"entry `{invariant}` has no named broken probe binding")
 
     for invariant, count in seen.items():
         if count > 1: report.violation("entry-duplicate", f"entry `{invariant}` appears {count} times")
     for row in mapped:
         if row["invariant"] not in seen: report.violation("row-unregistered", f"row `{row['invariant']}` has no registry entry")
     if len(registered) < minimum: report.violation("coverage-entries", f"{len(registered)} entries < {minimum}")
+    if execute_tests and not report.violations:
+        targets = {}
+        for entry in registered:
+            relative = entry["test_file"]
+            parts = pathlib.PurePosixPath(relative).parts
+            crate = parts[1]
+            target = pathlib.PurePosixPath(parts[-1]).stem
+            targets.setdefault((crate, target), set()).add(entry["test_fn"])
+        for (crate, target), names in sorted(targets.items()):
+            result = subprocess.run(
+                ["cargo", "test", "-p", crate, "--test", target, "--", "--nocapture"],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            output = result.stdout
+            if result.returncode:
+                report.violation("entry-test-target-failed", f"{crate}/{target} failed:\n{output[-4000:]}")
+                continue
+            for name in names:
+                if re.search(r"^test\s+" + re.escape(name) + r"\s+\.\.\.\s+ok$", output, re.M) is None:
+                    report.violation("entry-test-not-run", f"registered test `{name}` did not report ok in {crate}/{target}")
+            summary = re.search(r"test result: ok\. (?P<passed>\d+) passed; 0 failed; (?P<ignored>\d+) ignored;", output)
+            if summary is None or int(summary.group("ignored")) != 0:
+                report.violation("entry-test-target-ignored", f"{crate}/{target} did not prove zero ignored tests")
     return report
 
 
@@ -124,13 +178,18 @@ impl Gate { pub fn evaluate(&self) -> bool { false } }
 '''
 TEST = '''
 enum Mutation {
+    None,
     RemoveGuard,
 }
 fn mirrored(mutation: Mutation) -> bool { matches!(mutation, Mutation::RemoveGuard) }
 #[test]
 fn broken_gate() {
-    assert!(!Gate.evaluate());
-    assert!(mirrored(Mutation::RemoveGuard));
+    let real = Gate.evaluate();
+    assert!(!real);
+    let control = mirrored(Mutation::None);
+    assert!(!control);
+    let broken = mirrored(Mutation::RemoveGuard);
+    assert!(broken);
 }
 '''
 REGISTRY = '''
@@ -173,6 +232,12 @@ CASES = {
     "decorative_path_use": "entry-broken-variant-unused",
     "orphan": "entry-orphan",
     "unregistered": "row-unregistered",
+    "ignored_test": "entry-test-ignored",
+    "cfg_disabled_test": "entry-test-cfg-disabled",
+    "black_box_only": "entry-test-no-assertions",
+    "missing_real_call": "entry-real-call-missing",
+    "missing_control_call": "entry-control-variant-unused",
+    "missing_broken_call": "entry-broken-variant-unused",
 }
 
 
@@ -192,12 +257,19 @@ def mutate(root, case):
     elif case in {"comment_only_mutation_definition", "string_only_mutation_definition"}:
         test.write_text(test.read_text().replace("    RemoveGuard,", "    KeepGuard,").replace(
             "fn mirrored", ("// enum Fake { RemoveGuard }\nfn mirrored" if case.startswith("comment") else 'const X: &str = "enum Fake { RemoveGuard }";\nfn mirrored'), 1))
-    elif case == "comment_only_mutation_use": test.write_text(test.read_text().replace("assert!(mirrored(Mutation::RemoveGuard));", "// mirrored(Mutation::RemoveGuard);"))
-    elif case == "string_only_mutation_use": test.write_text(test.read_text().replace("assert!(mirrored(Mutation::RemoveGuard));", 'let _ = "mirrored(Mutation::RemoveGuard)";'))
-    elif case == "decorative_token_use": test.write_text(test.read_text().replace("assert!(mirrored(Mutation::RemoveGuard));", "let RemoveGuard = 1; let _ = RemoveGuard;"))
-    elif case == "decorative_path_use": test.write_text(test.read_text().replace("assert!(mirrored(Mutation::RemoveGuard));", "let _ = Mutation::RemoveGuard;"))
+    elif case == "comment_only_mutation_use": test.write_text(test.read_text().replace("let broken = mirrored(Mutation::RemoveGuard);", "// mirrored(Mutation::RemoveGuard);\n    let broken = true;"))
+    elif case == "string_only_mutation_use": test.write_text(test.read_text().replace("let broken = mirrored(Mutation::RemoveGuard);", 'let _ = "mirrored(Mutation::RemoveGuard)"; let broken = true;'))
+    elif case == "decorative_token_use": test.write_text(test.read_text().replace("let broken = mirrored(Mutation::RemoveGuard);", "let RemoveGuard = 1; let _ = RemoveGuard; let broken = true;"))
+    elif case == "decorative_path_use": test.write_text(test.read_text().replace("let broken = mirrored(Mutation::RemoveGuard);", "let _ = Mutation::RemoveGuard; let broken = true;"))
     elif case == "orphan": registry.write_text(registry.read_text().replace("FIXTURE-ONE", "FIXTURE-GHOST"))
     elif case == "unregistered": registry.write_text("schema_version=2\n")
+    elif case == "ignored_test": test.write_text(test.read_text().replace("#[test]", "#[test]\n#[ignore]"))
+    elif case == "cfg_disabled_test": test.write_text(test.read_text().replace("#[test]", "#[cfg(any())]\n#[test]"))
+    elif case == "black_box_only":
+        test.write_text(test.read_text().replace("assert!(!real);", "std::hint::black_box(real);").replace("assert!(!control);", "std::hint::black_box(control);").replace("assert!(broken);", "std::hint::black_box(broken);"))
+    elif case == "missing_real_call": test.write_text(test.read_text().replace("Gate.evaluate()", "false"))
+    elif case == "missing_control_call": test.write_text(test.read_text().replace("mirrored(Mutation::None)", "false"))
+    elif case == "missing_broken_call": test.write_text(test.read_text().replace("mirrored(Mutation::RemoveGuard)", "true", 1))
 
 
 def self_test():
@@ -214,7 +286,7 @@ def self_test():
 
 
 if not self_test(): raise SystemExit("check-negative-registry self-test failed")
-report = run_checks(REPO_ROOT)
+report = run_checks(REPO_ROOT, execute_tests=True)
 if report.violations:
     print(f"check-negative-registry: {len(report.violations)} violation(s)", file=sys.stderr)
     for code, message in report.violations: print(f"  [{code}] {message}", file=sys.stderr)

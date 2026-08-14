@@ -25,8 +25,15 @@ statement = "Without a private key, an attacker cannot produce a signature that 
 holds_because = "The implementation delegates the primitive to ed25519-dalek; this repository adds no stronger claim."
 breaks_if = "The primitive, dependency, or private-key custody is compromised."
 invariants = [
+  "RUNTIME-RELEASE-ATTESTATION-REQUIRED",
+  "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED",
+  "RUNTIME-RELEASE-SIGNATURE-VALID",
   "RUNTIME-RELEASE-SUBJECT-BOUND",
-  "SPINE-ENVELOPE-SIGNATURE-REQUIRED",
+  "SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED",
+  "SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED",
+  "SPINE-ENVELOPE-ISSUER-KEY-VALID",
+  "SPINE-ENVELOPE-SIGNATURE-WELL-FORMED",
+  "SPINE-ENVELOPE-SIGNATURE-VALID",
   "SPINE-CHAIN-ISSUER-BOUND",
 ]
 
@@ -50,10 +57,12 @@ statement = "Canonicalization is deterministic and injective over signed values:
 holds_because = "The shared canonicalizer sorts keys and fixes the number and escape representation used by signing and verification."
 breaks_if = "Encoder drift breaks honest verification; non-injectivity lets a signature or digest bind two structures."
 invariants = [
+  "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED",
+  "RUNTIME-RELEASE-SIGNATURE-VALID",
   "RUNTIME-RELEASE-SUBJECT-BOUND",
   "SPINE-ENVELOPE-HASH-FIELD-REQUIRED",
   "SPINE-ENVELOPE-HASH-BOUND",
-  "SPINE-ENVELOPE-SIGNATURE-REQUIRED",
+  "SPINE-ENVELOPE-SIGNATURE-VALID",
 ]
 
 [[assumption]]
@@ -63,6 +72,10 @@ statement = "One process writes each containment state file, and tmp-write plus 
 holds_because = "The daemon is the intended sole writer; manual release is routed through that running process."
 breaks_if = "Two processes or a non-atomic shared filesystem can fork or lose lease state."
 invariants = [
+  "RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED",
+  "RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED",
+  "RESPONSE-FILE-DUPLICATE-LEASE-REFUSED",
+  "RESPONSE-FILE-CLOSE-UNKNOWN-LEASE-REFUSED",
   "RESPONSE-STORED-LEASE-SCHEMA-KNOWN",
   "RESPONSE-STORED-LEASE-BOUNDED",
   "RUNTIME-CONTAINMENT-NEEDS-STORE",
@@ -72,10 +85,20 @@ invariants = [
 [[assumption]]
 id = "ASSUME-NETWORK-TRANSPORT"
 owner = "swarm-response"
-statement = "Adapters never report an operation that did not land as Reversed or another success status."
-holds_because = "Rollback status is derived from typed step outcomes, and the transport-free sandbox executor emits only Simulated or a refusal status."
-breaks_if = "An adapter swallows a transport failure into a success-shaped step or receipt."
+statement = "Configured network transports deliver bytes according to their documented timeout and error contracts."
+holds_because = "Transport integrations expose typed success and error results to the adapter layer."
+breaks_if = "A transport corrupts, duplicates, or silently discards a request while reporting delivery."
+invariants = []
+no_dependent_invariants_reason = "Transport delivery is outside the local fail-closed decision universe; adapter interpretation of outcomes is modeled separately."
+
+[[assumption]]
+id = "ASSUME-EXTERNAL-ADAPTER-BEHAVIOR"
+owner = "swarm-response"
+statement = "An external adapter reports only operations that actually landed as successful step or response outcomes, and reports failed, simulated, unsupported, or irreversible effects distinctly."
+holds_because = "The runtime and rollback classifiers consume typed adapter outcomes; focused fakes exercise every local classification branch without claiming the remote system is deterministic."
+breaks_if = "An adapter fabricates a success-shaped receipt or step for an operation that did not land."
 invariants = [
+  "RESPONSE-IRREVERSIBLE-INVERSE-REFUSED",
   "RESPONSE-UNMAPPED-INVERSE-REFUSED",
   "RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS",
   "RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS",
@@ -112,7 +135,10 @@ statement = "A caller supplies the last accepted head for the issuer and does no
 holds_because = "Nothing in this branch establishes it in production: verify_chain_link remains an uncoupled public primitive, and that reachability limit is stated in MAPPING.md."
 breaks_if = "A stale head, rollback, or None passed for a known issuer can re-admit replayed or truncated history."
 invariants = [
+  "SPINE-CHAIN-ISSUER-FIELD-REQUIRED",
+  "SPINE-CHAIN-SEQ-FIELD-REQUIRED",
   "SPINE-CHAIN-PREV-FIELD-REQUIRED",
+  "SPINE-CHAIN-PREV-TYPE-VALID",
   "SPINE-CHAIN-FIRST-SEQ",
   "SPINE-CHAIN-FIRST-PREV-NULL",
   "SPINE-CHAIN-ISSUER-BOUND",
@@ -124,9 +150,9 @@ invariants = [
 [[assumption]]
 id = "ASSUME-STATEFUL-GATE-DETERMINISM"
 owner = "swarm-policy"
-statement = "Given the same initial gate state, request, context, configuration, and ordered call history, policy and runtime decision transitions produce the same verdict and next state."
-holds_because = "The gates are stateful: their Mutex-protected rate windows are mutated on evaluation. They consult no network or advisory cache, so determinism is a transition-system claim, not the false purity claim this replaces."
-breaks_if = "An unmodelled cache, network lookup, concurrent mutation, or different prior call sequence changes a verdict for the same visible request."
+statement = "Given the same initial local gate state, request, context, configuration, and ordered call history, policy decision transitions produce the same verdict and next local state."
+holds_because = "The policy gates explicitly model their Mutex-protected rate-window state and update it in a defined order."
+breaks_if = "An unmodelled dependency, concurrent mutation, or different prior call sequence changes a policy verdict for the same visible request."
 invariants = [
   "POLICY-EMPTY-RULESET-DENIES",
   "POLICY-RULE-TIME-WINDOW",
@@ -144,8 +170,6 @@ invariants = [
   "RUNTIME-GUARD-REJECTION-BLOCKS-EXECUTION",
   "RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION",
   "RUNTIME-EXPIRED-LEASE-REFUSED",
-  "RUNTIME-ADAPTER-ERROR-NOT-SUCCESS",
-  "RUNTIME-FAILED-RECEIPT-NOT-SUCCESS",
 ]
 
 [[assumption]]
@@ -165,4 +189,5 @@ invariants = [
   "POLICY-DESTRUCTIVE-HUMAN-GATE",
   "RESPONSE-TTL-STRICTLY-POSITIVE",
   "RUNTIME-CONTAINMENT-NEEDS-STORE",
+  "RUNTIME-CONTAINMENT-PREVIEW-REQUIRED",
 ]

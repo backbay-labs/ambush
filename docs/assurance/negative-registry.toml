@@ -1,7 +1,9 @@
 # One executable negative mutation per MAPPING.md row. The registry gate resolves
 # both production paths exactly, parses real test bodies after removing comments
 # and literals, and requires the named mutation to be defined outside and used
-# inside the attributed test.
+# inside the attributed test. `permits` and `observed_when_neutralized` are
+# review prose, not mechanically interpreted assertions; the executable test is
+# the authority and the gate requires these fields only to be non-empty.
 
 schema_version = 2
 
@@ -60,10 +62,10 @@ invariant = "POLICY-ACTION-TARGETS-NONEMPTY"
 production_fn = "swarm_policy::static_gate::StaticApprovalGate::validate_request"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
-test_fn = "broken_action_target_validation_permits_an_empty_host_identifier"
+test_fn = "broken_action_target_validation_permits_empty_fields_across_all_action_variants"
 broken_variant = "StaticMutation::SkipActionTarget"
-permits = "An IsolateHost with a whitespace-only host id."
-observed_when_neutralized = "Neutralizing SkipActionTarget returns InvalidRequest instead of Allow."
+permits = "Every required address field across all 15 ResponseAction variants, exercised as 25 independent whitespace-only probes."
+observed_when_neutralized = "Neutralizing SkipActionTarget changes each of the 25 same-probe broken outcomes from a verdict to InvalidRequest."
 
 [[entry]]
 invariant = "POLICY-DESTRUCTIVE-MIN-SEVERITY"
@@ -336,7 +338,7 @@ permits = "A forged envelope identity with an untouched body and signature."
 observed_when_neutralized = "Neutralizing SkipHashBinding changes Ok(true) to hash mismatch."
 
 [[entry]]
-invariant = "SPINE-ENVELOPE-SIGNATURE-REQUIRED"
+invariant = "SPINE-ENVELOPE-SIGNATURE-VALID"
 production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
@@ -414,3 +416,163 @@ test_fn = "broken_prev_hash_binding_admits_the_forked_link_the_real_verifier_rej
 broken_variant = "ChainMutation::SkipPrevHashBinding"
 permits = "A signed continuation of a different history."
 observed_when_neutralized = "Neutralizing SkipPrevHashBinding changes ValidContinuation to HashMismatch."
+
+[[entry]]
+invariant = "RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED"
+production_fn = "swarm_response::containment::ContainmentState::open_lease"
+entry_point = "swarm_response::containment::MemoryContainmentLeaseStore::open_lease"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_memory_duplicate_guard_accepts_a_second_open_for_one_lease"
+broken_variant = "StoreMutation::SkipMemoryDuplicateOpen"
+permits = "A second in-memory open transition for one lease identifier."
+observed_when_neutralized = "The broken mirror changes AlreadyOpen to Ok on the same duplicate-open state."
+
+[[entry]]
+invariant = "RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED"
+production_fn = "swarm_response::containment::ContainmentState::close"
+entry_point = "swarm_response::containment::MemoryContainmentLeaseStore::close"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_memory_not_open_guard_closes_an_unknown_lease"
+broken_variant = "StoreMutation::SkipMemoryNotOpenClose"
+permits = "An in-memory close transition for a lease that was never opened."
+observed_when_neutralized = "The broken mirror changes NotOpen to Ok on the same absent-lease state."
+
+[[entry]]
+invariant = "RESPONSE-FILE-DUPLICATE-LEASE-REFUSED"
+production_fn = "swarm_response::containment::FileContainmentLeaseStore::open_lease"
+entry_point = "swarm_response::containment::FileContainmentLeaseStore::open_lease"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_file_duplicate_guard_accepts_a_second_open_for_one_lease"
+broken_variant = "StoreMutation::SkipFileDuplicateOpen"
+permits = "A second file-backed open transition for one lease identifier."
+observed_when_neutralized = "The broken mirror changes AlreadyOpen to Ok on the same persisted duplicate-open state."
+
+[[entry]]
+invariant = "RESPONSE-FILE-CLOSE-UNKNOWN-LEASE-REFUSED"
+production_fn = "swarm_response::containment::FileContainmentLeaseStore::close"
+entry_point = "swarm_response::containment::FileContainmentLeaseStore::close"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_file_not_open_guard_closes_an_unknown_lease"
+broken_variant = "StoreMutation::SkipFileNotOpenClose"
+permits = "A file-backed close transition for a lease that was never opened."
+observed_when_neutralized = "The broken mirror changes NotOpen to Ok on the same absent persisted lease."
+
+[[entry]]
+invariant = "RESPONSE-IRREVERSIBLE-INVERSE-REFUSED"
+production_fn = "swarm_response::rollback::resolve_inverse"
+entry_point = "swarm_response::rollback::resolve_inverse"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_irreversible_inverse_invents_a_fresh_session_as_a_reversal"
+broken_variant = "InverseMutation::InventIrreversibleInverse"
+permits = "A fresh login operation represented as reversal of a terminated session."
+observed_when_neutralized = "The broken mirror changes Err(irreversible) to an invented reauthenticate operation."
+
+[[entry]]
+invariant = "RUNTIME-CONTAINMENT-PREVIEW-REQUIRED"
+production_fn = "swarm_runtime::SwarmRuntime::prepare_containment"
+entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_preview_error_guard_dispatches_a_containment_with_no_inverse_plan"
+broken_variant = "RuntimeMutation::SkipContainmentPreviewError"
+permits = "Executor dispatch of a containment whose inverse preview cannot be derived."
+observed_when_neutralized = "The broken mirror changes ContainmentRefused with zero calls to Ok with one executor call."
+
+[[entry]]
+invariant = "RUNTIME-RELEASE-ATTESTATION-REQUIRED"
+production_fn = "swarm_runtime::containment::verify_release_attestation"
+entry_point = "swarm_runtime::containment::verify_release_attestation"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_attestation_requirement_accepts_an_unattested_release"
+broken_variant = "ReleaseAttestationMutation::SkipAttestationRequired"
+permits = "A rollback release with no governance attestation."
+observed_when_neutralized = "The broken mirror changes Unattested to Ok on the same receipt."
+
+[[entry]]
+invariant = "RUNTIME-RELEASE-ATTESTATION-WELL-FORMED"
+production_fn = "swarm_runtime::containment::verify_release_attestation"
+entry_point = "swarm_runtime::containment::verify_release_attestation"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_attestation_shape_guard_accepts_malformed_governance_json"
+broken_variant = "ReleaseAttestationMutation::SkipMalformedAttestation"
+permits = "Malformed governance-attestation JSON."
+observed_when_neutralized = "The broken mirror changes Malformed to Ok on the same receipt."
+
+[[entry]]
+invariant = "RUNTIME-RELEASE-SIGNATURE-VALID"
+production_fn = "swarm_runtime::containment::verify_release_attestation"
+entry_point = "swarm_runtime::containment::verify_release_attestation"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_release_signature_guard_accepts_a_bad_governor_signature"
+broken_variant = "ReleaseAttestationMutation::SkipSignatureValidation"
+permits = "A governance payload signed by an unrelated key."
+observed_when_neutralized = "The broken mirror changes Signature failure to Ok on the same receipt."
+
+[[entry]]
+invariant = "SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED"
+production_fn = "swarm_spine::envelope::verify_envelope"
+entry_point = "swarm_spine::envelope::verify_envelope"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_issuer_field_requirement_accepts_an_envelope_with_no_issuer"
+broken_variant = "EnvelopeMutation::SkipIssuerFieldRequired"
+permits = "An envelope with no issuer field."
+observed_when_neutralized = "The broken mirror substitutes the authentic issuer and changes MissingField to Ok(true)."
+
+[[entry]]
+invariant = "SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED"
+production_fn = "swarm_spine::envelope::verify_envelope"
+entry_point = "swarm_spine::envelope::verify_envelope"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_signature_field_requirement_accepts_an_unsigned_envelope"
+broken_variant = "EnvelopeMutation::SkipSignatureFieldRequired"
+permits = "An envelope with no signature field."
+observed_when_neutralized = "The broken mirror substitutes an authentic signature and changes MissingField to Ok(true)."
+
+[[entry]]
+invariant = "SPINE-ENVELOPE-ISSUER-KEY-VALID"
+production_fn = "swarm_spine::envelope::verify_envelope"
+entry_point = "swarm_spine::envelope::verify_envelope"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_issuer_key_validation_accepts_malformed_key_material"
+broken_variant = "EnvelopeMutation::SkipIssuerKeyValidation"
+permits = "Malformed issuer public-key material."
+observed_when_neutralized = "The broken mirror substitutes the authentic issuer and changes InvalidIssuer to Ok(true)."
+
+[[entry]]
+invariant = "SPINE-ENVELOPE-SIGNATURE-WELL-FORMED"
+production_fn = "swarm_spine::envelope::verify_envelope"
+entry_point = "swarm_spine::envelope::verify_envelope"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_signature_decoding_accepts_malformed_signature_material"
+broken_variant = "EnvelopeMutation::SkipSignatureWellFormed"
+permits = "Malformed Ed25519 signature material."
+observed_when_neutralized = "The broken mirror substitutes an authentic signature and changes decode failure to Ok(true)."
+
+[[entry]]
+invariant = "SPINE-CHAIN-ISSUER-FIELD-REQUIRED"
+production_fn = "swarm_spine::chain::verify_chain_link"
+entry_point = "swarm_spine::chain::verify_chain_link"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_chain_issuer_requirement_accepts_a_continuation_with_no_issuer"
+broken_variant = "ChainMutation::SkipIssuerFieldRequired"
+permits = "A continuation with no issuer field."
+observed_when_neutralized = "The broken mirror substitutes the held-head issuer and changes MissingField to ValidContinuation."
+
+[[entry]]
+invariant = "SPINE-CHAIN-SEQ-FIELD-REQUIRED"
+production_fn = "swarm_spine::chain::verify_chain_link"
+entry_point = "swarm_spine::chain::verify_chain_link"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_chain_sequence_requirement_accepts_a_continuation_with_no_sequence"
+broken_variant = "ChainMutation::SkipSequenceFieldRequired"
+permits = "A continuation with no sequence field."
+observed_when_neutralized = "The broken mirror substitutes head plus one and changes MissingField to ValidContinuation."
+
+[[entry]]
+invariant = "SPINE-CHAIN-PREV-TYPE-VALID"
+production_fn = "swarm_spine::chain::verify_chain_link"
+entry_point = "swarm_spine::chain::verify_chain_link"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_predecessor_type_guard_accepts_a_non_string_chain_reference"
+broken_variant = "ChainMutation::SkipPreviousHashTypeValidation"
+permits = "A numeric non-null predecessor identity."
+observed_when_neutralized = "The broken mirror substitutes the held-head hash and changes MissingField to ValidContinuation."

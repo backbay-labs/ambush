@@ -1,8 +1,10 @@
-# ADR 0011: Fail-Closed Is A Table With Mutation Tests Behind It, Not A Sentence
+# ADR 0012: Fail-Closed Is A Table With Mutation Tests Behind It, Not A Sentence
 
 ## Status
 
-Accepted on 2026-08-14. Phase 285, MAPPING-01..05 and FALSIFY-01..04.
+Accepted on 2026-08-14 for the repository-local Phase 285 implementation.
+MAPPING-05 and FALSIFY-04 remain open until repository settings make the wired
+workflow job a protected required check.
 
 Supersedes nothing. Names invariants of the trusted computing base ADR 0009
 draws; adds no dependency edge to any TCB crate, so
@@ -43,12 +45,18 @@ dependencies are many-to-many; forcing a one-assumption partition produced an
 incomplete blast radius and was removed in assurance review.
 
 `tools/check-mapping.sh` lexically removes Rust comments and literals, resolves
-each path against the tree — crate directory, module file, exact impl type and
-function body — and fails when it does not exist. It requires one
+each path through the compiled crate-root module graph — including inline and
+`#[path]` modules, but excluding orphan source files — to the exact impl type and
+function body, and fails when it does not exist. It requires one
 `// INVARIANT: <NAME>` marker immediately before an executable decision inside
 that exact function, and fails on any production marker with no row.
 
-The same checker resolves `docs/assurance/omissions.toml`. An excluded surface
+The immutable `docs/assurance/universe.toml` baseline freezes the exact required
+invariant and omission IDs/counts, requires the sets to be disjoint, partitions
+each ID onto exactly one named surface, and requires production paths to match
+that surface. Coordinated deletion of a row, marker, assumption dependency and
+registry entry therefore still fails against the baseline. The same checker
+resolves `docs/assurance/omissions.toml`. An excluded surface
 must name a real function plus an owner, reason, and clearing condition. The
 adversarial fixtures prove that comments, strings, wrong-function markers and
 markers parked above non-guard statements cannot satisfy it.
@@ -61,11 +69,14 @@ This is the substantive decision and the expensive one.
 `crates/*/tests/negative_*.rs` test, and `tools/check-negative-registry.sh` fails
 on a row with no entry, an entry with no row, an entry naming a test file or test
 function that does not exist, a test function carrying no adjacent `#[test]` or
-`#[tokio::test]` attribute, or a `broken_variant` whose exact `Enum::Variant`
+`#[tokio::test]` attribute, an ignored or cfg-disabled test, an assertion-free
+body, a missing named real/control/broken probe, or a `broken_variant` whose exact `Enum::Variant`
 identity is not executably defined outside the test and passed to a
 non-assertion call or constructor inside it. Comments, strings, decorative bare
 or qualified tokens, nonexistent modules and nonexistent types are adversarial
-self-test cases.
+self-test cases. Four batched Cargo invocations execute the exact registered
+test targets; the gate requires every registered name to report `ok` and each
+target summary to report zero ignored tests.
 
 Each such test does three things over one probe input:
 
@@ -101,7 +112,10 @@ they do not provide.
 The removed guard can be restored by selecting the mirror's `None` mutation on
 the same probe. The resulting differential failure is recorded per row in
 `negative-registry.toml`'s `observed_when_neutralized`, and the field is required
-non-empty. This ADR does not claim those outputs are in a commit message; exact
+non-empty. The prose in `permits` and `observed_when_neutralized` is not
+mechanically interpreted or compared to stdout; the executable assertions are
+authoritative and review checks that the prose describes them. This ADR does
+not claim those outputs are in a commit message; exact
 commands and outputs belong in the execution handoff that reproduced them.
 
 A negative test that has never been seen failing is not evidence. That is the
@@ -122,8 +136,8 @@ repository settings make the containing job a protected required check.
 
 ## What this buys, stated narrowly
 
-41 rows across `swarm-policy` (10), `swarm-response` (10), `swarm-runtime` (11)
-and `swarm-spine` (10), each with a same-probe differential mutation test, plus
+57 rows across `swarm-policy` (10), `swarm-response` (15), `swarm-runtime` (15)
+and `swarm-spine` (17), each with a same-probe differential mutation test, plus
 five enforced omissions for named surfaces that render no pre-dispatch refusal.
 
 It does NOT buy:
@@ -151,7 +165,7 @@ $ grep -rn 'verify_chain_link' crates/ | grep -v swarm-spine/src/chain.rs | grep
 crates/swarm-spine/src/lib.rs:61:pub use chain::{ChainLinkVerdict, IssuerChainHead, chain_head_from_envelope, verify_chain_link};
 ```
 
-Seven chain rows are invariants of a public, tested primitive of a TCB crate
+Ten chain rows are invariants of a public, tested primitive of a TCB crate
 that the critical lane does not call. They are mapped anyway, and the table says
 so in the row notes: the guard has to be right before something depends on it,
 and a row that states its own reachability is worth more than an absent row. The
@@ -188,5 +202,6 @@ denies; it does not prove the named guard is what denied.
 
 **Coverage floors as completeness.** The criterion's minimum of twelve is a
 floor, not permission to stop counting. The first implementation did that and
-missed real guards. The revised decision enumerates the named surfaces and uses
-explicit enforced omissions for exclusions.
+missed real guards. The revised decision enumerates the named surfaces, freezes
+their exact IDs in `universe.toml`, and uses explicit enforced omissions for
+exclusions.

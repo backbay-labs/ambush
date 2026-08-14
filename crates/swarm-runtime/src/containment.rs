@@ -259,9 +259,11 @@ pub fn verify_release_attestation(
     governance: Option<&dyn GovernanceAuthority>,
 ) -> Result<ConsensusGovernanceReceipt, ReleaseAttestationError> {
     let rollback_id = receipt.rollback_id.clone();
+    // INVARIANT: RUNTIME-RELEASE-ATTESTATION-REQUIRED
     let Some(raw) = receipt.governance_attestation.as_ref() else {
         return Err(ReleaseAttestationError::Unattested { rollback_id });
     };
+    // INVARIANT: RUNTIME-RELEASE-ATTESTATION-WELL-FORMED
     let attestation: ConsensusGovernanceReceipt =
         serde_json::from_value(raw.clone()).map_err(|source| {
             ReleaseAttestationError::Malformed {
@@ -278,6 +280,7 @@ pub fn verify_release_attestation(
     // edited" and "this attestation was signed by someone we do not trust" --
     // and collapsing them into one variant would report the second as the
     // first.
+    // INVARIANT: RUNTIME-RELEASE-SIGNATURE-VALID
     attestation
         .verify()
         .map_err(|source| ReleaseAttestationError::Signature {

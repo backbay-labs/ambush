@@ -9,6 +9,7 @@ Raw grep cannot make those distinctions and therefore cannot police evidence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import pathlib
 import re
 
@@ -235,6 +236,122 @@ def find_function(clean: str, name: str, type_name: str | None) -> FunctionSpan 
     return candidates[0] if len(candidates) == 1 else None
 
 
+@dataclass
+class ModuleNode:
+    path: pathlib.Path
+    module: tuple[str, ...]
+    start: int
+    end: int
+    child_base: pathlib.Path
+    children: list["ModuleNode"]
+
+
+@lru_cache(maxsize=None)
+def _source(path: str) -> tuple[str, str]:
+    raw = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
+    clean, _ = production_sanitized(raw)
+    return raw, clean
+
+
+@lru_cache(maxsize=None)
+def _file_function_spans(path: str) -> tuple[FunctionSpan, ...]:
+    return tuple(function_spans(_source(path)[1]))
+
+
+def _depth_at(clean: str, start: int, position: int) -> int:
+    return clean.count("{", start, position) - clean.count("}", start, position)
+
+
+def _module_children(node: ModuleNode) -> list[ModuleNode]:
+    raw, clean = _source(str(node.path))
+    pattern = re.compile(
+        r"(?P<attrs>(?:#\s*\[[^\]]*\]\s*)*)"
+        r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<kind>[;{])"
+    )
+    children: list[ModuleNode] = []
+    for match in pattern.finditer(clean, node.start, node.end):
+        if _depth_at(clean, node.start, match.start()) != 0:
+            continue
+        # A conditionally compiled declaration is not an unconditional member
+        # of the production module graph.  Do not try to guess a target's cfg
+        # environment: fail closed by making paths through it unresolvable.
+        clean_attrs = clean[match.start("attrs") : match.end("attrs")]
+        if re.search(r"#\s*\[\s*cfg(?:_attr)?\b", clean_attrs):
+            continue
+        name = match.group("name")
+        if match.group("kind") == "{":
+            opening = clean.find("{", match.start(), match.end() + 1)
+            closing = matching_brace(clean, opening)
+            if closing is None or closing > node.end:
+                continue
+            child = ModuleNode(
+                node.path,
+                node.module + (name,),
+                opening + 1,
+                closing,
+                node.child_base / name,
+                [],
+            )
+        else:
+            raw_attrs = raw[match.start("attrs") : match.end("attrs")]
+            path_attr = re.search(r"\bpath\s*=\s*\"([^\"]+)\"", raw_attrs)
+            candidates = (
+                [node.child_base / path_attr.group(1)]
+                if path_attr
+                else [node.child_base / f"{name}.rs", node.child_base / name / "mod.rs"]
+            )
+            target = next((candidate for candidate in candidates if candidate.is_file()), None)
+            if target is None:
+                continue
+            _, target_clean = _source(str(target))
+            child_base = target.parent if target.name == "mod.rs" else target.parent / target.stem
+            child = ModuleNode(
+                target,
+                node.module + (name,),
+                0,
+                len(target_clean),
+                child_base,
+                [],
+            )
+        child.children = _module_children(child)
+        children.append(child)
+    return children
+
+
+@lru_cache(maxsize=None)
+def _crate_graph(crate_src: str) -> ModuleNode | None:
+    source_dir = pathlib.Path(crate_src)
+    root_file = source_dir / "lib.rs"
+    if not root_file.is_file():
+        root_file = source_dir / "main.rs"
+    if not root_file.is_file():
+        return None
+    _, clean = _source(str(root_file))
+    root = ModuleNode(root_file, (), 0, len(clean), source_dir, [])
+    root.children = _module_children(root)
+    return root
+
+
+def _walk_modules(node: ModuleNode):
+    yield node
+    for child in node.children:
+        yield from _walk_modules(child)
+
+
+def reachable_rust_files(
+    root: pathlib.Path, crate_names: set[str] | None = None
+) -> set[pathlib.Path]:
+    files: set[pathlib.Path] = set()
+    for crate_src in sorted((root / "crates").glob("*/src")):
+        if crate_names is not None and crate_src.parent.name not in crate_names:
+            continue
+        graph = _crate_graph(str(crate_src))
+        if graph is not None:
+            files.update(node.path for node in _walk_modules(graph))
+    return files
+
+
 def resolve_function(root: pathlib.Path, path_str: str) -> tuple[pathlib.Path, FunctionSpan] | str:
     """Resolve an exact crate::module::[Type::]function path or return a reason."""
 
@@ -245,29 +362,17 @@ def resolve_function(root: pathlib.Path, path_str: str) -> tuple[pathlib.Path, F
     if not crate_dir.is_dir():
         return f"crate `{segments[0]}` has no source directory"
 
+    graph = _crate_graph(str(crate_dir))
+    if graph is None:
+        return f"crate `{segments[0]}` has no lib.rs or main.rs module root"
     rest = segments[1:]
-    module_file: pathlib.Path | None = None
-    current = crate_dir
+    nodes = {node.module: node for node in _walk_modules(graph)}
     cursor = 0
-    while cursor < len(rest):
-        segment = rest[cursor]
-        if not (segment[:1].islower() or segment.startswith("_")):
-            break
-        directory = current / segment
-        source = current / f"{segment}.rs"
-        if directory.is_dir():
-            current = directory
-            cursor += 1
-            continue
-        if source.is_file():
-            module_file = source
-            cursor += 1
-        break
-    if module_file is None:
-        module_file = current / ("mod.rs" if current != crate_dir else "lib.rs")
-    if not module_file.is_file():
-        return f"`{path_str}` resolves to missing `{module_file.relative_to(root)}`"
-
+    while cursor < len(rest) and tuple(rest[: cursor + 1]) in nodes:
+        cursor += 1
+    node = nodes.get(tuple(rest[:cursor]))
+    if node is None:
+        return f"`{path_str}` names a module not reachable from the crate root"
     remaining = rest[cursor:]
     if len(remaining) == 1:
         type_name, fn_name = None, remaining[0]
@@ -276,13 +381,28 @@ def resolve_function(root: pathlib.Path, path_str: str) -> tuple[pathlib.Path, F
     else:
         return f"`{path_str}` does not end in function or Type::function"
 
-    source_text = module_file.read_text(encoding="utf-8", errors="replace")
-    clean, _ = production_sanitized(source_text)
-    span = find_function(clean, fn_name, type_name)
-    if span is None:
+    _, clean = _source(str(node.path))
+    nested_ranges = [
+        (child.start, child.end)
+        for child in node.children
+        if child.path == node.path
+    ]
+    candidates = [
+        span
+        for span in _file_function_spans(str(node.path))
+        if node.start <= span.declaration_start < node.end
+        and not any(start <= span.declaration_start < end for start, end in nested_ranges)
+        and span.name == fn_name
+        and span.type_name == type_name
+        and not any(
+            attribute.startswith("cfg(") or attribute.startswith("cfg_attr(")
+            for attribute in function_attributes(clean, span)
+        )
+    ]
+    if len(candidates) != 1:
         target = f"{type_name}::{fn_name}" if type_name else fn_name
-        return f"`{module_file.relative_to(root)}` declares no unique production `{target}` body"
-    return module_file, span
+        return f"`{node.path.relative_to(root)}` declares no unique reachable production `{target}` body"
+    return node.path, candidates[0]
 
 
 def test_function(clean: str, name: str) -> FunctionSpan | None:
@@ -304,6 +424,55 @@ def test_function(clean: str, name: str) -> FunctionSpan | None:
     if not any(value == "test" or value.startswith("tokio::test") for value in normalized):
         return None
     return span
+
+
+def function_attributes(clean: str, span: FunctionSpan) -> set[str]:
+    lines = clean[: span.declaration_start].splitlines()
+    adjacent: list[str] = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped and not adjacent:
+            continue
+        if re.fullmatch(r"#\s*\[[^\]]+\]", stripped):
+            adjacent.append(stripped)
+            continue
+        break
+    return {
+        re.sub(r"\s+", "", attribute)
+        for attribute in re.findall(r"#\s*\[\s*([^\]]+)\]", "\n".join(adjacent))
+    }
+
+
+def assertion_count(clean: str, span: FunctionSpan) -> int:
+    body = clean[span.body_start : span.body_end + 1]
+    return len(re.findall(r"\b(?:assert|assert_eq|assert_ne|matches)!\s*\(", body))
+
+
+def call_used(clean: str, symbol: str, span: FunctionSpan) -> bool:
+    body = clean[span.body_start : span.body_end + 1]
+    return bool(re.search(
+        r"(?:\.|::|\b)" + re.escape(symbol) + r"(?:\s*::\s*<[^>]+>)?\s*\(",
+        body,
+    ))
+
+
+def binding_declared(clean: str, prefix: str, span: FunctionSpan) -> bool:
+    body = clean[span.body_start : span.body_end + 1]
+    return bool(re.search(
+        r"\blet\s+(?:mut\s+)?" + re.escape(prefix) + r"(?:\b|_[A-Za-z0-9_]+)",
+        body,
+    ))
+
+
+def binding_uses(clean: str, binding: str, evidence: str, span: FunctionSpan) -> bool:
+    body = clean[span.body_start : span.body_end + 1]
+    match = re.search(r"\blet\s+(?:mut\s+)?" + re.escape(binding) + r"\b", body)
+    if match is None:
+        return False
+    end = body.find(";", match.end())
+    if end < 0:
+        end = len(body)
+    return bool(re.search(r"\b" + re.escape(evidence) + r"\b", body[match.end() : end]))
 
 
 def identifier_defined(clean: str, name: str, excluded: tuple[int, int] | None = None) -> bool:

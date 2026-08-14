@@ -112,10 +112,12 @@ pub fn extract_envelope_hash(payload: &[u8]) -> SpineResult<String> {
 
 /// Verify an envelope signature and hash integrity.
 pub fn verify_envelope(envelope: &Value) -> SpineResult<bool> {
+    // INVARIANT: SPINE-ENVELOPE-ISSUER-FIELD-REQUIRED
     let issuer = envelope
         .get("issuer")
         .and_then(Value::as_str)
         .ok_or(SpineError::MissingField("issuer"))?;
+    // INVARIANT: SPINE-ENVELOPE-SIGNATURE-FIELD-REQUIRED
     let signature_hex = envelope
         .get("signature")
         .and_then(Value::as_str)
@@ -126,8 +128,10 @@ pub fn verify_envelope(envelope: &Value) -> SpineResult<bool> {
         .and_then(Value::as_str)
         .ok_or(SpineError::MissingField("envelope_hash"))?;
 
+    // INVARIANT: SPINE-ENVELOPE-ISSUER-KEY-VALID
     let pubkey_hex = parse_issuer_pubkey_hex(issuer)?;
     let public_key = PublicKey::from_hex(&pubkey_hex)?;
+    // INVARIANT: SPINE-ENVELOPE-SIGNATURE-WELL-FORMED
     let signature = Signature::from_hex(signature_hex)?;
 
     let mut unsigned = envelope.clone();
@@ -146,7 +150,7 @@ pub fn verify_envelope(envelope: &Value) -> SpineResult<bool> {
         });
     }
 
-    // INVARIANT: SPINE-ENVELOPE-SIGNATURE-REQUIRED
+    // INVARIANT: SPINE-ENVELOPE-SIGNATURE-VALID
     Ok(public_key.verify(&bytes, &signature))
 }
 

@@ -335,6 +335,7 @@ struct ContainmentState {
 
 impl ContainmentState {
     fn open_lease(&mut self, lease: &ContainmentLease) -> Result<(), ContainmentStoreError> {
+        // INVARIANT: RESPONSE-MEMORY-DUPLICATE-LEASE-REFUSED
         if self
             .open
             .iter()
@@ -349,6 +350,7 @@ impl ContainmentState {
     }
 
     fn close(&mut self, receipt: &RollbackReceipt) -> Result<(), ContainmentStoreError> {
+        // INVARIANT: RESPONSE-MEMORY-CLOSE-UNKNOWN-LEASE-REFUSED
         let Some(index) = self
             .open
             .iter()
@@ -481,6 +483,7 @@ impl ContainmentLeaseStore for FileContainmentLeaseStore {
     fn open_lease(&self, lease: &ContainmentLease) -> Result<(), ContainmentStoreError> {
         let _guard = self.locked();
         let mut state = self.read()?;
+        // INVARIANT: RESPONSE-FILE-DUPLICATE-LEASE-REFUSED
         if state.open.contains_key(&lease.lease_id) {
             return Err(ContainmentStoreError::AlreadyOpen {
                 lease_id: lease.lease_id.clone(),
@@ -508,6 +511,7 @@ impl ContainmentLeaseStore for FileContainmentLeaseStore {
     fn close(&self, receipt: &RollbackReceipt) -> Result<(), ContainmentStoreError> {
         let _guard = self.locked();
         let mut state = self.read()?;
+        // INVARIANT: RESPONSE-FILE-CLOSE-UNKNOWN-LEASE-REFUSED
         if state.open.remove(&receipt.lease_id).is_none() {
             return Err(ContainmentStoreError::NotOpen {
                 lease_id: receipt.lease_id.clone(),

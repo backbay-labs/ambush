@@ -183,10 +183,13 @@ pub fn resolve_inverse(
         (
             ResponseAction::TerminateUserSession { .. },
             ResponseRollbackStepKind::ReauthenticateUserSession,
-        ) => Err(InverseGap::Irreversible {
-            reason: "a terminated session cannot be resumed; the principal can only establish a \
-                     fresh session",
-        }),
+        ) => {
+            // INVARIANT: RESPONSE-IRREVERSIBLE-INVERSE-REFUSED
+            Err(InverseGap::Irreversible {
+                reason: "a terminated session cannot be resumed; the principal can only establish a \
+                         fresh session",
+            })
+        }
         // INVARIANT: RESPONSE-UNMAPPED-INVERSE-REFUSED
         _ => Err(InverseGap::Unmapped),
     }

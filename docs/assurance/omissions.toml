@@ -62,13 +62,16 @@ runtime can durably reserve a lease before dispatch and bind the later response
 receipt without losing that ordering. Phase 286 owns that redesign evidence."""
 
 [[omission]]
-id = "OMIT-RESPONSE-LEASE-STORE-ADMINISTRATION"
-production_fn = "swarm_response::containment::MemoryContainmentLeaseStore::open_lease"
-owner = "swarm-response"
+id = "OMIT-RUNTIME-RELEASE-CANONICALIZATION-UNREACHABLE"
+production_fn = "swarm_runtime::containment::verify_release_attestation"
+owner = "swarm-runtime"
 reason = """
-The store trait's duplicate/open/close persistence errors protect durable
-bookkeeping, not response dispatch or the lease/rollback semantic decisions in
-this phase. The pre-dispatch absence-of-store refusal is mapped separately."""
+The canonicalization error arm is fail closed, but no RollbackReceipt value in
+the compiled type universe can trigger it: every field is a finite typed Rust
+value and serde_json has no non-finite float or custom serializer on this type.
+Unattested, malformed, invalid-signature, and subject-mismatch decisions are
+mapped separately."""
 clearing_condition = """
-Remove this omission when store conflict resolution, multi-writer behavior, or
-receipt persistence becomes part of an authorization or dispatch verdict."""
+Remove this omission and add a differential row if RollbackReceipt gains a
+fallible serializer, non-finite numeric value, extension payload, or any field
+whose canonical serialization can fail at runtime."""

@@ -824,8 +824,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Assumption Registry And Invariant Mapping
 
-- [x] **MAPPING-01**: `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants. DELIVERED with 11. `ASSUME-STATEFUL-GATE-DETERMINISM` replaces the false pure-function claim: given identical initial window state and ordered history, the state transition is deterministic. Assumptions are many-to-many and the gate enforces the complete overlapping blast-radius sets.
-- [x] **MAPPING-02**: `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and assumption IDs. DELIVERED as 41 rows after enumerating the requirement-defined universe. Five surfaces that do not render a pre-dispatch refusal are explicit in enforced `docs/assurance/omissions.toml`, each with owner, reason, and clearing condition; dispatch delegation is one of them rather than being misrepresented by unrelated rollback rows.
+- [x] **MAPPING-01**: `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants. DELIVERED with 12. `ASSUME-STATEFUL-GATE-DETERMINISM` is limited to deterministic local policy state transitions; external adapter outcomes use `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR`. Assumptions are many-to-many and the gate enforces complete overlapping blast-radius sets.
+- [x] **MAPPING-02**: `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and assumption IDs. DELIVERED with 57 mapped invariants and 5 owned omissions. `docs/assurance/universe.toml` freezes the exact IDs/counts, requires mapped/omitted disjointness and one-surface assignment, and makes coordinated row/marker/assumption/registry deletion or deletion of all omissions fail.
 - [x] **MAPPING-03**: A `// INVARIANT: <Name>` source-marker convention annotates every Rust call site named in MAPPING.md.
 - [x] **MAPPING-04**: `scripts/check-mapping.sh` fails the build when a marker has no MAPPING.md row, or a MAPPING.md row names a Rust path that no longer exists. DELIVERED AT `tools/check-mapping.sh`; there is no `scripts/` directory in this repository and `tools/check-gates-wired.sh` only enumerates `tools/check-*.sh`, so the requirement's path would have made the gate invisible to the gate that catches unrun gates (same correction phase 283 recorded).
 - [ ] **MAPPING-05**: `scripts/check-mapping.sh` runs as a required step in `.github/workflows/ci.yml`. WORKFLOW WIRING DELIVERED AT `tools/check-mapping.sh`; repository branch-protection settings have not been verified/configured on this branch, so the stronger protected-required-check acceptance remains open.
@@ -833,7 +833,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 #### Negative Falsifiability
 
 - [x] **FALSIFY-01**: `docs/assurance/negative-registry.toml` maps each MAPPING.md invariant to a `crates/*/tests/negative_*.rs` test and the production function it targets.
-- [x] **FALSIFY-02**: Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous.
+- [x] **FALSIFY-02**: Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous. DELIVERED for all 57 rows: structural checks require assertions and named real/control/broken probes, reject `#[ignore]`/conditional disabling, and four batched Cargo targets prove every exact registered test reports `ok` with zero ignored.
 - [x] **FALSIFY-03**: `scripts/check-negative-registry.sh` fails if any MAPPING.md row lacks a registry entry or names an absent test. DELIVERED AT `tools/check-negative-registry.sh`; there is no `scripts/` directory in this repository and `tools/check-gates-wired.sh` only enumerates `tools/check-*.sh`, so the requirement's path would have made the gate invisible to the gate that catches unrun gates (same correction phase 283 recorded).
 - [ ] **FALSIFY-04**: `scripts/check-negative-registry.sh` is a required CI step. WORKFLOW WIRING DELIVERED AT `tools/check-negative-registry.sh`; repository branch-protection settings have not been verified/configured on this branch, so the protected-required-check acceptance remains open.
 
@@ -1481,12 +1481,12 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | FIXTURE-03 | Phase 284 | Satisfied |
 | FIXTURE-04 | Phase 284 | Satisfied |
 | MAPPING-01 | Phase 285 | Satisfied |
-| MAPPING-02 | Phase 285 | Satisfied |
+| MAPPING-02 | Phase 285 | Satisfied - 57 exact IDs plus 5 enforced omissions frozen by universe manifest |
 | MAPPING-03 | Phase 285 | Satisfied |
 | MAPPING-04 | Phase 285 | Satisfied |
 | MAPPING-05 | Phase 285 | Pending - workflow wired; protected-required-check repository setting unverified |
 | FALSIFY-01 | Phase 285 | Satisfied |
-| FALSIFY-02 | Phase 285 | Satisfied |
+| FALSIFY-02 | Phase 285 | Satisfied - 57 exact tests structurally checked and executed with zero ignored |
 | FALSIFY-03 | Phase 285 | Satisfied |
 | FALSIFY-04 | Phase 285 | Pending - workflow wired; protected-required-check repository setting unverified |
 | DST-01 | Phase 286 | Pending |

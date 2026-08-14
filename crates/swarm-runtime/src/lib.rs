@@ -885,6 +885,7 @@ impl<P, E> SwarmRuntime<P, E> {
 
         // The same derivation the operator-facing rehearsal uses, so the plan on
         // the lease is the plan a human was shown.
+        // INVARIANT: RUNTIME-CONTAINMENT-PREVIEW-REQUIRED
         let preview = crate::service::preview::build_rehearsal_preview(
             request,
             &format!("containment-lease:{}", request.hunt_id.0),

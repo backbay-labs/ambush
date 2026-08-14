@@ -76,10 +76,12 @@ pub fn verify_chain_link(
     envelope: &Value,
     known_head: Option<&IssuerChainHead>,
 ) -> SpineResult<ChainLinkVerdict> {
+    // INVARIANT: SPINE-CHAIN-ISSUER-FIELD-REQUIRED
     let envelope_issuer = envelope
         .get("issuer")
         .and_then(Value::as_str)
         .ok_or(SpineError::MissingField("issuer"))?;
+    // INVARIANT: SPINE-CHAIN-SEQ-FIELD-REQUIRED
     let seq = envelope
         .get("seq")
         .and_then(Value::as_u64)
@@ -89,6 +91,7 @@ pub fn verify_chain_link(
         .get("prev_envelope_hash")
         .ok_or(SpineError::MissingField("prev_envelope_hash"))?;
 
+    // INVARIANT: SPINE-CHAIN-PREV-TYPE-VALID
     let prev_hash_str = if prev_hash.is_null() {
         None
     } else {
