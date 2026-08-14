@@ -586,6 +586,7 @@ mod tests {
             }],
             completed_at_ms: 5_000,
             summary: "reversed".to_string(),
+            governance_attestation: None,
         }
     }
 

@@ -1004,51 +1004,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The store comes from the RUNTIME, not from config: for an in-memory
         // store a second instance built here would be a different map, and the
         // sweep would find nothing while reporting clean passes.
-        let mut containment_sweep_handle = match state.current_containment_store() {
-            Some(store) => {
-                let settings = state.current_containment_settings();
-                match swarm_runtime::containment::rollback_executor_from_config(
-                    &state.current_response_adapter_config(),
-                ) {
-                    Ok(executor) => {
-                        let sweep = swarm_runtime::containment::ContainmentSweep::new(
-                            store,
-                            executor,
-                            state.current_execution_mode(),
-                        );
-                        let sweep_shutdown = shutdown_rx.clone();
-                        let interval_ms = settings.sweep_interval_ms;
-                        tracing::info!(
-                            module = module_path!(),
-                            interval_ms,
-                            lease_ttl_ms = settings.lease_ttl_ms,
-                            "containment sweep started"
-                        );
-                        Some(tokio::spawn(async move {
-                            sweep.run_until_shutdown(interval_ms, sweep_shutdown).await;
-                        }))
-                    }
-                    Err(error) => {
-                        // Loud, not fatal: the runtime still refuses containments
-                        // it cannot lease, so nothing new gets contained. What is
-                        // lost is automatic release of anything already open.
-                        tracing::error!(
-                            module = module_path!(),
-                            reason = %error,
-                            "containment sweep NOT started; open containments will not expire"
-                        );
-                        None
+        //
+        // ONE SWEEP OBJECT, TWO TRIGGERS. The `Arc` built here is spawned as the
+        // TTL task AND handed to the operator release route below, so an
+        // operator's early release and the automatic expiry act on the same
+        // store, the same executor, the same execution mode and the same
+        // governance authority. Two `ContainmentSweep`s over a
+        // `MemoryContainmentLeaseStore` would be two different maps and the
+        // route would find no leases at all (QRT-04).
+        let containment_sweep: Option<Arc<swarm_runtime::containment::ContainmentSweep>> =
+            match state.current_containment_store() {
+                Some(store) => {
+                    match swarm_runtime::containment::rollback_executor_from_config(
+                        &state.current_response_adapter_config(),
+                    ) {
+                        Ok(executor) => Some(Arc::new(
+                            swarm_runtime::containment::ContainmentSweep::new(
+                                store,
+                                executor,
+                                state.current_execution_mode(),
+                            )
+                            // The same `GovernancePolicy` the dispatcher and the
+                            // ingest surface hold, so a release is co-signed on
+                            // the same receipt chain as the governance decision
+                            // that authorized the containment.
+                            .with_governance(Arc::clone(&governance_policy) as Arc<_>),
+                        )),
+                        Err(error) => {
+                            // Loud, not fatal: the runtime still refuses containments
+                            // it cannot lease, so nothing new gets contained. What is
+                            // lost is automatic release of anything already open.
+                            tracing::error!(
+                                module = module_path!(),
+                                reason = %error,
+                                "containment sweep NOT started; open containments will not expire"
+                            );
+                            None
+                        }
                     }
                 }
-            }
-            None => {
-                tracing::warn!(
-                    module = module_path!(),
-                    "no containment lease store configured; containment sweep not started"
-                );
-                None
-            }
-        };
+                None => {
+                    tracing::warn!(
+                        module = module_path!(),
+                        "no containment lease store configured; containment sweep not started"
+                    );
+                    None
+                }
+            };
+        let mut containment_sweep_handle = containment_sweep.as_ref().map(|sweep| {
+            let settings = state.current_containment_settings();
+            let sweep = Arc::clone(sweep);
+            let sweep_shutdown = shutdown_rx.clone();
+            let interval_ms = settings.sweep_interval_ms;
+            tracing::info!(
+                module = module_path!(),
+                interval_ms,
+                lease_ttl_ms = settings.lease_ttl_ms,
+                "containment sweep started"
+            );
+            tokio::spawn(async move {
+                sweep.run_until_shutdown(interval_ms, sweep_shutdown).await;
+            })
+        });
         let bridge_metrics = state.current_prometheus_metrics();
         // KNOWN LIMITATION: telemetry bridge workers are also spawned once from
         // the initial `runtime.telemetry_sources` config. `reload_from_disk()`
@@ -1075,9 +1092,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
         let listener = tokio::net::TcpListener::bind(&cli.bind).await?;
         let serve_state = state.clone();
+        // The operator containment routes ride on the daemon's own listener,
+        // because this is the process that holds the lease store, runs the TTL
+        // sweep, and owns the governance receipt chain. `swarmctl quarantine
+        // release` is a client of these two routes; see
+        // `swarm_runtime_http::http::containment` for why it is not a local
+        // subcommand.
+        //
+        // A misconfigured operator surface must NOT silently ship a daemon with
+        // no release route: `containment_operator_router` fails when a bearer
+        // token env is missing, and that failure is reported here rather than
+        // swallowed, so the absence of the route is always visible in the log.
+        let mut router = detect_http_router(serve_state);
+        match containment_sweep.as_ref() {
+            Some(sweep) if config.operator.enabled => {
+                match swarm_runtime_http::http::containment_operator_router(
+                    &config,
+                    Arc::clone(sweep),
+                ) {
+                    Ok(containment_router) => {
+                        tracing::info!(
+                            module = module_path!(),
+                            "operator containment release routes mounted"
+                        );
+                        router = router.merge(containment_router);
+                    }
+                    Err(error) => tracing::error!(
+                        module = module_path!(),
+                        reason = %error,
+                        "operator containment release routes NOT mounted; early release is \
+                         unavailable and leases can only end at their TTL"
+                    ),
+                }
+            }
+            Some(_) => tracing::warn!(
+                module = module_path!(),
+                "operator surface disabled in config; containment release routes not mounted"
+            ),
+            None => tracing::warn!(
+                module = module_path!(),
+                "no containment sweep; containment release routes not mounted"
+            ),
+        }
         let server = serve_with_listener(
             listener,
-            detect_http_router(serve_state),
+            router,
             config.tls.clone(),
             wait_for_shutdown_request(shutdown_rx),
         );

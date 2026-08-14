@@ -3232,6 +3232,7 @@ name = "swarm-runtime-http"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "async-trait",
  "axum",
  "clap",
  "ed25519-dalek",
@@ -3249,6 +3250,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "swarm-agents",
+ "swarm-consensus",
  "swarm-core",
  "swarm-crypto",
  "swarm-evolution",

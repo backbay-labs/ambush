@@ -262,6 +262,27 @@ pub struct RollbackReceipt {
     pub steps: Vec<RollbackStepOutcome>,
     pub completed_at_ms: i64,
     pub summary: String,
+    /// The governance attestation over this receipt, if one was produced.
+    ///
+    /// OPAQUE ON PURPOSE, AND THIS CRATE NEVER READS IT. The value is a
+    /// serialized `swarm_consensus::ConsensusGovernanceReceipt`; naming that
+    /// type here would put `swarm-consensus` on `swarm-response`'s manifest,
+    /// and `swarm-response` is a declared dependency of the trusted-computing-
+    /// base crate `swarm-spine` (`tools/check-workspace-layering.sh`). The
+    /// meaning of this field, and the only code allowed to decide whether it is
+    /// valid, live in `swarm_runtime::containment` --
+    /// `verify_release_attestation`.
+    ///
+    /// `None` means the release was NOT attested: no governance authority was
+    /// wired, or none could sign. It does not mean "attested and fine", and
+    /// nothing may read it that way -- the verifier refuses an unattested
+    /// receipt rather than passing it.
+    ///
+    /// EXCLUDED FROM ITS OWN SUBJECT. The attestation covers the canonical form
+    /// of this receipt with this field cleared, which is what
+    /// `skip_serializing_if` gives for free on the `None` the signer is handed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance_attestation: Option<serde_json::Value>,
 }
 
 impl RollbackReceipt {
@@ -349,6 +370,11 @@ impl RollbackReceipt {
             ),
             steps,
             completed_at_ms,
+            // Always `None` here. `from_steps` is what every executor builds a
+            // receipt with, and an executor cannot attest: it holds no governor
+            // key. The attestation is stamped once, by the single release path
+            // in `swarm_runtime::containment`, after the executor returns.
+            governance_attestation: None,
         }
     }
 }

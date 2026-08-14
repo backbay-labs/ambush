@@ -3015,3 +3015,657 @@ async fn review_workbench_routes_create_export_and_handoff_sessions() {
         "evidence_bundle"
     );
 }
+
+// --- QRT-04: operator-driven containment release ---------------------------
+//
+// These tests drive the routes in `super::containment` against a REAL
+// `swarm_agents::tom_agent::GovernancePolicy`, because the requirement's phrase
+// is "through the same governance signing path" and a fake signer would prove
+// nothing about that path. `swarm-runtime-http` is the lowest crate that can
+// name both the governance agent and the HTTP surface, which is why they live
+// here rather than in `swarm-runtime`'s own tests.
+//
+// NO WALL CLOCK GATES ANY ASSERTION BELOW. Every instant is a literal handed to
+// the release body, the list query, or `sweep(now_ms)`. `1c4d728` records a
+// `thread::sleep(2000)` against a 1000ms TTL as this repo's anti-pattern and
+// the containment module's own doc says the clock is a parameter everywhere;
+// an expiry test that could only be exercised by sleeping would be untestable
+// in exactly the same way.
+
+mod qrt_04 {
+    use super::*;
+    use async_trait::async_trait;
+    use ed25519_dalek::SigningKey;
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
+    use swarm_consensus::ConsensusGovernanceReceipt;
+    use swarm_response::containment::{
+        ContainmentLease, ContainmentLeaseStore, ContainmentTtl, MemoryContainmentLeaseStore,
+    };
+    use swarm_response::rollback::{
+        RollbackExecutor, RollbackReceipt, RollbackStepOutcome, RollbackStepStatus, RollbackTrigger,
+    };
+    use swarm_response::{ExecutionMode, ResponseError, ResponseStatus};
+    use swarm_runtime::containment::{
+        ContainmentSweep, ReleaseAttestationError, verify_release_attestation,
+    };
+
+    /// A world with hosts in it. The point of the integration test is that the
+    /// containment had an EFFECT and the rollback removed it, so something has
+    /// to hold that effect; a receipt asserting restoration with nothing behind
+    /// it is the failure mode this lane exists to remove.
+    #[derive(Debug, Default)]
+    struct World {
+        isolated_hosts: Mutex<BTreeSet<String>>,
+    }
+
+    impl World {
+        fn isolate(&self, host_id: &str) {
+            self.isolated_hosts
+                .lock()
+                .unwrap()
+                .insert(host_id.to_string());
+        }
+
+        fn is_isolated(&self, host_id: &str) -> bool {
+            self.isolated_hosts.lock().unwrap().contains(host_id)
+        }
+    }
+
+    /// Executes the inverse against [`World`] for real, so `Reversed` on the
+    /// receipt corresponds to an observable change.
+    #[derive(Debug)]
+    struct WorldRollbackExecutor {
+        world: Arc<World>,
+    }
+
+    #[async_trait]
+    impl RollbackExecutor for WorldRollbackExecutor {
+        async fn rollback(
+            &self,
+            lease: &ContainmentLease,
+            trigger: RollbackTrigger,
+            mode: ExecutionMode,
+            completed_at_ms: i64,
+        ) -> Result<RollbackReceipt, ResponseError> {
+            let host_id = lease.blast_radius().scope_value.clone();
+            let restored = self.world.isolated_hosts.lock().unwrap().remove(&host_id);
+            Ok(RollbackReceipt::from_steps(
+                lease,
+                trigger,
+                mode,
+                completed_at_ms,
+                vec![RollbackStepOutcome {
+                    kind: ResponseRollbackStepKind::RestoreHostConnectivity,
+                    status: if restored {
+                        RollbackStepStatus::Reversed
+                    } else {
+                        RollbackStepStatus::Failed
+                    },
+                    detail: format!("restored connectivity for `{host_id}`"),
+                }],
+            ))
+        }
+    }
+
+    fn isolate_preview(host_id: &str) -> ResponseRehearsalPreview {
+        ResponseRehearsalPreview {
+            rehearsal_id: format!("rehearsal:{host_id}"),
+            source_bundle_id: format!("bundle:{host_id}"),
+            prepared_at_ms: 1_000,
+            simulated_only: false,
+            blast_radius: ResponseBlastRadiusPreview {
+                scope_kind: ResponseRehearsalScopeKind::Host,
+                scope_value: host_id.to_string(),
+                impact: ResponseBlastRadiusImpact::HostConnectivityIsolated,
+                max_affected_scopes: 1,
+                affected_capabilities: vec!["network_connectivity".to_string()],
+                summary: format!("isolates {host_id}"),
+            },
+            rollback: ResponseRollbackPreview {
+                required: true,
+                summary: format!("restore connectivity for {host_id}"),
+                steps: vec![ResponseRollbackStep {
+                    kind: ResponseRollbackStepKind::RestoreHostConnectivity,
+                    summary: format!("restore {host_id}"),
+                }],
+            },
+        }
+    }
+
+    fn open_containment(
+        world: &World,
+        store: &dyn ContainmentLeaseStore,
+        lease_id: &str,
+        host_id: &str,
+        issued_at_ms: i64,
+        ttl_ms: i64,
+    ) -> ContainmentLease {
+        world.isolate(host_id);
+        let lease = ContainmentLease::open(
+            lease_id,
+            ResponseAction::IsolateHost {
+                host_id: host_id.to_string(),
+            },
+            format!("resp:{lease_id}"),
+            Some(format!("gov:{lease_id}")),
+            &isolate_preview(host_id),
+            issued_at_ms,
+            ContainmentTtl::from_config_ms(ttl_ms).unwrap(),
+        )
+        .unwrap();
+        store.open_lease(&lease).unwrap();
+        lease
+    }
+
+    fn governance_with_one_governor() -> Arc<GovernancePolicy> {
+        let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
+        policy.register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[41; 32]),
+        );
+        policy
+    }
+
+    fn attestation_of(receipt: &RollbackReceipt) -> ConsensusGovernanceReceipt {
+        serde_json::from_value(
+            receipt
+                .governance_attestation
+                .clone()
+                .expect("release should be attested"),
+        )
+        .expect("attestation should deserialize as a governance receipt")
+    }
+
+    struct Harness {
+        world: Arc<World>,
+        store: Arc<MemoryContainmentLeaseStore>,
+        sweep: Arc<ContainmentSweep>,
+        app: Router,
+    }
+
+    fn harness() -> Harness {
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
+        }
+        let world = Arc::new(World::default());
+        let store = Arc::new(MemoryContainmentLeaseStore::new());
+        let sweep = Arc::new(
+            ContainmentSweep::new(
+                store.clone(),
+                Arc::new(WorldRollbackExecutor {
+                    world: Arc::clone(&world),
+                }),
+                ExecutionMode::Enforced,
+            )
+            .with_governance(governance_with_one_governor()),
+        );
+        // ONE sweep object, and the router is handed the same `Arc` the TTL
+        // task would get in `swarm_detect`. That sharing is the thing under
+        // test: the manual release below and the `sweep(now_ms)` call after it
+        // reach `swarm_runtime::containment::release_lease` through the same
+        // store, executor, mode and governance authority.
+        let app = super::super::containment::containment_operator_router(
+            &operator_config(),
+            Arc::clone(&sweep),
+        )
+        .unwrap();
+        Harness {
+            world,
+            store,
+            sweep,
+            app,
+        }
+    }
+
+    fn bearer() -> (&'static str, &'static str) {
+        ("authorization", "Bearer secret-token")
+    }
+
+    #[tokio::test]
+    async fn qrt_04_containment_is_released_manually_and_by_ttl_through_one_path() {
+        let harness = harness();
+        // Two containments take effect at t=1_000. One will be released early
+        // by an operator, the other left to its TTL.
+        let manual = open_containment(
+            &harness.world,
+            harness.store.as_ref(),
+            "lease-manual",
+            "host-manual",
+            1_000,
+            60_000,
+        );
+        let expiring = open_containment(
+            &harness.world,
+            harness.store.as_ref(),
+            "lease-ttl",
+            "host-ttl",
+            1_000,
+            5_000,
+        );
+        assert_eq!(manual.expires_at_ms(), 61_000);
+        assert_eq!(expiring.expires_at_ms(), 6_000);
+
+        // 1. THE CONTAINMENT HAD AN EFFECT.
+        assert!(harness.world.is_isolated("host-manual"));
+        assert!(harness.world.is_isolated("host-ttl"));
+
+        // 2. The operator listing shows both, against a STATED instant.
+        let listed = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/containment/leases?now_ms=2000")
+                    .header(bearer().0, bearer().1)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let listed: Value =
+            serde_json::from_slice(&to_bytes(listed.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(listed["observed_at_ms"], 2_000);
+        assert_eq!(listed["open_leases"].as_array().unwrap().len(), 2);
+        // Sorted by expiry: the TTL lease first.
+        assert_eq!(listed["open_leases"][0]["lease"]["lease_id"], "lease-ttl");
+        assert_eq!(listed["open_leases"][0]["remaining_ms"], 4_000);
+        assert_eq!(listed["open_leases"][0]["expired"], false);
+        assert_eq!(
+            listed["open_leases"][1]["lease"]["lease_id"],
+            "lease-manual"
+        );
+        assert_eq!(listed["open_leases"][1]["remaining_ms"], 59_000);
+
+        // 3. MANUAL EARLY RELEASE, over the authenticated operator route, at a
+        //    stated instant well before the lease's own expiry.
+        let released = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/containment/leases/lease-manual/release")
+                    .header(bearer().0, bearer().1)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "now_ms": 3_000 }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(released.status(), StatusCode::OK);
+        let released: Value =
+            serde_json::from_slice(&to_bytes(released.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(released["lease_closed"], true);
+        assert_eq!(released["fully_reversed"], true);
+        assert_eq!(released["attestation_verified"], true);
+        assert_eq!(released["receipt"]["trigger"], "manual");
+        assert_eq!(released["receipt"]["completed_at_ms"], 3_000);
+        assert_eq!(
+            released["receipt"]["governance_receipt_id"],
+            "gov:lease-manual"
+        );
+        // The effect is gone from the world, not merely from the receipt.
+        assert!(!harness.world.is_isolated("host-manual"));
+        // The other containment is untouched.
+        assert!(harness.world.is_isolated("host-ttl"));
+
+        // 4. TTL RELEASE, driven by the instant the sweep is told to act at
+        //    rather than by elapsed wall clock.
+        let before_expiry = harness.sweep.sweep(5_999).await;
+        assert_eq!(
+            before_expiry.expired, 0,
+            "a lease expiring at 6_000 must not be swept at 5_999"
+        );
+        assert!(harness.world.is_isolated("host-ttl"));
+
+        let after_expiry = harness.sweep.sweep(6_001).await;
+        assert_eq!(after_expiry.expired, 1);
+        assert_eq!(after_expiry.restored(), 1);
+        assert!(after_expiry.failures.is_empty());
+        assert!(!harness.world.is_isolated("host-ttl"));
+
+        // 5. BOTH RECEIPTS ARE DURABLE, AND BOTH VERIFY.
+        let closed = harness.store.closed_receipts().unwrap();
+        assert_eq!(closed.len(), 2);
+        let manual_receipt = closed
+            .iter()
+            .find(|receipt| receipt.lease_id == "lease-manual")
+            .unwrap();
+        let ttl_receipt = closed
+            .iter()
+            .find(|receipt| receipt.lease_id == "lease-ttl")
+            .unwrap();
+        assert_eq!(manual_receipt.trigger, RollbackTrigger::Manual);
+        assert_eq!(ttl_receipt.trigger, RollbackTrigger::Expiry);
+        verify_release_attestation(manual_receipt).expect("manual release should verify");
+        verify_release_attestation(ttl_receipt).expect("ttl release should verify");
+
+        // 6. MANUAL AND AUTOMATIC RELEASE DID NOT DIVERGE. Everything a
+        //    reviewer would compare is equal except the trigger, the subject
+        //    and the instant -- because both went through `release_lease` on
+        //    the one `ContainmentSweep` that carries the store, the executor,
+        //    the mode and the governance authority.
+        assert_eq!(manual_receipt.status, ttl_receipt.status);
+        assert_eq!(manual_receipt.status, ResponseStatus::Executed);
+        assert_eq!(manual_receipt.mode, ttl_receipt.mode);
+        assert_eq!(manual_receipt.mode, ExecutionMode::Enforced);
+        assert!(manual_receipt.fully_reversed() && ttl_receipt.fully_reversed());
+        assert_eq!(
+            manual_receipt.steps.len(),
+            ttl_receipt.steps.len(),
+            "one release path means one step shape"
+        );
+        assert!(
+            manual_receipt.governance_attestation.is_some()
+                && ttl_receipt.governance_attestation.is_some(),
+            "if only one trigger were attested the two paths would have diverged"
+        );
+
+        // 7. THE TWO ATTESTATIONS SIT ON ONE CHAIN. The manual release was
+        //    attested first, so the TTL release's attestation must name the
+        //    manual one's commit as its predecessor. A second signer, or a
+        //    second chain, could not produce this.
+        let manual_attestation = attestation_of(manual_receipt);
+        let ttl_attestation = attestation_of(ttl_receipt);
+        assert_eq!(
+            ttl_attestation.payload.previous_commit_hash, manual_attestation.payload.commit_hash,
+            "the TTL release must extend the chain the manual release advanced"
+        );
+        assert_eq!(
+            manual_attestation.payload.issued_by,
+            ttl_attestation.payload.issued_by
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tampered_rollback_receipt_fails_verification() {
+        let harness = harness();
+        open_containment(
+            &harness.world,
+            harness.store.as_ref(),
+            "lease-tamper",
+            "host-tamper",
+            1_000,
+            60_000,
+        );
+        let receipt = harness.sweep.release("lease-tamper", 2_000).await.unwrap();
+        verify_release_attestation(&receipt).expect("the untampered receipt must verify");
+
+        // (a) MUTATE THE BODY. An auditor reading `fully_reversed` acts on it,
+        //     so rewriting a `Failed` step into a `Reversed` one is the lie
+        //     that matters most. The signature still checks out -- it covers a
+        //     governance commit, not a rollback -- and the SUBJECT binding is
+        //     what catches it.
+        let mut rewritten = receipt.clone();
+        rewritten.steps[0].status = RollbackStepStatus::Failed;
+        let error = verify_release_attestation(&rewritten).unwrap_err();
+        assert!(
+            matches!(error, ReleaseAttestationError::SubjectMismatch { .. }),
+            "expected a subject mismatch, got {error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("the signature does not cover this body"),
+            "unexpected diagnostic: {error}"
+        );
+
+        // Every other field is covered too, not just the one above.
+        for mutate in [
+            (|r: &mut RollbackReceipt| r.summary.push_str(" (edited)")) as fn(&mut RollbackReceipt),
+            |r: &mut RollbackReceipt| r.completed_at_ms += 1,
+            |r: &mut RollbackReceipt| r.lease_id = "lease-other".to_string(),
+            |r: &mut RollbackReceipt| r.rollback_id = "rollback:other".to_string(),
+            |r: &mut RollbackReceipt| r.trigger = RollbackTrigger::Expiry,
+            |r: &mut RollbackReceipt| r.origin_receipt_id = "resp:other".to_string(),
+            |r: &mut RollbackReceipt| r.governance_receipt_id = Some("gov:other".to_string()),
+            |r: &mut RollbackReceipt| r.status = ResponseStatus::Failed,
+            |r: &mut RollbackReceipt| r.mode = ExecutionMode::DryRun,
+        ] {
+            let mut tampered = receipt.clone();
+            mutate(&mut tampered);
+            assert!(
+                matches!(
+                    verify_release_attestation(&tampered),
+                    Err(ReleaseAttestationError::SubjectMismatch { .. })
+                ),
+                "a mutated receipt must not verify: {tampered:?}"
+            );
+        }
+
+        // (b) MUTATE THE ATTESTATION. `ConsensusGovernanceReceipt::verify`
+        //     re-canonicalizes the payload and checks the detached signature,
+        //     so this fails at the signature rather than at the binding.
+        let mut forged = receipt.clone();
+        let mut attestation = attestation_of(&receipt);
+        attestation.payload.issued_at_ms += 1;
+        forged.governance_attestation = Some(serde_json::to_value(&attestation).unwrap());
+        let error = verify_release_attestation(&forged).unwrap_err();
+        assert!(
+            matches!(error, ReleaseAttestationError::Signature { .. }),
+            "expected a signature failure, got {error:?}"
+        );
+
+        // (c) STRIP THE ATTESTATION. A verifier that answered "fine" here
+        //     would be reporting success over a region it never inspected.
+        let mut stripped = receipt.clone();
+        stripped.governance_attestation = None;
+        let error = verify_release_attestation(&stripped).unwrap_err();
+        assert!(
+            matches!(error, ReleaseAttestationError::Unattested { .. }),
+            "expected an unattested refusal, got {error:?}"
+        );
+
+        // (d) LIFT A VALID ATTESTATION ONTO A DIFFERENT RELEASE. The signature
+        //     is genuine and verifies; only the subject binding refuses it.
+        open_containment(
+            &harness.world,
+            harness.store.as_ref(),
+            "lease-second",
+            "host-second",
+            1_000,
+            60_000,
+        );
+        let second = harness.sweep.release("lease-second", 2_500).await.unwrap();
+        let mut lifted = second.clone();
+        lifted.governance_attestation = receipt.governance_attestation.clone();
+        attestation_of(&lifted)
+            .verify()
+            .expect("the lifted signature is genuine, which is the point");
+        assert!(
+            matches!(
+                verify_release_attestation(&lifted),
+                Err(ReleaseAttestationError::SubjectMismatch { .. })
+            ),
+            "a genuine signature over a different release must not verify this one"
+        );
+    }
+
+    #[tokio::test]
+    async fn release_route_refuses_unauthenticated_and_unscoped_callers() {
+        let harness = harness();
+        open_containment(
+            &harness.world,
+            harness.store.as_ref(),
+            "lease-auth",
+            "host-auth",
+            1_000,
+            60_000,
+        );
+
+        let anonymous = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/containment/leases/lease-auth/release")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            harness.world.is_isolated("host-auth"),
+            "a rejected request must not have released anything"
+        );
+
+        // A principal with every scope EXCEPT maintenance.
+        unsafe {
+            std::env::set_var("SWARM_OPERATOR_READONLY_TOKEN", "readonly-token");
+        }
+        let readonly = super::super::containment::containment_operator_router(
+            &scoped_operator_config(
+                "SWARM_OPERATOR_READONLY_TOKEN",
+                vec![OperatorPrincipalConfig {
+                    operator_id: "readonly-operator".to_string(),
+                    token_env: "SWARM_OPERATOR_READONLY_TOKEN".to_string(),
+                    token_expires_at_ms: None,
+                    scopes: vec![
+                        OperatorScope::Read,
+                        OperatorScope::Rehearse,
+                        OperatorScope::Approve,
+                    ],
+                }],
+            ),
+            Arc::clone(&harness.sweep),
+        )
+        .unwrap();
+        let forbidden = readonly
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/containment/leases/lease-auth/release")
+                    .header("authorization", "Bearer readonly-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+        assert!(
+            harness.world.is_isolated("host-auth"),
+            "a forbidden request must not have released anything"
+        );
+
+        // The same principal may still LIST: reading which hosts are contained
+        // is not the destructive act.
+        let listed = readonly
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/operator/containment/leases?now_ms=2000")
+                    .header("authorization", "Bearer readonly-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn releasing_an_unknown_lease_is_a_404_and_changes_nothing() {
+        let harness = harness();
+        open_containment(
+            &harness.world,
+            harness.store.as_ref(),
+            "lease-known",
+            "host-known",
+            1_000,
+            60_000,
+        );
+        let response = harness
+            .app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/containment/leases/lease-typo/release")
+                    .header(bearer().0, bearer().1)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("no open containment lease `lease-typo`"),
+            "unexpected body: {body:?}"
+        );
+        assert!(harness.world.is_isolated("host-known"));
+        assert_eq!(harness.store.open_leases().unwrap().len(), 1);
+        assert!(harness.store.closed_receipts().unwrap().is_empty());
+    }
+
+    /// A release the world refused is NOT a release, and neither the lease nor
+    /// the chain may pretend otherwise.
+    #[tokio::test]
+    async fn a_release_whose_inverse_failed_keeps_the_lease_open_and_is_not_attested() {
+        let harness = harness();
+        // Open a lease over a host the world never isolated, so the executor's
+        // `remove` returns false and it reports a `Failed` step -- the shape
+        // `HttpEdrRollbackExecutor` produces against an unreachable endpoint.
+        let lease = ContainmentLease::open(
+            "lease-unreachable",
+            ResponseAction::IsolateHost {
+                host_id: "host-unreachable".to_string(),
+            },
+            "resp:lease-unreachable".to_string(),
+            Some("gov:lease-unreachable".to_string()),
+            &isolate_preview("host-unreachable"),
+            1_000,
+            ContainmentTtl::from_config_ms(60_000).unwrap(),
+        )
+        .unwrap();
+        harness.store.open_lease(&lease).unwrap();
+
+        let response = harness
+            .app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/containment/leases/lease-unreachable/release")
+                    .header(bearer().0, bearer().1)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "now_ms": 2_000 }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["lease_closed"], false);
+        assert_eq!(body["fully_reversed"], false);
+        assert_eq!(body["attestation_verified"], false);
+        assert!(
+            body["attestation_error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("carries no governance attestation"),
+            "unexpected attestation error: {body:?}"
+        );
+        assert_eq!(
+            harness.store.open_leases().unwrap().len(),
+            1,
+            "a failed inverse must leave the lease open for the next sweep"
+        );
+        assert!(harness.store.closed_receipts().unwrap().is_empty());
+    }
+}
