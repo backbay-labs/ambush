@@ -34,24 +34,6 @@ impl StaticApprovalGate {
         }
     }
 
-    fn destructive_action(request: &ActionRequest) -> bool {
-        matches!(
-            request.action,
-            ResponseAction::BlockEgress { .. }
-                | ResponseAction::IsolateHost { .. }
-                | ResponseAction::RevokeCredential { .. }
-                | ResponseAction::SinkholeDns { .. }
-                | ResponseAction::TerminateUserSession { .. }
-                | ResponseAction::InjectFirewallRule { .. }
-                | ResponseAction::QuarantineFile { .. }
-                | ResponseAction::KillProcess { .. }
-                | ResponseAction::SuspendProcess { .. }
-                | ResponseAction::DisableUserAccount { .. }
-                | ResponseAction::ForcePasswordReset { .. }
-                | ResponseAction::RemoveScheduledTask { .. }
-        )
-    }
-
     pub(crate) fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
         if request.evidence.is_null() {
             return Err(ApprovalError::InvalidRequest(
@@ -271,7 +253,7 @@ impl ApprovalGate for StaticApprovalGate {
     ) -> Result<PolicyDecision, ApprovalError> {
         self.validate_request(request)?;
 
-        if Self::destructive_action(request) && request.severity == Severity::Low {
+        if request.action.requires_governance_receipt() && request.severity == Severity::Low {
             return Ok(PolicyDecision::deny_with_rule(
                 "static.minimum_severity",
                 "destructive actions require at least medium severity",
@@ -291,7 +273,9 @@ impl ApprovalGate for StaticApprovalGate {
             return Ok(decision);
         }
 
-        if Self::destructive_action(request) && request.severity >= self.human_gate_severity {
+        if request.action.requires_governance_receipt()
+            && request.severity >= self.human_gate_severity
+        {
             return Ok(PolicyDecision::require_human_with_rule(
                 "static.human_gate",
                 "authorized but held for human approval",

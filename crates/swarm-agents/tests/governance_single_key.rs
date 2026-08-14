@@ -15,7 +15,8 @@ use swarm_consensus::{
     ConsensusCommittee, ConsensusError, ConsensusSignedEnvelope, ConsensusTransport,
 };
 use swarm_core::agent::AgentHealthEntry;
-use swarm_core::types::{AgentId, ResponseAction};
+use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
+use swarm_policy::ActionRequest;
 
 fn key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed; 32])
@@ -34,9 +35,15 @@ fn healthy_policy(seed: u8) -> Arc<GovernancePolicy> {
     policy
 }
 
-fn block_egress() -> ResponseAction {
-    ResponseAction::BlockEgress {
-        target: "203.0.113.77".to_string(),
+fn block_egress() -> ActionRequest {
+    ActionRequest {
+        hunt_id: HuntId("hunt-single-key".to_string()),
+        requested_by: AgentId::new("pounce", "test"),
+        action: ResponseAction::BlockEgress {
+            target: "203.0.113.77".to_string(),
+        },
+        severity: Severity::Critical,
+        evidence: serde_json::json!({"signal": "test"}),
     }
 }
 
@@ -84,11 +91,7 @@ fn the_receipt_names_a_committee_of_one_signed_by_the_local_key() {
     // process can speak for is exactly itself. A receipt naming more members
     // than that, issued by a solo process, would be the thing BFT-03 removes.
     let policy = healthy_policy(5);
-    let GovernanceDecision::Allow {
-        receipt: Some(receipt),
-        ..
-    } = policy.can_act(&block_egress())
-    else {
+    let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&block_egress()) else {
         panic!("a healthy single-governor policy must allow with a receipt");
     };
 
@@ -143,11 +146,7 @@ fn the_governance_receipt_wire_shape_is_unchanged() {
     // committee was configured would keep this field set and still be wrong, so
     // the tallies are checked against the threshold rather than just present.
     let policy = healthy_policy(8);
-    let GovernanceDecision::Allow {
-        receipt: Some(receipt),
-        ..
-    } = policy.can_act(&block_egress())
-    else {
+    let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&block_egress()) else {
         panic!("expected an allow with a receipt");
     };
 
@@ -211,16 +210,12 @@ fn receipts_chain_across_calls_so_the_audit_log_is_ordered() {
     // committed round. If a refactor ever mints a receipt without advancing it
     // -- or advances it without committing -- this breaks.
     let policy = healthy_policy(9);
-    let GovernanceDecision::Allow {
-        receipt: Some(first),
-        ..
-    } = policy.can_act(&block_egress())
+    let GovernanceDecision::Authorize { receipt: first, .. } = policy.can_act(&block_egress())
     else {
         panic!("expected an allow");
     };
-    let GovernanceDecision::Allow {
-        receipt: Some(second),
-        ..
+    let GovernanceDecision::Authorize {
+        receipt: second, ..
     } = policy.can_act(&block_egress())
     else {
         panic!("expected an allow");
@@ -348,7 +343,7 @@ fn can_act_publishes_its_round_through_the_policys_transport_and_signs_only_loca
     );
 
     let decision = policy.can_act(&block_egress());
-    assert!(matches!(decision, GovernanceDecision::Allow { .. }));
+    assert!(matches!(decision, GovernanceDecision::Authorize { .. }));
 
     let accepted = transport.accepted.lock().unwrap().clone();
     assert!(

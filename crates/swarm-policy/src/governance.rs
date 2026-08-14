@@ -22,8 +22,51 @@
 
 use serde::{Deserialize, Serialize};
 use swarm_core::agent::AgentRole;
+use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 
-use crate::ActionRequest;
+use crate::{ActionRequest, static_gate::scope_for_response_action};
+
+pub const GOVERNANCE_ACTION_REQUEST_SUBJECT_SCHEMA_VERSION: u32 = 1;
+pub const GOVERNANCE_ACTION_REQUEST_SUBJECT_DOMAIN: &str =
+    "swarm.governance.action-request.authorization.v1";
+
+/// Canonical subject governed for one response request.
+///
+/// The two bearer artifacts are deliberately not part of the subject: the receipt
+/// cannot hash itself, and the partition lease is verified through its own path.
+/// Every other evidence field is retained. The domain and schema prevent this digest
+/// from being confused with a release attestation, contingency lease, or later schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GovernanceActionRequestSubjectV1 {
+    pub domain: String,
+    pub schema_version: u32,
+    pub hunt_id: HuntId,
+    pub requested_by: AgentId,
+    pub action: ResponseAction,
+    pub scope: Option<String>,
+    pub severity: Severity,
+    pub evidence: serde_json::Value,
+}
+
+impl GovernanceActionRequestSubjectV1 {
+    pub fn from_request(request: &ActionRequest) -> Self {
+        let mut evidence = request.evidence.clone();
+        if let Some(object) = evidence.as_object_mut() {
+            object.remove("governance_receipt");
+            object.remove("contingency_lease");
+        }
+        Self {
+            domain: GOVERNANCE_ACTION_REQUEST_SUBJECT_DOMAIN.to_string(),
+            schema_version: GOVERNANCE_ACTION_REQUEST_SUBJECT_SCHEMA_VERSION,
+            hunt_id: request.hunt_id.clone(),
+            requested_by: request.requested_by.clone(),
+            action: request.action.clone(),
+            scope: scope_for_response_action(&request.action),
+            severity: request.severity,
+            evidence,
+        }
+    }
+}
 
 /// One governance-originated runtime event, flattened to what the dispatcher publishes.
 ///
@@ -85,11 +128,10 @@ pub mod sealed {
 
 /// Partition-time authorization and event drain, as the dispatcher needs them.
 ///
-/// Deliberately narrow. The first four methods are the entire surface the dispatcher
-/// used of the concrete governance policy; [`GovernanceAuthority::status_report`] is
-/// the entire surface the ingest health endpoint used of it (SPLIT-05). Widening it
-/// beyond what a named consumer already called would re-import the coupling this
-/// trait exists to remove.
+/// Deliberately narrow. Its authorization methods separate normal action approval,
+/// governance veto, and partition contingency so no caller can use a generic
+/// "accept either decision" verifier. [`GovernanceAuthority::status_report`] is the
+/// read-only surface the ingest health endpoint uses.
 ///
 /// # What the trait widened, and why it is sealed
 ///
@@ -97,11 +139,11 @@ pub mod sealed {
 /// The dispatcher used to install one concrete type, `tom_agent::GovernancePolicy`
 /// (`swarm_runtime::` then, `swarm_agents::` since SPLIT-03 moved the role out), whose
 /// enforcement logic is the only thing that could answer
-/// [`GovernanceAuthority::authorize_partition_request`]. That
-/// method returning `Ok(true)` is what lets a destructive action proceed while the
-/// governance quorum is partitioned, so an arbitrary implementation installed through
-/// `AgentDispatcher::with_governance_policy` could approve every partition-time
-/// request without minting a contingency lease.
+/// [`GovernanceAuthority::authorize_partition_request`]. Returning a verified lease
+/// is what lets a destructive action proceed while the governance quorum is
+/// partitioned, so an arbitrary implementation installed through
+/// `AgentDispatcher::with_governance_policy` could otherwise approve every
+/// partition-time request without minting a contingency lease.
 ///
 /// The trait is therefore sealed: it requires
 /// [`sealed::SealedGovernanceAuthority`], which lives in a `#[doc(hidden)]` module and
@@ -202,14 +244,30 @@ pub mod sealed {
 pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
     /// Whether `request` may proceed while the governance quorum is partitioned.
     ///
-    /// `Ok(true)` means a contingency lease covers the request, `Ok(false)` that no
-    /// partition-time authorization was required or issued, and `Err` that the
-    /// request was rejected outright.
+    /// `Ok(Some(receipt))` means a contingency lease was verified and durably
+    /// redeemed for this exact request, `Ok(None)` that no partition-time
+    /// authorization was required, and `Err` that the request was rejected.
     fn authorize_partition_request(
         &self,
         request: &ActionRequest,
         now_ms: i64,
-    ) -> Result<bool, String>;
+    ) -> Result<Option<serde_json::Value>, String>;
+
+    /// Verify and durably consume one approval issued for this exact request.
+    fn verify_and_consume_action_authorization(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String>;
+
+    /// Verify and durably consume one veto issued for this exact request.
+    fn verify_and_consume_veto(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String>;
 
     /// Whether the governance quorum is currently partitioned.
     fn is_partitioned(&self) -> bool;

@@ -51,7 +51,7 @@ use swarm_runtime::config::{
 };
 use swarm_runtime::correlation::CorrelationEngine;
 use swarm_runtime::detection::metrics::CriticalPathMetrics;
-use swarm_runtime::dispatcher::{GovernanceVetoRoute, RequestResponseRouter};
+use swarm_runtime::dispatcher::{GovernanceVetoRoute, RequestResponseRouter, RoutedActionRequest};
 use swarm_runtime::dispatcher::{
     StrategyProposalOutcome, StrategyProposalRoute, StrategyProposalRouteReport,
     StrategyProposalRouter,
@@ -139,13 +139,13 @@ fn approval_context_now(live_mode: bool) -> ApprovalContext {
 impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
     async fn route_request(
         &self,
-        request: ActionRequest,
+        admitted: RoutedActionRequest,
     ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
         let runtime = self.runtime.load_full();
         let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
-        let detection = routed_detection_from_request(&request);
+        let detection = routed_detection_from_request(admitted.request());
         runtime
-            .audit_authorize_and_execute(&detection, &request, &context)
+            .audit_authorize_and_execute_admitted(&detection, &admitted, &context)
             .await
     }
 
@@ -155,14 +155,8 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
     ) -> Result<swarm_spine::AuditTrail, RuntimeError> {
         let runtime = self.runtime.load_full();
         let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
-        let detection = routed_detection_from_request(&veto.request);
-        Ok(runtime.audit_governance_veto(
-            &detection,
-            &veto.request,
-            &context,
-            &veto.governing_agent_id,
-            veto.reason,
-        ))
+        let detection = routed_detection_from_request(veto.request());
+        Ok(runtime.audit_admitted_governance_veto(&detection, &veto, &context))
     }
 }
 
@@ -1089,6 +1083,7 @@ async fn process_runtime_event(
                             stack
                                 .service
                                 .playbook_action_for_finding(finding, swarm_mode)
+                                .filter(|action| !action.requires_governance_receipt())
                         } else {
                             None
                         }
@@ -1181,6 +1176,8 @@ async fn process_demo_replay_step(
         now_ms: step.event.timestamp,
     };
     let replay_action = step.action.clone();
+    let live_governed_action = stack.service.mode() == RuntimeMode::LiveResponse
+        && replay_action.requires_governance_receipt();
     let signing_agent_id = AgentId::from_verifying_key(&state.signing_key.verifying_key());
     let detector = state.detector.load_full();
     let outcome = stack
@@ -1192,7 +1189,13 @@ async fn process_demo_replay_step(
                 approval: &approval,
                 signing_key: &state.signing_key,
             },
-            |_| Some(replay_action.clone()),
+            |_| {
+                if live_governed_action {
+                    None
+                } else {
+                    Some(replay_action.clone())
+                }
+            },
             |event, findings| publish_runtime_findings(state, event, findings),
         )
         .await?;
@@ -1210,11 +1213,18 @@ async fn process_demo_replay_step(
     let Some(bundle) = outcome else {
         state.append_demo_timeline(
             run_id,
-            "replay_step_without_findings",
+            if live_governed_action {
+                "governance_deferred"
+            } else {
+                "replay_step_without_findings"
+            },
             json!({
                 "step_index": step_index,
                 "event_id": step.event.event_id,
                 "action_kind": step.action.kind(),
+                "reason": live_governed_action.then_some(
+                    "live governed actions require Pouncer issuance and dispatcher admission; human approval alone cannot authorize execution"
+                ),
             }),
             now_ms(),
         );

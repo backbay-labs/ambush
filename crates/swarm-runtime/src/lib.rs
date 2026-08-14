@@ -183,6 +183,11 @@ pub enum RuntimeError {
     #[error(transparent)]
     Response(#[from] ResponseError),
 
+    #[error(
+        "governed action `{action}` refused in enforced mode: dispatcher governance admission is required"
+    )]
+    GovernedActionRequiresAdmission { action: &'static str },
+
     /// A containment was refused BEFORE it executed because it could not have
     /// been leased. The world is unchanged.
     #[error("containment `{action}` refused: {reason}")]
@@ -700,6 +705,41 @@ impl<P, E> SwarmRuntime<P, E> {
         governing_agent_id: &AgentId,
         reason: impl Into<String>,
     ) -> AuditTrail {
+        self.audit_governance_veto_with_receipt(
+            detection,
+            request,
+            context,
+            governing_agent_id,
+            reason,
+            None,
+        )
+    }
+
+    pub fn audit_admitted_governance_veto(
+        &self,
+        detection: &DetectionFinding,
+        veto: &crate::dispatcher::GovernanceVetoRoute,
+        context: &ApprovalContext,
+    ) -> AuditTrail {
+        self.audit_governance_veto_with_receipt(
+            detection,
+            veto.request(),
+            context,
+            veto.governing_agent_id(),
+            veto.reason(),
+            veto.verified_governance_receipt(),
+        )
+    }
+
+    fn audit_governance_veto_with_receipt(
+        &self,
+        detection: &DetectionFinding,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+        governing_agent_id: &AgentId,
+        reason: impl Into<String>,
+        verified_governance_receipt: Option<&serde_json::Value>,
+    ) -> AuditTrail {
         let reason = reason.into();
         let receipt = ResponseReceipt {
             receipt_id: format!(
@@ -728,7 +768,7 @@ impl<P, E> SwarmRuntime<P, E> {
         .with_governance_audit(
             governing_agent_id.clone(),
             reason.clone(),
-            Self::verified_governance_receipt(request).map(|(_, receipt_value)| receipt_value),
+            verified_governance_receipt.cloned(),
         );
 
         AuditTrail {
@@ -775,51 +815,20 @@ impl<P, E> SwarmRuntime<P, E> {
         }
     }
 
-    /// The governance receipt attached to `request`, if it is internally
-    /// consistent.
-    ///
-    /// NOT ANCHORED, DELIBERATELY, AND THIS IS THE THIRD SITE ADR 0011 NAMES.
-    /// `ConsensusGovernanceReceipt::verify` checks a signature against a public
-    /// key the receipt carries, so passing here says nothing about WHO signed.
-    /// Everything downstream of this function only DECORATES an audit record --
-    /// which receipt id to stamp, which body to copy -- and authorizes nothing;
-    /// the authorization decision is `missing_governance_receipt_reason` on the
-    /// dispatcher, which does anchor to the configured governor set. `SwarmRuntime`
-    /// holds no `GovernanceAuthority` to anchor to, and giving it one to improve an
-    /// audit label would widen the composition root for no verdict.
-    ///
-    /// The consequence is stated rather than hidden: an audit record can carry a
-    /// governance receipt id whose signer was never checked against the governor
-    /// set, on any path that reaches the runtime without passing the dispatcher.
-    fn verified_governance_receipt(
+    fn require_dispatcher_admission(
         request: &ActionRequest,
-    ) -> Option<(ConsensusGovernanceReceipt, serde_json::Value)> {
-        let receipt_value = request.evidence.get("governance_receipt")?.clone();
-        let receipt: ConsensusGovernanceReceipt =
-            match serde_json::from_value(receipt_value.clone()) {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    tracing::warn!(
-                        hunt_id = %request.hunt_id.0,
-                        requested_by = %request.requested_by,
-                        reason = %error,
-                        module = module_path!(),
-                        "ignoring malformed governance receipt embedded in request evidence"
-                    );
-                    return None;
-                }
-            };
-        if let Err(error) = receipt.verify() {
-            tracing::warn!(
-                hunt_id = %request.hunt_id.0,
-                requested_by = %request.requested_by,
-                reason = %error,
-                module = module_path!(),
-                "ignoring unverifiable governance receipt embedded in request evidence"
-            );
-            return None;
+        execution_mode: ExecutionMode,
+        admitted: bool,
+    ) -> Result<(), RuntimeError> {
+        if execution_mode == ExecutionMode::Enforced
+            && request.action.requires_governance_receipt()
+            && !admitted
+        {
+            return Err(RuntimeError::GovernedActionRequiresAdmission {
+                action: request.action.kind(),
+            });
         }
-        Some((receipt, receipt_value))
+        Ok(())
     }
 
     /// Decide, BEFORE anything executes, whether this action needs a containment
@@ -888,6 +897,7 @@ impl<P, E> SwarmRuntime<P, E> {
         prepared: &PreparedContainment,
         request: &ActionRequest,
         receipt: &ResponseReceipt,
+        governance_receipt: Option<&ConsensusGovernanceReceipt>,
     ) -> Result<(), RuntimeError> {
         let lease_id = format!(
             "containment:{}:{}:{}",
@@ -895,8 +905,8 @@ impl<P, E> SwarmRuntime<P, E> {
             request.action.kind(),
             receipt.receipt_id
         );
-        let governance_receipt_id = Self::verified_governance_receipt(request)
-            .map(|(governance, _)| governance.payload.receipt_id);
+        let governance_receipt_id =
+            governance_receipt.map(|governance| governance.payload.receipt_id.clone());
 
         let lease = swarm_response::containment::ContainmentLease::open(
             lease_id,
@@ -950,17 +960,16 @@ impl<P, E> SwarmRuntime<P, E> {
 
     fn decorate_receipt_with_governance(
         receipt: ResponseReceipt,
-        request: &ActionRequest,
+        governance_receipt: Option<(&ConsensusGovernanceReceipt, &serde_json::Value)>,
         reason: impl Into<String>,
     ) -> ResponseReceipt {
-        let Some((governance_receipt, receipt_value)) = Self::verified_governance_receipt(request)
-        else {
+        let Some((governance_receipt, receipt_value)) = governance_receipt else {
             return receipt;
         };
         receipt.with_governance_audit(
-            governance_receipt.payload.issued_by,
+            governance_receipt.payload.issued_by.clone(),
             reason.into(),
-            Some(receipt_value),
+            Some(receipt_value.clone()),
         )
     }
 }
@@ -976,6 +985,8 @@ where
         request: &ActionRequest,
         context: &ApprovalContext,
     ) -> Result<ResponseReceipt, RuntimeError> {
+        let execution_mode = self.execution_mode();
+        Self::require_dispatcher_admission(request, execution_mode, false)?;
         let decision = self.policy.evaluate(request, context)?;
         tracing::info!(
             correlation_id = %Self::correlation_id(context),
@@ -1019,7 +1030,7 @@ where
         ensure_active_lease(&lease, context.now_ms)?;
         let receipt = self
             .response
-            .execute(request, &lease, self.execution_mode())
+            .execute(request, &lease, execution_mode)
             .await
             .map_err(RuntimeError::from)?
             .with_policy_audit(
@@ -1029,7 +1040,7 @@ where
             );
         let receipt = Self::decorate_receipt_with_governance(
             receipt,
-            request,
+            None,
             "consensus approved response action",
         );
         if !receipt.status.indicates_success() {
@@ -1038,7 +1049,7 @@ where
             }));
         }
         if let Some(prepared) = prepared_containment.as_ref() {
-            Self::record_containment_lease(prepared, request, &receipt)?;
+            Self::record_containment_lease(prepared, request, &receipt, None)?;
         }
         tracing::info!(
             correlation_id = %Self::correlation_id(context),
@@ -1075,9 +1086,31 @@ where
         context: &ApprovalContext,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         self.audit_authorize_and_execute_instrumented_internal(
-            detection, request, context, false, None,
+            detection, request, context, false, None, None,
         )
         .await
+    }
+
+    /// Execute a request carrying the dispatcher's opaque, already-consumed
+    /// governance admission. The runtime trusts the type boundary and never parses or
+    /// verifies the bearer receipt again.
+    pub async fn audit_authorize_and_execute_admitted(
+        &self,
+        detection: &DetectionFinding,
+        admitted: &crate::dispatcher::RoutedActionRequest,
+        context: &ApprovalContext,
+    ) -> Result<AuditTrail, RuntimeError> {
+        Ok(self
+            .audit_authorize_and_execute_instrumented_internal(
+                detection,
+                admitted.request(),
+                context,
+                false,
+                None,
+                Some(admitted),
+            )
+            .await?
+            .audit)
     }
 
     /// Execute a rehearsal through the normal policy lane while forcing a dry-run receipt.
@@ -1093,6 +1126,7 @@ where
             context,
             true,
             Some(ExecutionMode::DryRun),
+            None,
         )
         .await
     }
@@ -1105,7 +1139,7 @@ where
         context: &ApprovalContext,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         self.audit_authorize_and_execute_instrumented_internal(
-            detection, request, context, true, None,
+            detection, request, context, true, None, None,
         )
         .await
     }
@@ -1117,11 +1151,15 @@ where
         context: &ApprovalContext,
         allow_human_approved_execution: bool,
         execution_mode_override: Option<ExecutionMode>,
+        admitted: Option<&crate::dispatcher::RoutedActionRequest>,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
+        let execution_mode = execution_mode_override.unwrap_or_else(|| self.execution_mode());
+        Self::require_dispatcher_admission(request, execution_mode, admitted.is_some())?;
+        let verified_governance_receipt =
+            admitted.and_then(crate::dispatcher::RoutedActionRequest::verified_governance_receipt);
         let policy_started = Instant::now();
         let decision = self.policy.evaluate(request, context)?;
         let policy_elapsed_us = policy_started.elapsed().as_micros() as u64;
-        let execution_mode = execution_mode_override.unwrap_or_else(|| self.execution_mode());
         tracing::info!(
             correlation_id = %Self::correlation_id(context),
             hunt_id = %request.hunt_id.0,
@@ -1227,12 +1265,16 @@ where
                                                     decision.rule_name.clone(),
                                                     decision.reason.clone(),
                                                 ),
-                                                request,
+                                                verified_governance_receipt,
                                                 "consensus approved response action",
                                             );
                                             match prepared_containment.as_ref().map(|prepared| {
                                                 Self::record_containment_lease(
-                                                    prepared, request, &receipt,
+                                                    prepared,
+                                                    request,
+                                                    &receipt,
+                                                    verified_governance_receipt
+                                                        .map(|(receipt, _)| receipt),
                                                 )
                                             }) {
                                                 Some(Err(error)) => {
@@ -1272,7 +1314,7 @@ where
                                                     decision.rule_name.clone(),
                                                     decision.reason.clone(),
                                                 ),
-                                                request,
+                                                verified_governance_receipt,
                                                 "consensus approved response action",
                                             )
                                             .into_failure(),
@@ -1324,7 +1366,7 @@ where
                                     );
                                     let receipt = Self::decorate_receipt_with_governance(
                                         receipt,
-                                        request,
+                                        verified_governance_receipt,
                                         "consensus approved response action",
                                     );
                                     (
@@ -1666,7 +1708,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_runtime_blocks_human_gated_actions() {
+    async fn raw_live_runtime_refuses_governed_action_before_human_policy() {
         let runtime = SwarmRuntime::new(
             RuntimeMode::LiveResponse,
             StaticApprovalGate::default(),
@@ -1689,12 +1731,12 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("authorized but held for human approval")
+                .contains("dispatcher governance admission")
         );
     }
 
     #[tokio::test]
-    async fn human_approved_live_runtime_executes_human_gated_action() {
+    async fn raw_human_approved_live_runtime_cannot_replace_governance_admission() {
         let calls = Arc::new(AtomicUsize::new(0));
         // A lease store is now required for an ENFORCED containment, and
         // `IsolateHost` is one. Attaching it is not test scaffolding: a live
@@ -1731,29 +1773,22 @@ mod tests {
             strategy_id: "test".to_string(),
         };
 
-        let report = runtime
+        let error = runtime
             .audit_authorize_and_execute_human_approved_instrumented(
                 &detection,
                 &request,
                 &sample_context(),
             )
             .await
-            .unwrap();
+            .expect_err("human approval alone must not admit a governed action");
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        match report.audit.response {
-            AuditResponseRecord::Success(receipt) => {
-                assert_eq!(receipt.status, ResponseStatus::Executed);
-                assert_eq!(receipt.mode, ExecutionMode::Enforced);
-                // The human-approved route reaches the lease hook too. Every
-                // route that can contain a host has to, which is why the hook is
-                // on `SwarmRuntime` rather than in `service/`.
-                let leases = store.open_leases().unwrap();
-                assert_eq!(leases.len(), 1);
-                assert_eq!(leases[0].origin_receipt_id(), receipt.receipt_id);
-            }
-            other => panic!("expected success response, got {other:?}"),
-        }
+        assert!(
+            error
+                .to_string()
+                .contains("dispatcher governance admission")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(store.open_leases().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1832,7 +1867,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_runtime_denies_low_severity_destructive_action() {
+    async fn raw_live_runtime_refuses_low_severity_governed_action_before_policy() {
         let runtime = SwarmRuntime::new(
             RuntimeMode::LiveResponse,
             StaticApprovalGate::default(),
@@ -1855,7 +1890,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("destructive actions require at least medium severity")
+                .contains("dispatcher governance admission")
         );
     }
 
@@ -1991,7 +2026,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_live_containment_with_no_lease_store_is_refused_before_it_executes() {
+    async fn raw_live_containment_is_refused_before_checking_for_a_lease_store() {
         let calls = Arc::new(AtomicUsize::new(0));
         let runtime = SwarmRuntime::new(
             RuntimeMode::LiveResponse,
@@ -2005,10 +2040,12 @@ mod tests {
             .authorize_and_execute(&quarantine_request(), &sample_context())
             .await
             .expect_err("an unbounded live containment must be refused");
-        assert!(
-            matches!(error, RuntimeError::ContainmentRefused { action, .. } if action == "quarantine_file"),
-            "unexpected error: {error}"
-        );
+        assert!(matches!(
+            error,
+            RuntimeError::GovernedActionRequiresAdmission {
+                action: "quarantine_file"
+            }
+        ));
         assert_eq!(
             calls.load(Ordering::SeqCst),
             0,
@@ -2059,7 +2096,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_live_containment_with_a_lease_store_executes_and_persists_a_bounded_lease() {
+    async fn raw_live_containment_is_refused_even_when_a_lease_store_exists() {
         let calls = Arc::new(AtomicUsize::new(0));
         let store = Arc::new(swarm_response::containment::MemoryContainmentLeaseStore::new());
         let runtime = SwarmRuntime::new(
@@ -2074,33 +2111,21 @@ mod tests {
             swarm_response::containment::ContainmentTtl::from_config_ms(900_000).unwrap(),
         );
 
-        let request = quarantine_request();
-        let context = sample_context();
-        let receipt = runtime
-            .authorize_and_execute(&request, &context)
+        let error = runtime
+            .authorize_and_execute(&quarantine_request(), &sample_context())
             .await
-            .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-        let leases = store.open_leases().unwrap();
-        assert_eq!(leases.len(), 1, "the containment produced no lease");
-        let lease = &leases[0];
-        assert_eq!(lease.action(), &request.action);
-        assert_eq!(
-            lease.origin_receipt_id(),
-            receipt.receipt_id,
-            "the lease must chain to the receipt that recorded the containment"
+            .expect_err("a lease store must not replace dispatcher admission");
+        assert!(
+            error
+                .to_string()
+                .contains("dispatcher governance admission")
         );
-        assert_eq!(lease.issued_at_ms(), context.now_ms);
-        assert_eq!(lease.expires_at_ms(), context.now_ms + 900_000);
-        assert!(lease.expires_at_ms() > lease.issued_at_ms());
-        assert_eq!(lease.blast_radius().scope_value, "host-1:/tmp/a");
-        assert_eq!(lease.rollback().steps.len(), 1);
-        assert!(swarm_response::rollback::plan_is_reversible(lease));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(store.open_leases().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn the_dispatcher_path_leases_a_containment_and_refuses_one_it_cannot_bound() {
+    async fn raw_audited_containment_is_refused_before_lease_store_checks() {
         let detection = sample_detection();
 
         // Refused: recorded as Skipped, not as a containment that happened.
@@ -2112,27 +2137,22 @@ mod tests {
                 calls: calls.clone(),
             },
         );
-        let report = unbounded
+        let error = unbounded
             .audit_authorize_and_execute_instrumented(
                 &detection,
                 &quarantine_request(),
                 &sample_context(),
             )
             .await
-            .unwrap();
-        assert!(!report.response_attempted);
-        assert!(!report.response_succeeded);
+            .expect_err("raw audited containment must require dispatcher admission");
+        assert!(
+            error
+                .to_string()
+                .contains("dispatcher governance admission")
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        match &report.audit.response {
-            AuditResponseRecord::Skipped { reason } => assert!(
-                reason.contains("no containment lease store is configured"),
-                "unexpected reason: {reason}"
-            ),
-            other => panic!("expected Skipped, got {other:?}"),
-        }
 
-        // Leased: the agent/dispatcher route reaches the same hook, which is why
-        // it sits on `SwarmRuntime` and not in `service/`.
+        // A configured store is deliberately not consulted either.
         let calls = Arc::new(AtomicUsize::new(0));
         let store = Arc::new(swarm_response::containment::MemoryContainmentLeaseStore::new());
         let bounded = SwarmRuntime::new(
@@ -2146,25 +2166,25 @@ mod tests {
             store.clone(),
             swarm_response::containment::ContainmentTtl::from_config_ms(60_000).unwrap(),
         );
-        let report = bounded
+        let error = bounded
             .audit_authorize_and_execute_instrumented(
                 &detection,
                 &quarantine_request(),
                 &sample_context(),
             )
             .await
-            .unwrap();
-        assert!(report.response_succeeded);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(store.open_leases().unwrap().len(), 1);
+            .expect_err("a lease store must not replace dispatcher admission");
+        assert!(
+            error
+                .to_string()
+                .contains("dispatcher governance admission")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(store.open_leases().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn a_containment_that_executed_but_could_not_be_leased_is_not_recorded_as_success() {
-        // The store refuses the second lease for the same receipt, so the
-        // containment executes and the lease cannot be written. That must not
-        // read as a clean success anywhere: an operator has to learn that a host
-        // is contained with nothing bounding it.
+    async fn raw_live_containment_cannot_reach_lease_persistence() {
         let calls = Arc::new(AtomicUsize::new(0));
         let store = Arc::new(swarm_response::containment::MemoryContainmentLeaseStore::new());
         let runtime = SwarmRuntime::new(
@@ -2179,49 +2199,32 @@ mod tests {
             swarm_response::containment::ContainmentTtl::from_config_ms(60_000).unwrap(),
         );
 
-        // `RecordingExecutor` mints a receipt id from the hunt id alone, so two
-        // runs of the same request derive the same lease id.
-        runtime
-            .authorize_and_execute(&quarantine_request(), &sample_context())
-            .await
-            .unwrap();
         let error = runtime
             .authorize_and_execute(&quarantine_request(), &sample_context())
             .await
-            .expect_err("a containment whose lease could not be written is not a success");
+            .expect_err("raw execution must stop before lease persistence");
         assert!(
-            matches!(error, RuntimeError::ContainmentLeaseNotRecorded { .. }),
-            "unexpected error: {error}"
+            error
+                .to_string()
+                .contains("dispatcher governance admission")
         );
-        assert!(
-            error.to_string().contains("EXECUTED"),
-            "the message must say the containment took effect: {error}"
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(store.open_leases().unwrap().is_empty());
 
         let detection = sample_detection();
-        let report = runtime
+        let error = runtime
             .audit_authorize_and_execute_instrumented(
                 &detection,
                 &quarantine_request(),
                 &sample_context(),
             )
             .await
-            .unwrap();
+            .expect_err("raw audited execution must stop before lease persistence");
         assert!(
-            !report.response_succeeded,
-            "the audit trail must not record an unleased containment as a success"
+            error
+                .to_string()
+                .contains("dispatcher governance admission")
         );
-        match &report.audit.response {
-            AuditResponseRecord::Failure(failure) => {
-                assert_eq!(
-                    failure.details["status"], "containment_lease_not_recorded",
-                    "unexpected details: {}",
-                    failure.details
-                );
-                assert_eq!(failure.details["containment_executed"], true);
-            }
-            other => panic!("expected Failure, got {other:?}"),
-        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }

@@ -585,7 +585,7 @@ Deployment bootstrap commands:
 - `--json` emits one structured validation report suitable for CI gates.
 - `swarmctl init --mode detect_only|live_response` writes a complete `rulesets/custom.yaml` template with inline comments and prints the matching `swarmctl readiness --config ...` follow-up command. The live-response template defaults to a durable local-journal pheromone backend.
 - `swarmctl readiness` runs the first-run readiness diagnostic and fails non-zero when telemetry sources, detector activation, or substrate readiness are not good enough for onboarding. Subject-backed telemetry sources are reported as configuration-validated, while bridge-backed sources are probed or validated according to their transport.
-- `swarmctl first-run` reruns the readiness gate, then launches one sandboxed synthetic walkthrough that forces the approval path, exports a signed receipt pack, and emits a proof bundle for the resulting incident. It requires `SWARM_VOTER_SIGNING_KEY` plus the normal evidence-signing env (default `SWARM_EVIDENCE_SIGNING_KEY`) and can take `--scenario path/to/custom.yaml` when the built-in process-start sample is not appropriate for the active detector mix.
+- `swarmctl first-run` reruns the readiness gate, then launches one detect-only sandboxed walkthrough that rehearses policy evaluation and emits a proof bundle for the resulting incident. It does not mint a human-approval receipt or a live governance authorization and therefore requires no voter or evidence signing key. The command can take `--scenario path/to/custom.yaml` when the built-in process-start sample is not appropriate for the active detector mix.
 - `swarmctl quickstart` collapses validate, readiness, built-in telemetry injection, and first-finding proof into one command. The signed detect-only bootstrap uses in-memory incident state, so quickstart prints the finding summary directly and only suggests `swarmctl incident` follow-ups when the active config already has durable incident storage enabled.
 - `swarmctl playbook-preview` evaluates the checked-in `pheromone.response_playbook` config with one explicit `--threat-class`, `--severity`, `--confidence`, and `--mode` tuple, then returns the matched rule or branch, typed rehearsal blast-radius and rollback metadata for each ordered action, and the approval verdict summary that would govern the live path. The command is side-effect free: it does not call live executors, mint governance receipts, or mutate durable runtime state.
 - `swarmctl status` now carries `false_positive_tracking` in JSON and prints the recent reviewed-finding count plus the top detector and host false-positive rates in text mode. The rollup is bounded to the same recent-incident window used by the operator review surface.
@@ -764,8 +764,9 @@ keys rather than a broad abstract autonomy schema:
   must stop for human approval. It applies to the static fallback gate only.
   `policy.rules` is evaluated first, in file order, and the first matching rule
   decides `allow` or `deny` outright; the human gate is reached only when no rule
-  matches. A matching `allow` rule therefore authorizes a destructive action
-  without human confirmation - which is exactly what the shipped
+  matches. A matching `allow` rule therefore passes the policy layer without
+  human confirmation, but it cannot replace dispatcher governance admission -
+  which is exactly the policy behavior the shipped
   `command-and-control-emergency-block` rule relies on. See
   `docs/CONSENSUS.md` "Human Approval Boundary".
 - `policy.lease_ttl_ms`: lifetime of ordinary capability leases minted by the

@@ -62,12 +62,13 @@ what the substrate does rather than something a central orchestrator arranges.
 
 Live response is a product feature, not an advisory footnote. When concentration crosses an
 escalation threshold, the runtime matches the finding against a repo-owned response playbook and
-routes a typed action through a deterministic policy gate. `BlockEgress`, `IsolateHost`, and
-`RevokeCredential` each require a signed governance receipt, revalidated by the dispatcher before
-the request reaches an adapter, plus human approval when the configured severity threshold
-applies. The runtime fails closed. Invalid configuration is rejected at load, degraded quorum
-blocks destructive response, and an action the runtime cannot seal into a receipt is an action it
-does not take.
+routes a typed action through deterministic governance and policy gates. Every governed action
+listed in [the consensus contract](docs/CONSENSUS.md#what-requires-a-governance-receipt) requires a
+full-request-bound authorization that the dispatcher durably consumes once immediately before
+routing, plus human approval when the configured severity threshold applies. The guided first-run
+is a detect-only policy rehearsal and mints neither kind of receipt. The runtime fails
+closed. Invalid configuration is rejected at load, degraded quorum blocks destructive response,
+and an action the runtime cannot seal into a pending authorization is an action it does not take.
 
 Detection itself is under pressure and expected to move. The runtime scores its own detectors
 against an adversarial corpus, mutates the ones losing ground, validates candidates against
@@ -139,8 +140,9 @@ cargo install --git https://github.com/backbay-labs/ambush swarm-runtime-http --
 
 ### 2. Watch a hunt end to end
 
-The first-run path drives a recorded adversarial scenario through the whole runtime: ingest,
-detection, pheromone deposit, concentration, escalation, policy, response, and receipts.
+The first-run path drives a recorded adversarial scenario through a detect-only rehearsal: ingest,
+detection, pheromone deposit, concentration, escalation, policy, human review, and evidence
+receipts. Those rehearsal receipts do not authorize a governed live response.
 
 ```sh
 swarmctl first-run --scenario scenarios/office-dropper-correlation.yaml
@@ -412,9 +414,9 @@ fails closed.
 - **Deterministic critical lane.** Ingest, detect, deposit, escalate, and route stay in one
   language and one type system, with `unwrap` and `expect` denied workspace-wide and a CI gate
   that enforces the runtime panic contract.
-- **Fail-closed authorization.** Invalid config is rejected at load. Destructive actions require a
-  signed receipt that the dispatcher revalidates. Degraded quorum blocks destructive response
-  while leaving observability and recovery inspection open.
+- **Fail-closed authorization.** Invalid config is rejected at load. Governed actions require a
+  request-bound receipt that the dispatcher verifies and durably consumes once. Degraded quorum
+  blocks destructive response while leaving observability and recovery inspection open.
 - **Guard pipeline.** Forbidden-path and path-normalization checks, egress allowlists,
   secret-leak detection, and shell-command screening run before anything crosses a boundary.
 - **Adversarial pressure.** The evasion corpus, deception tripwires, and replay suites run against
@@ -428,7 +430,7 @@ Governance modes bound what any of this can reach:
 | --- | --- | --- |
 | Observation | Detection, investigation, correlation, memory, deception, status | Signed deposits and ordinary audit |
 | Guarded response | Escalation, decoy deployment, other non-destructive actions | Policy validation and audit trail |
-| Receipt-backed response | `BlockEgress`, `IsolateHost`, `RevokeCredential` | Signed governance receipt, policy validation, human approval when configured |
+| Receipt-backed response | The governed action set in `docs/CONSENSUS.md` | One-time request-bound governance authorization, policy validation, human approval when configured |
 | Partition contingency | Destructive response while quorum is partitioned | Valid pre-staged lease, blast-radius cap, later reconciliation |
 | Maintenance-only | Operator review, export, replay, bounded upkeep | Authenticated operator access and maintenance audit |
 

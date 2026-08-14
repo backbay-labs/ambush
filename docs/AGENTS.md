@@ -71,19 +71,25 @@ health model, and event surface.
 The current governance chain is intentionally simple:
 
 1. An admitted runtime identity emits a finding or response proposal.
-2. `Pouncer` asks `Tom` policy whether a response can proceed.
+2. `Pouncer` first constructs the complete `ActionRequest`, then asks `Tom`
+   policy whether that exact request can proceed.
 3. `Tom` returns either:
    - no extra governance artifact for non-destructive guarded response,
-   - a signed governance receipt for destructive response, or
+   - a signed, pending-ledger-backed authorization for governed response, or
    - a veto or contingency lease path when partition handling applies.
-4. The dispatcher re-validates destructive-governance artifacts before routing.
-5. The response router and audit trail persist the final outcome.
+4. Immediately before routing, the dispatcher verifies the exact subject and
+   decision, durably consumes the authorization once, and creates an opaque
+   admission.
+5. The response runtime consumes that admission without reinterpreting the
+   receipt, then persists the final audit outcome.
 
 This means:
 
 - identity admission happens before agent participation
-- destructive authority is attached as explicit evidence
+- governed authority is bound to the full request and is one-time
 - operator approval layers on top of governance, not beside it
+- direct live ingest and raw enforced runtime calls cannot execute governed
+  actions; ingest forwards findings to `Pouncer` instead
 - review and maintenance surfaces inspect and replay this lineage but do not
   invent a second approval path
 
@@ -143,23 +149,27 @@ typed response requests only after governance policy review.
 Current scope:
 
 - guarded response request creation
-- receipt attachment for destructive requests
+- full-request construction before governance review
+- receipt attachment for governed requests
 - contingency-lease attachment during partition when allowed
 - veto emission when governance blocks execution
 
-`Pouncer` does not bypass the policy gate, dispatcher checks, or response
-adapter controls.
+`Pouncer` is the sole normal issuance point for governed live response. Direct
+ingest does not duplicate its governance round, and human approval cannot
+replace its dispatcher admission.
 
 ### Tom
 
 `Tom` is the governance role. It tracks governance health, issues signed
-receipts for destructive requests, stages contingency leases for partition
-survival, and persists partition-era activity for later reconciliation.
+request-bound authorizations, persists bounded pending and consumed ledgers,
+stages contingency leases for partition survival, and persists partition-era
+activity for later reconciliation.
 
 Current scope:
 
 - governance health observation
-- receipt-backed approval and veto for destructive response actions
+- one-time receipt-backed approval and veto for governed response actions
+- exact subject, decision, freshness, signer, and pending-ledger validation
 - persisted partition state and reconciliation reporting
 - pre-staged contingency lease issuance while healthy
 

@@ -575,4 +575,177 @@ impl ResponseAction {
             Self::Escalate { .. } => "escalate",
         }
     }
+
+    /// Whether enforced execution requires a one-time governance authorization.
+    ///
+    /// This is the canonical classification used by governance issuance, dispatcher
+    /// admission, raw-runtime refusal, and direct-ingest filtering. Keep the match
+    /// exhaustive so adding a response variant forces an explicit security decision.
+    pub fn requires_governance_receipt(&self) -> bool {
+        match self {
+            Self::BlockEgress { .. }
+            | Self::IsolateHost { .. }
+            | Self::RevokeCredential { .. }
+            | Self::SinkholeDns { .. }
+            | Self::TerminateUserSession { .. }
+            | Self::InjectFirewallRule { .. }
+            | Self::QuarantineFile { .. }
+            | Self::KillProcess { .. }
+            | Self::SuspendProcess { .. }
+            | Self::DisableUserAccount { .. }
+            | Self::ForcePasswordReset { .. }
+            | Self::RemoveScheduledTask { .. } => true,
+            Self::TriggerEdrScan { .. } | Self::DeployDecoy { .. } | Self::Escalate { .. } => false,
+        }
+    }
+
+    /// Stable governed action kinds used when pre-staging unscoped contingency
+    /// leases. Kept beside the canonical classifier so no downstream crate owns a
+    /// competing destructive-action list.
+    pub const fn governed_action_kinds() -> [&'static str; 12] {
+        [
+            "block_egress",
+            "isolate_host",
+            "revoke_credential",
+            "sinkhole_dns",
+            "terminate_user_session",
+            "inject_firewall_rule",
+            "quarantine_file",
+            "kill_process",
+            "suspend_process",
+            "disable_user_account",
+            "force_password_reset",
+            "remove_scheduled_task",
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::{ResponseAction, Severity};
+
+    #[test]
+    fn governance_receipt_classification_covers_every_response_action() {
+        let cases = [
+            (
+                ResponseAction::BlockEgress {
+                    target: "net".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::IsolateHost {
+                    host_id: "host".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::RevokeCredential {
+                    credential_id: "credential".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::SinkholeDns {
+                    domain: "bad.test".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::TerminateUserSession {
+                    host_id: "host".into(),
+                    session_id: "session".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::TriggerEdrScan {
+                    host_id: "host".into(),
+                    scan_profile: "quick".into(),
+                },
+                false,
+            ),
+            (
+                ResponseAction::InjectFirewallRule {
+                    host_id: "host".into(),
+                    rule_name: "deny".into(),
+                    direction: "egress".into(),
+                    cidr: "203.0.113.0/24".into(),
+                    port: Some(443),
+                },
+                true,
+            ),
+            (
+                ResponseAction::QuarantineFile {
+                    host_id: "host".into(),
+                    file_path: "/tmp/a".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::KillProcess {
+                    host_id: "host".into(),
+                    process_name: "bad".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::SuspendProcess {
+                    host_id: "host".into(),
+                    process_name: "suspect".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::DisableUserAccount {
+                    user_id: "user".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::ForcePasswordReset {
+                    user_id: "user".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::RemoveScheduledTask {
+                    host_id: "host".into(),
+                    task_name: "task".into(),
+                },
+                true,
+            ),
+            (
+                ResponseAction::DeployDecoy {
+                    decoy_type: "token".into(),
+                    target_zone: "dmz".into(),
+                },
+                false,
+            ),
+            (
+                ResponseAction::Escalate {
+                    summary: "review".into(),
+                    urgency: Severity::High,
+                },
+                false,
+            ),
+        ];
+
+        for (action, expected) in cases {
+            assert_eq!(
+                action.requires_governance_receipt(),
+                expected,
+                "classification drifted for {}",
+                action.kind()
+            );
+            assert_eq!(
+                ResponseAction::governed_action_kinds().contains(&action.kind()),
+                expected,
+                "governed kind list drifted for {}",
+                action.kind()
+            );
+        }
+    }
 }

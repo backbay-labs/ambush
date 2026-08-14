@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_consensus::{
     ConsensusCommittee, ConsensusConfig, ConsensusError, ConsensusGovernanceReceipt, ConsensusNode,
     ConsensusProposal, ConsensusTransport, GovernanceReceiptDecision, SoloGovernorTransport,
-    drive_round, recommended_max_faulty,
+    drive_round, proposal_id_for_payload, recommended_max_faulty,
 };
 use swarm_core::agent::{
     AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
@@ -18,7 +18,9 @@ use swarm_core::agent::{
 use swarm_core::types::{AgentId, ResponseAction, SwarmAction};
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
 use swarm_policy::ActionRequest;
-use swarm_policy::governance::{GovernanceAuthority, GovernanceRuntimeEventRecord};
+use swarm_policy::governance::{
+    GovernanceActionRequestSubjectV1, GovernanceAuthority, GovernanceRuntimeEventRecord,
+};
 // Both types are declared in `swarm-policy` as of SPLIT-05, so `GovernanceAuthority`
 // can name its own return type. Re-exported rather than merely imported, because the
 // paths `swarm_agents::tom_agent::{PartitionState, GovernanceStatusReport}` are what
@@ -30,6 +32,10 @@ const DEFAULT_CONTINGENCY_LEASE_TTL_MS: i64 = 300_000;
 const DEFAULT_CONTINGENCY_BLAST_RADIUS_CAP: usize = 1;
 const CONTINGENCY_LEASE_SCHEMA_VERSION: u32 = 1;
 const MAX_RECONCILIATION_REPORTS: usize = 16;
+const MAX_PENDING_AUTHORIZATIONS: usize = 1_024;
+const MAX_CONSUMED_AUTHORIZATIONS: usize = 1_024;
+const MAX_AUTHORIZATION_AGE_MS: i64 = 300_000;
+const MAX_AUTHORIZATION_FUTURE_SKEW_MS: i64 = 30_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContingencyLease {
@@ -44,11 +50,13 @@ pub struct ContingencyLease {
     pub expires_at_ms: i64,
     #[serde(default)]
     pub redeemed_scopes: Vec<String>,
+    #[serde(default)]
+    pub redeemed_request_subjects: Vec<String>,
     pub governance_receipt: ConsensusGovernanceReceipt,
 }
 
 impl ContingencyLease {
-    pub fn verify(&self) -> Result<(), String> {
+    pub fn verify(&self, governor_public_keys: &BTreeSet<AgentId>) -> Result<(), String> {
         if self.schema_version != CONTINGENCY_LEASE_SCHEMA_VERSION {
             return Err(format!(
                 "unsupported contingency lease schema_version `{}`",
@@ -66,26 +74,21 @@ impl ContingencyLease {
         }
         let receipt = &self.governance_receipt;
         receipt
-            .verify()
+            .verify_signed_by(governor_public_keys)
             .map_err(|error| format!("invalid contingency lease receipt: {error}"))?;
-        if receipt.payload.decision != GovernanceReceiptDecision::Approve {
-            return Err("contingency lease receipt must be an approval".to_string());
-        }
-        if receipt.payload.proposal_id
-            != build_contingency_lease_proposal(
-                &self.lease_id,
-                &self.action_kind,
-                self.scope.as_deref(),
-                self.blast_radius_cap,
-                self.max_duration_ms,
-                self.issued_at_ms,
-                self.expires_at_ms,
-            )
-            .map_err(|error| format!("failed to rebuild contingency lease proposal: {error}"))?
-            .proposal_id
-        {
-            return Err("contingency lease proposal hash did not match receipt".to_string());
-        }
+        let proposal = build_contingency_lease_proposal(
+            &self.lease_id,
+            &self.action_kind,
+            self.scope.as_deref(),
+            self.blast_radius_cap,
+            self.max_duration_ms,
+            self.issued_at_ms,
+            self.expires_at_ms,
+        )
+        .map_err(|error| format!("failed to rebuild contingency lease proposal: {error}"))?;
+        receipt
+            .verify_internal_consistency(&proposal.payload, GovernanceReceiptDecision::Approve)
+            .map_err(|error| format!("invalid contingency lease receipt: {error}"))?;
         Ok(())
     }
 
@@ -100,18 +103,30 @@ impl ContingencyLease {
         scope_for_response_action(action).unwrap_or_else(|| format!("unscoped:{}", action.kind()))
     }
 
-    fn can_redeem(&self, action: &ResponseAction, now_ms: i64) -> bool {
-        if !self.matches_action(action) || self.expires_at_ms <= now_ms {
+    fn can_redeem(&self, request: &ActionRequest, now_ms: i64) -> bool {
+        if !self.matches_action(&request.action) || self.expires_at_ms <= now_ms {
             return false;
         }
-        let scope = self.scope_key(action);
-        self.redeemed_scopes
+        let Ok(subject_digest) = governance_request_subject_digest(request) else {
+            return false;
+        };
+        if self
+            .redeemed_request_subjects
+            .iter()
+            .any(|existing| existing == &subject_digest)
+        {
+            return false;
+        }
+        let scope = self.scope_key(&request.action);
+        !self
+            .redeemed_scopes
             .iter()
             .any(|existing| existing == &scope)
-            || self.redeemed_scopes.len() < self.blast_radius_cap
+            && self.redeemed_scopes.len() < self.blast_radius_cap
     }
 
-    fn redeem(&mut self, action: &ResponseAction, now_ms: i64) -> Result<(), String> {
+    fn redeem(&mut self, request: &ActionRequest, now_ms: i64) -> Result<(), String> {
+        let action = &request.action;
         if !self.matches_action(action) {
             return Err(format!(
                 "contingency lease `{}` does not cover action `{}`",
@@ -122,13 +137,27 @@ impl ContingencyLease {
         if self.expires_at_ms <= now_ms {
             return Err("contingency lease expired".to_string());
         }
-        let scope = self.scope_key(action);
+        let subject_digest = governance_request_subject_digest(request)?;
         if self
+            .redeemed_request_subjects
+            .iter()
+            .any(|existing| existing == &subject_digest)
+        {
+            return Err(format!(
+                "contingency lease `{}` was already redeemed for this exact request",
+                self.lease_id
+            ));
+        }
+        let scope = self.scope_key(action);
+        let scope_was_redeemed = self
             .redeemed_scopes
             .iter()
-            .any(|existing| existing == &scope)
-        {
-            return Ok(());
+            .any(|existing| existing == &scope);
+        if scope_was_redeemed {
+            return Err(format!(
+                "contingency lease `{}` was already redeemed for scope `{scope}`",
+                self.lease_id
+            ));
         }
         if self.redeemed_scopes.len() >= self.blast_radius_cap {
             return Err(format!(
@@ -137,6 +166,7 @@ impl ContingencyLease {
             ));
         }
         self.redeemed_scopes.push(scope);
+        self.redeemed_request_subjects.push(subject_digest);
         Ok(())
     }
 }
@@ -189,8 +219,9 @@ pub enum GovernanceRuntimeEvent {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum GovernanceDecision {
-    Allow {
-        receipt: Option<ConsensusGovernanceReceipt>,
+    NotRequired,
+    Authorize {
+        receipt: ConsensusGovernanceReceipt,
         contingency_lease: Option<ContingencyLease>,
     },
     Veto {
@@ -198,6 +229,22 @@ pub enum GovernanceDecision {
         reason: String,
         receipt: Option<ConsensusGovernanceReceipt>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PendingGovernanceAuthorization {
+    receipt_id: String,
+    subject_digest: String,
+    decision: GovernanceReceiptDecision,
+    issued_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct ConsumedGovernanceAuthorization {
+    receipt_id: String,
+    subject_digest: String,
+    decision: GovernanceReceiptDecision,
+    consumed_at_ms: i64,
 }
 
 /// The one governor signing key this process is allowed to hold (BFT-03).
@@ -315,6 +362,8 @@ struct GovernanceState {
     last_healthy_governors: usize,
     last_quorum_threshold: usize,
     active_contingency_leases: Vec<ContingencyLease>,
+    pending_authorizations: VecDeque<PendingGovernanceAuthorization>,
+    consumed_authorizations: VecDeque<ConsumedGovernanceAuthorization>,
     partition_activity: Vec<PartitionActionRecord>,
     reconciliation_reports: Vec<PartitionReconciliationReport>,
     pending_events: VecDeque<GovernanceRuntimeEvent>,
@@ -355,6 +404,8 @@ impl Default for GovernanceState {
             last_healthy_governors: 0,
             last_quorum_threshold: 0,
             active_contingency_leases: Vec::new(),
+            pending_authorizations: VecDeque::new(),
+            consumed_authorizations: VecDeque::new(),
             partition_activity: Vec::new(),
             reconciliation_reports: Vec::new(),
             pending_events: VecDeque::new(),
@@ -401,6 +452,10 @@ struct PersistedGovernanceState {
     partition_started_at_ms: Option<i64>,
     last_transition_at_ms: Option<i64>,
     active_contingency_leases: Vec<ContingencyLease>,
+    #[serde(default)]
+    pending_authorizations: VecDeque<PendingGovernanceAuthorization>,
+    #[serde(default)]
+    consumed_authorizations: VecDeque<ConsumedGovernanceAuthorization>,
     partition_activity: Vec<PartitionActionRecord>,
     reconciliation_reports: Vec<PartitionReconciliationReport>,
 }
@@ -416,6 +471,8 @@ impl Default for PersistedGovernanceState {
             partition_started_at_ms: None,
             last_transition_at_ms: None,
             active_contingency_leases: Vec::new(),
+            pending_authorizations: VecDeque::new(),
+            consumed_authorizations: VecDeque::new(),
             partition_activity: Vec::new(),
             reconciliation_reports: Vec::new(),
         }
@@ -445,6 +502,8 @@ impl GovernancePersistence {
             partition_started_at_ms: state.partition_started_at_ms,
             last_transition_at_ms: state.last_transition_at_ms,
             active_contingency_leases: state.active_contingency_leases.clone(),
+            pending_authorizations: state.pending_authorizations.clone(),
+            consumed_authorizations: state.consumed_authorizations.clone(),
             partition_activity: state.partition_activity.clone(),
             reconciliation_reports: state.reconciliation_reports.clone(),
         };
@@ -505,7 +564,7 @@ impl GovernancePolicy {
     ) -> Result<Self, std::io::Error> {
         let persistence = GovernancePersistence::new(path.as_ref().to_path_buf());
         let persisted = persistence.load()?;
-        let state = GovernanceState {
+        let mut state = GovernanceState {
             governing_agent_id: persisted.governing_agent_id,
             peer_governors: persisted.peer_governors,
             previous_commit_hash: persisted.previous_commit_hash,
@@ -514,10 +573,14 @@ impl GovernancePolicy {
             partition_started_at_ms: persisted.partition_started_at_ms,
             last_transition_at_ms: persisted.last_transition_at_ms,
             active_contingency_leases: persisted.active_contingency_leases,
+            pending_authorizations: persisted.pending_authorizations,
+            consumed_authorizations: persisted.consumed_authorizations,
             partition_activity: persisted.partition_activity,
             reconciliation_reports: persisted.reconciliation_reports,
             ..Default::default()
         };
+        prune_authorization_ledgers(&mut state, now_ms());
+        persistence.save(&state)?;
         Ok(Self {
             state: Mutex::new(state),
             config,
@@ -560,7 +623,7 @@ impl GovernancePolicy {
             .insert(governing_agent_id, consensus_agent_id.clone());
         state.peer_governors.remove(&consensus_agent_id);
         state.local_governor = Some(offered);
-        self.persist_locked(&state);
+        self.persist_best_effort_locked(&state);
         Ok(())
     }
 
@@ -586,7 +649,7 @@ impl GovernancePolicy {
             return;
         }
         state.peer_governors.insert(consensus_agent_id);
-        self.persist_locked(&state);
+        self.persist_best_effort_locked(&state);
     }
 
     pub fn observe_health(
@@ -672,15 +735,12 @@ impl GovernancePolicy {
         if state.partition_state == PartitionState::Healthy {
             self.ensure_contingency_leases_locked(&mut state, observed_at_ms);
         }
-        self.persist_locked(&state);
+        self.persist_best_effort_locked(&state);
     }
 
-    pub fn can_act(&self, action: &ResponseAction) -> GovernanceDecision {
-        if !is_destructive_action(action) {
-            return GovernanceDecision::Allow {
-                receipt: None,
-                contingency_lease: None,
-            };
+    pub fn can_act(&self, request: &ActionRequest) -> GovernanceDecision {
+        if !request.action.requires_governance_receipt() {
+            return GovernanceDecision::NotRequired;
         }
 
         let mut state = self
@@ -706,9 +766,9 @@ impl GovernancePolicy {
             };
         }
         if state.partition_state == PartitionState::Partitioned {
-            if let Some(lease) = preview_matching_contingency_lease(&state, action, now_ms()) {
-                return GovernanceDecision::Allow {
-                    receipt: Some(lease.governance_receipt.clone()),
+            if let Some(lease) = preview_matching_contingency_lease(&state, request, now_ms()) {
+                return GovernanceDecision::Authorize {
+                    receipt: lease.governance_receipt.clone(),
                     contingency_lease: Some(lease),
                 };
             }
@@ -739,36 +799,40 @@ impl GovernancePolicy {
                 )),
             )
         };
-        let receipt =
-            match issue_governance_receipt(&mut state, self.transport.as_ref(), action, decision) {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    // Fail closed on a round that did not commit. This is the arm a
-                    // committee with admitted peer governors and no networked
-                    // transport lands in: `SoloGovernorTransport` refuses the
-                    // committee, no receipt exists, and authorizing the action
-                    // anyway would mean acting on a quorum nobody reached. The
-                    // consensus error is carried into the reason verbatim so the
-                    // operator is told "this transport cannot serve a committee of
-                    // N" rather than a generic denial.
-                    tracing::warn!(
-                        reason = %error,
-                        module = module_path!(),
-                        "governance round produced no receipt; refusing destructive action"
-                    );
-                    return GovernanceDecision::Veto {
-                        governing_agent_id: state
-                            .governing_agent_id
-                            .clone()
-                            .unwrap_or_else(|| AgentId::new("tom", "unconfigured")),
-                        reason: format!(
-                            "blocked destructive action because the governance round produced \
+        let receipt = match self.issue_request_authorization_locked(
+            &mut state,
+            request,
+            decision,
+            now_ms(),
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                // Fail closed on a round that did not commit. This is the arm a
+                // committee with admitted peer governors and no networked
+                // transport lands in: `SoloGovernorTransport` refuses the
+                // committee, no receipt exists, and authorizing the action
+                // anyway would mean acting on a quorum nobody reached. The
+                // consensus error is carried into the reason verbatim so the
+                // operator is told "this transport cannot serve a committee of
+                // N" rather than a generic denial.
+                tracing::warn!(
+                    reason = %error,
+                    module = module_path!(),
+                    "governance round produced no receipt; refusing destructive action"
+                );
+                return GovernanceDecision::Veto {
+                    governing_agent_id: state
+                        .governing_agent_id
+                        .clone()
+                        .unwrap_or_else(|| AgentId::new("tom", "unconfigured")),
+                    reason: format!(
+                        "blocked destructive action because the governance round produced \
                              no receipt: {error}"
-                        ),
-                        receipt: None,
-                    };
-                }
-            };
+                    ),
+                    receipt: None,
+                };
+            }
+        };
         let governing_agent_id = state
             .governing_agent_id
             .clone()
@@ -786,11 +850,158 @@ impl GovernancePolicy {
                 reason,
                 receipt: Some(receipt),
             },
-            None => GovernanceDecision::Allow {
-                receipt: Some(receipt),
+            None => GovernanceDecision::Authorize {
+                receipt,
                 contingency_lease: None,
             },
         }
+    }
+
+    fn issue_request_authorization_locked(
+        &self,
+        state: &mut GovernanceState,
+        request: &ActionRequest,
+        decision: GovernanceReceiptDecision,
+        issued_at_ms: i64,
+    ) -> Result<ConsensusGovernanceReceipt, String> {
+        let subject = governance_request_subject_value(request)?;
+        let proposal = ConsensusProposal {
+            proposal_id: proposal_id_for_payload(&subject).map_err(|error| error.to_string())?,
+            payload: subject,
+        };
+        let previous_commit_hash = state.previous_commit_hash.clone();
+        let receipt_counter = state.receipt_counter;
+        let previous_pending = state.pending_authorizations.clone();
+        let previous_consumed = state.consumed_authorizations.clone();
+        let receipt = run_governance_round(
+            state,
+            self.transport.as_ref(),
+            proposal,
+            decision,
+            issued_at_ms,
+        )
+        .map_err(|error| error.to_string())?;
+        let pending = PendingGovernanceAuthorization {
+            receipt_id: receipt.payload.receipt_id.clone(),
+            subject_digest: receipt.payload.proposal_id.clone(),
+            decision,
+            issued_at_ms,
+        };
+        state.pending_authorizations.push_back(pending);
+        prune_authorization_ledgers(state, issued_at_ms);
+        if let Err(error) = self.persist_locked(state) {
+            state.previous_commit_hash = previous_commit_hash;
+            state.receipt_counter = receipt_counter;
+            state.pending_authorizations = previous_pending;
+            state.consumed_authorizations = previous_consumed;
+            return Err(format!(
+                "governance authorization was not issued because pending-ledger persistence failed: {error}"
+            ));
+        }
+        Ok(receipt)
+    }
+
+    pub fn verify_and_consume_action_authorization(
+        &self,
+        request: &ActionRequest,
+        receipt_value: &serde_json::Value,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String> {
+        self.verify_and_consume_request_receipt(
+            request,
+            receipt_value,
+            GovernanceReceiptDecision::Approve,
+            now_ms,
+        )
+    }
+
+    pub fn verify_and_consume_veto(
+        &self,
+        request: &ActionRequest,
+        receipt_value: &serde_json::Value,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String> {
+        self.verify_and_consume_request_receipt(
+            request,
+            receipt_value,
+            GovernanceReceiptDecision::Veto,
+            now_ms,
+        )
+    }
+
+    fn verify_and_consume_request_receipt(
+        &self,
+        request: &ActionRequest,
+        receipt_value: &serde_json::Value,
+        expected_decision: GovernanceReceiptDecision,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String> {
+        let receipt: ConsensusGovernanceReceipt = serde_json::from_value(receipt_value.clone())
+            .map_err(|error| format!("invalid governance receipt: {error}"))?;
+        let subject = governance_request_subject_value(request)?;
+        let subject_digest =
+            proposal_id_for_payload(&subject).map_err(|error| error.to_string())?;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let governor_public_keys = governor_public_keys_locked(&state);
+        receipt
+            .verify_signed_by(&governor_public_keys)
+            .map_err(|error| format!("governance receipt refused: {error}"))?;
+        receipt
+            .verify_internal_consistency(&subject, expected_decision)
+            .map_err(|error| format!("governance receipt refused: {error}"))?;
+        if receipt.payload.issued_at_ms > now_ms.saturating_add(MAX_AUTHORIZATION_FUTURE_SKEW_MS) {
+            return Err("governance receipt was issued too far in the future".to_string());
+        }
+        if now_ms.saturating_sub(receipt.payload.issued_at_ms) > MAX_AUTHORIZATION_AGE_MS {
+            return Err("governance receipt is stale".to_string());
+        }
+        if state
+            .consumed_authorizations
+            .iter()
+            .any(|entry| entry.receipt_id == receipt.payload.receipt_id)
+        {
+            return Err(format!(
+                "governance receipt `{}` was already consumed",
+                receipt.payload.receipt_id
+            ));
+        }
+        let Some(index) = state.pending_authorizations.iter().position(|entry| {
+            entry.receipt_id == receipt.payload.receipt_id
+                && entry.subject_digest == subject_digest
+                && entry.decision == expected_decision
+                && entry.issued_at_ms == receipt.payload.issued_at_ms
+        }) else {
+            return Err(format!(
+                "governance receipt `{}` is not present in the pending authorization ledger",
+                receipt.payload.receipt_id
+            ));
+        };
+
+        let previous_pending = state.pending_authorizations.clone();
+        let previous_consumed = state.consumed_authorizations.clone();
+        state.pending_authorizations.remove(index);
+        state
+            .consumed_authorizations
+            .push_back(ConsumedGovernanceAuthorization {
+                receipt_id: receipt.payload.receipt_id.clone(),
+                subject_digest,
+                decision: expected_decision,
+                consumed_at_ms: now_ms,
+            });
+        prune_authorization_ledgers(&mut state, now_ms);
+        if let Err(error) = self.persist_locked(&state) {
+            state.pending_authorizations = previous_pending;
+            state.consumed_authorizations = previous_consumed;
+            return Err(format!(
+                "governance receipt was not consumed because ledger persistence failed: {error}"
+            ));
+        }
+        serde_json::to_value(receipt).map_err(|error| {
+            format!("verified governance receipt could not be serialized: {error}")
+        })
     }
 
     pub fn is_partitioned(&self) -> bool {
@@ -806,7 +1017,7 @@ impl GovernancePolicy {
         request: &ActionRequest,
         now_ms: i64,
     ) -> Result<Option<ContingencyLease>, String> {
-        if !is_destructive_action(&request.action) {
+        if !request.action.requires_governance_receipt() {
             return Ok(None);
         }
 
@@ -830,7 +1041,7 @@ impl GovernancePolicy {
                     None,
                     now_ms,
                 );
-                self.persist_locked(&state);
+                self.persist_best_effort_locked(&state);
                 return Err(reason);
             }
         };
@@ -846,11 +1057,11 @@ impl GovernancePolicy {
                     None,
                     now_ms,
                 );
-                self.persist_locked(&state);
+                self.persist_best_effort_locked(&state);
                 return Err(reason);
             }
         };
-        if let Err(reason) = lease.verify() {
+        if let Err(reason) = lease.verify(&governor_public_keys_locked(&state)) {
             self.record_partition_activity_locked(
                 &mut state,
                 request,
@@ -859,7 +1070,7 @@ impl GovernancePolicy {
                 Some(lease.lease_id.clone()),
                 now_ms,
             );
-            self.persist_locked(&state);
+            self.persist_best_effort_locked(&state);
             return Err(reason);
         }
         let Some(index) = state
@@ -876,7 +1087,7 @@ impl GovernancePolicy {
                 None,
                 now_ms,
             );
-            self.persist_locked(&state);
+            self.persist_best_effort_locked(&state);
             return Err(reason);
         };
         if state.active_contingency_leases[index] != lease {
@@ -892,13 +1103,15 @@ impl GovernancePolicy {
                 None,
                 now_ms,
             );
-            self.persist_locked(&state);
+            self.persist_best_effort_locked(&state);
             return Err(reason);
         }
+        let previous_leases = state.active_contingency_leases.clone();
+        let previous_activity = state.partition_activity.clone();
         let redeem_result = {
             let existing = &mut state.active_contingency_leases[index];
             existing
-                .redeem(&request.action, now_ms)
+                .redeem(request, now_ms)
                 .map(|_| existing.clone())
                 .map_err(|reason| (reason, existing.lease_id.clone()))
         };
@@ -913,7 +1126,7 @@ impl GovernancePolicy {
                     Some(lease_id),
                     now_ms,
                 );
-                self.persist_locked(&state);
+                self.persist_best_effort_locked(&state);
                 return Err(reason);
             }
         };
@@ -925,7 +1138,13 @@ impl GovernancePolicy {
             Some(redeemed.lease_id.clone()),
             now_ms,
         );
-        self.persist_locked(&state);
+        if let Err(error) = self.persist_locked(&state) {
+            state.active_contingency_leases = previous_leases;
+            state.partition_activity = previous_activity;
+            return Err(format!(
+                "contingency lease redemption was not authorized because persistence failed: {error}"
+            ));
+        }
         Ok(Some(redeemed))
     }
 
@@ -968,9 +1187,10 @@ impl GovernancePolicy {
         // would be a second place for the release attestation to drift from the
         // governance chain it is supposed to advance.
         state.local_governor.as_ref()?;
+        let proposal_payload = subject.clone();
         let proposal = ConsensusProposal {
-            proposal_id: sha256_hex(&canonical_json_bytes(subject).ok()?),
-            payload: subject.clone(),
+            proposal_id: proposal_id_for_payload(&proposal_payload).ok()?,
+            payload: proposal_payload,
         };
         match run_governance_round(
             &mut state,
@@ -1012,7 +1232,7 @@ impl GovernancePolicy {
                 .map(str::to_string),
             now_ms,
         );
-        self.persist_locked(&state);
+        self.persist_best_effort_locked(&state);
     }
 
     /// The trust anchor: every governor this policy knows about, by the identity
@@ -1075,7 +1295,7 @@ impl GovernancePolicy {
     }
 
     fn ensure_contingency_leases_locked(&self, state: &mut GovernanceState, now_ms: i64) {
-        for action_kind in destructive_action_kinds() {
+        for action_kind in ResponseAction::governed_action_kinds() {
             let already_active = state.active_contingency_leases.iter().any(|lease| {
                 lease.action_kind == action_kind
                     && lease.scope.is_none()
@@ -1154,14 +1374,23 @@ impl GovernancePolicy {
         });
     }
 
-    fn persist_locked(&self, state: &GovernanceState) {
+    fn persist_locked(&self, state: &GovernanceState) -> Result<(), String> {
         let Some(persistence) = &self.persistence else {
-            return;
+            return Ok(());
         };
-        if let Err(error) = persistence.save(state) {
+        persistence.save(state).map_err(|error| error.to_string())
+    }
+
+    fn persist_best_effort_locked(&self, state: &GovernanceState) {
+        if let Err(error) = self.persist_locked(state) {
+            let path = self
+                .persistence
+                .as_ref()
+                .map(|persistence| persistence.path.display().to_string())
+                .unwrap_or_else(|| "<memory>".to_string());
             tracing::warn!(
                 reason = %error,
-                path = %persistence.path.display(),
+                path = %path,
                 module = module_path!(),
                 "failed to persist governance policy state"
             );
@@ -1282,41 +1511,6 @@ impl SwarmAgent for TomAgent {
     }
 }
 
-fn is_destructive_action(action: &ResponseAction) -> bool {
-    matches!(
-        action,
-        ResponseAction::BlockEgress { .. }
-            | ResponseAction::IsolateHost { .. }
-            | ResponseAction::RevokeCredential { .. }
-            | ResponseAction::SinkholeDns { .. }
-            | ResponseAction::TerminateUserSession { .. }
-            | ResponseAction::InjectFirewallRule { .. }
-            | ResponseAction::QuarantineFile { .. }
-            | ResponseAction::KillProcess { .. }
-            | ResponseAction::SuspendProcess { .. }
-            | ResponseAction::DisableUserAccount { .. }
-            | ResponseAction::ForcePasswordReset { .. }
-            | ResponseAction::RemoveScheduledTask { .. }
-    )
-}
-
-fn destructive_action_kinds() -> [&'static str; 12] {
-    [
-        "block_egress",
-        "isolate_host",
-        "revoke_credential",
-        "sinkhole_dns",
-        "terminate_user_session",
-        "inject_firewall_rule",
-        "quarantine_file",
-        "kill_process",
-        "suspend_process",
-        "disable_user_account",
-        "force_password_reset",
-        "remove_scheduled_task",
-    ]
-}
-
 fn governance_quorum_threshold(total_governors: usize) -> usize {
     if total_governors == 0 {
         0
@@ -1386,23 +1580,6 @@ fn run_governance_round(
 /// A round that cannot commit -- no transport for this committee, threshold
 /// unreachable, deadline passed -- must produce a Veto that NAMES the cause.
 /// Collapsing it to `None` is how the old shape fell through to `Allow`.
-fn issue_governance_receipt(
-    state: &mut GovernanceState,
-    transport: &dyn ConsensusTransport,
-    action: &ResponseAction,
-    decision: GovernanceReceiptDecision,
-) -> Result<ConsensusGovernanceReceipt, ConsensusError> {
-    let issued_at_ms = now_ms();
-    let proposal = build_governance_proposal(
-        state.receipt_counter,
-        action,
-        decision,
-        &state.unhealthy_agents,
-        &state.previous_commit_hash,
-    )?;
-    run_governance_round(state, transport, proposal, decision, issued_at_ms)
-}
-
 fn issue_contingency_lease(
     state: &mut GovernanceState,
     transport: &dyn ConsensusTransport,
@@ -1454,6 +1631,7 @@ fn issue_contingency_lease(
             issued_at_ms,
             expires_at_ms,
             redeemed_scopes: Vec::new(),
+            redeemed_request_subjects: Vec::new(),
             governance_receipt,
         }),
         Err(error) => {
@@ -1466,26 +1644,6 @@ fn issue_contingency_lease(
             None
         }
     }
-}
-
-fn build_governance_proposal(
-    receipt_counter: u64,
-    action: &ResponseAction,
-    decision: GovernanceReceiptDecision,
-    unhealthy_agents: &[AgentHealthEntry],
-    previous_commit_hash: &str,
-) -> Result<ConsensusProposal, ConsensusError> {
-    let payload = serde_json::json!({
-        "receipt_counter": receipt_counter,
-        "action": action,
-        "decision": decision,
-        "unhealthy_agents": unhealthy_agents,
-        "previous_commit_hash": previous_commit_hash,
-    });
-    Ok(ConsensusProposal {
-        proposal_id: sha256_hex(&canonical_json_bytes(&payload)?),
-        payload,
-    })
 }
 
 fn build_contingency_lease_proposal(
@@ -1508,21 +1666,52 @@ fn build_contingency_lease_proposal(
         "expires_at_ms": expires_at_ms,
     });
     Ok(ConsensusProposal {
-        proposal_id: sha256_hex(&canonical_json_bytes(&payload)?),
+        proposal_id: proposal_id_for_payload(&payload)?,
         payload,
     })
 }
 
 fn preview_matching_contingency_lease(
     state: &GovernanceState,
-    action: &ResponseAction,
+    request: &ActionRequest,
     now_ms: i64,
 ) -> Option<ContingencyLease> {
     state
         .active_contingency_leases
         .iter()
-        .find(|lease| lease.can_redeem(action, now_ms))
+        .find(|lease| lease.can_redeem(request, now_ms))
         .cloned()
+}
+
+fn governance_request_subject_value(request: &ActionRequest) -> Result<serde_json::Value, String> {
+    serde_json::to_value(GovernanceActionRequestSubjectV1::from_request(request))
+        .map_err(|error| format!("failed to encode governance request subject: {error}"))
+}
+
+fn governance_request_subject_digest(request: &ActionRequest) -> Result<String, String> {
+    let subject = governance_request_subject_value(request)?;
+    proposal_id_for_payload(&subject).map_err(|error| error.to_string())
+}
+
+fn governor_public_keys_locked(state: &GovernanceState) -> BTreeSet<AgentId> {
+    let mut keys = state.peer_governors.clone();
+    if let Some(local) = state.local_governor.as_ref() {
+        keys.insert(local.consensus_agent_id().clone());
+    }
+    keys
+}
+
+fn prune_authorization_ledgers(state: &mut GovernanceState, now_ms: i64) {
+    let oldest_pending = now_ms.saturating_sub(MAX_AUTHORIZATION_AGE_MS);
+    state
+        .pending_authorizations
+        .retain(|entry| entry.issued_at_ms >= oldest_pending);
+    while state.pending_authorizations.len() > MAX_PENDING_AUTHORIZATIONS {
+        state.pending_authorizations.pop_front();
+    }
+    while state.consumed_authorizations.len() > MAX_CONSUMED_AUTHORIZATIONS {
+        state.consumed_authorizations.pop_front();
+    }
 }
 
 fn prune_expired_contingency_leases(state: &mut GovernanceState, now_ms: i64) {
@@ -1577,9 +1766,35 @@ impl GovernanceAuthority for GovernancePolicy {
         &self,
         request: &ActionRequest,
         now_ms: i64,
-    ) -> Result<bool, String> {
-        GovernancePolicy::authorize_partition_request(self, request, now_ms)
-            .map(|lease| lease.is_some())
+    ) -> Result<Option<serde_json::Value>, String> {
+        GovernancePolicy::authorize_partition_request(self, request, now_ms)?.map_or(
+            Ok(None),
+            |lease| {
+                serde_json::to_value(lease.governance_receipt)
+                    .map(Some)
+                    .map_err(|error| {
+                        format!("verified contingency receipt could not be serialized: {error}")
+                    })
+            },
+        )
+    }
+
+    fn verify_and_consume_action_authorization(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String> {
+        GovernancePolicy::verify_and_consume_action_authorization(self, request, receipt, now_ms)
+    }
+
+    fn verify_and_consume_veto(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        now_ms: i64,
+    ) -> Result<serde_json::Value, String> {
+        GovernancePolicy::verify_and_consume_veto(self, request, receipt, now_ms)
     }
 
     fn is_partitioned(&self) -> bool {
@@ -1678,7 +1893,18 @@ mod tests {
     use swarm_core::agent::{
         AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode,
     };
-    use swarm_core::types::{AgentId, ResponseAction, SwarmAction};
+    use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
+    use swarm_policy::ActionRequest;
+
+    fn request(action: ResponseAction) -> ActionRequest {
+        ActionRequest {
+            hunt_id: HuntId("hunt-governance-test".to_string()),
+            requested_by: AgentId::new("pounce", "test"),
+            action,
+            severity: Severity::Critical,
+            evidence: json!({"signal": "test"}),
+        }
+    }
 
     fn env(agent_health: Vec<AgentHealthEntry>) -> SwarmEnvironment {
         SwarmEnvironment {
@@ -1710,9 +1936,9 @@ mod tests {
             1_700_000_000_000,
         );
 
-        let decision = policy.can_act(&ResponseAction::BlockEgress {
+        let decision = policy.can_act(&request(ResponseAction::BlockEgress {
             target: "203.0.113.10".to_string(),
-        });
+        }));
         match decision {
             GovernanceDecision::Veto {
                 governing_agent_id,
@@ -1732,17 +1958,11 @@ mod tests {
             other => panic!("expected governance veto with receipt, got {other:?}"),
         }
 
-        let non_destructive = policy.can_act(&ResponseAction::DeployDecoy {
+        let non_destructive = policy.can_act(&request(ResponseAction::DeployDecoy {
             decoy_type: "honeypot".to_string(),
             target_zone: "dmz".to_string(),
-        });
-        assert!(matches!(
-            non_destructive,
-            GovernanceDecision::Allow {
-                receipt: None,
-                contingency_lease: None
-            }
-        ));
+        }));
+        assert!(matches!(non_destructive, GovernanceDecision::NotRequired));
     }
 
     #[test]
@@ -1756,12 +1976,12 @@ mod tests {
             .expect("the policy holds no other governor key");
         policy.observe_health(&AgentId::new("tom", "primary"), &[], 1_700_000_000_000);
 
-        let decision = policy.can_act(&ResponseAction::BlockEgress {
+        let decision = policy.can_act(&request(ResponseAction::BlockEgress {
             target: "203.0.113.77".to_string(),
-        });
+        }));
         match decision {
-            GovernanceDecision::Allow {
-                receipt: Some(receipt),
+            GovernanceDecision::Authorize {
+                receipt,
                 contingency_lease: None,
             } => {
                 assert!(
@@ -1788,9 +2008,9 @@ mod tests {
     fn governance_policy_vetoes_destructive_action_without_a_registered_governor() {
         let policy = GovernancePolicy::default();
 
-        let decision = policy.can_act(&ResponseAction::BlockEgress {
+        let decision = policy.can_act(&request(ResponseAction::BlockEgress {
             target: "203.0.113.10".to_string(),
-        });
+        }));
         match decision {
             GovernanceDecision::Veto {
                 governing_agent_id,
@@ -1813,14 +2033,11 @@ mod tests {
         // The guard must not become a blanket refusal: non-destructive actions never
         // needed a governance receipt and still do not.
         assert!(matches!(
-            policy.can_act(&ResponseAction::DeployDecoy {
+            policy.can_act(&request(ResponseAction::DeployDecoy {
                 decoy_type: "honeypot".to_string(),
                 target_zone: "dmz".to_string(),
-            }),
-            GovernanceDecision::Allow {
-                receipt: None,
-                contingency_lease: None
-            }
+            })),
+            GovernanceDecision::NotRequired
         ));
     }
 
@@ -1868,8 +2085,8 @@ mod tests {
         };
         assert!(
             matches!(
-                keyed.can_act(&action),
-                GovernanceDecision::Allow {
+                keyed.can_act(&request(action.clone())),
+                GovernanceDecision::Authorize {
                     contingency_lease: Some(_),
                     ..
                 }
@@ -1886,11 +2103,11 @@ mod tests {
         );
         assert_eq!(
             keyless.status_report().active_contingency_leases,
-            super::destructive_action_kinds().len(),
+            ResponseAction::governed_action_kinds().len(),
             "precondition: one live lease per destructive action kind survived the restart"
         );
 
-        let decision = keyless.can_act(&action);
+        let decision = keyless.can_act(&request(action));
         let _ = std::fs::remove_file(&path);
         match decision {
             GovernanceDecision::Veto { reason, .. } => assert!(
@@ -1921,12 +2138,12 @@ mod tests {
         assert_eq!(healthy_status.partition_state, PartitionState::Healthy);
         assert_eq!(healthy_status.active_contingency_leases, 12);
 
-        let decision = policy.can_act(&ResponseAction::BlockEgress {
+        let decision = policy.can_act(&request(ResponseAction::BlockEgress {
             target: "203.0.113.9".to_string(),
-        });
+        }));
         assert!(matches!(
             decision,
-            GovernanceDecision::Allow {
+            GovernanceDecision::Authorize {
                 contingency_lease: None,
                 ..
             }
@@ -1943,12 +2160,12 @@ mod tests {
         );
         assert!(policy.is_partitioned());
 
-        let decision = policy.can_act(&ResponseAction::BlockEgress {
+        let decision = policy.can_act(&request(ResponseAction::BlockEgress {
             target: "203.0.113.9".to_string(),
-        });
+        }));
         let lease = match decision {
-            GovernanceDecision::Allow {
-                receipt: Some(receipt),
+            GovernanceDecision::Authorize {
+                receipt,
                 contingency_lease: Some(lease),
             } => {
                 assert!(receipt.verify().is_ok());
@@ -1956,7 +2173,10 @@ mod tests {
             }
             other => panic!("expected contingency lease, got {other:?}"),
         };
-        assert!(lease.verify().is_ok(), "lease should verify: {lease:?}");
+        assert!(
+            lease.verify(&policy.governor_public_keys()).is_ok(),
+            "lease should verify: {lease:?}"
+        );
 
         let request = swarm_policy::ActionRequest {
             hunt_id: swarm_core::types::HuntId("hunt-partition-1".to_string()),
@@ -1975,6 +2195,17 @@ mod tests {
             .expect("partition request should be authorized")
             .expect("expected redeemed lease");
         assert_eq!(redeemed.redeemed_scopes, vec!["203.0.113.9".to_string()]);
+
+        policy
+            .authorize_partition_request(&request, base_ms + 10_501)
+            .expect_err("the exact partition request must be one-time");
+        let mut same_scope_different_request = request.clone();
+        same_scope_different_request.hunt_id =
+            swarm_core::types::HuntId("hunt-partition-same-scope".to_string());
+        assert!(matches!(
+            policy.can_act(&same_scope_different_request),
+            GovernanceDecision::Veto { .. }
+        ));
     }
 
     #[test]
@@ -2001,11 +2232,11 @@ mod tests {
             base_ms + 10_000,
         );
 
-        let decision = policy.can_act(&ResponseAction::IsolateHost {
+        let decision = policy.can_act(&request(ResponseAction::IsolateHost {
             host_id: "host-7".to_string(),
-        });
+        }));
         let contingency_lease = match decision {
-            GovernanceDecision::Allow {
+            GovernanceDecision::Authorize {
                 contingency_lease: Some(lease),
                 ..
             } => lease,

@@ -9,6 +9,15 @@ a THIRD check that is absent". Extends ADR 0009 by adding one method to a trait
 in the trusted computing base; the allow-listed dependency set ADR 0009 states
 is unchanged and `tools/check-workspace-layering.sh` needed no new exemption.
 
+Authorization follow-up, also 2026-08-14: the action-routing parts of this ADR
+are superseded by the request-bound, one-time admission contract in
+[`docs/CONSENSUS.md`](../CONSENSUS.md#request-binding-and-one-time-admission).
+The old `missing_governance_receipt_reason` and runtime-side receipt parser no
+longer exist. The dispatcher now asks the sealed authority to verify and durably
+consume an exact `Approve` or `Veto`, then passes an opaque admission to the
+runtime. Contingency receipts are likewise anchored and redeemed once. The
+release-attestation trust-anchor decision in this ADR remains current.
+
 ## Context
 
 `ConsensusGovernanceReceipt::verify` performed two checks, and both were closed
@@ -159,12 +168,14 @@ deliberately, and narrower than either previous widening:
 ## Consequences
 
 - **A dispatcher with no governance authority now refuses every action in
-  `response_action_requires_governance_receipt`.** That is a real behavior
+  `ResponseAction::requires_governance_receipt()`.** That is a real behavior
   change and it broke two integration tests, which were not adjusted to pass:
   they were fixtures minting an unrelated keypair and relying on a self-signed
   receipt being believed. They now install a governance policy that registers
   the key their receipts are signed with — which is what a deployment must also
-  do.
+  do. The follow-up additionally requires pending-ledger membership, exact
+  request binding, the route-specific decision, freshness, and durable
+  one-time consumption.
 - **`attestation_verified: true` on the containment release route now means
   what it says**: a governor this process recognizes signed this exact body.
   ADR 0010's warning against reading it as "a governor we trust authorized
@@ -176,14 +187,10 @@ deliberately, and narrower than either previous widening:
   the store. Closing it needs a durable, verifiable chain head, which this
   repository does not have. The `previous_commit_hash` equality the QRT-04 test
   asserts is a property of one process's in-memory chain, not an anchor.
-- **`SwarmRuntime::verified_governance_receipt` is deliberately not anchored.**
-  It decides whether to STAMP a receipt id into an audit record; it authorizes
-  nothing, and `SwarmRuntime` holds no `GovernanceAuthority` to anchor to. An
-  unanchored receipt reaching that path has already been refused by
-  `missing_governance_receipt_reason` on every dispatcher route that leads to
-  it. Recorded rather than silently left: an audit record can still carry a
-  receipt id whose signer was never checked against the governor set.
-- **`ContingencyLease::verify` has the same self-referential shape** (reported
-  in b4bf119 and still open). It is not fixed here. What stops a forged lease
-  today is the byte-equality check in `authorize_partition_request`, not
-  `verify`.
+- **`SwarmRuntime` no longer parses or verifies bearer governance receipts.**
+  Governed execution in enforced mode requires the dispatcher's opaque typed
+  admission; raw runtime entry points refuse before policy or execution. Audit
+  decoration reuses the receipt already verified by the dispatcher.
+- **`ContingencyLease::verify` is now anchored to the configured governor set**
+  and checks its locally derivable proposal and commit consistency. Redemption
+  is persisted before routing and is one-time for the exact request and scope.

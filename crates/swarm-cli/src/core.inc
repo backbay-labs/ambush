@@ -15,7 +15,7 @@ use crate::config::{
     config_signature_sidecar_path, load_config,
 };
 use crate::control::{
-    ControlError, DefaultControlPlane, FirstRunStatus, FirstRunWizardOptions, FirstRunWizardPaths,
+    ControlError, DefaultControlPlane, FirstRunStatus, FirstRunWizardOptions,
     IncidentLookupSelector, InvestigationLookupSelector, OPERATOR_API_SCHEMA_VERSION_HEADER,
     OperatorControlOutput, ReplayLookupSelector, render_output,
     resolve_operator_api_schema_version,
@@ -456,9 +456,6 @@ struct FirstRunArgs {
 
     #[arg(long, default_value_t = 0)]
     pace_ms: u64,
-
-    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY")]
-    voter_signing_key_env: String,
 }
 
 #[derive(Debug, Args)]
@@ -468,9 +465,6 @@ struct QuickstartArgs {
 
     #[arg(long, default_value_t = 0)]
     pace_ms: u64,
-
-    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY")]
-    voter_signing_key_env: String,
 }
 
 #[derive(Debug, Args)]
@@ -1809,7 +1803,6 @@ struct QuickstartCommandReport {
     injected_events: usize,
     elapsed_ms: Option<i64>,
     finding: Option<QuickstartFindingSummary>,
-    receipt_pack_id: Option<String>,
     proof_merkle_root: Option<String>,
     blocking_failures: Vec<String>,
     next_steps: Vec<String>,
@@ -2576,9 +2569,6 @@ fn render_quickstart_report(report: &QuickstartCommandReport) -> String {
             lines.push(format!("Severity: {severity}"));
         }
     }
-    if let Some(receipt_pack_id) = report.receipt_pack_id.as_deref() {
-        lines.push(format!("Receipt pack: {receipt_pack_id}"));
-    }
     if let Some(proof_merkle_root) = report.proof_merkle_root.as_deref() {
         lines.push(format!("Proof Merkle root: {proof_merkle_root}"));
     }
@@ -2684,17 +2674,6 @@ async fn run_first_run_command(
             .first_run(FirstRunWizardOptions {
                 scenario_path: args.scenario.clone(),
                 pace_ms: args.pace_ms,
-                voter_signing_key_env: args.voter_signing_key_env.clone(),
-                evidence_signer_id: cli.evidence_signer_id.clone(),
-                evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
-                paths: FirstRunWizardPaths {
-                    approval_verdict_results_dir: cli.approval_verdict_results_dir.clone(),
-                    approval_receipt_pack_results_dir: cli
-                        .approval_receipt_pack_results_dir
-                        .clone(),
-                    approval_set_results_dir: cli.approval_set_results_dir.clone(),
-                    approval_ledger_results_dir: cli.approval_ledger_results_dir.clone(),
-                },
             })
             .await?,
     ));
@@ -2738,7 +2717,6 @@ async fn run_quickstart_command(
                 injected_events: 0,
                 elapsed_ms: None,
                 finding: None,
-                receipt_pack_id: None,
                 proof_merkle_root: None,
                 blocking_failures: validate.errors.clone(),
                 next_steps: validate.remediations.clone(),
@@ -2765,15 +2743,6 @@ async fn run_quickstart_command(
         .first_run(FirstRunWizardOptions {
             scenario_path: args.scenario.clone(),
             pace_ms: args.pace_ms,
-            voter_signing_key_env: args.voter_signing_key_env.clone(),
-            evidence_signer_id: cli.evidence_signer_id.clone(),
-            evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
-            paths: FirstRunWizardPaths {
-                approval_verdict_results_dir: cli.approval_verdict_results_dir.clone(),
-                approval_receipt_pack_results_dir: cli.approval_receipt_pack_results_dir.clone(),
-                approval_set_results_dir: cli.approval_set_results_dir.clone(),
-                approval_ledger_results_dir: cli.approval_ledger_results_dir.clone(),
-            },
         })
         .await?;
 
@@ -2791,7 +2760,6 @@ async fn run_quickstart_command(
         injected_events: 0,
         elapsed_ms: None,
         finding: None,
-        receipt_pack_id: None,
         proof_merkle_root: None,
         blocking_failures: walkthrough.readiness.blocking_failures.clone(),
         next_steps: Vec::new(),
@@ -2813,7 +2781,6 @@ async fn run_quickstart_command(
             threat_class: incident.threat_class.as_ref().and_then(serialized_label),
             severity: incident.severity.as_ref().and_then(serialized_label),
         });
-        report.receipt_pack_id = walkthrough.artifacts.receipt_pack_id.clone();
         report.proof_merkle_root = walkthrough.artifacts.proof_merkle_root.clone();
         report
             .next_steps
@@ -5462,41 +5429,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quickstart_command_completes_on_signed_detect_only_template() {
+    async fn quickstart_command_completes_without_approval_or_evidence_keys() {
         let dir = unique_temp_dir("quickstart");
         let config_path = dir.join("config.yaml");
         fs::write(&config_path, render_init_template(InitMode::DetectOnly)).unwrap();
         write_debug_test_config_signature(&config_path).unwrap();
 
-        let voter_env = "SWARM_QUICKSTART_TEST_VOTER_KEY";
-        let evidence_env = "SWARM_QUICKSTART_TEST_EVIDENCE_KEY";
-        unsafe {
-            std::env::set_var(voter_env, "quickstart-voter-key");
-            std::env::set_var(evidence_env, "quickstart-evidence-key");
-        }
-
-        // The four approval stores default to REPO-RELATIVE `data/approval-*`
-        // paths (see the `#[arg(long, global = true, default_value = ...)]`
-        // declarations above), and `cargo test`'s cwd is the crate root, so a
-        // quickstart run that omits them writes into the checked-out tree.
         let cli = Cli::parse_from([
             "swarmctl",
             "--config",
             config_path.to_str().unwrap(),
             "--json",
-            "--evidence-signing-key-env",
-            evidence_env,
-            "--approval-set-results-dir",
-            dir.join("approval-sets").to_str().unwrap(),
-            "--approval-ledger-results-dir",
-            dir.join("approval-ledgers").to_str().unwrap(),
-            "--approval-verdict-results-dir",
-            dir.join("approval-verdicts").to_str().unwrap(),
-            "--approval-receipt-pack-results-dir",
-            dir.join("approval-receipt-packs").to_str().unwrap(),
             "quickstart",
-            "--voter-signing-key-env",
-            voter_env,
         ]);
 
         let args = match &cli.command {

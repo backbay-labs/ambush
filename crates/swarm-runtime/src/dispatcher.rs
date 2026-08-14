@@ -16,7 +16,7 @@ use swarm_core::agent::{
     AgentFinding, AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment,
     SwarmEvent, SwarmModeState,
 };
-use swarm_core::types::{AgentId, ResponseAction, Severity, SwarmAction};
+use swarm_core::types::{AgentId, Severity, SwarmAction};
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
 use swarm_policy::ActionRequest;
 use swarm_policy::governance::GovernanceAuthority;
@@ -119,9 +119,81 @@ struct PendingRoleShift {
 
 #[derive(Debug, Clone)]
 pub struct GovernanceVetoRoute {
-    pub request: ActionRequest,
-    pub governing_agent_id: AgentId,
-    pub reason: String,
+    request: ActionRequest,
+    governing_agent_id: AgentId,
+    reason: String,
+    verified_governance_receipt: Option<VerifiedGovernanceReceipt>,
+}
+
+impl GovernanceVetoRoute {
+    pub fn request(&self) -> &ActionRequest {
+        &self.request
+    }
+
+    pub fn governing_agent_id(&self) -> &AgentId {
+        &self.governing_agent_id
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    pub(crate) fn verified_governance_receipt(&self) -> Option<&serde_json::Value> {
+        self.verified_governance_receipt
+            .as_ref()
+            .map(|receipt| &receipt.value)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VerifiedGovernanceReceipt {
+    receipt: ConsensusGovernanceReceipt,
+    value: serde_json::Value,
+}
+
+impl VerifiedGovernanceReceipt {
+    fn from_verified_value(value: serde_json::Value) -> Result<Self, String> {
+        let receipt = serde_json::from_value(value.clone()).map_err(|error| {
+            format!("verified governance receipt could not be decoded: {error}")
+        })?;
+        Ok(Self { receipt, value })
+    }
+}
+
+/// Dispatcher-issued admission for a response request.
+///
+/// Its fields and constructor are private: code outside this module can inspect and
+/// route an admission, but cannot manufacture one to bypass governance consumption.
+#[derive(Debug, Clone)]
+pub struct RoutedActionRequest {
+    request: ActionRequest,
+    verified_governance_receipt: Option<VerifiedGovernanceReceipt>,
+}
+
+impl RoutedActionRequest {
+    fn new(
+        request: ActionRequest,
+        verified_governance_receipt: Option<serde_json::Value>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            request,
+            verified_governance_receipt: verified_governance_receipt
+                .map(VerifiedGovernanceReceipt::from_verified_value)
+                .transpose()?,
+        })
+    }
+
+    pub fn request(&self) -> &ActionRequest {
+        &self.request
+    }
+
+    pub(crate) fn verified_governance_receipt(
+        &self,
+    ) -> Option<(&ConsensusGovernanceReceipt, &serde_json::Value)> {
+        self.verified_governance_receipt
+            .as_ref()
+            .map(|verified| (&verified.receipt, &verified.value))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -151,7 +223,8 @@ pub struct StrategyProposalRouteReport {
 
 #[async_trait]
 pub trait RequestResponseRouter: Send + Sync {
-    async fn route_request(&self, request: ActionRequest) -> Result<AuditTrail, RuntimeError>;
+    async fn route_request(&self, request: RoutedActionRequest)
+    -> Result<AuditTrail, RuntimeError>;
 
     async fn route_governance_veto(
         &self,
@@ -557,9 +630,8 @@ impl AgentDispatcher {
                             );
                             continue;
                         };
-                        let partition_authorized = match self.authorize_partition_request(&request)
-                        {
-                            Ok(authorized) => authorized,
+                        let partition_receipt = match self.authorize_partition_request(&request) {
+                            Ok(receipt) => receipt,
                             Err(reason) => {
                                 tracing::warn!(
                                     agent_id = %completed.agent_id,
@@ -572,24 +644,44 @@ impl AgentDispatcher {
                                 continue;
                             }
                         };
-                        if !partition_authorized
-                            && let Some(reason) = missing_governance_receipt_reason(
+                        let verified_receipt = match partition_receipt {
+                            Some(receipt) => Some(receipt),
+                            None => match verify_and_consume_governance_receipt(
                                 &request,
                                 self.governance_policy.as_deref(),
-                            )
-                        {
-                            tracing::warn!(
-                                agent_id = %completed.agent_id,
-                                hunt_id = %request.hunt_id.0,
-                                action = %action_kind,
-                                reason = %reason,
-                                module = module_path!(),
-                                "request_response action rejected before runtime routing"
-                            );
-                            continue;
-                        }
+                                GovernanceRouteDecision::Approve,
+                                unix_timestamp_millis(),
+                            ) {
+                                Ok(receipt) => receipt,
+                                Err(reason) => {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %request.hunt_id.0,
+                                        action = %action_kind,
+                                        reason = %reason,
+                                        module = module_path!(),
+                                        "request_response action rejected before runtime routing"
+                                    );
+                                    continue;
+                                }
+                            },
+                        };
+                        let admitted = match RoutedActionRequest::new(request, verified_receipt) {
+                            Ok(admitted) => admitted,
+                            Err(reason) => {
+                                tracing::warn!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %hunt_id_value,
+                                    action = %action_kind,
+                                    reason = %reason,
+                                    module = module_path!(),
+                                    "request_response admission could not be constructed"
+                                );
+                                continue;
+                            }
+                        };
 
-                        match router.route_request(request).await {
+                        match router.route_request(admitted).await {
                             Ok(audit) => {
                                 self.publish_routed_response(
                                     &completed.agent_id,
@@ -659,7 +751,7 @@ impl AgentDispatcher {
                             );
                             continue;
                         };
-                        if self
+                        let verified_receipt = if self
                             .governance_policy
                             .as_ref()
                             .is_some_and(|policy| policy.is_partitioned())
@@ -671,27 +763,54 @@ impl AgentDispatcher {
                                     unix_timestamp_millis(),
                                 );
                             }
-                        } else if let Some(reason) = missing_governance_receipt_reason(
-                            &request,
-                            self.governance_policy.as_deref(),
-                        ) {
-                            tracing::warn!(
-                                agent_id = %completed.agent_id,
-                                hunt_id = %request.hunt_id.0,
-                                action = %action_kind,
-                                governing_agent_id = %governing_agent_id,
-                                reason = %reason,
-                                module = module_path!(),
-                                "governance veto rejected before runtime routing"
-                            );
-                            continue;
-                        }
+                            None
+                        } else {
+                            match verify_and_consume_governance_receipt(
+                                &request,
+                                self.governance_policy.as_deref(),
+                                GovernanceRouteDecision::Veto,
+                                unix_timestamp_millis(),
+                            ) {
+                                Ok(receipt) => receipt,
+                                Err(receipt_reason) => {
+                                    tracing::warn!(
+                                        agent_id = %completed.agent_id,
+                                        hunt_id = %request.hunt_id.0,
+                                        action = %action_kind,
+                                        governing_agent_id = %governing_agent_id,
+                                        reason = %receipt_reason,
+                                        module = module_path!(),
+                                        "governance veto rejected before runtime routing"
+                                    );
+                                    continue;
+                                }
+                            }
+                        };
+
+                        let verified_governance_receipt = match verified_receipt
+                            .map(VerifiedGovernanceReceipt::from_verified_value)
+                            .transpose()
+                        {
+                            Ok(receipt) => receipt,
+                            Err(receipt_reason) => {
+                                tracing::warn!(
+                                    agent_id = %completed.agent_id,
+                                    hunt_id = %request.hunt_id.0,
+                                    action = %action_kind,
+                                    reason = %receipt_reason,
+                                    module = module_path!(),
+                                    "governance veto admission could not be constructed"
+                                );
+                                continue;
+                            }
+                        };
 
                         match router
                             .route_governance_veto(GovernanceVetoRoute {
                                 request,
                                 governing_agent_id: governing_agent_id.clone(),
                                 reason: reason.clone(),
+                                verified_governance_receipt,
                             })
                             .await
                         {
@@ -1017,9 +1136,12 @@ impl AgentDispatcher {
         });
     }
 
-    fn authorize_partition_request(&self, request: &ActionRequest) -> Result<bool, String> {
+    fn authorize_partition_request(
+        &self,
+        request: &ActionRequest,
+    ) -> Result<Option<serde_json::Value>, String> {
         let Some(governance_policy) = &self.governance_policy else {
-            return Ok(false);
+            return Ok(None);
         };
         governance_policy.authorize_partition_request(request, unix_timestamp_millis())
     }
@@ -1279,65 +1401,39 @@ fn governance_action_requires_admission(action: &SwarmAction) -> bool {
     )
 }
 
-fn response_action_requires_governance_receipt(action: &ResponseAction) -> bool {
-    matches!(
-        action,
-        ResponseAction::BlockEgress { .. }
-            | ResponseAction::IsolateHost { .. }
-            | ResponseAction::RevokeCredential { .. }
-            | ResponseAction::SinkholeDns { .. }
-            | ResponseAction::TerminateUserSession { .. }
-            | ResponseAction::InjectFirewallRule { .. }
-            | ResponseAction::QuarantineFile { .. }
-            | ResponseAction::KillProcess { .. }
-            | ResponseAction::SuspendProcess { .. }
-            | ResponseAction::DisableUserAccount { .. }
-            | ResponseAction::ForcePasswordReset { .. }
-            | ResponseAction::RemoveScheduledTask { .. }
-    )
+#[derive(Debug, Clone, Copy)]
+enum GovernanceRouteDecision {
+    Approve,
+    Veto,
 }
 
-/// Why this destructive request may not proceed, or `None` if it may.
-///
-/// THE RECEIPT IS CHECKED AGAINST THE GOVERNOR SET, NOT AGAINST ITSELF.
-/// `ConsensusGovernanceReceipt::verify` authenticates nothing on its own: it
-/// checks a detached signature against `signature.public_key_hex`, a field of
-/// the receipt, so an agent that can put evidence on a request can mint a
-/// keypair, sign its own approval and pass. `verify_signed_by` requires the
-/// signing key to be one the installed [`GovernanceAuthority`] names.
-///
-/// FAILS CLOSED WITHOUT AN AUTHORITY. No governance policy installed, or one
-/// naming no governor, refuses every action in
-/// [`response_action_requires_governance_receipt`] rather than accepting a
-/// self-signed receipt -- the same posture `GovernancePolicy::can_act` takes on
-/// an empty keyring (b4bf119). A dispatcher with no governance authority cannot
-/// tell an approval from a forgery, and saying so is the only honest answer.
-fn missing_governance_receipt_reason(
+/// Verify and consume the route-specific receipt before anything is handed to a
+/// runtime router. A configured signer alone is insufficient: the authority also
+/// checks the exact request subject and its durable one-time pending ledger.
+fn verify_and_consume_governance_receipt(
     request: &ActionRequest,
     governance: Option<&dyn GovernanceAuthority>,
-) -> Option<String> {
-    if !response_action_requires_governance_receipt(&request.action) {
-        return None;
+    decision: GovernanceRouteDecision,
+    now_ms: i64,
+) -> Result<Option<serde_json::Value>, String> {
+    if !request.action.requires_governance_receipt() {
+        return Ok(None);
     }
     let Some(receipt_value) = request.evidence.get("governance_receipt").cloned() else {
-        return Some("missing governance receipt".to_string());
+        return Err("missing governance receipt".to_string());
     };
-    let receipt: ConsensusGovernanceReceipt = match serde_json::from_value(receipt_value) {
-        Ok(receipt) => receipt,
-        Err(error) => return Some(format!("invalid governance receipt: {error}")),
+    let Some(governance) = governance else {
+        return Err("no governance authority is configured".to_string());
     };
-    let governor_public_keys = governance
-        .map(GovernanceAuthority::governor_public_keys)
-        .unwrap_or_default();
-    receipt
-        .verify_signed_by(&governor_public_keys)
-        .map(|_| ())
-        // Not "invalid signature" any more: the same call now refuses a VALID
-        // signature made by a key no governor holds, and refuses outright when
-        // there is no governor to compare against. Naming it after one of the
-        // three would report the other two as something they are not.
-        .map_err(|error| format!("governance receipt refused: {error}"))
-        .err()
+    match decision {
+        GovernanceRouteDecision::Approve => {
+            governance.verify_and_consume_action_authorization(request, &receipt_value, now_ms)
+        }
+        GovernanceRouteDecision::Veto => {
+            governance.verify_and_consume_veto(request, &receipt_value, now_ms)
+        }
+    }
+    .map(Some)
 }
 
 fn swarm_action_hunt_id(action: &SwarmAction) -> Option<&swarm_core::types::HuntId> {

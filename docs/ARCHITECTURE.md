@@ -106,7 +106,7 @@ The runtime already exposes bounded governance surfaces:
 - registry-backed identity admission
 - Tom governance health and degraded-state tracking
 - human approval thresholds from repo-owned policy config
-- receipt-backed multi-instance response authorization and partition-era lease
+- full-request-bound, one-time response authorization and partition-era lease
   handling
 
 Detailed semantics live in `docs/CONSENSUS.md`.
@@ -119,7 +119,7 @@ The active architecture uses four governance modes across that lane:
 | --- | --- | --- |
 | Observation | Detection, investigation, correlation, memory, deception, and ordinary status publication | No governance receipt is required |
 | Guarded response | Non-destructive response work such as escalation or decoy deployment | Policy and audit apply, but destructive-governance semantics do not |
-| Receipt-backed response | Destructive response work such as block, isolate, and revoke | Signed governance receipt plus any required human approval |
+| Receipt-backed response | Governed response work enumerated in `docs/CONSENSUS.md` | Dispatcher-consumed request authorization plus any required human approval |
 | Maintenance-only | Local operator maintenance, review, export, replay, and bounded upkeep actions | Does not widen live-response authority or bypass the response path |
 
 This is the shipped architecture boundary. A broader multi-operator governance
@@ -128,6 +128,8 @@ plane is still deferred.
 Across those modes, the active safety rule is:
 
 - fail closed for destructive response when quorum is unavailable
+- refuse raw enforced governed actions before policy or execution; only the
+  dispatcher can create runtime admission
 - fail open for observability, health reporting, and recovery inspection
 - use staged contingency leases only as bounded partition-era exceptions
 - persist reconciliation markers so healing does not erase partition history

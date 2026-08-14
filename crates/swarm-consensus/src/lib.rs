@@ -255,6 +255,27 @@ pub struct ConsensusProposal {
     pub payload: Value,
 }
 
+/// Derive the only valid proposal identifier for a canonical JSON payload.
+pub fn proposal_id_for_payload(payload: &Value) -> Result<String, ConsensusError> {
+    Ok(sha256_hex(&canonical_json_bytes(payload)?))
+}
+
+/// Derive the commit hash used by both round production and receipt validation.
+pub fn commit_hash_for_proposal(
+    height: u64,
+    round: u64,
+    previous_commit_hash: &str,
+    proposal: &ConsensusProposal,
+) -> Result<String, ConsensusError> {
+    Ok(sha256_hex(&canonical_json_bytes(&serde_json::json!({
+        "height": height,
+        "round": round,
+        "previous_commit_hash": previous_commit_hash,
+        "proposal_id": proposal.proposal_id,
+        "payload": proposal.payload,
+    }))?))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SignedMessageKind {
@@ -400,6 +421,17 @@ pub struct ConsensusGovernanceReceipt {
 }
 
 impl ConsensusGovernanceReceipt {
+    fn expected_receipt_id(&self) -> Result<String, ConsensusError> {
+        Ok(sha256_hex(&canonical_json_bytes(&serde_json::json!({
+            "decision": self.payload.decision,
+            "height": self.payload.height,
+            "round": self.payload.round,
+            "commit_hash": self.payload.commit_hash,
+            "issued_by": self.payload.issued_by,
+            "issued_at_ms": self.payload.issued_at_ms,
+        }))?))
+    }
+
     pub fn issue(
         commit: &ConsensusCommit,
         previous_commit_hash: &str,
@@ -519,6 +551,87 @@ impl ConsensusGovernanceReceipt {
             });
         }
         Ok(verifying_key)
+    }
+
+    /// Validate the receipt fields that can be proven from a locally available
+    /// proposal payload. This proves internal consistency, not distributed quorum:
+    /// individual peer votes are not carried by this receipt format.
+    pub fn verify_internal_consistency(
+        &self,
+        proposal_payload: &Value,
+        expected_decision: GovernanceReceiptDecision,
+    ) -> Result<(), ConsensusError> {
+        if self.payload.schema_version != CONSENSUS_RECEIPT_SCHEMA_VERSION {
+            return Err(ConsensusError::InvalidMessage(format!(
+                "unsupported governance receipt schema_version `{}`",
+                self.payload.schema_version
+            )));
+        }
+        if self.payload.decision != expected_decision {
+            return Err(ConsensusError::InvalidMessage(format!(
+                "governance receipt decision was `{:?}`, expected `{:?}`",
+                self.payload.decision, expected_decision
+            )));
+        }
+        let proposal_id = proposal_id_for_payload(proposal_payload)?;
+        if self.payload.proposal_id != proposal_id {
+            return Err(ConsensusError::InvalidMessage(
+                "governance receipt proposal digest did not match the request subject".to_string(),
+            ));
+        }
+        if self.payload.threshold == 0 || self.payload.threshold.is_multiple_of(2) {
+            return Err(ConsensusError::InvalidMessage(format!(
+                "governance receipt threshold `{}` is not a valid 2f+1 threshold",
+                self.payload.threshold
+            )));
+        }
+        let max_faulty = (self.payload.threshold - 1) / 2;
+        let committee =
+            ConsensusCommittee::new(self.payload.committee_members.clone(), max_faulty)?;
+        if committee.members() != self.payload.committee_members.as_slice()
+            || committee.committee_id() != self.payload.committee_id
+            || committee.threshold() != self.payload.threshold
+        {
+            return Err(ConsensusError::InvalidMessage(
+                "governance receipt committee descriptor is inconsistent".to_string(),
+            ));
+        }
+        if !committee.contains(&self.payload.issued_by) {
+            return Err(ConsensusError::InvalidMessage(
+                "governance receipt signer is not a committee member".to_string(),
+            ));
+        }
+        if self.payload.prevote_tally < self.payload.threshold
+            || self.payload.precommit_tally < self.payload.threshold
+            || self.payload.prevote_tally > self.payload.committee_members.len()
+            || self.payload.precommit_tally > self.payload.committee_members.len()
+        {
+            return Err(ConsensusError::InvalidMessage(
+                "governance receipt vote tallies are inconsistent with its committee threshold"
+                    .to_string(),
+            ));
+        }
+        let proposal = ConsensusProposal {
+            proposal_id,
+            payload: proposal_payload.clone(),
+        };
+        let commit_hash = commit_hash_for_proposal(
+            self.payload.height,
+            self.payload.round,
+            &self.payload.previous_commit_hash,
+            &proposal,
+        )?;
+        if self.payload.commit_hash != commit_hash {
+            return Err(ConsensusError::InvalidMessage(
+                "governance receipt commit hash is inconsistent with its proposal".to_string(),
+            ));
+        }
+        if self.payload.receipt_id != self.expected_receipt_id()? {
+            return Err(ConsensusError::InvalidMessage(
+                "governance receipt identifier is inconsistent with its payload".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1128,13 +1241,8 @@ impl ConsensusNode {
             return Ok(ConsensusProgress::default());
         }
 
-        let commit_hash = sha256_hex(&canonical_json_bytes(&serde_json::json!({
-            "height": self.height,
-            "round": round,
-            "previous_commit_hash": self.previous_commit_hash,
-            "proposal_id": proposal.proposal_id,
-            "payload": proposal.payload,
-        }))?);
+        let commit_hash =
+            commit_hash_for_proposal(self.height, round, &self.previous_commit_hash, proposal)?;
 
         let commit = ConsensusCommit {
             height: self.height,
@@ -2034,6 +2142,73 @@ mod tests {
             1_000,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn governance_receipt_internal_consistency_checks_every_locally_provable_field() {
+        let signer = member(44);
+        let committee = ConsensusCommittee::new(vec![signer.agent_id.clone()], 0).unwrap();
+        let payload = json!({"domain": "test.authorization.v1", "subject": "exact"});
+        let proposal = ConsensusProposal {
+            proposal_id: super::proposal_id_for_payload(&payload).unwrap(),
+            payload: payload.clone(),
+        };
+        let previous_commit_hash = "previous";
+        let commit = super::ConsensusCommit {
+            height: 7,
+            round: 2,
+            committee_id: committee.committee_id().to_string(),
+            proposal: proposal.clone(),
+            prevote_tally: 1,
+            precommit_tally: 1,
+            commit_hash: super::commit_hash_for_proposal(7, 2, previous_commit_hash, &proposal)
+                .unwrap(),
+        };
+        let receipt = super::ConsensusGovernanceReceipt::issue(
+            &commit,
+            previous_commit_hash,
+            &committee,
+            super::GovernanceReceiptDecision::Approve,
+            signer.agent_id,
+            &signer.signing_key,
+            1_000,
+        )
+        .unwrap();
+        receipt
+            .verify_internal_consistency(&payload, super::GovernanceReceiptDecision::Approve)
+            .unwrap();
+
+        let mut mutations = Vec::new();
+        let mut changed = receipt.clone();
+        changed.payload.schema_version += 1;
+        mutations.push(changed);
+        let mut changed = receipt.clone();
+        changed.payload.proposal_id = "other".to_string();
+        mutations.push(changed);
+        let mut changed = receipt.clone();
+        changed.payload.committee_id = "other".to_string();
+        mutations.push(changed);
+        let mut changed = receipt.clone();
+        changed.payload.prevote_tally = 0;
+        mutations.push(changed);
+        let mut changed = receipt.clone();
+        changed.payload.precommit_tally = 2;
+        mutations.push(changed);
+        let mut changed = receipt.clone();
+        changed.payload.commit_hash = "other".to_string();
+        mutations.push(changed);
+        let mut changed = receipt.clone();
+        changed.payload.receipt_id = "other".to_string();
+        mutations.push(changed);
+
+        for changed in mutations {
+            changed
+                .verify_internal_consistency(&payload, super::GovernanceReceiptDecision::Approve)
+                .expect_err("mutated receipt consistency must fail");
+        }
+        receipt
+            .verify_internal_consistency(&payload, super::GovernanceReceiptDecision::Veto)
+            .expect_err("decision-route swap must fail");
     }
 
     #[test]

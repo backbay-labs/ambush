@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 
 /// A response request emitted by the detection runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionRequest {
     /// Investigation or correlation context.
     pub hunt_id: HuntId,

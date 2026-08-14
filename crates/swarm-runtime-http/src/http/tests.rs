@@ -40,7 +40,7 @@ use swarm_evolution::evidence::{
 use swarm_ingest_runtime::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
 };
-use swarm_ingest_runtime::ingest::{DemoProofPackage, IngestState, detect_http_router};
+use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
 use swarm_policy::ApprovalContext;
 use swarm_response::SwarmFindingEnvelope;
 use swarm_runtime::approval::DefaultApprovalHarness;
@@ -1730,15 +1730,8 @@ async fn evidence_endpoints_return_signed_bundle_views() {
 }
 
 #[tokio::test]
-async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
-    unsafe {
-        std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
-        std::env::set_var("SWARM_EVIDENCE_SIGNING_KEY", "operator-demo-proof-key");
-    }
-
+async fn live_governed_demo_cannot_be_resumed_by_human_approval() {
     let root = unique_temp_dir("approval-resume");
-    let operator_vote_signer = Ed25519Signer::from_secret_material("local-operator-vote-key");
-    let operator_voter_id = format!("swarm:ed25519:{}", operator_vote_signer.public_key_hex());
     let runtime_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let runtime_addr = runtime_listener.local_addr().unwrap();
     let runtime_base_url = format!("http://{}", runtime_addr);
@@ -1748,22 +1741,12 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
     runtime_config.runtime.mode = swarm_runtime::RuntimeMode::LiveResponse;
     runtime_config.runtime.demo_mode = true;
     runtime_config.policy.human_gate_severity = swarm_core::types::Severity::Low;
-    // Lowering `human_gate_severity` is not sufficient on its own. `operator_config()`
-    // inherits `permissive_policy_rules()`, whose sole rule has an empty `actions`
-    // selector -- a wildcard that matches `IsolateHost`, returns Allow, and short
-    // circuits the static human gate (the first matching rule decides outright; see
-    // docs/CONSENSUS.md "Human Approval Boundary"). Without this, no approval set is
-    // ever registered and `total_count` below is 0.
-    //
-    // Scope the inherited allow off destructive actions so `IsolateHost` reaches
-    // `static.human_gate`, mirroring the fixture shape already used in
-    // `ingest/tests.rs` `permissive_policy_rules`. Scoped to this test's own
-    // `runtime_config`: `operator_config()` has dozens of consumers in this module.
+    // Even a config that would otherwise hold the action for human review must
+    // defer a live governed demo action to Pouncer and dispatcher governance.
     for rule in &mut runtime_config.policy.rules {
         rule.actions = vec![swarm_core::config::PolicyActionSelector::Escalate];
     }
     runtime_config.operator.runtime_base_url = runtime_base_url.clone();
-    runtime_config.operator.auth.operator_id = operator_voter_id.clone();
     let runtime_harness = DefaultApprovalHarness::from_path(
         &runtime_config_path,
         root.join("approval-verdicts"),
@@ -1825,58 +1808,7 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
     let run_id = replay_json["run_id"].as_str().unwrap().to_string();
 
     let approval_sets = runtime_harness.list_approval_sets().unwrap();
-    assert_eq!(approval_sets.total_count, 1);
-    let approval_set_id = approval_sets.sets[0].set_id.clone();
-    let approval_ledgers = runtime_harness
-        .list_ledgers(Some(&approval_set_id))
-        .unwrap();
-    assert_eq!(approval_ledgers.total_count, 1);
-    let approval_ledger_id = approval_ledgers.ledgers[0].ledger_id.clone();
-
-    let mut operator_demo_config = operator_config();
-    operator_demo_config.operator.runtime_base_url = runtime_base_url.clone();
-    operator_demo_config.operator.auth.operator_id = operator_voter_id.clone();
-    let surface = LocalOperatorSurface::from_config_and_paths(
-        "inline",
-        operator_demo_config,
-        surface_paths(&root),
-    )
-    .unwrap();
-    let app = surface.router();
-    let vote_payload = canonical_json_bytes(&json!({
-        "approval_set_id": approval_set_id.clone(),
-        "ledger_id": approval_ledger_id.clone(),
-        "voter_id": operator_voter_id.clone(),
-    }))
-    .unwrap();
-    let signature = operator_vote_signer.sign(&vote_payload);
-
-    let vote_response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!(
-                    "/v1/operator/approval-ledgers/{approval_ledger_id}/vote"
-                ))
-                .header("authorization", "Bearer secret-token")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "voter_id": operator_voter_id,
-                        "signature": signature,
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(vote_response.status(), StatusCode::OK);
-    let vote_body = to_bytes(vote_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let vote_json: Value = serde_json::from_slice(&vote_body).unwrap();
-    assert_eq!(vote_json["quorum_state"]["quorum_met"], true);
+    assert_eq!(approval_sets.total_count, 0);
 
     let proof_response = reqwest::Client::new()
         .get(format!("{runtime_base_url}/v1/demo/proof"))
@@ -1884,17 +1816,14 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
         .send()
         .await
         .unwrap();
-    assert_eq!(proof_response.status(), reqwest::StatusCode::OK);
-    let proof: DemoProofPackage = proof_response.json().await.unwrap();
-    assert_eq!(proof.run_id, run_id);
-    assert_eq!(proof.signed_receipts.len(), 1);
+    assert_eq!(proof_response.status(), reqwest::StatusCode::CONFLICT);
     assert!(
-        proof
-            .decision_timeline
-            .iter()
-            .any(|entry| entry.stage == "approval_resumed")
+        proof_response
+            .text()
+            .await
+            .unwrap()
+            .contains("does not have a correlated incident")
     );
-    assert!(!proof.final_incident.incident_id.is_empty());
 
     runtime_server.abort();
 }

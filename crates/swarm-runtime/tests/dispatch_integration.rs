@@ -45,7 +45,9 @@ use swarm_policy::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
     PolicyVerdict,
 };
-use swarm_response::containment::{ContainmentTtl, MemoryContainmentLeaseStore};
+use swarm_response::containment::{
+    ContainmentLeaseStore, ContainmentTtl, MemoryContainmentLeaseStore,
+};
 use swarm_response::{
     DispatchingExecutor, ExecutionMode, ResponseError, ResponseExecutor, ResponseReceipt,
     ResponseStatus,
@@ -55,6 +57,7 @@ use swarm_runtime::{
     config::load_config,
     dispatcher::{
         AgentDispatcher, AgentDispatcherConfig, GovernanceVetoRoute, RequestResponseRouter,
+        RoutedActionRequest,
     },
     escalation::ConcentrationMonitor,
 };
@@ -295,11 +298,14 @@ where
     P: ApprovalGate + Send + Sync + 'static,
     E: ResponseExecutor + Send + Sync + 'static,
 {
-    async fn route_request(&self, request: ActionRequest) -> Result<AuditTrail, RuntimeError> {
-        let detection = detection_from_request(&request);
+    async fn route_request(
+        &self,
+        admitted: RoutedActionRequest,
+    ) -> Result<AuditTrail, RuntimeError> {
+        let detection = detection_from_request(admitted.request());
         let audit = self
             .runtime
-            .audit_authorize_and_execute(&detection, &request, &self.context)
+            .audit_authorize_and_execute_admitted(&detection, &admitted, &self.context)
             .await?;
         self.audits.lock().unwrap().push(audit.clone());
         Ok(audit)
@@ -309,14 +315,10 @@ where
         &self,
         veto: GovernanceVetoRoute,
     ) -> Result<AuditTrail, RuntimeError> {
-        let detection = detection_from_request(&veto.request);
-        let audit = self.runtime.audit_governance_veto(
-            &detection,
-            &veto.request,
-            &self.context,
-            &veto.governing_agent_id,
-            veto.reason,
-        );
+        let detection = detection_from_request(veto.request());
+        let audit = self
+            .runtime
+            .audit_admitted_governance_veto(&detection, &veto, &self.context);
         self.audits.lock().unwrap().push(audit.clone());
         Ok(audit)
     }
@@ -566,7 +568,7 @@ fn sample_request_response_action(
             "max_confidence": 1.0
         }
     });
-    if is_destructive_action(&action) {
+    if action.requires_governance_receipt() {
         evidence["governance_receipt"] =
             sample_governance_receipt(&action, GovernanceReceiptDecision::Approve);
     }
@@ -623,13 +625,60 @@ fn sample_governance_veto_action(
     }
 }
 
-fn is_destructive_action(action: &ResponseAction) -> bool {
-    matches!(
-        action,
-        ResponseAction::BlockEgress { .. }
-            | ResponseAction::IsolateHost { .. }
-            | ResponseAction::RevokeCredential { .. }
-    )
+fn fixture_action_request(agent_id: &AgentId, action: &SwarmAction) -> ActionRequest {
+    let (hunt_id, response_action, evidence) = match action {
+        SwarmAction::RequestResponse {
+            hunt_id,
+            action,
+            evidence,
+        }
+        | SwarmAction::GovernanceVeto {
+            hunt_id,
+            action,
+            evidence,
+            ..
+        } => (hunt_id, action, evidence),
+        other => panic!("expected response fixture, got {other:?}"),
+    };
+    let severity = serde_json::from_value(evidence["escalation"]["severity"].clone())
+        .expect("fixture escalation severity must decode");
+    ActionRequest {
+        hunt_id: hunt_id.clone(),
+        requested_by: agent_id.clone(),
+        action: response_action.clone(),
+        severity,
+        evidence: evidence.clone(),
+    }
+}
+
+fn attach_issued_receipt(
+    policy: &GovernancePolicy,
+    agent_id: &AgentId,
+    mut action: SwarmAction,
+    expected_decision: GovernanceReceiptDecision,
+) -> SwarmAction {
+    let request = fixture_action_request(agent_id, &action);
+    let receipt = match (expected_decision, policy.can_act(&request)) {
+        (GovernanceReceiptDecision::Approve, GovernanceDecision::Authorize { receipt, .. }) => {
+            receipt
+        }
+        (
+            GovernanceReceiptDecision::Veto,
+            GovernanceDecision::Veto {
+                receipt: Some(receipt),
+                ..
+            },
+        ) => receipt,
+        (expected, other) => panic!("expected {expected:?} issuance, got {other:?}"),
+    };
+    match &mut action {
+        SwarmAction::RequestResponse { evidence, .. }
+        | SwarmAction::GovernanceVeto { evidence, .. } => {
+            evidence["governance_receipt"] = serde_json::to_value(receipt).unwrap();
+        }
+        other => panic!("expected response fixture, got {other:?}"),
+    }
+    action
 }
 
 /// THE governor key these fixtures speak for.
@@ -776,7 +825,7 @@ fn sample_partition_request_response_action(
         "contingency_lease": lease,
         "governance_receipt": lease.governance_receipt.clone(),
     });
-    if !is_destructive_action(&action) {
+    if !action.requires_governance_receipt() {
         evidence
             .as_object_mut()
             .expect("evidence must be object")
@@ -918,7 +967,7 @@ async fn guard_blocks_dispatched_executor_before_execution() -> Result<(), Box<d
 #[tokio::test]
 async fn policy_deny_skips_dispatched_executor() -> Result<(), Box<dyn Error>> {
     let runtime = SwarmRuntime::new(
-        RuntimeMode::LiveResponse,
+        RuntimeMode::DetectOnly,
         StaticApprovalGate::default(),
         DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox, None)?,
     );
@@ -1019,7 +1068,7 @@ async fn expanded_response_action_routes_through_runtime_executor() -> Result<()
 #[tokio::test]
 async fn unsupported_webhook_action_fails_closed_in_runtime_audit() -> Result<(), Box<dyn Error>> {
     let runtime = SwarmRuntime::new(
-        RuntimeMode::LiveResponse,
+        RuntimeMode::DetectOnly,
         StaticApprovalGate::default(),
         DispatchingExecutor::from_config(
             ResponseAdapterConfig::Webhook {
@@ -1141,6 +1190,21 @@ async fn destructive_request_response_persists_governance_receipt() -> Result<()
         sample_context(),
         Arc::clone(&audits),
     ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "primary");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governance-1",
+            "evt-governance-1",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.10".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut dispatcher = AgentDispatcher::new(
         AgentDispatcherConfig::default(),
@@ -1153,18 +1217,8 @@ async fn destructive_request_response_persists_governance_receipt() -> Result<()
     // receipt. Without it the dispatcher has no trust anchor and refuses the
     // request outright (ADR 0011) -- which is asserted directly, alongside its
     // control, in the test below.
-    .with_governance_policy(sample_governance_policy());
-    dispatcher.register(Box::new(OneShotRequestAgent::new(
-        AgentId::new("pounce", "primary"),
-        vec![sample_request_response_action(
-            "hunt-governance-1",
-            "evt-governance-1",
-            ResponseAction::BlockEgress {
-                target: "203.0.113.10".to_string(),
-            },
-            Severity::Critical,
-        )],
-    )))?;
+    .with_governance_policy(governance);
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
 
     dispatcher.tick_once().await;
 
@@ -1190,6 +1244,302 @@ async fn destructive_request_response_persists_governance_receipt() -> Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn governed_dispatcher_admission_reaches_containment_lease_persistence()
+-> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let store = Arc::new(MemoryContainmentLeaseStore::new());
+    let runtime = Arc::new(
+        SwarmRuntime::new(RuntimeMode::LiveResponse, gate, executor.clone())
+            .with_containment_store(store.clone(), ContainmentTtl::from_config_ms(60_000)?),
+    );
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "primary");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governed-containment",
+            "evt-governed-containment",
+            ResponseAction::QuarantineFile {
+                host_id: "host-7".to_string(),
+                file_path: "/tmp/payload.exe".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(governance);
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+
+    dispatcher.tick_once().await;
+
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    let leases = store.open_leases()?;
+    assert_eq!(leases.len(), 1);
+    assert_eq!(
+        leases[0].blast_radius().scope_value,
+        "host-7:/tmp/payload.exe"
+    );
+    let audits = audits.lock().unwrap();
+    assert_eq!(audits.len(), 1);
+    let AuditResponseRecord::Success(receipt) = &audits[0].response else {
+        panic!("expected success receipt, got {:?}", audits[0].response);
+    };
+    assert!(receipt.audit.governance.is_some());
+    assert_eq!(leases[0].origin_receipt_id(), receipt.receipt_id);
+    Ok(())
+}
+
+#[tokio::test]
+async fn destructive_request_response_refuses_an_issued_veto_receipt() -> Result<(), Box<dyn Error>>
+{
+    let (gate, evaluate_calls, _issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        Arc::clone(&runtime),
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let governance = sample_governance_policy();
+    governance.observe_health(
+        &AgentId::new("tom", "primary"),
+        &[AgentHealthEntry {
+            id: "whisker-primary".to_string(),
+            role: AgentRole::Whisker,
+            health: AgentHealth::Degraded,
+        }],
+        1_700_000_000_000,
+    );
+    let pounce_id = AgentId::new("pounce", "primary");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governance-route-swap",
+            "evt-governance-route-swap",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.99".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Veto,
+    );
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(governance);
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+
+    dispatcher.tick_once().await;
+
+    assert_eq!(audits.lock().unwrap().len(), 0);
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn destructive_approval_cannot_change_target() -> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, _issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "primary");
+    let issued = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governance-binding",
+            "evt-governance-binding",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.10".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let SwarmAction::RequestResponse {
+        hunt_id, evidence, ..
+    } = issued
+    else {
+        panic!("fixture must be a response request");
+    };
+    let changed = SwarmAction::RequestResponse {
+        hunt_id,
+        action: ResponseAction::BlockEgress {
+            target: "203.0.113.99".to_string(),
+        },
+        evidence: evidence.clone(),
+    };
+    let replay = changed.clone();
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(governance);
+    dispatcher.register(Box::new(OneShotRequestAgent::new(
+        pounce_id,
+        vec![changed, replay],
+    )))?;
+
+    dispatcher.tick_once().await;
+
+    assert_eq!(audits.lock().unwrap().len(), 0);
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn destructive_approval_routes_exactly_once() -> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, _issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "primary");
+    let issued = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governance-once",
+            "evt-governance-once",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.10".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(governance);
+    dispatcher.register(Box::new(OneShotRequestAgent::new(
+        pounce_id,
+        vec![issued.clone(), issued],
+    )))?;
+
+    dispatcher.tick_once().await;
+
+    assert_eq!(audits.lock().unwrap().len(), 1);
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_live_runtime_refuses_governed_action_before_policy_or_executor()
+-> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let store = Arc::new(MemoryContainmentLeaseStore::new());
+    let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate, executor.clone())
+        .with_containment_store(store, ContainmentTtl::from_config_ms(60_000)?);
+    let request = sample_request(
+        ResponseAction::BlockEgress {
+            target: "203.0.113.120".to_string(),
+        },
+        Severity::Critical,
+    );
+
+    let mut non_live_caller_context = sample_context();
+    non_live_caller_context.live_mode = false;
+    let error = runtime
+        .authorize_and_execute(&request, &non_live_caller_context)
+        .await
+        .expect_err("raw live entry points must not accept governed actions");
+
+    assert!(
+        error
+            .to_string()
+            .contains("dispatcher governance admission")
+    );
+    let error = runtime
+        .audit_authorize_and_execute(&sample_detection(), &request, &sample_context())
+        .await
+        .expect_err("raw audited entry point must also refuse");
+    assert!(
+        error
+            .to_string()
+            .contains("dispatcher governance admission")
+    );
+    let error = runtime
+        .audit_authorize_and_execute_human_approved_instrumented(
+            &sample_detection(),
+            &request,
+            &sample_context(),
+        )
+        .await
+        .expect_err("human approval must not replace governance admission");
+    assert!(
+        error
+            .to_string()
+            .contains("dispatcher governance admission")
+    );
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
 /// What one destructive request did: `(audits, executor calls, gate evaluations)`.
 ///
 /// The three numbers are read together on purpose. A request that is refused
@@ -1198,7 +1548,7 @@ async fn destructive_request_response_persists_governance_receipt() -> Result<()
 /// defect this repository keeps finding.
 async fn run_one_destructive_request(
     governance: Option<Arc<GovernancePolicy>>,
-    receipt_signing_key: &SigningKey,
+    unissued_signing_key: Option<&SigningKey>,
     hunt_id: &str,
 ) -> Result<(usize, usize, usize), Box<dyn Error>> {
     let (gate, evaluate_calls, _issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
@@ -1222,8 +1572,8 @@ async fn run_one_destructive_request(
         test_health_state(),
     )
     .with_request_response_router(router);
-    if let Some(governance) = governance {
-        dispatcher = dispatcher.with_governance_policy(governance);
+    if let Some(governance) = governance.as_ref() {
+        dispatcher = dispatcher.with_governance_policy(Arc::clone(governance));
     }
 
     let action = ResponseAction::BlockEgress {
@@ -1242,11 +1592,28 @@ async fn run_one_destructive_request(
     else {
         panic!("sample_request_response_action must build a request_response action");
     };
-    evidence["governance_receipt"] = sample_governance_receipt_signed_by(
-        &action,
-        GovernanceReceiptDecision::Approve,
-        receipt_signing_key,
-    );
+    let request = ActionRequest {
+        hunt_id: hunt_id.clone(),
+        requested_by: AgentId::new("pounce", "primary"),
+        action: action.clone(),
+        severity: Severity::Critical,
+        evidence: evidence.clone(),
+    };
+    evidence["governance_receipt"] = if let Some(receipt_signing_key) = unissued_signing_key {
+        sample_governance_receipt_signed_by(
+            &action,
+            GovernanceReceiptDecision::Approve,
+            receipt_signing_key,
+        )
+    } else {
+        let Some(governance) = governance.as_ref() else {
+            panic!("issued receipt control requires a governance policy");
+        };
+        let GovernanceDecision::Authorize { receipt, .. } = governance.can_act(&request) else {
+            panic!("healthy governance must issue the control receipt");
+        };
+        serde_json::to_value(receipt).unwrap()
+    };
     dispatcher.register(Box::new(OneShotRequestAgent::new(
         AgentId::new("pounce", "primary"),
         vec![SwarmAction::RequestResponse {
@@ -1288,7 +1655,7 @@ async fn destructive_request_response_is_refused_when_the_signer_is_not_a_govern
     // CONTROL: the registered governor's own key routes.
     let (audits, executed, evaluated) = run_one_destructive_request(
         Some(sample_governance_policy()),
-        &governor_key,
+        None,
         "hunt-anchor-control",
     )
     .await?;
@@ -1301,7 +1668,7 @@ async fn destructive_request_response_is_refused_when_the_signer_is_not_a_govern
     // A receipt that is internally perfect and signed by nobody in particular.
     let (audits, executed, evaluated) = run_one_destructive_request(
         Some(sample_governance_policy()),
-        &stranger_key,
+        Some(&stranger_key),
         "hunt-anchor-stranger",
     )
     .await?;
@@ -1316,7 +1683,7 @@ async fn destructive_request_response_is_refused_when_the_signer_is_not_a_govern
     // takes on an empty keyring (b4bf119). This is the case that used to route
     // on the strength of a key carried inside the request.
     let (audits, executed, evaluated) =
-        run_one_destructive_request(None, &governor_key, "hunt-anchor-anchorless").await?;
+        run_one_destructive_request(None, Some(&governor_key), "hunt-anchor-anchorless").await?;
     assert_eq!(
         (audits, executed, evaluated),
         (0, 0, 0),
@@ -1384,8 +1751,9 @@ async fn partitioned_request_response_redeems_contingency_lease() -> Result<(), 
     let action = ResponseAction::BlockEgress {
         target: "203.0.113.210".to_string(),
     };
-    let lease = match governance_policy.can_act(&action) {
-        GovernanceDecision::Allow {
+    let lease = match governance_policy.can_act(&sample_request(action.clone(), Severity::Critical))
+    {
+        GovernanceDecision::Authorize {
             contingency_lease: Some(lease),
             ..
         } => lease,
@@ -1493,8 +1861,9 @@ async fn partitioned_request_response_rejects_expired_contingency_lease()
     let action = ResponseAction::BlockEgress {
         target: "203.0.113.211".to_string(),
     };
-    let lease = match governance_policy.can_act(&action) {
-        GovernanceDecision::Allow {
+    let lease = match governance_policy.can_act(&sample_request(action.clone(), Severity::Critical))
+    {
+        GovernanceDecision::Authorize {
             contingency_lease: Some(lease),
             ..
         } => lease,
@@ -2049,18 +2418,21 @@ async fn governance_veto_records_failure_receipt_without_execution() -> Result<(
         sample_context(),
         Arc::clone(&audits),
     ));
-    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-    let mut dispatcher = AgentDispatcher::new(
-        AgentDispatcherConfig::default(),
-        shutdown_rx,
-        test_substrate(),
-        test_health_state(),
-    )
-    .with_request_response_router(router)
-    .with_governance_policy(sample_governance_policy());
-    dispatcher.register(Box::new(OneShotRequestAgent::new(
-        AgentId::new("pounce", "primary"),
-        vec![sample_governance_veto_action(
+    let governance = sample_governance_policy();
+    governance.observe_health(
+        &AgentId::new("tom", "primary"),
+        &[AgentHealthEntry {
+            id: "whisker-primary".to_string(),
+            role: AgentRole::Whisker,
+            health: AgentHealth::Degraded,
+        }],
+        1_700_000_000_000,
+    );
+    let pounce_id = AgentId::new("pounce", "primary");
+    let veto = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_governance_veto_action(
             "hunt-veto-1",
             "evt-veto-1",
             ResponseAction::BlockEgress {
@@ -2069,8 +2441,19 @@ async fn governance_veto_records_failure_receipt_without_execution() -> Result<(
             Severity::Critical,
             AgentId::new("tom", "primary"),
             "blocked destructive action while swarm unhealthy: whisker-primary:Degraded",
-        )],
-    )))?;
+        ),
+        GovernanceReceiptDecision::Veto,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(governance);
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![veto])))?;
 
     dispatcher.tick_once().await;
 

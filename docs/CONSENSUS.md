@@ -30,7 +30,7 @@ The active runtime uses four governance modes.
 | --- | --- | --- |
 | Observation | Detection, investigation, correlation, memory, deception, status publication | No governance receipt; standard signed deposits and audit only |
 | Guarded response | Non-destructive response actions such as escalation or decoy deployment | Policy validation and ordinary audit trail |
-| Receipt-backed response | Destructive response actions such as `BlockEgress`, `IsolateHost`, and `RevokeCredential` | Signed governance receipt, policy validation, and optional human approval |
+| Receipt-backed response | Governed response actions listed below | One-time request-bound governance authorization, policy validation, and optional human approval |
 | Partition contingency | Destructive response while quorum is partitioned | Valid staged contingency lease plus partition authorization and later reconciliation |
 | Maintenance-only | Local operator review, export, replay, and bounded maintenance actions | Authenticated operator access and maintenance audit, but no widened destructive authority |
 
@@ -39,26 +39,70 @@ plane.
 
 ## What Requires A Governance Receipt
 
-The dispatcher currently requires a valid signed governance receipt for these
-destructive actions:
+`ResponseAction::requires_governance_receipt()` is the single classification
+source. It currently classifies these actions as governed:
 
 - `BlockEgress`
 - `IsolateHost`
 - `RevokeCredential`
+- `SinkholeDns`
+- `TerminateUserSession`
+- `InjectFirewallRule`
+- `QuarantineFile`
+- `KillProcess`
+- `SuspendProcess`
+- `DisableUserAccount`
+- `ForcePasswordReset`
+- `RemoveScheduledTask`
+
+`TriggerEdrScan`, `DeployDecoy`, and `Escalate` are not governed by this
+receipt boundary. They remain subject to normal policy and audit controls.
 
 For those actions:
 
-1. `Pouncer` asks `Tom` policy whether the action can proceed.
+1. `Pouncer` constructs the complete `ActionRequest`, then asks `Tom` policy
+   whether that exact request can proceed.
 2. `Tom` runs one consensus round through the `ConsensusTransport` its policy
-   holds, driving a single `ConsensusNode` built from `Tom`'s own signing key,
-   and either returns the receipt that round committed, returns a veto, or
-   attaches a contingency lease if the request is occurring during partition.
-3. The dispatcher re-validates the receipt before the request reaches the
-   runtime response router.
-4. The response adapter still runs under the existing policy and lease checks.
+   holds and persists an issued authorization in the pending ledger before
+   returning its receipt. An approval, veto, and partition contingency are
+   distinct typed outcomes.
+3. Immediately before routing, the dispatcher verifies the configured signer,
+   exact route decision, exact request subject, freshness, locally provable
+   receipt consistency, and pending-ledger membership. It durably consumes the
+   authorization once.
+4. Only then does the dispatcher create an opaque routed admission. The runtime
+   consumes that admission without parsing or verifying the receipt a second
+   time; ordinary policy, lease, containment, guard, adapter, and audit checks
+   still apply.
 
 Non-destructive actions remain guarded and audited, but they do not require a
 governance receipt in the current runtime.
+
+### Request Binding And One-Time Admission
+
+Normal action authorization uses the domain-separated
+`GovernanceActionRequestSubjectV1`. Its canonical JSON binds the domain and
+schema version plus `hunt_id`, `requested_by`, the complete response action and
+target, derived scope, severity, and the remaining evidence. Only the bearer
+fields `governance_receipt` and `contingency_lease` are excluded. The proposal
+identifier is the hash of that canonical subject.
+
+A receipt is not authority merely because its signature verifies. The installed
+`GovernanceAuthority` separately verifies and consumes an `Approve` for a
+`RequestResponse` route or a `Veto` for a `GovernanceVeto` route. It requires:
+
+- the supported receipt schema and a signer in the configured governor set
+- the exact expected decision and exact canonical subject/proposal digest
+- bounded age and future clock skew
+- committee, threshold, tally, commit-hash, and receipt-id consistency that can
+  be derived from the local receipt data
+- a matching entry in the persisted pending-authorization ledger
+- durable movement to the bounded consumed ledger before routing
+
+Missing legacy pending state, a replayed receipt, or any issuance/consumption
+persistence failure refuses the route. These checks prove local consistency
+and one-time policy issuance. They do **not** prove that a distributed quorum
+actually exchanged votes; that depends on the transport described below.
 
 ### How The Round Is Actually Run (BFT-03, phase 321)
 
@@ -113,11 +157,13 @@ is the open half of BFT-04. Two consequences worth naming:
 ### Restart Safety Of A Round
 
 `PersistedGovernanceState` persists `previous_commit_hash`, the receipt counter,
-partition state and active leases. It persists NO round state and NOT the
-governor key. A restart mid-round therefore loses the round. The outcome is
-fail-closed -- no commit means a veto -- but governance LIVENESS is not
-restart-safe, and any claim of "restart-safe recovery" should be read as
-covering the persisted fields above and not the round.
+partition state, active leases, and bounded pending and consumed authorization
+ledgers. It persists NO round state and NOT the governor key. A restart
+mid-round therefore loses the round. A receipt issued before restart remains
+usable only if its pending entry was durably written; a consumed receipt remains
+refused after restart. Governance LIVENESS is not restart-safe, and any claim of
+"restart-safe recovery" should be read as covering the persisted fields above
+and not the round.
 
 ## Approval And Receipt Lineage
 
@@ -127,8 +173,8 @@ The active receipt chain is:
 2. Policy validation evaluates the request and severity.
 3. `Tom` governance either approves, vetoes, or stages partition-time fallback
    evidence.
-4. The dispatcher verifies destructive-governance evidence before runtime
-   routing.
+4. The dispatcher verifies and durably consumes governed authorization before
+   runtime routing, producing an opaque admission for the runtime.
 5. Human approval applies when severity crosses `policy.human_gate_severity`.
 6. Final execution and audit artifacts persist the request, decision, and
    outcome lineage.
@@ -152,7 +198,7 @@ rate limit all match decides the request outright. Only when no configured rule
 matches does evaluation reach `StaticApprovalGate`, which is the sole producer of
 `RequireHuman` (`static.human_gate`). The precedence is therefore:
 
-1. first matching `policy.rules` entry -> `allow` or `deny`, immediately
+1. first matching `policy.rules` entry -> policy-layer `allow` or `deny`, immediately
 2. no rule matched -> static gate -> `static.human_gate` for destructive actions
    at or above `policy.human_gate_severity`, otherwise `static.default_allow`
 
@@ -170,8 +216,8 @@ Current implications:
 
 - a destructive request can be governance-authorized and still stop at the human
   gate, when no configured rule matches it
-- a matching configured `allow` rule authorizes a destructive action outright;
-  the human gate does not re-open a decision a rule already made
+- a matching configured `allow` rule passes the policy layer without a human
+  hold; it still cannot replace dispatcher governance admission
 - human approval does not replace the governance receipt
 - demo approval and live operator approval reuse the same bounded approval
   vocabulary rather than defining a second governance model
@@ -254,7 +300,8 @@ The active contract is intentionally narrow:
 - leases may be scoped to one host or other action scope
 - leases carry a blast-radius cap
 - leases expire after a bounded TTL
-- redemption is persisted for later reconciliation
+- each exact request and each covered scope is redeemable only once
+- redemption is persisted before routing and retained for later reconciliation
 
 Contingency leases are an emergency exception inside the existing governance
 model. They are not an alternate control plane.
@@ -285,6 +332,24 @@ Operators should expect governance state in these surfaces:
 
 The platform and operator surfaces consume this governance data, but they do not
 change the underlying authorization semantics.
+
+## Ingest, Bridge, Demo, And Raw Runtime Boundaries
+
+Live HTTP ingest and bridge ingest still detect, deposit, publish findings, and
+forward telemetry to the agent lane. Their synchronous playbook selector does
+not return a governed action. `Pouncer` constructs and governs the later request
+once; ingest does not start a duplicate round.
+
+All raw `SwarmRuntime` entry points refuse governed actions in enforced mode
+before policy, lease issuance, guards, containment, or executor invocation.
+This is keyed to the actual execution mode, not the caller's `live_mode` flag.
+Detect-only rehearsal and non-governed action behavior is unchanged.
+
+The guided `swarmctl first-run` path is a detect-only governed-action and policy
+rehearsal. It mints neither a human-approval receipt nor a governance
+authorization. A live demo step that names a governed action records
+`governance_deferred`; it does not create a human-resume path that could bypass
+`Pouncer` and the dispatcher.
 
 ## Config Keys That Define The Contract
 

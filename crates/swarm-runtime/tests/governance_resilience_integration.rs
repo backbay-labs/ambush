@@ -56,23 +56,21 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
     let action = ResponseAction::IsolateHost {
         host_id: "host-77".to_string(),
     };
-    let lease = match policy.can_act(&action) {
-        GovernanceDecision::Allow {
+    let mut authorized_request = swarm_policy::ActionRequest {
+        hunt_id: HuntId("hunt-resilience-allow".to_string()),
+        requested_by: AgentId::new("pounce", "primary"),
+        action: action.clone(),
+        severity: Severity::Critical,
+        evidence: json!({}),
+    };
+    let lease = match policy.can_act(&authorized_request) {
+        GovernanceDecision::Authorize {
             contingency_lease: Some(lease),
             ..
         } => lease,
         other => panic!("expected contingency lease, got {other:?}"),
     };
-
-    let authorized_request = swarm_policy::ActionRequest {
-        hunt_id: HuntId("hunt-resilience-allow".to_string()),
-        requested_by: AgentId::new("pounce", "primary"),
-        action: action.clone(),
-        severity: Severity::Critical,
-        evidence: json!({
-            "contingency_lease": lease,
-        }),
-    };
+    authorized_request.evidence = json!({"contingency_lease": lease});
     policy
         .authorize_partition_request(&authorized_request, base_ms + 10_100)
         .expect("lease-backed request should be authorized");
