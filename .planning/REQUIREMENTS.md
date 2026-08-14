@@ -921,11 +921,11 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Z3-Backed Promotion Gate
 
-- [ ] **ZGATE-01**: `require_solver_result_for_promotion` is added to config, distinct from `evolution.assurance.require_solver_summary`, defaulting to `true` in the curated ruleset.
-- [ ] **ZGATE-02**: `crates/swarm-runtime/src/promotion.rs` rejects a candidate whose `solver_summary` is `None` when the gate is enabled; today `promotion.rs` never references `solver_summary` at all (verified: 0 occurrences). PATH CORRECTED 2026-08-13: `crates/swarm-evolution/src/promotion.rs` does not exist and never did — that crate owns four modules and re-exports `promotion` from `swarm-runtime` (`swarm-evolution/src/lib.rs:36-39`). The 0-occurrence measurement is correct for the real file, which is 2,901 lines and also has 0 occurrences of `z3`.
-- [ ] **ZGATE-03**: A `CustomZ3` bundle evaluated through the `z3`-feature-off path counts as no solver result, so a build without the feature fails closed rather than promoting on an unverified stub.
-- [ ] **ZGATE-04**: The promotion report prints the solver proof id and attestation hash, or an explicit "NO SOLVER RESULT RECORDED" line.
-- [ ] **ZGATE-05**: `crates/swarm-runtime/tests/promotion_solver_gate.rs` covers denied-missing-summary, denied-feature-disabled, and allowed-with-proof, asserting on concrete variants rather than log lines. PATH CORRECTED 2026-08-13: `crates/swarm-evolution/tests/` does not exist. A test at the original path would compile, since `swarm_evolution::promotion` is a live re-export, but it would sit under a crate containing none of the code it exercises and would silently change meaning when a later SPLIT moves `promotion` for real.
+- [x] **ZGATE-01**: `require_solver_result_for_promotion` is added to config, distinct from `evolution.assurance.require_solver_summary`, defaulting to `true` in the curated ruleset. SHIPPED 99733a0. "Defaults true in the curated ruleset" can only mean "a ruleset that omits the key resolves to true" — `rulesets/default.yaml` is frozen by the signed attestation and cannot carry the key — so the serde default is the mechanism, pinned by `tracked_default_ruleset_resolves_the_promotion_solver_gate_to_enabled`.
+- [x] **ZGATE-02**: `crates/swarm-runtime/src/promotion.rs` rejects a candidate whose `solver_summary` is `None` when the gate is enabled; today `promotion.rs` never references `solver_summary` at all (verified: 0 occurrences). PATH CORRECTED 2026-08-13: `crates/swarm-evolution/src/promotion.rs` does not exist and never did — that crate owns four modules and re-exports `promotion` from `swarm-runtime` (`swarm-evolution/src/lib.rs:36-39`). The 0-occurrence measurement is correct for the real file, which is 2,901 lines and also has 0 occurrences of `z3`. SHIPPED 99733a0 as `ProductionPromotionError::SolverResultMissing`.
+- [x] **ZGATE-03**: A `CustomZ3` bundle evaluated through the `z3`-feature-off path counts as no solver result, so a build without the feature fails closed rather than promoting on an unverified stub. SHIPPED. The code distinction was already right — the feature-off arm and `enable_z3: false` both record `EvolutionSolverProofStatus::Disabled`, and `promotion_solver_block` maps `Disabled` onto the SAME `Missing` variant as an absent status. What was open is that `rulesets/default.yaml:236-238` lists `disabled` in `evolution.assurance.allowed_solver_statuses`, and that file cannot be edited: its sha256 is inside the ed25519-signed `rulesets/attestation.json` and the signing key is deliberately absent. So the requirement is closed in the CONSUMING code instead — the promotion gate hardcodes `proved` and reads the assurance allow-list nowhere, enforced by `the_assurance_allow_list_cannot_authorize_a_promotion`, which is the only test that fails when `promotion_solver_block` is rewired to that field (measured).
+- [x] **ZGATE-04**: The promotion report prints the solver proof id and attestation hash, or an explicit "NO SOLVER RESULT RECORDED" line. SHIPPED 99733a0 as the unconditional `Solver result:` line, either `<status> | required_for_promotion=<bool>` or the exact `NO_SOLVER_RESULT_RECORDED` literal.
+- [x] **ZGATE-05**: `crates/swarm-runtime/tests/promotion_solver_gate.rs` covers denied-missing-summary, denied-feature-disabled, and allowed-with-proof, asserting on concrete variants rather than log lines. PATH CORRECTED 2026-08-13: `crates/swarm-evolution/tests/` does not exist. A test at the original path would compile, since `swarm_evolution::promotion` is a live re-export, but it would sit under a crate containing none of the code it exercises and would silently change meaning when a later SPLIT moves `promotion` for real. SHIPPED at the corrected path with five tests. denied-feature-disabled derives its status from the REAL formal-safety gate rather than a hand-typed literal, and the file also executes the operator recipe from `docs/EVOLUTION.md` by reading the query out of the doc.
 
 ### Provenance Memory And Correlation (v1.82)
 
@@ -1534,11 +1534,11 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | SAFEP-03 | Phase 294 | Pending |
 | SAFEP-04 | Phase 294 | Pending |
 | SAFEP-05 | Phase 294 | Pending |
-| ZGATE-01 | Phase 322 | Pending |
-| ZGATE-02 | Phase 322 | Pending |
-| ZGATE-03 | Phase 322 | Pending |
-| ZGATE-04 | Phase 322 | Pending |
-| ZGATE-05 | Phase 322 | Pending |
+| ZGATE-01 | Phase 322 | Satisfied |
+| ZGATE-02 | Phase 322 | Satisfied |
+| ZGATE-03 | Phase 322 | Satisfied |
+| ZGATE-04 | Phase 322 | Satisfied |
+| ZGATE-05 | Phase 322 | Satisfied |
 | GRAPH-01 | Phase 296 | Pending |
 | GRAPH-02 | Phase 296 | Pending |
 | GRAPH-03 | Phase 296 | Pending |

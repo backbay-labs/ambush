@@ -1122,6 +1122,18 @@ enum PromotionSolverBlock {
 ///
 /// `Timeout`, `ResourceLimit`, `Error` and `Counterexample` land in `NotProved`:
 /// a solver DID run and did not prove the property.
+///
+/// DELIBERATELY DOES NOT READ `config.evolution.assurance.allowed_solver_statuses`,
+/// and that omission is load-bearing rather than an oversight. The curated
+/// `rulesets/default.yaml` lists `disabled` in that allow-list, so a version of
+/// this function that consulted it would accept a solver that never ran, in every
+/// shipped deployment. The two lists answer different questions: the assurance
+/// allow-list decides whether a PROPOSAL may continue through the evolution lane,
+/// this decides whether a CANDIDATE may become production. The ruleset is frozen
+/// by the signed `rulesets/attestation.json` and cannot drop the entry, so the
+/// separation is enforced instead:
+/// `tests/promotion_solver_gate.rs::the_assurance_allow_list_cannot_authorize_a_promotion`
+/// fails, and only it fails, if this function is rewired to that field.
 fn promotion_solver_block(
     config: &SwarmConfig,
     assurance: Option<&EvolutionProposalAssuranceSummary>,

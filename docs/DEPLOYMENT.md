@@ -231,3 +231,19 @@ curl -fsS http://127.0.0.1:9090/healthz
   durable investigation and incident lookup.
 - Recovery drills, PVC boundaries, and JetStream restore guidance live in
   [docs/DR-RUNBOOK.md](DR-RUNBOOK.md).
+- **Automated promotion of evolved detectors is OFF in every shipped
+  configuration, by design.** `promotion.require_solver_result_for_promotion`
+  defaults to `true`, and the curated `rulesets/default.yaml` cannot produce the
+  `proved` solver result it asks for: its one invariant bundle declares no
+  `custom_z3` invariant and `evolution.safety_gate.enable_z3` is `false`. Every
+  promotion attempt therefore fails with `no solver result was recorded`, and
+  every promotion report carries the literal line
+  `Solver result: NO SOLVER RESULT RECORDED`. This is fail-closed and intended:
+  an evolved detector does not reach production without a recorded solver proof.
+  Canary admission, rollback, and the operator review surfaces are unaffected.
+  To turn automated promotion on you need a deployment-owned admission bundle
+  with a `custom_z3` invariant, `enable_z3: true`, and a binary built with
+  `--features swarm-runtime/z3`. The step-by-step recipe, what a passing solver
+  result looks like, and why the curated ruleset cannot be edited to satisfy its
+  own gate are in
+  [docs/EVOLUTION.md](EVOLUTION.md#default-promotion-posture-no-proof-no-promotion).
