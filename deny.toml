@@ -25,19 +25,22 @@ all-features = false
 # last-checked..expires window is capped at 180 days, so a deadline cannot be
 # written far enough out to stop being one. A duplicate waiver below carries no
 # expiry because two checks make an exact `crate@SemVer` pin self-invalidating.
-# The metadata stage owns full textual identity: it splits at the final `@`,
-# requires a non-empty name plus valid exact SemVer 2.0, and then makes Cargo.lock
-# exact-name matching authoritative. That admits Cargo-valid leading-underscore
-# and Unicode-XID names without maintaining a second package-name grammar. Every
-# selector fails when multiple lock rows have its exact name and build-stripped
-# core+prerelease identity, because cargo-deny cannot distinguish registry/path
-# identity or build variants. The error lists each source; source-less rows are
-# labeled path/local with Cargo.lock's filesystem-path omission stated. Cargo-deny
-# then owns duplicate applicability in its scanned graph. See the script header
-# for the constructed bypasses this split closes.
+# A locked Cargo metadata resolution first proves Cargo.lock is current for the
+# manifests; stale lock evidence is refused before this file or the lock inventory
+# is trusted. The metadata stage then owns full textual identity: it splits at the
+# final `@`, requires a non-empty name plus valid exact SemVer 2.0, and makes
+# Cargo.lock exact-name matching authoritative. That admits Cargo-valid leading-
+# underscore and Unicode-XID names without maintaining a second package-name
+# grammar. Every selector fails when multiple lock rows have its exact name and
+# build-stripped core+prerelease identity, because cargo-deny cannot distinguish
+# registry/path identity or build variants. The error lists each source; source-
+# less rows are labeled path/local with Cargo.lock's filesystem-path omission
+# stated. Cargo-deny then runs with `--locked` and owns duplicate applicability in
+# its scanned graph. Cargo-audit has no locked option, so the gate byte-compares
+# Cargo.lock afterward and fails any rewrite. See the script header for fixtures.
 #
-# The gate also runs `cargo deny check -D advisory-not-detected -D unmatched-skip
-# -D unnecessary-skip`, which turns cargo-deny's default stale-waiver warnings
+# The gate also runs `cargo deny --locked check -D advisory-not-detected -D
+# unmatched-skip -D unnecessary-skip`, which turns default stale-waiver warnings
 # into errors. A waiver here that is no longer needed fails the build; it does not
 # linger as a warning nobody reads.
 

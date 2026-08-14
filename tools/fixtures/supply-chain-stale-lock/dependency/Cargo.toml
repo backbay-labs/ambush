@@ -1,0 +1,8 @@
+[package]
+name = "supply-chain-stale-lock-dependency"
+version = "0.2.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"

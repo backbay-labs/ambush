@@ -112,7 +112,11 @@ exact name and build-stripped core-plus-prerelease identity; diagnostics list re
 and truthfully identify source-less rows as path/local while noting that Cargo.lock omits the
 filesystem path. Cargo-deny separately checks duplicate applicability in its scanned graph. Do not
 add `--ignore` to `cargo audit`: that list is derived from `deny.toml`, and a RustSec id in a
-workflow or `tools/*.sh` fails as a second list that would drift.
+workflow or `tools/*.sh` fails as a second list that would drift. The gate refuses stale resolution
+before parsing the lock with `cargo metadata --locked`, runs cargo-deny with `--locked`, and
+byte-compares Cargo.lock after cargo-audit because cargo-audit has no locked mode. Its executable
+fixture changes a path dependency's manifest version without updating its locked dependency row
+and proves the first locked metadata call fails without changing the lock bytes.
 
 ## Conventions
 

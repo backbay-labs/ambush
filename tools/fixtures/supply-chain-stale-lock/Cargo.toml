@@ -1,0 +1,13 @@
+[package]
+name = "supply-chain-stale-lock-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+supply-chain-stale-lock-dependency = { path = "dependency" }
+
+[workspace]

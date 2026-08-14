@@ -83,6 +83,23 @@
 #   cargo-deny. A date-based expiry on top would only add calendar churn to checks
 #   the resolved inventory and graph already make.
 #
+# WHY LOCKED RESOLUTION RUNS BEFORE THE LOCK INVENTORY IS READ
+#   Cargo.lock is evidence only if it is current for the manifests. Measured on
+#   2026-08-14 at 4ae5286: with a deliberately stale lock, the Python policy read
+#   the old rows and passed; the unlocked `cargo deny check` then resolved the
+#   manifests and rewrote Cargo.lock, so either same-precedence ambiguity bypass
+#   failed only on the SECOND invocation. The first invocation had already made
+#   its policy decision against stale evidence.
+#
+#   A quiet `cargo metadata --locked --format-version 1` now runs before Python
+#   reads Cargo.lock. cargo-deny receives its own global `--locked` flag before
+#   `check`, which is the position accepted by cargo-deny 0.19.4. cargo-audit
+#   0.22.0 has no locked option; it reads Cargo.lock directly, so the gate keeps a
+#   byte snapshot and compares it after metadata, cargo-deny, and cargo-audit.
+#   Any attempted rewrite fails the gate. The disposable stale-lock fixture below
+#   proves on every run that the FIRST locked metadata invocation refuses stale
+#   resolution and leaves the lock bytes unchanged.
+#
 # WHY `-D advisory-not-detected`, `-D unmatched-skip`, AND `-D unnecessary-skip`
 #   All three are warnings by default, and a warning does not change the exit code:
 #   with an ignore entry added for a real advisory against a crate this workspace
@@ -144,6 +161,64 @@ cd "$ROOT_DIR"
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
+
+locked_metadata() {
+  cargo metadata --locked --format-version 1 --quiet "$@"
+}
+
+# Executable first-run regression for the stale-lock TOCTOU above. The checked-in
+# fixture is copied so even a broken Cargo invocation cannot damage the evidence
+# used by the next run. Its path dependency manifest says 0.2.0 while the locked
+# dependency row says 0.1.0; the root package identity itself is unchanged.
+STALE_LOCK_FIXTURE_SOURCE="$ROOT_DIR/tools/fixtures/supply-chain-stale-lock"
+STALE_LOCK_FIXTURE="$WORK_DIR/supply-chain-stale-lock"
+cp -R "$STALE_LOCK_FIXTURE_SOURCE" "$STALE_LOCK_FIXTURE"
+cp "$STALE_LOCK_FIXTURE/Cargo.lock" "$WORK_DIR/stale-lock-before"
+
+stale_metadata_status=0
+if locked_metadata \
+  --manifest-path "$STALE_LOCK_FIXTURE/Cargo.toml" \
+  >"$WORK_DIR/stale-lock-metadata.json" \
+  2>"$WORK_DIR/stale-lock-metadata.stderr"; then
+  stale_metadata_status=0
+else
+  stale_metadata_status=$?
+fi
+
+if ! cmp -s "$WORK_DIR/stale-lock-before" "$STALE_LOCK_FIXTURE/Cargo.lock"; then
+  echo "::error::locked metadata rewrote the disposable stale Cargo.lock" >&2
+  exit 1
+fi
+if [ "$stale_metadata_status" -eq 0 ]; then
+  echo "::error::locked metadata accepted the disposable stale Cargo.lock" >&2
+  exit 1
+fi
+if ! grep -Fq 'Cargo.lock' "$WORK_DIR/stale-lock-metadata.stderr" || \
+  ! grep -Fq -- '--locked' "$WORK_DIR/stale-lock-metadata.stderr"; then
+  sed -n '1,20p' "$WORK_DIR/stale-lock-metadata.stderr" >&2
+  echo "::error::stale-lock fixture failed for an unexpected reason" >&2
+  exit 1
+fi
+echo "locked resolution fixture ok: first run refused stale Cargo.lock without mutation"
+
+# Establish that the repository lock is current before it becomes policy input,
+# and retain one immutable baseline through both downstream scanners.
+cp "$ROOT_DIR/Cargo.lock" "$WORK_DIR/repository-lock-baseline"
+metadata_status=0
+if locked_metadata >"$WORK_DIR/repository-metadata.json"; then
+  metadata_status=0
+else
+  metadata_status=$?
+fi
+if ! cmp -s "$WORK_DIR/repository-lock-baseline" "$ROOT_DIR/Cargo.lock"; then
+  echo "::error::cargo metadata changed Cargo.lock despite --locked" >&2
+  exit 1
+fi
+if [ "$metadata_status" -ne 0 ]; then
+  echo "::error::Cargo.lock is stale for the manifests; refusing to parse stale inventory" >&2
+  exit "$metadata_status"
+fi
+echo "locked resolution ok: Cargo.lock is current for the manifests"
 
 # Enforcement surfaces: every place other than deny.toml where an advisory could
 # be waived. Tracked or untracked, so a NEW workflow or gate script counts on the
@@ -760,8 +835,21 @@ PY
 # duplicate fails normally, while the three `-D` flags make stale advisory ignores,
 # lock-present skips unmatched in this graph, and no-longer-duplicate skips fail.
 # See the header for the measured ownership boundary.
-cargo deny check -D advisory-not-detected -D unmatched-skip -D unnecessary-skip \
-  advisories licenses bans sources
+deny_status=0
+if cargo deny --locked check \
+  -D advisory-not-detected -D unmatched-skip -D unnecessary-skip \
+  advisories licenses bans sources; then
+  deny_status=0
+else
+  deny_status=$?
+fi
+if ! cmp -s "$WORK_DIR/repository-lock-baseline" "$ROOT_DIR/Cargo.lock"; then
+  echo "::error::cargo-deny changed Cargo.lock despite --locked" >&2
+  exit 1
+fi
+if [ "$deny_status" -ne 0 ]; then
+  exit "$deny_status"
+fi
 
 # `cargo deny` honours features and targets; `cargo audit` reads the whole
 # lockfile, so the two see different graphs and BOTH must run. The ignore list
@@ -775,10 +863,23 @@ while IFS= read -r advisory_id; do
   audit_ignore_count=$((audit_ignore_count + 1))
 done < "$WORK_DIR/advisory-ignores"
 
+audit_args=(--deny warnings "${audit_flags[@]}")
 if [ "$audit_ignore_count" -eq 0 ]; then
   echo "cargo audit: no advisory exceptions in deny.toml"
-  cargo audit --deny warnings
 else
   echo "cargo audit: $audit_ignore_count advisory exception(s) derived from deny.toml"
-  cargo audit --deny warnings "${audit_flags[@]}"
+fi
+
+audit_status=0
+if cargo audit "${audit_args[@]}"; then
+  audit_status=0
+else
+  audit_status=$?
+fi
+if ! cmp -s "$WORK_DIR/repository-lock-baseline" "$ROOT_DIR/Cargo.lock"; then
+  echo "::error::cargo-audit changed Cargo.lock; it has no locked mode" >&2
+  exit 1
+fi
+if [ "$audit_status" -ne 0 ]; then
+  exit "$audit_status"
 fi
