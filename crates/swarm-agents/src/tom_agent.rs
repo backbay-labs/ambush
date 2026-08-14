@@ -17,10 +17,11 @@ use swarm_core::agent::{
 };
 use swarm_core::types::{AgentId, ResponseAction, SwarmAction};
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
-use swarm_policy::ActionRequest;
 use swarm_policy::governance::{
-    GovernanceActionRequestSubjectV1, GovernanceAuthority, GovernanceRuntimeEventRecord,
+    ConsumedGovernedHumanAuthorization, GovernanceActionRequestSubjectV1, GovernanceAuthority,
+    GovernanceRuntimeEventRecord, GovernedHumanAuthorizationHold,
 };
+use swarm_policy::{ActionRequest, PolicyDecision, PolicyVerdict};
 // Both types are declared in `swarm-policy` as of SPLIT-05, so `GovernanceAuthority`
 // can name its own return type. Re-exported rather than merely imported, because the
 // paths `swarm_agents::tom_agent::{PartitionState, GovernanceStatusReport}` are what
@@ -34,6 +35,7 @@ const CONTINGENCY_LEASE_SCHEMA_VERSION: u32 = 1;
 const MAX_RECONCILIATION_REPORTS: usize = 16;
 const MAX_PENDING_AUTHORIZATIONS: usize = 1_024;
 const MAX_CONSUMED_AUTHORIZATIONS: usize = 1_024;
+const MAX_PENDING_HUMAN_AUTHORIZATIONS: usize = 1_024;
 const MAX_AUTHORIZATION_AGE_MS: i64 = 300_000;
 const MAX_AUTHORIZATION_FUTURE_SKEW_MS: i64 = 30_000;
 
@@ -364,6 +366,7 @@ struct GovernanceState {
     active_contingency_leases: Vec<ContingencyLease>,
     pending_authorizations: VecDeque<PendingGovernanceAuthorization>,
     consumed_authorizations: VecDeque<ConsumedGovernanceAuthorization>,
+    pending_human_authorizations: VecDeque<GovernedHumanAuthorizationHold>,
     partition_activity: Vec<PartitionActionRecord>,
     reconciliation_reports: Vec<PartitionReconciliationReport>,
     pending_events: VecDeque<GovernanceRuntimeEvent>,
@@ -406,6 +409,7 @@ impl Default for GovernanceState {
             active_contingency_leases: Vec::new(),
             pending_authorizations: VecDeque::new(),
             consumed_authorizations: VecDeque::new(),
+            pending_human_authorizations: VecDeque::new(),
             partition_activity: Vec::new(),
             reconciliation_reports: Vec::new(),
             pending_events: VecDeque::new(),
@@ -456,6 +460,8 @@ struct PersistedGovernanceState {
     pending_authorizations: VecDeque<PendingGovernanceAuthorization>,
     #[serde(default)]
     consumed_authorizations: VecDeque<ConsumedGovernanceAuthorization>,
+    #[serde(default)]
+    pending_human_authorizations: VecDeque<GovernedHumanAuthorizationHold>,
     partition_activity: Vec<PartitionActionRecord>,
     reconciliation_reports: Vec<PartitionReconciliationReport>,
 }
@@ -473,6 +479,7 @@ impl Default for PersistedGovernanceState {
             active_contingency_leases: Vec::new(),
             pending_authorizations: VecDeque::new(),
             consumed_authorizations: VecDeque::new(),
+            pending_human_authorizations: VecDeque::new(),
             partition_activity: Vec::new(),
             reconciliation_reports: Vec::new(),
         }
@@ -504,6 +511,7 @@ impl GovernancePersistence {
             active_contingency_leases: state.active_contingency_leases.clone(),
             pending_authorizations: state.pending_authorizations.clone(),
             consumed_authorizations: state.consumed_authorizations.clone(),
+            pending_human_authorizations: state.pending_human_authorizations.clone(),
             partition_activity: state.partition_activity.clone(),
             reconciliation_reports: state.reconciliation_reports.clone(),
         };
@@ -575,6 +583,7 @@ impl GovernancePolicy {
             active_contingency_leases: persisted.active_contingency_leases,
             pending_authorizations: persisted.pending_authorizations,
             consumed_authorizations: persisted.consumed_authorizations,
+            pending_human_authorizations: persisted.pending_human_authorizations,
             partition_activity: persisted.partition_activity,
             reconciliation_reports: persisted.reconciliation_reports,
             ..Default::default()
@@ -936,49 +945,17 @@ impl GovernancePolicy {
         expected_decision: GovernanceReceiptDecision,
         now_ms: i64,
     ) -> Result<serde_json::Value, String> {
-        let receipt: ConsensusGovernanceReceipt = serde_json::from_value(receipt_value.clone())
-            .map_err(|error| format!("invalid governance receipt: {error}"))?;
-        let subject = governance_request_subject_value(request)?;
-        let subject_digest =
-            proposal_id_for_payload(&subject).map_err(|error| error.to_string())?;
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let governor_public_keys = governor_public_keys_locked(&state);
-        receipt
-            .verify_signed_by(&governor_public_keys)
-            .map_err(|error| format!("governance receipt refused: {error}"))?;
-        receipt
-            .verify_internal_consistency(&subject, expected_decision)
-            .map_err(|error| format!("governance receipt refused: {error}"))?;
-        if receipt.payload.issued_at_ms > now_ms.saturating_add(MAX_AUTHORIZATION_FUTURE_SKEW_MS) {
-            return Err("governance receipt was issued too far in the future".to_string());
-        }
-        if now_ms.saturating_sub(receipt.payload.issued_at_ms) > MAX_AUTHORIZATION_AGE_MS {
-            return Err("governance receipt is stale".to_string());
-        }
-        if state
-            .consumed_authorizations
-            .iter()
-            .any(|entry| entry.receipt_id == receipt.payload.receipt_id)
-        {
-            return Err(format!(
-                "governance receipt `{}` was already consumed",
-                receipt.payload.receipt_id
-            ));
-        }
-        let Some(index) = state.pending_authorizations.iter().position(|entry| {
-            entry.receipt_id == receipt.payload.receipt_id
-                && entry.subject_digest == subject_digest
-                && entry.decision == expected_decision
-                && entry.issued_at_ms == receipt.payload.issued_at_ms
-        }) else {
-            return Err(format!(
-                "governance receipt `{}` is not present in the pending authorization ledger",
-                receipt.payload.receipt_id
-            ));
-        };
+        let (receipt, subject_digest, index) = validate_pending_request_receipt_locked(
+            &state,
+            request,
+            receipt_value,
+            expected_decision,
+            now_ms,
+        )?;
 
         let previous_pending = state.pending_authorizations.clone();
         let previous_consumed = state.consumed_authorizations.clone();
@@ -1001,6 +978,202 @@ impl GovernancePolicy {
         }
         serde_json::to_value(receipt).map_err(|error| {
             format!("verified governance receipt could not be serialized: {error}")
+        })
+    }
+
+    pub fn begin_human_authorization_hold(
+        &self,
+        request: &ActionRequest,
+        receipt_value: &serde_json::Value,
+        policy_decision: &PolicyDecision,
+        now_ms: i64,
+    ) -> Result<GovernedHumanAuthorizationHold, String> {
+        if policy_decision.verdict != PolicyVerdict::RequireHuman {
+            return Err("human authorization hold requires a require_human policy decision".into());
+        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (receipt, subject_digest, _) = validate_pending_request_receipt_locked(
+            &state,
+            request,
+            receipt_value,
+            GovernanceReceiptDecision::Approve,
+            now_ms,
+        )?;
+        if let Some(existing) = state.pending_human_authorizations.iter().find(|hold| {
+            hold.governance_receipt
+                .get("payload")
+                .and_then(|payload| payload.get("receipt_id"))
+                .and_then(serde_json::Value::as_str)
+                == Some(receipt.payload.receipt_id.as_str())
+        }) {
+            if existing.request != *request || existing.policy_decision != *policy_decision {
+                return Err("pending human authorization does not match the exact request".into());
+            }
+            return Ok(existing.clone());
+        }
+
+        let hold_seed = serde_json::json!({
+            "domain": "swarm.governance.human-authorization-hold.v1",
+            "subject_digest": subject_digest,
+            "receipt_id": receipt.payload.receipt_id,
+            "policy_decision": policy_decision,
+        });
+        let hold_id = format!(
+            "governance-human-hold:{}",
+            sha256_hex(&canonical_json_bytes(&hold_seed).map_err(|error| error.to_string())?)
+        );
+        let hold = GovernedHumanAuthorizationHold {
+            hold_id,
+            request: request.clone(),
+            policy_decision: policy_decision.clone(),
+            governance_receipt: receipt_value.clone(),
+            created_at_ms: now_ms,
+            approval_set_id: None,
+            approval_set_digest: None,
+        };
+        let previous = state.pending_human_authorizations.clone();
+        state.pending_human_authorizations.push_back(hold.clone());
+        prune_authorization_ledgers(&mut state, now_ms);
+        if let Err(error) = self.persist_locked(&state) {
+            state.pending_human_authorizations = previous;
+            return Err(format!(
+                "human authorization hold was not created because persistence failed: {error}"
+            ));
+        }
+        Ok(hold)
+    }
+
+    pub fn bind_human_approval_set(
+        &self,
+        hold_id: &str,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String> {
+        if approval_set_id.is_empty() || approval_set_digest.is_empty() {
+            return Err("human approval binding fields must not be empty".into());
+        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = state.pending_human_authorizations.clone();
+        let Some(hold) = state
+            .pending_human_authorizations
+            .iter_mut()
+            .find(|hold| hold.hold_id == hold_id)
+        else {
+            return Err(format!(
+                "pending human authorization hold `{hold_id}` was not found"
+            ));
+        };
+        match (&hold.approval_set_id, &hold.approval_set_digest) {
+            (Some(existing_id), Some(existing_digest))
+                if existing_id == approval_set_id && existing_digest == approval_set_digest =>
+            {
+                return Ok(hold.clone());
+            }
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "pending human authorization hold `{hold_id}` is already bound"
+                ));
+            }
+            _ => {}
+        }
+        hold.approval_set_id = Some(approval_set_id.to_string());
+        hold.approval_set_digest = Some(approval_set_digest.to_string());
+        let bound = hold.clone();
+        if let Err(error) = self.persist_locked(&state) {
+            state.pending_human_authorizations = previous;
+            return Err(format!(
+                "human approval set was not bound because persistence failed: {error}"
+            ));
+        }
+        Ok(bound)
+    }
+
+    pub fn pending_human_authorization(
+        &self,
+        approval_set_id: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pending_human_authorizations
+            .iter()
+            .find(|hold| hold.approval_set_id.as_deref() == Some(approval_set_id))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "pending human authorization for approval set `{approval_set_id}` was not found"
+                )
+            })
+    }
+
+    pub fn verify_and_consume_human_authorization(
+        &self,
+        hold_id: &str,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+        now_ms: i64,
+    ) -> Result<ConsumedGovernedHumanAuthorization, String> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(hold_index) = state
+            .pending_human_authorizations
+            .iter()
+            .position(|hold| hold.hold_id == hold_id)
+        else {
+            return Err(format!(
+                "pending human authorization hold `{hold_id}` was not found"
+            ));
+        };
+        let hold = state.pending_human_authorizations[hold_index].clone();
+        if hold.approval_set_id.as_deref() != Some(approval_set_id)
+            || hold.approval_set_digest.as_deref() != Some(approval_set_digest)
+        {
+            return Err("human approval set does not match the persisted hold binding".into());
+        }
+        let (receipt, subject_digest, receipt_index) = validate_pending_request_receipt_locked(
+            &state,
+            &hold.request,
+            &hold.governance_receipt,
+            GovernanceReceiptDecision::Approve,
+            now_ms,
+        )?;
+        let verified_governance_receipt = serde_json::to_value(&receipt).map_err(|error| {
+            format!("verified governance receipt could not be serialized: {error}")
+        })?;
+
+        let previous_pending = state.pending_authorizations.clone();
+        let previous_consumed = state.consumed_authorizations.clone();
+        let previous_holds = state.pending_human_authorizations.clone();
+        state.pending_authorizations.remove(receipt_index);
+        state
+            .consumed_authorizations
+            .push_back(ConsumedGovernanceAuthorization {
+                receipt_id: receipt.payload.receipt_id,
+                subject_digest,
+                decision: GovernanceReceiptDecision::Approve,
+                consumed_at_ms: now_ms,
+            });
+        state.pending_human_authorizations.remove(hold_index);
+        prune_authorization_ledgers(&mut state, now_ms);
+        if let Err(error) = self.persist_locked(&state) {
+            state.pending_authorizations = previous_pending;
+            state.consumed_authorizations = previous_consumed;
+            state.pending_human_authorizations = previous_holds;
+            return Err(format!(
+                "human and governance authorization were not consumed because persistence failed: {error}"
+            ));
+        }
+        Ok(ConsumedGovernedHumanAuthorization {
+            hold,
+            verified_governance_receipt,
         })
     }
 
@@ -1701,6 +1874,57 @@ fn governor_public_keys_locked(state: &GovernanceState) -> BTreeSet<AgentId> {
     keys
 }
 
+fn validate_pending_request_receipt_locked(
+    state: &GovernanceState,
+    request: &ActionRequest,
+    receipt_value: &serde_json::Value,
+    expected_decision: GovernanceReceiptDecision,
+    now_ms: i64,
+) -> Result<(ConsensusGovernanceReceipt, String, usize), String> {
+    let receipt: ConsensusGovernanceReceipt = serde_json::from_value(receipt_value.clone())
+        .map_err(|error| format!("invalid governance receipt: {error}"))?;
+    let subject = governance_request_subject_value(request)?;
+    let subject_digest = proposal_id_for_payload(&subject).map_err(|error| error.to_string())?;
+    receipt
+        .verify_signed_by(&governor_public_keys_locked(state))
+        .map_err(|error| format!("governance receipt refused: {error}"))?;
+    receipt
+        .verify_internal_consistency(&subject, expected_decision)
+        .map_err(|error| format!("governance receipt refused: {error}"))?;
+    if receipt.payload.issued_at_ms > now_ms.saturating_add(MAX_AUTHORIZATION_FUTURE_SKEW_MS) {
+        return Err("governance receipt was issued too far in the future".to_string());
+    }
+    if now_ms.saturating_sub(receipt.payload.issued_at_ms) > MAX_AUTHORIZATION_AGE_MS {
+        return Err("governance receipt is stale".to_string());
+    }
+    if state
+        .consumed_authorizations
+        .iter()
+        .any(|entry| entry.receipt_id == receipt.payload.receipt_id)
+    {
+        return Err(format!(
+            "governance receipt `{}` was already consumed",
+            receipt.payload.receipt_id
+        ));
+    }
+    let index = state
+        .pending_authorizations
+        .iter()
+        .position(|entry| {
+            entry.receipt_id == receipt.payload.receipt_id
+                && entry.subject_digest == subject_digest
+                && entry.decision == expected_decision
+                && entry.issued_at_ms == receipt.payload.issued_at_ms
+        })
+        .ok_or_else(|| {
+            format!(
+                "governance receipt `{}` is not present in the pending authorization ledger",
+                receipt.payload.receipt_id
+            )
+        })?;
+    Ok((receipt, subject_digest, index))
+}
+
 fn prune_authorization_ledgers(state: &mut GovernanceState, now_ms: i64) {
     let oldest_pending = now_ms.saturating_sub(MAX_AUTHORIZATION_AGE_MS);
     state
@@ -1711,6 +1935,23 @@ fn prune_authorization_ledgers(state: &mut GovernanceState, now_ms: i64) {
     }
     while state.consumed_authorizations.len() > MAX_CONSUMED_AUTHORIZATIONS {
         state.consumed_authorizations.pop_front();
+    }
+    let pending_receipt_ids = state
+        .pending_authorizations
+        .iter()
+        .map(|authorization| authorization.receipt_id.clone())
+        .collect::<BTreeSet<_>>();
+    state.pending_human_authorizations.retain(|hold| {
+        hold.created_at_ms >= oldest_pending
+            && hold
+                .governance_receipt
+                .get("payload")
+                .and_then(|payload| payload.get("receipt_id"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|receipt_id| pending_receipt_ids.contains(receipt_id))
+    });
+    while state.pending_human_authorizations.len() > MAX_PENDING_HUMAN_AUTHORIZATIONS {
+        state.pending_human_authorizations.pop_front();
     }
 }
 
@@ -1795,6 +2036,59 @@ impl GovernanceAuthority for GovernancePolicy {
         now_ms: i64,
     ) -> Result<serde_json::Value, String> {
         GovernancePolicy::verify_and_consume_veto(self, request, receipt, now_ms)
+    }
+
+    fn begin_human_authorization_hold(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        policy_decision: &PolicyDecision,
+        now_ms: i64,
+    ) -> Result<GovernedHumanAuthorizationHold, String> {
+        GovernancePolicy::begin_human_authorization_hold(
+            self,
+            request,
+            receipt,
+            policy_decision,
+            now_ms,
+        )
+    }
+
+    fn bind_human_approval_set(
+        &self,
+        hold_id: &str,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String> {
+        GovernancePolicy::bind_human_approval_set(
+            self,
+            hold_id,
+            approval_set_id,
+            approval_set_digest,
+        )
+    }
+
+    fn pending_human_authorization(
+        &self,
+        approval_set_id: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String> {
+        GovernancePolicy::pending_human_authorization(self, approval_set_id)
+    }
+
+    fn verify_and_consume_human_authorization(
+        &self,
+        hold_id: &str,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+        now_ms: i64,
+    ) -> Result<ConsumedGovernedHumanAuthorization, String> {
+        GovernancePolicy::verify_and_consume_human_authorization(
+            self,
+            hold_id,
+            approval_set_id,
+            approval_set_digest,
+            now_ms,
+        )
     }
 
     fn is_partitioned(&self) -> bool {

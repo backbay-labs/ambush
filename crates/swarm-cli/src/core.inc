@@ -456,6 +456,13 @@ struct FirstRunArgs {
 
     #[arg(long, default_value_t = 0)]
     pace_ms: u64,
+
+    #[deprecated(
+        since = "0.1.0",
+        note = "first-run is detect-only and no longer reads voter signing keys"
+    )]
+    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY", hide = true)]
+    voter_signing_key_env: String,
 }
 
 #[derive(Debug, Args)]
@@ -465,6 +472,13 @@ struct QuickstartArgs {
 
     #[arg(long, default_value_t = 0)]
     pace_ms: u64,
+
+    #[deprecated(
+        since = "0.1.0",
+        note = "quickstart is detect-only and no longer reads voter signing keys"
+    )]
+    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY", hide = true)]
+    voter_signing_key_env: String,
 }
 
 #[derive(Debug, Args)]
@@ -1803,6 +1817,8 @@ struct QuickstartCommandReport {
     injected_events: usize,
     elapsed_ms: Option<i64>,
     finding: Option<QuickstartFindingSummary>,
+    /// Retained as an explicit JSON `null` for output-schema compatibility.
+    receipt_pack_id: Option<String>,
     proof_merkle_root: Option<String>,
     blocking_failures: Vec<String>,
     next_steps: Vec<String>,
@@ -2663,6 +2679,7 @@ async fn run_readiness_command(
     }
 }
 
+#[allow(deprecated)]
 async fn run_first_run_command(
     cli: &Cli,
     args: &FirstRunArgs,
@@ -2671,10 +2688,10 @@ async fn run_first_run_command(
     let plane = load_control_plane_with_remediation(&cli.config)?;
     let output = OperatorControlOutput::FirstRun(Box::new(
         plane
-            .first_run(FirstRunWizardOptions {
-                scenario_path: args.scenario.clone(),
-                pace_ms: args.pace_ms,
-            })
+            .first_run(FirstRunWizardOptions::detect_only(
+                args.scenario.clone(),
+                args.pace_ms,
+            ))
             .await?,
     ));
 
@@ -2700,6 +2717,7 @@ async fn run_first_run_command(
     }
 }
 
+#[allow(deprecated)]
 async fn run_quickstart_command(
     cli: &Cli,
     args: &QuickstartArgs,
@@ -2717,6 +2735,7 @@ async fn run_quickstart_command(
                 injected_events: 0,
                 elapsed_ms: None,
                 finding: None,
+                receipt_pack_id: None,
                 proof_merkle_root: None,
                 blocking_failures: validate.errors.clone(),
                 next_steps: validate.remediations.clone(),
@@ -2740,10 +2759,10 @@ async fn run_quickstart_command(
         );
     let plane = load_control_plane_with_remediation(&cli.config)?;
     let walkthrough = plane
-        .first_run(FirstRunWizardOptions {
-            scenario_path: args.scenario.clone(),
-            pace_ms: args.pace_ms,
-        })
+        .first_run(FirstRunWizardOptions::detect_only(
+            args.scenario.clone(),
+            args.pace_ms,
+        ))
         .await?;
 
     let walkthrough = walkthrough.data;
@@ -2760,6 +2779,7 @@ async fn run_quickstart_command(
         injected_events: 0,
         elapsed_ms: None,
         finding: None,
+        receipt_pack_id: None,
         proof_merkle_root: None,
         blocking_failures: walkthrough.readiness.blocking_failures.clone(),
         next_steps: Vec::new(),
@@ -5257,10 +5277,11 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, build_validate_report,
-        evolution_mutation_signing_key, load_config, parse_review_artifact_ref_arg,
-        render_init_template, resolve_quarantine_endpoint, run_init_command,
-        run_playbook_preview_command, run_quickstart_command, run_readiness_command,
+        Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, QuickstartCommandReport,
+        build_validate_report, evolution_mutation_signing_key, load_config,
+        parse_review_artifact_ref_arg, render_init_template, resolve_quarantine_endpoint,
+        run_init_command, run_playbook_preview_command, run_quickstart_command,
+        run_readiness_command,
     };
     use crate::config::write_debug_test_config_signature;
     use clap::Parser;
@@ -5349,6 +5370,70 @@ mod tests {
     fn cli_parses_quickstart_command() {
         let cli = Cli::parse_from(["swarmctl", "quickstart", "--pace-ms", "25"]);
         assert!(matches!(cli.command, Command::Quickstart(_)));
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn cli_accepts_legacy_voter_signing_key_flags_without_using_them_as_authority() {
+        let first_run = Cli::parse_from([
+            "swarmctl",
+            "first-run",
+            "--voter-signing-key-env",
+            "LEGACY_FIRST_RUN_KEY",
+        ]);
+        let Command::FirstRun(first_run) = first_run.command else {
+            panic!("expected first-run command");
+        };
+        assert_eq!(first_run.voter_signing_key_env, "LEGACY_FIRST_RUN_KEY");
+
+        let quickstart = Cli::parse_from([
+            "swarmctl",
+            "quickstart",
+            "--voter-signing-key-env",
+            "LEGACY_QUICKSTART_KEY",
+        ]);
+        let Command::Quickstart(quickstart) = quickstart.command else {
+            panic!("expected quickstart command");
+        };
+        assert_eq!(quickstart.voter_signing_key_env, "LEGACY_QUICKSTART_KEY");
+    }
+
+    #[test]
+    fn quickstart_json_keeps_the_legacy_receipt_pack_field_as_null() {
+        let value = serde_json::to_value(QuickstartCommandReport {
+            config_path: "config.yaml".to_string(),
+            validation_passed: true,
+            readiness_passed: true,
+            status: "completed".to_string(),
+            scenario_name: None,
+            run_id: None,
+            injected_events: 0,
+            elapsed_ms: None,
+            finding: None,
+            receipt_pack_id: None,
+            proof_merkle_root: None,
+            blocking_failures: Vec::new(),
+            next_steps: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "config_path": "config.yaml",
+                "validation_passed": true,
+                "readiness_passed": true,
+                "status": "completed",
+                "scenario_name": null,
+                "run_id": null,
+                "injected_events": 0,
+                "elapsed_ms": null,
+                "finding": null,
+                "receipt_pack_id": null,
+                "proof_merkle_root": null,
+                "blocking_failures": [],
+                "next_steps": [],
+            })
+        );
     }
 
     #[test]

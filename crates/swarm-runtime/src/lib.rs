@@ -188,6 +188,9 @@ pub enum RuntimeError {
     )]
     GovernedActionRequiresAdmission { action: &'static str },
 
+    #[error("governance authorization refused: {0}")]
+    GovernanceAuthorization(String),
+
     /// A containment was refused BEFORE it executed because it could not have
     /// been leased. The world is unchanged.
     #[error("containment `{action}` refused: {reason}")]
@@ -613,6 +616,17 @@ pub struct RuntimeExecutionReport {
     pub response_elapsed_us: Option<u64>,
     pub response_attempted: bool,
     pub response_succeeded: bool,
+}
+
+struct EvaluatedExecution<'a> {
+    detection: &'a DetectionFinding,
+    request: &'a ActionRequest,
+    context: &'a ApprovalContext,
+    decision: swarm_policy::PolicyDecision,
+    policy_elapsed_us: u64,
+    execution_mode: ExecutionMode,
+    allow_human_approved_execution: bool,
+    verified_governance_receipt: Option<(&'a ConsensusGovernanceReceipt, &'a serde_json::Value)>,
 }
 
 impl<P, E> SwarmRuntime<P, E> {
@@ -1086,7 +1100,7 @@ where
         context: &ApprovalContext,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         self.audit_authorize_and_execute_instrumented_internal(
-            detection, request, context, false, None, None,
+            detection, request, context, false, None,
         )
         .await
     }
@@ -1096,21 +1110,109 @@ where
     /// verifies the bearer receipt again.
     pub async fn audit_authorize_and_execute_admitted(
         &self,
-        detection: &DetectionFinding,
-        admitted: &crate::dispatcher::RoutedActionRequest,
-        context: &ApprovalContext,
+        admitted: crate::dispatcher::RoutedActionRequest,
     ) -> Result<AuditTrail, RuntimeError> {
+        let (permit, governance, human_approval) = admitted.into_parts();
+        let (request, detection, context, decision, policy_elapsed_us) =
+            permit.into_execution_parts();
+        let governance = governance.as_ref().map(|(receipt, value)| (receipt, value));
         Ok(self
-            .audit_authorize_and_execute_instrumented_internal(
-                detection,
-                admitted.request(),
-                context,
-                false,
-                None,
-                Some(admitted),
-            )
+            .audit_execute_evaluated(EvaluatedExecution {
+                detection: &detection,
+                request: &request,
+                context: &context,
+                decision,
+                policy_elapsed_us,
+                execution_mode: self.execution_mode(),
+                allow_human_approved_execution: human_approval.is_some(),
+                verified_governance_receipt: governance,
+            })
             .await?
             .audit)
+    }
+
+    /// Evaluate ordinary policy once for the dispatcher without consuming
+    /// governance and without reaching guards, leases, or the executor.
+    pub fn preflight_dispatcher_request(
+        &self,
+        request: ActionRequest,
+        detection: DetectionFinding,
+        context: ApprovalContext,
+    ) -> Result<crate::dispatcher::DispatcherPolicyPreflight, RuntimeError> {
+        let policy_started = Instant::now();
+        let decision = self.policy.evaluate(&request, &context)?;
+        let policy_elapsed_us = policy_started.elapsed().as_micros() as u64;
+        let audit = || AuditTrail {
+            trail_id: format!("trail:{}:{}", request.hunt_id.0, context.now_ms),
+            hunt_id: request.hunt_id.0.clone(),
+            related_receipt_ids: context.receipt_chain.clone(),
+            detection: detection.clone(),
+            policy: PolicyRecord {
+                verdict: decision.verdict,
+                rule_name: decision.rule_name.clone(),
+                reason: decision.reason.clone(),
+                lease: None,
+            },
+            response: AuditResponseRecord::Skipped {
+                reason: decision.reason.clone(),
+            },
+            created_at_ms: context.now_ms,
+        };
+        match decision.verdict {
+            swarm_policy::PolicyVerdict::Deny => {
+                Ok(crate::dispatcher::DispatcherPolicyPreflight::deny(audit()))
+            }
+            swarm_policy::PolicyVerdict::RequireHuman if self.mode == RuntimeMode::LiveResponse => {
+                let skipped = audit();
+                Ok(crate::dispatcher::DispatcherPolicyPreflight::require_human(
+                    crate::dispatcher::DispatcherPolicyPermit::new(
+                        request,
+                        detection,
+                        context,
+                        decision,
+                        policy_elapsed_us,
+                    ),
+                    skipped,
+                ))
+            }
+            swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {
+                Ok(crate::dispatcher::DispatcherPolicyPreflight::allow(
+                    crate::dispatcher::DispatcherPolicyPermit::new(
+                        request,
+                        detection,
+                        context,
+                        decision,
+                        policy_elapsed_us,
+                    ),
+                ))
+            }
+        }
+    }
+
+    /// Restore the original require-human decision after restart without a
+    /// second mutable policy evaluation.
+    pub fn restore_human_dispatcher_preflight(
+        &self,
+        hold: &swarm_policy::governance::GovernedHumanAuthorizationHold,
+        detection: DetectionFinding,
+        mut context: ApprovalContext,
+        approval_pack_id: &str,
+    ) -> Result<crate::dispatcher::DispatcherPolicyPermit, RuntimeError> {
+        if self.mode != RuntimeMode::LiveResponse
+            || hold.policy_decision.verdict != swarm_policy::PolicyVerdict::RequireHuman
+        {
+            return Err(RuntimeError::GovernanceAuthorization(
+                "persisted human hold is not a live require_human decision".into(),
+            ));
+        }
+        context.receipt_chain.push(approval_pack_id.to_string());
+        Ok(crate::dispatcher::DispatcherPolicyPermit::new(
+            hold.request.clone(),
+            detection,
+            context,
+            hold.policy_decision.clone(),
+            0,
+        ))
     }
 
     /// Execute a rehearsal through the normal policy lane while forcing a dry-run receipt.
@@ -1126,7 +1228,6 @@ where
             context,
             true,
             Some(ExecutionMode::DryRun),
-            None,
         )
         .await
     }
@@ -1139,7 +1240,7 @@ where
         context: &ApprovalContext,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         self.audit_authorize_and_execute_instrumented_internal(
-            detection, request, context, true, None, None,
+            detection, request, context, true, None,
         )
         .await
     }
@@ -1151,15 +1252,39 @@ where
         context: &ApprovalContext,
         allow_human_approved_execution: bool,
         execution_mode_override: Option<ExecutionMode>,
-        admitted: Option<&crate::dispatcher::RoutedActionRequest>,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         let execution_mode = execution_mode_override.unwrap_or_else(|| self.execution_mode());
-        Self::require_dispatcher_admission(request, execution_mode, admitted.is_some())?;
-        let verified_governance_receipt =
-            admitted.and_then(crate::dispatcher::RoutedActionRequest::verified_governance_receipt);
+        Self::require_dispatcher_admission(request, execution_mode, false)?;
         let policy_started = Instant::now();
         let decision = self.policy.evaluate(request, context)?;
         let policy_elapsed_us = policy_started.elapsed().as_micros() as u64;
+        self.audit_execute_evaluated(EvaluatedExecution {
+            detection,
+            request,
+            context,
+            decision,
+            policy_elapsed_us,
+            execution_mode,
+            allow_human_approved_execution,
+            verified_governance_receipt: None,
+        })
+        .await
+    }
+
+    async fn audit_execute_evaluated(
+        &self,
+        execution: EvaluatedExecution<'_>,
+    ) -> Result<RuntimeExecutionReport, RuntimeError> {
+        let EvaluatedExecution {
+            detection,
+            request,
+            context,
+            decision,
+            policy_elapsed_us,
+            execution_mode,
+            allow_human_approved_execution,
+            verified_governance_receipt,
+        } = execution;
         tracing::info!(
             correlation_id = %Self::correlation_id(context),
             hunt_id = %request.hunt_id.0,

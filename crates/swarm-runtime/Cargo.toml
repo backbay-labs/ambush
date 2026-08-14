@@ -96,6 +96,7 @@ swarm-agents.workspace = true
 swarm-ingest-runtime.workspace = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 tower.workspace = true
+trybuild = "1.0"
 
 [[bench]]
 name = "hot_path"

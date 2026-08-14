@@ -12,8 +12,8 @@ use swarm_consensus::{
 };
 use swarm_core::agent::{AgentHealth, AgentHealthEntry, AgentRole};
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
-use swarm_policy::ActionRequest;
 use swarm_policy::governance::GovernanceActionRequestSubjectV1;
+use swarm_policy::{ActionRequest, PolicyDecision};
 
 const GOVERNOR_KEY: [u8; 32] = [91; 32];
 
@@ -334,5 +334,74 @@ fn issuance_and_consumption_refuse_persistence_failures() {
     policy
         .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 2)
         .expect("failed persistence must roll the pending entry back in memory");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn human_hold_binding_and_consumption_refuse_persistence_failures() {
+    let path = persistence_path("human-failure");
+    let policy =
+        GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path).unwrap();
+    policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&GOVERNOR_KEY),
+        )
+        .unwrap();
+    let request = request();
+    let receipt = approval(&policy, &request);
+    let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
+    let decision =
+        PolicyDecision::require_human_with_rule("test.require-human", "human review is required");
+
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    let error = policy
+        .begin_human_authorization_hold(&request, &receipt, &decision, issued_at_ms + 1)
+        .expect_err("a hold persistence failure must refuse the hold");
+    assert!(error.contains("hold was not created because persistence failed"));
+
+    fs::remove_dir(&path).unwrap();
+    let hold = policy
+        .begin_human_authorization_hold(&request, &receipt, &decision, issued_at_ms + 2)
+        .expect("the failed hold persistence must roll back in memory");
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    let error = policy
+        .bind_human_approval_set(&hold.hold_id, "approval-set:test", "set-digest:test")
+        .expect_err("a binding persistence failure must refuse the binding");
+    assert!(error.contains("set was not bound because persistence failed"));
+
+    fs::remove_dir(&path).unwrap();
+    policy
+        .bind_human_approval_set(&hold.hold_id, "approval-set:test", "set-digest:test")
+        .expect("the failed binding persistence must roll back in memory");
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    let error = policy
+        .verify_and_consume_human_authorization(
+            &hold.hold_id,
+            "approval-set:test",
+            "set-digest:test",
+            issued_at_ms + 3,
+        )
+        .expect_err("a consume persistence failure must refuse routing");
+    assert!(error.contains("were not consumed because persistence failed"));
+
+    fs::remove_dir(&path).unwrap();
+    assert!(
+        policy
+            .pending_human_authorization("approval-set:test")
+            .is_ok(),
+        "failed persistence must leave the exact hold pending"
+    );
+    policy
+        .verify_and_consume_human_authorization(
+            &hold.hold_id,
+            "approval-set:test",
+            "set-digest:test",
+            issued_at_ms + 4,
+        )
+        .expect("failed persistence must roll both approvals back in memory");
     let _ = fs::remove_file(path);
 }

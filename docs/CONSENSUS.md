@@ -30,7 +30,7 @@ The active runtime uses four governance modes.
 | --- | --- | --- |
 | Observation | Detection, investigation, correlation, memory, deception, status publication | No governance receipt; standard signed deposits and audit only |
 | Guarded response | Non-destructive response actions such as escalation or decoy deployment | Policy validation and ordinary audit trail |
-| Receipt-backed response | Governed response actions listed below | One-time request-bound governance authorization, policy validation, and optional human approval |
+| Receipt-backed response | Governed response actions listed below | One-time request-bound governance authorization, one policy preflight, and human approval when that preflight returns `RequireHuman` |
 | Partition contingency | Destructive response while quorum is partitioned | Valid staged contingency lease plus partition authorization and later reconciliation |
 | Maintenance-only | Local operator review, export, replay, and bounded maintenance actions | Authenticated operator access and maintenance audit, but no widened destructive authority |
 
@@ -66,14 +66,18 @@ For those actions:
    holds and persists an issued authorization in the pending ledger before
    returning its receipt. An approval, veto, and partition contingency are
    distinct typed outcomes.
-3. Immediately before routing, the dispatcher verifies the configured signer,
-   exact route decision, exact request subject, freshness, locally provable
-   receipt consistency, and pending-ledger membership. It durably consumes the
-   authorization once.
-4. Only then does the dispatcher create an opaque routed admission. The runtime
-   consumes that admission without parsing or verifying the receipt a second
-   time; ordinary policy, lease, containment, guard, adapter, and audit checks
-   still apply.
+3. The dispatcher preflights ordinary policy once without consuming governance.
+   `Deny` stops there. `RequireHuman` durably holds the exact request, policy
+   decision, and still-pending governance receipt, then binds a persisted
+   approval set; it creates no admission and invokes no executor.
+4. An `Allow`, or the dedicated resume path after an exact persisted human pack
+   is verified, atomically consumes the governance authorization immediately
+   before routing. Only then does the dispatcher create one opaque, non-cloneable
+   admission and move it to one router invocation.
+5. The runtime consumes that admission by value without parsing the receipts or
+   evaluating mutable policy a second time. Lease, containment, guard, adapter,
+   and audit checks still apply. If routing or execution fails after durable
+   consumption, the authorization is burned rather than made replayable.
 
 Non-destructive actions remain guarded and audited, but they do not require a
 governance receipt in the current runtime.
@@ -157,11 +161,13 @@ is the open half of BFT-04. Two consequences worth naming:
 ### Restart Safety Of A Round
 
 `PersistedGovernanceState` persists `previous_commit_hash`, the receipt counter,
-partition state, active leases, and bounded pending and consumed authorization
-ledgers. It persists NO round state and NOT the governor key. A restart
+partition state, active leases, bounded pending and consumed authorization
+ledgers, and bounded exact-request human holds. It persists NO round state and
+NOT the governor key. A restart
 mid-round therefore loses the round. A receipt issued before restart remains
 usable only if its pending entry was durably written; a consumed receipt remains
-refused after restart. Governance LIVENESS is not restart-safe, and any claim of
+refused after restart. A held request can resume only from its bound persisted
+approval set and pack while both approvals remain fresh. Governance LIVENESS is not restart-safe, and any claim of
 "restart-safe recovery" should be read as covering the persisted fields above
 and not the round.
 
@@ -170,12 +176,14 @@ and not the round.
 The active receipt chain is:
 
 1. An admitted runtime agent proposes or routes a response.
-2. Policy validation evaluates the request and severity.
-3. `Tom` governance either approves, vetoes, or stages partition-time fallback
+2. `Tom` governance either approves, vetoes, or stages partition-time fallback
    evidence.
-4. The dispatcher verifies and durably consumes governed authorization before
-   runtime routing, producing an opaque admission for the runtime.
-5. Human approval applies when severity crosses `policy.human_gate_severity`.
+3. The dispatcher evaluates ordinary policy once without consuming governance.
+4. `Allow` proceeds to atomic governance consumption. `RequireHuman` persists
+   an exact hold and approval-set binding while leaving governance pending.
+5. The dedicated resume path verifies the exact persisted human pack, rechecks
+   governance freshness and pending state, then atomically consumes governance
+   and creates the one-shot admission without a second policy evaluation.
 6. Final execution and audit artifacts persist the request, decision, and
    outcome lineage.
 
@@ -215,9 +223,16 @@ destructive action human-gated must not write a matching `allow` rule for it.
 Current implications:
 
 - a destructive request can be governance-authorized and still stop at the human
-  gate, when no configured rule matches it
+  gate, when no configured rule matches it; stopping persists a hold but consumes
+  neither approval and executes nothing
 - a matching configured `allow` rule passes the policy layer without a human
   hold; it still cannot replace dispatcher governance admission
+- only the dedicated dispatcher resume route can compose the exact persisted
+  human pack with the exact still-pending governance authorization
+- forged, denied, stale, future-dated, or cross-request human packs consume
+  neither approval; direct raw human-approved runtime entry points remain refused
+- after atomic consumption, the admission is non-cloneable and any routing or
+  execution failure burns both approvals
 - human approval does not replace the governance receipt
 - demo approval and live operator approval reuse the same bounded approval
   vocabulary rather than defining a second governance model
@@ -349,7 +364,10 @@ The guided `swarmctl first-run` path is a detect-only governed-action and policy
 rehearsal. It mints neither a human-approval receipt nor a governance
 authorization. A live demo step that names a governed action records
 `governance_deferred`; it does not create a human-resume path that could bypass
-`Pouncer` and the dispatcher.
+`Pouncer` and the dispatcher. The hidden, deprecated
+`--voter-signing-key-env` option remains parseable for one compatibility release
+but is ignored; quickstart retains `receipt_pack_id: null` in JSON for the same
+compatibility window.
 
 ## Config Keys That Define The Contract
 

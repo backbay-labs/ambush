@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use axum::{Json, Router, routing::post};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{
@@ -32,7 +33,7 @@ use swarm_core::config::{
 };
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
-use swarm_crypto::{canonical_json_bytes, sha256_hex};
+use swarm_crypto::{Ed25519Signer, canonical_json_bytes, sha256_hex};
 use swarm_guard::{
     Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
 };
@@ -40,6 +41,7 @@ use swarm_pheromone::{
     ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, PheromoneSubstrate,
 };
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
+use swarm_policy::governance::GovernedHumanAuthorizationHold;
 use swarm_policy::static_gate::{StaticApprovalGate, scope_for_response_action};
 use swarm_policy::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
@@ -54,10 +56,15 @@ use swarm_response::{
 };
 use swarm_runtime::{
     RuntimeError, SwarmRuntime,
+    approval::{
+        ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule, build_receipt_pack,
+        evaluate_verdict,
+    },
     config::load_config,
     dispatcher::{
-        AgentDispatcher, AgentDispatcherConfig, GovernanceVetoRoute, RequestResponseRouter,
-        RoutedActionRequest,
+        AgentDispatcher, AgentDispatcherConfig, DispatcherPolicyPermit, DispatcherPolicyPreflight,
+        GovernanceVetoRoute, GovernedHumanHoldRoute, HumanApprovalChallenge,
+        HumanApprovalResumeDispatcher, RequestResponseRouter, RoutedActionRequest,
     },
     escalation::ConcentrationMonitor,
 };
@@ -148,6 +155,36 @@ impl CountingApprovalGate {
                 evaluate_calls: Arc::clone(&evaluate_calls),
                 issue_lease_calls: Arc::clone(&issue_lease_calls),
                 lease_expiry: LeaseExpiry::Absolute(expires_at_ms),
+            },
+            evaluate_calls,
+            issue_lease_calls,
+        )
+    }
+
+    fn require_human_with_ttl(ttl_ms: i64) -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let evaluate_calls = Arc::new(AtomicUsize::new(0));
+        let issue_lease_calls = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                verdict: PolicyVerdict::RequireHuman,
+                evaluate_calls: Arc::clone(&evaluate_calls),
+                issue_lease_calls: Arc::clone(&issue_lease_calls),
+                lease_expiry: LeaseExpiry::Relative(ttl_ms),
+            },
+            evaluate_calls,
+            issue_lease_calls,
+        )
+    }
+
+    fn deny_with_ttl(ttl_ms: i64) -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let evaluate_calls = Arc::new(AtomicUsize::new(0));
+        let issue_lease_calls = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                verdict: PolicyVerdict::Deny,
+                evaluate_calls: Arc::clone(&evaluate_calls),
+                issue_lease_calls: Arc::clone(&issue_lease_calls),
+                lease_expiry: LeaseExpiry::Relative(ttl_ms),
             },
             evaluate_calls,
             issue_lease_calls,
@@ -276,6 +313,10 @@ struct RuntimeBackedRouter<P, E> {
     runtime: Arc<SwarmRuntime<P, E>>,
     context: ApprovalContext,
     audits: Arc<Mutex<Vec<AuditTrail>>>,
+    approval_harness: DefaultApprovalHarness,
+    human_voter: Ed25519Signer,
+    trusted_human_packs: Arc<Mutex<BTreeMap<String, ApprovalReceiptPackReport>>>,
+    fail_routes_remaining: Arc<AtomicUsize>,
 }
 
 impl<P, E> RuntimeBackedRouter<P, E> {
@@ -284,11 +325,86 @@ impl<P, E> RuntimeBackedRouter<P, E> {
         context: ApprovalContext,
         audits: Arc<Mutex<Vec<AuditTrail>>>,
     ) -> Self {
+        let approval_root = PathBuf::from(temp_jsonl_path("human-approvals"));
         Self {
             runtime,
             context,
             audits,
+            approval_harness: DefaultApprovalHarness::from_path(
+                approval_root.join("config"),
+                approval_root.join("verdicts"),
+                approval_root.join("packs"),
+                approval_root.join("sets"),
+                approval_root.join("ledgers"),
+            )
+            .unwrap(),
+            human_voter: Ed25519Signer::from_secret_material("dispatcher-human-voter"),
+            trusted_human_packs: Arc::new(Mutex::new(BTreeMap::new())),
+            fail_routes_remaining: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    fn build_human_pack(
+        &self,
+        set_id: &str,
+        approve: bool,
+        evaluated_at_ms: i64,
+    ) -> ApprovalReceiptPackReport {
+        let voter_id = format!("swarm:ed25519:{}", self.human_voter.public_key_hex());
+        if approve {
+            self.approval_harness
+                .append_vote(set_id, &voter_id, &self.human_voter)
+                .unwrap();
+        }
+        let set = self
+            .approval_harness
+            .load_approval_set(set_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        let ledger_id = self
+            .approval_harness
+            .list_ledgers(Some(&set.set_id))
+            .unwrap()
+            .ledgers[0]
+            .ledger_id
+            .clone();
+        let ledger = self
+            .approval_harness
+            .load_ledger(&ledger_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        let verdict = evaluate_verdict(&set, &ledger, evaluated_at_ms).unwrap();
+        let signer = Ed25519Signer::from_secret_material("dispatcher-human-pack-signer");
+        let pack = build_receipt_pack(
+            &set,
+            &ledger,
+            &verdict,
+            vec![set.promotion_evidence_ref.clone()],
+            &signer,
+            "dispatcher-human-pack-signer",
+            evaluated_at_ms.saturating_add(1),
+        )
+        .unwrap();
+        self.trusted_human_packs
+            .lock()
+            .unwrap()
+            .insert(pack.pack_id.clone(), pack.clone());
+        pack
+    }
+
+    fn approve_pending_human_hold(&self) -> ApprovalReceiptPackReport {
+        let set_id = self
+            .approval_harness
+            .list_approval_sets()
+            .unwrap()
+            .sets
+            .into_iter()
+            .next()
+            .expect("dispatcher persisted a human approval set")
+            .set_id;
+        self.build_human_pack(&set_id, true, unix_now_ms())
     }
 }
 
@@ -298,17 +414,91 @@ where
     P: ApprovalGate + Send + Sync + 'static,
     E: ResponseExecutor + Send + Sync + 'static,
 {
+    async fn preflight_request(
+        &self,
+        request: ActionRequest,
+    ) -> Result<DispatcherPolicyPreflight, RuntimeError> {
+        let detection = detection_from_request(&request);
+        self.runtime
+            .preflight_dispatcher_request(request, detection, self.context.clone())
+    }
+
+    async fn route_preflight_audit(&self, audit: AuditTrail) -> Result<AuditTrail, RuntimeError> {
+        self.audits.lock().unwrap().push(audit.clone());
+        Ok(audit)
+    }
+
     async fn route_request(
         &self,
         admitted: RoutedActionRequest,
     ) -> Result<AuditTrail, RuntimeError> {
-        let detection = detection_from_request(admitted.request());
+        if self
+            .fail_routes_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(RuntimeError::GovernanceAuthorization(
+                "test router refused owned admission".into(),
+            ));
+        }
         let audit = self
             .runtime
-            .audit_authorize_and_execute_admitted(&detection, &admitted, &self.context)
+            .audit_authorize_and_execute_admitted(admitted)
             .await?;
         self.audits.lock().unwrap().push(audit.clone());
         Ok(audit)
+    }
+
+    async fn route_human_hold(
+        &self,
+        route: GovernedHumanHoldRoute,
+    ) -> Result<HumanApprovalChallenge, RuntimeError> {
+        let voter_id = format!("swarm:ed25519:{}", self.human_voter.public_key_hex());
+        let record = self
+            .approval_harness
+            .create_approval_set(
+                vec![voter_id],
+                ThresholdRule::AtLeast { required: 1 },
+                &route.hold().approval_evidence_ref(),
+            )
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
+        let report = self
+            .approval_harness
+            .load_approval_set(&record.set_id)
+            .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?
+            .unwrap();
+        self.audits
+            .lock()
+            .unwrap()
+            .push(route.initial_audit().clone());
+        route.challenge_for_persisted_set(&report.report)
+    }
+
+    async fn load_persisted_human_approval(
+        &self,
+        pack_id: &str,
+    ) -> Result<Option<ApprovalReceiptPackReport>, RuntimeError> {
+        Ok(self
+            .trusted_human_packs
+            .lock()
+            .unwrap()
+            .get(pack_id)
+            .cloned())
+    }
+
+    async fn restore_human_preflight(
+        &self,
+        hold: &GovernedHumanAuthorizationHold,
+        approval_pack_id: &str,
+        now_ms: i64,
+    ) -> Result<DispatcherPolicyPermit, RuntimeError> {
+        let detection = detection_from_request(&hold.request);
+        let mut context = self.context.clone();
+        context.now_ms = now_ms;
+        self.runtime
+            .restore_human_dispatcher_preflight(hold, detection, context, approval_pack_id)
     }
 
     async fn route_governance_veto(
@@ -334,17 +524,26 @@ fn repo_config_path() -> PathBuf {
 /// `cargo test`'s cwd is the crate root, so a test that takes the default
 /// appends to the checked-out `crates/swarm-runtime/dead-letter.jsonl`.
 fn temp_jsonl_path(label: &str) -> String {
+    static TEMP_PATH_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
     std::env::temp_dir()
         .join(format!(
-            "swarm-runtime-dispatch-{label}-{}-{}.jsonl",
+            "swarm-runtime-dispatch-{label}-{}-{}-{}.jsonl",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_nanos()
+                .as_nanos(),
+            TEMP_PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed),
         ))
         .display()
         .to_string()
+}
+
+fn unix_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 fn sample_config() -> Result<SwarmConfig, Box<dyn Error>> {
@@ -1245,6 +1444,538 @@ async fn destructive_request_response_persists_governance_receipt() -> Result<()
 }
 
 #[tokio::test]
+async fn governed_human_hold_keeps_governance_pending_and_executes_nothing()
+-> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, issue_lease_calls) =
+        CountingApprovalGate::require_human_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "human-hold");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governed-human-hold",
+            "evt-governed-human-hold",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.41".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router.clone())
+    .with_governance_policy(governance.clone());
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+
+    dispatcher.tick_once().await;
+
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    let audits = audits.lock().unwrap();
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0].policy.verdict, PolicyVerdict::RequireHuman);
+    assert!(matches!(
+        audits[0].response,
+        AuditResponseRecord::Skipped { .. }
+    ));
+    drop(audits);
+
+    let approval_set = router
+        .approval_harness
+        .list_approval_sets()?
+        .sets
+        .into_iter()
+        .next()
+        .expect("the dispatcher must persist one approval set");
+    let hold = governance.pending_human_authorization(&approval_set.set_id)?;
+    assert_eq!(hold.request.hunt_id.0, "hunt-governed-human-hold");
+    assert_eq!(hold.policy_decision.verdict, PolicyVerdict::RequireHuman);
+    assert_eq!(
+        hold.approval_set_id.as_deref(),
+        Some(approval_set.set_id.as_str())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn governed_policy_deny_does_not_consume_governance_authorization()
+-> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::deny_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "governed-policy-deny");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governed-policy-deny",
+            "evt-governed-policy-deny",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.46".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let request = fixture_action_request(&pounce_id, &action);
+    let receipt = request.evidence["governance_receipt"].clone();
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router)
+    .with_governance_policy(governance.clone());
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+    dispatcher.tick_once().await;
+
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        audits.lock().unwrap()[0].response,
+        AuditResponseRecord::Skipped { .. }
+    ));
+    governance
+        .verify_and_consume_action_authorization(&request, &receipt, unix_now_ms())
+        .expect("ordinary policy denial must leave governance pending");
+    Ok(())
+}
+
+#[tokio::test]
+async fn governed_human_resume_executes_once_without_re_evaluating_policy()
+-> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, issue_lease_calls) =
+        CountingApprovalGate::require_human_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "human-resume");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governed-human-resume",
+            "evt-governed-human-resume",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.42".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router.clone())
+    .with_governance_policy(governance.clone());
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+    dispatcher.tick_once().await;
+
+    let pack = router.approve_pending_human_hold();
+    let resume = HumanApprovalResumeDispatcher::new(governance, router);
+    let audit = resume.resume(pack.clone(), unix_now_ms()).await?;
+
+    assert_eq!(audit.hunt_id, "hunt-governed-human-resume");
+    assert!(matches!(audit.response, AuditResponseRecord::Success(_)));
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+
+    let replay = resume
+        .resume(pack, unix_now_ms())
+        .await
+        .expect_err("a human and governance approval pair must be one-shot");
+    assert!(replay.to_string().contains("pending human authorization"));
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn fresh_human_approval_cannot_resume_a_stale_governance_receipt()
+-> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, issue_lease_calls) =
+        CountingApprovalGate::require_human_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "stale-governance-resume");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-stale-governance-resume",
+            "evt-stale-governance-resume",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.47".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let issued_at_ms = fixture_action_request(&pounce_id, &action).evidence
+        ["governance_receipt"]["payload"]["issued_at_ms"]
+        .as_i64()
+        .expect("issued governance receipt carries its timestamp");
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router.clone())
+    .with_governance_policy(governance.clone());
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+    dispatcher.tick_once().await;
+
+    let set_id = router
+        .approval_harness
+        .list_approval_sets()?
+        .sets
+        .into_iter()
+        .next()
+        .expect("dispatcher persisted a human approval set")
+        .set_id;
+    let resume_at_ms = issued_at_ms.saturating_add(300_002);
+    let fresh_pack = router.build_human_pack(&set_id, true, resume_at_ms.saturating_sub(1));
+    let error = HumanApprovalResumeDispatcher::new(governance.clone(), router)
+        .resume(fresh_pack, resume_at_ms)
+        .await
+        .expect_err("fresh human approval cannot refresh stale governance");
+    assert!(
+        error.to_string().contains("governance receipt is stale"),
+        "{error}"
+    );
+    assert!(governance.pending_human_authorization(&set_id).is_ok());
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, issue_lease_calls) =
+        CountingApprovalGate::require_human_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "human-hostile-packs");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governed-human-hostile",
+            "evt-governed-human-hostile",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.43".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router.clone())
+    .with_governance_policy(governance.clone());
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+    dispatcher.tick_once().await;
+
+    let set_id = router
+        .approval_harness
+        .list_approval_sets()?
+        .sets
+        .into_iter()
+        .next()
+        .expect("dispatcher persisted a human approval set")
+        .set_id;
+    let denied = router.build_human_pack(&set_id, false, unix_now_ms());
+    let resume = HumanApprovalResumeDispatcher::new(governance.clone(), router.clone());
+    let denied_error = resume
+        .resume(denied, unix_now_ms())
+        .await
+        .expect_err("a not-approved verdict must not consume governance");
+    assert!(
+        denied_error
+            .to_string()
+            .contains("not an internally valid approval"),
+        "{denied_error}"
+    );
+
+    let valid = router.build_human_pack(&set_id, true, unix_now_ms());
+    let mut forged = valid.clone();
+    forged.audit_refs.clear();
+    let forged_error = resume
+        .resume(forged, unix_now_ms())
+        .await
+        .expect_err("a caller-mutated pack must not consume governance");
+    assert!(forged_error.to_string().contains("persisted artifact"));
+
+    let mut cross_request = valid.clone();
+    cross_request.approval_set.promotion_evidence_ref =
+        "governance-human-hold:unrelated".to_string();
+    let cross_request_error = resume
+        .resume(cross_request, unix_now_ms())
+        .await
+        .expect_err("a pack substituted across requests must not consume governance");
+    assert!(
+        cross_request_error
+            .to_string()
+            .contains("persisted artifact")
+    );
+
+    let stale_error = resume
+        .resume(valid.clone(), valid.created_at_ms.saturating_add(300_001))
+        .await
+        .expect_err("a stale human approval must not consume governance");
+    assert!(stale_error.to_string().contains("stale"));
+    let future_error = resume
+        .resume(valid.clone(), valid.created_at_ms.saturating_sub(30_001))
+        .await
+        .expect_err("a future-dated human approval must not consume governance");
+    assert!(future_error.to_string().contains("future"));
+
+    assert!(governance.pending_human_authorization(&set_id).is_ok());
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+
+    resume.resume(valid, unix_now_ms()).await?;
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_router_burns_owned_human_and_governance_admission() -> Result<(), Box<dyn Error>> {
+    let (gate, evaluate_calls, issue_lease_calls) =
+        CountingApprovalGate::require_human_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let governance = sample_governance_policy();
+    let pounce_id = AgentId::new("pounce", "human-route-failure");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governed-human-route-failure",
+            "evt-governed-human-route-failure",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.44".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router.clone())
+    .with_governance_policy(governance.clone());
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+    dispatcher.tick_once().await;
+
+    let pack = router.approve_pending_human_hold();
+    router.fail_routes_remaining.store(1, Ordering::SeqCst);
+    let resume = HumanApprovalResumeDispatcher::new(governance, router);
+    let route_error = resume
+        .resume(pack.clone(), unix_now_ms())
+        .await
+        .expect_err("router failure is reported after durable consumption");
+    assert!(route_error.to_string().contains("refused owned admission"));
+    let replay_error = resume
+        .resume(pack, unix_now_ms())
+        .await
+        .expect_err("a failed owned route must not make the admission reusable");
+    assert!(
+        replay_error
+            .to_string()
+            .contains("pending human authorization")
+    );
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn governed_human_hold_and_consumption_survive_governance_restarts()
+-> Result<(), Box<dyn Error>> {
+    let persistence_path = temp_jsonl_path("governed-human-restart");
+    let governance = Arc::new(GovernancePolicy::with_persistence(
+        GovernancePolicyConfig::default(),
+        &persistence_path,
+    )?);
+    governance.register_governor(
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
+    )?;
+    let (gate, evaluate_calls, issue_lease_calls) =
+        CountingApprovalGate::require_human_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        runtime,
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let pounce_id = AgentId::new("pounce", "human-restart");
+    let action = attach_issued_receipt(
+        &governance,
+        &pounce_id,
+        sample_request_response_action(
+            "hunt-governed-human-restart",
+            "evt-governed-human-restart",
+            ResponseAction::BlockEgress {
+                target: "203.0.113.45".to_string(),
+            },
+            Severity::Critical,
+        ),
+        GovernanceReceiptDecision::Approve,
+    );
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router.clone())
+    .with_governance_policy(governance);
+    dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
+    dispatcher.tick_once().await;
+    let pack = router.approve_pending_human_hold();
+    drop(dispatcher);
+
+    let reloaded = Arc::new(GovernancePolicy::with_persistence(
+        GovernancePolicyConfig::default(),
+        &persistence_path,
+    )?);
+    reloaded.register_governor(
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
+    )?;
+    let resume = HumanApprovalResumeDispatcher::new(reloaded, router.clone());
+    resume.resume(pack.clone(), unix_now_ms()).await?;
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+
+    let consumed_reload = Arc::new(GovernancePolicy::with_persistence(
+        GovernancePolicyConfig::default(),
+        &persistence_path,
+    )?);
+    consumed_reload.register_governor(
+        AgentId::new("tom", "primary"),
+        SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
+    )?;
+    let replay = HumanApprovalResumeDispatcher::new(consumed_reload, router)
+        .resume(pack, unix_now_ms())
+        .await
+        .expect_err("restart must preserve one-time consumption");
+    assert!(replay.to_string().contains("pending human authorization"));
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn governed_dispatcher_admission_reaches_containment_lease_persistence()
 -> Result<(), Box<dyn Error>> {
     let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
@@ -1362,7 +2093,7 @@ async fn destructive_request_response_refuses_an_issued_veto_receipt() -> Result
     dispatcher.tick_once().await;
 
     assert_eq!(audits.lock().unwrap().len(), 0);
-    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
     Ok(())
 }
@@ -1428,7 +2159,7 @@ async fn destructive_approval_cannot_change_target() -> Result<(), Box<dyn Error
     dispatcher.tick_once().await;
 
     assert_eq!(audits.lock().unwrap().len(), 0);
-    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 2);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
     Ok(())
 }
@@ -1480,7 +2211,7 @@ async fn destructive_approval_routes_exactly_once() -> Result<(), Box<dyn Error>
     dispatcher.tick_once().await;
 
     assert_eq!(audits.lock().unwrap().len(), 1);
-    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 2);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
@@ -1674,8 +2405,8 @@ async fn destructive_request_response_is_refused_when_the_signer_is_not_a_govern
     .await?;
     assert_eq!(
         (audits, executed, evaluated),
-        (0, 0, 0),
-        "a self-signed receipt from outside the governor set must not reach the runtime"
+        (0, 0, 1),
+        "a self-signed receipt from outside the governor set must not pass governance after policy preflight"
     );
 
     // NO AUTHORITY AT ALL. The dispatcher cannot tell an approval from a
@@ -1686,8 +2417,8 @@ async fn destructive_request_response_is_refused_when_the_signer_is_not_a_govern
         run_one_destructive_request(None, Some(&governor_key), "hunt-anchor-anchorless").await?;
     assert_eq!(
         (audits, executed, evaluated),
-        (0, 0, 0),
-        "with no governance authority installed there is no trust anchor, so nothing may proceed"
+        (0, 0, 1),
+        "with no governance authority installed policy may preflight, but nothing may proceed"
     );
     Ok(())
 }
@@ -1732,7 +2463,7 @@ async fn partitioned_request_response_fails_closed_without_contingency_lease()
 
     dispatcher.tick_once().await;
 
-    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
     assert!(audits.lock().unwrap().is_empty());
@@ -1907,7 +2638,7 @@ async fn partitioned_request_response_rejects_expired_contingency_lease()
 
     dispatcher.tick_once().await;
 
-    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
     assert!(audits.lock().unwrap().is_empty());

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use swarm_core::agent::AgentRole;
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 
-use crate::{ActionRequest, static_gate::scope_for_response_action};
+use crate::{ActionRequest, PolicyDecision, static_gate::scope_for_response_action};
 
 pub const GOVERNANCE_ACTION_REQUEST_SUBJECT_SCHEMA_VERSION: u32 = 1;
 pub const GOVERNANCE_ACTION_REQUEST_SUBJECT_DOMAIN: &str =
@@ -66,6 +66,39 @@ impl GovernanceActionRequestSubjectV1 {
             evidence,
         }
     }
+}
+
+/// Durable composition point between a pending governance authorization and an
+/// ordinary policy decision that requires a human.
+///
+/// This record is data, not an execution capability. Only the sealed governance
+/// authority can persist or consume it, and the dispatcher can mint an execution
+/// admission only from the consumed form returned by that authority.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GovernedHumanAuthorizationHold {
+    pub hold_id: String,
+    pub request: ActionRequest,
+    pub policy_decision: PolicyDecision,
+    pub governance_receipt: serde_json::Value,
+    pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_set_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_set_digest: Option<String>,
+}
+
+impl GovernedHumanAuthorizationHold {
+    pub fn approval_evidence_ref(&self) -> String {
+        format!("swarm.governance.human-authorization.v1:{}", self.hold_id)
+    }
+}
+
+/// Result of atomically consuming both a human hold and its still-pending
+/// governance authorization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConsumedGovernedHumanAuthorization {
+    pub hold: GovernedHumanAuthorizationHold,
+    pub verified_governance_receipt: serde_json::Value,
 }
 
 /// One governance-originated runtime event, flattened to what the dispatcher publishes.
@@ -268,6 +301,41 @@ pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
         receipt: &serde_json::Value,
         now_ms: i64,
     ) -> Result<serde_json::Value, String>;
+
+    /// Verify without consuming an approval receipt, then durably hold its exact
+    /// request and already-evaluated ordinary-policy decision for human review.
+    fn begin_human_authorization_hold(
+        &self,
+        request: &ActionRequest,
+        receipt: &serde_json::Value,
+        policy_decision: &PolicyDecision,
+        now_ms: i64,
+    ) -> Result<GovernedHumanAuthorizationHold, String>;
+
+    /// Bind a locally persisted approval set to a pending hold. Persistence must
+    /// succeed before the set can be redeemed.
+    fn bind_human_approval_set(
+        &self,
+        hold_id: &str,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String>;
+
+    /// Read the still-pending hold bound to this locally persisted approval set.
+    fn pending_human_authorization(
+        &self,
+        approval_set_id: &str,
+    ) -> Result<GovernedHumanAuthorizationHold, String>;
+
+    /// Atomically consume the exact held approval receipt and remove the human
+    /// hold. Persistence happens before an execution admission is returned.
+    fn verify_and_consume_human_authorization(
+        &self,
+        hold_id: &str,
+        approval_set_id: &str,
+        approval_set_digest: &str,
+        now_ms: i64,
+    ) -> Result<ConsumedGovernedHumanAuthorization, String>;
 
     /// Whether the governance quorum is currently partitioned.
     fn is_partitioned(&self) -> bool;

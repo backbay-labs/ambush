@@ -72,7 +72,7 @@ pub struct ApprovalContext {
 }
 
 /// The outcome of evaluating a live response request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDecision {
     /// Deterministic policy verdict.
     pub verdict: PolicyVerdict,

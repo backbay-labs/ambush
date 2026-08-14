@@ -18,6 +18,15 @@ consume an exact `Approve` or `Veto`, then passes an opaque admission to the
 runtime. Contingency receipts are likewise anchored and redeemed once. The
 release-attestation trust-anchor decision in this ADR remains current.
 
+Human-approval composition was hardened in the same follow-up. Ordinary policy
+is preflighted once before governance consumption. `RequireHuman` persists an
+exact-request hold and approval-set binding while leaving governance pending;
+the dedicated resume route verifies the exact locally persisted approval pack,
+atomically consumes governance, and moves one non-cloneable admission to one
+router call without a second mutable policy evaluation. Once consumed, a later
+routing or execution failure burns both approvals. Raw human-approved runtime
+entry points do not bypass this route.
+
 ## Context
 
 `ConsensusGovernanceReceipt::verify` performed two checks, and both were closed

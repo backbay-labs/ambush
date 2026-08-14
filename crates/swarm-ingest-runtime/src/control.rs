@@ -236,11 +236,81 @@ pub enum FirstRunStatus {
     Completed,
 }
 
+/// Legacy approval-store locations retained for source compatibility.
+///
+/// Guided first-run is now a detect-only rehearsal and does not read or write
+/// these stores. Remove these fields from downstream callers after migrating to
+/// [`FirstRunWizardOptions::detect_only`].
+#[derive(Debug, Clone)]
+pub struct FirstRunWizardPaths {
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
+    pub approval_verdict_results_dir: PathBuf,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
+    pub approval_receipt_pack_results_dir: PathBuf,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
+    pub approval_set_results_dir: PathBuf,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
+    pub approval_ledger_results_dir: PathBuf,
+}
+
 /// Operator-controlled inputs for the guided first-run walkthrough.
 #[derive(Debug, Clone)]
 pub struct FirstRunWizardOptions {
     pub scenario_path: Option<PathBuf>,
     pub pace_ms: u64,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer reads a voter signing key"
+    )]
+    pub voter_signing_key_env: String,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer signs approval evidence"
+    )]
+    pub evidence_signer_id: String,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer reads an evidence signing key"
+    )]
+    pub evidence_signing_key_env: String,
+    #[deprecated(
+        since = "0.1.0",
+        note = "guided first-run no longer writes approval artifacts"
+    )]
+    pub paths: FirstRunWizardPaths,
+}
+
+#[allow(deprecated)]
+impl FirstRunWizardOptions {
+    /// Construct the current detect-only guided walkthrough without treating
+    /// legacy approval inputs as authority.
+    pub fn detect_only(scenario_path: Option<PathBuf>, pace_ms: u64) -> Self {
+        Self {
+            scenario_path,
+            pace_ms,
+            voter_signing_key_env: String::new(),
+            evidence_signer_id: String::new(),
+            evidence_signing_key_env: String::new(),
+            paths: FirstRunWizardPaths {
+                approval_verdict_results_dir: PathBuf::new(),
+                approval_receipt_pack_results_dir: PathBuf::new(),
+                approval_set_results_dir: PathBuf::new(),
+                approval_ledger_results_dir: PathBuf::new(),
+            },
+        }
+    }
 }
 
 /// Readiness-gated first-run walkthrough report exposed through `swarmctl`.
@@ -1652,10 +1722,7 @@ mod tests {
     }
 
     fn first_run_options(_root: &std::path::Path) -> FirstRunWizardOptions {
-        FirstRunWizardOptions {
-            scenario_path: None,
-            pace_ms: 0,
-        }
+        FirstRunWizardOptions::detect_only(None, 0)
     }
 
     fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {

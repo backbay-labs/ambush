@@ -1495,6 +1495,160 @@ pub fn verify_receipt_pack(pack: &ApprovalReceiptPackReport) -> Result<(), Appro
     Ok(())
 }
 
+/// Canonical digest used to bind a governance human hold to the exact approval
+/// set persisted before any votes are accepted.
+pub fn approval_set_digest(report: &ApprovalSetReport) -> Result<String, ApprovalError> {
+    Ok(sha256_hex(&canonical_json_bytes(report)?))
+}
+
+/// Verify the complete locally persisted human-approval artifact against one
+/// governed hold. The caller must separately prove `pack` is byte-for-byte the
+/// pack loaded from its durable store; this function validates its cryptographic
+/// and internal lineage plus the exact hold binding.
+pub fn verify_governed_human_receipt_pack(
+    pack: &ApprovalReceiptPackReport,
+    expected_set_id: &str,
+    expected_set_digest: &str,
+    expected_evidence_ref: &str,
+    hold_created_at_ms: i64,
+    now_ms: i64,
+) -> Result<(), ApprovalError> {
+    const MAX_HUMAN_APPROVAL_AGE_MS: i64 = 300_000;
+    const MAX_HUMAN_APPROVAL_FUTURE_SKEW_MS: i64 = 30_000;
+
+    verify_receipt_pack(pack)?;
+    if pack.approval_set.set_id != expected_set_id
+        || approval_set_digest(&pack.approval_set)? != expected_set_digest
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval set does not match the persisted governance hold".into(),
+        });
+    }
+    if pack.approval_set.promotion_evidence_ref != expected_evidence_ref
+        || !pack
+            .audit_refs
+            .iter()
+            .any(|reference| reference == expected_evidence_ref)
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval receipt pack is not bound to the governed request".into(),
+        });
+    }
+    if pack.approval_set.created_at_ms < hold_created_at_ms
+        || pack.verdict.evaluated_at_ms < hold_created_at_ms
+        || pack.created_at_ms < pack.verdict.evaluated_at_ms
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval receipt pack predates the governance hold".into(),
+        });
+    }
+    if pack.created_at_ms > now_ms.saturating_add(MAX_HUMAN_APPROVAL_FUTURE_SKEW_MS) {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval receipt pack was created too far in the future".into(),
+        });
+    }
+    if now_ms.saturating_sub(pack.created_at_ms) > MAX_HUMAN_APPROVAL_AGE_MS {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval receipt pack is stale".into(),
+        });
+    }
+    if pack.ledger.approval_set_id != pack.approval_set.set_id
+        || pack.verdict.approval_set_id != pack.approval_set.set_id
+        || pack.verdict.ledger_id != pack.ledger.ledger_id
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval set, ledger, and verdict lineage do not agree".into(),
+        });
+    }
+
+    let expected_set_id = approval_set_id(
+        pack.approval_set.created_at_ms,
+        &canonical_json_bytes(&ApprovalSetIdSeed {
+            eligible_voters: &pack.approval_set.eligible_voters,
+            threshold: &pack.approval_set.threshold,
+            promotion_evidence_ref: &pack.approval_set.promotion_evidence_ref,
+            created_at_ms: pack.approval_set.created_at_ms,
+        })?,
+    );
+    if pack.approval_set.set_id != expected_set_id
+        || pack.ledger.ledger_id
+            != approval_ledger_id(&pack.approval_set.set_id, pack.approval_set.created_at_ms)
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval set or ledger identifier is not canonical".into(),
+        });
+    }
+
+    let mut replayed_ledger = ApprovalLedgerReport {
+        ledger_id: pack.ledger.ledger_id.clone(),
+        approval_set_id: pack.ledger.approval_set_id.clone(),
+        entries: Vec::new(),
+        created_at_ms: pack.ledger.created_at_ms,
+    };
+    for entry in &pack.ledger.entries {
+        if entry.vote != ApprovalVote::Approve {
+            return Err(ApprovalError::InvalidReceiptPack {
+                reason: "governed execution requires explicit approve votes".into(),
+            });
+        }
+        let expected_entry_id = next_approval_ledger_entry_id(
+            &replayed_ledger.ledger_id,
+            replayed_ledger.entries.len(),
+        );
+        let expected_envelope_hash = build_vote_envelope_hash(
+            &replayed_ledger,
+            &expected_entry_id,
+            &entry.voter_id,
+            &entry.signature,
+            entry.timestamp_ms,
+        )?;
+        if entry.entry_id != expected_entry_id || entry.envelope_hash != expected_envelope_hash {
+            return Err(ApprovalError::InvalidReceiptPack {
+                reason: "approval vote ledger chain is inconsistent".into(),
+            });
+        }
+        validate_and_append_vote(
+            &mut replayed_ledger,
+            &pack.approval_set,
+            &entry.voter_id,
+            &entry.signature,
+            entry.timestamp_ms,
+            &entry.envelope_hash,
+        )?;
+    }
+    if replayed_ledger != pack.ledger {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval vote ledger could not be replayed exactly".into(),
+        });
+    }
+
+    let expected_verdict = evaluate_verdict(
+        &pack.approval_set,
+        &pack.ledger,
+        pack.verdict.evaluated_at_ms,
+    )?;
+    if expected_verdict != pack.verdict || pack.verdict.status != ApprovalVerdictStatus::Approved {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval verdict is not an internally valid approval".into(),
+        });
+    }
+    let expected_pack_id = approval_receipt_pack_id(
+        pack.created_at_ms,
+        &canonical_json_bytes(&ApprovalReceiptPackIdSeed {
+            signer_id: &pack.signer_id,
+            content_hash: &pack.content_hash,
+            signature_key_id: &pack.signature.key_id,
+            created_at_ms: pack.created_at_ms,
+        })?,
+    );
+    if pack.pack_id != expected_pack_id {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "approval receipt-pack identifier is not canonical".into(),
+        });
+    }
+    Ok(())
+}
+
 pub fn render_approval_set(report: &ApprovalSetReport) -> String {
     let mut lines = vec![
         format!("Approval Set: {}", report.set_id),

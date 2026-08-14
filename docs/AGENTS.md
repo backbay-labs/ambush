@@ -77,11 +77,15 @@ The current governance chain is intentionally simple:
    - no extra governance artifact for non-destructive guarded response,
    - a signed, pending-ledger-backed authorization for governed response, or
    - a veto or contingency lease path when partition handling applies.
-4. Immediately before routing, the dispatcher verifies the exact subject and
-   decision, durably consumes the authorization once, and creates an opaque
-   admission.
-5. The response runtime consumes that admission without reinterpreting the
-   receipt, then persists the final audit outcome.
+4. The dispatcher preflights ordinary policy once without consuming governance.
+   A human-gated request is persisted as an exact hold and leaves the governance
+   receipt pending; it produces no admission and invokes no executor.
+5. An ordinary `Allow`, or the dedicated human-resume route after verifying the
+   exact persisted approval pack, atomically consumes governance and creates a
+   non-cloneable admission immediately before routing.
+6. The response runtime consumes that admission by value without reinterpreting
+   receipts or re-evaluating mutable policy, then persists the final audit
+   outcome. A routing or execution failure after consumption burns the approval.
 
 This means:
 
