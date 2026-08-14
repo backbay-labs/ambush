@@ -499,11 +499,9 @@ where
         &self,
         hold: &GovernedHumanAuthorizationHold,
         approval_pack_id: &str,
-        now_ms: i64,
     ) -> Result<DispatcherPolicyPermit, RuntimeError> {
         let detection = detection_from_request(&hold.request);
-        let mut context = self.context.clone();
-        context.now_ms = now_ms;
+        let context = self.context.clone();
         self.runtime
             .restore_human_dispatcher_preflight(hold, detection, context, approval_pack_id)
     }

@@ -210,11 +210,9 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
         &self,
         hold: &GovernedHumanAuthorizationHold,
         approval_pack_id: &str,
-        now_ms: i64,
     ) -> Result<DispatcherPolicyPermit, RuntimeError> {
         let runtime = self.runtime.load_full();
-        let mut context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
-        context.now_ms = now_ms;
+        let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
         let detection = routed_detection_from_request(&hold.request);
         runtime.restore_human_dispatcher_preflight(hold, detection, context, approval_pack_id)
     }

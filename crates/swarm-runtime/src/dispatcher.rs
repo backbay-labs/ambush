@@ -199,6 +199,13 @@ impl DispatcherPolicyPermit {
         &self.decision
     }
 
+    /// Replace any restoration-time timestamp with the host time sampled by the
+    /// dispatcher after the last awaited preflight step.
+    fn bind_trusted_now_ms(mut self, trusted_now_ms: i64) -> Self {
+        self.context.now_ms = trusted_now_ms;
+        self
+    }
+
     pub(crate) fn into_execution_parts(
         self,
     ) -> (
@@ -427,12 +434,13 @@ pub trait RequestResponseRouter: Send + Sync {
     ) -> Result<Option<ApprovalReceiptPackReport>, RuntimeError>;
 
     /// Reconstitute execution context from a persisted hold without evaluating
-    /// mutable ordinary policy a second time.
+    /// mutable ordinary policy a second time. This awaited step must be
+    /// side-effect-free: it runs before the dispatcher samples the trusted clock
+    /// and before either approval is consumed.
     async fn restore_human_preflight(
         &self,
         hold: &GovernedHumanAuthorizationHold,
         approval_pack_id: &str,
-        now_ms: i64,
     ) -> Result<DispatcherPolicyPermit, RuntimeError>;
 
     async fn route_governance_veto(
@@ -446,6 +454,19 @@ pub trait RequestResponseRouter: Send + Sync {
 pub struct HumanApprovalResumeDispatcher {
     governance: Arc<dyn GovernanceAuthority>,
     router: Arc<dyn RequestResponseRouter>,
+    clock: Arc<dyn HumanResumeClock>,
+}
+
+trait HumanResumeClock: Send + Sync {
+    fn now_ms(&self) -> i64;
+}
+
+struct HostHumanResumeClock;
+
+impl HumanResumeClock for HostHumanResumeClock {
+    fn now_ms(&self) -> i64 {
+        now_ms()
+    }
 }
 
 impl HumanApprovalResumeDispatcher {
@@ -453,7 +474,24 @@ impl HumanApprovalResumeDispatcher {
         governance: Arc<dyn GovernanceAuthority>,
         router: Arc<dyn RequestResponseRouter>,
     ) -> Self {
-        Self { governance, router }
+        Self {
+            governance,
+            router,
+            clock: Arc::new(HostHumanResumeClock),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_clock(
+        governance: Arc<dyn GovernanceAuthority>,
+        router: Arc<dyn RequestResponseRouter>,
+        clock: Arc<dyn HumanResumeClock>,
+    ) -> Self {
+        Self {
+            governance,
+            router,
+            clock,
+        }
     }
 
     /// Verify the locally persisted approval pack and exact request binding,
@@ -492,9 +530,20 @@ impl HumanApprovalResumeDispatcher {
                 "pending human authorization has no approval-set digest".into(),
             )
         })?;
-        // Sample the trusted host clock only after durable artifacts are loaded,
-        // immediately before freshness validation and atomic consumption.
-        let trusted_now_ms = now_ms();
+        let permit = self
+            .router
+            .restore_human_preflight(&hold, &receipt_pack.pack_id)
+            .await?;
+        if permit.request != hold.request || permit.decision != hold.policy_decision {
+            return Err(RuntimeError::GovernanceAuthorization(
+                "restored policy preflight does not match the persisted human hold".into(),
+            ));
+        }
+        // All artifact I/O and awaited, side-effect-free preflight work is now
+        // complete. Use one post-await host timestamp for human-pack freshness,
+        // governance consumption, and the eventual lease/execution context. No
+        // await may be introduced between verification and durable consumption.
+        let trusted_now_ms = self.clock.now_ms();
         verify_governed_human_receipt_pack(
             &receipt_pack,
             approval_set_id,
@@ -504,15 +553,6 @@ impl HumanApprovalResumeDispatcher {
             trusted_now_ms,
         )
         .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
-        let permit = self
-            .router
-            .restore_human_preflight(&hold, &receipt_pack.pack_id, trusted_now_ms)
-            .await?;
-        if permit.request != hold.request || permit.decision != hold.policy_decision {
-            return Err(RuntimeError::GovernanceAuthorization(
-                "restored policy preflight does not match the persisted human hold".into(),
-            ));
-        }
         let consumed = self
             .governance
             .verify_and_consume_human_authorization(
@@ -528,7 +568,7 @@ impl HumanApprovalResumeDispatcher {
             ));
         }
         let admitted = RoutedActionRequest::new(
-            permit,
+            permit.bind_trusted_now_ms(trusted_now_ms),
             Some(consumed.verified_governance_receipt),
             Some(receipt_pack),
         )
@@ -1994,8 +2034,14 @@ fn unix_timestamp_millis() -> i64 {
 mod tests {
     use super::{
         AgentDispatcher, AgentDispatcherConfig, AgentRestartFactory, DispatcherPolicyPermit,
-        RoutedActionRequest, StrategyProposalOutcome, StrategyProposalRoute,
+        DispatcherPolicyPreflight, GovernanceVetoRoute, GovernedHumanHoldRoute,
+        HumanApprovalChallenge, HumanApprovalResumeDispatcher, HumanResumeClock,
+        RequestResponseRouter, RoutedActionRequest, StrategyProposalOutcome, StrategyProposalRoute,
         StrategyProposalRouteReport, StrategyProposalRouter, agent_role_label,
+    };
+    use crate::approval::{
+        ApprovalReceiptPackReport, DefaultApprovalHarness, ThresholdRule, approval_set_digest,
+        build_receipt_pack, evaluate_verdict,
     };
     use crate::detection::metrics::{CriticalPathMetrics, encode_metrics};
     use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
@@ -2008,9 +2054,11 @@ mod tests {
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use std::collections::VecDeque;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
     use std::time::Duration;
-    use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
+    use swarm_agents::tom_agent::{
+        GovernanceDecision, GovernancePolicy, GovernancePolicyConfig, TomAgent,
+    };
     use swarm_core::ThreatClass;
     use swarm_core::agent::{
         AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
@@ -2018,10 +2066,286 @@ mod tests {
     };
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
+    use swarm_crypto::Ed25519Signer;
     use swarm_pheromone::{ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate};
+    use swarm_policy::governance::GovernedHumanAuthorizationHold;
     use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision};
+    use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
     use swarm_whisker::DetectionFinding;
     use tokio::sync::{mpsc, watch};
+
+    struct AdjustableHumanResumeClock {
+        now_ms: AtomicI64,
+    }
+
+    impl AdjustableHumanResumeClock {
+        fn new(now_ms: i64) -> Self {
+            Self {
+                now_ms: AtomicI64::new(now_ms),
+            }
+        }
+    }
+
+    impl HumanResumeClock for AdjustableHumanResumeClock {
+        fn now_ms(&self) -> i64 {
+            self.now_ms.load(Ordering::SeqCst)
+        }
+    }
+
+    struct DelayedHumanResumeRouter {
+        pack: ApprovalReceiptPackReport,
+        clock: Arc<AdjustableHumanResumeClock>,
+        advance_clock_to_ms: Option<i64>,
+        lease_calls: AtomicUsize,
+        executor_calls: AtomicUsize,
+        effect_calls: AtomicUsize,
+        execution_now_ms: AtomicI64,
+    }
+
+    #[async_trait]
+    impl RequestResponseRouter for DelayedHumanResumeRouter {
+        async fn preflight_request(
+            &self,
+            _request: ActionRequest,
+        ) -> Result<DispatcherPolicyPreflight, crate::RuntimeError> {
+            unreachable!("resume test never performs ordinary policy preflight")
+        }
+
+        async fn route_preflight_audit(
+            &self,
+            _audit: AuditTrail,
+        ) -> Result<AuditTrail, crate::RuntimeError> {
+            unreachable!("resume test never routes a preflight audit")
+        }
+
+        async fn route_request(
+            &self,
+            admitted: RoutedActionRequest,
+        ) -> Result<AuditTrail, crate::RuntimeError> {
+            let (permit, _, _) = admitted.into_parts();
+            let (request, detection, context, decision, _) = permit.into_execution_parts();
+            self.lease_calls.fetch_add(1, Ordering::SeqCst);
+            self.executor_calls.fetch_add(1, Ordering::SeqCst);
+            self.effect_calls.fetch_add(1, Ordering::SeqCst);
+            self.execution_now_ms
+                .store(context.now_ms, Ordering::SeqCst);
+            Ok(AuditTrail {
+                trail_id: format!("trail:{}:{}", request.hunt_id.0, context.now_ms),
+                hunt_id: request.hunt_id.0,
+                related_receipt_ids: context.receipt_chain,
+                detection,
+                policy: PolicyRecord {
+                    verdict: decision.verdict,
+                    rule_name: decision.rule_name,
+                    reason: decision.reason,
+                    lease: None,
+                },
+                response: AuditResponseRecord::Skipped {
+                    reason: "test execution recorded".to_string(),
+                },
+                created_at_ms: context.now_ms,
+            })
+        }
+
+        async fn route_human_hold(
+            &self,
+            _hold: GovernedHumanHoldRoute,
+        ) -> Result<HumanApprovalChallenge, crate::RuntimeError> {
+            unreachable!("resume test starts from a persisted hold")
+        }
+
+        async fn load_persisted_human_approval(
+            &self,
+            pack_id: &str,
+        ) -> Result<Option<ApprovalReceiptPackReport>, crate::RuntimeError> {
+            Ok((pack_id == self.pack.pack_id).then(|| self.pack.clone()))
+        }
+
+        async fn restore_human_preflight(
+            &self,
+            hold: &GovernedHumanAuthorizationHold,
+            approval_pack_id: &str,
+        ) -> Result<DispatcherPolicyPermit, crate::RuntimeError> {
+            // Model an awaited policy-context restore during which the artifacts
+            // cross their freshness boundary, without sleeping in the test.
+            tokio::task::yield_now().await;
+            if let Some(now_ms) = self.advance_clock_to_ms {
+                self.clock.now_ms.store(now_ms, Ordering::SeqCst);
+            }
+            Ok(DispatcherPolicyPermit::new(
+                hold.request.clone(),
+                DetectionFinding {
+                    finding_id: "finding-human-resume-clock".to_string(),
+                    event_id: "event-human-resume-clock".to_string(),
+                    threat_class: ThreatClass::CommandAndControl,
+                    severity: Severity::Critical,
+                    confidence: 1.0,
+                    evidence: serde_json::json!({}),
+                    strategy_id: "test".to_string(),
+                },
+                ApprovalContext {
+                    live_mode: true,
+                    receipt_chain: vec![approval_pack_id.to_string()],
+                    correlation_id: None,
+                    now_ms: i64::MIN,
+                },
+                hold.policy_decision.clone(),
+                0,
+            ))
+        }
+
+        async fn route_governance_veto(
+            &self,
+            _veto: GovernanceVetoRoute,
+        ) -> Result<AuditTrail, crate::RuntimeError> {
+            unreachable!("resume test never routes a veto")
+        }
+    }
+
+    fn human_resume_clock_fixture(
+        advance_past_freshness: bool,
+    ) -> (
+        Arc<GovernancePolicy>,
+        Arc<DelayedHumanResumeRouter>,
+        Arc<AdjustableHumanResumeClock>,
+        ApprovalReceiptPackReport,
+        String,
+    ) {
+        let governance = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
+        governance
+            .register_governor(
+                AgentId::new("tom", "resume-clock"),
+                SigningKey::from_bytes(&[91; 32]),
+            )
+            .unwrap();
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-human-resume-clock".to_string()),
+            requested_by: AgentId::new("pounce", "resume-clock"),
+            action: ResponseAction::BlockEgress {
+                target: "203.0.113.91".to_string(),
+            },
+            severity: Severity::Critical,
+            evidence: serde_json::json!({"finding": "clock-bound"}),
+        };
+        let receipt = match governance.can_act(&request) {
+            GovernanceDecision::Authorize { receipt, .. } => receipt,
+            other => panic!("expected governance authorization, got {other:?}"),
+        };
+        let receipt_value = serde_json::to_value(receipt).unwrap();
+        let hold = governance
+            .begin_human_authorization_hold(
+                &request,
+                &receipt_value,
+                &PolicyDecision::require_human_with_rule("test.human", "human approval required"),
+                super::now_ms(),
+            )
+            .unwrap();
+
+        static FIXTURE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+        let approval_root = std::env::temp_dir().join(format!(
+            "swarm-human-resume-clock-{}-{}-{}",
+            std::process::id(),
+            super::now_ms(),
+            FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let harness = DefaultApprovalHarness::from_path(
+            approval_root.join("config"),
+            approval_root.join("verdicts"),
+            approval_root.join("packs"),
+            approval_root.join("sets"),
+            approval_root.join("ledgers"),
+        )
+        .unwrap();
+        let voter = Ed25519Signer::from_secret_material("human-resume-clock-voter");
+        let voter_id = format!("swarm:ed25519:{}", voter.public_key_hex());
+        let set_record = harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                &hold.approval_evidence_ref(),
+            )
+            .unwrap();
+        let set = harness
+            .load_approval_set(&set_record.set_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        governance
+            .bind_human_approval_set(
+                &hold.hold_id,
+                &set.set_id,
+                &approval_set_digest(&set).unwrap(),
+            )
+            .unwrap();
+        harness.append_vote(&set.set_id, &voter_id, &voter).unwrap();
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap().report;
+        let evaluated_at_ms = super::now_ms().max(set.created_at_ms);
+        let verdict = evaluate_verdict(&set, &ledger, evaluated_at_ms).unwrap();
+        let pack_signer = Ed25519Signer::from_secret_material("human-resume-clock-pack-signer");
+        let pack = build_receipt_pack(
+            &set,
+            &ledger,
+            &verdict,
+            vec![set.promotion_evidence_ref.clone()],
+            &pack_signer,
+            "human-resume-clock-pack-signer",
+            evaluated_at_ms.saturating_add(1),
+        )
+        .unwrap();
+        let initial_now_ms = pack.created_at_ms;
+        let clock = Arc::new(AdjustableHumanResumeClock::new(initial_now_ms));
+        let router = Arc::new(DelayedHumanResumeRouter {
+            pack: pack.clone(),
+            clock: Arc::clone(&clock),
+            advance_clock_to_ms: advance_past_freshness
+                .then(|| initial_now_ms.saturating_add(300_001)),
+            lease_calls: AtomicUsize::new(0),
+            executor_calls: AtomicUsize::new(0),
+            effect_calls: AtomicUsize::new(0),
+            execution_now_ms: AtomicI64::new(i64::MIN),
+        });
+        (governance, router, clock, pack, set.set_id)
+    }
+
+    #[tokio::test]
+    async fn human_resume_rechecks_freshness_after_awaited_preflight_restore() {
+        let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(true);
+        let resume =
+            HumanApprovalResumeDispatcher::with_clock(governance.clone(), router.clone(), clock);
+
+        let error = resume
+            .resume(pack)
+            .await
+            .expect_err("approval expiring during awaited restore must be refused");
+        assert!(error.to_string().contains("stale"), "{error}");
+        assert_eq!(router.lease_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(router.executor_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(router.effect_calls.load(Ordering::SeqCst), 0);
+        assert!(governance.pending_human_authorization(&set_id).is_ok());
+
+        let (fresh_governance, fresh_router, fresh_clock, fresh_pack, _) =
+            human_resume_clock_fixture(false);
+        let expected_execution_now_ms = fresh_clock.now_ms();
+        HumanApprovalResumeDispatcher::with_clock(
+            fresh_governance,
+            fresh_router.clone(),
+            fresh_clock,
+        )
+        .resume(fresh_pack)
+        .await
+        .expect("fresh approval control must execute once");
+        assert_eq!(fresh_router.lease_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fresh_router.executor_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fresh_router.effect_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fresh_router.execution_now_ms.load(Ordering::SeqCst),
+            expected_execution_now_ms,
+            "execution context must carry the final trusted timestamp"
+        );
+    }
 
     struct MockAgent {
         id: AgentId,

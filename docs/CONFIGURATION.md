@@ -943,7 +943,7 @@ operator_surface:
         scopes: ["read", "maintenance"]
 ```
 
-- `runtime_base_url` is the detect-server base URL used by the Providence widget and scoped drilldown links.
+- `runtime_base_url` is the detect-server base URL used by the Providence widget, scoped drilldown links, and governed-approval resume. Because resume forwards the authenticated operator bearer, this URL must use HTTPS except for local development on an exact loopback host: `localhost`, any `127.0.0.0/8` address, or `::1`. Plaintext private, link-local, unspecified, remote, credential-bearing, and lookalike hostnames are rejected during configuration validation.
 - `public_base_url` remains the operator-surface base URL for replay, audit-trail, and review links.
 - `allowed_embed_origins` drives `Content-Security-Policy: frame-ancestors` and `X-Frame-Options` for `/v1/demo/widget`.
 - `widget_token_ttl_secs` controls the lifetime of the signed read-only context tokens included in Providence links.
