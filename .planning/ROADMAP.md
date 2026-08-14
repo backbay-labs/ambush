@@ -1120,7 +1120,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** NOTE (2026-08-11): the "7 tests fail against 161 checked-in fixtures" premise did NOT reproduce - e93d521 had already removed 137 of them and the grep returned 0 before this phase began. The real work was isolation, the generator, and the freshness gate. Test runs write into the repository. Every later assurance signal is unreadable until the baseline is green and isolated.
 **Requirements:** FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04
 **Depends on:** v1.78 milestone complete
-**Status:** Complete 2026-08-11 (executed out of order, ahead of v1.78, as a prerequisite for parallel work)
+**Status**: Complete 2026-08-11 (executed out of order, ahead of v1.78, as a prerequisite for parallel work)
 **Plans:** TBD
 **Success Criteria**:
 1. `cargo test -p swarm-runtime kitten_agent` passes with zero failures and zero schema-drift skips.

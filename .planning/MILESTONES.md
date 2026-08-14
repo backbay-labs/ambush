@@ -11,12 +11,12 @@
 
 ## Active Milestone
 
-### v1.77 Integration Proof
-**Executable phases:** 276-279
+### v1.79 Assurance Foundation
+**Executable phases:** 284-287
 **Status:** Active
-**Started:** 2026-04-13
-**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic HTTP wrappers with tested adapters and validating the full detect-to-respond loop with real telemetry.
-**Progress:** Phases 276-279 complete; milestone is active pending v1.78 definition or archive/promotion
+**Started:** 2026-08-14
+**Goal:** Make the fail-closed claim checkable: green fixtures, an invariant-to-function-to-assumption map with negative falsifiability, and DST, fuzz, and Loom executors.
+**Progress:** Phase 284 complete; phase 285 active; phases 286-287 not started
 
 ## Queued Milestones
 
@@ -37,12 +37,6 @@
 **Status:** Queued
 **Goal:** Green the verification gates, eliminate the core.inc pattern, split the 97,709-LOC swarm-runtime crate, and name and enforce a trusted computing base.
 **Progress:** Phases 280-283 defined 2026-08-10; ready to activate in sequence
-
-### v1.79 Assurance Foundation
-**Executable phases:** 284-287
-**Status:** Queued
-**Goal:** Make the fail-closed claim checkable: green fixtures, an invariant-to-function-to-assumption map with negative falsifiability, and DST, fuzz, and Loom executors.
-**Progress:** Phases 284-287 defined 2026-08-10; ready to activate in sequence
 
 ### v1.80 Red Swarm
 **Executable phases:** 288-291
