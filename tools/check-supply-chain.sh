@@ -45,45 +45,39 @@
 #   assessment with a new date.
 #
 # WHY `[[bans.skip]]` ENTRIES CARRY NO EXPIRY
-#   Because an exact-version skip is self-invalidating, and that was measured
-#   rather than assumed. This parser accepts `<crate>@<SemVer 2.0>` -- including
-#   valid prerelease and build metadata -- and rejects wildcard, range, operator,
-#   partial, and invalid SemVer specs. cargo-deny then supplies two distinct
-#   stale-waiver checks, and all three failure modes were constructed and observed
-#   on 2026-08-14:
+#   Because two independent checks make an exact-version skip self-invalidating.
+#   Their ownership is deliberately separate:
 #
-#     fixture@1.2.3                         -> fixture = =1.2.3
-#     fixture-prerelease@1.2.3-alpha.1      -> fixture-prerelease = =1.2.3-alpha.1
-#     fixture-build@1.2.3+build.7            -> fixture-build = =1.2.3
-#     fixture-both@1.2.3-alpha.1+build.7     -> fixture-both = =1.2.3-alpha.1
-#     serde_yaml@0.9.34+deprecated           -> serde_yaml = =0.9.34
+#   1. This metadata stage owns FULL TEXTUAL IDENTITY. It accepts only
+#      `<crate>@<SemVer 2.0>`, including valid prerelease and build metadata, and
+#      requires the name plus complete version text to occur in Cargo.lock. A
+#      build-bearing selector also fails when two locked packages of that name
+#      share its core+prerelease precedence identity: cargo-deny cannot tell those
+#      build variants apart, so the waiver would be ambiguous.
 #
-#   Those are cargo-deny 0.19.4's own `unmatched-skip` / `unnecessary-skip`
-#   renderings. The leading `=` is the exact selector evidence. cargo-deny follows
-#   SemVer precedence by normalizing build metadata out of matching, but accepts
-#   it in a valid version string; changing the real serde_yaml fixture's core from
-#   0.9.34 to 0.9.33 changes `unnecessary-skip` to `unmatched-skip`.
+#      This is necessary because cargo-deny 0.19.4 normalizes build metadata out
+#      of its comparator. Constructed on 2026-08-14 at 69b32d7: changing the real
+#      duplicated skip `thiserror@1.0.69` to `thiserror@1.0.69+stale` still printed
+#      `bans ok`, and the ENTIRE gate exited 0. The same cargo-deny behavior renders
+#      `serde_yaml@0.9.34+deprecated` as `serde_yaml = =0.9.34`. Grammar validation
+#      alone therefore cannot make build-bearing selectors stale safely.
 #
-#     thiserror@1.0.69 -> thiserror@1.0.68 (the skip no longer matches the lock):
-#       error[duplicate]: found 2 duplicate entries for crate 'thiserror'
-#       warning[unmatched-skip]: skipped crate 'thiserror = =1.0.68' was not encountered
-#       bans FAILED / EXIT=2
+#   2. cargo-deny owns DUPLICATE APPLICABILITY inside the graph it scans. With
+#      `-D unmatched-skip`, a lock-present exact version absent from that graph
+#      fails. With `-D unnecessary-skip`, a graph-present version that is no
+#      longer duplicated fails. An uncovered new duplicate fails normally.
 #
-#     a skip for a version absent from the graph (serde@0.0.1), run with
-#     `-D unmatched-skip`:
-#       error[unmatched-skip]: skipped crate 'serde = =0.0.1' was not encountered
-#       bans FAILED / EXIT=2
-#
-#     a skip for a version still present but no longer duplicated
-#     (serde@1.0.228), run with `-D unnecessary-skip`:
+#      Constructed with serde@1.0.228, which is locked and graph-present but has
+#      only one version:
 #       error[unnecessary-skip]: skip 'serde = =1.0.228' applied to a crate
 #         with only one version
 #       bans FAILED / EXIT=2
-#     Without `-D`, the same diagnostic is a warning, `bans ok`, EXIT=0.
+#      Without `-D`, the same diagnostic is a warning, `bans ok`, EXIT=0.
 #
-#   So a stale exact skip fails through the duplicate it stopped covering,
-#   `unmatched-skip`, or `unnecessary-skip`. A date-based expiry on top of that
-#   would only add calendar churn to a check the lockfile already makes.
+#   So a moved or mistyped full version fails against Cargo.lock before cargo-deny
+#   runs, and a version that stops being an applicable duplicate fails in
+#   cargo-deny. A date-based expiry on top would only add calendar churn to checks
+#   the resolved inventory and graph already make.
 #
 # WHY `-D advisory-not-detected`, `-D unmatched-skip`, AND `-D unnecessary-skip`
 #   All three are warnings by default, and a warning does not change the exit code:
@@ -127,18 +121,18 @@
 #
 # REFUSING TO PASS SILENTLY
 #   Guards, in the same spirit as check-gates-wired.sh and
-#   check-fixture-freshness.sh: deny.toml must parse and must contain a `[bans]
-#   skip` array; the surface list must be non-empty and must contain at least one
-#   workflow and at least one tools script (otherwise the id scan would be
-#   inspecting nothing while reporting success); and deny.toml is cross-checked
-#   against its own text twice -- outside comments, an advisory id may appear ONLY
-#   on an `id = "..."` line, and the set of ids in that text must equal the set the
-#   TOML parser saw as ignore entries. So an entry the parser silently missed, one
-#   parked under the wrong table, and an id hidden in some other field are all
-#   failures rather than waivers nobody checked. The weaker of those two checks
-#   alone was not enough, and that was measured: an id written into a
-#   `[[bans.skip]]` reason while the same id is a real ignore entry leaves the sets
-#   equal, and the gate exited 0 until the line-position rule was added.
+#   check-fixture-freshness.sh: deny.toml and Cargo.lock must parse; Cargo.lock must
+#   expose a non-empty package inventory; deny.toml must contain a `[bans] skip`
+#   array; the surface list must contain a workflow and a tools script; and
+#   deny.toml is cross-checked against its own text twice. Outside comments, an
+#   advisory id may appear ONLY on an `id = "..."` line, and the set of ids in that
+#   text must equal the set the TOML parser saw as ignore entries. So an entry the
+#   parser silently missed, one parked under the wrong table, and an id hidden in
+#   some other field are all failures rather than waivers nobody checked. The
+#   weaker of those two checks alone was not enough, and that was measured: an id
+#   written into a `[[bans.skip]]` reason while the same id is a real ignore entry
+#   leaves the sets equal, and the gate exited 0 until the line-position rule was
+#   added.
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -166,7 +160,8 @@ if [ "${#surfaces[@]}" -eq 0 ]; then
   exit 1
 fi
 
-python3 - "$ROOT_DIR/deny.toml" "$WORK_DIR/advisory-ignores" "${surfaces[@]}" <<'PY'
+python3 - "$ROOT_DIR/deny.toml" "$ROOT_DIR/Cargo.lock" \
+  "$WORK_DIR/advisory-ignores" "${surfaces[@]}" <<'PY'
 import datetime
 import pathlib
 import re
@@ -183,8 +178,9 @@ if sys.version_info < (3, 11):
 import tomllib  # noqa: E402  (guarded above so the failure is legible)
 
 deny_path = pathlib.Path(sys.argv[1])
-out_path = pathlib.Path(sys.argv[2])
-surfaces = [pathlib.Path(p) for p in sys.argv[3:]]
+lock_path = pathlib.Path(sys.argv[2])
+out_path = pathlib.Path(sys.argv[3])
+surfaces = [pathlib.Path(p) for p in sys.argv[4:]]
 
 TODAY = datetime.date.today()
 
@@ -206,12 +202,56 @@ SEMVER_PRERELEASE_ID = (
     r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
 )
 SEMVER_BUILD_ID = r"[0-9A-Za-z-]+"
-EXACT_SKIP_SPEC = re.compile(
-    r"\A[A-Za-z0-9][A-Za-z0-9_-]*@"
+SEMVER_TEXT = (
     rf"{SEMVER_NUMBER}\.{SEMVER_NUMBER}\.{SEMVER_NUMBER}"
     rf"(?:-{SEMVER_PRERELEASE_ID}(?:\.{SEMVER_PRERELEASE_ID})*)?"
-    rf"(?:\+{SEMVER_BUILD_ID}(?:\.{SEMVER_BUILD_ID})*)?\Z"
+    rf"(?:\+{SEMVER_BUILD_ID}(?:\.{SEMVER_BUILD_ID})*)?"
 )
+EXACT_SKIP_SPEC = re.compile(
+    r"\A(?P<name>[A-Za-z0-9][A-Za-z0-9_-]*)@"
+    rf"(?P<version>{SEMVER_TEXT})\Z"
+)
+
+
+def locked_skip_problem(spec, locked_packages):
+    """Return why an exact skip does not identify one safe lockfile version."""
+    match = EXACT_SKIP_SPEC.fullmatch(spec)
+    if match is None:
+        raise ValueError(f"lock identity called with invalid skip spec {spec!r}")
+
+    name = match.group("name")
+    version = match.group("version")
+    locked_versions = [
+        locked_version
+        for locked_name, locked_version in locked_packages
+        if locked_name == name
+    ]
+
+    if version not in locked_versions:
+        available = ", ".join(sorted(set(locked_versions))) or "<none>"
+        return (
+            f"version `{version}` has no exact textual match in Cargo.lock for "
+            f"crate `{name}` (locked version(s): {available}). This gate includes "
+            "build metadata in waiver identity even though cargo-deny does not"
+        )
+
+    if "+" in version:
+        precedence = version.partition("+")[0]
+        same_precedence = [
+            locked_version
+            for locked_version in locked_versions
+            if locked_version.partition("+")[0] == precedence
+        ]
+        if len(same_precedence) > 1:
+            rendered = ", ".join(sorted(same_precedence))
+            return (
+                f"build-bearing selector `{spec}` is ambiguous: Cargo.lock has "
+                f"{len(same_precedence)} `{name}` packages with SemVer precedence "
+                f"identity `{precedence}` ({rendered}), and cargo-deny normalizes "
+                "their build metadata away"
+            )
+
+    return None
 
 # Executable grammar fixtures. These run before deny.toml is inspected so a
 # future regex edit cannot silently admit the broad forms this policy exists to
@@ -251,6 +291,71 @@ for fixture, expected in SKIP_SPEC_FIXTURES:
         print(
             "::error::internal exact-skip grammar fixture failed: "
             f"{fixture!r} expected accepted={expected}, got accepted={actual}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+# Executable lock-identity fixtures. The grammar and lockfile checks have
+# different jobs: the first admits valid exact SemVer text; the second proves the
+# full text names a locked package and closes cargo-deny's build-normalization
+# gap. Both pass controls prevent a fail-everything implementation from looking
+# strict.
+LOCK_IDENTITY_FIXTURES = (
+    (
+        "exact locked build",
+        "serde_yaml@0.9.34+deprecated",
+        (("serde_yaml", "0.9.34+deprecated"),),
+        None,
+    ),
+    (
+        "stale build",
+        "serde_yaml@0.9.34+stale",
+        (("serde_yaml", "0.9.34+deprecated"),),
+        "has no exact textual match",
+    ),
+    (
+        "missing build text",
+        "serde_yaml@0.9.34",
+        (("serde_yaml", "0.9.34+deprecated"),),
+        "has no exact textual match",
+    ),
+    (
+        "ambiguous build",
+        "fixture@1.2.3+build.7",
+        (("fixture", "1.2.3+build.7"), ("fixture", "1.2.3+build.8")),
+        "is ambiguous",
+    ),
+    (
+        "stale combined prerelease and build",
+        "fixture@1.2.3-alpha.1+build.8",
+        (("fixture", "1.2.3-alpha.1+build.7"),),
+        "has no exact textual match",
+    ),
+    (
+        "exact locked stable",
+        "fixture@1.2.3",
+        (("fixture", "1.2.3"),),
+        None,
+    ),
+    (
+        "exact locked prerelease",
+        "fixture@1.2.3-alpha.1",
+        (("fixture", "1.2.3-alpha.1"),),
+        None,
+    ),
+)
+
+for label, spec, fixture_packages, expected_problem in LOCK_IDENTITY_FIXTURES:
+    actual_problem = locked_skip_problem(spec, fixture_packages)
+    if expected_problem is None:
+        fixture_ok = actual_problem is None
+    else:
+        fixture_ok = actual_problem is not None and expected_problem in actual_problem
+    if not fixture_ok:
+        print(
+            "::error::internal skip lock-identity fixture failed: "
+            f"{label!r} expected problem={expected_problem!r}, "
+            f"got {actual_problem!r}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -319,6 +424,47 @@ try:
 except tomllib.TOMLDecodeError as exc:
     print(f"::error::{deny_path} does not parse as TOML: {exc}", file=sys.stderr)
     sys.exit(1)
+
+try:
+    lock_raw = lock_path.read_text(encoding="utf-8")
+except OSError as exc:
+    print(f"::error::cannot read {lock_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    lock_config = tomllib.loads(lock_raw)
+except tomllib.TOMLDecodeError as exc:
+    print(f"::error::{lock_path} does not parse as TOML: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+lock_entries = lock_config.get("package")
+if not isinstance(lock_entries, list) or not lock_entries:
+    print(
+        "::error::Cargo.lock has no non-empty `package` array; duplicate waiver "
+        "versions cannot be checked against the resolved inventory",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+locked_packages = []
+lock_inventory_valid = True
+for index, entry in enumerate(lock_entries):
+    where = f"Cargo.lock package[{index}]"
+    if not isinstance(entry, dict):
+        problem(where, "must be a package table")
+        lock_inventory_valid = False
+        continue
+    name = entry.get("name")
+    version = entry.get("version")
+    if not isinstance(name, str) or not name:
+        problem(where, "has no string `name`")
+        lock_inventory_valid = False
+        continue
+    if not isinstance(version, str) or not version:
+        problem(where, "has no string `version`")
+        lock_inventory_valid = False
+        continue
+    locked_packages.append((name, version))
 
 ignores = config.get("advisories", {}).get("ignore", [])
 skips = config.get("bans", {}).get("skip")
@@ -397,7 +543,8 @@ for index, entry in enumerate(skips):
     if not isinstance(spec, str):
         spec = ""
     where = f"deny.toml [bans] skip `{spec or '<no crate>'}`"
-    if EXACT_SKIP_SPEC.fullmatch(spec) is None:
+    spec_match = EXACT_SKIP_SPEC.fullmatch(spec)
+    if spec_match is None:
         problem(
             where,
             "`crate` must be an exact `<crate>@<SemVer 2.0>` spec; valid "
@@ -406,6 +553,10 @@ for index, entry in enumerate(skips):
             "because they can keep matching after the reviewed version moves "
             "or do not identify one valid version",
         )
+    elif lock_inventory_valid:
+        lock_problem = locked_skip_problem(spec, locked_packages)
+        if lock_problem is not None:
+            problem(where, lock_problem)
     reason = entry.get("reason", "")
     if not isinstance(reason, str) or not reason.strip():
         problem(where, "has no `reason`")
@@ -504,8 +655,13 @@ if errors:
 out_path.write_text("".join(f"{advisory_id}\n" for advisory_id in ignore_ids))
 
 print(
+    f"exception policy fixtures ok: {len(SKIP_SPEC_FIXTURES)} SemVer grammar, "
+    f"{len(LOCK_IDENTITY_FIXTURES)} lock identity"
+)
+print(
     f"exception policy ok: {len(ignores)} advisory exception(s), "
     f"{len(skips)} duplicate waiver(s), "
+    f"{len(locked_packages)} locked package(s) checked, "
     f"{len(surfaces)} enforcement surface(s) scanned for advisory ids"
 )
 for entry in ignores:
@@ -516,11 +672,11 @@ for entry in ignores:
     print(f"  {entry['id']}: expires {expires} ({(expires - TODAY).days} day(s) left)")
 PY
 
-# `bans` runs with duplicates ENFORCED. Accepted duplicates are enumerated, dated
-# and justified as exact-version `[[bans.skip]]` entries in deny.toml, so a new
-# duplicate -- or a skipped one moving version or ceasing to be a duplicate --
-# fails this gate. The three `-D` flags escalate cargo-deny's own stale-waiver
-# warnings into errors; see the header for the measured cases.
+# The metadata stage above has already proved each skip's full version text exists
+# in Cargo.lock. `bans` now owns applicability in its feature/target graph: a new
+# duplicate fails normally, while the three `-D` flags make stale advisory ignores,
+# lock-present skips unmatched in this graph, and no-longer-duplicate skips fail.
+# See the header for the measured ownership boundary.
 cargo deny check -D advisory-not-detected -D unmatched-skip -D unnecessary-skip \
   advisories licenses bans sources
 

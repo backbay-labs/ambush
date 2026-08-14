@@ -24,15 +24,16 @@ all-features = false
 # An advisory exception past its `expires` date FAILS the gate, and the
 # last-checked..expires window is capped at 180 days, so a deadline cannot be
 # written far enough out to stop being one. A duplicate waiver below carries no
-# expiry because an exact `crate@SemVer` pin already is one. Valid SemVer 2.0
-# prerelease and build metadata are accepted; wildcard, range, operator, partial,
-# and invalid SemVer specs fail the metadata parser. Move an accepted pin and
-# cargo-deny reports the duplicate it stopped covering or `unmatched-skip`; leave
-# the pinned version present after its duplicate disappears and
-# `unnecessary-skip` fires. All three stale-skip cases exit 2. See the header of
-# tools/check-supply-chain.sh for cargo-deny 0.19.4's observed exact-selector
-# normalization, including its SemVer-standard removal of build metadata from
-# matching.
+# expiry because two checks make an exact `crate@SemVer` pin self-invalidating.
+# The metadata stage owns full textual identity: valid SemVer 2.0 prerelease and
+# build metadata are accepted, broad or invalid specs are rejected, and the exact
+# name plus version text (including `+build`) must occur in Cargo.lock. A
+# build-bearing selector also fails when multiple locked packages of that name
+# have the same core+prerelease precedence identity, because cargo-deny cannot
+# distinguish their build variants. Cargo-deny then owns duplicate applicability:
+# it fails when that locked package is unmatched in its scanned graph, ceases to
+# be duplicated, or leaves a new duplicate uncovered. See the script header for
+# the constructed stale-build bypass this split closes.
 #
 # The gate also runs `cargo deny check -D advisory-not-detected -D unmatched-skip
 # -D unnecessary-skip`, which turns cargo-deny's default stale-waiver warnings
@@ -77,11 +78,12 @@ highlight = "all"
 # yet. It cannot be made to fail, so it is not a gate. Only an exact
 # `<crate>@<SemVer 2.0>` `[[bans.skip]]` is accepted, including valid prerelease
 # and build metadata; wildcard, range, operator, partial, and invalid SemVer specs
-# are rejected before cargo-deny runs. An exact skip breaks when a NEW duplicate
-# appears, a skipped version moves, or the version remains but ceases to be
-# duplicated, which is the entire point of the check. Each entry names the
-# dependency that pins the old major so it can be retired when that dependency
-# moves.
+# are rejected before cargo-deny runs. The exact full version must exist in
+# Cargo.lock before cargo-deny checks whether it is an applicable duplicate. A
+# moved version, an uncovered NEW duplicate, or a version that remains locked but
+# ceases to be duplicated therefore fails in the layer that owns that question.
+# Each entry names the dependency that pins the old major so it can be retired
+# when that dependency moves.
 #
 # Reviewed 2026-08-11 (phase 280 / GATEFIX-04). Every `pinned-by` clause below was
 # re-traced with `cargo tree -i <crate>@<version> --target all -e normal
