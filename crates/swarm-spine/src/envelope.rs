@@ -137,6 +137,7 @@ pub fn verify_envelope(envelope: &Value) -> SpineResult<bool> {
 
     let bytes = envelope_signing_bytes(&unsigned)?;
     let computed_hash = sha256_hex_prefixed(&bytes);
+    // INVARIANT: SPINE-ENVELOPE-HASH-BOUND
     if computed_hash != claimed_hash {
         return Err(SpineError::HashMismatch {
             expected: claimed_hash.to_string(),
@@ -144,6 +145,7 @@ pub fn verify_envelope(envelope: &Value) -> SpineResult<bool> {
         });
     }
 
+    // INVARIANT: SPINE-ENVELOPE-SIGNATURE-REQUIRED
     Ok(public_key.verify(&bytes, &signature))
 }
 

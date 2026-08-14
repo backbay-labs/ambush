@@ -165,6 +165,7 @@ impl TryFrom<ContainmentLeaseRecord> for ContainmentLease {
                 expected: CONTAINMENT_LEASE_SCHEMA_VERSION,
             });
         }
+        // INVARIANT: RESPONSE-STORED-LEASE-BOUNDED
         if record.expires_at_ms <= record.issued_at_ms {
             return Err(ContainmentLeaseError::UnboundedLease {
                 lease_id: record.lease_id,
@@ -205,6 +206,7 @@ impl ContainmentLease {
         // Saturating rather than wrapping, then re-checked: at `i64::MAX` the
         // add is a no-op and the lease would be unbounded, which is exactly the
         // state the error below exists to refuse.
+        // INVARIANT: RESPONSE-LEASE-BOUNDED
         let expires_at_ms = issued_at_ms.saturating_add(ttl.get());
         if expires_at_ms <= issued_at_ms {
             return Err(ContainmentLeaseError::UnboundedLease {

@@ -35,6 +35,7 @@ impl StaticApprovalGate {
     }
 
     pub(crate) fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
+        // INVARIANT: POLICY-NULL-EVIDENCE-REFUSED
         if request.evidence.is_null() {
             return Err(ApprovalError::InvalidRequest(
                 "evidence bundle must not be null".to_string(),
@@ -196,6 +197,7 @@ impl StaticApprovalGate {
         let mut windows = self.lock_windows();
         let window = windows.entry(scope.clone()).or_default();
         Self::prune_window(window, context.now_ms);
+        // INVARIANT: POLICY-SCOPE-RATE-LIMIT
         if window.len() >= self.max_actions_per_scope_per_minute {
             return Some(PolicyDecision::deny_with_rule(
                 "static.scope_rate_limit",
@@ -253,6 +255,7 @@ impl ApprovalGate for StaticApprovalGate {
     ) -> Result<PolicyDecision, ApprovalError> {
         self.validate_request(request)?;
 
+        // INVARIANT: POLICY-DESTRUCTIVE-MIN-SEVERITY
         if request.action.requires_governance_receipt() && request.severity == Severity::Low {
             return Ok(PolicyDecision::deny_with_rule(
                 "static.minimum_severity",
@@ -273,6 +276,7 @@ impl ApprovalGate for StaticApprovalGate {
             return Ok(decision);
         }
 
+        // INVARIANT: POLICY-DESTRUCTIVE-HUMAN-GATE
         if request.action.requires_governance_receipt()
             && request.severity >= self.human_gate_severity
         {

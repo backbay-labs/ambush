@@ -296,6 +296,7 @@ pub fn verify_release_attestation(
             source,
         }
     })?;
+    // INVARIANT: RUNTIME-RELEASE-SUBJECT-BOUND
     if attestation.payload.proposal_id != derived {
         return Err(ReleaseAttestationError::SubjectMismatch {
             rollback_id,
@@ -421,6 +422,7 @@ pub async fn release_lease(
     // host is still contained and the lease is the only record of it. Keep it
     // open and let the next sweep retry rather than closing over a host nobody
     // is tracking any more.
+    // INVARIANT: RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE
     let attempt_failed = receipt
         .steps
         .iter()

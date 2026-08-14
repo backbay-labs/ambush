@@ -100,6 +100,7 @@ pub fn verify_chain_link(
 
     match known_head {
         None => {
+            // INVARIANT: SPINE-CHAIN-FIRST-LINK-SHAPE
             if seq != 1 {
                 return Ok(ChainLinkVerdict::InvalidChainHead {
                     reason: format!("first envelope must have seq=1, got seq={seq}"),
@@ -115,6 +116,7 @@ pub fn verify_chain_link(
         Some(head) => {
             let envelope_issuer_norm = normalize_issuer_for_compare(envelope_issuer);
             let head_issuer_norm = normalize_issuer_for_compare(&head.issuer);
+            // INVARIANT: SPINE-CHAIN-ISSUER-BOUND
             if envelope_issuer_norm != head_issuer_norm {
                 return Ok(ChainLinkVerdict::InvalidChainHead {
                     reason: format!(
@@ -129,6 +131,7 @@ pub fn verify_chain_link(
                     reason: format!("known head sequence overflow for issuer {}", head.issuer),
                 });
             };
+            // INVARIANT: SPINE-CHAIN-SEQ-MONOTONIC
             if seq != expected_seq {
                 return Ok(ChainLinkVerdict::SequenceMismatch {
                     expected_seq,
@@ -137,6 +140,7 @@ pub fn verify_chain_link(
             }
 
             let actual_prev_hash = prev_hash_str.unwrap_or("");
+            // INVARIANT: SPINE-CHAIN-PREV-HASH-BOUND
             if actual_prev_hash != head.envelope_hash {
                 return Ok(ChainLinkVerdict::HashMismatch {
                     expected_prev_hash: head.envelope_hash.clone(),

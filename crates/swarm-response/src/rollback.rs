@@ -320,6 +320,7 @@ impl RollbackReceipt {
         }
         if steps.iter().all(|step| step.status.restored()) {
             ResponseStatus::Executed
+        // INVARIANT: RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS
         } else if steps
             .iter()
             .all(|step| step.status == RollbackStepStatus::Simulated)
@@ -438,6 +439,7 @@ impl RollbackExecutor for SandboxRollbackExecutor {
             .steps
             .iter()
             .map(|step| match resolve_inverse(lease.action(), step.kind) {
+                // INVARIANT: RESPONSE-SANDBOX-NEVER-REVERSES
                 Ok(inverse) => RollbackStepOutcome {
                     kind: step.kind,
                     status: RollbackStepStatus::Simulated,

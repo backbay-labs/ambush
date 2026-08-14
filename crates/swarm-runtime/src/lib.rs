@@ -872,6 +872,7 @@ impl<P, E> SwarmRuntime<P, E> {
             return Ok(None);
         }
 
+        // INVARIANT: RUNTIME-CONTAINMENT-NEEDS-STORE
         let Some(binding) = self.containment.as_ref() else {
             return Err(RuntimeError::ContainmentRefused {
                 action: request.action.kind(),
@@ -1014,9 +1015,11 @@ where
         );
 
         match decision.verdict {
+            // INVARIANT: RUNTIME-DENY-BLOCKS-EXECUTION
             swarm_policy::PolicyVerdict::Deny => {
                 return Err(ApprovalError::Denied(decision.reason.clone()).into());
             }
+            // INVARIANT: RUNTIME-HUMAN-GATE-BLOCKS-LIVE
             swarm_policy::PolicyVerdict::RequireHuman if self.mode == RuntimeMode::LiveResponse => {
                 return Err(ApprovalError::Denied(decision.reason.clone()).into());
             }
@@ -1553,6 +1556,7 @@ fn ensure_active_lease(
     lease: &swarm_policy::CapabilityLease,
     now_ms: i64,
 ) -> Result<(), ApprovalError> {
+    // INVARIANT: RUNTIME-EXPIRED-LEASE-REFUSED
     if lease.expires_at_ms <= now_ms {
         return Err(ApprovalError::Denied(
             "capability lease expired".to_string(),

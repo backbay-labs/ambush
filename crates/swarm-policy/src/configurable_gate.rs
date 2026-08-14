@@ -133,6 +133,7 @@ impl ApprovalGate for ConfigurableApprovalGate {
 
         self.static_gate.validate_request(request)?;
 
+        // INVARIANT: POLICY-EMPTY-RULESET-DENIES
         if self.rules.is_empty() {
             return Ok(PolicyDecision::deny_with_rule(
                 "configurable.fail_closed.empty_ruleset",

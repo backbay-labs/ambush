@@ -1,0 +1,312 @@
+# Assumption registry (MAPPING-01, phase 285).
+#
+# WHAT THIS FILE IS
+#   Every fail-closed guarantee in `docs/assurance/MAPPING.md` rests on
+#   something this codebase does not itself enforce -- a clock, a hash, a
+#   filesystem, a transport. This file names those things, says who owns each,
+#   and lists the invariants that stop holding if the assumption stops holding.
+#
+# WHAT IT IS NOT
+#   It is not a threat model and it is not a proof. An assumption listed here is
+#   UNPROVEN BY CONSTRUCTION: that is what makes it an assumption. The value is
+#   that the blast radius of each one is enumerated rather than guessed at.
+#
+# CONSISTENCY IS ENFORCED, NOT PROMISED
+#   `tools/check-mapping.sh` requires each `invariants` list to be EXACTLY the
+#   set of MAPPING.md rows whose `Assumption` column names that assumption --
+#   equal as a set, in both directions. So this file cannot drift from the table
+#   without CI going red, and neither file is derived from the other at read
+#   time (which would make agreement vacuous).
+#
+# EMPTY `invariants`
+#   Permitted, and only with a `no_dependent_invariants_reason`. Two of the
+#   eight assumptions MAPPING-01 names have no dependent row in this tree, and
+#   saying so with a measurement is more honest than inventing a row to fill the
+#   column. Both are stated below with the command that establishes it.
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Platform assumptions named by MAPPING-01
+# ---------------------------------------------------------------------------
+
+[[assumption]]
+id = "ASSUME-OS-CLOCK"
+owner = "swarm-runtime"
+statement = """
+The `now_ms` value handed to a policy, lease or sweep decision is a unix
+millisecond reading of the host clock that does not jump backwards across the
+lifetime of a capability lease or a containment lease."""
+holds_because = """
+Every expiry decision in the critical lane takes the instant as a PARAMETER
+rather than reading a clock -- `ensure_active_lease(lease, now_ms)`,
+`ContainmentLease::open(.., issued_at_ms, ttl)`, `release_lease(.., now_ms)`,
+`prune_expired_contingency_leases(state, now_ms)` -- so exactly one call site per
+lane reads the clock and it is auditable. This repo has nine shipped defects
+where a verdict was decided by elapsed wall clock; the parameter shape is the
+response to them."""
+breaks_if = """
+The host clock steps backwards (NTP correction, VM snapshot restore, or a
+caller passing an attacker-influenced timestamp). A backwards step makes an
+expired capability lease look live again and defers a containment sweep. Note
+that the manual-release HTTP route lets the request body supply `now_ms`, which
+is why the governance attestation on a release is stamped with the SERVER's
+clock and not the caller's -- see the comment in
+`swarm_runtime::containment::release_lease`."""
+invariants = [
+  "POLICY-SCOPE-RATE-LIMIT",
+  "RESPONSE-LEASE-BOUNDED",
+  "RUNTIME-EXPIRED-LEASE-REFUSED",
+]
+
+[[assumption]]
+id = "ASSUME-ED25519"
+owner = "swarm-crypto"
+statement = """
+Ed25519 as implemented by `ed25519-dalek` is existentially unforgeable: without
+the private key, no signature verifies under the corresponding public key."""
+holds_because = """
+Standard cryptographic assumption plus a maintained implementation. This repo
+adds nothing to it and must not be read as having strengthened it."""
+breaks_if = """
+The primitive is broken, the dependency is compromised, or -- far more likely --
+a private key leaks. A live Ed25519 seed sat tracked at
+`rulesets/data/agent-keys/` from 69814a4 until the repository went public;
+`tools/check-no-committed-keys.sh` exists because of that."""
+invariants = [
+  "SPINE-ENVELOPE-SIGNATURE-REQUIRED",
+]
+
+[[assumption]]
+id = "ASSUME-SHA256"
+owner = "swarm-crypto"
+statement = """
+SHA-256 is collision resistant, so a digest identifies the bytes it was taken
+over."""
+holds_because = """
+Standard cryptographic assumption. Every chain link and every content address in
+the spine is a SHA-256 digest of canonical bytes."""
+breaks_if = """
+A collision is found. Two envelopes would then share an `envelope_hash`, and a
+chain link could be satisfied by a body other than the one that was signed --
+which is the whole content of SPINE-ENVELOPE-HASH-BOUND and
+SPINE-CHAIN-PREV-HASH-BOUND."""
+invariants = [
+  "SPINE-ENVELOPE-HASH-BOUND",
+]
+# SPINE-ENVELOPE-HASH-BOUND rests on ASSUME-CANONICAL-JSON too -- the digest is
+# taken over canonical bytes -- but collision resistance is the sharper of the
+# two for that row, and MAPPING.md names one assumption per row so that the
+# blast-radius lists below stay a partition rather than an overlapping set.
+
+[[assumption]]
+id = "ASSUME-CANONICAL-JSON"
+owner = "swarm-crypto"
+statement = """
+`swarm_crypto::canonicalize_json` is injective on the values this system signs:
+two structurally different values never canonicalize to the same bytes, and one
+value always canonicalizes to the same bytes."""
+holds_because = """
+Sorted keys and a fixed number/escape form. Both directions matter and they fail
+differently: a non-deterministic encoding breaks verification of honest
+documents, and a non-injective one lets a different document satisfy a signature
+taken over another."""
+breaks_if = """
+The canonicalizer changes, or a value reaches it that it does not normalize (for
+example a float whose shortest round-trip form differs between encoders). Every
+subject digest -- `release_subject_id`, `envelope_signing_bytes` -- is taken over
+its output."""
+invariants = [
+  "RUNTIME-RELEASE-SUBJECT-BOUND",
+]
+
+[[assumption]]
+id = "ASSUME-KEYSTORE-ATOMICITY"
+owner = "swarm-runtime"
+statement = """
+A tmp-write-plus-rename is atomic on the deployment filesystem, and EXACTLY ONE
+process writes each state file: `data/governance-partition-state.json` and the
+configured containment `lease_store_path`."""
+holds_because = """
+`GovernancePersistence::save` is tmp-write plus rename with NO lock, and the
+daemon holds `previous_commit_hash` and `receipt_counter` in memory. ADR 0010
+records the consequence and the decision taken because of it: manual containment
+release is an authenticated route on the running daemon rather than a `swarmctl`
+subcommand, precisely so there is exactly one writer."""
+breaks_if = """
+A second process opens the same state file -- a CLI writing directly while the
+daemon runs, two daemons on one host, or a shared network filesystem without
+rename atomicity. The failure is a FORKED audit chain, not a crash, so nothing
+reports it at the time."""
+invariants = [
+  "RESPONSE-STORED-LEASE-BOUNDED",
+  "RUNTIME-CONTAINMENT-NEEDS-STORE",
+]
+
+[[assumption]]
+id = "ASSUME-NETWORK-TRANSPORT"
+owner = "swarm-response"
+statement = """
+A response or rollback adapter reports a delivery that did not land as a FAILURE
+in its receipt, and never as a success. It may not know whether the far side
+acted, but it must not claim it did."""
+holds_because = """
+Enforced structurally rather than by adapter discipline:
+`RollbackReceipt::from_steps` DERIVES the receipt status from the step outcomes,
+so an executor cannot disagree with its own steps, and `SandboxRollbackExecutor`
+-- which holds no transport at all -- cannot emit `Reversed` in any mode."""
+breaks_if = """
+An adapter maps a transport error to a success-ish step. Measured against a dead
+port, `HttpEdrRollbackExecutor` returns `Ok` with a `Failed` step -- NOT `Err` --
+which is why the release path decides on the steps and not on the `Result`. An
+adapter that swallowed the error into a `Reversed` step would defeat every row
+below it."""
+invariants = [
+  "RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS",
+  "RESPONSE-SANDBOX-NEVER-REVERSES",
+  "RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE",
+]
+
+[[assumption]]
+id = "ASSUME-JETSTREAM-DURABILITY"
+owner = "swarm-pheromone"
+statement = """
+When the NATS JetStream substrate acknowledges a write, the record survives a
+broker restart and is not re-delivered under a different sequence."""
+holds_because = """
+JetStream file-backed streams with explicit acknowledgement. Exercised by the
+`jetstream` CI job (`tools/with-nats-jetstream.sh`), which runs
+`swarm-pheromone`'s `--test jetstream --test multi_instance` suites."""
+breaks_if = """
+The stream is memory-backed, the retention policy discards, or a cluster split
+re-delivers. The pheromone substrate would lose deposits; nothing in the
+response-authorization lane would notice."""
+invariants = []
+no_dependent_invariants_reason = """
+No MAPPING.md row depends on it. Every row in this phase's set is in
+swarm-policy, swarm-response, swarm-runtime or swarm-spine, and none of those
+four crates reaches the substrate on the paths mapped here -- the pheromone
+substrate is an input to detection, not to authorization. It is named because
+MAPPING-01 names it, and because the phase-286 deterministic-simulation work
+will produce rows that do depend on it (substrate close/reopen between
+policy-allow and receipt-persist is one of that phase's three fault classes).
+Filling this list today would mean inventing a row."""
+
+[[assumption]]
+id = "ASSUME-SUBPROCESS-ISOLATION"
+owner = "swarm-runtime"
+statement = """
+No production path in the critical lane spawns a subprocess, so no response
+decision depends on process isolation, argument quoting or inherited
+environment."""
+holds_because = """
+Measured, not assumed:
+
+    $ grep -rl 'Command::new' crates/*/src
+    crates/swarm-ingest-runtime/src/ingest/tests.rs
+
+The single hit is a `#[cfg(test)]` file. Response adapters reach hosts over
+HTTP (`http_edr`, `crowdstrike_rtr`, `webhook`, `splunk_hec`), never by
+exec."""
+breaks_if = """
+A response adapter is added that shells out to an EDR CLI. At that point this
+row stops being an absence and becomes a real trust boundary, and the grep above
+becomes a gate rather than a measurement."""
+invariants = []
+no_dependent_invariants_reason = """
+No MAPPING.md row depends on it, because the condition it assumes is currently
+VACUOUSLY TRUE -- there is no subprocess in production code to isolate. It is
+named because MAPPING-01 names it, and because the grep in `holds_because` is
+the thing worth re-running when a new adapter lands."""
+
+# ---------------------------------------------------------------------------
+# Assumptions this repository adds beyond MAPPING-01's list
+# ---------------------------------------------------------------------------
+
+[[assumption]]
+id = "ASSUME-CHAIN-HEAD-DURABILITY"
+owner = "swarm-spine"
+statement = """
+A caller of `verify_chain_link` supplies the head of the last envelope it
+ACCEPTED for that issuer, and that head is not rolled back or forgotten between
+calls."""
+holds_because = """
+Nothing in this tree holds it yet, and that is stated rather than implied.
+`verify_chain_link`, `chain_head_from_envelope` and `IssuerChainHead` have NO
+production call site:
+
+    $ grep -rn 'verify_chain_link' crates/ | grep -v swarm-spine/src/chain.rs \
+        | grep -v tests/negative_
+    crates/swarm-spine/src/lib.rs:61:pub use chain::{...verify_chain_link};
+
+The four rows under this assumption are therefore invariants of a public,
+tested TCB primitive that the critical lane does not yet call. They are mapped
+ahead of the caller deliberately: the guard has to be right before something
+depends on it, and a row that says so is worth more than an absent row."""
+breaks_if = """
+The head is read from a store that can roll back, or a caller passes `None`
+where it holds a head. `None` is not a refusal -- it is "this issuer is new" --
+so a caller that loses its head store silently re-admits an issuer at whatever
+sequence the next envelope claims, which is exactly what
+SPINE-CHAIN-FIRST-LINK-SHAPE narrows to seq=1.
+
+THE CONCRETE GAP TODAY: `swarm_runtime::approval::build_vote_envelope_hash`
+BUILDS a chain -- it passes `entries.last().envelope_hash` as
+`prev_envelope_hash` -- and nothing ever verifies that chain with
+`verify_chain_link`. The approval ledger's links are constructed and never
+checked. Tracked as follow-up; see `docs/decisions/0011-*`."""
+invariants = [
+  "SPINE-CHAIN-PREV-HASH-BOUND",
+  "SPINE-CHAIN-SEQ-MONOTONIC",
+  "SPINE-CHAIN-ISSUER-BOUND",
+  "SPINE-CHAIN-FIRST-LINK-SHAPE",
+]
+
+[[assumption]]
+id = "ASSUME-DETERMINISTIC-GATE"
+owner = "swarm-policy"
+statement = """
+A policy verdict is a pure function of the request, the loaded rules and
+`now_ms`. No advisory, best-effort or optional context reaches it, so a verdict
+never depends on how much information happened to be available."""
+holds_because = """
+Structural. `swarm-policy` is trusted-computing-base (ADR 0009) and its declared
+workspace dependencies are allow-listed down to `{swarm-core}` in ANY dependency
+kind, enforced by `tools/check-workspace-layering.sh` with a fixture that proves
+it fails when broken. `swarm-runtime`'s correlation and memory modules cannot be
+named from inside a gate (TCBOUND-04)."""
+breaks_if = """
+A gate is given a handle to anything it can consult opportunistically -- a cache,
+a reputation store, a network lookup. The verdict then becomes load-dependent
+and the negative tests below stop being decisive, because the same request could
+be denied on one run and allowed on the next."""
+invariants = [
+  "POLICY-NULL-EVIDENCE-REFUSED",
+  "POLICY-DESTRUCTIVE-MIN-SEVERITY",
+  "POLICY-DESTRUCTIVE-HUMAN-GATE",
+  "RUNTIME-DENY-BLOCKS-EXECUTION",
+  "RUNTIME-HUMAN-GATE-BLOCKS-LIVE",
+]
+
+[[assumption]]
+id = "ASSUME-CONFIG-INTEGRITY"
+owner = "swarm-runtime"
+statement = """
+The policy rules a deployment loads are the ones the repository shipped or ones
+an operator deliberately supplied; they are not attacker-chosen, and an EMPTY
+rule set means unconfigured rather than permissive."""
+holds_because = """
+`rulesets/default.yaml`'s sha256 is inside the ed25519-signed
+`rulesets/attestation.json`, and the signing key is deliberately absent from
+this repository -- so the curated ruleset cannot be edited in tree at all. An
+operator-supplied ruleset is outside that seal and is trusted as operator
+input."""
+breaks_if = """
+An operator's own config file is writable by something that should not be
+writing it. The failure mode this row is really about is milder and much more
+likely: a deployment that never configured rules at all. That is the SHIPPED
+default -- `PolicyConfig::default()` carries no rules -- so the fail-closed arm
+is on the path every unconfigured deployment takes, not a corner."""
+invariants = [
+  "POLICY-EMPTY-RULESET-DENIES",
+]
