@@ -48,12 +48,16 @@
 #   Because two independent checks make an exact-version skip self-invalidating.
 #   Their ownership is deliberately separate:
 #
-#   1. This metadata stage owns FULL TEXTUAL IDENTITY. It accepts only
-#      `<crate>@<SemVer 2.0>`, including valid prerelease and build metadata, and
-#      requires the name plus complete version text to occur in Cargo.lock. A
-#      build-bearing selector also fails when two locked packages of that name
-#      share its core+prerelease precedence identity: cargo-deny cannot tell those
-#      build variants apart, so the waiver would be ambiguous.
+#   1. This metadata stage owns FULL TEXTUAL IDENTITY. It splits at the final `@`,
+#      requires a non-empty name and exact SemVer 2.0 version text, then makes
+#      Cargo.lock's exact name authoritative. That accepts Cargo-valid names a
+#      hand-written subset would miss, including leading underscore and Unicode
+#      XID names. Every selector fails when multiple locked rows share its exact
+#      name and build-stripped core+prerelease precedence identity: cargo-deny
+#      cannot distinguish registry vs path identity or build variants there.
+#      Ambiguity errors print each row's source string; a source-less lock row is
+#      truthfully labeled path/local while noting Cargo.lock records no filesystem
+#      path.
 #
 #      This is necessary because cargo-deny 0.19.4 normalizes build metadata out
 #      of its comparator. Constructed on 2026-08-14 at 69b32d7: changing the real
@@ -207,49 +211,58 @@ SEMVER_TEXT = (
     rf"(?:-{SEMVER_PRERELEASE_ID}(?:\.{SEMVER_PRERELEASE_ID})*)?"
     rf"(?:\+{SEMVER_BUILD_ID}(?:\.{SEMVER_BUILD_ID})*)?"
 )
-EXACT_SKIP_SPEC = re.compile(
-    r"\A(?P<name>[A-Za-z0-9][A-Za-z0-9_-]*)@"
-    rf"(?P<version>{SEMVER_TEXT})\Z"
-)
+EXACT_SEMVER = re.compile(rf"\A{SEMVER_TEXT}\Z")
+
+
+def split_skip_spec(spec):
+    """Split at the final @; Cargo.lock is authoritative for the package name."""
+    name, separator, version = spec.rpartition("@")
+    if not separator or not name or EXACT_SEMVER.fullmatch(version) is None:
+        return None
+    return name, version
 
 
 def locked_skip_problem(spec, locked_packages):
     """Return why an exact skip does not identify one safe lockfile version."""
-    match = EXACT_SKIP_SPEC.fullmatch(spec)
-    if match is None:
+    parsed = split_skip_spec(spec)
+    if parsed is None:
         raise ValueError(f"lock identity called with invalid skip spec {spec!r}")
 
-    name = match.group("name")
-    version = match.group("version")
-    locked_versions = [
-        locked_version
-        for locked_name, locked_version in locked_packages
+    name, version = parsed
+    locked_rows = [
+        (locked_version, locked_identity)
+        for locked_name, locked_version, locked_identity in locked_packages
         if locked_name == name
     ]
 
-    if version not in locked_versions:
-        available = ", ".join(sorted(set(locked_versions))) or "<none>"
+    precedence = version.partition("+")[0]
+    same_precedence = [
+        (locked_version, locked_identity)
+        for locked_version, locked_identity in locked_rows
+        if locked_version.partition("+")[0] == precedence
+    ]
+    if len(same_precedence) > 1:
+        rendered = "; ".join(
+            f"{locked_version} [{locked_identity}]"
+            for locked_version, locked_identity in sorted(same_precedence)
+        )
         return (
-            f"version `{version}` has no exact textual match in Cargo.lock for "
-            f"crate `{name}` (locked version(s): {available}). This gate includes "
-            "build metadata in waiver identity even though cargo-deny does not"
+            f"selector `{spec}` is ambiguous: Cargo.lock has "
+            f"{len(same_precedence)} `{name}` rows with build-stripped SemVer "
+            f"precedence identity `{precedence}`: {rendered}. cargo-deny cannot "
+            "distinguish these package identities"
         )
 
-    if "+" in version:
-        precedence = version.partition("+")[0]
-        same_precedence = [
-            locked_version
-            for locked_version in locked_versions
-            if locked_version.partition("+")[0] == precedence
-        ]
-        if len(same_precedence) > 1:
-            rendered = ", ".join(sorted(same_precedence))
-            return (
-                f"build-bearing selector `{spec}` is ambiguous: Cargo.lock has "
-                f"{len(same_precedence)} `{name}` packages with SemVer precedence "
-                f"identity `{precedence}` ({rendered}), and cargo-deny normalizes "
-                "their build metadata away"
-            )
+    if not any(locked_version == version for locked_version, _ in locked_rows):
+        available = "; ".join(
+            f"{locked_version} [{locked_identity}]"
+            for locked_version, locked_identity in sorted(locked_rows)
+        ) or "<none>"
+        return (
+            f"version `{version}` has no exact textual match in Cargo.lock for "
+            f"crate `{name}` (locked row(s): {available}). This gate includes "
+            "build metadata in waiver identity even though cargo-deny does not"
+        )
 
     return None
 
@@ -265,6 +278,8 @@ SKIP_SPEC_FIXTURES = (
     ("fixture@1.2.3+build.7", True),
     ("fixture@1.2.3-alpha.1+build.7", True),
     ("serde_yaml@0.9.34+deprecated", True),
+    ("_probe@1.2.3", True),
+    ("δprobe@1.2.3", True),
     # Wildcards, partials, and operators are not exact versions.
     ("fixture@*", False),
     ("fixture@1", False),
@@ -283,10 +298,11 @@ SKIP_SPEC_FIXTURES = (
     ("fixture@1.2.3+build..7", False),
     ("fixture@1.2.3-", False),
     ("fixture@1.2.3+", False),
+    ("@1.2.3", False),
 )
 
 for fixture, expected in SKIP_SPEC_FIXTURES:
-    actual = EXACT_SKIP_SPEC.fullmatch(fixture) is not None
+    actual = split_skip_spec(fixture) is not None
     if actual != expected:
         print(
             "::error::internal exact-skip grammar fixture failed: "
@@ -300,61 +316,119 @@ for fixture, expected in SKIP_SPEC_FIXTURES:
 # full text names a locked package and closes cargo-deny's build-normalization
 # gap. Both pass controls prevent a fail-everything implementation from looking
 # strict.
+FIXTURE_REGISTRY = "source=registry+https://example.invalid/index"
+FIXTURE_PATH = "path/local (Cargo.lock records no source or filesystem path)"
 LOCK_IDENTITY_FIXTURES = (
     (
         "exact locked build",
         "serde_yaml@0.9.34+deprecated",
-        (("serde_yaml", "0.9.34+deprecated"),),
+        (("serde_yaml", "0.9.34+deprecated", FIXTURE_REGISTRY),),
         None,
     ),
     (
         "stale build",
         "serde_yaml@0.9.34+stale",
-        (("serde_yaml", "0.9.34+deprecated"),),
-        "has no exact textual match",
+        (("serde_yaml", "0.9.34+deprecated", FIXTURE_REGISTRY),),
+        ("has no exact textual match",),
     ),
     (
         "missing build text",
         "serde_yaml@0.9.34",
-        (("serde_yaml", "0.9.34+deprecated"),),
-        "has no exact textual match",
+        (("serde_yaml", "0.9.34+deprecated", FIXTURE_REGISTRY),),
+        ("has no exact textual match",),
     ),
     (
         "ambiguous build",
         "fixture@1.2.3+build.7",
-        (("fixture", "1.2.3+build.7"), ("fixture", "1.2.3+build.8")),
-        "is ambiguous",
+        (
+            ("fixture", "1.2.3+build.7", FIXTURE_REGISTRY),
+            ("fixture", "1.2.3+build.8", FIXTURE_PATH),
+        ),
+        ("is ambiguous", FIXTURE_REGISTRY, FIXTURE_PATH),
+    ),
+    (
+        "same version from registry and path",
+        "fixture@1.2.3",
+        (
+            ("fixture", "1.2.3", FIXTURE_REGISTRY),
+            ("fixture", "1.2.3", FIXTURE_PATH),
+        ),
+        ("is ambiguous", FIXTURE_REGISTRY, FIXTURE_PATH),
+    ),
+    (
+        "stable selector beside build variant",
+        "fixture@1.2.3",
+        (
+            ("fixture", "1.2.3", FIXTURE_REGISTRY),
+            ("fixture", "1.2.3+local", FIXTURE_PATH),
+        ),
+        ("is ambiguous", "1.2.3+local", FIXTURE_REGISTRY, FIXTURE_PATH),
     ),
     (
         "stale combined prerelease and build",
         "fixture@1.2.3-alpha.1+build.8",
-        (("fixture", "1.2.3-alpha.1+build.7"),),
-        "has no exact textual match",
+        (("fixture", "1.2.3-alpha.1+build.7", FIXTURE_REGISTRY),),
+        ("has no exact textual match",),
     ),
     (
         "exact locked stable",
         "fixture@1.2.3",
-        (("fixture", "1.2.3"),),
+        (("fixture", "1.2.3", FIXTURE_REGISTRY),),
         None,
     ),
     (
         "exact locked prerelease",
         "fixture@1.2.3-alpha.1",
-        (("fixture", "1.2.3-alpha.1"),),
+        (("fixture", "1.2.3-alpha.1", FIXTURE_REGISTRY),),
         None,
+    ),
+    (
+        "leading underscore Cargo name",
+        "_probe@1.2.3",
+        (("_probe", "1.2.3", FIXTURE_PATH),),
+        None,
+    ),
+    (
+        "Unicode XID Cargo name",
+        "δprobe@1.2.3",
+        (("δprobe", "1.2.3", FIXTURE_PATH),),
+        None,
+    ),
+    (
+        "name absent from lock",
+        "missing@1.2.3",
+        (("other", "1.2.3", FIXTURE_REGISTRY),),
+        ("locked row(s): <none>",),
+    ),
+    (
+        "at sign remains subject to authoritative lock name",
+        "not@a@1.2.3",
+        (("not-a", "1.2.3", FIXTURE_REGISTRY),),
+        ("locked row(s): <none>",),
+    ),
+    (
+        "empty name is rejected before lock matching",
+        "@1.2.3",
+        (("fixture", "1.2.3", FIXTURE_REGISTRY),),
+        ("invalid skip spec",),
     ),
 )
 
-for label, spec, fixture_packages, expected_problem in LOCK_IDENTITY_FIXTURES:
-    actual_problem = locked_skip_problem(spec, fixture_packages)
-    if expected_problem is None:
+for label, spec, fixture_packages, expected_parts in LOCK_IDENTITY_FIXTURES:
+    try:
+        actual_problem = locked_skip_problem(spec, fixture_packages)
+    except ValueError as exc:
+        actual_problem = str(exc)
+    if expected_parts is None:
         fixture_ok = actual_problem is None
     else:
-        fixture_ok = actual_problem is not None and expected_problem in actual_problem
+        fixture_ok = actual_problem is not None and all(
+            part in actual_problem for part in expected_parts
+        )
     if not fixture_ok:
         print(
             "::error::internal skip lock-identity fixture failed: "
-            f"{label!r} expected problem={expected_problem!r}, "
+            f"{label!r} expected parts={expected_parts!r}, "
             f"got {actual_problem!r}",
             file=sys.stderr,
         )
@@ -464,7 +538,16 @@ for index, entry in enumerate(lock_entries):
         problem(where, "has no string `version`")
         lock_inventory_valid = False
         continue
-    locked_packages.append((name, version))
+    source = entry.get("source")
+    if source is None:
+        identity = "path/local (Cargo.lock records no source or filesystem path)"
+    elif not isinstance(source, str) or not source:
+        problem(where, "has a non-string or empty `source`")
+        lock_inventory_valid = False
+        continue
+    else:
+        identity = f"source={source}"
+    locked_packages.append((name, version, identity))
 
 ignores = config.get("advisories", {}).get("ignore", [])
 skips = config.get("bans", {}).get("skip")
@@ -543,15 +626,15 @@ for index, entry in enumerate(skips):
     if not isinstance(spec, str):
         spec = ""
     where = f"deny.toml [bans] skip `{spec or '<no crate>'}`"
-    spec_match = EXACT_SKIP_SPEC.fullmatch(spec)
-    if spec_match is None:
+    spec_parts = split_skip_spec(spec)
+    if spec_parts is None:
         problem(
             where,
-            "`crate` must be an exact `<crate>@<SemVer 2.0>` spec; valid "
-            "prerelease and build metadata are accepted, but wildcard, range, "
-            "operator, partial, and invalid SemVer requirements are forbidden "
-            "because they can keep matching after the reviewed version moves "
-            "or do not identify one valid version",
+            "`crate` must end in `@<SemVer 2.0>` with a non-empty package name "
+            "before the final `@`; valid prerelease and build metadata are "
+            "accepted, while wildcard, range, operator, partial, and invalid "
+            "SemVer requirements are forbidden. Cargo.lock exact-name matching "
+            "is authoritative for which package names are valid",
         )
     elif lock_inventory_valid:
         lock_problem = locked_skip_problem(spec, locked_packages)

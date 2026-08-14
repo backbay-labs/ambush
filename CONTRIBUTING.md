@@ -104,14 +104,15 @@ Waiving a supply-chain finding -- a RustSec advisory or a duplicate dependency -
 entry to `deny.toml` with the metadata that gate parses out of its `reason`: `last-checked
 <YYYY-MM-DD>` and a `clears-when:` clause on either kind of entry, plus `expires <YYYY-MM-DD>` and a
 `blast-radius:` note on an `[advisories] ignore`. Duplicate skips must use the exact
-`<crate>@<SemVer 2.0>` form. Valid prerelease and build metadata are accepted; wildcard, range,
-operator, partial, and invalid SemVer requirements are rejected. The exact name and complete
-version text, including build metadata, must occur in `Cargo.lock`; a build-bearing selector is
-also rejected when multiple locked packages share its name and core-plus-prerelease identity.
-Cargo-deny separately checks that the locked selector applies to a duplicate in its scanned graph.
-Do not add `--ignore` to a `cargo audit` invocation: that list is derived from `deny.toml`, and a
-RustSec id written into a workflow or a `tools/*.sh` fails the gate as a second list that would
-drift.
+`<crate>@<SemVer 2.0>` form. The gate splits at the final `@`, requires a non-empty name and valid
+exact SemVer, and uses exact `Cargo.lock` matching as the authority for Cargo package names; this
+includes leading-underscore and Unicode-XID names. The complete version text must occur in the
+lock, including build metadata. Every selector is rejected when multiple locked rows share its
+exact name and build-stripped core-plus-prerelease identity; diagnostics list registry/git sources
+and truthfully identify source-less rows as path/local while noting that Cargo.lock omits the
+filesystem path. Cargo-deny separately checks duplicate applicability in its scanned graph. Do not
+add `--ignore` to `cargo audit`: that list is derived from `deny.toml`, and a RustSec id in a
+workflow or `tools/*.sh` fails as a second list that would drift.
 
 ## Conventions
 
