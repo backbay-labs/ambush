@@ -1,10 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::LocalOperatorSurface;
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use axum::Json;
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::extract::State;
+use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::routing::post;
 use serde_json::{Value, json};
@@ -12,14 +14,18 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use swarm_agents::tom_agent::{GovernanceDecision, GovernancePolicy, GovernancePolicyConfig};
+use swarm_core::agent::{
+    AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
+};
 use swarm_core::config::{
     AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
     DetectorProfilesConfig, InvestigationConfig, NotificationChannelConfig,
     NotificationRateLimitConfig, NotificationRoutingConfig, OperatorAuthConfig,
     OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, OperatorSurfacePaths,
-    PheromoneBackendConfig, PheromoneConfig, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
-    PromotionConfig, QuietHoursConfig, RoutingRule, RuntimeSettings, SwarmConfig,
-    TelemetrySourceConfig,
+    PheromoneBackendConfig, PheromoneConfig, PolicyActionSelector, PolicyConfig, PolicyRuleConfig,
+    PolicyRuleDecision, PromotionConfig, QuietHoursConfig, RoutingRule, RuntimeSettings,
+    SwarmConfig, TelemetrySourceConfig,
 };
 use swarm_core::pheromone::{
     ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
@@ -28,7 +34,7 @@ use swarm_core::types::{
     AgentId, HuntId, ProvidenceIncidentReconciliation, ProvidenceIncidentStatus,
     ProvidenceReconciliationOutcome, ResponseAction, ResponseBlastRadiusImpact,
     ResponseBlastRadiusPreview, ResponseRehearsalPreview, ResponseRehearsalScopeKind,
-    ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity,
+    ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity, SwarmAction,
 };
 use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
 use swarm_evolution::evidence::{
@@ -41,20 +47,22 @@ use swarm_ingest_runtime::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
 };
 use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
-use swarm_policy::ApprovalContext;
+use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::SwarmFindingEnvelope;
-use swarm_runtime::approval::DefaultApprovalHarness;
+use swarm_runtime::approval::{DefaultApprovalHarness, ThresholdRule};
+use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::replay::{
     ExperimentLineage, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
     ReplayScenarioMetadata, ReplayScenarioStep,
 };
+use swarm_runtime::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
 use swarm_runtime::service::EventExecutionContext;
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, CorrelatedIncident, IncidentMemberDecision, IncidentStore,
     PolicyRecord, ReplayBundle, ReplayBundleStore,
 };
 use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
-use tokio::sync::{Mutex as AsyncMutex, oneshot};
+use tokio::sync::{Mutex as AsyncMutex, oneshot, watch};
 use tower::ServiceExt;
 
 use swarm_evolution::governance_prep::{
@@ -77,6 +85,50 @@ use swarm_runtime::evolution::{
 use swarm_runtime_workbench::review_workbench::DefaultReviewWorkbenchHarness;
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct OneShotGovernedRequestAgent {
+    id: AgentId,
+    verifying_key: ed25519_dalek::VerifyingKey,
+    actions: Option<Vec<SwarmAction>>,
+}
+
+impl OneShotGovernedRequestAgent {
+    fn new(id: AgentId, actions: Vec<SwarmAction>) -> Self {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[73; 32]);
+        Self {
+            id,
+            verifying_key: signing_key.verifying_key(),
+            actions: Some(actions),
+        }
+    }
+}
+
+#[async_trait]
+impl SwarmAgent for OneShotGovernedRequestAgent {
+    fn identity(&self) -> &ed25519_dalek::VerifyingKey {
+        &self.verifying_key
+    }
+
+    fn id(&self) -> &AgentId {
+        &self.id
+    }
+
+    fn role(&self) -> AgentRole {
+        AgentRole::Pouncer
+    }
+
+    fn observe_event(&mut self, _event: &swarm_core::agent::SwarmEvent) -> Result<(), SwarmError> {
+        Ok(())
+    }
+
+    async fn tick(&mut self, _env: &SwarmEnvironment) -> Result<Vec<SwarmAction>, SwarmError> {
+        Ok(self.actions.take().unwrap_or_default())
+    }
+
+    fn health(&self) -> AgentHealth {
+        AgentHealth::Healthy
+    }
+}
 
 fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
     vec![PolicyRuleConfig {
@@ -304,6 +356,46 @@ async fn spawn_notification_capture_server() -> (
         let _ = server.await;
     });
     (format!("http://{address}/"), state, shutdown_tx, handle)
+}
+
+#[derive(Clone, Default)]
+struct ApprovalResumeCaptureState {
+    requests: Arc<AsyncMutex<Vec<(String, Value)>>>,
+}
+
+async fn approval_resume_capture_handler(
+    State(state): State<ApprovalResumeCaptureState>,
+    OriginalUri(uri): OriginalUri,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    state
+        .requests
+        .lock()
+        .await
+        .push((uri.path().to_string(), body));
+    (StatusCode::OK, Json(json!({"ok": true})))
+}
+
+async fn spawn_approval_resume_capture_server() -> (
+    String,
+    ApprovalResumeCaptureState,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = ApprovalResumeCaptureState::default();
+    let app = Router::new()
+        .route("/{*path}", post(approval_resume_capture_handler))
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+    (format!("http://{address}"), state, shutdown_tx, handle)
 }
 
 fn notification_operator_config(target_url: String, dead_letter_path: String) -> SwarmConfig {
@@ -2943,6 +3035,344 @@ async fn review_workbench_routes_create_export_and_handoff_sessions() {
         maintenance_json["actions"][0]["target_kind"],
         "evidence_bundle"
     );
+}
+
+#[tokio::test]
+async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
+    const TOKEN_ENV: &str = "SWARM_ORDINARY_APPROVAL_ROUTE_TOKEN";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_ORDINARY_APPROVAL_ROUTE_EVIDENCE_KEY";
+    const TOKEN: &str = "ordinary-approval-route-token";
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(EVIDENCE_KEY_ENV, "ordinary-approval-route-evidence-key");
+    }
+    let (runtime_base_url, capture, shutdown_tx, server) =
+        spawn_approval_resume_capture_server().await;
+    let signer = Ed25519Signer::from_secret_material("ordinary-approval-route-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let mut config = operator_config();
+    config.operator.runtime_base_url = runtime_base_url;
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: voter_id.clone(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+    let root = unique_temp_dir("ordinary-approval-route");
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
+    let harness = surface.state.approval.as_ref().unwrap();
+    let set = harness
+        .create_approval_set(
+            vec![voter_id.clone()],
+            ThresholdRule::AtLeast { required: 1 },
+            "promotion_evidence:ordinary-demo-approval",
+        )
+        .unwrap();
+    let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+        .ledger_id
+        .clone();
+    let signature = signer.sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": set.set_id.clone(),
+            "ledger_id": ledger_id.clone(),
+            "voter_id": voter_id.clone(),
+        }))
+        .unwrap(),
+    );
+    let response = surface
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"voter_id": voter_id, "signature": signature}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = capture.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].0,
+        format!("/v1/demo/approvals/{}/resume", set.set_id)
+    );
+    assert!(requests[0].1.get("receipt_pack").is_some());
+    assert!(requests[0].1.get("receipt_pack_id").is_none());
+    drop(requests);
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(EVIDENCE_KEY_ENV);
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticated_runtime_route() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_E2E_TOKEN";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_GOVERNED_RESUME_E2E_EVIDENCE_KEY";
+    const TOKEN: &str = "governed-resume-e2e-bearer";
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(EVIDENCE_KEY_ENV, "governed-resume-e2e-evidence-key");
+    }
+
+    let root = unique_temp_dir("governed-resume-production-composition");
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    paths.evidence_signer_id = "governed-resume-e2e-signer".to_string();
+    let harness = DefaultApprovalHarness::from_path(
+        "inline",
+        &paths.approval_verdict_results_dir,
+        &paths.approval_receipt_pack_results_dir,
+        &paths.approval_set_results_dir,
+        &paths.approval_ledger_results_dir,
+    )
+    .unwrap();
+
+    let operator_signer = Ed25519Signer::from_secret_material("governed-resume-e2e-voter");
+    let operator_id = format!("swarm:ed25519:{}", operator_signer.public_key_hex());
+    let runtime_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let runtime_address = runtime_listener.local_addr().unwrap();
+    let mut config = operator_config();
+    config.runtime.mode = swarm_core::config::RuntimeMode::LiveResponse;
+    config.policy.human_gate_severity = Severity::Low;
+    for rule in &mut config.policy.rules {
+        rule.actions = vec![PolicyActionSelector::Escalate];
+    }
+    config.operator.runtime_base_url = format!("http://{runtime_address}");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = operator_id.clone();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: operator_id.clone(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+
+    let governance = Arc::new(
+        GovernancePolicy::with_persistence(
+            GovernancePolicyConfig::default(),
+            root.join("governance-authorizations.json"),
+        )
+        .unwrap(),
+    );
+    governance
+        .register_governor(
+            AgentId::new("tom", "governed-resume-e2e"),
+            ed25519_dalek::SigningKey::from_bytes(&[91; 32]),
+        )
+        .unwrap();
+    let runtime_events = RuntimeEventBroadcaster::new(32);
+    let mut runtime_rx = runtime_events.subscribe();
+    let state = IngestState::from_config(root.join("swarm.yaml"), config.clone())
+        .unwrap()
+        .with_approval_harness(harness.clone())
+        .with_governance_policy(Arc::clone(&governance))
+        .with_runtime_events(runtime_events.clone());
+
+    let pounce_id = AgentId::new("pounce", "governed-resume-e2e");
+    let hunt_id = HuntId("hunt-governed-resume-e2e".to_string());
+    let response_action = ResponseAction::BlockEgress {
+        target: "203.0.113.211".to_string(),
+    };
+    let mut evidence = json!({
+        "lineage": {
+            "hunt_id": hunt_id.0.clone(),
+            "event_id": "evt-governed-resume-e2e",
+            "indicator": {"host_id": "host-governed-resume-e2e"}
+        },
+        "escalation": {
+            "mode": "alert",
+            "mode_transition_at": 1_700_000_000,
+            "timestamp": 1_700_000_010,
+            "threat_class": ThreatClass::Execution,
+            "severity": Severity::Critical,
+            "confidence": 0.99
+        },
+        "playbook_match": {
+            "threat_class": ThreatClass::Execution,
+            "severity": Severity::Critical,
+            "min_confidence": 0.90,
+            "max_confidence": 1.0
+        }
+    });
+    let request = ActionRequest {
+        hunt_id: hunt_id.clone(),
+        requested_by: pounce_id.clone(),
+        action: response_action.clone(),
+        severity: Severity::Critical,
+        evidence: evidence.clone(),
+    };
+    let GovernanceDecision::Authorize { receipt, .. } = governance.can_act(&request) else {
+        panic!("healthy configured governance must authorize the exact request");
+    };
+    evidence["governance_receipt"] = serde_json::to_value(receipt).unwrap();
+
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        state.current_substrate(),
+        Arc::new(ArcSwap::from_pointee(Vec::<AgentHealthEntry>::new())),
+    )
+    .with_request_response_router(state.current_request_response_router())
+    .with_governance_policy(Arc::clone(&governance))
+    .with_runtime_events(runtime_events);
+    dispatcher
+        .register(Box::new(OneShotGovernedRequestAgent::new(
+            pounce_id,
+            vec![SwarmAction::RequestResponse {
+                hunt_id,
+                action: response_action,
+                evidence,
+            }],
+        )))
+        .unwrap();
+    dispatcher.tick_once().await;
+
+    let approval_sets = harness.list_approval_sets().unwrap();
+    assert_eq!(approval_sets.sets.len(), 1);
+    let approval_set_id = approval_sets.sets[0].set_id.clone();
+    governance
+        .pending_human_authorization(&approval_set_id)
+        .expect("dispatcher must leave governance pending while it waits for a human");
+    while let Ok(event) = runtime_rx.try_recv() {
+        if let RuntimeEvent::ResponseExecution { response_kind, .. } = event {
+            assert_ne!(
+                response_kind, "success",
+                "the initial hold must not execute"
+            );
+        }
+    }
+
+    let runtime_server = tokio::spawn(async move {
+        axum::serve(runtime_listener, detect_http_router(state))
+            .await
+            .unwrap();
+    });
+    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
+    let operator_app = surface.router();
+    let ledgers = harness.list_ledgers(Some(&approval_set_id)).unwrap();
+    assert_eq!(ledgers.ledgers.len(), 1);
+    let ledger_id = ledgers.ledgers[0].ledger_id.clone();
+    let signature = operator_signer.sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": approval_set_id.clone(),
+            "ledger_id": ledger_id.clone(),
+            "voter_id": operator_id.clone(),
+        }))
+        .unwrap(),
+    );
+    let trusted_before_ms = swarm_runtime::runtime_events::now_ms();
+    let vote_response = operator_app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "voter_id": operator_id.clone(),
+                        "signature": signature,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let trusted_after_ms = swarm_runtime::runtime_events::now_ms();
+    assert_eq!(vote_response.status(), StatusCode::OK);
+
+    let receipt_packs = harness.list_receipt_packs().unwrap();
+    assert_eq!(receipt_packs.packs.len(), 1);
+    let receipt_pack_id = receipt_packs.packs[0].pack_id.clone();
+    assert!(
+        governance
+            .pending_human_authorization(&approval_set_id)
+            .is_err()
+    );
+
+    let mut successful_executions = 0;
+    while let Ok(event) = runtime_rx.try_recv() {
+        if let RuntimeEvent::ResponseExecution {
+            response_kind,
+            emitted_at_ms,
+            ..
+        } = event
+            && response_kind == "success"
+        {
+            successful_executions += 1;
+            assert!(emitted_at_ms >= trusted_before_ms && emitted_at_ms <= trusted_after_ms);
+        }
+    }
+    assert_eq!(successful_executions, 1);
+
+    let duplicate_vote = operator_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "voter_id": operator_id.clone(),
+                        "signature": operator_signer.sign(
+                            &canonical_json_bytes(&json!({
+                                "approval_set_id": approval_set_id.clone(),
+                                "ledger_id": ledger_id.clone(),
+                                "voter_id": operator_id.clone(),
+                            }))
+                            .unwrap(),
+                        ),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!duplicate_vote.status().is_success());
+
+    let replay = reqwest::Client::new()
+        .post(format!(
+            "http://{runtime_address}/v1/governance/approvals/{approval_set_id}/resume"
+        ))
+        .bearer_auth(TOKEN)
+        .json(&json!({"receipt_pack_id": receipt_pack_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), reqwest::StatusCode::CONFLICT);
+    tokio::task::yield_now().await;
+    while let Ok(event) = runtime_rx.try_recv() {
+        if let RuntimeEvent::ResponseExecution { response_kind, .. } = event {
+            assert_ne!(response_kind, "success", "a retry must not execute again");
+        }
+    }
+
+    runtime_server.abort();
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(EVIDENCE_KEY_ENV);
+    }
+    let _ = fs::remove_dir_all(root);
 }
 
 // --- QRT-04: operator-driven containment release ---------------------------

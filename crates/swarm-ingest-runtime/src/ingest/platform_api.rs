@@ -453,6 +453,22 @@ impl PlatformApiError {
         }
     }
 
+    pub(super) fn not_found(error: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            error: error.into(),
+            retry_after_seconds: None,
+        }
+    }
+
+    pub(super) fn conflict(error: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            error: error.into(),
+            retry_after_seconds: None,
+        }
+    }
+
     pub(super) fn too_many_requests(error: impl Into<String>, retry_after_seconds: u64) -> Self {
         Self {
             status: StatusCode::TOO_MANY_REQUESTS,
@@ -850,13 +866,57 @@ pub(super) fn legacy_evasion_api_router(state: &IngestState) -> Router<IngestSta
 
 // --- Auth middleware ---
 
-async fn require_supported_platform_api_schema_version(
+pub(super) async fn require_supported_platform_api_schema_version(
     headers: axum::http::HeaderMap,
     request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, PlatformApiError> {
     let requested = parse_requested_schema_version_header(&headers)?;
     resolve_operator_api_schema_version(requested).map_err(PlatformApiError::bad_request)?;
+    Ok(next.run(request).await)
+}
+
+pub(super) async fn require_governed_resume_bearer_auth(
+    State(state): State<IngestState>,
+    headers: axum::http::HeaderMap,
+    mut request: axum::extract::Request,
+    next: Next,
+) -> Result<Response, PlatformApiError> {
+    let peer_addr = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0);
+    state
+        .platform_api_rate_limiter()
+        .check_request(&headers, peer_addr, request.uri().path(), now_ms())
+        .map_err(map_platform_rate_limit_rejection)?;
+    let value = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .ok_or_else(|| PlatformApiError::unauthorized("missing Authorization header"))?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| PlatformApiError::unauthorized("expected Authorization: Bearer <token>"))?;
+    let principal = state
+        .platform_api_auth()
+        .authenticate_bearer(token, now_ms())
+        .map_err(|error| match error {
+            PlatformApiBearerAuthFailure::Invalid => {
+                PlatformApiError::unauthorized("invalid bearer token")
+            }
+            PlatformApiBearerAuthFailure::Expired {
+                operator_id,
+                expires_at_ms,
+            } => PlatformApiError::unauthorized(format!(
+                "bearer token for operator `{operator_id}` expired at {expires_at_ms}"
+            )),
+        })?;
+    if !principal.has_scope(OperatorScope::Approve) {
+        return Err(PlatformApiError::forbidden(
+            "operator bearer token does not grant approve scope",
+        ));
+    }
+    request.extensions_mut().insert(principal);
     Ok(next.run(request).await)
 }
 

@@ -1,4 +1,5 @@
 mod demo;
+mod governance_resume;
 mod health;
 mod platform_api;
 mod providence_handlers;
@@ -2651,6 +2652,7 @@ pub fn detect_http_router(state: IngestState) -> Router {
             post(soar_verdict_handlers::soar_verdict_handler),
         )
         .route("/v1/events/stream", get(demo::runtime_events_handler))
+        .merge(governance_resume::governed_resume_router(&state))
         .nest("/api/v1", platform_api::legacy_evasion_api_router(&state))
         .nest("/v2/api", platform_api::platform_api_router(&state))
         .with_state(state)

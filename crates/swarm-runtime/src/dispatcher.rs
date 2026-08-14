@@ -462,7 +462,6 @@ impl HumanApprovalResumeDispatcher {
     pub async fn resume(
         &self,
         receipt_pack: ApprovalReceiptPackReport,
-        now_ms: i64,
     ) -> Result<AuditTrail, RuntimeError> {
         let persisted = self
             .router
@@ -493,18 +492,21 @@ impl HumanApprovalResumeDispatcher {
                 "pending human authorization has no approval-set digest".into(),
             )
         })?;
+        // Sample the trusted host clock only after durable artifacts are loaded,
+        // immediately before freshness validation and atomic consumption.
+        let trusted_now_ms = now_ms();
         verify_governed_human_receipt_pack(
             &receipt_pack,
             approval_set_id,
             approval_set_digest,
             &hold.approval_evidence_ref(),
             hold.created_at_ms,
-            now_ms,
+            trusted_now_ms,
         )
         .map_err(|error| RuntimeError::GovernanceAuthorization(error.to_string()))?;
         let permit = self
             .router
-            .restore_human_preflight(&hold, &receipt_pack.pack_id, now_ms)
+            .restore_human_preflight(&hold, &receipt_pack.pack_id, trusted_now_ms)
             .await?;
         if permit.request != hold.request || permit.decision != hold.policy_decision {
             return Err(RuntimeError::GovernanceAuthorization(
@@ -517,7 +519,7 @@ impl HumanApprovalResumeDispatcher {
                 &hold.hold_id,
                 approval_set_id,
                 approval_set_digest,
-                now_ms,
+                trusted_now_ms,
             )
             .map_err(RuntimeError::GovernanceAuthorization)?;
         if consumed.hold != hold {

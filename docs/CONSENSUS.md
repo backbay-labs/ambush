@@ -229,6 +229,16 @@ Current implications:
   hold; it still cannot replace dispatcher governance admission
 - only the dedicated dispatcher resume route can compose the exact persisted
   human pack with the exact still-pending governance authorization
+- serve mode opens all four durable approval stores (sets, ledgers, verdicts,
+  and receipt packs). A governance-prefixed operator vote exports the pack,
+  then calls the authenticated internal runtime endpoint
+  `/v1/governance/approvals/{approval_set_id}/resume` with only its persisted
+  pack ID. The runtime reloads the pack and samples its own clock immediately
+  before freshness validation and consumption; neither the operator request nor
+  the callback body can supply a timestamp
+- that endpoint is an internal operator-to-runtime callback, not part of the
+  public read-only platform API/OpenAPI surface. Missing stores or a missing pack
+  fail closed; ordinary demo approval sets keep the existing demo-resume route
 - forged, denied, stale, future-dated, or cross-request human packs consume
   neither approval; direct raw human-approved runtime entry points remain refused
 - after atomic consumption, the admission is non-cloneable and any routing or

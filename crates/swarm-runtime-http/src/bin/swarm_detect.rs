@@ -59,6 +59,22 @@ struct Cli {
     approval_set_results_dir: PathBuf,
     #[arg(long, default_value = "data/approval-ledgers")]
     approval_ledger_results_dir: PathBuf,
+    #[arg(long, default_value = "data/approval-verdicts")]
+    approval_verdict_results_dir: PathBuf,
+    #[arg(long, default_value = "data/approval-receipt-packs")]
+    approval_receipt_pack_results_dir: PathBuf,
+}
+
+fn build_approval_harness(
+    cli: &Cli,
+) -> Result<DefaultApprovalHarness, swarm_runtime::approval::ApprovalError> {
+    DefaultApprovalHarness::from_path(
+        &cli.config,
+        &cli.approval_verdict_results_dir,
+        &cli.approval_receipt_pack_results_dir,
+        &cli.approval_set_results_dir,
+        &cli.approval_ledger_results_dir,
+    )
 }
 
 fn response_kind(value: &swarm_spine::AuditResponseRecord) -> &'static str {
@@ -701,10 +717,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if cli.serve {
-        let approval_harness = DefaultApprovalHarness::from_paths(
-            &cli.approval_set_results_dir,
-            &cli.approval_ledger_results_dir,
-        )?;
+        let approval_harness = build_approval_harness(&cli)?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::channel(10_000);
         let (bridge_ingest_tx, mut bridge_ingest_rx) =
@@ -1379,8 +1392,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        register_optional_calico_agent, register_optional_sphinx_agent, watch_paths_differ,
+        Cli, build_approval_harness, register_optional_calico_agent,
+        register_optional_sphinx_agent, watch_paths_differ,
     };
+    use clap::Parser;
     use std::path::PathBuf;
     use std::sync::Arc;
     use swarm_core::agent::{AgentRole, SwarmModeState};
@@ -1402,6 +1417,35 @@ mod tests {
         assert!(watch_paths_differ(left.as_ref(), None));
         assert!(!watch_paths_differ(left.as_ref(), left.as_ref()));
         assert!(!watch_paths_differ(None, None));
+    }
+
+    #[test]
+    fn serve_approval_harness_configures_all_four_durable_stores() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-detect-approval-stores-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let cli = Cli::parse_from([
+            "swarm-detect",
+            "--approval-set-results-dir",
+            root.join("sets").to_str().unwrap(),
+            "--approval-ledger-results-dir",
+            root.join("ledgers").to_str().unwrap(),
+            "--approval-verdict-results-dir",
+            root.join("verdicts").to_str().unwrap(),
+            "--approval-receipt-pack-results-dir",
+            root.join("packs").to_str().unwrap(),
+        ]);
+
+        let harness = build_approval_harness(&cli).expect("all approval stores should open");
+        assert!(harness.list_verdicts().unwrap().verdicts.is_empty());
+        assert!(harness.list_receipt_packs().unwrap().packs.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

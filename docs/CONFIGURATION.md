@@ -1003,6 +1003,15 @@ Supported reference architecture:
 
 - run `swarm_detect --serve` as the primary runtime service
 - run `swarmctl serve` as a separate operator deployment, admin pod, or private service mounting the same state root and artifact directories
+- keep the approval set, ledger, verdict, and receipt-pack directories shared and
+  durable across both services. `swarm_detect --serve` defaults them to
+  `data/approval-sets`, `data/approval-ledgers`, `data/approval-verdicts`, and
+  `data/approval-receipt-packs`; its matching override flags are
+  `--approval-set-results-dir`, `--approval-ledger-results-dir`,
+  `--approval-verdict-results-dir`, and
+  `--approval-receipt-pack-results-dir`. Governed human resume fails closed if
+  the verdict or receipt-pack store is not configured or the referenced pack is
+  absent
 - front the non-loopback operator address with TLS; prefer mTLS or a private network boundary if it leaves localhost
 - keep operator bearer secrets and the context-token signer in the mounted secret bundle, not in repo config
 

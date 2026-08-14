@@ -351,7 +351,14 @@ impl<P, E> RuntimeBackedRouter<P, E> {
         evaluated_at_ms: i64,
     ) -> ApprovalReceiptPackReport {
         let voter_id = format!("swarm:ed25519:{}", self.human_voter.public_key_hex());
-        if approve {
+        let has_vote = self
+            .approval_harness
+            .list_ledgers(Some(set_id))
+            .unwrap()
+            .ledgers
+            .first()
+            .is_some_and(|ledger| ledger.vote_count > 0);
+        if approve && !has_vote {
             self.approval_harness
                 .append_vote(set_id, &voter_id, &self.human_voter)
                 .unwrap();
@@ -1621,7 +1628,7 @@ async fn governed_human_resume_executes_once_without_re_evaluating_policy()
 
     let pack = router.approve_pending_human_hold();
     let resume = HumanApprovalResumeDispatcher::new(governance, router);
-    let audit = resume.resume(pack.clone(), unix_now_ms()).await?;
+    let audit = resume.resume(pack.clone()).await?;
 
     assert_eq!(audit.hunt_id, "hunt-governed-human-resume");
     assert!(matches!(audit.response, AuditResponseRecord::Success(_)));
@@ -1630,7 +1637,7 @@ async fn governed_human_resume_executes_once_without_re_evaluating_policy()
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
 
     let replay = resume
-        .resume(pack, unix_now_ms())
+        .resume(pack)
         .await
         .expect_err("a human and governance approval pair must be one-shot");
     assert!(replay.to_string().contains("pending human authorization"));
@@ -1698,9 +1705,22 @@ async fn fresh_human_approval_cannot_resume_a_stale_governance_receipt()
         .set_id;
     let resume_at_ms = issued_at_ms.saturating_add(300_002);
     let fresh_pack = router.build_human_pack(&set_id, true, resume_at_ms.saturating_sub(1));
-    let error = HumanApprovalResumeDispatcher::new(governance.clone(), router)
-        .resume(fresh_pack, resume_at_ms)
-        .await
+    let hold = governance.pending_human_authorization(&set_id)?;
+    swarm_runtime::approval::verify_governed_human_receipt_pack(
+        &fresh_pack,
+        hold.approval_set_id.as_deref().unwrap(),
+        hold.approval_set_digest.as_deref().unwrap(),
+        &hold.approval_evidence_ref(),
+        hold.created_at_ms,
+        resume_at_ms,
+    )?;
+    let error = governance
+        .verify_and_consume_human_authorization(
+            &hold.hold_id,
+            hold.approval_set_id.as_deref().unwrap(),
+            hold.approval_set_digest.as_deref().unwrap(),
+            resume_at_ms,
+        )
         .expect_err("fresh human approval cannot refresh stale governance");
     assert!(
         error.to_string().contains("governance receipt is stale"),
@@ -1767,7 +1787,7 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
     let denied = router.build_human_pack(&set_id, false, unix_now_ms());
     let resume = HumanApprovalResumeDispatcher::new(governance.clone(), router.clone());
     let denied_error = resume
-        .resume(denied, unix_now_ms())
+        .resume(denied)
         .await
         .expect_err("a not-approved verdict must not consume governance");
     assert!(
@@ -1777,11 +1797,21 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
         "{denied_error}"
     );
 
+    let future = router.build_human_pack(&set_id, true, unix_now_ms().saturating_add(600_000));
+    let future_error = resume
+        .resume(future)
+        .await
+        .expect_err("a genuine future-dated pack must be checked against the host clock");
+    assert!(
+        future_error.to_string().contains("future"),
+        "{future_error}"
+    );
+
     let valid = router.build_human_pack(&set_id, true, unix_now_ms());
     let mut forged = valid.clone();
     forged.audit_refs.clear();
     let forged_error = resume
-        .resume(forged, unix_now_ms())
+        .resume(forged)
         .await
         .expect_err("a caller-mutated pack must not consume governance");
     assert!(forged_error.to_string().contains("persisted artifact"));
@@ -1790,7 +1820,7 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
     cross_request.approval_set.promotion_evidence_ref =
         "governance-human-hold:unrelated".to_string();
     let cross_request_error = resume
-        .resume(cross_request, unix_now_ms())
+        .resume(cross_request)
         .await
         .expect_err("a pack substituted across requests must not consume governance");
     assert!(
@@ -1799,15 +1829,26 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
             .contains("persisted artifact")
     );
 
-    let stale_error = resume
-        .resume(valid.clone(), valid.created_at_ms.saturating_add(300_001))
-        .await
-        .expect_err("a stale human approval must not consume governance");
+    let hold = governance.pending_human_authorization(&set_id)?;
+    let stale_error = swarm_runtime::approval::verify_governed_human_receipt_pack(
+        &valid,
+        hold.approval_set_id.as_deref().unwrap(),
+        hold.approval_set_digest.as_deref().unwrap(),
+        &hold.approval_evidence_ref(),
+        hold.created_at_ms,
+        valid.created_at_ms.saturating_add(300_001),
+    )
+    .expect_err("a stale human approval must not consume governance");
     assert!(stale_error.to_string().contains("stale"));
-    let future_error = resume
-        .resume(valid.clone(), valid.created_at_ms.saturating_sub(30_001))
-        .await
-        .expect_err("a future-dated human approval must not consume governance");
+    let future_error = swarm_runtime::approval::verify_governed_human_receipt_pack(
+        &valid,
+        hold.approval_set_id.as_deref().unwrap(),
+        hold.approval_set_digest.as_deref().unwrap(),
+        &hold.approval_evidence_ref(),
+        hold.created_at_ms,
+        valid.created_at_ms.saturating_sub(30_001),
+    )
+    .expect_err("a future-dated human approval must not consume governance");
     assert!(future_error.to_string().contains("future"));
 
     assert!(governance.pending_human_authorization(&set_id).is_ok());
@@ -1815,7 +1856,7 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 0);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
 
-    resume.resume(valid, unix_now_ms()).await?;
+    resume.resume(valid).await?;
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
@@ -1869,12 +1910,12 @@ async fn failed_router_burns_owned_human_and_governance_admission() -> Result<()
     router.fail_routes_remaining.store(1, Ordering::SeqCst);
     let resume = HumanApprovalResumeDispatcher::new(governance, router);
     let route_error = resume
-        .resume(pack.clone(), unix_now_ms())
+        .resume(pack.clone())
         .await
         .expect_err("router failure is reported after durable consumption");
     assert!(route_error.to_string().contains("refused owned admission"));
     let replay_error = resume
-        .resume(pack, unix_now_ms())
+        .resume(pack)
         .await
         .expect_err("a failed owned route must not make the admission reusable");
     assert!(
@@ -1951,7 +1992,7 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
         SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
     )?;
     let resume = HumanApprovalResumeDispatcher::new(reloaded, router.clone());
-    resume.resume(pack.clone(), unix_now_ms()).await?;
+    resume.resume(pack.clone()).await?;
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
@@ -1965,7 +2006,7 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
         SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
     )?;
     let replay = HumanApprovalResumeDispatcher::new(consumed_reload, router)
-        .resume(pack, unix_now_ms())
+        .resume(pack)
         .await
         .expect_err("restart must preserve one-time consumption");
     assert!(replay.to_string().contains("pending human authorization"));

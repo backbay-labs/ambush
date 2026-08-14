@@ -160,7 +160,13 @@ Current scope:
 
 `Pouncer` is the sole normal issuance point for governed live response. Direct
 ingest does not duplicate its governance round, and human approval cannot
-replace its dispatcher admission.
+replace its dispatcher admission. When policy requires a human, the dispatcher
+persists the exact hold and approval set without consuming governance. A signed
+operator vote persists a verdict and receipt pack; the authenticated internal
+runtime resume callback loads that pack by ID and uses the runtime host clock to
+validate and atomically consume the exact still-pending hold. The request body
+does not accept caller-selected time. Ordinary demo approvals remain on the demo
+resume route.
 
 ### Tom
 

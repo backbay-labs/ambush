@@ -4,11 +4,12 @@ use super::helpers::{approval_harness, limit_approval_ledger_list, limit_approva
 use super::state::OperatorHttpState;
 use axum::Json;
 use axum::extract::{Extension, Path as RoutePath, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header};
 use serde::Deserialize;
 use serde_json::json;
 use swarm_core::config::OperatorScope;
 use swarm_crypto::DetachedSignature;
+use swarm_policy::governance::GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX;
 use swarm_runtime::approval::{
     ApprovalLedgerList, ApprovalLedgerLookup, ApprovalSetList, ApprovalSetReport,
     ApprovalVerdictStatus, ThresholdRule,
@@ -132,6 +133,7 @@ pub(super) async fn approval_vote_append_handler(
     Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     RoutePath(ledger_id): RoutePath<String>,
+    headers: HeaderMap,
     Json(request): Json<ApprovalVoteAppendRequest>,
 ) -> Result<Json<ApprovalLedgerLookup>, OperatorApiError> {
     require_operator_api_scope(&principal, OperatorScope::Approve, "approval")?;
@@ -169,15 +171,79 @@ pub(super) async fn approval_vote_append_handler(
                     &state.approval_receipt_signing_key_env,
                 )
                 .map_err(map_approval_error)?;
-            resume_demo_approval(
-                &state.runtime_base_url,
-                &updated.report.approval_set_id,
-                &receipt_pack.report,
-            )
-            .await?;
+            let approval_set = harness
+                .load_approval_set(&updated.report.approval_set_id)
+                .map_err(map_approval_error)?
+                .ok_or_else(|| {
+                    OperatorApiError::internal(
+                        "approval set disappeared before its approved verdict was routed",
+                    )
+                })?;
+            if approval_set
+                .report
+                .promotion_evidence_ref
+                .starts_with(GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX)
+            {
+                let authorization = headers
+                    .get(header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| {
+                        OperatorApiError::unauthorized(
+                            "authenticated vote request lost its Authorization header",
+                        )
+                    })?;
+                resume_governed_approval(
+                    &state.runtime_base_url,
+                    &updated.report.approval_set_id,
+                    &receipt_pack.report.pack_id,
+                    authorization,
+                )
+                .await?;
+            } else {
+                resume_demo_approval(
+                    &state.runtime_base_url,
+                    &updated.report.approval_set_id,
+                    &receipt_pack.report,
+                )
+                .await?;
+            }
         }
     }
     Ok(Json(updated))
+}
+
+async fn resume_governed_approval(
+    runtime_base_url: &str,
+    approval_set_id: &str,
+    receipt_pack_id: &str,
+    authorization: &str,
+) -> Result<(), OperatorApiError> {
+    let url = format!(
+        "{}/v1/governance/approvals/{}/resume",
+        runtime_base_url.trim_end_matches('/'),
+        approval_set_id
+    );
+    let response = reqwest::Client::new()
+        .post(url)
+        .header(header::AUTHORIZATION.as_str(), authorization)
+        .json(&json!({ "receipt_pack_id": receipt_pack_id }))
+        .send()
+        .await
+        .map_err(|error| {
+            OperatorApiError::bad_gateway(format!(
+                "failed to resume governed approval `{approval_set_id}`: {error}"
+            ))
+        })?;
+    if response.status().is_success() {
+        return Ok(());
+    }
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Err(OperatorApiError::bad_gateway(format!(
+        "runtime governed-resume endpoint returned {} for approval `{approval_set_id}`: {}",
+        status.as_u16(),
+        body
+    )))
 }
 
 async fn resume_demo_approval(

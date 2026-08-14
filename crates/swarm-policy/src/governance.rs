@@ -29,6 +29,8 @@ use crate::{ActionRequest, PolicyDecision, static_gate::scope_for_response_actio
 pub const GOVERNANCE_ACTION_REQUEST_SUBJECT_SCHEMA_VERSION: u32 = 1;
 pub const GOVERNANCE_ACTION_REQUEST_SUBJECT_DOMAIN: &str =
     "swarm.governance.action-request.authorization.v1";
+pub const GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX: &str =
+    "swarm.governance.human-authorization.v1:";
 
 /// Canonical subject governed for one response request.
 ///
@@ -89,7 +91,7 @@ pub struct GovernedHumanAuthorizationHold {
 
 impl GovernedHumanAuthorizationHold {
     pub fn approval_evidence_ref(&self) -> String {
-        format!("swarm.governance.human-authorization.v1:{}", self.hold_id)
+        format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}{}", self.hold_id)
     }
 }
 

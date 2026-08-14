@@ -1810,6 +1810,195 @@ async fn platform_api_routes_require_bearer_and_api_key_but_health_and_ingest_do
 }
 
 #[tokio::test]
+async fn governed_resume_requires_approve_bearer_and_fails_closed_without_pack_store() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_AUTH_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-auth-test-secret";
+    const READ_TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_READ_TEST_TOKEN";
+    const READ_TOKEN: &str = "governed-resume-read-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-auth-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: "governed-resume-auth-operator".to_string(),
+            token_env: TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: "governed-resume-read-operator".to_string(),
+            token_env: READ_TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read],
+        },
+    ];
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(READ_TOKEN_ENV, READ_TOKEN);
+    }
+    let state = IngestState::from_config(temp_path("governed-resume-auth"), config).unwrap();
+    let app = detect_http_router(state);
+    let uri = "/v1/governance/approvals/approval-set:missing/resume";
+    let body = json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string();
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {READ_TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let caller_selected_time = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "receipt_pack_id": "approval-receipt-pack:missing",
+                        "now_ms": 0,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        caller_selected_time.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let unavailable = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(READ_TOKEN_ENV);
+    }
+}
+
+#[tokio::test]
+async fn governed_resume_fails_closed_when_receipt_pack_store_is_not_configured() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_STORE_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-store-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-store-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "governed-resume-store-operator".to_string(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+    unsafe { std::env::set_var(TOKEN_ENV, TOKEN) };
+    let root = temp_path("governed-resume-two-stores");
+    let harness = DefaultApprovalHarness::from_paths(root.join("sets"), root.join("ledgers"))
+        .expect("two-store compatibility harness should open");
+    let state = IngestState::from_config(temp_path("governed-resume-two-store-config"), config)
+        .unwrap()
+        .with_approval_harness(harness);
+    let response = detect_http_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/governance/approvals/approval-set:missing/resume")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    unsafe { std::env::remove_var(TOKEN_ENV) };
+}
+
+#[tokio::test]
+async fn governed_resume_fails_closed_when_persisted_pack_is_missing() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_MISSING_PACK_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-missing-pack-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-missing-pack-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "governed-resume-missing-pack-operator".to_string(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+    unsafe { std::env::set_var(TOKEN_ENV, TOKEN) };
+    let root = temp_path("governed-resume-four-stores");
+    let harness = DefaultApprovalHarness::from_path(
+        root.join("config.yaml"),
+        root.join("verdicts"),
+        root.join("receipt-packs"),
+        root.join("sets"),
+        root.join("ledgers"),
+    )
+    .expect("four-store approval harness should open");
+    let state = IngestState::from_config(temp_path("governed-resume-four-store-config"), config)
+        .unwrap()
+        .with_approval_harness(harness);
+    let response = detect_http_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/governance/approvals/approval-set:missing/resume")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    unsafe { std::env::remove_var(TOKEN_ENV) };
+}
+
+#[tokio::test]
 async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
     let mut config = test_config("suspicious_process_tree");
     enable_platform_api(&mut config);
