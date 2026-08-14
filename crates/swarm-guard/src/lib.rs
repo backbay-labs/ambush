@@ -1,4 +1,30 @@
 //! Guard pipeline for response and filesystem safety checks.
+//!
+//! ## Owns
+//!
+//! - The individual safety checks a proposed response is run through:
+//!   [`forbidden_path`], [`shell_command`], [`egress_allowlist`],
+//!   [`secret_leak`], and the [`path_normalization`] that stops `..` and
+//!   symlink tricks defeating the first of them.
+//! - The guard outcome shape ([`Severity`], [`GuardResult`]) and the
+//!   panic-isolation around each check, so a guard that panics denies rather
+//!   than disappears.
+//!
+//! ## Does not own
+//!
+//! - The authorization decision. A guard rejection is an input to the response
+//!   path, not a substitute for `swarm-policy`'s verdict; passing every guard
+//!   authorizes nothing.
+//! - Execution, receipts, or telemetry.
+//! - Configuration loading. Each guard is constructed from a config value the
+//!   caller supplies.
+//!
+//! NOT in the trusted computing base, deliberately. It is trust-sensitive
+//! because a guard that silently passes lets a destructive action through, but
+//! it is a consumer of the boundary rather than part of it (ADR 0009): it must
+//! not appear in `swarm-policy`, `swarm-crypto` or `swarm-spine`'s manifests in
+//! any dependency kind, and `tools/check-workspace-layering.sh` fails the build
+//! if it does.
 
 pub mod egress_allowlist;
 pub mod forbidden_path;
