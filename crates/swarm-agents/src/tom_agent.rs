@@ -1015,6 +1015,33 @@ impl GovernancePolicy {
         self.persist_locked(&state);
     }
 
+    /// The trust anchor: every governor this policy knows about, by the identity
+    /// derived from its PUBLIC key.
+    ///
+    /// Exactly the membership `GovernanceState::committee` builds a round over --
+    /// the admitted peers plus the local governor -- which is the set that can
+    /// legitimately have signed a receipt on this chain. Peers were never held as
+    /// keys at all (`peer_governors: BTreeSet<AgentId>`), and the local governor's
+    /// entry is the `AgentId` `LocalGovernorKey::new` derived once from
+    /// `signing_key.verifying_key()`: the PUBLIC half, already printed in every
+    /// receipt this policy signs. The private half is not read here and cannot be --
+    /// `LocalGovernorKey` exposes no accessor returning a `SigningKey` (BFT-03).
+    ///
+    /// Empty when no governor is registered, and callers must refuse rather than
+    /// fall back to the key a receipt carries -- see
+    /// `ConsensusGovernanceReceipt::verify_signed_by`.
+    pub fn governor_public_keys(&self) -> BTreeSet<AgentId> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut keys = state.peer_governors.clone();
+        if let Some(local) = state.local_governor.as_ref() {
+            keys.insert(local.consensus_agent_id().clone());
+        }
+        keys
+    }
+
     pub fn status_report(&self) -> GovernanceStatusReport {
         let state = self
             .state
@@ -1521,21 +1548,22 @@ fn now_ms() -> i64 {
 // `swarm_policy::governance::GovernanceAuthority`.
 impl swarm_policy::governance::sealed::SealedGovernanceAuthority for GovernancePolicy {}
 
-// All SIX methods below delegate to the inherent method of the same name. Inherent
+// All SEVEN methods below delegate to the inherent method of the same name. Inherent
 // impls are probed before trait impls, so `GovernancePolicy::method(self, ..)`
 // resolves to the inherent one.
 //
 // A differing return type would make a mis-resolution a compile error, but that
-// covers only three of the six: `attest_release`
+// covers only three of the seven: `attest_release`
 // (`Option<ConsensusGovernanceReceipt>` inherent, `Option<serde_json::Value>` here),
 // `authorize_partition_request`
 // (`Result<Option<ContingencyLease>, String>` inherent, `Result<bool, String>` here)
 // and `drain_runtime_events` (`Vec<GovernanceRuntimeEvent>` inherent,
-// `Vec<GovernanceRuntimeEventRecord>` here). `is_partitioned`, `note_partition_veto`
-// and `status_report` have identical signatures on both sides, so for those three a
-// mis-resolution is a silent infinite recursion, not a diagnostic.
+// `Vec<GovernanceRuntimeEventRecord>` here). `is_partitioned`, `note_partition_veto`,
+// `status_report` and `governor_public_keys` have identical signatures on both sides,
+// so for those four a mis-resolution is a silent infinite recursion, not a
+// diagnostic.
 //
-// The `deny` below covers all six, which is why the guarantee is stated once here
+// The `deny` below covers all seven, which is why the guarantee is stated once here
 // instead of per-method. `unconditional_recursion` is warn-by-default, so without
 // the attribute these three were protected only by CI's `-D warnings` and not by a
 // plain `cargo build`. Measured both ways by rewriting the `is_partitioned` body as
@@ -1600,6 +1628,17 @@ impl GovernanceAuthority for GovernancePolicy {
                 None
             }
         }
+    }
+
+    /// The SEVENTH method (ADR 0011). Same return type as its inherent twin, so it
+    /// joins the group the `deny(unconditional_recursion)` above protects. There is a
+    /// runtime backstop too: `swarm-runtime-http`'s
+    /// `a_fully_re_attested_receipt_is_refused` reaches this method through a
+    /// `dyn GovernanceAuthority` and fails if the set comes back empty or wrong,
+    /// because an empty anchor refuses the GENUINE receipt the same test verifies
+    /// first.
+    fn governor_public_keys(&self) -> BTreeSet<AgentId> {
+        GovernancePolicy::governor_public_keys(self)
     }
 }
 

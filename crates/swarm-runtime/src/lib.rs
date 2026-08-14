@@ -775,6 +775,22 @@ impl<P, E> SwarmRuntime<P, E> {
         }
     }
 
+    /// The governance receipt attached to `request`, if it is internally
+    /// consistent.
+    ///
+    /// NOT ANCHORED, DELIBERATELY, AND THIS IS THE THIRD SITE ADR 0011 NAMES.
+    /// `ConsensusGovernanceReceipt::verify` checks a signature against a public
+    /// key the receipt carries, so passing here says nothing about WHO signed.
+    /// Everything downstream of this function only DECORATES an audit record --
+    /// which receipt id to stamp, which body to copy -- and authorizes nothing;
+    /// the authorization decision is `missing_governance_receipt_reason` on the
+    /// dispatcher, which does anchor to the configured governor set. `SwarmRuntime`
+    /// holds no `GovernanceAuthority` to anchor to, and giving it one to improve an
+    /// audit label would widen the composition root for no verdict.
+    ///
+    /// The consequence is stated rather than hidden: an audit record can carry a
+    /// governance receipt id whose signer was never checked against the governor
+    /// set, on any path that reaches the runtime without passing the dispatcher.
     fn verified_governance_receipt(
         request: &ActionRequest,
     ) -> Option<(ConsensusGovernanceReceipt, serde_json::Value)> {

@@ -150,6 +150,55 @@ pub mod sealed {
 ///   cannot prevent one being undone -- release proceeds either way, and an
 ///   unattested release is recorded as unattested rather than silently equated with
 ///   an attested one.
+///
+/// # The third widening: [`GovernanceAuthority::governor_public_keys`] (ADR 0011)
+///
+/// `attest_release` above says a verifier can prove the signature covers *this* body.
+/// It could not prove WHO signed it, and that was a hole rather than a nuance.
+/// `ConsensusGovernanceReceipt::verify` checks a detached signature against
+/// `signature.public_key_hex` CARRIED INSIDE THE RECEIPT, so both checks the QRT-04
+/// release path performed were closed over attacker-writable data: anyone able to
+/// rewrite a stored receipt could mint a keypair, recompute the subject digest over
+/// the rewritten body, sign it, and verification returned `Ok`. Measured, before this
+/// method existed, in `swarm-runtime-http`'s
+/// `a_fully_re_attested_receipt_is_refused`.
+///
+/// Closing it needs the governor public keys where the verification happens, and the
+/// verification happens in `swarm_runtime` -- [`crate::governance`] has no path to
+/// `GovernancePolicy` (`swarm-agents` depends on `swarm-runtime`) and
+/// [`GovernanceStatusReport`] carries counts, not identities. So the trust anchor
+/// travels on this trait, for the same structural reason `attest_release` does.
+///
+/// It is narrower than either method above:
+///
+/// - **PUBLIC HALVES ONLY, AND IT CANNOT BE OTHERWISE.** It returns `AgentId`s, and a
+///   governor's `AgentId` is `swarm:ed25519:<public-key-hex>` --
+///   `AgentId::from_verifying_key` renders the 32 bytes of an
+///   `ed25519_dalek::VerifyingKey` and nothing else. The local governor's is computed
+///   once at registration by `SigningKey::verifying_key()`; recovering the private
+///   half from it is the discrete-log problem ed25519 rests on, which is the same
+///   protection every signature this system publishes already relies on. There is no
+///   `SigningKey` in the return type, the private half never leaves
+///   `LocalGovernorKey` -- which by construction exposes no accessor returning one
+///   (BFT-03, `tools/check-single-governor-key.sh`) -- and peer governors were never
+///   held as keys at all. The exact bytes returned are already published in plaintext
+///   inside every receipt this authority signs, as `payload.issued_by` and
+///   `signature.public_key_hex`, so a caller learns nothing it could not read off an
+///   artifact it already holds.
+/// - **It renders no verdict and takes no argument.** It reports a set. Every
+///   decision made from it is made by the caller, in the open.
+/// - **It grants no capability the implementer lacks.** An implementation could
+///   return an attacker's key and admit forged receipts -- but only a type that
+///   already implements this trait can, and that type already answers
+///   [`GovernanceAuthority::authorize_partition_request`] and already holds the
+///   signing key. This adds nothing to what a hostile implementer could do; the seal,
+///   as ever, is what keeps that set enumerable.
+///
+/// It returns identities rather than `ed25519_dalek::VerifyingKey` deliberately:
+/// `swarm-policy` is trusted computing base whose declared workspace dependencies are
+/// allow-listed down to `{swarm-core}` (ADR 0009), `AgentId` is already the currency
+/// of receipts, and the encoding is lossless -- so the check is exactly a public-key
+/// comparison, spelled in a type this crate may name.
 pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
     /// Whether `request` may proceed while the governance quorum is partitioned.
     ///
@@ -200,4 +249,21 @@ pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
     /// true statement, rather than treating absence as proof.
     fn attest_release(&self, subject: &serde_json::Value, now_ms: i64)
     -> Option<serde_json::Value>;
+
+    /// The public key of every governor this authority recognises, as the consensus
+    /// identity derived from it.
+    ///
+    /// This is the TRUST ANCHOR a verifier checks a governance receipt's signer
+    /// against. Each element is `swarm:ed25519:<public-key-hex>` -- the 32 public key
+    /// bytes, hex-encoded, untruncated and unhashed -- so membership here is exactly
+    /// public-key equality, and nothing in the return value is derived from a private
+    /// key. See the trait doc for why that is structural rather than a convention.
+    ///
+    /// AN EMPTY SET MEANS "I CANNOT NAME A GOVERNOR", AND CALLERS MUST REFUSE.
+    /// It is the same situation `GovernancePolicy::can_act` fails closed on with no
+    /// registered governor key (b4bf119): the only remaining key is the one the
+    /// receipt carries itself, and trusting that is the defect this method exists to
+    /// close. `ConsensusGovernanceReceipt::verify_signed_by` refuses an empty anchor
+    /// outright so no caller has to remember.
+    fn governor_public_keys(&self) -> std::collections::BTreeSet<swarm_core::types::AgentId>;
 }

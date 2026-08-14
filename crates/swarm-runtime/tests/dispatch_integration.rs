@@ -632,11 +632,44 @@ fn is_destructive_action(action: &ResponseAction) -> bool {
     )
 }
 
+/// THE governor key these fixtures speak for.
+///
+/// `sample_governance_policy` registers it and `sample_governance_receipt` signs
+/// with it, so a fixture receipt is signed by a governor the dispatcher's own
+/// authority names. That pairing is load bearing since ADR 0011: the dispatcher
+/// checks a receipt's signer against the installed authority's governor set, so
+/// a fixture that minted an unrelated keypair -- which is what this file did --
+/// is now indistinguishable from a forgery, and is asserted to be refused in
+/// `destructive_request_response_is_refused_when_the_signer_is_not_a_governor`.
+const SAMPLE_GOVERNOR_KEY_BYTES: [u8; 32] = [17; 32];
+
+fn sample_governance_policy() -> Arc<GovernancePolicy> {
+    let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
+    policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
+        )
+        .expect("the policy holds no other governor key");
+    policy
+}
+
 fn sample_governance_receipt(
     action: &ResponseAction,
     decision: GovernanceReceiptDecision,
 ) -> serde_json::Value {
-    let signing_key = SigningKey::from_bytes(&[17; 32]);
+    sample_governance_receipt_signed_by(
+        action,
+        decision,
+        &SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
+    )
+}
+
+fn sample_governance_receipt_signed_by(
+    action: &ResponseAction,
+    decision: GovernanceReceiptDecision,
+    signing_key: &SigningKey,
+) -> serde_json::Value {
     let issued_by = AgentId::from_verifying_key(&signing_key.verifying_key());
     let committee = ConsensusCommittee::new(vec![issued_by.clone()], 0).unwrap();
     let proposal_payload = json!({
@@ -669,7 +702,7 @@ fn sample_governance_receipt(
             &committee,
             decision,
             issued_by,
-            &signing_key,
+            signing_key,
             1_700_000_000_010,
         )
         .unwrap(),
@@ -1115,7 +1148,12 @@ async fn destructive_request_response_persists_governance_receipt() -> Result<()
         test_substrate(),
         test_health_state(),
     )
-    .with_request_response_router(router);
+    .with_request_response_router(router)
+    // The authority that NAMES the governor whose key signs the fixture
+    // receipt. Without it the dispatcher has no trust anchor and refuses the
+    // request outright (ADR 0011) -- which is asserted directly, alongside its
+    // control, in the test below.
+    .with_governance_policy(sample_governance_policy());
     dispatcher.register(Box::new(OneShotRequestAgent::new(
         AgentId::new("pounce", "primary"),
         vec![sample_request_response_action(
@@ -1148,6 +1186,141 @@ async fn destructive_request_response_persists_governance_receipt() -> Result<()
             .receipt
             .as_ref()
             .is_some_and(serde_json::Value::is_object)
+    );
+    Ok(())
+}
+
+/// What one destructive request did: `(audits, executor calls, gate evaluations)`.
+///
+/// The three numbers are read together on purpose. A request that is refused
+/// before routing produces zero of each; asserting only on audits would not
+/// distinguish "refused" from "executed but unrecorded", which is the shape of
+/// defect this repository keeps finding.
+async fn run_one_destructive_request(
+    governance: Option<Arc<GovernancePolicy>>,
+    receipt_signing_key: &SigningKey,
+    hunt_id: &str,
+) -> Result<(usize, usize, usize), Box<dyn Error>> {
+    let (gate, evaluate_calls, _issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
+    let executor = RecordingExecutor::default();
+    let runtime = Arc::new(SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate,
+        executor.clone(),
+    ));
+    let audits = Arc::new(Mutex::new(Vec::new()));
+    let router = Arc::new(RuntimeBackedRouter::new(
+        Arc::clone(&runtime),
+        sample_context(),
+        Arc::clone(&audits),
+    ));
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        test_substrate(),
+        test_health_state(),
+    )
+    .with_request_response_router(router);
+    if let Some(governance) = governance {
+        dispatcher = dispatcher.with_governance_policy(governance);
+    }
+
+    let action = ResponseAction::BlockEgress {
+        target: "203.0.113.11".to_string(),
+    };
+    let SwarmAction::RequestResponse {
+        hunt_id,
+        action,
+        mut evidence,
+    } = sample_request_response_action(
+        hunt_id,
+        "evt-governance-anchor",
+        action,
+        Severity::Critical,
+    )
+    else {
+        panic!("sample_request_response_action must build a request_response action");
+    };
+    evidence["governance_receipt"] = sample_governance_receipt_signed_by(
+        &action,
+        GovernanceReceiptDecision::Approve,
+        receipt_signing_key,
+    );
+    dispatcher.register(Box::new(OneShotRequestAgent::new(
+        AgentId::new("pounce", "primary"),
+        vec![SwarmAction::RequestResponse {
+            hunt_id,
+            action,
+            evidence,
+        }],
+    )))?;
+
+    dispatcher.tick_once().await;
+
+    let audit_count = audits.lock().unwrap().len();
+    Ok((
+        audit_count,
+        executor.calls.load(Ordering::SeqCst),
+        evaluate_calls.load(Ordering::SeqCst),
+    ))
+}
+
+/// A destructive action needs a receipt signed by a governor the dispatcher's
+/// own authority names -- not merely a receipt that verifies against itself.
+///
+/// `ConsensusGovernanceReceipt::verify` checks a detached signature against
+/// `signature.public_key_hex`, a field OF THE RECEIPT, so before ADR 0011 any
+/// agent that could attach evidence could mint a keypair, sign its own approval
+/// and be routed. The control case is in the same test so a refusal cannot be
+/// mistaken for the dispatcher refusing everything.
+#[tokio::test]
+async fn destructive_request_response_is_refused_when_the_signer_is_not_a_governor()
+-> Result<(), Box<dyn Error>> {
+    let governor_key = SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES);
+    let stranger_key = SigningKey::from_bytes(&[201; 32]);
+    assert_ne!(
+        governor_key.verifying_key(),
+        stranger_key.verifying_key(),
+        "the forged receipt must be signed by a different key than the governor's"
+    );
+
+    // CONTROL: the registered governor's own key routes.
+    let (audits, executed, evaluated) = run_one_destructive_request(
+        Some(sample_governance_policy()),
+        &governor_key,
+        "hunt-anchor-control",
+    )
+    .await?;
+    assert_eq!(
+        (audits, executed, evaluated),
+        (1, 1, 1),
+        "a receipt from the configured governor must still route"
+    );
+
+    // A receipt that is internally perfect and signed by nobody in particular.
+    let (audits, executed, evaluated) = run_one_destructive_request(
+        Some(sample_governance_policy()),
+        &stranger_key,
+        "hunt-anchor-stranger",
+    )
+    .await?;
+    assert_eq!(
+        (audits, executed, evaluated),
+        (0, 0, 0),
+        "a self-signed receipt from outside the governor set must not reach the runtime"
+    );
+
+    // NO AUTHORITY AT ALL. The dispatcher cannot tell an approval from a
+    // forgery, so it refuses -- the same posture `GovernancePolicy::can_act`
+    // takes on an empty keyring (b4bf119). This is the case that used to route
+    // on the strength of a key carried inside the request.
+    let (audits, executed, evaluated) =
+        run_one_destructive_request(None, &governor_key, "hunt-anchor-anchorless").await?;
+    assert_eq!(
+        (audits, executed, evaluated),
+        (0, 0, 0),
+        "with no governance authority installed there is no trust anchor, so nothing may proceed"
     );
     Ok(())
 }
@@ -1883,7 +2056,8 @@ async fn governance_veto_records_failure_receipt_without_execution() -> Result<(
         test_substrate(),
         test_health_state(),
     )
-    .with_request_response_router(router);
+    .with_request_response_router(router)
+    .with_governance_policy(sample_governance_policy());
     dispatcher.register(Box::new(OneShotRequestAgent::new(
         AgentId::new("pounce", "primary"),
         vec![sample_governance_veto_action(

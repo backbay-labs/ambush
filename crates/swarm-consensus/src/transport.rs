@@ -20,10 +20,14 @@
 //! REFUSES any committee with more than one member. That refusal is the
 //! load-bearing part. A transport that accepted a real `3f+1` committee and
 //! then delivered nothing would let a multi-governor deployment run rounds that
-//! silently degenerate to "one node agreed with itself" -- and because
-//! `ConsensusGovernanceReceipt::verify` only checks the signature, such a
-//! receipt would pass every downstream gate. Refusing at bind time makes the
-//! degenerate case unreachable instead of undetectable.
+//! silently degenerate to "one node agreed with itself" -- and such a receipt
+//! would pass every downstream gate. `ConsensusGovernanceReceipt::verify`
+//! checks only that the receipt is internally consistent, and
+//! `verify_signed_by` adds only that the signer is a configured governor (ADR
+//! 0011) -- which the local governor of a degenerate round IS. Neither reads
+//! `prevote_tally`, `precommit_tally` or `committee_members`, so no verifier
+//! downstream can tell a real quorum from a self-satisfied one. Refusing at
+//! bind time makes the degenerate case unreachable instead of undetectable.
 //!
 //! A networked transport (pheromone-substrate or JetStream backed) is NOT in
 //! this module. It cannot be, at this signature: the trait is synchronous, and

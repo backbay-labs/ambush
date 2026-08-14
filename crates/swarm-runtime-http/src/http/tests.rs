@@ -3039,7 +3039,11 @@ mod qrt_04 {
     use std::collections::BTreeSet;
     use std::sync::Mutex;
     use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
-    use swarm_consensus::ConsensusGovernanceReceipt;
+    use swarm_consensus::{
+        ConsensusCommit, ConsensusCommittee, ConsensusGovernanceReceipt, ConsensusProposal,
+        GovernanceReceiptDecision,
+    };
+    use swarm_crypto::sha256_hex;
     use swarm_response::containment::{
         ContainmentLease, ContainmentLeaseStore, ContainmentTtl, MemoryContainmentLeaseStore,
     };
@@ -3346,8 +3350,10 @@ mod qrt_04 {
             .unwrap();
         assert_eq!(manual_receipt.trigger, RollbackTrigger::Manual);
         assert_eq!(ttl_receipt.trigger, RollbackTrigger::Expiry);
-        verify_release_attestation(manual_receipt).expect("manual release should verify");
-        verify_release_attestation(ttl_receipt).expect("ttl release should verify");
+        verify_release_attestation(manual_receipt, harness.sweep.governance())
+            .expect("manual release should verify");
+        verify_release_attestation(ttl_receipt, harness.sweep.governance())
+            .expect("ttl release should verify");
 
         // 6. MANUAL AND AUTOMATIC RELEASE DID NOT DIVERGE. Everything a
         //    reviewer would compare is equal except the trigger, the subject
@@ -3398,7 +3404,8 @@ mod qrt_04 {
             60_000,
         );
         let receipt = harness.sweep.release("lease-tamper", 2_000).await.unwrap();
-        verify_release_attestation(&receipt).expect("the untampered receipt must verify");
+        verify_release_attestation(&receipt, harness.sweep.governance())
+            .expect("the untampered receipt must verify");
 
         // (a) MUTATE THE BODY. An auditor reading `fully_reversed` acts on it,
         //     so rewriting a `Failed` step into a `Reversed` one is the lie
@@ -3407,7 +3414,7 @@ mod qrt_04 {
         //     what catches it.
         let mut rewritten = receipt.clone();
         rewritten.steps[0].status = RollbackStepStatus::Failed;
-        let error = verify_release_attestation(&rewritten).unwrap_err();
+        let error = verify_release_attestation(&rewritten, harness.sweep.governance()).unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::SubjectMismatch { .. }),
             "expected a subject mismatch, got {error:?}"
@@ -3435,7 +3442,7 @@ mod qrt_04 {
             mutate(&mut tampered);
             assert!(
                 matches!(
-                    verify_release_attestation(&tampered),
+                    verify_release_attestation(&tampered, harness.sweep.governance()),
                     Err(ReleaseAttestationError::SubjectMismatch { .. })
                 ),
                 "a mutated receipt must not verify: {tampered:?}"
@@ -3449,7 +3456,7 @@ mod qrt_04 {
         let mut attestation = attestation_of(&receipt);
         attestation.payload.issued_at_ms += 1;
         forged.governance_attestation = Some(serde_json::to_value(&attestation).unwrap());
-        let error = verify_release_attestation(&forged).unwrap_err();
+        let error = verify_release_attestation(&forged, harness.sweep.governance()).unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::Signature { .. }),
             "expected a signature failure, got {error:?}"
@@ -3459,7 +3466,7 @@ mod qrt_04 {
         //     would be reporting success over a region it never inspected.
         let mut stripped = receipt.clone();
         stripped.governance_attestation = None;
-        let error = verify_release_attestation(&stripped).unwrap_err();
+        let error = verify_release_attestation(&stripped, harness.sweep.governance()).unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::Unattested { .. }),
             "expected an unattested refusal, got {error:?}"
@@ -3483,10 +3490,121 @@ mod qrt_04 {
             .expect("the lifted signature is genuine, which is the point");
         assert!(
             matches!(
-                verify_release_attestation(&lifted),
+                verify_release_attestation(&lifted, harness.sweep.governance()),
                 Err(ReleaseAttestationError::SubjectMismatch { .. })
             ),
             "a genuine signature over a different release must not verify this one"
+        );
+    }
+
+    /// Re-attest `receipt` end to end with `signing_key`: a fresh commit whose
+    /// `proposal_id` is the digest of the canonical receipt-minus-attestation,
+    /// signed by whoever holds the key.
+    ///
+    /// This is the attacker's whole job, and it is eight lines. Every input is
+    /// public: the subject is the receipt itself, and the binding rule is
+    /// documented on `GovernanceAuthority::attest_release`.
+    fn re_attest(receipt: &RollbackReceipt, signing_key: &SigningKey) -> Value {
+        let mut subject = receipt.clone();
+        subject.governance_attestation = None;
+        let subject_id = sha256_hex(&canonical_json_bytes(&subject).unwrap());
+        let issued_by = AgentId::from_verifying_key(&signing_key.verifying_key());
+        let committee = ConsensusCommittee::new(vec![issued_by.clone()], 0).unwrap();
+        let commit = ConsensusCommit {
+            height: 1,
+            round: 0,
+            committee_id: committee.committee_id().to_string(),
+            proposal: ConsensusProposal {
+                proposal_id: subject_id,
+                payload: json!({ "forged": true }),
+            },
+            prevote_tally: 1,
+            precommit_tally: 1,
+            commit_hash: "forged-commit-hash".to_string(),
+        };
+        serde_json::to_value(
+            ConsensusGovernanceReceipt::issue(
+                &commit,
+                "forged-previous-commit-hash",
+                &committee,
+                GovernanceReceiptDecision::Approve,
+                issued_by,
+                signing_key,
+                9_999,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// A FULL RE-ATTESTATION BY A KEY NO GOVERNOR EVER HELD.
+    ///
+    /// The tamper test above covers PARTIAL rewrites -- body edited with the
+    /// attestation left alone, or a genuine attestation lifted from another
+    /// release. This is the case it did not cover: the attacker rewrites the
+    /// body AND mints a fresh keypair AND recomputes `proposal_id` over the
+    /// rewritten subject AND signs it. Both of the checks that shipped with
+    /// QRT-04 pass on that input, because both are self-referential -- the
+    /// signature is checked against a public key carried inside the receipt,
+    /// and the subject digest against the body the attacker wrote.
+    #[tokio::test]
+    async fn a_fully_re_attested_receipt_is_refused() {
+        let harness = harness();
+        open_containment(
+            &harness.world,
+            harness.store.as_ref(),
+            "lease-forge",
+            "host-forge",
+            1_000,
+            60_000,
+        );
+        let receipt = harness.sweep.release("lease-forge", 2_000).await.unwrap();
+        verify_release_attestation(&receipt, harness.sweep.governance())
+            .expect("the genuine receipt must verify");
+
+        // The lie an auditor would act on: a release that did NOT restore the
+        // host, rewritten to say it did -- and then re-signed end to end.
+        let mut forged = receipt.clone();
+        forged.steps[0].status = RollbackStepStatus::Failed;
+        forged.summary = "forged by a key no governor ever held".to_string();
+        let attacker = SigningKey::from_bytes(&[251; 32]);
+        forged.governance_attestation = Some(re_attest(&forged, &attacker));
+
+        // The forged attestation is signed by a DIFFERENT key than the genuine
+        // one, which is what makes this a trust-anchor question rather than a
+        // signature question.
+        let attacker_id = AgentId::from_verifying_key(&attacker.verifying_key());
+        assert_ne!(attestation_of(&receipt).payload.issued_by, attacker_id);
+        // Both shipped checks pass on the forgery, individually.
+        attestation_of(&forged)
+            .verify()
+            .expect("the forged signature is internally consistent, which is the point");
+
+        let error = verify_release_attestation(&forged, harness.sweep.governance())
+            .expect_err("a receipt re-attested by an unknown key must be refused");
+        assert!(
+            matches!(error, ReleaseAttestationError::UntrustedSigner { .. }),
+            "expected an untrusted-signer refusal, got {error:?}"
+        );
+        // The diagnostic names the key that actually signed, so an operator can
+        // tell a forgery from a governor rotation they forgot about.
+        assert!(
+            error.to_string().contains(&attacker_id.0),
+            "the refusal should name the untrusted signer: {error}"
+        );
+
+        // FAIL CLOSED WITH NO ANCHOR. The same GENUINE receipt that verified
+        // above is refused when there is no authority to check it against --
+        // not accepted on the strength of the key it carries.
+        let error = verify_release_attestation(&receipt, None)
+            .expect_err("with no governor set, a verifier knows nothing and must say so");
+        assert!(
+            matches!(error, ReleaseAttestationError::UntrustedSigner { .. }),
+            "expected a refusal with no trust anchor, got {error:?}"
+        );
+        assert!(
+            error.to_string().contains("no governor public keys"),
+            "the refusal should name the missing anchor: {error}"
         );
     }
 

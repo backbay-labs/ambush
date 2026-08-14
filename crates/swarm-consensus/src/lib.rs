@@ -44,6 +44,23 @@ pub enum ConsensusError {
 
     #[error("consensus transport failed: {0}")]
     Transport(String),
+
+    #[error(
+        "refusing to verify governance receipt `{receipt_id}`: no governor public keys are \
+         available to check its signer against, and the only other key on offer is the one the \
+         receipt carries itself"
+    )]
+    NoTrustAnchor { receipt_id: String },
+
+    #[error(
+        "governance receipt `{receipt_id}` is signed by `{signer}`, which is not one of the \
+         {governor_count} configured governor public key(s)"
+    )]
+    UntrustedSigner {
+        receipt_id: String,
+        signer: AgentId,
+        governor_count: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -423,6 +440,19 @@ impl ConsensusGovernanceReceipt {
         })
     }
 
+    /// Check the receipt against ITSELF: the signature covers the payload, and
+    /// `payload.issued_by` derives from the key that made it.
+    ///
+    /// THIS IS NOT AUTHENTICATION AND MUST NOT BE READ AS ANY. Both checks are
+    /// closed over data the receipt carries: the signature is verified against
+    /// `signature.public_key_hex`, which is a field of the receipt, so anyone
+    /// holding any ed25519 keypair can produce a receipt that passes. What it
+    /// buys is that a PARTIAL rewrite fails -- edit the payload and leave the
+    /// signature alone and this refuses -- which is a real and useful property
+    /// for an at-rest artifact, and it is the whole of the property.
+    ///
+    /// Anything deciding whether a governor AUTHORIZED something must call
+    /// [`Self::verify_signed_by`] with the configured governor public keys.
     pub fn verify(&self) -> Result<VerifyingKey, ConsensusError> {
         let payload = canonical_json_bytes(&self.payload)?;
         verify_detached_signature(&payload, &self.signature).map_err(ConsensusError::Crypto)?;
@@ -444,6 +474,49 @@ impl ConsensusGovernanceReceipt {
                 "receipt signer mismatch: payload issued_by `{}` but signature key derives `{}`",
                 self.payload.issued_by, derived_id
             )));
+        }
+        Ok(verifying_key)
+    }
+
+    /// Verify the receipt AND anchor it: the signing key must be one of
+    /// `governor_public_keys`.
+    ///
+    /// [`Self::verify`] is self-referential -- it checks a signature against a
+    /// public key the receipt carries -- so an attacker who can rewrite a stored
+    /// receipt can mint a keypair, re-sign the rewritten body, and pass it. This
+    /// is the check that makes that fail: the verifying key recovered FROM THE
+    /// SIGNATURE (not from `payload.issued_by`, which is attacker-written) is
+    /// mapped to its consensus identity and must be a member of the set the
+    /// caller supplies.
+    ///
+    /// The anchor is a set of `AgentId`, and that is not a weaker check than
+    /// comparing raw keys: `AgentId::from_verifying_key` renders the 32 public
+    /// key bytes as `swarm:ed25519:<hex>` with no truncation and no hashing, so
+    /// two keys collide here only if they are the same key.
+    ///
+    /// FAILS CLOSED ON AN EMPTY ANCHOR. An empty set means the caller could not
+    /// name a single governor, which is exactly when the receipt's own key is
+    /// the only key on offer -- so it refuses with
+    /// [`ConsensusError::NoTrustAnchor`] rather than falling back to
+    /// [`Self::verify`]. Same posture as `GovernancePolicy::can_act` with no
+    /// registered governor key (b4bf119).
+    pub fn verify_signed_by(
+        &self,
+        governor_public_keys: &BTreeSet<AgentId>,
+    ) -> Result<VerifyingKey, ConsensusError> {
+        if governor_public_keys.is_empty() {
+            return Err(ConsensusError::NoTrustAnchor {
+                receipt_id: self.payload.receipt_id.clone(),
+            });
+        }
+        let verifying_key = self.verify()?;
+        let signer = AgentId::from_verifying_key(&verifying_key);
+        if !governor_public_keys.contains(&signer) {
+            return Err(ConsensusError::UntrustedSigner {
+                receipt_id: self.payload.receipt_id.clone(),
+                signer,
+                governor_count: governor_public_keys.len(),
+            });
         }
         Ok(verifying_key)
     }
@@ -1287,9 +1360,9 @@ fn detached_signature(signing_key: &SigningKey, payload: &[u8]) -> DetachedSigna
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConsensusCommittee, ConsensusConfig, ConsensusEnvelope, ConsensusNode, ConsensusProgress,
-        ConsensusProposal, ConsensusSignedEnvelope, DEFAULT_CONSENSUS_SUBJECT_PREFIX,
-        JetStreamSubjectLayout,
+        ConsensusCommittee, ConsensusConfig, ConsensusEnvelope, ConsensusError, ConsensusNode,
+        ConsensusProgress, ConsensusProposal, ConsensusSignedEnvelope,
+        DEFAULT_CONSENSUS_SUBJECT_PREFIX, JetStreamSubjectLayout,
     };
     use ed25519_dalek::SigningKey;
     use serde_json::json;
@@ -1936,5 +2009,108 @@ mod tests {
             assert_eq!(committee.threshold(), max_faulty * 2 + 1);
             assert!(committee.threshold() <= committee_size - max_faulty);
         }
+    }
+
+    /// Issue a governance receipt signed by `signer`, over a commit that names
+    /// `signer`'s own one-member committee.
+    fn governance_receipt(signer: &CommitteeMember) -> super::ConsensusGovernanceReceipt {
+        let committee = ConsensusCommittee::new(vec![signer.agent_id.clone()], 0).unwrap();
+        let commit = super::ConsensusCommit {
+            height: 1,
+            round: 0,
+            committee_id: committee.committee_id().to_string(),
+            proposal: proposal(1),
+            prevote_tally: 1,
+            precommit_tally: 1,
+            commit_hash: "commit-hash".to_string(),
+        };
+        super::ConsensusGovernanceReceipt::issue(
+            &commit,
+            "previous-commit-hash",
+            &committee,
+            super::GovernanceReceiptDecision::Approve,
+            signer.agent_id.clone(),
+            &signer.signing_key,
+            1_000,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn verify_signed_by_refuses_a_signer_outside_the_governor_set() {
+        let governor = member(7);
+        let stranger = member(8);
+        let anchor = BTreeSet::from([governor.agent_id.clone()]);
+
+        // The genuine receipt is admitted, so the refusals below are not the
+        // method refusing everything.
+        let genuine = governance_receipt(&governor);
+        assert_eq!(
+            genuine.verify_signed_by(&anchor).unwrap(),
+            governor.signing_key.verifying_key()
+        );
+
+        // A receipt minted end to end by a key the anchor does not name. It is
+        // internally perfect -- `verify()` accepts it -- which is the whole
+        // point: self-consistency is not authorization.
+        let forged = governance_receipt(&stranger);
+        forged
+            .verify()
+            .expect("the forgery is internally consistent, which is why verify() is not enough");
+        let error = forged
+            .verify_signed_by(&anchor)
+            .expect_err("a receipt signed outside the governor set must be refused");
+        match error {
+            ConsensusError::UntrustedSigner {
+                signer,
+                governor_count,
+                ..
+            } => {
+                assert_eq!(signer, stranger.agent_id);
+                assert_eq!(governor_count, 1);
+            }
+            other => panic!("expected UntrustedSigner, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_signed_by_refuses_when_the_anchor_is_empty() {
+        // FAIL CLOSED. An empty anchor is the caller saying it cannot name a
+        // governor; the receipt's own key is then the only key on offer, and
+        // trusting it is the defect this method exists to close.
+        let governor = member(7);
+        let genuine = governance_receipt(&governor);
+        genuine
+            .verify()
+            .expect("the receipt is genuine; only the anchor is missing");
+        let error = genuine
+            .verify_signed_by(&BTreeSet::new())
+            .expect_err("an empty governor set must refuse, not fall back to verify()");
+        assert!(
+            matches!(error, ConsensusError::NoTrustAnchor { .. }),
+            "expected NoTrustAnchor, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn verify_signed_by_reads_the_key_from_the_signature_not_from_issued_by() {
+        // `payload.issued_by` is attacker-written, so an anchor check that read
+        // it would be checking the attacker's claim about themselves. Rewriting
+        // it to name a real governor must not admit the receipt -- and must not
+        // be reported as an anchor failure either, because the signature over
+        // the mutated payload is what breaks first.
+        let governor = member(7);
+        let stranger = member(8);
+        let anchor = BTreeSet::from([governor.agent_id.clone()]);
+
+        let mut relabelled = governance_receipt(&stranger);
+        relabelled.payload.issued_by = governor.agent_id.clone();
+        let error = relabelled
+            .verify_signed_by(&anchor)
+            .expect_err("claiming a governor's identity must not admit a stranger's signature");
+        assert!(
+            matches!(error, ConsensusError::Crypto(_)),
+            "expected the signature over the edited payload to fail first, got {error:?}"
+        );
     }
 }

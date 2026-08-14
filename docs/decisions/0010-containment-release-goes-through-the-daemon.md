@@ -8,6 +8,13 @@ Supersedes nothing. Extends ADR 0009 by adding one method to a trait in the
 trusted computing base; the allow-listed dependency set that ADR 0009 states
 is unchanged and `tools/check-workspace-layering.sh` needed no new exemption.
 
+Amended 2026-08-14 by ADR 0011, which closes the missing THIRD check this ADR
+names below. `verify_release_attestation` now also requires the signer to be a
+configured governor, so the paragraph reading "`attestation_verified: true`
+therefore means 'this attestation matches this body', NOT 'a governor we trust
+authorized this'" is no longer true of the shipped code. It is left in place
+unedited because it is the record of what shipped in phase 320.
+
 ## Context
 
 QRT-04 asks for three things at once:

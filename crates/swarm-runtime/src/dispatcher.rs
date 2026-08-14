@@ -573,7 +573,10 @@ impl AgentDispatcher {
                             }
                         };
                         if !partition_authorized
-                            && let Some(reason) = missing_governance_receipt_reason(&request)
+                            && let Some(reason) = missing_governance_receipt_reason(
+                                &request,
+                                self.governance_policy.as_deref(),
+                            )
                         {
                             tracing::warn!(
                                 agent_id = %completed.agent_id,
@@ -668,7 +671,10 @@ impl AgentDispatcher {
                                     unix_timestamp_millis(),
                                 );
                             }
-                        } else if let Some(reason) = missing_governance_receipt_reason(&request) {
+                        } else if let Some(reason) = missing_governance_receipt_reason(
+                            &request,
+                            self.governance_policy.as_deref(),
+                        ) {
                             tracing::warn!(
                                 agent_id = %completed.agent_id,
                                 hunt_id = %request.hunt_id.0,
@@ -1291,7 +1297,25 @@ fn response_action_requires_governance_receipt(action: &ResponseAction) -> bool 
     )
 }
 
-fn missing_governance_receipt_reason(request: &ActionRequest) -> Option<String> {
+/// Why this destructive request may not proceed, or `None` if it may.
+///
+/// THE RECEIPT IS CHECKED AGAINST THE GOVERNOR SET, NOT AGAINST ITSELF.
+/// `ConsensusGovernanceReceipt::verify` authenticates nothing on its own: it
+/// checks a detached signature against `signature.public_key_hex`, a field of
+/// the receipt, so an agent that can put evidence on a request can mint a
+/// keypair, sign its own approval and pass. `verify_signed_by` requires the
+/// signing key to be one the installed [`GovernanceAuthority`] names.
+///
+/// FAILS CLOSED WITHOUT AN AUTHORITY. No governance policy installed, or one
+/// naming no governor, refuses every action in
+/// [`response_action_requires_governance_receipt`] rather than accepting a
+/// self-signed receipt -- the same posture `GovernancePolicy::can_act` takes on
+/// an empty keyring (b4bf119). A dispatcher with no governance authority cannot
+/// tell an approval from a forgery, and saying so is the only honest answer.
+fn missing_governance_receipt_reason(
+    request: &ActionRequest,
+    governance: Option<&dyn GovernanceAuthority>,
+) -> Option<String> {
     if !response_action_requires_governance_receipt(&request.action) {
         return None;
     }
@@ -1302,10 +1326,17 @@ fn missing_governance_receipt_reason(request: &ActionRequest) -> Option<String> 
         Ok(receipt) => receipt,
         Err(error) => return Some(format!("invalid governance receipt: {error}")),
     };
+    let governor_public_keys = governance
+        .map(GovernanceAuthority::governor_public_keys)
+        .unwrap_or_default();
     receipt
-        .verify()
+        .verify_signed_by(&governor_public_keys)
         .map(|_| ())
-        .map_err(|error| format!("invalid governance receipt signature: {error}"))
+        // Not "invalid signature" any more: the same call now refuses a VALID
+        // signature made by a key no governor holds, and refuses outright when
+        // there is no governor to compare against. Naming it after one of the
+        // three would report the other two as something they are not.
+        .map_err(|error| format!("governance receipt refused: {error}"))
         .err()
 }
 
