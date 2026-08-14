@@ -821,12 +821,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 move |identity| {
                     let governance_policy = Arc::clone(&governance_policy);
                     build_restartable_agent(move || {
-                        Ok(Box::new(TomAgent::new_with_signing_key(
-                            identity.id.clone(),
-                            identity.signing_key.clone(),
-                            degraded_tick_threshold,
-                            Arc::clone(&governance_policy),
-                        )))
+                        // Fallible since BFT-03: the governance policy holds at
+                        // most ONE governor signing key, so a restart that tried
+                        // to install a second, different key is a configuration
+                        // error the supervisor must see, not something to swallow.
+                        Ok(Box::new(
+                            TomAgent::new_with_signing_key(
+                                identity.id.clone(),
+                                identity.signing_key.clone(),
+                                degraded_tick_threshold,
+                                Arc::clone(&governance_policy),
+                            )
+                            .map_err(|error| error.to_string())?,
+                        ))
                     })
                 }
             },

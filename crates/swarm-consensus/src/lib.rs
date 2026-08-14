@@ -18,6 +18,10 @@ use swarm_crypto::{
     DetachedSignature, canonical_json_bytes, sha256, sha256_hex, verify_detached_signature,
 };
 
+pub mod transport;
+
+pub use transport::{ConsensusTransport, SoloGovernorTransport, drive_round};
+
 pub const DEFAULT_CONSENSUS_SUBJECT_PREFIX: &str = "swarm.consensus";
 pub const CONSENSUS_RECEIPT_SCHEMA_VERSION: u32 = 1;
 
@@ -37,6 +41,9 @@ pub enum ConsensusError {
 
     #[error("local node `{0}` cannot issue signed receipts without a signing key")]
     SigningUnavailable(AgentId),
+
+    #[error("consensus transport failed: {0}")]
+    Transport(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -726,6 +733,27 @@ impl ConsensusNode {
     pub fn proposer_for_current_round(&self) -> Result<&AgentId, ConsensusError> {
         self.committee
             .proposer_for(&self.previous_commit_hash, self.round)
+    }
+
+    pub fn round_timeout_ms(&self) -> i64 {
+        self.config.round_timeout_ms
+    }
+
+    /// Sign one of this node's own outbound envelopes with its own key.
+    ///
+    /// The signing key never leaves the node. A round driver holding a
+    /// `&mut ConsensusNode` can therefore produce signed traffic for exactly
+    /// one identity -- the one it owns -- which is the structural half of
+    /// BFT-03: there is no way to reach a second member's key from here.
+    pub fn sign_outbound(
+        &self,
+        envelope: ConsensusEnvelope,
+    ) -> Result<ConsensusSignedEnvelope, ConsensusError> {
+        let signing_key = self
+            .local_signing_key
+            .as_ref()
+            .ok_or_else(|| ConsensusError::SigningUnavailable(self.local_agent_id.clone()))?;
+        ConsensusSignedEnvelope::sign(envelope, signing_key)
     }
 
     pub fn queue_proposal(

@@ -32,10 +32,12 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
         .as_millis() as i64;
 
     let policy = GovernancePolicy::with_persistence(config.clone(), &path).unwrap();
-    policy.register_governor(
-        AgentId::new("tom", "primary"),
-        SigningKey::from_bytes(&[31; 32]),
-    );
+    policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[31; 32]),
+        )
+        .expect("the policy holds no other governor key");
     policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
     policy.observe_health(
         &AgentId::new("tom", "primary"),
@@ -113,10 +115,12 @@ fn partition_recovery_reconciles_and_persists_partition_activity() {
     );
 
     let reloaded = GovernancePolicy::with_persistence(config, &path).unwrap();
-    reloaded.register_governor(
-        AgentId::new("tom", "primary"),
-        SigningKey::from_bytes(&[31; 32]),
-    );
+    reloaded
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[31; 32]),
+        )
+        .expect("the policy holds no other governor key");
     let status = reloaded.status_report();
     assert_eq!(status.partition_state, PartitionState::Healthy);
     assert_eq!(status.unauthorized_partition_actions, 0);

@@ -5213,10 +5213,12 @@ async fn healthz_includes_governance_partition_component() {
         contingency_lease_ttl_ms: 60_000,
         contingency_blast_radius_cap: 1,
     }));
-    governance_policy.register_governor(
-        AgentId::new("tom", "primary"),
-        ed25519_dalek::SigningKey::from_bytes(&[29; 32]),
-    );
+    governance_policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            ed25519_dalek::SigningKey::from_bytes(&[29; 32]),
+        )
+        .expect("the policy holds no other governor key");
     governance_policy.observe_health(
         &AgentId::new("tom", "primary"),
         &[AgentHealthEntry {
