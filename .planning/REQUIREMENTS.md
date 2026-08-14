@@ -859,8 +859,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Supply-Chain Hardening
 
-- [ ] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition.
-- [ ] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, and the `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift.
+- [x] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition. Also an `expires` date: an exception whose deadline has passed FAILS `tools/check-supply-chain.sh` (constructed and observed), and the last-checked..expires window is capped at 180 days. `[[bans.skip]]` entries carry `last-checked` and `pinned-by`/`clears-when` under the same parser.
+- [x] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, and the `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift. Deduplicated by DERIVATION rather than comparison: the script reads `[advisories] ignore` and builds the `--ignore` flags from it, holds no id of its own, and fails if a RustSec id appears on any other enforcement surface.
 
 ### Red Swarm (v1.80)
 
@@ -1503,8 +1503,8 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | LOOM-02 | Phase 287 | Pending |
 | LOOM-03 | Phase 287 | Pending |
 | LOOM-04 | Phase 287 | Pending |
-| SUPPLY-01 | Phase 287 | Pending |
-| SUPPLY-02 | Phase 287 | Pending |
+| SUPPLY-01 | Phase 287 | Satisfied |
+| SUPPLY-02 | Phase 287 | Satisfied |
 | OPFOR-01 | Phase 288 | Pending |
 | OPFOR-02 | Phase 288 | Pending |
 | OPFOR-03 | Phase 288 | Pending |

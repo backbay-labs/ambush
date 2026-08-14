@@ -100,6 +100,14 @@ container ships, before that image is signed and attested.
 Supply chain is enforced with `cargo deny` and `cargo audit` through
 `tools/check-supply-chain.sh`. A new dependency needs a reason in the pull request description.
 
+Waiving a supply-chain finding -- a RustSec advisory or a duplicate dependency -- means adding an
+entry to `deny.toml` with the metadata that gate parses out of its `reason`: `last-checked
+<YYYY-MM-DD>` and a `clears-when:` clause on either kind of entry, plus `expires <YYYY-MM-DD>` and a
+`blast-radius:` note on an `[advisories] ignore`. An expired advisory exception fails the build, and
+so does a waiver that no longer matches anything. Do not add `--ignore` to a `cargo audit`
+invocation: that list is derived from `deny.toml`, and a RustSec id written into a workflow or a
+`tools/*.sh` fails the gate as a second list that would drift.
+
 ## Conventions
 
 - **No panics on the runtime path.** `unwrap_used` and `expect_used` are denied workspace-wide,
