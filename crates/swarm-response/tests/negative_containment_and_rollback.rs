@@ -73,22 +73,69 @@ fn lease(issued_at_ms: i64, ttl_ms: i64) -> ContainmentLease {
 }
 
 // ---------------------------------------------------------------------------
+// RESPONSE-TTL-STRICTLY-POSITIVE
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TtlMutation {
+    None,
+    SkipPositiveCheck,
+}
+
+fn mirrored_ttl(ttl_ms: i64, mutation: TtlMutation) -> Result<i64, ContainmentLeaseError> {
+    if mutation != TtlMutation::SkipPositiveCheck && ttl_ms <= 0 {
+        return Err(ContainmentLeaseError::NonPositiveTtl { ttl_ms });
+    }
+    Ok(ttl_ms)
+}
+
+#[test]
+fn broken_ttl_check_permits_a_zero_lifetime() {
+    let real = ContainmentTtl::from_config_ms(0);
+    assert_eq!(
+        real,
+        Err(ContainmentLeaseError::NonPositiveTtl { ttl_ms: 0 })
+    );
+    let control = mirrored_ttl(0, TtlMutation::None);
+    assert_eq!(
+        control,
+        Err(ContainmentLeaseError::NonPositiveTtl { ttl_ms: 0 })
+    );
+    assert_eq!(mirrored_ttl(0, TtlMutation::SkipPositiveCheck), Ok(0));
+}
+
+// ---------------------------------------------------------------------------
 // RESPONSE-LEASE-BOUNDED
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenMutation {
+    None,
+    SkipExpiryBound,
+}
+
 /// Mirror of `ContainmentLease::open`'s expiry derivation, copied from
 /// `crates/swarm-response/src/containment.rs`, with the post-add re-check
-/// removed.
+/// selectively removable.
 ///
 /// Only the derivation is mirrored, because that is the whole invariant: the
 /// saturating add plus the `expires_at_ms <= issued_at_ms` re-check. The mirror
 /// returns the expiry it would have written rather than a `ContainmentLease`,
 /// since the real type has no other constructor -- which is itself the point.
-fn broken_open_expiry(
+fn mirrored_open_expiry(
+    lease_id: &str,
     issued_at_ms: i64,
     ttl: ContainmentTtl,
+    mutation: OpenMutation,
 ) -> Result<i64, ContainmentLeaseError> {
     let expires_at_ms = issued_at_ms.saturating_add(ttl.get());
+    if mutation != OpenMutation::SkipExpiryBound && expires_at_ms <= issued_at_ms {
+        return Err(ContainmentLeaseError::UnboundedLease {
+            lease_id: lease_id.to_string(),
+            issued_at_ms,
+            expires_at_ms,
+        });
+    }
     Ok(expires_at_ms)
 }
 
@@ -118,7 +165,26 @@ fn broken_open_permits_the_unbounded_lease_the_real_constructor_refuses() {
         "unexpected error: {error}"
     );
 
-    let broken = broken_open_expiry(issued_at_ms, ttl).expect("the broken derivation returns one");
+    let control = mirrored_open_expiry(
+        "containment:saturating",
+        issued_at_ms,
+        ttl,
+        OpenMutation::None,
+    );
+    assert_eq!(
+        control,
+        Err(error.clone()),
+        "the unmutated mirror must reproduce the real refusal on the same \
+         saturating-add probe"
+    );
+
+    let broken = mirrored_open_expiry(
+        "containment:saturating",
+        issued_at_ms,
+        ttl,
+        OpenMutation::SkipExpiryBound,
+    )
+    .expect("the broken derivation returns an expiry");
     assert_eq!(
         broken, issued_at_ms,
         "without the re-check the lease is written with an expiry that is not \
@@ -130,24 +196,38 @@ fn broken_open_permits_the_unbounded_lease_the_real_constructor_refuses() {
     // refusing everything.
     let ordinary = lease(1_000, 900_000);
     assert_eq!(ordinary.expires_at_ms(), 901_000);
-    assert_eq!(broken_open_expiry(1_000, ttl).unwrap(), 901_000);
+    assert_eq!(
+        mirrored_open_expiry("containment:ordinary", 1_000, ttl, OpenMutation::None).unwrap(),
+        901_000
+    );
 }
 
 // ---------------------------------------------------------------------------
 // RESPONSE-STORED-LEASE-BOUNDED
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoredLeaseMutation {
+    None,
+    SkipExpiryBound,
+    SkipSchemaVersion,
+}
+
 /// Mirror of `impl TryFrom<ContainmentLeaseRecord> for ContainmentLease`,
-/// reduced to the two guards it applies, with the expiry bound removed.
+/// reduced to the two guards it applies, with the expiry bound selectively
+/// removable.
 ///
 /// `ContainmentLeaseRecord` is private -- deliberately, it is the only shape
 /// that deserializes -- so the mirror reads the same fields off the wire JSON.
-fn broken_stored_lease_accepts(record: &serde_json::Value) -> Result<i64, String> {
+fn mirrored_stored_lease_accepts(
+    record: &serde_json::Value,
+    mutation: StoredLeaseMutation,
+) -> Result<i64, String> {
     let schema_version = record
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
         .ok_or("missing schema_version")?;
-    if schema_version != 1 {
+    if mutation != StoredLeaseMutation::SkipSchemaVersion && schema_version != 1 {
         return Err(format!("unknown schema version {schema_version}"));
     }
     let issued_at_ms = record
@@ -158,9 +238,24 @@ fn broken_stored_lease_accepts(record: &serde_json::Value) -> Result<i64, String
         .get("expires_at_ms")
         .and_then(serde_json::Value::as_i64)
         .ok_or("missing expires_at_ms")?;
-    // The `expires_at_ms <= issued_at_ms` guard is what has been removed.
-    let _ = issued_at_ms;
+    if mutation != StoredLeaseMutation::SkipExpiryBound && expires_at_ms <= issued_at_ms {
+        return Err("containment lease must be bounded".to_string());
+    }
     Ok(expires_at_ms)
+}
+
+#[test]
+fn broken_schema_check_loads_a_lease_from_an_unknown_wire_version() {
+    let mut wire = serde_json::to_value(lease(1_000, 900_000)).unwrap();
+    wire["schema_version"] = json!(99);
+    let real = serde_json::from_value::<ContainmentLease>(wire.clone());
+    assert!(real.is_err());
+    let control = mirrored_stored_lease_accepts(&wire, StoredLeaseMutation::None);
+    assert!(control.is_err());
+    assert_eq!(
+        mirrored_stored_lease_accepts(&wire, StoredLeaseMutation::SkipSchemaVersion),
+        Ok(901_000)
+    );
 }
 
 #[test]
@@ -179,7 +274,15 @@ fn broken_stored_lease_bound_accepts_the_already_expired_record_the_real_one_rej
         "the refusal must name the bound: {error}"
     );
 
-    let broken = broken_stored_lease_accepts(&wire)
+    let control = mirrored_stored_lease_accepts(&wire, StoredLeaseMutation::None);
+    assert!(
+        control
+            .as_ref()
+            .is_err_and(|reason| reason.contains("must be bounded")),
+        "the unmutated mirror must refuse the same edited record: {control:?}"
+    );
+
+    let broken = mirrored_stored_lease_accepts(&wire, StoredLeaseMutation::SkipExpiryBound)
         .expect("the broken variant admits the record the real one rejects");
     assert_eq!(
         broken, 900,
@@ -197,6 +300,14 @@ fn broken_stored_lease_bound_accepts_the_already_expired_record_the_real_one_rej
 // RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeriveStatusMutation {
+    None,
+    SkipDryRunMode,
+    SkipEmptySteps,
+    ReportPartialSuccess,
+}
+
 /// Mirror of `RollbackReceipt::derive_status`, copied from
 /// `crates/swarm-response/src/rollback.rs`, with the `mode == DryRun` condition
 /// dropped from the all-`Simulated` arm.
@@ -204,8 +315,12 @@ fn broken_stored_lease_bound_accepts_the_already_expired_record_the_real_one_rej
 /// That condition is the entire fix from cc5b169: `ResponseStatus::Simulated`
 /// answers `indicates_success()` with `true`, which is only honest when nothing
 /// was supposed to happen.
-fn broken_derive_status(steps: &[RollbackStepOutcome], _mode: ExecutionMode) -> ResponseStatus {
-    if steps.is_empty() {
+fn mirrored_derive_status(
+    steps: &[RollbackStepOutcome],
+    mode: ExecutionMode,
+    mutation: DeriveStatusMutation,
+) -> ResponseStatus {
+    if mutation != DeriveStatusMutation::SkipEmptySteps && steps.is_empty() {
         return ResponseStatus::Failed;
     }
     if steps.iter().all(|step| step.status.restored()) {
@@ -213,11 +328,162 @@ fn broken_derive_status(steps: &[RollbackStepOutcome], _mode: ExecutionMode) -> 
     } else if steps
         .iter()
         .all(|step| step.status == RollbackStepStatus::Simulated)
+        && (mutation == DeriveStatusMutation::SkipDryRunMode || mode == ExecutionMode::DryRun)
     {
         ResponseStatus::Simulated
+    } else if mutation == DeriveStatusMutation::ReportPartialSuccess {
+        ResponseStatus::Executed
     } else {
         ResponseStatus::Failed
     }
+}
+
+#[test]
+fn broken_empty_step_status_reports_success_without_any_inverse() {
+    let lease = lease(1_000, 900_000);
+    let steps = Vec::new();
+    let real = RollbackReceipt::from_steps(
+        &lease,
+        RollbackTrigger::Expiry,
+        ExecutionMode::Enforced,
+        2_000,
+        steps.clone(),
+    );
+    assert_eq!(real.status, ResponseStatus::Failed);
+    assert_eq!(
+        mirrored_derive_status(&steps, ExecutionMode::Enforced, DeriveStatusMutation::None),
+        real.status
+    );
+    assert_eq!(
+        mirrored_derive_status(
+            &steps,
+            ExecutionMode::Enforced,
+            DeriveStatusMutation::SkipEmptySteps,
+        ),
+        ResponseStatus::Executed,
+        "without the empty-step guard the vacuous all-restored predicate reports success"
+    );
+}
+
+#[test]
+fn broken_partial_status_reports_success_with_an_unsupported_inverse() {
+    let lease = lease(1_000, 900_000);
+    let steps = vec![RollbackStepOutcome {
+        kind: ResponseRollbackStepKind::ReleaseQuarantinedFile,
+        status: RollbackStepStatus::Unsupported,
+        detail: "no adapter inverse".to_string(),
+    }];
+    let real = RollbackReceipt::from_steps(
+        &lease,
+        RollbackTrigger::Expiry,
+        ExecutionMode::Enforced,
+        2_000,
+        steps.clone(),
+    );
+    assert_eq!(real.status, ResponseStatus::Failed);
+    assert_eq!(
+        mirrored_derive_status(&steps, ExecutionMode::Enforced, DeriveStatusMutation::None),
+        real.status
+    );
+    assert_eq!(
+        mirrored_derive_status(
+            &steps,
+            ExecutionMode::Enforced,
+            DeriveStatusMutation::ReportPartialSuccess,
+        ),
+        ResponseStatus::Executed
+    );
+}
+
+// ---------------------------------------------------------------------------
+// RESPONSE-UNMAPPED-INVERSE-REFUSED
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InverseMutation {
+    None,
+    InventUnmappedInverse,
+}
+
+fn mirrored_inverse(
+    action: &ResponseAction,
+    step: ResponseRollbackStepKind,
+    mutation: InverseMutation,
+) -> Result<&'static str, &'static str> {
+    match (action, step) {
+        (
+            ResponseAction::QuarantineFile { .. },
+            ResponseRollbackStepKind::ReleaseQuarantinedFile,
+        ) => Ok("release_quarantined_file"),
+        _ if mutation == InverseMutation::InventUnmappedInverse => Ok("invented_inverse"),
+        _ => Err("unmapped"),
+    }
+}
+
+#[test]
+fn broken_unmapped_inverse_fabricates_an_operation_for_a_mismatched_step() {
+    let action = quarantine_action();
+    let step = ResponseRollbackStepKind::ResumeProcess;
+    assert!(resolve_inverse(&action, step).is_err());
+    assert_eq!(
+        mirrored_inverse(&action, step, InverseMutation::None),
+        Err("unmapped")
+    );
+    assert_eq!(
+        mirrored_inverse(&action, step, InverseMutation::InventUnmappedInverse),
+        Ok("invented_inverse")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// RESPONSE-ROLLBACK-REQUIRES-STEPS
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequireStepsMutation {
+    None,
+    SkipRequiredSteps,
+}
+
+fn mirrored_require_steps(
+    lease: &ContainmentLease,
+    mutation: RequireStepsMutation,
+) -> Result<(), &'static str> {
+    if mutation != RequireStepsMutation::SkipRequiredSteps && lease.rollback().steps.is_empty() {
+        return Err("no rollback steps");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan() {
+    let empty = ContainmentLease::open(
+        "containment:empty-plan",
+        quarantine_action(),
+        "resp:empty-plan",
+        None,
+        &preview(&[]),
+        1_000,
+        ContainmentTtl::from_config_ms(900_000).unwrap(),
+    )
+    .unwrap();
+    let real = SandboxRollbackExecutor
+        .rollback(
+            &empty,
+            RollbackTrigger::Expiry,
+            ExecutionMode::Enforced,
+            2_000,
+        )
+        .await;
+    assert!(real.is_err());
+    assert_eq!(
+        mirrored_require_steps(&empty, RequireStepsMutation::None),
+        Err("no rollback steps")
+    );
+    assert_eq!(
+        mirrored_require_steps(&empty, RequireStepsMutation::SkipRequiredSteps),
+        Ok(())
+    );
 }
 
 #[test]
@@ -246,22 +512,19 @@ fn broken_mode_gate_reports_an_enforced_simulation_as_the_success_the_real_one_r
     );
     assert!(!real.fully_reversed());
 
-    let control = broken_derive_status(&steps, ExecutionMode::DryRun);
+    let control =
+        mirrored_derive_status(&steps, ExecutionMode::Enforced, DeriveStatusMutation::None);
     assert_eq!(
-        control,
-        RollbackReceipt::from_steps(
-            &lease,
-            RollbackTrigger::Expiry,
-            ExecutionMode::DryRun,
-            2_000,
-            steps.clone(),
-        )
-        .status,
-        "the mirror must reproduce the real derivation in DryRun, where the two \
-         agree; without this the mutation below could be any rewrite at all"
+        control, real.status,
+        "the unmutated mirror must reproduce the real derivation on the same \
+         Enforced all-simulated probe"
     );
 
-    let broken = broken_derive_status(&steps, ExecutionMode::Enforced);
+    let broken = mirrored_derive_status(
+        &steps,
+        ExecutionMode::Enforced,
+        DeriveStatusMutation::SkipDryRunMode,
+    );
     assert_eq!(broken, ResponseStatus::Simulated);
     assert!(
         broken.indicates_success(),
@@ -274,17 +537,24 @@ fn broken_mode_gate_reports_an_enforced_simulation_as_the_success_the_real_one_r
 // RESPONSE-SANDBOX-NEVER-REVERSES
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SandboxMutation {
+    None,
+    ClaimEnforcedReversed,
+}
+
 /// Mirror of `SandboxRollbackExecutor::rollback`, copied from
 /// `crates/swarm-response/src/rollback.rs`, reinstating the pre-cc5b169 shape:
 /// a resolved inverse is recorded as `Reversed` when the mode is `Enforced`.
 ///
 /// This executor cannot reach a host -- it holds no transport at all -- so
 /// every `Reversed` it writes is a claim about a world it never touched.
-fn broken_sandbox_rollback(
+fn mirrored_sandbox_rollback(
     lease: &ContainmentLease,
     trigger: RollbackTrigger,
     mode: ExecutionMode,
     completed_at_ms: i64,
+    mutation: SandboxMutation,
 ) -> RollbackReceipt {
     let steps = lease
         .rollback()
@@ -293,7 +563,9 @@ fn broken_sandbox_rollback(
         .map(|step| match resolve_inverse(lease.action(), step.kind) {
             Ok(inverse) => RollbackStepOutcome {
                 kind: step.kind,
-                status: if mode == ExecutionMode::Enforced {
+                status: if mutation == SandboxMutation::ClaimEnforcedReversed
+                    && mode == ExecutionMode::Enforced
+                {
                     RollbackStepStatus::Reversed
                 } else {
                     RollbackStepStatus::Simulated
@@ -331,35 +603,29 @@ async fn broken_sandbox_executor_claims_the_reversal_the_real_one_refuses_to_cla
     );
     assert_eq!(real.status, ResponseStatus::Failed);
 
-    let control = broken_sandbox_rollback(
-        &lease,
-        RollbackTrigger::Expiry,
-        ExecutionMode::DryRun,
-        2_000,
-    );
-    let real_dry_run = SandboxRollbackExecutor
-        .rollback(
-            &lease,
-            RollbackTrigger::Expiry,
-            ExecutionMode::DryRun,
-            2_000,
-        )
-        .await
-        .expect("a receipt");
-    assert_eq!(
-        control.status, real_dry_run.status,
-        "the mirror must reproduce the real executor in DryRun, where the two agree"
-    );
-    assert_eq!(
-        control.steps[0].status, real_dry_run.steps[0].status,
-        "and step for step, not only in the summary status"
-    );
-
-    let broken = broken_sandbox_rollback(
+    let control = mirrored_sandbox_rollback(
         &lease,
         RollbackTrigger::Expiry,
         ExecutionMode::Enforced,
         2_000,
+        SandboxMutation::None,
+    );
+    assert_eq!(
+        control.status, real.status,
+        "the unmutated mirror must reproduce the real executor on the same \
+         Enforced probe"
+    );
+    assert_eq!(
+        control.steps[0].status, real.steps[0].status,
+        "and step for step, not only in the summary status"
+    );
+
+    let broken = mirrored_sandbox_rollback(
+        &lease,
+        RollbackTrigger::Expiry,
+        ExecutionMode::Enforced,
+        2_000,
+        SandboxMutation::ClaimEnforcedReversed,
     );
     assert!(
         broken.fully_reversed(),

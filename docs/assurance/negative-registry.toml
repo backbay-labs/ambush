@@ -1,40 +1,9 @@
-# Negative falsifiability registry (FALSIFY-01, phase 285).
-#
-# One entry per row of `docs/assurance/MAPPING.md`. Each names the production
-# function the row is about, the public entry point a test can reach it through,
-# and the `crates/*/tests/negative_*.rs` test that proves the guard actually
-# fires by constructing a deliberately-broken variant and asserting the broken
-# variant PERMITS what the real function refuses.
-#
-# `observed_when_neutralized` is the load-bearing field and it is not
-# decorative. Every mutation in this file was neutralized -- the removed guard
-# put back, so the "broken" variant is no longer broken -- and the test was run
-# and watched to fail. The recorded text is that failure. A negative test that
-# has never been observed failing is the eleventh entry in
-# `.planning/STATE.md`'s defect catalogue wearing a different hat.
-#
-# WHAT tools/check-negative-registry.sh CHECKS
-#   - every MAPPING.md row has exactly one entry here, and every entry names a
-#     MAPPING.md row (both directions, so neither file can grow orphans)
-#   - `production_fn` equals the row's `Enforcing function` column
-#   - `test_file` exists, lives at `crates/*/tests/negative_*.rs`, and declares
-#     `fn <test_fn>`
-#   - `broken_variant` is named INSIDE the body of `test_fn` and is also defined
-#     somewhere else in the same file
-#   - `permits` and `observed_when_neutralized` are non-empty
-#
-# WHAT IT CANNOT CHECK, AND SAYING SO IS THE POINT
-#   That the mirror is a FAITHFUL copy of the function it claims to mirror. No
-#   static check can establish that. Two things stand in for it: each test's
-#   unmutated control, which asserts the mirror reproduces the real function's
-#   outcome on the same probe, and review -- which is why every entry names the
-#   mirror so a reviewer can diff it against the source it copies.
+# One executable negative mutation per MAPPING.md row. The registry gate resolves
+# both production paths exactly, parses real test bodies after removing comments
+# and literals, and requires the named mutation to be defined outside and used
+# inside the attributed test.
 
-schema_version = 1
-
-# ---------------------------------------------------------------------------
-# swarm-policy
-# ---------------------------------------------------------------------------
+schema_version = 2
 
 [[entry]]
 invariant = "POLICY-EMPTY-RULESET-DENIES"
@@ -42,13 +11,39 @@ production_fn = "swarm_policy::configurable_gate::ConfigurableApprovalGate::eval
 entry_point = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
 test_fn = "broken_empty_ruleset_arm_permits_the_action_the_real_gate_fails_closed_on"
-broken_variant = "broken_configurable_evaluate"
-permits = """
-A Medium-severity IsolateHost on a deployment with no configurable rules
-loaded -- the shipped default -- is authorized by the static fallback."""
-observed_when_neutralized = """
-left: Deny, right: Allow -- "without the empty-ruleset arm an unconfigured
-deployment authorizes a destructive action off the static fallback alone"."""
+broken_variant = "ConfigurableMutation::SkipEmptyRuleset"
+permits = "An explicitly empty PolicyConfig reaches static default allow."
+observed_when_neutralized = "Neutralizing SkipEmptyRuleset makes the final Allow assertion receive Deny/configurable.fail_closed.empty_ruleset."
+
+[[entry]]
+invariant = "POLICY-RULE-TIME-WINDOW"
+production_fn = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
+entry_point = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
+test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
+test_fn = "broken_time_window_admits_a_request_outside_the_configured_window"
+broken_variant = "ConfigurableMutation::SkipTimeWindow"
+permits = "A matching request outside the configured UTC hour window."
+observed_when_neutralized = "Neutralizing SkipTimeWindow changes the broken verdict from Allow to Deny."
+
+[[entry]]
+invariant = "POLICY-RULE-AGENT-RATE-LIMIT"
+production_fn = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
+entry_point = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
+test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
+test_fn = "broken_agent_rate_limit_admits_the_over_budget_request"
+broken_variant = "ConfigurableMutation::SkipAgentRateLimit"
+permits = "The second request under a per-agent budget of one."
+observed_when_neutralized = "Neutralizing SkipAgentRateLimit changes the second broken verdict from Allow to Deny."
+
+[[entry]]
+invariant = "POLICY-CONFIGURED-DENY-RULE"
+production_fn = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
+entry_point = "swarm_policy::configurable_gate::ConfigurableApprovalGate::evaluate"
+test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
+test_fn = "broken_configured_deny_rule_turns_an_explicit_denial_into_allow"
+broken_variant = "ConfigurableMutation::FlipDenyToAllow"
+permits = "A request matched by an explicit Deny rule."
+observed_when_neutralized = "Neutralizing FlipDenyToAllow changes the broken verdict from Allow to Deny."
 
 [[entry]]
 invariant = "POLICY-NULL-EVIDENCE-REFUSED"
@@ -56,13 +51,19 @@ production_fn = "swarm_policy::static_gate::StaticApprovalGate::validate_request
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
 test_fn = "broken_validate_request_permits_the_null_evidence_request_the_real_gate_refuses"
-broken_variant = "SkipNullEvidence"
-permits = """
-A request whose evidence bundle is JSON `null` reaches a verdict instead of
-being refused as malformed."""
-observed_when_neutralized = """
-panicked at `the broken variant admits the request it should have refused:
-InvalidRequest("evidence bundle must not be null")`."""
+broken_variant = "StaticMutation::SkipNullEvidence"
+permits = "A JSON-null evidence bundle reaches a verdict."
+observed_when_neutralized = "Neutralizing SkipNullEvidence returns InvalidRequest instead of a verdict."
+
+[[entry]]
+invariant = "POLICY-ACTION-TARGETS-NONEMPTY"
+production_fn = "swarm_policy::static_gate::StaticApprovalGate::validate_request"
+entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
+test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
+test_fn = "broken_action_target_validation_permits_an_empty_host_identifier"
+broken_variant = "StaticMutation::SkipActionTarget"
+permits = "An IsolateHost with a whitespace-only host id."
+observed_when_neutralized = "Neutralizing SkipActionTarget returns InvalidRequest instead of Allow."
 
 [[entry]]
 invariant = "POLICY-DESTRUCTIVE-MIN-SEVERITY"
@@ -70,26 +71,19 @@ production_fn = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
 test_fn = "broken_minimum_severity_permits_the_low_severity_destructive_action_the_real_gate_denies"
-broken_variant = "SkipMinimumSeverity"
-permits = """
-A `Severity::Low` IsolateHost is allowed for immediate execution."""
-observed_when_neutralized = """
-left: Deny, right: Allow -- "deleting the minimum-severity arm must let a
-Low-severity IsolateHost through to immediate execution"."""
+broken_variant = "StaticMutation::SkipMinimumSeverity"
+permits = "A Low-severity destructive action."
+observed_when_neutralized = "Neutralizing SkipMinimumSeverity changes the broken verdict from Allow to Deny."
 
 [[entry]]
-invariant = "POLICY-DESTRUCTIVE-HUMAN-GATE"
+invariant = "POLICY-DEPLOY-DECOY-MIN-SEVERITY"
 production_fn = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
-test_fn = "broken_human_gate_permits_immediate_execution_of_what_the_real_gate_holds"
-broken_variant = "SkipHumanGate"
-permits = """
-A Critical IsolateHost becomes `Allow` instead of `RequireHuman`, which in
-LiveResponse mode is the difference between executed and refused."""
-observed_when_neutralized = """
-left: RequireHuman, right: Allow -- "deleting the human-gate arm must turn a
-held action into an immediately executable one"."""
+test_fn = "broken_deploy_decoy_minimum_permits_a_low_severity_deployment"
+broken_variant = "StaticMutation::SkipDeployDecoyMinimum"
+permits = "A Low-severity decoy deployment."
+observed_when_neutralized = "Neutralizing SkipDeployDecoyMinimum changes the broken verdict from Allow to Deny."
 
 [[entry]]
 invariant = "POLICY-SCOPE-RATE-LIMIT"
@@ -97,17 +91,29 @@ production_fn = "swarm_policy::static_gate::StaticApprovalGate::scope_rate_limit
 entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
 test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
 test_fn = "broken_scope_rate_limit_permits_the_over_budget_action_the_real_gate_denies"
-broken_variant = "SkipScopeRateLimit"
-permits = """
-The sixth action in one minute against one scope, against a shipped budget of
-five."""
-observed_when_neutralized = """
-left: Deny, right: Allow -- "deleting the over-budget arm must let the sixth
-action in the same minute through against the same scope"."""
+broken_variant = "StaticMutation::SkipScopeRateLimit"
+permits = "The sixth same-scope action under a budget of five."
+observed_when_neutralized = "Neutralizing SkipScopeRateLimit changes the sixth broken verdict from Allow to Deny."
 
-# ---------------------------------------------------------------------------
-# swarm-response
-# ---------------------------------------------------------------------------
+[[entry]]
+invariant = "POLICY-DESTRUCTIVE-HUMAN-GATE"
+production_fn = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
+entry_point = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
+test_file = "crates/swarm-policy/tests/negative_policy_gates.rs"
+test_fn = "broken_human_gate_permits_immediate_execution_of_what_the_real_gate_holds"
+broken_variant = "StaticMutation::SkipHumanGate"
+permits = "Immediate execution of a Critical destructive action."
+observed_when_neutralized = "Neutralizing SkipHumanGate changes the broken verdict from Allow to RequireHuman."
+
+[[entry]]
+invariant = "RESPONSE-TTL-STRICTLY-POSITIVE"
+production_fn = "swarm_response::containment::ContainmentTtl::from_config_ms"
+entry_point = "swarm_response::containment::ContainmentTtl::from_config_ms"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_ttl_check_permits_a_zero_lifetime"
+broken_variant = "TtlMutation::SkipPositiveCheck"
+permits = "A zero containment TTL."
+observed_when_neutralized = "Neutralizing SkipPositiveCheck changes Ok(0) to NonPositiveTtl { ttl_ms: 0 }."
 
 [[entry]]
 invariant = "RESPONSE-LEASE-BOUNDED"
@@ -115,12 +121,19 @@ production_fn = "swarm_response::containment::ContainmentLease::open"
 entry_point = "swarm_response::containment::ContainmentLease::open"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
 test_fn = "broken_open_permits_the_unbounded_lease_the_real_constructor_refuses"
-broken_variant = "broken_open_expiry"
-permits = """
-A lease issued at `i64::MAX`, where the saturating add is a no-op, is written
-with an expiry equal to its issue instant -- an unbounded containment."""
-observed_when_neutralized = """
-panicked at `the broken derivation returns one: NonPositiveTtl { ttl_ms: 900000 }`."""
+broken_variant = "OpenMutation::SkipExpiryBound"
+permits = "At i64::MAX, a saturating-add expiry equal to the issue instant."
+observed_when_neutralized = "the broken derivation returns an expiry: UnboundedLease { lease_id: \"containment:saturating\", issued_at_ms: 9223372036854775807, expires_at_ms: 9223372036854775807 }"
+
+[[entry]]
+invariant = "RESPONSE-STORED-LEASE-SCHEMA-KNOWN"
+production_fn = "swarm_response::containment::ContainmentLease::try_from"
+entry_point = "swarm_response::containment::ContainmentLease::try_from"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_schema_check_loads_a_lease_from_an_unknown_wire_version"
+broken_variant = "StoredLeaseMutation::SkipSchemaVersion"
+permits = "A version-99 lease record."
+observed_when_neutralized = "Neutralizing SkipSchemaVersion changes Ok(901000) to unknown schema version 99."
 
 [[entry]]
 invariant = "RESPONSE-STORED-LEASE-BOUNDED"
@@ -128,13 +141,29 @@ production_fn = "swarm_response::containment::ContainmentLease::try_from"
 entry_point = "swarm_response::containment::ContainmentLease::try_from"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
 test_fn = "broken_stored_lease_bound_accepts_the_already_expired_record_the_real_one_rejects"
-broken_variant = "broken_stored_lease_accepts"
-permits = """
-A stored lease record edited so `expires_at_ms` precedes `issued_at_ms` is
-loaded back as a live lease."""
-observed_when_neutralized = """
-panicked at `the broken variant admits the record the real one rejects:
-"unbounded"`."""
+broken_variant = "StoredLeaseMutation::SkipExpiryBound"
+permits = "A stored expiry before its issue instant."
+observed_when_neutralized = "Neutralizing SkipExpiryBound changes Ok(900) to containment lease must be bounded."
+
+[[entry]]
+invariant = "RESPONSE-UNMAPPED-INVERSE-REFUSED"
+production_fn = "swarm_response::rollback::resolve_inverse"
+entry_point = "swarm_response::rollback::resolve_inverse"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_unmapped_inverse_fabricates_an_operation_for_a_mismatched_step"
+broken_variant = "InverseMutation::InventUnmappedInverse"
+permits = "An invented inverse for a mismatched action and step."
+observed_when_neutralized = "Neutralizing InventUnmappedInverse changes Ok(invented_inverse) to Err(unmapped)."
+
+[[entry]]
+invariant = "RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS"
+production_fn = "swarm_response::rollback::RollbackReceipt::derive_status"
+entry_point = "swarm_response::rollback::RollbackReceipt::from_steps"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_empty_step_status_reports_success_without_any_inverse"
+broken_variant = "DeriveStatusMutation::SkipEmptySteps"
+permits = "Vacuous Executed status for an empty outcome list."
+observed_when_neutralized = "Neutralizing SkipEmptySteps changes Executed to Failed."
 
 [[entry]]
 invariant = "RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS"
@@ -142,13 +171,29 @@ production_fn = "swarm_response::rollback::RollbackReceipt::derive_status"
 entry_point = "swarm_response::rollback::RollbackReceipt::from_steps"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
 test_fn = "broken_mode_gate_reports_an_enforced_simulation_as_the_success_the_real_one_refuses"
-broken_variant = "broken_derive_status"
-permits = """
-An Enforced rollback whose every step was merely simulated is recorded as
-`ResponseStatus::Simulated`, whose `indicates_success()` is true -- a durable
-success claim over a host that is still contained."""
-observed_when_neutralized = """
-left: Failed, right: Simulated."""
+broken_variant = "DeriveStatusMutation::SkipDryRunMode"
+permits = "Simulated success in Enforced mode."
+observed_when_neutralized = "Neutralizing SkipDryRunMode changes Simulated to Failed on the same Enforced probe."
+
+[[entry]]
+invariant = "RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS"
+production_fn = "swarm_response::rollback::RollbackReceipt::derive_status"
+entry_point = "swarm_response::rollback::RollbackReceipt::from_steps"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_partial_status_reports_success_with_an_unsupported_inverse"
+broken_variant = "DeriveStatusMutation::ReportPartialSuccess"
+permits = "Executed status for an Unsupported step."
+observed_when_neutralized = "Neutralizing ReportPartialSuccess changes Executed to Failed."
+
+[[entry]]
+invariant = "RESPONSE-ROLLBACK-REQUIRES-STEPS"
+production_fn = "swarm_response::rollback::require_steps"
+entry_point = "swarm_response::rollback::SandboxRollbackExecutor::rollback"
+test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
+test_fn = "broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan"
+broken_variant = "RequireStepsMutation::SkipRequiredSteps"
+permits = "Rollback execution with an empty inverse plan."
+observed_when_neutralized = "Neutralizing SkipRequiredSteps changes Ok(()) to Err(no rollback steps)."
 
 [[entry]]
 invariant = "RESPONSE-SANDBOX-NEVER-REVERSES"
@@ -156,18 +201,19 @@ production_fn = "swarm_response::rollback::SandboxRollbackExecutor::rollback"
 entry_point = "swarm_response::rollback::SandboxRollbackExecutor::rollback"
 test_file = "crates/swarm-response/tests/negative_containment_and_rollback.rs"
 test_fn = "broken_sandbox_executor_claims_the_reversal_the_real_one_refuses_to_claim"
-broken_variant = "broken_sandbox_rollback"
-permits = """
-The pre-cc5b169 shape: `fully_reversed()` is true and the status is `Executed`,
-from an executor that holds no transport and touched no host."""
-observed_when_neutralized = """
-panicked at `the pre-cc5b169 shape reports a full reversal from code that holds
-no transport and touched no host: [RollbackStepOutcome { .. status: Simulated
-.. }]`."""
+broken_variant = "SandboxMutation::ClaimEnforcedReversed"
+permits = "A Reversed outcome from a transport-free executor."
+observed_when_neutralized = "Neutralizing ClaimEnforcedReversed changes Reversed/Executed to Simulated/Failed on the same Enforced probe."
 
-# ---------------------------------------------------------------------------
-# swarm-runtime
-# ---------------------------------------------------------------------------
+[[entry]]
+invariant = "RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION"
+production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_policy_error_fallback_executes_when_evaluation_failed"
+broken_variant = "RuntimeMutation::SkipPolicyError"
+permits = "Executor dispatch after policy evaluation errors."
+observed_when_neutralized = "Neutralizing SkipPolicyError leaves the executor call count at zero and returns InvalidRequest."
 
 [[entry]]
 invariant = "RUNTIME-DENY-BLOCKS-EXECUTION"
@@ -175,13 +221,9 @@ production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
 test_fn = "broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls"
-broken_variant = "SkipDenyVerdict"
-permits = """
-A policy-denied BlockEgress reaches `ResponseExecutor::execute`. The assertion
-is on the adapter's call count, not on a verdict enum."""
-observed_when_neutralized = """
-panicked at `the broken variant executes the denied action:
-Approval(Denied("denied by fixture"))`."""
+broken_variant = "RuntimeMutation::SkipDenyVerdict"
+permits = "Executor dispatch after Deny."
+observed_when_neutralized = "Neutralizing SkipDenyVerdict leaves the executor call count at zero and returns Denied."
 
 [[entry]]
 invariant = "RUNTIME-HUMAN-GATE-BLOCKS-LIVE"
@@ -189,27 +231,19 @@ production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
 test_fn = "broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds"
-broken_variant = "SkipHumanGateVerdict"
-permits = """
-An action held for human confirmation is executed in `ExecutionMode::Enforced`
-with no human involved."""
-observed_when_neutralized = """
-panicked at `the broken variant executes the held action:
-Approval(Denied("held by fixture"))`."""
+broken_variant = "RuntimeMutation::SkipHumanGateVerdict"
+permits = "Executor dispatch after RequireHuman in LiveResponse."
+observed_when_neutralized = "Neutralizing SkipHumanGateVerdict leaves the executor call count at zero and returns Denied."
 
 [[entry]]
-invariant = "RUNTIME-EXPIRED-LEASE-REFUSED"
-production_fn = "swarm_runtime::ensure_active_lease"
+invariant = "RUNTIME-GUARD-REJECTION-BLOCKS-EXECUTION"
+production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
-test_fn = "broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtime_refuses"
-broken_variant = "SkipLeaseExpiry"
-permits = """
-Execution under a capability lease that expired one millisecond before the
-request was evaluated."""
-observed_when_neutralized = """
-panicked at `the broken variant executes under a dead lease:
-Approval(Denied("capability lease expired"))`."""
+test_fn = "broken_guard_rejection_reaches_the_executor"
+broken_variant = "GuardMutation::SkipGuardRejection"
+permits = "Executor dispatch after a blocking guard result."
+observed_when_neutralized = "Neutralizing SkipGuardRejection leaves the executor call count at zero and returns GuardRejected."
 
 [[entry]]
 invariant = "RUNTIME-CONTAINMENT-NEEDS-STORE"
@@ -217,14 +251,49 @@ production_fn = "swarm_runtime::SwarmRuntime::prepare_containment"
 entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
 test_fn = "broken_containment_store_check_contains_a_host_the_real_runtime_refuses_to_touch"
-broken_variant = "SkipContainmentStore"
-permits = """
-A file is quarantined on a real host with no lease recorded anywhere, so
-nothing will ever sweep it -- the unbounded containment the lane exists to
-remove."""
-observed_when_neutralized = """
-panicked at `the broken variant quarantines the file: ContainmentRefused {
-action: "quarantine_file", reason: "no containment lease store is configured" }`."""
+broken_variant = "RuntimeMutation::SkipContainmentStore"
+permits = "Enforced containment without a lease store."
+observed_when_neutralized = "Neutralizing SkipContainmentStore leaves the executor call count at zero and returns ContainmentRefused."
+
+[[entry]]
+invariant = "RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION"
+production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_lease_issue_error_fallback_executes_without_a_real_lease"
+broken_variant = "RuntimeMutation::SkipLeaseIssueError"
+permits = "Executor dispatch after lease issuance errors."
+observed_when_neutralized = "Neutralizing SkipLeaseIssueError leaves the executor call count at zero and returns InvalidRequest."
+
+[[entry]]
+invariant = "RUNTIME-EXPIRED-LEASE-REFUSED"
+production_fn = "swarm_runtime::ensure_active_lease"
+entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtime_refuses"
+broken_variant = "RuntimeMutation::SkipLeaseExpiry"
+permits = "Execution with an expired capability lease."
+observed_when_neutralized = "Neutralizing SkipLeaseExpiry leaves the executor call count at zero and returns capability lease expired."
+
+[[entry]]
+invariant = "RUNTIME-ADAPTER-ERROR-NOT-SUCCESS"
+production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_adapter_error_conversion_returns_false_success"
+broken_variant = "RuntimeMutation::SkipAdapterError"
+permits = "A synthesized Executed receipt after adapter error."
+observed_when_neutralized = "Neutralizing SkipAdapterError returns ResponseError instead of Executed."
+
+[[entry]]
+invariant = "RUNTIME-FAILED-RECEIPT-NOT-SUCCESS"
+production_fn = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+entry_point = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+test_fn = "broken_failed_receipt_check_returns_a_failure_as_success"
+broken_variant = "RuntimeMutation::SkipFailedReceiptStatus"
+permits = "Ok(Failed receipt) after adapter dispatch."
+observed_when_neutralized = "Neutralizing SkipFailedReceiptStatus returns ResponseError instead of Ok(Failed)."
 
 [[entry]]
 invariant = "RUNTIME-RELEASE-SUBJECT-BOUND"
@@ -232,16 +301,9 @@ production_fn = "swarm_runtime::containment::verify_release_attestation"
 entry_point = "swarm_runtime::containment::verify_release_attestation"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
 test_fn = "broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuses"
-broken_variant = "broken_verify_release_attestation"
-permits = """
-A rollback receipt whose `steps[0].status` was rewritten Failed -> Reversed
-verifies against its GENUINE, unmodified ed25519 signature. This is mutation M2
-from ce1ddd1, kept as a permanent test: the signature check alone does not catch
-a body rewrite."""
-observed_when_neutralized = """
-panicked at `without the subject binding a body rewrite passes on a genuine,
-unmodified signature -- the signature check ALONE does not catch it: "subject
-mismatch"`."""
+broken_variant = "ReleaseAttestationMutation::SkipSubjectBinding"
+permits = "A genuine signature lifted onto a rewritten rollback body."
+observed_when_neutralized = "Neutralizing SkipSubjectBinding changes Ok(()) to subject mismatch on the same rewritten receipt."
 
 [[entry]]
 invariant = "RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE"
@@ -249,20 +311,19 @@ production_fn = "swarm_runtime::containment::release_lease"
 entry_point = "swarm_runtime::containment::release_lease"
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
 test_fn = "broken_failed_step_check_abandons_the_still_contained_host_the_real_release_retains"
-broken_variant = "broken_release_lease"
-permits = """
-The lease is closed over a host whose inverse never landed. The fake executor
-returns `Ok` with a `Failed` step -- the shape a real transport failure takes --
-rather than `Err`, which is the shape production never emits and which made the
-original test for this contract green over the region it was meant to guard."""
-observed_when_neutralized = """
-left: 1, right: 0 open leases -- "without the Failed-step guard one EDR blip at
-sweep time closes the lease permanently and the host stays contained with
-nothing tracking it"."""
+broken_variant = "ReleaseLeaseMutation::SkipFailedStepRetention"
+permits = "Closing the open lease after a Failed rollback step."
+observed_when_neutralized = "Neutralizing SkipFailedStepRetention makes the same failed-step probe report left: 1, right: 0 for the open-lease assertion."
 
-# ---------------------------------------------------------------------------
-# swarm-spine
-# ---------------------------------------------------------------------------
+[[entry]]
+invariant = "SPINE-ENVELOPE-HASH-FIELD-REQUIRED"
+production_fn = "swarm_spine::envelope::verify_envelope"
+entry_point = "swarm_spine::envelope::verify_envelope"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_hash_field_requirement_admits_an_envelope_with_no_claimed_identity"
+broken_variant = "EnvelopeMutation::SkipHashFieldRequired"
+permits = "An envelope with no claimed hash field."
+observed_when_neutralized = "Neutralizing SkipHashFieldRequired changes Ok(true) to missing envelope_hash."
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-HASH-BOUND"
@@ -270,14 +331,9 @@ production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
 test_fn = "broken_hash_binding_admits_the_forged_envelope_id_the_real_verifier_refuses"
-broken_variant = "SkipHashBinding"
-permits = """
-An envelope whose `envelope_hash` was rewritten to an attacker-chosen value,
-with body and signature untouched, is admitted -- so the identity the next
-chain link has to match is chosen by the attacker."""
-observed_when_neutralized = """
-panicked at `without the hash comparison the signature alone verifies ...:
-Err("hash mismatch: expected 0xabab..., computed 0x8870000df17f...")`."""
+broken_variant = "EnvelopeMutation::SkipHashBinding"
+permits = "A forged envelope identity with an untouched body and signature."
+observed_when_neutralized = "Neutralizing SkipHashBinding changes Ok(true) to hash mismatch."
 
 [[entry]]
 invariant = "SPINE-ENVELOPE-SIGNATURE-REQUIRED"
@@ -285,45 +341,39 @@ production_fn = "swarm_spine::envelope::verify_envelope"
 entry_point = "swarm_spine::envelope::verify_envelope"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
 test_fn = "broken_signature_check_admits_the_reattributed_envelope_the_real_verifier_refuses"
-broken_variant = "SkipSignatureCheck"
-permits = """
-An envelope re-attributed to a second issuer, with its hash recomputed so the
-hash binding is satisfied, is accepted as that issuer's -- and their key never
-touched it. Recomputing sha256 needs no key, so this is inside any tamperer's
-reach."""
-observed_when_neutralized = """
-panicked at `without the signature check an envelope is attributed to whichever
-issuer the bytes claim, and the victim's key never touched it: Ok(false)`."""
+broken_variant = "EnvelopeMutation::SkipSignatureCheck"
+permits = "Reattribution to an issuer whose key never signed the body."
+observed_when_neutralized = "Neutralizing SkipSignatureCheck changes Ok(true) to Ok(false)."
 
 [[entry]]
-invariant = "SPINE-CHAIN-PREV-HASH-BOUND"
+invariant = "SPINE-CHAIN-PREV-FIELD-REQUIRED"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
-test_fn = "broken_prev_hash_binding_admits_the_forked_link_the_real_verifier_rejects"
-broken_variant = "SkipPrevHashBinding"
-permits = """
-A correctly signed seq=2 envelope from the right issuer that continues a
-different history is accepted as a valid continuation of ours."""
-observed_when_neutralized = """
-left: HashMismatch { expected_prev_hash: "0x8870000d...", actual_prev_hash:
-"0xcdcd..." }, right: ValidContinuation."""
+test_fn = "broken_previous_hash_field_requirement_admits_an_ambiguous_first_link"
+broken_variant = "ChainMutation::SkipPreviousHashFieldRequired"
+permits = "A first link that omits prev_envelope_hash."
+observed_when_neutralized = "Neutralizing SkipPreviousHashFieldRequired changes NewChain to missing prev_envelope_hash."
 
 [[entry]]
-invariant = "SPINE-CHAIN-SEQ-MONOTONIC"
+invariant = "SPINE-CHAIN-FIRST-SEQ"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
-test_fn = "broken_sequence_binding_admits_the_replayed_envelope_the_real_verifier_rejects"
-broken_variant = "SkipSequenceBinding"
-permits = """
-A byte-identical replay of an already-accepted envelope is no longer caught at
-the sequence check. The test then asserts what is LEFT catches it, which is why
-the prev-hash guard is a separate row: each is the only thing standing between
-a replay and the chain."""
-observed_when_neutralized = """
-panicked at `deleting the sequence guard must stop the replay being caught
-there, got SequenceMismatch { expected_seq: 3, actual_seq: 2 }`."""
+test_fn = "broken_first_sequence_guard_admits_the_truncated_history_the_real_verifier_rejects"
+broken_variant = "ChainMutation::SkipFirstSequence"
+permits = "A new issuer starting at sequence 99."
+observed_when_neutralized = "Neutralizing SkipFirstSequence changes NewChain to InvalidChainHead."
+
+[[entry]]
+invariant = "SPINE-CHAIN-FIRST-PREV-NULL"
+production_fn = "swarm_spine::chain::verify_chain_link"
+entry_point = "swarm_spine::chain::verify_chain_link"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_first_previous_hash_guard_admits_a_new_chain_linked_to_hidden_history"
+broken_variant = "ChainMutation::SkipFirstPreviousHash"
+permits = "A first link pointing to unseen predecessor history."
+observed_when_neutralized = "Neutralizing SkipFirstPreviousHash changes NewChain to InvalidChainHead."
 
 [[entry]]
 invariant = "SPINE-CHAIN-ISSUER-BOUND"
@@ -331,25 +381,36 @@ production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
 test_fn = "broken_issuer_binding_admits_the_cross_issuer_splice_the_real_verifier_rejects"
-broken_variant = "SkipIssuerBinding"
-permits = """
-Any keyholder extends any issuer's chain, because every other check is
-satisfiable from public data: seq and prev-hash are both readable off the head."""
-observed_when_neutralized = """
-left: InvalidChainHead { reason: "issuer mismatch: envelope issuer
-swarm:ed25519:fd1724... does not match head issuer swarm:ed25519:ea4a6c..." },
-right: ValidContinuation."""
+broken_variant = "ChainMutation::SkipIssuerBinding"
+permits = "Another issuer extending the held chain head."
+observed_when_neutralized = "Neutralizing SkipIssuerBinding changes ValidContinuation to InvalidChainHead."
 
 [[entry]]
-invariant = "SPINE-CHAIN-FIRST-LINK-SHAPE"
+invariant = "SPINE-CHAIN-HEAD-NOT-OVERFLOWED"
 production_fn = "swarm_spine::chain::verify_chain_link"
 entry_point = "swarm_spine::chain::verify_chain_link"
 test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
-test_fn = "broken_first_envelope_shape_admits_the_truncated_history_the_real_verifier_rejects"
-broken_variant = "SkipFirstEnvelopeShape"
-permits = """
-An issuer met for the first time joins at seq=99, conceding 98 records that
-were never seen and can never be audited."""
-observed_when_neutralized = """
-left: InvalidChainHead { reason: "first envelope must have seq=1, got seq=99" },
-right: NewChain."""
+test_fn = "broken_head_overflow_guard_wraps_the_chain_back_to_zero"
+broken_variant = "ChainMutation::WrapHeadSequence"
+permits = "A u64::MAX head wrapping to sequence zero."
+observed_when_neutralized = "Neutralizing WrapHeadSequence changes ValidContinuation to InvalidChainHead."
+
+[[entry]]
+invariant = "SPINE-CHAIN-SEQ-MONOTONIC"
+production_fn = "swarm_spine::chain::verify_chain_link"
+entry_point = "swarm_spine::chain::verify_chain_link"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_sequence_binding_admits_the_replayed_envelope_the_real_verifier_rejects"
+broken_variant = "ChainMutation::SkipSequenceBinding"
+permits = "A wrong sequence with the correct issuer and previous hash."
+observed_when_neutralized = "Neutralizing SkipSequenceBinding makes the same wrong-sequence probe report left: SequenceMismatch { expected_seq: 3, actual_seq: 2 }, right: ValidContinuation."
+
+[[entry]]
+invariant = "SPINE-CHAIN-PREV-HASH-BOUND"
+production_fn = "swarm_spine::chain::verify_chain_link"
+entry_point = "swarm_spine::chain::verify_chain_link"
+test_file = "crates/swarm-spine/tests/negative_envelope_and_chain.rs"
+test_fn = "broken_prev_hash_binding_admits_the_forked_link_the_real_verifier_rejects"
+broken_variant = "ChainMutation::SkipPrevHashBinding"
+permits = "A signed continuation of a different history."
+observed_when_neutralized = "Neutralizing SkipPrevHashBinding changes ValidContinuation to HashMismatch."

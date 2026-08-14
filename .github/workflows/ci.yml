@@ -186,9 +186,11 @@ jobs:
       # toolchain, no build artifacts, no network. Measured 0.9s wall clock in a
       # warm worktree with both self-tests included.
       #
-      # BOTH SCRIPTS RUN A FIXTURE BEFORE THEY TOUCH THE REAL TREE, and refuse
-      # to scan it if the fixture misbehaves -- 16 cases for the mapping gate,
-      # 15 for the registry gate. A gate that has never been observed failing is
+      # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
+      # and refuse to scan it if a fixture misbehaves. These workflow steps are
+      # present here; protected-required-check status is repository setting
+      # state and is tracked separately in Phase 285 acceptance. A gate that has
+      # never been observed failing is
       # not evidence; each was also falsified against the REAL tree before
       # landing (an unmapped marker, a renamed function path, a deleted registry
       # entry), and those three observations are in the phase-285 commit body.

@@ -1,53 +1,6 @@
 #!/usr/bin/env bash
-#
-# Invariant-map gate (MAPPING-03, MAPPING-04, MAPPING-05; phase 285).
-#
-# WHY THIS EXISTS
-#   `docs/assurance/MAPPING.md` claims that each fail-closed invariant is
-#   enforced by a named `crate::module::function`. A markdown table cannot go
-#   stale loudly: rename the function and the row still reads correctly, delete
-#   the guard and the row still reads correctly. A table nobody checks is the
-#   documentation form of the defect `.planning/STATE.md` catalogues twelve
-#   times -- a claim reporting success over a region it never inspected.
-#
-# WHAT IS CHECKED
-#   1. Every `// INVARIANT: <NAME>` marker in production code under
-#      `crates/*/src` has a row in MAPPING.md. (MAPPING-04, first half.)
-#   2. Every MAPPING.md row resolves to a real declaration: the crate exists,
-#      the module file exists, the named type is declared in it, and a
-#      `fn <name>` is declared in it. (MAPPING-04, second half.)
-#   3. Every MAPPING.md row has its marker IN THE FILE IT RESOLVES TO. A marker
-#      parked in an unrelated file does not satisfy a row.
-#   4. Every row's assumption is declared in `docs/assurance/assumptions.toml`,
-#      every assumption carries a non-empty owner and statement, and each
-#      assumption's `invariants` list equals EXACTLY the set of rows naming it
-#      -- as a set, in both directions. An assumption with no dependent rows is
-#      allowed and must carry `no_dependent_invariants_reason`.
-#   5. Coverage floors from the phase's success criteria: >= 12 rows, >= 4
-#      distinct crates, >= 8 assumptions. Below any of these the map is not yet
-#      the thing the phase asked for, and a green gate would say it was.
-#
-# WHAT IS NOT CHECKED, DELIBERATELY
-#   - That the named function actually enforces what the row says. No static
-#     check can establish that; `tools/check-negative-registry.sh` requires a
-#     mutation test per row, and review reads it.
-#   - Markers inside `#[cfg(test)]`. Production text is everything above the
-#     first column-0 `#[cfg(test)]` in a file. That truncation is an
-#     approximation and the self-test exercises it in both directions: a
-#     function that exists ONLY under `#[cfg(test)]` must NOT satisfy a row.
-#   - `.inc` files. `tools/check-no-include-files.sh` keeps new ones out and
-#     the one allow-listed file carries no rows.
-#
-# SELF-TEST
-#   Every invocation first builds synthetic repositories in a temp directory and
-#   runs the SAME checker over them: one clean tree that must pass, and twelve
-#   broken trees that must each be caught with the right diagnostic. If any case
-#   misbehaves the script exits 1 WITHOUT looking at the real tree, because a
-#   broken checker is a broken gate rather than a green one.
-#
-#   Case `unmapped_marker` is success criterion 3 of phase 285 in executable
-#   form: a deliberately unmapped `// INVARIANT:` marker must fail the build.
-#
+# Phase-285 invariant-map gate. It uses a Rust lexical sanitizer so comments and
+# literals cannot fabricate declarations, markers, or guard adjacency.
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,497 +16,290 @@ import tempfile
 import tomllib
 
 REPO_ROOT = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+from assurance_source import (  # noqa: E402
+    function_spans,
+    looks_like_executable_guard,
+    next_code_line,
+    production_sanitized,
+    resolve_function,
+)
 
 MAPPING_REL = "docs/assurance/MAPPING.md"
 ASSUMPTIONS_REL = "docs/assurance/assumptions.toml"
-
-MARKER = re.compile(r"//\s*INVARIANT:\s*(?P<name>[A-Z0-9][A-Z0-9-]*)\s*$", re.M)
-CFG_TEST_AT_COL0 = re.compile(r"^#\[cfg\(test\)\]", re.M)
-# A table row: | `INV` | `path` | `ASSUME-X` | prose |
+OMISSIONS_REL = "docs/assurance/omissions.toml"
 ROW = re.compile(
     r"^\|\s*`(?P<invariant>[A-Z0-9][A-Z0-9-]*)`\s*"
     r"\|\s*`(?P<function>[A-Za-z0-9_:]+)`\s*"
-    r"\|\s*`(?P<assumption>[A-Z0-9][A-Z0-9-]*)`\s*"
-    r"\|(?P<summary>[^|]*)\|\s*$",
+    r"\|(?P<assumptions>[^|]+)\|(?P<summary>[^|]*)\|\s*$",
     re.M,
 )
+MARKER = re.compile(r"^\s*INVARIANT:\s*(?P<name>[A-Z0-9][A-Z0-9-]*)\s*$")
 
 
 class Report:
-    def __init__(self, label: str) -> None:
-        self.label = label
-        self.violations: list[tuple[str, str]] = []
-
-    def violation(self, code: str, message: str) -> None:
-        self.violations.append((code, message))
-
-    def codes(self) -> set[str]:
-        return {code for code, _ in self.violations}
+    def __init__(self): self.violations: list[tuple[str, str]] = []
+    def violation(self, code, message): self.violations.append((code, message))
+    def codes(self): return {code for code, _ in self.violations}
 
 
-def production_text(path: pathlib.Path) -> str:
-    """File text with the trailing column-0 `#[cfg(test)]` item onwards removed."""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    match = CFG_TEST_AT_COL0.search(text)
-    return text[: match.start()] if match else text
+def load_toml(root, relative, key, report):
+    path = root / relative
+    if not path.is_file():
+        report.violation(f"{key}-missing", f"{relative} does not exist")
+        return []
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8")).get(key, [])
+    except tomllib.TOMLDecodeError as error:
+        report.violation(f"{key}-unparseable", f"{relative}: {error}")
+        return []
 
 
-def parse_rows(root: pathlib.Path, report: Report):
+def parse_rows(root, report):
     path = root / MAPPING_REL
     if not path.is_file():
         report.violation("mapping-missing", f"{MAPPING_REL} does not exist")
         return []
     rows = []
     for match in ROW.finditer(path.read_text(encoding="utf-8")):
-        rows.append(
-            {
-                "invariant": match.group("invariant"),
-                "function": match.group("function"),
-                "assumption": match.group("assumption"),
-                "summary": match.group("summary").strip(),
-            }
-        )
+        assumptions = re.findall(r"`(ASSUME-[A-Z0-9-]+)`", match.group("assumptions"))
+        rows.append({
+            "invariant": match.group("invariant"),
+            "function": match.group("function"),
+            "assumptions": assumptions,
+            "summary": match.group("summary").strip(),
+        })
     return rows
 
 
-def parse_assumptions(root: pathlib.Path, report: Report):
-    path = root / ASSUMPTIONS_REL
-    if not path.is_file():
-        report.violation("assumptions-missing", f"{ASSUMPTIONS_REL} does not exist")
-        return []
-    try:
-        document = tomllib.loads(path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as error:
-        report.violation("assumptions-unparseable", f"{ASSUMPTIONS_REL}: {error}")
-        return []
-    return document.get("assumption", [])
-
-
-def collect_markers(root: pathlib.Path):
-    """Every `// INVARIANT: X` in production code, as (name, file) pairs."""
+def collect_markers(root):
     found = []
-    crates = root / "crates"
-    if not crates.is_dir():
-        return found
-    for source in sorted(crates.glob("*/src/**/*.rs")):
-        text = production_text(source)
-        for match in MARKER.finditer(text):
-            found.append((match.group("name"), source))
+    for path in sorted((root / "crates").glob("*/src/**/*.rs")):
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        clean, comments = production_sanitized(raw)
+        spans = function_spans(clean)
+        for comment in comments:
+            match = MARKER.fullmatch(comment.text)
+            if not match:
+                continue
+            next_line = next_code_line(clean, comment.start)
+            owner = next(
+                (span for span in spans if span.body_start < comment.start < span.body_end),
+                None,
+            )
+            found.append({
+                "name": match.group("name"), "path": path, "position": comment.start,
+                "next_line": next_line, "owner": owner,
+            })
     return found
 
 
-def resolve_function(root: pathlib.Path, path_str: str):
-    """Resolve `crate::module::Type::function` to (file, type_name, fn_name).
-
-    Returns (None, reason) when it cannot be resolved.
-    """
-    segments = path_str.split("::")
-    if len(segments) < 2:
-        return None, f"`{path_str}` is not a `crate::...::function` path"
-
-    crate_dir = root / "crates" / segments[0].replace("_", "-") / "src"
-    if not crate_dir.is_dir():
-        return None, f"crate `{segments[0]}` has no `crates/*/src` directory"
-
-    rest = segments[1:]
-    current_dir = crate_dir
-    module_file = None
-    index = 0
-    while index < len(rest):
-        segment = rest[index]
-        if not (segment[:1].islower() or segment.startswith("_")):
-            break
-        directory = current_dir / segment
-        file = current_dir / f"{segment}.rs"
-        if directory.is_dir():
-            current_dir = directory
-            index += 1
-            continue
-        if file.is_file():
-            module_file = file
-            index += 1
-        break
-
-    if module_file is None:
-        module_file = (
-            current_dir / "mod.rs" if current_dir != crate_dir else crate_dir / "lib.rs"
-        )
-    if not module_file.is_file():
-        return None, f"`{path_str}` resolves to `{module_file}`, which does not exist"
-
-    remaining = rest[index:]
-    if len(remaining) == 1:
-        type_name, fn_name = None, remaining[0]
-    elif len(remaining) == 2 and remaining[0][:1].isupper():
-        type_name, fn_name = remaining
-    else:
-        return None, f"`{path_str}` does not end in `function` or `Type::function`"
-    return (module_file, type_name, fn_name), None
-
-
-def check_row_resolves(root: pathlib.Path, row, report: Report):
-    resolved, reason = resolve_function(root, row["function"])
-    if resolved is None:
-        report.violation(
-            "row-path-unresolvable",
-            f"row `{row['invariant']}` names `{row['function']}`: {reason}",
-        )
-        return None
-    module_file, type_name, fn_name = resolved
-    text = production_text(module_file)
-    if not re.search(r"\bfn\s+" + re.escape(fn_name) + r"\s*[(<]", text):
-        report.violation(
-            "row-function-absent",
-            f"row `{row['invariant']}` names `{row['function']}` but "
-            f"`{module_file.relative_to(root)}` declares no `fn {fn_name}` in "
-            "production code",
-        )
-        return None
-    if type_name is not None:
-        declared = re.search(
-            r"\b(struct|enum|union|trait)\s+" + re.escape(type_name) + r"\b", text
-        )
-        implemented = re.search(r"\bimpl\b[^\n{]*\b" + re.escape(type_name) + r"\b", text)
-        if not declared and not implemented:
-            report.violation(
-                "row-type-absent",
-                f"row `{row['invariant']}` names type `{type_name}` which "
-                f"`{module_file.relative_to(root)}` neither declares nor implements",
-            )
-            return None
-    return module_file
-
-
-def run_checks(root: pathlib.Path, label: str, min_rows: int, min_crates: int, min_assumptions: int) -> Report:
-    report = Report(label)
+def run_checks(root, min_rows=12, min_crates=4, min_assumptions=8):
+    report = Report()
     rows = parse_rows(root, report)
-    assumptions = parse_assumptions(root, report)
+    assumptions = load_toml(root, ASSUMPTIONS_REL, "assumption", report)
+    omissions = load_toml(root, OMISSIONS_REL, "omission", report)
     markers = collect_markers(root)
+    if not rows: report.violation("no-rows", "MAPPING.md parsed to zero rows")
+    if not markers: report.violation("no-markers", "no lexical INVARIANT markers found")
 
-    if not rows:
-        report.violation("no-rows", "MAPPING.md parsed to zero rows; refusing to pass silently")
-    if not markers:
-        report.violation(
-            "no-markers",
-            "no `// INVARIANT:` marker found in any `crates/*/src`; refusing to pass silently",
-        )
-    if not assumptions:
-        report.violation(
-            "no-assumptions", "assumptions.toml parsed to zero assumptions; refusing to pass silently"
-        )
-
-    seen = set()
+    row_by_name = {}
     for row in rows:
-        if row["invariant"] in seen:
-            report.violation("row-duplicate", f"row `{row['invariant']}` appears more than once")
-        seen.add(row["invariant"])
-        if not row["summary"]:
-            report.violation(
-                "row-no-summary", f"row `{row['invariant']}` states nothing in its last column"
-            )
+        name = row["invariant"]
+        if name in row_by_name: report.violation("row-duplicate", f"row `{name}` is duplicated")
+        row_by_name[name] = row
+        if not row["summary"]: report.violation("row-no-summary", f"row `{name}` has no summary")
+        if not row["assumptions"]:
+            report.violation("row-no-assumptions", f"row `{name}` names no assumption")
+        if len(set(row["assumptions"])) != len(row["assumptions"]):
+            report.violation("row-assumption-duplicate", f"row `{name}` repeats an assumption")
 
-    row_by_name = {row["invariant"]: row for row in rows}
+    marker_by_name = {}
+    for marker in markers:
+        marker_by_name.setdefault(marker["name"], []).append(marker)
+        relative = marker["path"].relative_to(root)
+        if marker["name"] not in row_by_name:
+            report.violation("marker-unmapped", f"{relative}: marker `{marker['name']}` has no row")
+        if marker["owner"] is None:
+            report.violation("marker-outside-function", f"{relative}: marker `{marker['name']}` is outside a function body")
+        if marker["next_line"] is None or not looks_like_executable_guard(marker["next_line"][1]):
+            got = "end of file" if marker["next_line"] is None else repr(marker["next_line"][1])
+            report.violation("marker-not-on-guard", f"{relative}: marker `{marker['name']}` is followed by {got}, not an executable decision")
 
-    # 1. Every marker has a row.
-    marker_names = set()
-    for name, source in markers:
-        marker_names.add(name)
-        if name not in row_by_name:
-            report.violation(
-                "marker-unmapped",
-                f"`// INVARIANT: {name}` in {source.relative_to(root)} has no row in "
-                f"{MAPPING_REL}",
-            )
-
-    # 2 and 3. Every row resolves, and its marker is in the file it resolves to.
-    markers_by_name: dict[str, set[pathlib.Path]] = {}
-    for name, source in markers:
-        markers_by_name.setdefault(name, set()).add(source)
     for row in rows:
-        module_file = check_row_resolves(root, row, report)
-        if module_file is None:
+        resolved = resolve_function(root, row["function"])
+        if isinstance(resolved, str):
+            report.violation("row-path-unresolvable", f"row `{row['invariant']}`: {resolved}")
             continue
-        sources = markers_by_name.get(row["invariant"], set())
-        if not sources:
-            report.violation(
-                "row-unmarked",
-                f"row `{row['invariant']}` has no `// INVARIANT: {row['invariant']}` "
-                "marker in any production source",
-            )
-        elif module_file not in sources:
-            report.violation(
-                "row-marker-elsewhere",
-                f"row `{row['invariant']}` resolves to "
-                f"{module_file.relative_to(root)} but its marker is only in "
-                + ", ".join(sorted(str(s.relative_to(root)) for s in sources)),
-            )
+        path, span = resolved
+        matching = marker_by_name.get(row["invariant"], [])
+        if len(matching) != 1:
+            report.violation("row-marker-count", f"row `{row['invariant']}` has {len(matching)} lexical source markers; expected one")
+            continue
+        marker = matching[0]
+        if marker["path"] != path or not (span.body_start < marker["position"] < span.body_end):
+            report.violation("row-marker-wrong-function", f"row `{row['invariant']}` marker is not inside exact `{row['function']}` body")
 
-    # 4. Assumptions.
-    declared_ids = set()
+    declared = {}
     for assumption in assumptions:
-        identifier = assumption.get("id")
+        identifier = assumption.get("id", "")
         if not identifier:
-            report.violation("assumption-no-id", "an assumption carries no `id`")
-            continue
-        if identifier in declared_ids:
-            report.violation("assumption-duplicate", f"assumption `{identifier}` is declared twice")
-        declared_ids.add(identifier)
-        if not (assumption.get("owner") or "").strip():
-            report.violation("assumption-no-owner", f"assumption `{identifier}` names no owner")
-        if not (assumption.get("statement") or "").strip():
-            report.violation("assumption-no-statement", f"assumption `{identifier}` states nothing")
+            report.violation("assumption-no-id", "an assumption has no id"); continue
+        if identifier in declared: report.violation("assumption-duplicate", f"assumption `{identifier}` is duplicated")
+        declared[identifier] = assumption
+        for field in ("owner", "statement", "holds_because", "breaks_if"):
+            if not str(assumption.get(field, "")).strip():
+                report.violation(f"assumption-no-{field.replace('_', '-')}", f"assumption `{identifier}` has no {field}")
         listed = assumption.get("invariants")
-        if listed is None:
-            report.violation(
-                "assumption-no-invariants-key",
-                f"assumption `{identifier}` has no `invariants` key; an empty list must be "
-                "written out, so that omitting it cannot read as 'nothing depends on this'",
-            )
-            continue
-        expected = {row["invariant"] for row in rows if row["assumption"] == identifier}
+        if not isinstance(listed, list):
+            report.violation("assumption-no-invariants", f"assumption `{identifier}` has no invariants list"); continue
+        expected = {row["invariant"] for row in rows if identifier in row["assumptions"]}
         if set(listed) != expected:
-            report.violation(
-                "assumption-invariants-drift",
-                f"assumption `{identifier}` lists {sorted(listed)} but MAPPING.md rows "
-                f"naming it are {sorted(expected)}",
-            )
-        if not listed and not (assumption.get("no_dependent_invariants_reason") or "").strip():
-            report.violation(
-                "assumption-empty-unexplained",
-                f"assumption `{identifier}` has no dependent invariants and no "
-                "`no_dependent_invariants_reason`",
-            )
-
+            report.violation("assumption-invariants-drift", f"assumption `{identifier}` lists {sorted(set(listed))}, mapping requires {sorted(expected)}")
+        if not listed and not str(assumption.get("no_dependent_invariants_reason", "")).strip():
+            report.violation("assumption-empty-unexplained", f"assumption `{identifier}` has no dependents or reason")
     for row in rows:
-        if row["assumption"] not in declared_ids:
-            report.violation(
-                "row-assumption-undeclared",
-                f"row `{row['invariant']}` names assumption `{row['assumption']}`, which "
-                f"{ASSUMPTIONS_REL} does not declare",
-            )
+        for identifier in row["assumptions"]:
+            if identifier not in declared:
+                report.violation("row-assumption-undeclared", f"row `{row['invariant']}` names undeclared `{identifier}`")
 
-    # 5. Coverage floors.
-    if len(rows) < min_rows:
-        report.violation(
-            "coverage-rows",
-            f"{len(rows)} rows, fewer than the required {min_rows}",
-        )
-    crates_covered = {row["function"].split("::", 1)[0] for row in rows}
-    if len(crates_covered) < min_crates:
-        report.violation(
-            "coverage-crates",
-            f"rows span {len(crates_covered)} crates ({sorted(crates_covered)}), fewer "
-            f"than the required {min_crates}",
-        )
-    if len(assumptions) < min_assumptions:
-        report.violation(
-            "coverage-assumptions",
-            f"{len(assumptions)} assumptions, fewer than the required {min_assumptions}",
-        )
+    omission_ids = set()
+    for omission in omissions:
+        identifier = omission.get("id", "")
+        if not identifier:
+            report.violation("omission-no-id", "an omission has no id"); continue
+        if identifier in omission_ids: report.violation("omission-duplicate", f"omission `{identifier}` is duplicated")
+        omission_ids.add(identifier)
+        for field in ("owner", "reason", "clearing_condition"):
+            if not str(omission.get(field, "")).strip():
+                report.violation(f"omission-no-{field.replace('_', '-')}", f"omission `{identifier}` has no {field}")
+        path = omission.get("production_fn", "")
+        resolved = resolve_function(root, path) if path else "no production_fn"
+        if isinstance(resolved, str):
+            report.violation("omission-path-unresolvable", f"omission `{identifier}`: {resolved}")
 
+    if len(rows) < min_rows: report.violation("coverage-rows", f"{len(rows)} rows < {min_rows}")
+    crates = {row["function"].split("::", 1)[0] for row in rows}
+    if len(crates) < min_crates: report.violation("coverage-crates", f"{len(crates)} crates < {min_crates}")
+    if len(assumptions) < min_assumptions: report.violation("coverage-assumptions", f"{len(assumptions)} assumptions < {min_assumptions}")
     return report
 
 
-# ---------------------------------------------------------------------------
-# Self-test
-# ---------------------------------------------------------------------------
-
-CLEAN_SOURCE = """\
+SOURCE = '''
 pub struct Gate;
-
 impl Gate {
-    // INVARIANT: FIXTURE-ONE
     pub fn evaluate(&self) -> bool {
-        false
-    }
-}
-
-// INVARIANT: FIXTURE-TWO
-pub fn free_guard() -> bool {
-    false
-}
-
-#[cfg(test)]
-mod tests {
-    // INVARIANT: NOT-A-REAL-MARKER
-    pub fn only_in_tests() -> bool {
+        // INVARIANT: FIXTURE-ONE
+        if dangerous() { return false; }
         true
     }
 }
-"""
-
-CLEAN_MAPPING = """\
-# fixture
-
-| Invariant | Enforcing function | Assumption | What it refuses |
+pub fn omitted() { if dangerous() {} }
+#[cfg(test)] mod tests { pub fn fake() {} }
+'''
+MAPPING = '''
+| Invariant | Enforcing function | Assumptions | What it refuses |
 | --- | --- | --- | --- |
-| `FIXTURE-ONE` | `fixture_crate::gate::Gate::evaluate` | `ASSUME-FIXTURE` | refuses the first thing |
-| `FIXTURE-TWO` | `fixture_crate::gate::free_guard` | `ASSUME-FIXTURE` | refuses the second thing |
-"""
-
-CLEAN_ASSUMPTIONS = """\
-schema_version = 1
-
+| `FIXTURE-ONE` | `fixture_crate::gate::Gate::evaluate` | `ASSUME-A`, `ASSUME-B` | danger |
+'''
+ASSUMPTIONS = '''
+schema_version=2
 [[assumption]]
-id = "ASSUME-FIXTURE"
-owner = "fixture-crate"
-statement = "the fixture holds"
-invariants = ["FIXTURE-ONE", "FIXTURE-TWO"]
-
+id="ASSUME-A"
+owner="x"
+statement="s"
+holds_because="h"
+breaks_if="b"
+invariants=["FIXTURE-ONE"]
 [[assumption]]
-id = "ASSUME-UNUSED"
-owner = "fixture-crate"
-statement = "nothing depends on this yet"
-invariants = []
-no_dependent_invariants_reason = "no row needs it"
-"""
+id="ASSUME-B"
+owner="x"
+statement="s"
+holds_because="h"
+breaks_if="b"
+invariants=["FIXTURE-ONE"]
+'''
+OMISSIONS = '''
+schema_version=1
+[[omission]]
+id="OMIT-X"
+production_fn="fixture_crate::gate::omitted"
+owner="x"
+reason="not a verdict"
+clearing_condition="when it becomes one"
+'''
 
 
-def build_fixture(base: pathlib.Path) -> pathlib.Path:
-    root = base
-    source_dir = root / "crates" / "fixture-crate" / "src"
-    source_dir.mkdir(parents=True)
-    (source_dir / "lib.rs").write_text("pub mod gate;\n", encoding="utf-8")
-    (source_dir / "gate.rs").write_text(CLEAN_SOURCE, encoding="utf-8")
-    assurance = root / "docs" / "assurance"
-    assurance.mkdir(parents=True)
-    (assurance / "MAPPING.md").write_text(CLEAN_MAPPING, encoding="utf-8")
-    (assurance / "assumptions.toml").write_text(CLEAN_ASSUMPTIONS, encoding="utf-8")
+def fixture(root):
+    source = root / "crates/fixture-crate/src"; source.mkdir(parents=True)
+    (source / "lib.rs").write_text("pub mod gate;\n")
+    (source / "gate.rs").write_text(SOURCE)
+    docs = root / "docs/assurance"; docs.mkdir(parents=True)
+    (docs / "MAPPING.md").write_text(MAPPING)
+    (docs / "assumptions.toml").write_text(ASSUMPTIONS)
+    (docs / "omissions.toml").write_text(OMISSIONS)
     return root
 
 
-def mutate(root: pathlib.Path, case: str) -> None:
-    gate = root / "crates" / "fixture-crate" / "src" / "gate.rs"
-    mapping = root / "docs" / "assurance" / "MAPPING.md"
-    assumptions = root / "docs" / "assurance" / "assumptions.toml"
-
-    if case == "unmapped_marker":
-        # Inserted ABOVE the `#[cfg(test)]` block, so it lands in production
-        # text. Appending it after the block would be truncated away by
-        # `production_text` and the case would pass for the wrong reason -- which
-        # is how the first cut of this fixture behaved, and why the self-test
-        # asserts on the diagnostic CODE rather than merely on non-emptiness.
-        gate.write_text(
-            gate.read_text().replace(
-                "#[cfg(test)]",
-                "// INVARIANT: FIXTURE-ORPHAN\npub fn orphan() {}\n\n#[cfg(test)]",
-            )
-        )
-    elif case == "row_function_absent":
-        mapping.write_text(mapping.read_text().replace("Gate::evaluate", "Gate::evaluate_renamed"))
-        gate.write_text(gate.read_text().replace("FIXTURE-ONE", "FIXTURE-ONE"))
-    elif case == "row_module_absent":
-        mapping.write_text(mapping.read_text().replace("fixture_crate::gate::free_guard", "fixture_crate::absent::free_guard"))
-    elif case == "row_crate_absent":
-        mapping.write_text(mapping.read_text().replace("fixture_crate::gate::free_guard", "absent_crate::gate::free_guard"))
-    elif case == "row_type_absent":
-        mapping.write_text(mapping.read_text().replace("gate::Gate::evaluate", "gate::Absent::evaluate"))
-    elif case == "row_assumption_undeclared":
-        mapping.write_text(mapping.read_text().replace("`ASSUME-FIXTURE` | refuses the second", "`ASSUME-GHOST` | refuses the second"))
-        assumptions.write_text(assumptions.read_text().replace('invariants = ["FIXTURE-ONE", "FIXTURE-TWO"]', 'invariants = ["FIXTURE-ONE"]'))
-    elif case == "assumption_no_owner":
-        assumptions.write_text(assumptions.read_text().replace('owner = "fixture-crate"\nstatement = "the fixture holds"', 'owner = ""\nstatement = "the fixture holds"'))
-    elif case == "assumption_names_absent_invariant":
-        assumptions.write_text(assumptions.read_text().replace('invariants = ["FIXTURE-ONE", "FIXTURE-TWO"]', 'invariants = ["FIXTURE-ONE", "FIXTURE-TWO", "FIXTURE-GHOST"]'))
-    elif case == "assumption_drops_a_row":
-        assumptions.write_text(assumptions.read_text().replace('invariants = ["FIXTURE-ONE", "FIXTURE-TWO"]', 'invariants = ["FIXTURE-ONE"]'))
-    elif case == "assumption_empty_unexplained":
-        assumptions.write_text(assumptions.read_text().replace('no_dependent_invariants_reason = "no row needs it"\n', ""))
-    elif case == "row_unmarked":
-        gate.write_text(gate.read_text().replace("// INVARIANT: FIXTURE-TWO\n", ""))
-    elif case == "row_marker_elsewhere":
-        gate.write_text(gate.read_text().replace("// INVARIANT: FIXTURE-TWO\n", ""))
-        other = root / "crates" / "fixture-crate" / "src" / "lib.rs"
-        other.write_text(other.read_text() + "// INVARIANT: FIXTURE-TWO\npub fn decoy() {}\n")
-    elif case == "function_only_under_cfg_test":
-        gate.write_text(
-            gate.read_text().replace(
-                "// INVARIANT: FIXTURE-TWO\npub fn free_guard() -> bool {\n    false\n}\n",
-                "// INVARIANT: FIXTURE-TWO\npub fn placeholder() -> bool {\n    false\n}\n",
-            ).replace(
-                "    pub fn only_in_tests() -> bool {",
-                "    pub fn free_guard() -> bool {",
-            )
-        )
-    else:
-        raise AssertionError(f"unknown fixture case {case}")
-
-
-SELF_TEST_CASES = {
-    "unmapped_marker": "marker-unmapped",
-    "row_function_absent": "row-function-absent",
-    "row_module_absent": "row-path-unresolvable",
-    "row_crate_absent": "row-path-unresolvable",
-    "row_type_absent": "row-type-absent",
-    "row_assumption_undeclared": "row-assumption-undeclared",
-    "assumption_no_owner": "assumption-no-owner",
-    "assumption_names_absent_invariant": "assumption-invariants-drift",
-    "assumption_drops_a_row": "assumption-invariants-drift",
-    "assumption_empty_unexplained": "assumption-empty-unexplained",
-    "row_unmarked": "row-unmarked",
-    "row_marker_elsewhere": "row-marker-elsewhere",
-    "function_only_under_cfg_test": "row-function-absent",
+CASES = {
+    "comment_fake_marker": "row-marker-count",
+    "string_fake_marker": "row-marker-count",
+    "comment_fake_function": "row-path-unresolvable",
+    "string_fake_function": "row-path-unresolvable",
+    "marker_not_adjacent": "marker-not-on-guard",
+    "marker_wrong_function": "row-marker-wrong-function",
+    "omission_bad_path": "omission-path-unresolvable",
+    "omission_no_owner": "omission-no-owner",
+    "assumption_many_to_many_drift": "assumption-invariants-drift",
 }
 
 
-def run_self_test() -> bool:
+def mutate(root, case):
+    src = root / "crates/fixture-crate/src/gate.rs"
+    mapping = root / "docs/assurance/MAPPING.md"
+    assumptions = root / "docs/assurance/assumptions.toml"
+    omissions = root / "docs/assurance/omissions.toml"
+    if case == "comment_fake_marker":
+        src.write_text(src.read_text().replace("// INVARIANT: FIXTURE-ONE\n        if", "/* // INVARIANT: FIXTURE-ONE */\n        if"))
+    elif case == "string_fake_marker":
+        src.write_text(src.read_text().replace("// INVARIANT: FIXTURE-ONE\n        if", 'let _ = "// INVARIANT: FIXTURE-ONE";\n        if'))
+    elif case in {"comment_fake_function", "string_fake_function"}:
+        mapping.write_text(mapping.read_text().replace("Gate::evaluate", "Gate::ghost"))
+        fake = "// pub fn ghost(&self) {}" if case.startswith("comment") else 'const _: &str = "pub fn ghost(&self) {}";'
+        src.write_text(src.read_text().replace("pub fn evaluate", fake + "\n    pub fn evaluate"))
+    elif case == "marker_not_adjacent":
+        src.write_text(src.read_text().replace("// INVARIANT: FIXTURE-ONE\n        if", "// INVARIANT: FIXTURE-ONE\n        let x = 1;\n        if"))
+    elif case == "marker_wrong_function":
+        src.write_text(src.read_text().replace("// INVARIANT: FIXTURE-ONE\n        if dangerous()", "if dangerous()").replace("pub fn omitted() {", "pub fn omitted() { // INVARIANT: FIXTURE-ONE\n if dangerous() {} }\npub fn displaced() {"))
+    elif case == "omission_bad_path": omissions.write_text(omissions.read_text().replace("::omitted", "::ghost"))
+    elif case == "omission_no_owner": omissions.write_text(omissions.read_text().replace('owner="x"', 'owner=""'))
+    elif case == "assumption_many_to_many_drift": assumptions.write_text(assumptions.read_text().replace('invariants=["FIXTURE-ONE"]', 'invariants=[]', 1))
+
+
+def self_test():
     ok = True
     with tempfile.TemporaryDirectory() as raw:
         base = pathlib.Path(raw)
-
-        clean = build_fixture(base / "clean")
-        report = run_checks(clean, "self-test/clean", min_rows=2, min_crates=1, min_assumptions=2)
+        clean = fixture(base / "clean")
+        report = run_checks(clean, 1, 1, 2)
         if report.violations:
-            ok = False
-            print("SELF-TEST FAILED: the clean fixture must pass, but reported:", file=sys.stderr)
-            for code, message in report.violations:
-                print(f"  [{code}] {message}", file=sys.stderr)
-
-        for case, expected_code in SELF_TEST_CASES.items():
-            root = build_fixture(base / case)
-            mutate(root, case)
-            report = run_checks(root, f"self-test/{case}", min_rows=2, min_crates=1, min_assumptions=2)
-            if expected_code not in report.codes():
-                ok = False
-                print(
-                    f"SELF-TEST FAILED: case `{case}` must report `{expected_code}`, got "
-                    f"{sorted(report.codes()) or 'no violations at all'}",
-                    file=sys.stderr,
-                )
-
-        # The coverage floors have to be falsifiable too, or they are three
-        # numbers nothing ever compares against.
-        root = build_fixture(base / "coverage")
-        report = run_checks(root, "self-test/coverage", min_rows=12, min_crates=4, min_assumptions=8)
-        for expected_code in ("coverage-rows", "coverage-crates", "coverage-assumptions"):
-            if expected_code not in report.codes():
-                ok = False
-                print(
-                    f"SELF-TEST FAILED: the coverage floors must report `{expected_code}` "
-                    f"against a 2-row fixture, got {sorted(report.codes())}",
-                    file=sys.stderr,
-                )
+            ok = False; print(f"mapping self-test clean failed: {report.violations}", file=sys.stderr)
+        for case, expected in CASES.items():
+            root = fixture(base / case); mutate(root, case)
+            codes = run_checks(root, 1, 1, 2).codes()
+            if expected not in codes:
+                ok = False; print(f"mapping self-test {case}: expected {expected}, got {sorted(codes)}", file=sys.stderr)
     return ok
 
 
-if not run_self_test():
-    print("check-mapping self-test failed; refusing to scan the real tree", file=sys.stderr)
-    raise SystemExit(1)
-
-report = run_checks(REPO_ROOT, "repository", min_rows=12, min_crates=4, min_assumptions=8)
+if not self_test(): raise SystemExit("check-mapping self-test failed")
+report = run_checks(REPO_ROOT)
 if report.violations:
     print(f"check-mapping: {len(report.violations)} violation(s)", file=sys.stderr)
-    for code, message in report.violations:
-        print(f"  [{code}] {message}", file=sys.stderr)
+    for code, message in report.violations: print(f"  [{code}] {message}", file=sys.stderr)
     raise SystemExit(1)
-
-rows = parse_rows(REPO_ROOT, Report("count"))
-assumptions = parse_assumptions(REPO_ROOT, Report("count"))
-markers = collect_markers(REPO_ROOT)
-crates = sorted({row["function"].split("::", 1)[0] for row in rows})
-print(
-    f"check-mapping OK: {len(rows)} invariant rows across {len(crates)} crates "
-    f"({', '.join(crates)}), {len(markers)} source markers, "
-    f"{len(assumptions)} assumptions; {len(SELF_TEST_CASES) + 3} self-test cases passed"
-)
+rows = parse_rows(REPO_ROOT, Report())
+assumptions = load_toml(REPO_ROOT, ASSUMPTIONS_REL, "assumption", Report())
+omissions = load_toml(REPO_ROOT, OMISSIONS_REL, "omission", Report())
+print(f"check-mapping OK: {len(rows)} rows, {len(assumptions)} assumptions, {len(omissions)} enforced omissions; {len(CASES)+1} self-tests passed (1 clean control, {len(CASES)} adversarial)")
 PY

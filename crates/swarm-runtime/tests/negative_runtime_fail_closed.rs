@@ -25,6 +25,7 @@ use swarm_consensus::{
 };
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 use swarm_crypto::{Ed25519Signer, canonical_json_bytes, sha256_hex};
+use swarm_guard::{Guard, GuardAction, GuardContext, GuardPipeline, GuardResult};
 use swarm_policy::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
     PolicyVerdict,
@@ -136,6 +137,14 @@ enum RuntimeMutation {
     /// `prepare_containment`'s "no lease store configured" refusal replaced by
     /// `Ok(None)`, which is what it returned before cc5b169.
     SkipContainmentStore,
+    /// An `ApprovalGate::evaluate` error is replaced by Allow.
+    SkipPolicyError,
+    /// An `ApprovalGate::issue_lease` error is replaced by a synthesized lease.
+    SkipLeaseIssueError,
+    /// A response-adapter error is replaced by a synthesized success receipt.
+    SkipAdapterError,
+    /// A failed receipt is returned as if it were successful.
+    SkipFailedReceiptStatus,
 }
 
 /// Mirror of `SwarmRuntime::authorize_and_execute`, copied from
@@ -163,7 +172,13 @@ async fn mirrored_authorize_and_execute(
     context: &ApprovalContext,
     mutation: RuntimeMutation,
 ) -> Result<ResponseReceipt, RuntimeError> {
-    let decision = policy.evaluate(request, context)?;
+    let decision = match policy.evaluate(request, context) {
+        Ok(decision) => decision,
+        Err(_) if mutation == RuntimeMutation::SkipPolicyError => {
+            PolicyDecision::allow_with_rule("mutated.policy_error", "mutated to allow")
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     match decision.verdict {
         PolicyVerdict::Deny if mutation != RuntimeMutation::SkipDenyVerdict => {
@@ -195,21 +210,409 @@ async fn mirrored_authorize_and_execute(
         });
     }
 
-    let lease = policy.issue_lease(request, context)?;
+    let lease = match policy.issue_lease(request, context) {
+        Ok(lease) => lease,
+        Err(_) if mutation == RuntimeMutation::SkipLeaseIssueError => CapabilityLease {
+            capability_id: "mutated-lease".to_string(),
+            expires_at_ms: context.now_ms.saturating_add(60_000),
+            action: request.action.kind().to_string(),
+            scope: None,
+        },
+        Err(error) => return Err(error.into()),
+    };
     if mutation != RuntimeMutation::SkipLeaseExpiry && lease.expires_at_ms <= context.now_ms {
         return Err(ApprovalError::Denied("capability lease expired".to_string()).into());
     }
 
-    let receipt = response
-        .execute(request, &lease, execution_mode)
-        .await
-        .map_err(RuntimeError::from)?;
-    if !receipt.status.indicates_success() {
+    let receipt = match response.execute(request, &lease, execution_mode).await {
+        Ok(receipt) => receipt,
+        Err(_) if mutation == RuntimeMutation::SkipAdapterError => ResponseReceipt {
+            receipt_id: "mutated-adapter-error".to_string(),
+            action: request.action.kind().to_string(),
+            mode: execution_mode,
+            status: ResponseStatus::Executed,
+            summary: "mutated adapter error to success".to_string(),
+            details: json!({}),
+            audit: Default::default(),
+        },
+        Err(error) => return Err(error.into()),
+    };
+    if mutation != RuntimeMutation::SkipFailedReceiptStatus && !receipt.status.indicates_success() {
         return Err(RuntimeError::Response(ResponseError {
             failure: receipt.into_failure(),
         }));
     }
     Ok(receipt)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GateFailure {
+    Evaluate,
+    IssueLease,
+}
+
+#[derive(Debug, Clone)]
+struct FailingGate(GateFailure);
+
+impl ApprovalGate for FailingGate {
+    fn evaluate(
+        &self,
+        _request: &ActionRequest,
+        _context: &ApprovalContext,
+    ) -> Result<PolicyDecision, ApprovalError> {
+        if self.0 == GateFailure::Evaluate {
+            Err(ApprovalError::InvalidRequest(
+                "policy unavailable".to_string(),
+            ))
+        } else {
+            Ok(PolicyDecision::allow("evaluation succeeded"))
+        }
+    }
+
+    fn issue_lease(
+        &self,
+        request: &ActionRequest,
+        context: &ApprovalContext,
+    ) -> Result<CapabilityLease, ApprovalError> {
+        if self.0 == GateFailure::IssueLease {
+            Err(ApprovalError::InvalidRequest(
+                "lease unavailable".to_string(),
+            ))
+        } else {
+            Ok(CapabilityLease {
+                capability_id: "failure-fixture-live-lease".to_string(),
+                expires_at_ms: context.now_ms.saturating_add(60_000),
+                action: request.action.kind().to_string(),
+                scope: None,
+            })
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FixedOutcomeExecutor {
+    calls: Arc<AtomicUsize>,
+    outcome: Result<ResponseStatus, &'static str>,
+}
+
+#[async_trait]
+impl ResponseExecutor for FixedOutcomeExecutor {
+    async fn execute(
+        &self,
+        request: &ActionRequest,
+        _lease: &CapabilityLease,
+        mode: ExecutionMode,
+    ) -> Result<ResponseReceipt, ResponseError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let status = self
+            .outcome
+            .map_err(|message| ResponseError::unavailable(request.action.kind(), mode, message))?;
+        Ok(ResponseReceipt {
+            receipt_id: "fixed-outcome".to_string(),
+            action: request.action.kind().to_string(),
+            mode,
+            status,
+            summary: "fixed outcome".to_string(),
+            details: json!({}),
+            audit: Default::default(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn broken_policy_error_fallback_executes_when_evaluation_failed() {
+    let gate = FailingGate(GateFailure::Evaluate);
+    let probe = block_egress(Severity::Medium);
+    let context = context(1_700_000_000_000);
+    let real_calls = Arc::new(AtomicUsize::new(0));
+    let real_runtime = SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate.clone(),
+        RecordingExecutor {
+            calls: real_calls.clone(),
+        },
+    );
+    let real = real_runtime.authorize_and_execute(&probe, &context).await;
+    assert!(real.is_err());
+    assert_eq!(real_calls.load(Ordering::SeqCst), 0);
+    let control_calls = Arc::new(AtomicUsize::new(0));
+    let control = mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &RecordingExecutor {
+            calls: control_calls.clone(),
+        },
+        None,
+        &probe,
+        &context,
+        RuntimeMutation::None,
+    )
+    .await;
+    assert_eq!(outcome(&control), outcome(&real));
+    assert_eq!(control_calls.load(Ordering::SeqCst), 0);
+    let broken_calls = Arc::new(AtomicUsize::new(0));
+    mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &RecordingExecutor {
+            calls: broken_calls.clone(),
+        },
+        None,
+        &probe,
+        &context,
+        RuntimeMutation::SkipPolicyError,
+    )
+    .await
+    .unwrap();
+    assert_eq!(broken_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn broken_lease_issue_error_fallback_executes_without_a_real_lease() {
+    let gate = FailingGate(GateFailure::IssueLease);
+    let probe = block_egress(Severity::Medium);
+    let context = context(1_700_000_000_000);
+    let real_calls = Arc::new(AtomicUsize::new(0));
+    let real_runtime = SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate.clone(),
+        RecordingExecutor {
+            calls: real_calls.clone(),
+        },
+    );
+    let real = real_runtime.authorize_and_execute(&probe, &context).await;
+    assert!(real.is_err());
+    assert_eq!(real_calls.load(Ordering::SeqCst), 0);
+    let control_calls = Arc::new(AtomicUsize::new(0));
+    let control = mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &RecordingExecutor {
+            calls: control_calls.clone(),
+        },
+        None,
+        &probe,
+        &context,
+        RuntimeMutation::None,
+    )
+    .await;
+    assert_eq!(outcome(&control), outcome(&real));
+    let broken_calls = Arc::new(AtomicUsize::new(0));
+    mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &RecordingExecutor {
+            calls: broken_calls.clone(),
+        },
+        None,
+        &probe,
+        &context,
+        RuntimeMutation::SkipLeaseIssueError,
+    )
+    .await
+    .unwrap();
+    assert_eq!(broken_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn broken_adapter_error_conversion_returns_false_success() {
+    let gate = FixedVerdictGate {
+        verdict: PolicyVerdict::Allow,
+        lease_ttl_ms: 60_000,
+    };
+    let probe = block_egress(Severity::Medium);
+    let context = context(1_700_000_000_000);
+    let real_calls = Arc::new(AtomicUsize::new(0));
+    let real_executor = FixedOutcomeExecutor {
+        calls: real_calls.clone(),
+        outcome: Err("offline"),
+    };
+    let real_runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), real_executor);
+    let real = real_runtime.authorize_and_execute(&probe, &context).await;
+    assert!(real.is_err());
+    let control_calls = Arc::new(AtomicUsize::new(0));
+    let control_executor = FixedOutcomeExecutor {
+        calls: control_calls.clone(),
+        outcome: Err("offline"),
+    };
+    let control = mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &control_executor,
+        None,
+        &probe,
+        &context,
+        RuntimeMutation::None,
+    )
+    .await;
+    assert_eq!(outcome(&control), outcome(&real));
+    let broken_calls = Arc::new(AtomicUsize::new(0));
+    let broken_executor = FixedOutcomeExecutor {
+        calls: broken_calls.clone(),
+        outcome: Err("offline"),
+    };
+    let broken = mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &broken_executor,
+        None,
+        &probe,
+        &context,
+        RuntimeMutation::SkipAdapterError,
+    )
+    .await
+    .unwrap();
+    assert_eq!(broken.status, ResponseStatus::Executed);
+    assert_eq!(broken_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn broken_failed_receipt_check_returns_a_failure_as_success() {
+    let gate = FixedVerdictGate {
+        verdict: PolicyVerdict::Allow,
+        lease_ttl_ms: 60_000,
+    };
+    let probe = block_egress(Severity::Medium);
+    let context = context(1_700_000_000_000);
+    let real_calls = Arc::new(AtomicUsize::new(0));
+    let real_executor = FixedOutcomeExecutor {
+        calls: real_calls.clone(),
+        outcome: Ok(ResponseStatus::Failed),
+    };
+    let real_runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), real_executor);
+    let real = real_runtime.authorize_and_execute(&probe, &context).await;
+    assert!(real.is_err());
+    let control_calls = Arc::new(AtomicUsize::new(0));
+    let control_executor = FixedOutcomeExecutor {
+        calls: control_calls.clone(),
+        outcome: Ok(ResponseStatus::Failed),
+    };
+    let control = mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &control_executor,
+        None,
+        &probe,
+        &context,
+        RuntimeMutation::None,
+    )
+    .await;
+    assert_eq!(outcome(&control), outcome(&real));
+    let broken_calls = Arc::new(AtomicUsize::new(0));
+    let broken_executor = FixedOutcomeExecutor {
+        calls: broken_calls.clone(),
+        outcome: Ok(ResponseStatus::Failed),
+    };
+    let broken = mirrored_authorize_and_execute(
+        RuntimeMode::LiveResponse,
+        &gate,
+        &broken_executor,
+        None,
+        &probe,
+        &context,
+        RuntimeMutation::SkipFailedReceiptStatus,
+    )
+    .await
+    .unwrap();
+    assert_eq!(broken.status, ResponseStatus::Failed);
+    assert_eq!(broken_calls.load(Ordering::SeqCst), 1);
+}
+
+#[derive(Debug)]
+struct RejectingGuard;
+
+impl Guard for RejectingGuard {
+    fn name(&self) -> &str {
+        "negative-reject"
+    }
+    fn handles(&self, _action: &GuardAction<'_>) -> bool {
+        true
+    }
+    fn check(&self, _action: &GuardAction<'_>, _context: &GuardContext) -> GuardResult {
+        GuardResult::block(
+            "negative-reject",
+            swarm_guard::Severity::Critical,
+            "blocked",
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuardMutation {
+    None,
+    SkipGuardRejection,
+}
+
+async fn mirrored_guard_authorize(
+    policy: &dyn ApprovalGate,
+    response: &dyn ResponseExecutor,
+    request: &ActionRequest,
+    context: &ApprovalContext,
+    mutation: GuardMutation,
+) -> Result<ResponseReceipt, RuntimeError> {
+    let decision = policy.evaluate(request, context)?;
+    if decision.verdict != PolicyVerdict::Allow {
+        return Err(ApprovalError::Denied(decision.reason).into());
+    }
+    if mutation != GuardMutation::SkipGuardRejection {
+        return Err(RuntimeError::GuardRejected {
+            guard_name: "negative-reject".to_string(),
+            reason: "blocked".to_string(),
+        });
+    }
+    let lease = policy.issue_lease(request, context)?;
+    response
+        .execute(request, &lease, ExecutionMode::Enforced)
+        .await
+        .map_err(Into::into)
+}
+
+#[tokio::test]
+async fn broken_guard_rejection_reaches_the_executor() {
+    let gate = FixedVerdictGate {
+        verdict: PolicyVerdict::Allow,
+        lease_ttl_ms: 60_000,
+    };
+    let probe = block_egress(Severity::Medium);
+    let context = context(1_700_000_000_000);
+    let real_calls = Arc::new(AtomicUsize::new(0));
+    let real_runtime = SwarmRuntime::new(
+        RuntimeMode::LiveResponse,
+        gate.clone(),
+        RecordingExecutor {
+            calls: real_calls.clone(),
+        },
+    )
+    .with_guard_pipeline(GuardPipeline::new(vec![Box::new(RejectingGuard)]));
+    let real = real_runtime.authorize_and_execute(&probe, &context).await;
+    assert!(matches!(real, Err(RuntimeError::GuardRejected { .. })));
+    assert_eq!(real_calls.load(Ordering::SeqCst), 0);
+    let control_calls = Arc::new(AtomicUsize::new(0));
+    let control = mirrored_guard_authorize(
+        &gate,
+        &RecordingExecutor {
+            calls: control_calls.clone(),
+        },
+        &probe,
+        &context,
+        GuardMutation::None,
+    )
+    .await;
+    assert!(matches!(control, Err(RuntimeError::GuardRejected { .. })));
+    assert_eq!(control_calls.load(Ordering::SeqCst), 0);
+    let broken_calls = Arc::new(AtomicUsize::new(0));
+    mirrored_guard_authorize(
+        &gate,
+        &RecordingExecutor {
+            calls: broken_calls.clone(),
+        },
+        &probe,
+        &context,
+        GuardMutation::SkipGuardRejection,
+    )
+    .await
+    .unwrap();
+    assert_eq!(broken_calls.load(Ordering::SeqCst), 1);
 }
 
 /// Flattened outcome, so the control can compare the real runtime against the
@@ -686,10 +1089,19 @@ fn attest(receipt: &RollbackReceipt) -> serde_json::Value {
     serde_json::to_value(ConsensusGovernanceReceipt { payload, signature }).unwrap()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReleaseAttestationMutation {
+    None,
+    SkipSubjectBinding,
+}
+
 /// Mirror of `verify_release_attestation`, copied from
-/// `crates/swarm-runtime/src/containment.rs`, with the subject binding removed
-/// -- mutation M2 from ce1ddd1, made permanent as a test.
-fn broken_verify_release_attestation(receipt: &RollbackReceipt) -> Result<(), String> {
+/// `crates/swarm-runtime/src/containment.rs`, with the subject binding
+/// selectively removable -- mutation M2 from ce1ddd1, made permanent as a test.
+fn mirrored_verify_release_attestation(
+    receipt: &RollbackReceipt,
+    mutation: ReleaseAttestationMutation,
+) -> Result<(), String> {
     let raw = receipt
         .governance_attestation
         .as_ref()
@@ -698,8 +1110,17 @@ fn broken_verify_release_attestation(receipt: &RollbackReceipt) -> Result<(), St
     let attestation: ConsensusGovernanceReceipt =
         serde_json::from_value(raw).map_err(|error| error.to_string())?;
     attestation.verify().map_err(|error| error.to_string())?;
-    // The `attestation.payload.proposal_id != derived` comparison is what has
-    // been removed. The signature check above is untouched and still passes.
+    let mut subject = receipt.clone();
+    subject.governance_attestation = None;
+    let derived = sha256_hex(&canonical_json_bytes(&subject).map_err(|error| error.to_string())?);
+    if mutation != ReleaseAttestationMutation::SkipSubjectBinding
+        && attestation.payload.proposal_id != derived
+    {
+        return Err(format!(
+            "subject mismatch: attested {}, derived {derived}",
+            attestation.payload.proposal_id
+        ));
+    }
     Ok(())
 }
 
@@ -719,20 +1140,24 @@ fn broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuse
     assert!(rewritten.fully_reversed());
 
     let real = verify_release_attestation(&rewritten);
-    match real {
-        Err(ReleaseAttestationError::SubjectMismatch { .. }) => {}
-        other => panic!("expected a subject mismatch, got {other:?}"),
-    }
-
-    // Control: the mirror agrees with the real verifier on the UNTOUCHED
-    // receipt, so what differs below is the mutation and not the rewrite.
-    broken_verify_release_attestation(&attested)
-        .expect("the mirror accepts the genuine receipt too");
-
-    broken_verify_release_attestation(&rewritten).expect(
-        "without the subject binding a body rewrite passes on a genuine, \
-         unmodified signature -- the signature check ALONE does not catch it",
+    assert!(
+        matches!(real, Err(ReleaseAttestationError::SubjectMismatch { .. })),
+        "expected a subject mismatch, got {real:?}"
     );
+
+    let control = mirrored_verify_release_attestation(&rewritten, ReleaseAttestationMutation::None);
+    assert!(
+        control
+            .as_ref()
+            .is_err_and(|reason| reason.contains("subject mismatch")),
+        "the unmutated mirror must refuse the same rewritten receipt: {control:?}"
+    );
+
+    mirrored_verify_release_attestation(&rewritten, ReleaseAttestationMutation::SkipSubjectBinding)
+        .expect(
+            "without the subject binding a body rewrite passes on a genuine, \
+         unmodified signature -- the signature check ALONE does not catch it",
+        );
 }
 
 // ---------------------------------------------------------------------------
@@ -812,16 +1237,23 @@ fn containment_lease() -> ContainmentLease {
     .expect("the fixture lease is bounded")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReleaseLeaseMutation {
+    None,
+    SkipFailedStepRetention,
+}
+
 /// Mirror of `release_lease`, copied from
 /// `crates/swarm-runtime/src/containment.rs`, with the `attempt_failed` early
-/// return removed -- the pre-cc5b169 shape, which read "could not be issued" as
-/// `Err` and therefore never saw this case.
-async fn broken_release_lease(
+/// return selectively removable -- the pre-cc5b169 shape, which read "could
+/// not be issued" as `Err` and therefore never saw this case.
+async fn mirrored_release_lease(
     store: &dyn ContainmentLeaseStore,
     executor: &dyn RollbackExecutor,
     mode: ExecutionMode,
     lease_id: &str,
     now_ms: i64,
+    mutation: ReleaseLeaseMutation,
 ) -> Result<RollbackReceipt, String> {
     let lease = store
         .get(lease_id)
@@ -831,8 +1263,13 @@ async fn broken_release_lease(
         .rollback(&lease, RollbackTrigger::Expiry, mode, now_ms)
         .await
         .map_err(|error| error.to_string())?;
-    // The `steps.iter().any(|s| s.status == Failed) -> return early` guard is
-    // what has been removed.
+    let attempt_failed = receipt
+        .steps
+        .iter()
+        .any(|step| step.status == RollbackStepStatus::Failed);
+    if mutation != ReleaseLeaseMutation::SkipFailedStepRetention && attempt_failed {
+        return Ok(receipt);
+    }
     store.close(&receipt).map_err(|error| error.to_string())?;
     Ok(receipt)
 }
@@ -863,14 +1300,31 @@ async fn broken_failed_step_check_abandons_the_still_contained_host_the_real_rel
     );
     assert_eq!(real_store.closed_receipts().unwrap().len(), 0);
 
+    let control_store = MemoryContainmentLeaseStore::new();
+    control_store.open_lease(&lease).unwrap();
+    let control = mirrored_release_lease(
+        &control_store,
+        &FailingRollbackExecutor,
+        ExecutionMode::Enforced,
+        lease.lease_id(),
+        6_000,
+        ReleaseLeaseMutation::None,
+    )
+    .await
+    .expect("the unmutated mirror produces the same failed receipt");
+    assert_eq!(control.steps, real.steps);
+    assert_eq!(control_store.open_leases().unwrap().len(), 1);
+    assert_eq!(control_store.closed_receipts().unwrap().len(), 0);
+
     let broken_store = MemoryContainmentLeaseStore::new();
     broken_store.open_lease(&lease).unwrap();
-    let broken = broken_release_lease(
+    let broken = mirrored_release_lease(
         &broken_store,
         &FailingRollbackExecutor,
         ExecutionMode::Enforced,
         lease.lease_id(),
         6_000,
+        ReleaseLeaseMutation::SkipFailedStepRetention,
     )
     .await
     .expect("the broken variant produces a receipt");

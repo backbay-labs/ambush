@@ -1,0 +1,74 @@
+# Enforced exclusions from the Phase 285 negative-mutation universe.
+#
+# An omission is not a passing invariant. It identifies a requirement-named
+# production decision surface that does not itself render a fail-closed verdict,
+# and states exactly when that classification must be revisited. The mapping gate
+# resolves every path and refuses an ownerless, unexplained, or uncleared entry.
+
+schema_version = 1
+
+[[omission]]
+id = "OMIT-RESPONSE-DISPATCH-CONSTRUCTION"
+production_fn = "swarm_response::dispatch::DispatchingExecutor::from_config"
+owner = "swarm-response"
+reason = """
+This function constructs the configured adapter and propagates initialization
+errors before a runtime exists. It renders no response authorization or
+containment verdict, so it is startup availability rather than a fail-closed
+request invariant."""
+clearing_condition = """
+Remove this omission and add a mapped mutation row if construction ever accepts
+a request, selects a fallback adapter after an initialization error, or can turn
+a failed backend initialization into an executable response path."""
+
+[[omission]]
+id = "OMIT-RESPONSE-DISPATCH-DELEGATION"
+production_fn = "swarm_response::dispatch::DispatchingExecutor::execute"
+owner = "swarm-response"
+reason = """
+The exhaustive AdapterInner match delegates the request to exactly one already
+constructed executor. It has no allow, deny, containment, rollback, or success
+classification of its own; those decisions are mapped at the adapter result
+consumer and containment/rollback functions."""
+clearing_condition = """
+Remove this omission and add a mapped mutation row when dispatch adds filtering,
+fallback, multi-cast, retry classification, or any local success/refusal branch."""
+
+[[omission]]
+id = "OMIT-RUNTIME-NONCONTAINMENT-BYPASS"
+production_fn = "swarm_runtime::SwarmRuntime::prepare_containment"
+owner = "swarm-runtime"
+reason = """
+The two early Ok(None) branches identify non-containment actions and DryRun.
+Neither is a refusal guard: the former is outside containment, and the latter
+must not open a real lease for a simulated side effect."""
+clearing_condition = """
+Remove this omission if either branch can skip lease creation for an Enforced
+containment action, or if DryRun begins performing a real containment effect."""
+
+[[omission]]
+id = "OMIT-RUNTIME-POSTACTION-LEASE-PERSISTENCE"
+production_fn = "swarm_runtime::SwarmRuntime::record_containment_lease"
+owner = "swarm-runtime"
+reason = """
+Lease-construction and store failures are returned loudly but happen after the
+response adapter has acted because the lease chains to that response receipt.
+They are serious recovery failures, but they cannot satisfy the Phase 285
+meaning of fail closed before dispatch; claiming they block execution would be
+false."""
+clearing_condition = """
+Replace this omission with mapped receipt-before-action invariants when the
+runtime can durably reserve a lease before dispatch and bind the later response
+receipt without losing that ordering. Phase 286 owns that redesign evidence."""
+
+[[omission]]
+id = "OMIT-RESPONSE-LEASE-STORE-ADMINISTRATION"
+production_fn = "swarm_response::containment::MemoryContainmentLeaseStore::open_lease"
+owner = "swarm-response"
+reason = """
+The store trait's duplicate/open/close persistence errors protect durable
+bookkeeping, not response dispatch or the lease/rollback semantic decisions in
+this phase. The pre-dispatch absence-of-store refusal is mapped separately."""
+clearing_condition = """
+Remove this omission when store conflict resolution, multi-writer behavior, or
+receipt persistence becomes part of an authorization or dispatch verdict."""

@@ -422,11 +422,11 @@ pub async fn release_lease(
     // host is still contained and the lease is the only record of it. Keep it
     // open and let the next sweep retry rather than closing over a host nobody
     // is tracking any more.
-    // INVARIANT: RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE
     let attempt_failed = receipt
         .steps
         .iter()
         .any(|step| step.status == RollbackStepStatus::Failed);
+    // INVARIANT: RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE
     if attempt_failed {
         tracing::warn!(
             module = module_path!(),

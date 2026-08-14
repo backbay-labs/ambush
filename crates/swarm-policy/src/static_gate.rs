@@ -42,6 +42,7 @@ impl StaticApprovalGate {
             ));
         }
 
+        // INVARIANT: POLICY-ACTION-TARGETS-NONEMPTY
         match &request.action {
             ResponseAction::BlockEgress { target } if target.trim().is_empty() => {
                 return Err(ApprovalError::InvalidRequest(
@@ -263,6 +264,7 @@ impl ApprovalGate for StaticApprovalGate {
             ));
         }
 
+        // INVARIANT: POLICY-DEPLOY-DECOY-MIN-SEVERITY
         if matches!(request.action, ResponseAction::DeployDecoy { .. })
             && request.severity == Severity::Low
         {

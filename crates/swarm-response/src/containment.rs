@@ -83,6 +83,7 @@ pub struct ContainmentTtl(NonZeroI64);
 impl ContainmentTtl {
     /// Build a TTL from a configured millisecond value, refusing zero and negatives.
     pub fn from_config_ms(ttl_ms: i64) -> Result<Self, ContainmentLeaseError> {
+        // INVARIANT: RESPONSE-TTL-STRICTLY-POSITIVE
         match NonZeroI64::new(ttl_ms) {
             Some(value) if value.get() > 0 => Ok(Self(value)),
             _ => Err(ContainmentLeaseError::NonPositiveTtl { ttl_ms }),
@@ -158,6 +159,7 @@ impl TryFrom<ContainmentLeaseRecord> for ContainmentLease {
     type Error = ContainmentLeaseError;
 
     fn try_from(record: ContainmentLeaseRecord) -> Result<Self, Self::Error> {
+        // INVARIANT: RESPONSE-STORED-LEASE-SCHEMA-KNOWN
         if record.schema_version != CONTAINMENT_LEASE_SCHEMA_VERSION {
             return Err(ContainmentLeaseError::UnknownSchemaVersion {
                 lease_id: record.lease_id,
@@ -206,8 +208,8 @@ impl ContainmentLease {
         // Saturating rather than wrapping, then re-checked: at `i64::MAX` the
         // add is a no-op and the lease would be unbounded, which is exactly the
         // state the error below exists to refuse.
-        // INVARIANT: RESPONSE-LEASE-BOUNDED
         let expires_at_ms = issued_at_ms.saturating_add(ttl.get());
+        // INVARIANT: RESPONSE-LEASE-BOUNDED
         if expires_at_ms <= issued_at_ms {
             return Err(ContainmentLeaseError::UnboundedLease {
                 lease_id,

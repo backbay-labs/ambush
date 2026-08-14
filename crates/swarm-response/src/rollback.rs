@@ -187,6 +187,7 @@ pub fn resolve_inverse(
             reason: "a terminated session cannot be resumed; the principal can only establish a \
                      fresh session",
         }),
+        // INVARIANT: RESPONSE-UNMAPPED-INVERSE-REFUSED
         _ => Err(InverseGap::Unmapped),
     }
 }
@@ -315,6 +316,7 @@ impl RollbackReceipt {
     }
 
     fn derive_status(steps: &[RollbackStepOutcome], mode: ExecutionMode) -> ResponseStatus {
+        // INVARIANT: RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS
         if steps.is_empty() {
             return ResponseStatus::Failed;
         }
@@ -335,6 +337,7 @@ impl RollbackReceipt {
             // sandbox). Reporting that as success would put a false claim in the
             // durable record, so the mode gates the arm.
             ResponseStatus::Simulated
+        // INVARIANT: RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS
         } else {
             // Anything left is a containment still partly or wholly in effect.
             // `indicates_success()` is false for `Failed`, so every caller that
@@ -400,6 +403,7 @@ pub trait RollbackExecutor: Send + Sync + std::fmt::Debug {
 /// Refuse a plan with no steps. A containment whose plan has no steps cannot be
 /// proven reversible, so no executor may emit a receipt about it.
 fn require_steps(lease: &ContainmentLease, mode: ExecutionMode) -> Result<(), ResponseError> {
+    // INVARIANT: RESPONSE-ROLLBACK-REQUIRES-STEPS
     if lease.rollback().steps.is_empty() {
         return Err(ResponseError::unavailable(
             lease.action_kind(),

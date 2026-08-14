@@ -71,6 +71,8 @@ enum EnvelopeMutation {
     SkipHashBinding,
     /// The final `public_key.verify(..)` replaced by an unconditional `true`.
     SkipSignatureCheck,
+    /// A missing `envelope_hash` is defaulted to the computed digest.
+    SkipHashFieldRequired,
 }
 
 /// Mirror of `verify_envelope`, copied from
@@ -91,7 +93,10 @@ fn mirrored_verify_envelope(envelope: &Value, mutation: EnvelopeMutation) -> Res
     let claimed_hash = envelope
         .get("envelope_hash")
         .and_then(Value::as_str)
-        .ok_or("missing envelope_hash")?;
+        .map(str::to_string);
+    if claimed_hash.is_none() && mutation != EnvelopeMutation::SkipHashFieldRequired {
+        return Err("missing envelope_hash".to_string());
+    }
 
     let pubkey_hex = parse_issuer_pubkey_hex(issuer).map_err(|error| error.to_string())?;
     let public_key = PublicKey::from_hex(&pubkey_hex).map_err(|error| error.to_string())?;
@@ -105,6 +110,7 @@ fn mirrored_verify_envelope(envelope: &Value, mutation: EnvelopeMutation) -> Res
 
     let bytes = envelope_signing_bytes(&unsigned).map_err(|error| error.to_string())?;
     let computed_hash = sha256_hex_prefixed(&bytes);
+    let claimed_hash = claimed_hash.unwrap_or_else(|| computed_hash.clone());
     if mutation != EnvelopeMutation::SkipHashBinding && computed_hash != claimed_hash {
         return Err(format!(
             "hash mismatch: expected {claimed_hash}, computed {computed_hash}"
@@ -115,6 +121,27 @@ fn mirrored_verify_envelope(envelope: &Value, mutation: EnvelopeMutation) -> Res
         return Ok(true);
     }
     Ok(public_key.verify(&bytes, &signature))
+}
+
+// ---------------------------------------------------------------------------
+// SPINE-ENVELOPE-HASH-FIELD-REQUIRED
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_hash_field_requirement_admits_an_envelope_with_no_claimed_identity() {
+    let keypair = signing_keypair(7);
+    let mut missing = envelope(&keypair, 1, None);
+    missing.as_object_mut().unwrap().remove("envelope_hash");
+    let real = verify_envelope(&missing).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_envelope(&missing, EnvelopeMutation::None);
+    assert!(!admitted(&control));
+    let broken = mirrored_verify_envelope(&missing, EnvelopeMutation::SkipHashFieldRequired);
+    assert!(
+        admitted(&broken),
+        "without the required-field guard the verifier silently substitutes its \
+         computed digest for the absent claimed identity: {broken:?}"
+    );
 }
 
 fn admitted(result: &Result<bool, String>) -> bool {
@@ -224,14 +251,20 @@ fn broken_signature_check_admits_the_reattributed_envelope_the_real_verifier_ref
 enum ChainMutation {
     /// No mutation. The control.
     None,
-    /// The `seq != 1 || prev_hash.is_some()` guard on a NEW chain deleted.
-    SkipFirstEnvelopeShape,
+    /// The `seq != 1` guard on a new chain deleted.
+    SkipFirstSequence,
+    /// The `prev_hash_str.is_some()` guard on a new chain deleted.
+    SkipFirstPreviousHash,
     /// The `envelope_issuer_norm != head_issuer_norm` guard deleted.
     SkipIssuerBinding,
     /// The `seq != expected_seq` guard deleted.
     SkipSequenceBinding,
     /// The `actual_prev_hash != head.envelope_hash` guard deleted.
     SkipPrevHashBinding,
+    /// A missing `prev_envelope_hash` field is treated as JSON null.
+    SkipPreviousHashFieldRequired,
+    /// Head increment uses wrapping arithmetic instead of refusing overflow.
+    WrapHeadSequence,
 }
 
 /// Mirror of `verify_chain_link`, copied from
@@ -249,9 +282,12 @@ fn mirrored_verify_chain_link(
         .get("seq")
         .and_then(Value::as_u64)
         .ok_or("missing seq")?;
-    let prev_hash = envelope
-        .get("prev_envelope_hash")
-        .ok_or("missing prev_envelope_hash")?;
+    let missing_prev = Value::Null;
+    let prev_hash = match envelope.get("prev_envelope_hash") {
+        Some(value) => value,
+        None if mutation == ChainMutation::SkipPreviousHashFieldRequired => &missing_prev,
+        None => return Err("missing prev_envelope_hash".to_string()),
+    };
 
     let prev_hash_str = if prev_hash.is_null() {
         None
@@ -271,17 +307,15 @@ fn mirrored_verify_chain_link(
 
     match known_head {
         None => {
-            if mutation != ChainMutation::SkipFirstEnvelopeShape {
-                if seq != 1 {
-                    return Ok(ChainLinkVerdict::InvalidChainHead {
-                        reason: format!("first envelope must have seq=1, got seq={seq}"),
-                    });
-                }
-                if prev_hash_str.is_some() {
-                    return Ok(ChainLinkVerdict::InvalidChainHead {
-                        reason: "first envelope must have null prev_envelope_hash".to_string(),
-                    });
-                }
+            if mutation != ChainMutation::SkipFirstSequence && seq != 1 {
+                return Ok(ChainLinkVerdict::InvalidChainHead {
+                    reason: format!("first envelope must have seq=1, got seq={seq}"),
+                });
+            }
+            if mutation != ChainMutation::SkipFirstPreviousHash && prev_hash_str.is_some() {
+                return Ok(ChainLinkVerdict::InvalidChainHead {
+                    reason: "first envelope must have null prev_envelope_hash".to_string(),
+                });
             }
             Ok(ChainLinkVerdict::NewChain)
         }
@@ -298,10 +332,15 @@ fn mirrored_verify_chain_link(
                 });
             }
 
-            let Some(expected_seq) = head.seq.checked_add(1) else {
-                return Ok(ChainLinkVerdict::InvalidChainHead {
-                    reason: format!("known head sequence overflow for issuer {}", head.issuer),
-                });
+            let expected_seq = if mutation == ChainMutation::WrapHeadSequence {
+                head.seq.wrapping_add(1)
+            } else {
+                let Some(expected_seq) = head.seq.checked_add(1) else {
+                    return Ok(ChainLinkVerdict::InvalidChainHead {
+                        reason: format!("known head sequence overflow for issuer {}", head.issuer),
+                    });
+                };
+                expected_seq
             };
             if mutation != ChainMutation::SkipSequenceBinding && seq != expected_seq {
                 return Ok(ChainLinkVerdict::SequenceMismatch {
@@ -323,6 +362,51 @@ fn mirrored_verify_chain_link(
             Ok(ChainLinkVerdict::ValidContinuation)
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// SPINE-CHAIN-PREV-FIELD-REQUIRED
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_previous_hash_field_requirement_admits_an_ambiguous_first_link() {
+    let keypair = signing_keypair(7);
+    let mut missing = envelope(&keypair, 1, None);
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("prev_envelope_hash");
+    let real = verify_chain_link(&missing, None).map_err(|error| error.to_string());
+    assert!(real.is_err());
+    let control = mirrored_verify_chain_link(&missing, None, ChainMutation::None);
+    assert!(control.is_err());
+    assert_eq!(
+        mirrored_verify_chain_link(&missing, None, ChainMutation::SkipPreviousHashFieldRequired,)
+            .unwrap(),
+        ChainLinkVerdict::NewChain
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SPINE-CHAIN-HEAD-NOT-OVERFLOWED
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_head_overflow_guard_wraps_the_chain_back_to_zero() {
+    let keypair = signing_keypair(7);
+    let head = IssuerChainHead {
+        issuer: format!("swarm:ed25519:{}", keypair.public_key().to_hex()),
+        seq: u64::MAX,
+        envelope_hash: "0x".to_string() + &"aa".repeat(32),
+    };
+    let wrapped = envelope(&keypair, 0, Some(head.envelope_hash.clone()));
+    let real = verify_chain_link(&wrapped, Some(&head)).unwrap();
+    assert!(matches!(real, ChainLinkVerdict::InvalidChainHead { .. }));
+    let control = mirrored_verify_chain_link(&wrapped, Some(&head), ChainMutation::None).unwrap();
+    assert_eq!(control, real);
+    let broken =
+        mirrored_verify_chain_link(&wrapped, Some(&head), ChainMutation::WrapHeadSequence).unwrap();
+    assert_eq!(broken, ChainLinkVerdict::ValidContinuation);
 }
 
 fn head_of(envelope: &Value) -> IssuerChainHead {
@@ -398,12 +482,13 @@ fn broken_sequence_binding_admits_the_replayed_envelope_the_real_verifier_reject
     let second = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
     let head_at_two = head_of(&second);
 
-    // Replay: `second` is re-presented after it has already been accepted. It is
-    // byte-identical to a record that verified, so signature and prev-hash both
-    // still pass against the OLD head -- but its prev-hash does not name the new
-    // head, which is why the probe below asserts on the sequence verdict
-    // specifically.
-    let real = verify_chain_link(&second, Some(&head_at_two)).expect("a verdict");
+    // Wrong sequence, RIGHT previous hash. Every remaining continuation guard
+    // is satisfied, so deleting only the sequence comparison must admit this
+    // exact probe. A byte-identical replay does not isolate the sequence guard:
+    // its previous hash names the old head, so the prev-hash guard still refuses
+    // it after the sequence guard is removed.
+    let wrong_sequence = envelope(&keypair, 2, Some(head_at_two.envelope_hash.clone()));
+    let real = verify_chain_link(&wrong_sequence, Some(&head_at_two)).expect("a verdict");
     assert_eq!(
         real,
         ChainLinkVerdict::SequenceMismatch {
@@ -414,33 +499,27 @@ fn broken_sequence_binding_admits_the_replayed_envelope_the_real_verifier_reject
     );
     assert!(!real.is_valid());
 
-    let control = mirrored_verify_chain_link(&second, Some(&head_at_two), ChainMutation::None)
-        .expect("a verdict");
+    let control =
+        mirrored_verify_chain_link(&wrong_sequence, Some(&head_at_two), ChainMutation::None)
+            .expect("a verdict");
     assert_eq!(
         control, real,
         "the unmutated mirror must reproduce the real verdict"
     );
 
     let broken = mirrored_verify_chain_link(
-        &second,
+        &wrong_sequence,
         Some(&head_at_two),
         ChainMutation::SkipSequenceBinding,
     )
     .expect("a verdict");
-    assert!(
-        !matches!(broken, ChainLinkVerdict::SequenceMismatch { .. }),
-        "deleting the sequence guard must stop the replay being caught there, got {broken:?}"
-    );
     assert_eq!(
         broken,
-        ChainLinkVerdict::HashMismatch {
-            expected_prev_hash: head_at_two.envelope_hash.clone(),
-            actual_prev_hash: head.envelope_hash.clone(),
-        },
-        "and what is left is the prev-hash guard -- which is exactly why these \
-         are two rows: each alone is the only thing standing between a replay \
-         and the chain"
+        ChainLinkVerdict::ValidContinuation,
+        "with the correct issuer and previous hash, removing only the sequence \
+         guard must admit the wrong sequence"
     );
+    assert!(broken.is_valid());
 }
 
 // ---------------------------------------------------------------------------
@@ -490,11 +569,11 @@ fn broken_issuer_binding_admits_the_cross_issuer_splice_the_real_verifier_reject
 }
 
 // ---------------------------------------------------------------------------
-// SPINE-CHAIN-FIRST-LINK-SHAPE
+// SPINE-CHAIN-FIRST-SEQ
 // ---------------------------------------------------------------------------
 
 #[test]
-fn broken_first_envelope_shape_admits_the_truncated_history_the_real_verifier_rejects() {
+fn broken_first_sequence_guard_admits_the_truncated_history_the_real_verifier_rejects() {
     let keypair = signing_keypair(7);
 
     // No known head -- a fresh verifier meeting this issuer for the first time.
@@ -517,9 +596,8 @@ fn broken_first_envelope_shape_admits_the_truncated_history_the_real_verifier_re
         "the unmutated mirror must reproduce the real verdict"
     );
 
-    let broken =
-        mirrored_verify_chain_link(&truncated, None, ChainMutation::SkipFirstEnvelopeShape)
-            .expect("a verdict");
+    let broken = mirrored_verify_chain_link(&truncated, None, ChainMutation::SkipFirstSequence)
+        .expect("a verdict");
     assert_eq!(
         broken,
         ChainLinkVerdict::NewChain,
@@ -534,4 +612,37 @@ fn broken_first_envelope_shape_admits_the_truncated_history_the_real_verifier_re
         verify_chain_link(&genuine_first, None).expect("a verdict"),
         ChainLinkVerdict::NewChain
     );
+}
+
+// ---------------------------------------------------------------------------
+// SPINE-CHAIN-FIRST-PREV-NULL
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_first_previous_hash_guard_admits_a_new_chain_linked_to_hidden_history() {
+    let keypair = signing_keypair(7);
+    let linked_first = envelope(&keypair, 1, Some("0x".to_string() + &"ef".repeat(32)));
+    assert!(verify_envelope(&linked_first).expect("the envelope is correctly signed"));
+
+    let real = verify_chain_link(&linked_first, None).expect("a verdict");
+    assert!(matches!(real, ChainLinkVerdict::InvalidChainHead { .. }));
+    assert!(!real.is_valid());
+
+    let control =
+        mirrored_verify_chain_link(&linked_first, None, ChainMutation::None).expect("a verdict");
+    assert_eq!(
+        control, real,
+        "the unmutated mirror must reproduce the real verdict"
+    );
+
+    let broken =
+        mirrored_verify_chain_link(&linked_first, None, ChainMutation::SkipFirstPreviousHash)
+            .expect("a verdict");
+    assert_eq!(
+        broken,
+        ChainLinkVerdict::NewChain,
+        "without the null-previous-hash guard a supposed first link can point at \
+         history this verifier has never seen"
+    );
+    assert!(broken.is_valid());
 }

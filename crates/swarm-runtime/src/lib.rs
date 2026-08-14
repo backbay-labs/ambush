@@ -1002,6 +1002,7 @@ where
     ) -> Result<ResponseReceipt, RuntimeError> {
         let execution_mode = self.execution_mode();
         Self::require_dispatcher_admission(request, execution_mode, false)?;
+        // INVARIANT: RUNTIME-POLICY-ERROR-BLOCKS-EXECUTION
         let decision = self.policy.evaluate(request, context)?;
         tracing::info!(
             correlation_id = %Self::correlation_id(context),
@@ -1026,6 +1027,7 @@ where
             swarm_policy::PolicyVerdict::Allow | swarm_policy::PolicyVerdict::RequireHuman => {}
         }
 
+        // INVARIANT: RUNTIME-GUARD-REJECTION-BLOCKS-EXECUTION
         if let Some((guard_name, reason)) = self.evaluate_guard_rejection(request) {
             tracing::warn!(
                 correlation_id = %Self::correlation_id(context),
@@ -1043,8 +1045,10 @@ where
         let prepared_containment =
             self.prepare_containment(request, context, self.execution_mode())?;
 
+        // INVARIANT: RUNTIME-LEASE-ISSUE-ERROR-BLOCKS-EXECUTION
         let lease = self.policy.issue_lease(request, context)?;
         ensure_active_lease(&lease, context.now_ms)?;
+        // INVARIANT: RUNTIME-ADAPTER-ERROR-NOT-SUCCESS
         let receipt = self
             .response
             .execute(request, &lease, execution_mode)
@@ -1060,6 +1064,7 @@ where
             None,
             "consensus approved response action",
         );
+        // INVARIANT: RUNTIME-FAILED-RECEIPT-NOT-SUCCESS
         if !receipt.status.indicates_success() {
             return Err(RuntimeError::Response(ResponseError {
                 failure: receipt.into_failure(),

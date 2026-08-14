@@ -150,6 +150,7 @@ impl ApprovalGate for ConfigurableApprovalGate {
 
                 if let Some(window) = rule.time_window_utc {
                     let hour = Self::current_hour_utc(context.now_ms);
+                    // INVARIANT: POLICY-RULE-TIME-WINDOW
                     if !window.contains_hour(hour) {
                         return Ok(PolicyDecision::deny_with_rule(
                             rule.name.clone(),
@@ -158,6 +159,7 @@ impl ApprovalGate for ConfigurableApprovalGate {
                     }
                 }
 
+                // INVARIANT: POLICY-RULE-AGENT-RATE-LIMIT
                 if let Some(limit) = rule.max_actions_per_agent_per_minute
                     && self.agent_limit_exceeded(rule, request, context.now_ms, limit)
                 {
@@ -174,6 +176,7 @@ impl ApprovalGate for ConfigurableApprovalGate {
                     PolicyRuleDecision::Allow => {
                         PolicyDecision::allow_with_rule(rule.name.clone(), Self::allow_reason(rule))
                     }
+                    // INVARIANT: POLICY-CONFIGURED-DENY-RULE
                     PolicyRuleDecision::Deny => {
                         PolicyDecision::deny_with_rule(rule.name.clone(), Self::deny_reason(rule))
                     }

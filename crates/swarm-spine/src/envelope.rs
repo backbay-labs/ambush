@@ -120,6 +120,7 @@ pub fn verify_envelope(envelope: &Value) -> SpineResult<bool> {
         .get("signature")
         .and_then(Value::as_str)
         .ok_or(SpineError::MissingField("signature"))?;
+    // INVARIANT: SPINE-ENVELOPE-HASH-FIELD-REQUIRED
     let claimed_hash = envelope
         .get("envelope_hash")
         .and_then(Value::as_str)

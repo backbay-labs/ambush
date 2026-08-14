@@ -36,19 +36,22 @@ allowed to exist**.
 
 ### 1. A row names the enforcing function, and a gate resolves it
 
-`docs/assurance/MAPPING.md` carries one row per fail-closed invariant. Each row
-names an exact `crate::module::function` path and one assumption ID.
+`docs/assurance/MAPPING.md` carries one row per fail-closed invariant in the
+requirement-defined universe. Each row names an exact
+`crate::module::function` path and one or more assumption IDs. Assumption
+dependencies are many-to-many; forcing a one-assumption partition produced an
+incomplete blast radius and was removed in assurance review.
 
-`tools/check-mapping.sh` resolves each path against the tree — crate directory,
-module file, declared type, declared `fn` — and fails when it does not exist.
-It also requires a `// INVARIANT: <NAME>` marker on the enforcing statement, **in
-the file the row resolves to**, and fails on any marker in production code that
-has no row.
+`tools/check-mapping.sh` lexically removes Rust comments and literals, resolves
+each path against the tree — crate directory, module file, exact impl type and
+function body — and fails when it does not exist. It requires one
+`// INVARIANT: <NAME>` marker immediately before an executable decision inside
+that exact function, and fails on any production marker with no row.
 
-Production text is everything above the first column-0 `#[cfg(test)]` in a file,
-so a function that exists only inside a test module does not satisfy a row. The
-self-test exercises that direction explicitly (`function_only_under_cfg_test`),
-because a truncation rule with no fixture is itself an uninspected region.
+The same checker resolves `docs/assurance/omissions.toml`. An excluded surface
+must name a real function plus an owner, reason, and clearing condition. The
+adversarial fixtures prove that comments, strings, wrong-function markers and
+markers parked above non-guard statements cannot satisfy it.
 
 ### 2. A row is not allowed to exist without a mutation test
 
@@ -57,9 +60,12 @@ This is the substantive decision and the expensive one.
 `docs/assurance/negative-registry.toml` maps each row to a
 `crates/*/tests/negative_*.rs` test, and `tools/check-negative-registry.sh` fails
 on a row with no entry, an entry with no row, an entry naming a test file or test
-function that does not exist, a test function carrying no `#[test]` attribute, or
-a `broken_variant` that is not both defined in the file and named inside the test
-body.
+function that does not exist, a test function carrying no adjacent `#[test]` or
+`#[tokio::test]` attribute, or a `broken_variant` whose exact `Enum::Variant`
+identity is not executably defined outside the test and passed to a
+non-assertion call or constructor inside it. Comments, strings, decorative bare
+or qualified tokens, nonexistent modules and nonexistent types are adversarial
+self-test cases.
 
 Each such test does three things over one probe input:
 
@@ -90,12 +96,13 @@ mirror is faithful.** The control in step 2 and review are what stand in for it,
 and both check scripts say so in their headers rather than implying a guarantee
 they do not provide.
 
-### 4. Every mutation was neutralized and watched to fail
+### 4. Neutralization evidence is row-local and reproducible
 
-For each of the 21 rows, the removed guard was put back — making the "broken"
-variant no longer broken — and the test was run and observed failing. The
-observed text is recorded per row in `negative-registry.toml`'s
-`observed_when_neutralized`, and the field is required to be non-empty.
+The removed guard can be restored by selecting the mirror's `None` mutation on
+the same probe. The resulting differential failure is recorded per row in
+`negative-registry.toml`'s `observed_when_neutralized`, and the field is required
+non-empty. This ADR does not claim those outputs are in a commit message; exact
+commands and outputs belong in the execution handoff that reproduced them.
 
 A negative test that has never been seen failing is not evidence. That is the
 eleventh entry in `.planning/STATE.md` wearing a different hat.
@@ -109,19 +116,22 @@ directory — a gate placed in `scripts/` would be invisible to the gate that
 checks gates are wired. The requirement wording is stale; phase 283 hit the same
 thing and recorded the same deviation.
 
+Workflow wiring is not branch protection. Both scripts are invoked by
+`.github/workflows/ci.yml`, but MAPPING-05 and FALSIFY-04 remain open until
+repository settings make the containing job a protected required check.
+
 ## What this buys, stated narrowly
 
-21 rows across `swarm-policy` (5), `swarm-response` (4), `swarm-runtime` (6) and
-`swarm-spine` (6), each with a mutation test that has been observed failing.
+41 rows across `swarm-policy` (10), `swarm-response` (10), `swarm-runtime` (11)
+and `swarm-spine` (10), each with a same-probe differential mutation test, plus
+five enforced omissions for named surfaces that render no pre-dispatch refusal.
 
 It does NOT buy:
 
-- **completeness.** Nobody has enumerated every fail-closed guard in the tree.
-  The table is the set of invariants that are real, already enforced, and
-  falsifiable today. `swarm-agents`' `GovernancePolicy::can_act` — the fix in
-  b4bf119, and a genuine fail-closed guard — has no row, because the phase's
-  criterion names four crates and holding the diff to four crates mattered more
-  than a twenty-second row.
+- **whole-tree completeness.** The declared universe is the four surfaces named
+  by MAPPING-02, not every crate. `swarm-agents::GovernancePolicy::can_act` is
+  outside that declared universe; expanding the requirement must expand the
+  scope registry rather than silently pretending it was already covered.
 - **evidence about concurrency or crash recovery.** Every row is proved by a
   single-process, in-memory test. Phases 286 and 287 are where those come from.
 - **a trust anchor for release attestation.** `RUNTIME-RELEASE-SUBJECT-BOUND`
@@ -141,7 +151,7 @@ $ grep -rn 'verify_chain_link' crates/ | grep -v swarm-spine/src/chain.rs | grep
 crates/swarm-spine/src/lib.rs:61:pub use chain::{ChainLinkVerdict, IssuerChainHead, chain_head_from_envelope, verify_chain_link};
 ```
 
-Four of the 21 rows are invariants of a public, tested primitive of a TCB crate
+Seven chain rows are invariants of a public, tested primitive of a TCB crate
 that the critical lane does not call. They are mapped anyway, and the table says
 so in the row notes: the guard has to be right before something depends on it,
 and a row that states its own reachability is worth more than an absent row. The
@@ -176,6 +186,7 @@ passing positive tests before this phase, and several of the defects listed abov
 shipped underneath passing positive tests. A positive test proves the system
 denies; it does not prove the named guard is what denied.
 
-**Thirty rows.** The criterion asks for twelve. Twenty-one is what could be
-backed by a mutation test that was actually observed failing, without inventing
-an invariant to fill a row.
+**Coverage floors as completeness.** The criterion's minimum of twelve is a
+floor, not permission to stop counting. The first implementation did that and
+missed real guards. The revised decision enumerates the named surfaces and uses
+explicit enforced omissions for exclusions.
