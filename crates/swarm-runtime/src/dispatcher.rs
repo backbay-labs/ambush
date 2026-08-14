@@ -1592,10 +1592,12 @@ mod tests {
             contingency_lease_ttl_ms: 60_000,
             contingency_blast_radius_cap: 1,
         }));
-        governance_policy.register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[31; 32]),
-        );
+        governance_policy
+            .register_governor(
+                AgentId::new("tom", "primary"),
+                SigningKey::from_bytes(&[31; 32]),
+            )
+            .expect("the policy holds no other governor key");
         governance_policy.observe_health(
             &AgentId::new("tom", "primary"),
             &[AgentHealthEntry {
@@ -2303,12 +2305,15 @@ mod tests {
             .register_restartable(initial_agent, Arc::clone(&restart_factory))
             .unwrap();
         dispatcher
-            .register(Box::new(TomAgent::new_with_signing_key(
-                AgentId::new("tom", "primary"),
-                SigningKey::from_bytes(&[17; 32]),
-                1,
-                Arc::clone(&governance_policy),
-            )))
+            .register(Box::new(
+                TomAgent::new_with_signing_key(
+                    AgentId::new("tom", "primary"),
+                    SigningKey::from_bytes(&[17; 32]),
+                    1,
+                    Arc::clone(&governance_policy),
+                )
+                .expect("the fixture policy holds no other governor key"),
+            ))
             .unwrap();
         dispatcher
             .register(Box::new(MockAgent::new(

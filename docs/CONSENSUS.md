@@ -49,14 +49,75 @@ destructive actions:
 For those actions:
 
 1. `Pouncer` asks `Tom` policy whether the action can proceed.
-2. `Tom` either returns an approval receipt, returns a veto, or attaches a
-   contingency lease if the request is occurring during partition.
+2. `Tom` runs one consensus round through the `ConsensusTransport` its policy
+   holds, driving a single `ConsensusNode` built from `Tom`'s own signing key,
+   and either returns the receipt that round committed, returns a veto, or
+   attaches a contingency lease if the request is occurring during partition.
 3. The dispatcher re-validates the receipt before the request reaches the
    runtime response router.
 4. The response adapter still runs under the existing policy and lease checks.
 
 Non-destructive actions remain guarded and audited, but they do not require a
 governance receipt in the current runtime.
+
+### How The Round Is Actually Run (BFT-03, phase 321)
+
+This is the part that is easy to overstate, so it is stated exactly.
+
+- `GovernancePolicy` holds AT MOST ONE governor signing key
+  (`LocalGovernorKey`), and `register_governor` returns
+  `Err(GovernanceKeyError::SecondSigningKey)` for a second, different key. The
+  type exposes no accessor returning a `SigningKey`. Until phase 321 this was a
+  `BTreeMap<AgentId, SigningKey>` and the round was simulated by building one
+  in-process node per key -- a shape in which one process could cast every
+  committee member's vote.
+- Peer governors are admitted by identity alone
+  (`register_peer_governor(&VerifyingKey)`); no peer key is ever held. The
+  admitted set IS persisted, because forgetting it across a restart is a
+  fail-open: a policy that knows about a peer refuses every destructive action,
+  and one that has forgotten it is back to a committee of one and starts
+  authorizing again.
+- The round is driven by `swarm_consensus::drive_round`, which publishes signed
+  envelopes to a `ConsensusTransport` and consumes what the transport delivers.
+  Its deadline is `round_timeout_ms * (max_faulty + 1)`.
+- A round that does not commit inside that deadline returns an error, and
+  `can_act` turns it into a `Veto` carrying the consensus error verbatim. It
+  never falls through to `Allow`.
+
+WHAT DOES NOT SHIP YET. The only transport in the tree is
+`SoloGovernorTransport`, which serves a committee of ONE and REFUSES any larger
+committee. So:
+
+- a deployment registering one governor (the only shape
+  `crates/swarm-runtime-http/src/bin/swarm_detect.rs` builds today) runs a real
+  one-member round: `threshold() == 1`, the member is its own proposer, and the
+  receipt names a committee of one;
+- a deployment that admits peer governors WITHOUT installing a networked
+  transport fails closed on every destructive action, with a veto naming the
+  transport as the cause.
+
+A networked transport -- pheromone-substrate or JetStream backed -- is not here.
+It cannot be at the current signature: `ConsensusTransport` is synchronous (a
+mailbox: publish to an outbox, drain an inbox), and a transport that must wait
+for peers has to be `async`, which makes `GovernancePolicy::can_act` async. That
+is the open half of BFT-04. Two consequences worth naming:
+
+- contingency-lease issuance also runs a governance round, from the SYNCHRONOUS
+  `observe_health` on every `TomAgent` tick, once per each of twelve destructive
+  action kinds. Making the round networked changes that path's character
+  completely, and it is deliberately not attempted here.
+- BFT-03's requirement text also asks that governors exchange
+  `ConsensusSignedEnvelope` **over the pheromone substrate**. That clause is NOT
+  satisfied; the seam exists and the substrate transport does not.
+
+### Restart Safety Of A Round
+
+`PersistedGovernanceState` persists `previous_commit_hash`, the receipt counter,
+partition state and active leases. It persists NO round state and NOT the
+governor key. A restart mid-round therefore loses the round. The outcome is
+fail-closed -- no commit means a veto -- but governance LIVENESS is not
+restart-safe, and any claim of "restart-safe recovery" should be read as
+covering the persisted fields above and not the round.
 
 ## Approval And Receipt Lineage
 

@@ -2,15 +2,15 @@ use async_trait::async_trait;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_consensus::{
     ConsensusCommittee, ConsensusConfig, ConsensusError, ConsensusGovernanceReceipt, ConsensusNode,
-    ConsensusProgress, ConsensusProposal, ConsensusSignedEnvelope, GovernanceReceiptDecision,
-    recommended_max_faulty,
+    ConsensusProposal, ConsensusTransport, GovernanceReceiptDecision, SoloGovernorTransport,
+    drive_round, recommended_max_faulty,
 };
 use swarm_core::agent::{
     AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
@@ -200,11 +200,112 @@ pub enum GovernanceDecision {
     },
 }
 
+/// The one governor signing key this process is allowed to hold (BFT-03).
+///
+/// Before this type, `GovernanceState` held `governors: BTreeMap<AgentId,
+/// SigningKey>` and `simulate_governance_commit` built one `ConsensusNode` per
+/// entry -- so the type permitted a process to speak, and sign, for every
+/// member of its own committee. Nothing in the tree ever put two keys in that
+/// map (measured: all 13 `register_governor` call sites register exactly one
+/// key per policy), but "nobody does it" is a property of today's callers, not
+/// of the code. This type makes it a property of the code.
+///
+/// There is deliberately NO accessor returning the `SigningKey`. Everything
+/// that needs to sign does so through a method here, so a future
+/// `issue_*`-shaped function cannot clone a key back out into a collection.
+/// See `tools/check-single-governor-key.sh` for what that does and does not
+/// catch.
+struct LocalGovernorKey {
+    consensus_agent_id: AgentId,
+    signing_key: SigningKey,
+}
+
+impl std::fmt::Debug for LocalGovernorKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never render the private half, not even in a panic message.
+        formatter
+            .debug_struct("LocalGovernorKey")
+            .field("consensus_agent_id", &self.consensus_agent_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalGovernorKey {
+    fn new(signing_key: SigningKey) -> Self {
+        Self {
+            consensus_agent_id: AgentId::from_verifying_key(&signing_key.verifying_key()),
+            signing_key,
+        }
+    }
+
+    fn consensus_agent_id(&self) -> &AgentId {
+        &self.consensus_agent_id
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+
+    /// Build the ONE consensus node this process drives.
+    ///
+    /// The key is cloned exactly here, into the node that owns it for the
+    /// duration of a round. `ConsensusNode` exposes no key accessor either --
+    /// it signs its own outbound envelopes through `sign_outbound`.
+    fn consensus_node(
+        &self,
+        committee: ConsensusCommittee,
+        config: ConsensusConfig,
+        previous_commit_hash: &str,
+        now_ms: i64,
+    ) -> Result<ConsensusNode, ConsensusError> {
+        ConsensusNode::new_with_signing_key(
+            self.consensus_agent_id.clone(),
+            self.signing_key.clone(),
+            committee,
+            config,
+            previous_commit_hash.to_string(),
+            now_ms,
+        )
+    }
+
+    fn issue_receipt(
+        &self,
+        commit: &swarm_consensus::ConsensusCommit,
+        previous_commit_hash: &str,
+        committee: &ConsensusCommittee,
+        decision: GovernanceReceiptDecision,
+        issued_at_ms: i64,
+    ) -> Result<ConsensusGovernanceReceipt, ConsensusError> {
+        ConsensusGovernanceReceipt::issue(
+            commit,
+            previous_commit_hash,
+            committee,
+            decision,
+            self.consensus_agent_id.clone(),
+            &self.signing_key,
+            issued_at_ms,
+        )
+    }
+}
+
+/// Refusal reasons for [`GovernancePolicy::register_governor`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum GovernanceKeyError {
+    #[error(
+        "governance policy already holds the signing key for governor `{existing}`; refusing to \
+         also hold `{offered}` (no process may hold more than one governor signing key)"
+    )]
+    SecondSigningKey { existing: AgentId, offered: AgentId },
+}
+
 #[derive(Debug)]
 struct GovernanceState {
     governing_agent_id: Option<AgentId>,
     display_governors: BTreeMap<AgentId, AgentId>,
-    governors: BTreeMap<AgentId, SigningKey>,
+    /// The single key this process holds, if any.
+    local_governor: Option<LocalGovernorKey>,
+    /// Peer governors, by consensus identity only. No key, ever.
+    peer_governors: BTreeSet<AgentId>,
     unhealthy_agents: Vec<AgentHealthEntry>,
     previous_commit_hash: String,
     receipt_counter: u64,
@@ -219,12 +320,32 @@ struct GovernanceState {
     pending_events: VecDeque<GovernanceRuntimeEvent>,
 }
 
+impl GovernanceState {
+    /// Every governor this policy knows about: the local one plus admitted peers.
+    fn governor_count(&self) -> usize {
+        self.peer_governors
+            .len()
+            .saturating_add(usize::from(self.local_governor.is_some()))
+    }
+
+    /// The committee for a round, by consensus identity. Contains no keys.
+    fn committee(&self) -> Result<ConsensusCommittee, ConsensusError> {
+        let mut members = self.peer_governors.iter().cloned().collect::<Vec<_>>();
+        if let Some(local) = self.local_governor.as_ref() {
+            members.push(local.consensus_agent_id().clone());
+        }
+        let size = members.len();
+        ConsensusCommittee::new(members, recommended_max_faulty(size))
+    }
+}
+
 impl Default for GovernanceState {
     fn default() -> Self {
         Self {
             governing_agent_id: None,
             display_governors: BTreeMap::new(),
-            governors: BTreeMap::new(),
+            local_governor: None,
+            peer_governors: BTreeSet::new(),
             unhealthy_agents: Vec::new(),
             previous_commit_hash: "governance-bootstrap".to_string(),
             receipt_counter: 0,
@@ -264,6 +385,16 @@ struct GovernancePersistence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedGovernanceState {
     governing_agent_id: Option<AgentId>,
+    /// Admitted peer governors, by consensus identity. NEVER a key.
+    ///
+    /// Persisted because forgetting them is a FAIL-OPEN across restart: a
+    /// policy that knows about three peers refuses every destructive action
+    /// (the shipped solo transport cannot serve a four-member committee), and
+    /// one that has forgotten them is back to a committee of one and starts
+    /// authorizing again. `#[serde(default)]` so state files written before
+    /// this field existed still load.
+    #[serde(default)]
+    peer_governors: BTreeSet<AgentId>,
     previous_commit_hash: String,
     receipt_counter: u64,
     partition_state: PartitionState,
@@ -278,6 +409,7 @@ impl Default for PersistedGovernanceState {
     fn default() -> Self {
         Self {
             governing_agent_id: None,
+            peer_governors: BTreeSet::new(),
             previous_commit_hash: "governance-bootstrap".to_string(),
             receipt_counter: 0,
             partition_state: PartitionState::Healthy,
@@ -306,6 +438,7 @@ impl GovernancePersistence {
     fn save(&self, state: &GovernanceState) -> Result<(), std::io::Error> {
         let persisted = PersistedGovernanceState {
             governing_agent_id: state.governing_agent_id.clone(),
+            peer_governors: state.peer_governors.clone(),
             previous_commit_hash: state.previous_commit_hash.clone(),
             receipt_counter: state.receipt_counter,
             partition_state: state.partition_state,
@@ -333,6 +466,14 @@ pub struct GovernancePolicy {
     state: Mutex<GovernanceState>,
     config: GovernancePolicyConfig,
     persistence: Option<GovernancePersistence>,
+    /// How this policy's governance rounds reach the rest of the committee.
+    ///
+    /// Defaults to [`SoloGovernorTransport`], which serves a committee of one
+    /// and REFUSES any larger committee. A deployment that admits peer
+    /// governors and does not also install a networked transport therefore
+    /// fails closed -- `can_act` vetoes -- instead of minting receipts from a
+    /// round nobody else took part in.
+    transport: Arc<dyn ConsensusTransport>,
 }
 
 impl Default for GovernancePolicy {
@@ -347,7 +488,15 @@ impl GovernancePolicy {
             state: Mutex::new(GovernanceState::default()),
             config,
             persistence: None,
+            transport: Arc::new(SoloGovernorTransport::new()),
         }
+    }
+
+    /// Replace the consensus transport. See [`GovernancePolicy::transport`].
+    #[must_use]
+    pub fn with_transport(mut self, transport: Arc<dyn ConsensusTransport>) -> Self {
+        self.transport = transport;
+        self
     }
 
     pub fn with_persistence(
@@ -358,6 +507,7 @@ impl GovernancePolicy {
         let persisted = persistence.load()?;
         let state = GovernanceState {
             governing_agent_id: persisted.governing_agent_id,
+            peer_governors: persisted.peer_governors,
             previous_commit_hash: persisted.previous_commit_hash,
             receipt_counter: persisted.receipt_counter,
             partition_state: persisted.partition_state,
@@ -372,22 +522,70 @@ impl GovernancePolicy {
             state: Mutex::new(state),
             config,
             persistence: Some(persistence),
+            transport: Arc::new(SoloGovernorTransport::new()),
         })
     }
 
-    pub fn register_governor(&self, governing_agent_id: AgentId, signing_key: SigningKey) {
+    /// Install THE local governor signing key.
+    ///
+    /// Idempotent for the same key -- `governance_resilience_integration.rs`
+    /// re-registers the same identity after a persistence reload and must keep
+    /// working. A second, DIFFERENT key is refused: holding two means this
+    /// process could cast two committee members' votes, which is exactly the
+    /// property BFT-03 removes.
+    pub fn register_governor(
+        &self,
+        governing_agent_id: AgentId,
+        signing_key: SigningKey,
+    ) -> Result<(), GovernanceKeyError> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let offered = LocalGovernorKey::new(signing_key);
+        if let Some(existing) = state.local_governor.as_ref()
+            && existing.verifying_key() != offered.verifying_key()
+        {
+            return Err(GovernanceKeyError::SecondSigningKey {
+                existing: existing.consensus_agent_id().clone(),
+                offered: offered.consensus_agent_id().clone(),
+            });
+        }
         state
             .governing_agent_id
             .get_or_insert(governing_agent_id.clone());
-        let consensus_agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+        let consensus_agent_id = offered.consensus_agent_id().clone();
         state
             .display_governors
             .insert(governing_agent_id, consensus_agent_id.clone());
-        state.governors.insert(consensus_agent_id, signing_key);
+        state.peer_governors.remove(&consensus_agent_id);
+        state.local_governor = Some(offered);
+        self.persist_locked(&state);
+        Ok(())
+    }
+
+    /// Admit a peer governor by identity alone.
+    ///
+    /// This is how a committee grows past one member without this process
+    /// acquiring a second key. It exists so the multi-member path is
+    /// EXPRESSIBLE and therefore testable: with a peer admitted, `can_act`
+    /// builds a committee of two, the shipped `SoloGovernorTransport` refuses
+    /// it, and the decision is a Veto naming the missing networked transport
+    /// rather than a receipt minted from keys this process should not have.
+    pub fn register_peer_governor(&self, peer: &VerifyingKey) {
+        let consensus_agent_id = AgentId::from_verifying_key(peer);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state
+            .local_governor
+            .as_ref()
+            .is_some_and(|local| local.consensus_agent_id() == &consensus_agent_id)
+        {
+            return;
+        }
+        state.peer_governors.insert(consensus_agent_id);
         self.persist_locked(&state);
     }
 
@@ -407,7 +605,7 @@ impl GovernancePolicy {
             .filter(|entry| entry.health != AgentHealth::Healthy)
             .cloned()
             .collect();
-        let total_governors = state.display_governors.len().max(state.governors.len());
+        let total_governors = state.display_governors.len().max(state.governor_count());
         let unhealthy_governors = entries
             .iter()
             .filter(|entry| {
@@ -496,7 +694,7 @@ impl GovernancePolicy {
         // branch on purpose - `active_contingency_leases` is rehydrated from disk by
         // `with_persistence` before any governor registers, so the partition branch
         // would otherwise authorize a destructive action off a state file alone.
-        if state.governors.is_empty() {
+        if state.local_governor.is_none() {
             return GovernanceDecision::Veto {
                 governing_agent_id: state
                     .governing_agent_id
@@ -541,28 +739,55 @@ impl GovernancePolicy {
                 )),
             )
         };
-        let receipt = issue_governance_receipt(&mut state, action, decision);
-        let governing_agent_id = state.governing_agent_id.clone().or_else(|| {
-            receipt
-                .as_ref()
-                .map(|receipt| receipt.payload.issued_by.clone())
-        });
+        let receipt =
+            match issue_governance_receipt(&mut state, self.transport.as_ref(), action, decision) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    // Fail closed on a round that did not commit. This is the arm a
+                    // committee with admitted peer governors and no networked
+                    // transport lands in: `SoloGovernorTransport` refuses the
+                    // committee, no receipt exists, and authorizing the action
+                    // anyway would mean acting on a quorum nobody reached. The
+                    // consensus error is carried into the reason verbatim so the
+                    // operator is told "this transport cannot serve a committee of
+                    // N" rather than a generic denial.
+                    tracing::warn!(
+                        reason = %error,
+                        module = module_path!(),
+                        "governance round produced no receipt; refusing destructive action"
+                    );
+                    return GovernanceDecision::Veto {
+                        governing_agent_id: state
+                            .governing_agent_id
+                            .clone()
+                            .unwrap_or_else(|| AgentId::new("tom", "unconfigured")),
+                        reason: format!(
+                            "blocked destructive action because the governance round produced \
+                             no receipt: {error}"
+                        ),
+                        receipt: None,
+                    };
+                }
+            };
+        let governing_agent_id = state
+            .governing_agent_id
+            .clone()
+            .unwrap_or_else(|| receipt.payload.issued_by.clone());
 
         match reason {
             // A missing `governing_agent_id` is a labelling problem, not grounds to
             // permit the action: this used to `return Allow` with the veto reason
-            // discarded. The keyring is non-empty by the guard above, so
+            // discarded. A local governor key exists by the guard above, so
             // `register_governor` has run and has already set `governing_agent_id`;
             // the fallback mirrors the partition branch and cannot be reached through
             // the public API.
             Some(reason) => GovernanceDecision::Veto {
-                governing_agent_id: governing_agent_id
-                    .unwrap_or_else(|| AgentId::new("tom", "unconfigured")),
+                governing_agent_id,
                 reason,
-                receipt,
+                receipt: Some(receipt),
             },
             None => GovernanceDecision::Allow {
-                receipt,
+                receipt: Some(receipt),
                 contingency_lease: None,
             },
         }
@@ -808,7 +1033,7 @@ impl GovernancePolicy {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         GovernanceStatusReport {
             partition_state: state.partition_state,
-            total_governors: state.display_governors.len().max(state.governors.len()),
+            total_governors: state.display_governors.len().max(state.governor_count()),
             healthy_governors: state.last_healthy_governors,
             quorum_threshold: state.last_quorum_threshold,
             active_contingency_leases: state.active_contingency_leases.len(),
@@ -846,6 +1071,7 @@ impl GovernancePolicy {
             }
             if let Some(lease) = issue_contingency_lease(
                 state,
+                self.transport.as_ref(),
                 action_kind,
                 None,
                 self.config.contingency_blast_radius_cap,
@@ -941,7 +1167,7 @@ impl TomAgent {
         id: AgentId,
         degraded_tick_threshold: usize,
         governance_policy: std::sync::Arc<GovernancePolicy>,
-    ) -> Self {
+    ) -> Result<Self, GovernanceKeyError> {
         Self::new_with_signing_key(
             id,
             SigningKey::generate(&mut OsRng),
@@ -950,23 +1176,29 @@ impl TomAgent {
         )
     }
 
+    /// Construct a Tom and install its key as THE governor key of `governance_policy`.
+    ///
+    /// Fallible since BFT-03: a policy that already holds a different governor's
+    /// key refuses this one rather than accumulating both. Swallowing that would
+    /// leave a Tom that believes it governs while the policy signs with someone
+    /// else's key, so the error propagates to the composition root.
     pub fn new_with_signing_key(
         id: AgentId,
         signing_key: SigningKey,
         degraded_tick_threshold: usize,
         governance_policy: std::sync::Arc<GovernancePolicy>,
-    ) -> Self {
-        governance_policy.register_governor(id.clone(), signing_key.clone());
+    ) -> Result<Self, GovernanceKeyError> {
+        governance_policy.register_governor(id.clone(), signing_key.clone())?;
         let verifying_key = signing_key.verifying_key();
 
-        Self {
+        Ok(Self {
             id,
             verifying_key,
             health: AgentHealth::Healthy,
             degraded_tick_threshold,
             degraded_ticks: BTreeMap::new(),
             governance_policy,
-        }
+        })
     }
 }
 
@@ -1088,66 +1320,83 @@ fn partition_transition_reason(state: PartitionState) -> &'static str {
     }
 }
 
+/// Run one governance round over `transport` and mint the receipt it commits.
+///
+/// This is the function that replaced `simulate_governance_commit` on the
+/// production path (BFT-03). The differences that matter:
+///
+/// - exactly ONE `ConsensusNode` is built, from the ONE local key, so this
+///   process can produce signed traffic for one committee member and no other;
+/// - envelopes go out through a [`ConsensusTransport`], so the seam a networked
+///   deployment needs exists and the shipped `SoloGovernorTransport` refuses
+///   any committee it cannot honestly serve;
+/// - a round that does not commit within `round_timeout_ms * (max_faulty + 1)`
+///   returns `Err`, and every caller turns that into a refusal.
+fn run_governance_round(
+    state: &mut GovernanceState,
+    transport: &dyn ConsensusTransport,
+    proposal: ConsensusProposal,
+    decision: GovernanceReceiptDecision,
+    issued_at_ms: i64,
+) -> Result<ConsensusGovernanceReceipt, ConsensusError> {
+    let Some(local) = state.local_governor.as_ref() else {
+        return Err(ConsensusError::InvalidCommittee(
+            "governance policy holds no local governor signing key".to_string(),
+        ));
+    };
+    let committee = state.committee()?;
+    let mut node = local.consensus_node(
+        committee.clone(),
+        ConsensusConfig::default(),
+        &state.previous_commit_hash,
+        issued_at_ms,
+    )?;
+    let commit = drive_round(&mut node, transport, proposal, issued_at_ms)?;
+    let previous_commit_hash = state.previous_commit_hash.clone();
+    let receipt = local.issue_receipt(
+        &commit,
+        &previous_commit_hash,
+        &committee,
+        decision,
+        issued_at_ms,
+    )?;
+    state.previous_commit_hash = commit.commit_hash;
+    state.receipt_counter = state.receipt_counter.saturating_add(1);
+    Ok(receipt)
+}
+
+/// Returns `Result`, not `Option`, so the refusal reason reaches the operator.
+///
+/// A round that cannot commit -- no transport for this committee, threshold
+/// unreachable, deadline passed -- must produce a Veto that NAMES the cause.
+/// Collapsing it to `None` is how the old shape fell through to `Allow`.
 fn issue_governance_receipt(
     state: &mut GovernanceState,
+    transport: &dyn ConsensusTransport,
     action: &ResponseAction,
     decision: GovernanceReceiptDecision,
-) -> Option<ConsensusGovernanceReceipt> {
-    if state.governors.is_empty() {
-        return None;
-    }
-
+) -> Result<ConsensusGovernanceReceipt, ConsensusError> {
     let issued_at_ms = now_ms();
-    match simulate_governance_commit(
-        &state.governors,
+    let proposal = build_governance_proposal(
+        state.receipt_counter,
+        action,
+        decision,
+        &state.unhealthy_agents,
         &state.previous_commit_hash,
-        build_governance_proposal(
-            state.receipt_counter,
-            action,
-            decision,
-            &state.unhealthy_agents,
-            &state.previous_commit_hash,
-        )
-        .ok()?,
-        issued_at_ms,
-    ) {
-        Ok((commit, committee)) => {
-            let issued_by = state.governors.keys().next().cloned()?;
-            let signing_key = state.governors.get(&issued_by)?;
-            let previous_commit_hash = state.previous_commit_hash.clone();
-            state.previous_commit_hash = commit.commit_hash.clone();
-            state.receipt_counter = state.receipt_counter.saturating_add(1);
-            ConsensusGovernanceReceipt::issue(
-                &commit,
-                &previous_commit_hash,
-                &committee,
-                decision,
-                issued_by,
-                signing_key,
-                issued_at_ms,
-            )
-            .ok()
-        }
-        Err(error) => {
-            tracing::warn!(
-                reason = %error,
-                module = module_path!(),
-                "failed to build governance consensus receipt"
-            );
-            None
-        }
-    }
+    )?;
+    run_governance_round(state, transport, proposal, decision, issued_at_ms)
 }
 
 fn issue_contingency_lease(
     state: &mut GovernanceState,
+    transport: &dyn ConsensusTransport,
     action_kind: &str,
     scope: Option<&str>,
     blast_radius_cap: usize,
     ttl_ms: i64,
     issued_at_ms: i64,
 ) -> Option<ContingencyLease> {
-    if state.governors.is_empty() || blast_radius_cap == 0 || ttl_ms <= 0 {
+    if state.local_governor.is_none() || blast_radius_cap == 0 || ttl_ms <= 0 {
         return None;
     }
     let expires_at_ms = issued_at_ms.saturating_add(ttl_ms);
@@ -1172,41 +1421,25 @@ fn issue_contingency_lease(
         expires_at_ms,
     )
     .ok()?;
-    match simulate_governance_commit(
-        &state.governors,
-        &state.previous_commit_hash,
+    match run_governance_round(
+        state,
+        transport,
         proposal,
+        GovernanceReceiptDecision::Approve,
         issued_at_ms,
     ) {
-        Ok((commit, committee)) => {
-            let issued_by = state.governors.keys().next().cloned()?;
-            let signing_key = state.governors.get(&issued_by)?;
-            let previous_commit_hash = state.previous_commit_hash.clone();
-            state.previous_commit_hash = commit.commit_hash.clone();
-            state.receipt_counter = state.receipt_counter.saturating_add(1);
-            let governance_receipt = ConsensusGovernanceReceipt::issue(
-                &commit,
-                &previous_commit_hash,
-                &committee,
-                GovernanceReceiptDecision::Approve,
-                issued_by,
-                signing_key,
-                issued_at_ms,
-            )
-            .ok()?;
-            Some(ContingencyLease {
-                schema_version: CONTINGENCY_LEASE_SCHEMA_VERSION,
-                lease_id,
-                action_kind: action_kind.to_string(),
-                scope: scope.map(str::to_string),
-                blast_radius_cap,
-                max_duration_ms: ttl_ms,
-                issued_at_ms,
-                expires_at_ms,
-                redeemed_scopes: Vec::new(),
-                governance_receipt,
-            })
-        }
+        Ok(governance_receipt) => Some(ContingencyLease {
+            schema_version: CONTINGENCY_LEASE_SCHEMA_VERSION,
+            lease_id,
+            action_kind: action_kind.to_string(),
+            scope: scope.map(str::to_string),
+            blast_radius_cap,
+            max_duration_ms: ttl_ms,
+            issued_at_ms,
+            expires_at_ms,
+            redeemed_scopes: Vec::new(),
+            governance_receipt,
+        }),
         Err(error) => {
             tracing::warn!(
                 reason = %error,
@@ -1217,77 +1450,6 @@ fn issue_contingency_lease(
             None
         }
     }
-}
-
-fn simulate_governance_commit(
-    governors: &BTreeMap<AgentId, SigningKey>,
-    previous_commit_hash: &str,
-    proposal: ConsensusProposal,
-    now_ms: i64,
-) -> Result<(swarm_consensus::ConsensusCommit, ConsensusCommittee), ConsensusError> {
-    let committee = ConsensusCommittee::new(
-        governors.keys().cloned().collect(),
-        recommended_max_faulty(governors.len()),
-    )?;
-    let config = ConsensusConfig::default();
-    let mut nodes = governors
-        .iter()
-        .map(|(agent_id, signing_key)| {
-            ConsensusNode::new_with_signing_key(
-                agent_id.clone(),
-                signing_key.clone(),
-                committee.clone(),
-                config.clone(),
-                previous_commit_hash.to_string(),
-                now_ms,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut pending = std::collections::VecDeque::new();
-    let mut commits = Vec::new();
-
-    for node in &mut nodes {
-        let progress = node.queue_proposal(proposal.clone(), now_ms)?;
-        commits.extend(progress.commits.clone());
-        collect_signed_progress(progress, governors, &mut pending)?;
-    }
-
-    while let Some(envelope) = pending.pop_front() {
-        let mut outbound = Vec::new();
-        for node in &mut nodes {
-            let progress = node.handle_signed_envelope(&envelope, now_ms)?;
-            commits.extend(progress.commits.clone());
-            outbound.push(progress);
-        }
-        for progress in outbound {
-            collect_signed_progress(progress, governors, &mut pending)?;
-        }
-    }
-
-    commits
-        .into_iter()
-        .next()
-        .map(|commit| (commit, committee))
-        .ok_or_else(|| {
-            ConsensusError::InvalidMessage("governance consensus did not commit".to_string())
-        })
-}
-
-fn collect_signed_progress(
-    progress: ConsensusProgress,
-    governors: &BTreeMap<AgentId, SigningKey>,
-    pending: &mut std::collections::VecDeque<ConsensusSignedEnvelope>,
-) -> Result<(), ConsensusError> {
-    for envelope in progress.outbound {
-        let signing_key = governors.get(&envelope.message.from).ok_or_else(|| {
-            ConsensusError::InvalidCommittee(format!(
-                "missing signing key for governance member `{}`",
-                envelope.message.from
-            ))
-        })?;
-        pending.push_back(ConsensusSignedEnvelope::sign(envelope, signing_key)?);
-    }
-    Ok(())
 }
 
 fn build_governance_proposal(
@@ -1504,10 +1666,12 @@ mod tests {
     #[test]
     fn governance_policy_vetoes_destructive_actions_when_swarm_is_unhealthy() {
         let policy = GovernancePolicy::default();
-        policy.register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[7; 32]),
-        );
+        policy
+            .register_governor(
+                AgentId::new("tom", "primary"),
+                SigningKey::from_bytes(&[7; 32]),
+            )
+            .expect("the policy holds no other governor key");
         policy.observe_health(
             &AgentId::new("tom", "primary"),
             &[AgentHealthEntry {
@@ -1556,10 +1720,12 @@ mod tests {
     #[test]
     fn governance_policy_approves_destructive_actions_with_signed_receipt_when_healthy() {
         let policy = GovernancePolicy::default();
-        policy.register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[11; 32]),
-        );
+        policy
+            .register_governor(
+                AgentId::new("tom", "primary"),
+                SigningKey::from_bytes(&[11; 32]),
+            )
+            .expect("the policy holds no other governor key");
         policy.observe_health(&AgentId::new("tom", "primary"), &[], 1_700_000_000_000);
 
         let decision = policy.can_act(&ResponseAction::BlockEgress {
@@ -1649,10 +1815,12 @@ mod tests {
         };
 
         let keyed = GovernancePolicy::with_persistence(config.clone(), &path).unwrap();
-        keyed.register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[19; 32]),
-        );
+        keyed
+            .register_governor(
+                AgentId::new("tom", "primary"),
+                SigningKey::from_bytes(&[19; 32]),
+            )
+            .expect("the policy holds no other governor key");
         keyed.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
         keyed.observe_health(
             &AgentId::new("tom", "primary"),
@@ -1714,10 +1882,12 @@ mod tests {
             contingency_lease_ttl_ms: 60_000,
             contingency_blast_radius_cap: 1,
         });
-        policy.register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[13; 32]),
-        );
+        policy
+            .register_governor(
+                AgentId::new("tom", "primary"),
+                SigningKey::from_bytes(&[13; 32]),
+            )
+            .expect("the policy holds no other governor key");
         policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
         let healthy_status = policy.status_report();
         assert_eq!(healthy_status.partition_state, PartitionState::Healthy);
@@ -1786,10 +1956,12 @@ mod tests {
             contingency_lease_ttl_ms: 60_000,
             contingency_blast_radius_cap: 1,
         });
-        policy.register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[17; 32]),
-        );
+        policy
+            .register_governor(
+                AgentId::new("tom", "primary"),
+                SigningKey::from_bytes(&[17; 32]),
+            )
+            .expect("the policy holds no other governor key");
         policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
         policy.observe_health(
             &AgentId::new("tom", "primary"),
@@ -1853,7 +2025,8 @@ mod tests {
     #[tokio::test]
     async fn tom_agent_shifts_degraded_agents_to_tom_role() {
         let policy = Arc::new(GovernancePolicy::default());
-        let mut agent = TomAgent::new(AgentId::new("tom", "primary"), 3, Arc::clone(&policy));
+        let mut agent = TomAgent::new(AgentId::new("tom", "primary"), 3, Arc::clone(&policy))
+            .expect("a fresh policy has no governor key yet");
 
         let actions = agent
             .tick(&env(vec![AgentHealthEntry {
@@ -1876,7 +2049,8 @@ mod tests {
     #[tokio::test]
     async fn tom_agent_marks_agents_failed_after_threshold() {
         let policy = Arc::new(GovernancePolicy::default());
-        let mut agent = TomAgent::new(AgentId::new("tom", "primary"), 3, Arc::clone(&policy));
+        let mut agent = TomAgent::new(AgentId::new("tom", "primary"), 3, Arc::clone(&policy))
+            .expect("a fresh policy has no governor key yet");
 
         let first_actions = agent
             .tick(&env(vec![AgentHealthEntry {

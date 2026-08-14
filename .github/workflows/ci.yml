@@ -151,6 +151,29 @@ jobs:
       - name: Check the trusted-computing-base layering boundary
         run: bash tools/check-workspace-layering.sh
 
+      # BFT-03 / phase 321 criterion 3. The criterion reads "no production path
+      # holds more than one governor signing key in memory" and names no method
+      # of checking it, which makes it satisfiable by assertion -- the exact
+      # pattern phase 321 exists to repair.
+      #
+      # This is the WEAKEST of the three mechanisms and its header says so. The
+      # type (`LocalGovernorKey`, no `SigningKey` accessor) and the test
+      # (`register_governor` returns Err on a second distinct key) are the
+      # guarantee; this is a lexical backstop over the three files that make up
+      # the governance signing path, and it enumerates four things it cannot
+      # see -- including two `GovernancePolicy` instances in one process, which
+      # nothing here closes.
+      #
+      # It runs a FIXTURE on every invocation before it touches the real tree:
+      # six planted violations that must be caught and three controls that must
+      # not be, including a keyring inside `#[cfg(test)]` and one named only in
+      # a comment. Three identifier-grep sweeps in this repository's history
+      # declared themselves complete and were wrong; a grep that has never been
+      # observed to fail is not evidence. No toolchain needed beyond awk, so it
+      # belongs in this job with the other fast static checks.
+      - name: Check no production path holds a governor keyring
+        run: bash tools/check-single-governor-key.sh
+
   build:
     runs-on: ubuntu-latest
     steps:

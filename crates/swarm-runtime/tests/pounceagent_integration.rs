@@ -188,10 +188,12 @@ fn request_actions(actions: &[SwarmAction]) -> Vec<&ResponseAction> {
 // governance, so they register a governor and let the receipt-backed Allow path run.
 fn healthy_governance_policy() -> Arc<GovernancePolicy> {
     let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
-    policy.register_governor(
-        AgentId::new("tom", "primary"),
-        SigningKey::from_bytes(&[17; 32]),
-    );
+    policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[17; 32]),
+        )
+        .expect("the policy holds no other governor key");
     policy
 }
 
@@ -204,10 +206,12 @@ fn sample_partition_governance_policy() -> Arc<GovernancePolicy> {
         contingency_lease_ttl_ms: 60_000,
         contingency_blast_radius_cap: 1,
     }));
-    policy.register_governor(
-        AgentId::new("tom", "primary"),
-        SigningKey::from_bytes(&[23; 32]),
-    );
+    policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[23; 32]),
+        )
+        .expect("the policy holds no other governor key");
     policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
     policy.observe_health(
         &AgentId::new("tom", "primary"),
@@ -466,10 +470,12 @@ async fn response_playbook_branches_emit_ordered_actions_from_runtime_context() 
 #[tokio::test]
 async fn pounceagent_emits_governance_veto_for_destructive_action() {
     let governance_policy = Arc::new(GovernancePolicy::default());
-    governance_policy.register_governor(
-        AgentId::new("tom", "primary"),
-        SigningKey::from_bytes(&[9; 32]),
-    );
+    governance_policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[9; 32]),
+        )
+        .expect("the policy holds no other governor key");
     governance_policy.observe_health(
         &AgentId::new("tom", "primary"),
         &[AgentHealthEntry {

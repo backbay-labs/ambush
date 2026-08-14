@@ -686,10 +686,12 @@ fn sample_partition_governance_policy_with_ttl(ttl_ms: i64) -> Arc<GovernancePol
         contingency_lease_ttl_ms: ttl_ms,
         contingency_blast_radius_cap: 1,
     }));
-    policy.register_governor(
-        AgentId::new("tom", "primary"),
-        SigningKey::from_bytes(&[23; 32]),
-    );
+    policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[23; 32]),
+        )
+        .expect("the policy holds no other governor key");
     policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
     policy.observe_health(
         &AgentId::new("tom", "primary"),
@@ -1299,10 +1301,12 @@ async fn partitioned_request_response_rejects_expired_contingency_lease()
         contingency_lease_ttl_ms: 1000,
         contingency_blast_radius_cap: 1,
     }));
-    governance_policy.register_governor(
-        AgentId::new("tom", "primary"),
-        SigningKey::from_bytes(&[29; 32]),
-    );
+    governance_policy
+        .register_governor(
+            AgentId::new("tom", "primary"),
+            SigningKey::from_bytes(&[29; 32]),
+        )
+        .expect("the policy holds no other governor key");
     governance_policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
     governance_policy.observe_health(
         &AgentId::new("tom", "primary"),
