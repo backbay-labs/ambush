@@ -103,9 +103,14 @@ rustc/Cargo release and commit identities. Every Cargo command runs with a fresh
 config-free gate-owned `CARGO_HOME`; repository and ancestor Cargo configuration
 is refused, active-host compiler/wrapper/flags/linker/runner overrides are
 rejected, and inactive-target, Python, and loader channels are neutralized. The
-checker itself starts through an absolute system-path Python interpreter, so a
-candidate-controlled `PATH/python3` cannot fabricate its final status. A
-gate-owned rustc wrapper runs under that exact isolated Python and forces one
+Actions runner's step environment is the bootstrap trust root: it clears
+`BASH_ENV`, `ENV`, and the loader injection family before starting the step
+shell, which then launches an absolute `/bin/bash` through `/usr/bin/env -i`.
+Only inside that clean parent-created boundary does the checker select an
+absolute system-path Python interpreter. Directly invoking the script from a
+process that already carries shell-startup or loader injection is intentionally
+not claimed safe; executable fixtures reproduce both pre-entry false greens.
+A gate-owned rustc wrapper runs under that exact isolated Python and forces one
 target-only recompilation with unique
 codegen metadata, then requires one audit record binding test mode, crate name,
 pinned rustc, canonical source realpath, and source hash. It associates the
@@ -129,7 +134,8 @@ checked before and after every Cargo process, so the executable transitive
 fixture that overwrites the audit program is also refused after compilation.
 The isolated execution boundary defeats those
 substitutions and default-feature drift before the gate compiles its own
-Rust-syntax checker.
+Rust-syntax checker. It also strips every `LD_*`/`DYLD_*` variable, including
+`LD_AUDIT`, from Cargo, compiler-wrapper, and emitted-test descendants.
 
 The protocol itself has a separate compiled five-test contract target. Its
 success case uses typed counters and role capture to prove exactly one real,

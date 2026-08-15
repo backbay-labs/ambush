@@ -193,13 +193,13 @@ jobs:
       # and production-library targets so a same-name explicit test cannot
       # redirect execution, pins manifest/toolchain semantics, and forces an
       # audited target compile through a config-free Cargo home and pinned
-      # compiler. Two warm runs of the 144-self-test gate took 209.40s and
-      # 141.41s wall clock (38.76/38.42s user, 16.72/16.32s sys) on Darwin
+      # compiler. Two warm runs of the 149-self-test gate took 290.50s and
+      # 116.72s wall clock (39.31/38.59s user, 17.15/15.90s sys) on Darwin
       # 25.4.0 arm64 with rustc 1.97.1 (2026-08-15). Both began with no other
-      # Cargo process in this worktree, but system load was 24-42 and sibling
-      # worktrees were compiling during measurement. These are explicitly
+      # Cargo process in this worktree, but system load remained 24-42 with
+      # unrelated system contention. These are explicitly
       # contention-bound observations, not quiet measurements or a CI estimate;
-      # the stable 54.74-55.48s CPU cost is the more useful local datum. Compiled
+      # the stable 54.49-56.46s CPU cost is the more useful local datum. Compiled
       # actual-source mutations dominate; timing remains cache- and
       # machine-dependent.
       #
@@ -229,7 +229,24 @@ jobs:
       # maintained while the falsifiability behind it rotted.
       - name: Check every mapped invariant has a falsifying negative test
         if: ${{ !cancelled() }}
-        run: bash tools/check-negative-registry.sh
+        # These values are cleared by the Actions runner before it starts the
+        # step shell. That parent-created environment is the bootstrap trust
+        # root: a script cannot neutralize BASH_ENV or a dynamic-loader hook
+        # that executes before the script's first instruction.
+        env:
+          BASH_ENV: ""
+          ENV: ""
+          LD_AUDIT: ""
+          LD_PRELOAD: ""
+          LD_LIBRARY_PATH: ""
+          DYLD_INSERT_LIBRARIES: ""
+          DYLD_LIBRARY_PATH: ""
+          DYLD_FRAMEWORK_PATH: ""
+          DYLD_FALLBACK_LIBRARY_PATH: ""
+          DYLD_FALLBACK_FRAMEWORK_PATH: ""
+          DYLD_ROOT_PATH: ""
+          DYLD_IMAGE_SUFFIX: ""
+        run: /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc tools/check-negative-registry.sh
 
   build:
     runs-on: ubuntu-latest

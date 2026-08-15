@@ -25,8 +25,12 @@
 # overrides. Inactive-target overrides are stripped. External
 # Cargo homes are ignored: every Cargo command uses a recreated config-free
 # gate-owned home, pinned cargo/rustc, and a
-# gate-owned isolated-Python rustc wrapper, while the checker itself starts
-# through an absolute system-path Python. The wrapper forces and audits one
+# gate-owned isolated-Python rustc wrapper. The supported workflow first clears
+# BASH_ENV/ENV and loader injection in the runner-created step environment,
+# then uses absolute env/bash with `env -i`; that parent is the bootstrap trust
+# root. Only inside it does the checker select an absolute system-path Python.
+# Direct hostile-environment invocation is reproduced as unsafe, not claimed
+# repaired by script-internal sanitization. The wrapper forces and audits one
 # exact test-mode compile per target, including crate name and canonical source
 # realpath/hash. Checker-owned semantic digests cover the complete four
 # crate manifests and root execution-affecting TOML tables. It compiles with
@@ -36,7 +40,7 @@
 # compilation. The full local custom-build target inventory is bound; the one
 # reviewed build script is manifest/source-digested, all additions are refused,
 # and audit wrapper/program hashes are checked around each Cargo process.
-# Isolated Python plus environment rejection/neutralization
+# Isolated Python plus complete descendant `LD_*`/`DYLD_*` rejection/neutralization
 # precedes compilation of the gate's own Rust-syntax checker.
 # This does not prove a handwritten mirror faithful beyond the registered probe;
 # that broader fidelity remains a review duty.

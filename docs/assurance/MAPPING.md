@@ -43,16 +43,22 @@ tables. Cargo metadata also binds the full local custom-build inventory; the one
 reviewed build-script manifest and source are digested and any added local
 custom-build target is refused. Every Cargo command uses a fresh config-free
 gate-owned `CARGO_HOME`, an exact pinned Cargo/rustc, a sanitized PATH, and no
-repository or ancestor Cargo config. The checker starts with an absolute
-system-path Python, and a gate-owned isolated-Python rustc wrapper forces and audits exactly one
+repository or ancestor Cargo config. The Actions runner's cleared step
+environment is the bootstrap trust root: it empties `BASH_ENV`, `ENV`, and the
+loader-injection family before starting the shell, then the step uses
+`/usr/bin/env -i` and absolute `/bin/bash`. Inside that boundary the checker
+selects an absolute system-path Python, and a gate-owned isolated-Python rustc wrapper forces and audits exactly one
 test-mode compile per registered target, binding the compiler, crate name,
 canonical source realpath, and source hash. The gate then invokes emitted test
 binaries directly under a sanitized runtime environment so a Cargo runner,
 loader setting, or Python-module injection cannot forge discovery or pass
 counts, and it rechecks execution inputs plus the audit program/wrapper hashes
 after compilation. Active-host compiler, rustdoc, flags, target, wrapper, and
-runner overrides are rejected; inactive-target and Python environment channels
-are neutralized before the gate compiles its own Rust-syntax checker.
+runner overrides are rejected; inactive-target, Python, and every descendant
+`LD_*`/`DYLD_*` environment channel are neutralized before the gate compiles its
+own Rust-syntax checker. Direct invocation from a process already compromised by
+shell-startup or loader injection is outside the local script's power to repair
+and is not claimed safe; checked fixtures reproduce those pre-entry false greens.
 The local digests detect uncoordinated drift but are co-located with the checker:
 they do not provide external provenance and cannot resist a coherent edit of
 all local inputs. This also does not mechanically prove
