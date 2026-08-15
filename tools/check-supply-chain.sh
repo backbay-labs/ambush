@@ -312,11 +312,15 @@ fi
 echo "supply-chain tools ok: cargo-deny $REQUIRED_CARGO_DENY_VERSION, cargo-audit $REQUIRED_CARGO_AUDIT_VERSION"
 
 # Keep executable provenance separate from downloaded-source reuse. This parser
-# asks git for every tracked workflow rather than maintaining another file list.
-# Every actions/cache use must be a source-only Cargo cache, and release jobs are
-# held to their exact least-privilege token and tool-install contracts. The
-# mutations make every negative branch executable.
+# asks git for every tracked workflow and local action manifest rather than
+# maintaining another file list. Ruby/Psych parses the YAML with aliases disabled
+# and rejects duplicate mapping keys from the syntax tree before safe_load can
+# apply its last-key-wins behavior. Every cache-family use must be a source-only
+# Cargo cache; split restore/save actions and composite-action caches are refused.
+# Release jobs are held to their exact least-privilege token and tool-install
+# contracts. The mutations make every negative branch executable.
 python3 - "$ROOT_DIR" "$REQUIRED_CARGO_CYCLONEDX_VERSION" <<'PY'
+import json
 import pathlib
 import re
 import subprocess
@@ -325,7 +329,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 cyclonedx_version = sys.argv[2]
 tracked = subprocess.run(
-    ["git", "-C", str(root), "ls-files", "--", ".github/workflows"],
+    ["git", "-C", str(root), "ls-files"],
     check=True,
     stdout=subprocess.PIPE,
     text=True,
@@ -340,6 +344,14 @@ if not workflow_names:
     raise SystemExit("git reported no tracked .github/workflows/*.yml or *.yaml files")
 workflows = {
     name: (root / name).read_text(encoding="utf-8") for name in workflow_names
+}
+action_names = sorted(
+    name
+    for name in tracked
+    if pathlib.PurePosixPath(name).name in {"action.yml", "action.yaml"}
+)
+action_manifests = {
+    name: (root / name).read_text(encoding="utf-8") for name in action_names
 }
 
 ci_name = ".github/workflows/ci.yml"
@@ -389,6 +401,246 @@ github_release_permissions = """    permissions:
       contents: write
 """
 
+RUBY_CACHE_VALIDATOR = r'''
+require "json"
+require "yaml"
+
+unless YAML.respond_to?(:safe_load) && Psych.respond_to?(:parse_stream) && defined?(Psych::Nodes::Mapping)
+  abort "ruby bootstrap lacks YAML.safe_load, Psych.parse_stream, or Psych node APIs"
+end
+
+payload = JSON.parse(STDIN.read)
+documents = payload.fetch("workflows")
+action_documents = payload.fetch("actions")
+allowed_paths = [
+  "~/.cargo/registry/index",
+  "~/.cargo/registry/cache",
+  "~/.cargo/git/db",
+  "~/.cargo/git/checkouts",
+]
+namespace = "cargo-home-sources-v1-"
+expected_counts = {
+  ".github/workflows/ci.yml" => 12,
+  ".github/workflows/release.yml" => 2,
+}
+recognized = [
+  "actions/cache",
+  "actions/cache/restore",
+  "actions/cache/save",
+]
+problems = []
+combined_total = 0
+composite_cache_total = 0
+
+parse_document = lambda do |source, name, kind|
+  begin
+    syntax_tree = Psych.parse_stream(source)
+    duplicate_problems = []
+    walk = nil
+    walk = lambda do |node, path|
+      if node.respond_to?(:tag) && !node.tag.nil? && !node.tag.empty?
+        duplicate_problems << "#{name}: #{kind} YAML custom tag #{node.tag.inspect} is forbidden at #{path}"
+      end
+      if node.is_a?(Psych::Nodes::Mapping)
+        seen = {}
+        node.children.each_slice(2).with_index do |pair, index|
+          key, value = pair
+          if key.is_a?(Psych::Nodes::Scalar)
+            identity = key.value
+            if seen.key?(identity)
+              duplicate_problems << "#{name}: #{kind} YAML duplicate mapping key #{identity.inspect} at #{path}"
+            else
+              seen[identity] = index
+            end
+            child_path = "#{path}.#{identity}"
+          else
+            duplicate_problems << "#{name}: #{kind} YAML mapping key at #{path}[#{index}] must be scalar"
+            child_path = "#{path}[#{index}]"
+          end
+          walk.call(key, "#{path}.<key>")
+          walk.call(value, child_path)
+        end
+      elsif node.respond_to?(:children) && node.children.is_a?(Array)
+        node.children.each_with_index do |child, index|
+          walk.call(child, "#{path}[#{index}]")
+        end
+      end
+    end
+    walk.call(syntax_tree, "$")
+    unless duplicate_problems.empty?
+      problems.concat(duplicate_problems)
+      next nil
+    end
+    YAML.safe_load(source, aliases: false)
+  rescue StandardError => error
+    problems << "#{name}: #{kind} YAML parse failed with aliases disabled: #{error.class}: #{error.message}"
+    nil
+  end
+end
+
+validate_cache_steps = lambda do |name, context, steps|
+  combined_count = 0
+  steps.each_with_index do |step, index|
+    next unless step.is_a?(Hash)
+    raw_uses = step["uses"]
+    next unless raw_uses.is_a?(String)
+    normalized_uses = raw_uses.strip.downcase
+    pieces = normalized_uses.split("@", -1)
+    action_identity = pieces.first
+    next unless recognized.include?(action_identity)
+    label = "#{name}: #{context}.steps[#{index}] #{normalized_uses.inspect}"
+    if pieces.length != 2 || pieces.last.empty?
+      problems << "#{label}: cache action must contain exactly one non-empty @ reference"
+      next
+    end
+    reference = pieces.last
+    if reference != "v4"
+      problems << "#{label}: cache action must use exact @v4"
+    end
+    if action_identity == "actions/cache"
+      combined_count += 1
+    else
+      problems << "#{label}: split cache restore/save actions are forbidden; use actions/cache@v4"
+    end
+
+    inputs = step["with"]
+    unless inputs.is_a?(Hash)
+      problems << "#{label}: with must be an object"
+      next
+    end
+    actual_keys = inputs.keys.map(&:to_s).sort
+    expected_keys = if action_identity == "actions/cache/save"
+      ["key", "path"]
+    else
+      ["key", "path", "restore-keys"]
+    end
+    if actual_keys != expected_keys
+      problems << "#{label}: with keys must be exactly #{expected_keys.inspect}, got #{actual_keys.inspect}"
+    end
+
+    path_value = inputs["path"]
+    if path_value.is_a?(String)
+      paths = path_value.lines.map(&:strip).reject(&:empty?).map { |path| path.sub(%r{/+\z}, "") }
+      if paths != allowed_paths
+        problems << "#{label}: normalized paths must be exactly #{allowed_paths.inspect}, got #{paths.inspect}"
+      end
+    else
+      problems << "#{label}: path must be a scalar string"
+    end
+
+    key = inputs["key"]
+    unless key.is_a?(String) && key.start_with?(namespace)
+      problems << "#{label}: key must be a scalar beginning #{namespace.inspect}"
+    end
+    unless action_identity == "actions/cache/save"
+      restore_value = inputs["restore-keys"]
+      if restore_value.is_a?(String)
+        restore_keys = restore_value.lines.map(&:strip).reject(&:empty?)
+        unless restore_keys.length == 1 && restore_keys.first.start_with?(namespace)
+          problems << "#{label}: restore-keys must contain exactly one #{namespace.inspect} prefix"
+        end
+      else
+        problems << "#{label}: restore-keys must be a scalar string"
+      end
+    end
+  end
+  combined_count
+end
+
+documents.keys.sort.each do |name|
+  workflow = parse_document.call(documents.fetch(name), name, "workflow")
+  next if workflow.nil?
+  unless workflow.is_a?(Hash)
+    problems << "#{name}: workflow YAML root must be an object"
+    next
+  end
+  jobs = workflow["jobs"]
+  unless jobs.is_a?(Hash)
+    problems << "#{name}: workflow jobs must be an object"
+    next
+  end
+
+  combined_count = 0
+  jobs.each do |job_name, job|
+    next unless job.is_a?(Hash)
+    steps = job["steps"]
+    next unless steps.is_a?(Array)
+    combined_count += validate_cache_steps.call(name, "jobs.#{job_name}", steps)
+  end
+  combined_total += combined_count
+
+  expected = expected_counts.fetch(name, 0)
+  if combined_count != expected
+    problems << "#{name}: expected #{expected} committed actions/cache@v4 step(s), found #{combined_count}"
+  end
+end
+
+action_documents.keys.sort.each do |name|
+  action = parse_document.call(action_documents.fetch(name), name, "action")
+  next if action.nil?
+  unless action.is_a?(Hash)
+    problems << "#{name}: action YAML root must be an object"
+    next
+  end
+  runs = action["runs"]
+  next unless runs.is_a?(Hash) && runs["using"].to_s.strip.downcase == "composite"
+  steps = runs["steps"]
+  unless steps.is_a?(Array)
+    problems << "#{name}: composite action runs.steps must be an array"
+    next
+  end
+  count = validate_cache_steps.call(name, "runs", steps)
+  composite_cache_total += count
+  combined_total += count
+end
+
+if combined_total != 14
+  problems << "tracked workflow inventory must contain exactly 14 actions/cache@v4 steps, found #{combined_total}"
+end
+if composite_cache_total != 0
+  problems << "tracked composite actions must contain zero actions/cache@v4 steps, found #{composite_cache_total}"
+end
+
+STDOUT.write(JSON.generate({
+  "problems" => problems,
+  "ruby_version" => RUBY_VERSION,
+  "psych_version" => Psych::VERSION,
+}))
+'''
+
+
+def structural_cache_problems(
+    documents: dict[str, str], actions: dict[str, str]
+) -> tuple[list[str], str]:
+    process = subprocess.run(
+        ["ruby", "-e", RUBY_CACHE_VALIDATOR],
+        input=json.dumps({"workflows": documents, "actions": actions}),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if process.returncode != 0:
+        raise SystemExit(
+            "Ruby workflow cache validator failed closed: "
+            f"exit={process.returncode}, stderr={process.stderr.strip()!r}"
+        )
+    try:
+        result = json.loads(process.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Ruby workflow cache validator returned invalid JSON: {exc}")
+    if not isinstance(result, dict):
+        raise SystemExit("Ruby workflow cache validator returned a non-object result")
+    problems = result.get("problems")
+    ruby_version = result.get("ruby_version")
+    psych_version = result.get("psych_version")
+    if not isinstance(problems, list) or not all(
+        isinstance(problem, str) for problem in problems
+    ):
+        raise SystemExit("Ruby workflow cache validator returned a non-string problem list")
+    if not isinstance(ruby_version, str) or not isinstance(psych_version, str):
+        raise SystemExit("Ruby workflow cache validator omitted runtime bootstrap versions")
+    return problems, f"ruby {ruby_version} / psych {psych_version}"
+
 
 def job_body(text: str, job: str) -> str | None:
     match = re.search(
@@ -402,63 +654,16 @@ def permission_blocks(body: str) -> list[str]:
     return re.findall(r"(?m)^    permissions:\n(?:      \S.*\n)+", body)
 
 
-def workflow_contract_problems(documents: dict[str, str]) -> list[str]:
+def workflow_contract_problems(
+    documents: dict[str, str], actions: dict[str, str] = action_manifests
+) -> list[str]:
     problems: list[str] = []
     if sorted(documents) != workflow_names:
         problems.append("validator input no longer equals git's tracked workflow inventory")
-
-    for name, text in sorted(documents.items()):
-        for forbidden in forbidden_paths:
-            if forbidden in text:
-                problems.append(f"{name}: forbidden Cargo cache path is present: {forbidden}")
-
-        action_count = len(re.findall(r"uses: actions/cache@", text))
-        blocks = re.findall(
-            r"(?ms)^      - name: Cache cargo home\n.*?(?=^      - name:|\Z)",
-            text,
-        )
-        if action_count != len(blocks):
-            problems.append(
-                f"{name}: every actions/cache use must be a validated Cache cargo home "
-                f"block (actions={action_count}, validated={len(blocks)})"
-            )
-
-        for index, block in enumerate(blocks, start=1):
-            label = f"{name}: Cargo cache block {index}"
-            path_match = re.search(
-                r"(?m)^          path: \|\n"
-                r"(?P<paths>(?:            \S.*\n)+)"
-                r"^          key: ",
-                block,
-            )
-            if path_match is None:
-                problems.append(f"{label} has no parseable path list")
-            else:
-                paths = [line.strip() for line in path_match.group("paths").splitlines()]
-                if paths != allowed_paths:
-                    problems.append(
-                        f"{label} paths are not the exact source-only set: {paths!r}"
-                    )
-
-            key_match = re.search(r"(?m)^          key: (.+)$", block)
-            if key_match is None or not key_match.group(1).startswith(namespace):
-                actual = key_match.group(1) if key_match else "<missing>"
-                problems.append(f"{label} key is outside {namespace!r}: {actual}")
-
-            restore_match = re.search(
-                r"(?m)^          restore-keys: \|\n(?P<keys>(?:            \S.*\n)+)",
-                block,
-            )
-            if restore_match is None:
-                problems.append(f"{label} has no parseable restore prefix")
-            else:
-                restore_keys = [
-                    line.strip() for line in restore_match.group("keys").splitlines()
-                ]
-                if not restore_keys or any(
-                    not key.startswith(namespace) for key in restore_keys
-                ):
-                    problems.append(f"{label} has legacy restore prefix: {restore_keys!r}")
+    if sorted(actions) != action_names:
+        problems.append("validator input no longer equals git's tracked action-manifest inventory")
+    cache_problems, _ = structural_cache_problems(documents, actions)
+    problems.extend(cache_problems)
 
     ci = documents.get(ci_name, "")
     supply_job = job_body(ci, "supply-chain")
@@ -524,16 +729,35 @@ def replaced(
     return result
 
 
-def require_valid(label: str, documents: dict[str, str]) -> None:
-    problems = workflow_contract_problems(documents)
+def replaced_last(
+    documents: dict[str, str], name: str, old: str, new: str, label: str
+) -> dict[str, str]:
+    text = documents[name]
+    pieces = text.rsplit(old, 1)
+    if len(pieces) != 2:
+        raise SystemExit(f"could not construct {label}")
+    result = dict(documents)
+    result[name] = new.join(pieces)
+    return result
+
+
+def require_valid(
+    label: str,
+    documents: dict[str, str],
+    actions: dict[str, str] = action_manifests,
+) -> None:
+    problems = workflow_contract_problems(documents, actions)
     if problems:
         raise SystemExit(f"{label} unexpectedly failed: {'; '.join(problems)}")
 
 
 def require_invalid(
-    label: str, documents: dict[str, str], expected: list[str]
+    label: str,
+    documents: dict[str, str],
+    expected: list[str],
+    actions: dict[str, str] = action_manifests,
 ) -> None:
-    problems = workflow_contract_problems(documents)
+    problems = workflow_contract_problems(documents, actions)
     missing = [item for item in expected if not any(item in problem for problem in problems)]
     if missing:
         rendered = "; ".join(problems) if problems else "no problems"
@@ -544,18 +768,21 @@ def require_invalid(
     print(f"workflow mutation refused: {label}: {'; '.join(matched)}")
 
 
-require_valid("checked-in workflows", workflows)
+require_valid("checked-in workflows and action manifests", workflows)
+_, parser_bootstrap = structural_cache_problems(workflows, action_manifests)
 
-yaml_extension_mutation = dict(workflows)
-yaml_extension_mutation[".github/workflows/ignored-cache.yaml"] = """name: ignored
+for extension in ("yml", "yaml"):
+    extension_mutation = dict(workflows)
+    synthetic_name = f".github/workflows/ignored-cache.{extension}"
+    extension_mutation[synthetic_name] = """name: ignored
 jobs:
   ignored:
     steps:
-      - name: Cache cargo home
-        uses: actions/cache@v4
+      - name: Renamed cache step
+        uses: "actions/cache@v4"
         with:
           path: |
-            ~/.cargo/bin/
+            ~/.cargo/bin
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
@@ -564,21 +791,81 @@ jobs:
           restore-keys: |
             cargo-home-sources-v1-
 """
+    require_invalid(
+        f"tracked .{extension} quoted/renamed/no-slash cache mutation",
+        extension_mutation,
+        [f"{synthetic_name}: jobs.ignored.steps[0]", "normalized paths must be exactly"],
+    )
+
+    split_mutation = dict(workflows)
+    split_name = f".github/workflows/split-cache.{extension}"
+    split_mutation[split_name] = """name: split
+jobs:
+  split:
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-sources-v1-split
+          restore-keys: |
+            cargo-home-sources-v1-
+      - uses: "actions/cache/save@v4"
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-sources-v1-split
+"""
+    require_invalid(
+        f"tracked .{extension} split restore/save cache mutation",
+        split_mutation,
+        [
+            "actions/cache/restore@v4",
+            "actions/cache/save@v4",
+            "split cache restore/save actions are forbidden",
+        ],
+    )
+
+composite_cache_mutation = dict(action_manifests)
+composite_name = ".github/actions/cache-probe/action.yaml"
+composite_cache_mutation[composite_name] = """name: cache probe
+description: cache parser mutation
+runs:
+  using: composite
+  steps:
+    - name: Renamed composite restore
+      uses: "actions/cache/restore@v4"
+      with:
+        path: |
+          ~/.cargo/bin
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          ~/.cargo/git/checkouts/
+        key: cargo-home-sources-v1-composite
+        restore-keys: |
+          cargo-home-sources-v1-
+"""
 require_invalid(
-    "tracked .yaml workflow cache mutation",
-    yaml_extension_mutation,
+    "tracked composite action split-cache/executable-path mutation",
+    workflows,
     [
-        ".github/workflows/ignored-cache.yaml: forbidden Cargo cache path is present: ~/.cargo/bin/"
+        f"{composite_name}: runs.steps[0]",
+        "split cache restore/save actions are forbidden",
+        "normalized paths must be exactly",
     ],
+    composite_cache_mutation,
 )
 
-cache_workflows = [
-    name for name, text in sorted(workflows.items()) if "uses: actions/cache@" in text
-]
-if not cache_workflows:
-    raise SystemExit("tracked workflow inventory contains no actions/cache use")
+cache_workflows = [ci_name, release_name]
 for name in cache_workflows:
-    for forbidden in forbidden_paths:
+    for forbidden in (*forbidden_paths, "~/.cargo/bin"):
         mutated = replaced(
             workflows,
             name,
@@ -589,13 +876,17 @@ for name in cache_workflows:
         require_invalid(
             f"{name} forbidden-path mutation {forbidden}",
             mutated,
-            [f"{name}: forbidden Cargo cache path is present: {forbidden}"],
+            [f"{name}: jobs.", "normalized paths must be exactly"],
         )
 
     legacy_key = replaced(
         workflows, name, namespace, "cargo-home-", f"{name} legacy cache-key mutation"
     )
-    require_invalid(f"{name} legacy cache-key mutation", legacy_key, ["key is outside"])
+    require_invalid(
+        f"{name} legacy cache-key mutation",
+        legacy_key,
+        ["key must be a scalar beginning"],
+    )
 
     legacy_restore = replaced(
         workflows,
@@ -607,7 +898,7 @@ for name in cache_workflows:
     require_invalid(
         f"{name} legacy restore-prefix mutation",
         legacy_restore,
-        ["legacy restore prefix"],
+        ["restore-keys must contain exactly one"],
     )
 
     target_cache = replaced(
@@ -618,7 +909,9 @@ for name in cache_workflows:
         f"{name} target-cache mutation",
     )
     require_invalid(
-        f"{name} target-cache mutation", target_cache, ["not the exact source-only set"]
+        f"{name} target-cache mutation",
+        target_cache,
+        ["normalized paths must be exactly"],
     )
 
     renamed_cache = replaced(
@@ -626,13 +919,131 @@ for name in cache_workflows:
         name,
         "      - name: Cache cargo home\n",
         "      - name: Cache build tools\n",
-        f"{name} unvalidated-cache-name mutation",
+        f"{name} renamed cache control",
     )
-    require_invalid(
-        f"{name} unvalidated-cache-name mutation",
-        renamed_cache,
-        ["every actions/cache use must be a validated Cache cargo home block"],
+    require_valid(f"{name} renamed cache control", renamed_cache)
+
+    quoted_cache = replaced(
+        workflows,
+        name,
+        "        uses: actions/cache@v4\n",
+        '        uses: "actions/cache@v4"\n',
+        f"{name} quoted cache control",
     )
+    require_valid(f"{name} quoted cache control", quoted_cache)
+
+    capitalized_cache = replaced(
+        workflows,
+        name,
+        "        uses: actions/cache@v4\n",
+        "        uses: Actions/Cache@V4\n",
+        f"{name} capitalized cache control",
+    )
+    require_valid(f"{name} capitalized cache control", capitalized_cache)
+
+frozen_release_bypass = replaced_last(
+    workflows,
+    release_name,
+    "      - name: Cache cargo home\n",
+    "      - name: Restore release inputs\n",
+    "frozen release cache-step rename",
+)
+frozen_release_bypass = replaced_last(
+    frozen_release_bypass,
+    release_name,
+    "        uses: actions/cache@v4\n",
+    '        uses: "actions/cache@v4"\n',
+    "frozen release quoted cache action",
+)
+frozen_release_bypass = replaced_last(
+    frozen_release_bypass,
+    release_name,
+    "            ~/.cargo/registry/index/\n",
+    "            ~/.cargo/bin\n            ~/.cargo/registry/index/\n",
+    "frozen release no-slash binary path",
+)
+require_invalid(
+    "frozen renamed/quoted/no-slash release cache mutation",
+    frozen_release_bypass,
+    [
+        ".github/workflows/release.yml: jobs.release-hardening.steps[1]",
+        "normalized paths must be exactly",
+    ],
+)
+
+missing_committed_cache = replaced(
+    workflows,
+    ci_name,
+    "        uses: actions/cache@v4\n",
+    "        uses: actions/checkout@v4\n",
+    "missing committed cache inventory mutation",
+)
+require_invalid(
+    "missing committed cache inventory mutation",
+    missing_committed_cache,
+    [
+        ".github/workflows/ci.yml: expected 12 committed actions/cache@v4 step(s), found 11",
+        "tracked workflow inventory must contain exactly 14 actions/cache@v4 steps, found 13",
+    ],
+)
+
+yaml_alias_mutation = dict(workflows)
+yaml_alias_mutation[".github/workflows/cache-alias.yaml"] = """name: aliases
+cache_paths: &cache_paths |
+  ~/.cargo/registry/index/
+jobs:
+  aliases:
+    steps:
+      - uses: actions/cache@v4
+        with:
+          path: *cache_paths
+          key: cargo-home-sources-v1-alias
+          restore-keys: cargo-home-sources-v1-
+"""
+require_invalid(
+    "workflow YAML alias mutation",
+    yaml_alias_mutation,
+    ["workflow YAML parse failed with aliases disabled", "Psych::BadAlias"],
+)
+
+yaml_parse_mutation = dict(workflows)
+yaml_parse_mutation[".github/workflows/broken.yaml"] = "jobs: [unterminated\n"
+require_invalid(
+    "workflow YAML parse-error mutation",
+    yaml_parse_mutation,
+    ["workflow YAML parse failed with aliases disabled", "Psych::SyntaxError"],
+)
+
+yaml_duplicate_key_mutation = replaced(
+    workflows,
+    ci_name,
+    "        uses: actions/cache@v4\n",
+    "        uses: actions/cache@v4\n        uses: actions/checkout@v4\n",
+    "workflow YAML duplicate uses-key mutation",
+)
+require_invalid(
+    "workflow YAML duplicate uses-key mutation",
+    yaml_duplicate_key_mutation,
+    ["workflow YAML duplicate mapping key \"uses\""],
+)
+
+yaml_custom_tag_mutation = dict(workflows)
+yaml_custom_tag_mutation[".github/workflows/cache-tag.yaml"] = """name: tag
+jobs:
+  tagged:
+    steps:
+      - uses: actions/cache@v4
+        with:
+          path: !forged |
+            ~/.cargo/registry/index/
+          key: cargo-home-sources-v1-tag
+          restore-keys: cargo-home-sources-v1-
+"""
+require_invalid(
+    "workflow YAML custom-tag mutation",
+    yaml_custom_tag_mutation,
+    ["workflow YAML custom tag \"!forged\" is forbidden"],
+)
 
 for tool in ("cargo-deny", "cargo-audit"):
     conditional = replaced(
@@ -707,7 +1118,7 @@ require_invalid(
     "fake cached cargo-cyclonedx false-SBOM mutation",
     fake_cached_release,
     [
-        "forbidden Cargo cache path is present: ~/.cargo/bin/",
+        "normalized paths must be exactly",
         "cargo-cyclonedx must be installed exactly once, unconditionally",
     ],
 )
@@ -744,8 +1155,10 @@ for label, old, new, expected in permission_mutations:
 
 print(
     f"workflow contract fixtures ok: {len(workflow_names)} tracked workflow(s), "
-    f"{sum(len(re.findall(r'uses: actions/cache@', text)) for text in workflows.values())} "
-    "source-only caches, exact tool installs, and least-privilege release permissions"
+    f"{len(action_names)} tracked action manifest(s), 14 structurally parsed "
+    "source-only caches, zero composite caches, exact tool installs, and "
+    f"least-privilege release permissions ({parser_bootstrap}; stdlib json/yaml, "
+    "YAML.safe_load + Psych.parse_stream required)"
 )
 PY
 
