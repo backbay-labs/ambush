@@ -1745,6 +1745,17 @@ impl GovernancePersistence {
             if under_lock.checkpoint_binding.as_ref() == Some(&self.lock_binding)
                 && under_lock.checkpoint_sequence == under_lock.state_sequence
             {
+                // A prior attempt may have renamed this exact checkpoint and
+                // then failed its parent-directory sync. Rewriting the signed
+                // checkpoint makes the idempotent success boundary durable;
+                // merely loading matching bytes cannot prove that durability.
+                self.write_migration_checkpoint(under_lock.state_sequence, signing_key)
+                    .map_err(
+                        |error| GovernancePersistenceError::MigrationCheckpointLagging {
+                            sequence: under_lock.state_sequence,
+                            reason: error.to_string(),
+                        },
+                    )?;
                 let local = LocalGovernorKey::new(signing_key.clone());
                 self.load(&local)?;
                 return Ok(GovernanceLockMigrationReport {
@@ -2327,6 +2338,15 @@ fn write_atomic_synced(
         path: path.to_path_buf(),
         source,
     })?;
+    #[cfg(test)]
+    if take_injected_atomic_parent_sync_failure(path) {
+        return Ok(AtomicWriteOutcome::RenamedDirectorySyncFailed(
+            GovernancePersistenceError::Write {
+                path: path.parent().unwrap_or(path).to_path_buf(),
+                source: std::io::Error::other("injected post-rename parent sync failure"),
+            },
+        ));
+    }
     if let Some(parent) = path.parent()
         && let Err(source) = fs::File::open(parent).and_then(|directory| directory.sync_all())
     {
@@ -2338,6 +2358,32 @@ fn write_atomic_synced(
         ));
     }
     Ok(AtomicWriteOutcome::Synced)
+}
+
+#[cfg(test)]
+thread_local! {
+    static INJECT_ATOMIC_PARENT_SYNC_FAILURE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn inject_atomic_parent_sync_failure(path: &Path) {
+    INJECT_ATOMIC_PARENT_SYNC_FAILURE.with(|target| {
+        *target.borrow_mut() = Some(path.to_path_buf());
+    });
+}
+
+#[cfg(test)]
+fn take_injected_atomic_parent_sync_failure(path: &Path) -> bool {
+    INJECT_ATOMIC_PARENT_SYNC_FAILURE.with(|target| {
+        let mut target = target.borrow_mut();
+        if target.as_deref() == Some(path) {
+            target.take();
+            true
+        } else {
+            false
+        }
+    })
 }
 
 fn remove_governance_stream_files(
@@ -4615,6 +4661,7 @@ mod tests {
         GovernancePersistenceError, GovernancePolicy, GovernancePolicyConfig,
         GovernanceRuntimeEvent, GovernanceSequenceCheckpoint, LocalGovernorKey, PartitionState,
         PendingGovernanceAuthorization, PersistedGovernanceState, TomAgent,
+        inject_atomic_parent_sync_failure,
     };
     use ed25519_dalek::SigningKey;
     use serde_json::json;
@@ -5112,6 +5159,234 @@ mod tests {
         cleanup_persistence(&path);
     }
 
+    #[test]
+    fn migration_preserves_a_genuine_pending_action_receipt_and_its_one_shot_ledger() {
+        let path = persistence_path("migration-action-receipt");
+        let key = SigningKey::from_bytes(&[160; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.160".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: production governance issued an action receipt");
+        };
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        let preconsumed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.162".to_string(),
+        });
+        let GovernanceDecision::Authorize {
+            receipt: preconsumed_receipt,
+            ..
+        } = policy.can_act(&preconsumed_request)
+        else {
+            panic!("precondition: production governance issued the pre-consumed receipt");
+        };
+        let preconsumed_value = serde_json::to_value(&preconsumed_receipt).unwrap();
+        policy
+            .verify_and_consume_action_authorization(
+                &preconsumed_request,
+                &preconsumed_value,
+                preconsumed_receipt.payload.issued_at_ms + 1,
+            )
+            .expect("precondition: the second genuine receipt is consumed before migration");
+        drop(policy);
+
+        let (authority_payload, previous_sequence) = rewrite_as_signed_pre_lock_stream(&path, &key);
+        let report =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id, key.clone()).unwrap();
+        assert_eq!(report.migrated_sequence, previous_sequence + 1);
+        assert_eq!(state_payload_without_lock(&path), authority_payload);
+
+        let restarted = load_signed_policy(&path, &key).unwrap();
+        let error = restarted
+            .verify_and_consume_action_authorization(
+                &preconsumed_request,
+                &preconsumed_value,
+                preconsumed_receipt.payload.issued_at_ms + 2,
+            )
+            .expect_err("a receipt consumed before migration must remain consumed");
+        assert!(error.contains("already consumed"), "{error}");
+        restarted
+            .verify_and_consume_action_authorization(
+                &governed_request,
+                &receipt_value,
+                receipt.payload.issued_at_ms + 1,
+            )
+            .expect("the genuine pending receipt survives migration and restart");
+        drop(restarted);
+
+        let replay = load_signed_policy(&path, &key).unwrap();
+        let error = replay
+            .verify_and_consume_action_authorization(
+                &governed_request,
+                &receipt_value,
+                receipt.payload.issued_at_ms + 2,
+            )
+            .expect_err("the migrated action receipt remains one-shot after another restart");
+        assert!(error.contains("already consumed"), "{error}");
+        let state = replay.state.lock().unwrap();
+        assert!(state.pending_authorizations.is_empty());
+        assert_eq!(state.consumed_authorizations.len(), 2);
+        assert!(
+            state
+                .consumed_authorizations
+                .iter()
+                .any(|consumed| consumed.receipt_id == receipt.payload.receipt_id)
+        );
+        assert!(
+            state
+                .consumed_authorizations
+                .iter()
+                .any(|consumed| { consumed.receipt_id == preconsumed_receipt.payload.receipt_id })
+        );
+        drop(state);
+        drop(replay);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn migration_preserves_a_genuine_human_approval_pack_and_atomic_one_shot() {
+        let path = persistence_path("migration-human-pack");
+        let approval_root = path.with_extension("approval-fixture");
+        let key = SigningKey::from_bytes(&[161; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let policy = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.161".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&governed_request)
+        else {
+            panic!("precondition: production governance issued an action receipt");
+        };
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        let decision = swarm_policy::PolicyDecision::require_human_with_rule(
+            "migration-human-review",
+            "human review required",
+        );
+        let hold = policy
+            .begin_human_authorization_hold(
+                &governed_request,
+                &receipt_value,
+                &decision,
+                receipt.payload.issued_at_ms + 1,
+            )
+            .unwrap();
+        let approval_harness = DefaultApprovalHarness::from_path(
+            approval_root.join("config"),
+            approval_root.join("verdicts"),
+            approval_root.join("packs"),
+            approval_root.join("sets"),
+            approval_root.join("ledgers"),
+        )
+        .unwrap();
+        let voter = Ed25519Signer::from_secret_material("migration-human-voter");
+        let voter_id = format!("swarm:ed25519:{}", voter.public_key_hex());
+        let set_record = approval_harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::Unanimous,
+                &hold.approval_evidence_ref(),
+            )
+            .unwrap();
+        approval_harness
+            .append_vote(&set_record.set_id, &voter_id, &voter)
+            .unwrap();
+        let set = approval_harness
+            .load_approval_set(&set_record.set_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        let ledger_id = approval_harness
+            .list_ledgers(Some(&set.set_id))
+            .unwrap()
+            .ledgers[0]
+            .ledger_id
+            .clone();
+        let ledger = approval_harness
+            .load_ledger(&ledger_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        let evaluated_at_ms = super::now_ms();
+        let verdict = evaluate_verdict(&set, &ledger, evaluated_at_ms).unwrap();
+        let pack_signer = Ed25519Signer::from_secret_material("migration-human-pack");
+        let pack = build_receipt_pack(
+            &set,
+            &ledger,
+            &verdict,
+            vec![hold.approval_evidence_ref()],
+            &pack_signer,
+            "migration-human-pack",
+            evaluated_at_ms + 1,
+        )
+        .unwrap();
+        let set_digest = approval_set_digest(&set).unwrap();
+        let bound = policy
+            .bind_human_approval_set(&hold.hold_id, &set.set_id, &set_digest)
+            .unwrap();
+        verify_governed_human_receipt_pack(
+            &pack,
+            bound.approval_set_id.as_deref().unwrap(),
+            bound.approval_set_digest.as_deref().unwrap(),
+            &bound.approval_evidence_ref(),
+            bound.created_at_ms,
+            pack.created_at_ms + 1,
+        )
+        .expect("precondition: genuine signed pack matches the persisted hold");
+        drop(policy);
+
+        let (authority_payload, previous_sequence) = rewrite_as_signed_pre_lock_stream(&path, &key);
+        let report =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id, key.clone()).unwrap();
+        assert_eq!(report.migrated_sequence, previous_sequence + 1);
+        assert_eq!(state_payload_without_lock(&path), authority_payload);
+
+        let restarted = load_signed_policy(&path, &key).unwrap();
+        let migrated_hold = restarted
+            .pending_human_authorization(&set.set_id)
+            .expect("the exact bound hold survives migration and restart");
+        assert_eq!(migrated_hold, bound);
+        verify_governed_human_receipt_pack(
+            &pack,
+            migrated_hold.approval_set_id.as_deref().unwrap(),
+            migrated_hold.approval_set_digest.as_deref().unwrap(),
+            &migrated_hold.approval_evidence_ref(),
+            migrated_hold.created_at_ms,
+            pack.created_at_ms + 1,
+        )
+        .expect("the genuine pack still verifies against the migrated hold");
+        restarted
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                &set.set_id,
+                &set_digest,
+                pack.created_at_ms + 1,
+            )
+            .expect("the migrated hold and receipt are consumed atomically");
+        drop(restarted);
+
+        let replay = load_signed_policy(&path, &key).unwrap();
+        let error = replay
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                &set.set_id,
+                &set_digest,
+                pack.created_at_ms + 2,
+            )
+            .expect_err("the migrated human authorization remains one-shot after restart");
+        assert!(error.contains("was not found"), "{error}");
+        let state = replay.state.lock().unwrap();
+        assert!(state.pending_human_authorizations.is_empty());
+        assert!(state.pending_authorizations.is_empty());
+        assert_eq!(state.consumed_authorizations.len(), 1);
+        drop(state);
+        drop(replay);
+        cleanup_persistence(&path);
+        fs::remove_dir_all(approval_root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn pvc_restore_rebinds_signed_state_without_clearing_authority() {
@@ -5193,6 +5468,43 @@ mod tests {
             GovernancePolicy::migrate_persistence_lock(&path, governing_id, key).unwrap();
         assert!(idempotent.already_migrated);
         assert_eq!(idempotent.migrated_sequence, previous_sequence + 1);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn migration_retry_resyncs_checkpoint_after_post_rename_parent_sync_failure() {
+        let path = persistence_path("migration-checkpoint-parent-sync-retry");
+        let key = SigningKey::from_bytes(&[159; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        drop(initialize_signed_policy(&path, &key));
+        let (_, previous_sequence) = rewrite_as_signed_pre_lock_stream(&path, &key);
+        let checkpoint_path = GovernancePolicy::persistence_sequence_path(&path);
+
+        inject_atomic_parent_sync_failure(&checkpoint_path);
+        let first =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id.clone(), key.clone())
+                .unwrap_err();
+        assert!(matches!(
+            first,
+            GovernancePersistenceError::MigrationCheckpointLagging { sequence, .. }
+                if sequence == previous_sequence + 1
+        ));
+        assert_eq!(read_envelope(&path).sequence(), previous_sequence + 1);
+        assert_eq!(read_checkpoint(&path).sequence(), previous_sequence + 1);
+
+        inject_atomic_parent_sync_failure(&checkpoint_path);
+        let retry =
+            GovernancePolicy::migrate_persistence_lock(&path, governing_id.clone(), key.clone());
+        assert!(matches!(
+            retry,
+            Err(GovernancePersistenceError::MigrationCheckpointLagging { sequence, .. })
+                if sequence == previous_sequence + 1
+        ));
+
+        let repaired = GovernancePolicy::migrate_persistence_lock(&path, governing_id, key)
+            .expect("retry must durably rewrite and sync the migrated checkpoint");
+        assert!(repaired.already_migrated);
+        assert_eq!(repaired.migrated_sequence, previous_sequence + 1);
         cleanup_persistence(&path);
     }
 
