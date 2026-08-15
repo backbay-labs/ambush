@@ -262,6 +262,10 @@ Current implications:
 Every runtime-owned agent identity follows the same admission path:
 
 - keys persist under `identity.agent_key_dir`
+- on the shipped Linux release path and macOS development path, a newly created
+  key root is synced through its parent and each new key is synced with the key
+  root before creation is reported; sync failure aborts startup and a retry
+  treats existing key bytes as loaded rather than creating another identity
 - stable identities are derived from the Ed25519 public key
 - registry snapshots and continuity proofs persist under
   `identity.registry_dir`
@@ -340,6 +344,9 @@ The active contract is intentionally narrow:
 - leases may be scoped to one host or other action scope
 - leases carry a blast-radius cap
 - leases expire after a bounded TTL
+- each lease is bound to the exact canonical governor committee recorded in its
+  signed receipt; admitting a new committee member atomically invalidates every
+  lease staged by the prior committee
 - each exact request and each covered scope is redeemable only once
 - redemption is persisted before routing and retained for later reconciliation
 
@@ -374,9 +381,12 @@ The platform and operator surfaces consume this governance data, but they do not
 change the underlying authorization semantics.
 
 Persisted governance authority is one Tom/primary-signed state envelope plus an
-adjacent Tom/primary-signed sequence checkpoint. The externally preloaded and admitted Tom key is
-the signer expectation; persisted peer governors are committee membership, not
-receipt-signing trust anchors. The shipped issuance path remains local-only.
+adjacent Tom/primary-signed sequence checkpoint. The externally preloaded and
+admitted Tom key is the signer expectation; persisted peer governors are
+committee membership, not receipt-signing trust anchors. The shipped issuance
+path remains local-only. On load, a signed contingency lease whose receipt names
+a different canonical committee is discarded rather than migrated into the
+current committee's authority.
 Rollback of only the envelope is detected against the checkpoint. Rolling back
 both local files together is outside the protection of this design and requires
 an external monotonic or independently authenticated anchor.

@@ -100,6 +100,30 @@ impl ContingencyLease {
         Ok(())
     }
 
+    fn matches_committee(&self, committee: &ConsensusCommittee) -> bool {
+        let receipt = &self.governance_receipt.payload;
+        receipt.committee_id == committee.committee_id()
+            && receipt.committee_members.as_slice() == committee.members()
+            && receipt.threshold == committee.threshold()
+    }
+
+    fn verify_for_committee(
+        &self,
+        governor_public_keys: &BTreeSet<AgentId>,
+        committee: &ConsensusCommittee,
+    ) -> Result<(), String> {
+        self.verify(governor_public_keys)?;
+        if !self.matches_committee(committee) {
+            return Err(format!(
+                "contingency lease `{}` was staged for governance committee `{}`, not current committee `{}`",
+                self.lease_id,
+                self.governance_receipt.payload.committee_id,
+                committee.committee_id()
+            ));
+        }
+        Ok(())
+    }
+
     fn matches_action(&self, action: &ResponseAction) -> bool {
         self.action_kind == action.kind()
             && self.scope.as_ref().is_none_or(|scope| {
@@ -417,9 +441,15 @@ struct GovernanceState {
 impl GovernanceState {
     /// Every governor this policy knows about: the local one plus admitted peers.
     fn governor_count(&self) -> usize {
-        self.peer_governors
-            .len()
-            .saturating_add(usize::from(self.local_governor.is_some()))
+        self.committee_member_ids().len()
+    }
+
+    fn committee_member_ids(&self) -> BTreeSet<AgentId> {
+        let mut members = self.peer_governors.clone();
+        if let Some(local) = self.local_governor.as_ref() {
+            members.insert(local.consensus_agent_id().clone());
+        }
+        members
     }
 
     /// Resolve unhealthy runtime identities to the consensus identities that
@@ -449,10 +479,7 @@ impl GovernanceState {
 
     /// The committee for a round, by consensus identity. Contains no keys.
     fn committee(&self) -> Result<ConsensusCommittee, ConsensusError> {
-        let mut members = self.peer_governors.iter().cloned().collect::<Vec<_>>();
-        if let Some(local) = self.local_governor.as_ref() {
-            members.push(local.consensus_agent_id().clone());
-        }
+        let members = self.committee_member_ids().into_iter().collect::<Vec<_>>();
         let size = members.len();
         ConsensusCommittee::new(members, recommended_max_faulty(size))
     }
@@ -1206,6 +1233,7 @@ impl GovernancePolicy {
         };
         state.peer_governors.remove(&consensus_agent_id);
         state.local_governor = Some(local_governor);
+        retain_current_committee_contingency_leases(&mut state);
         prune_authorization_ledgers(&mut state, now_ms());
         Ok(Self {
             state: Mutex::new(state),
@@ -1386,6 +1414,8 @@ impl GovernancePolicy {
         let previous_governing_agent_id = state.governing_agent_id.clone();
         let previous_display_governors = state.display_governors.clone();
         let previous_peers = state.peer_governors.clone();
+        let previous_committee = state.committee_member_ids();
+        let previous_leases = state.active_contingency_leases.clone();
         let had_local_governor = state.local_governor.is_some();
         state
             .governing_agent_id
@@ -1398,11 +1428,15 @@ impl GovernancePolicy {
         if !had_local_governor {
             state.local_governor = Some(offered);
         }
+        if state.committee_member_ids() != previous_committee {
+            state.active_contingency_leases.clear();
+        }
         match self.persist_locked(&mut state) {
             Err(reason) => {
                 state.governing_agent_id = previous_governing_agent_id;
                 state.display_governors = previous_display_governors;
                 state.peer_governors = previous_peers;
+                state.active_contingency_leases = previous_leases;
                 if !had_local_governor {
                     state.local_governor = None;
                 }
@@ -1449,9 +1483,11 @@ impl GovernancePolicy {
         if !state.peer_governors.insert(consensus_agent_id.clone()) {
             return Ok(());
         }
+        let previous_leases = std::mem::take(&mut state.active_contingency_leases);
         match self.persist_locked(&mut state) {
             Err(error) => {
                 state.peer_governors.remove(&consensus_agent_id);
+                state.active_contingency_leases = previous_leases;
                 return Err(format!(
                     "peer governor was not admitted because persistence failed: {error}"
                 ));
@@ -2155,7 +2191,25 @@ impl GovernancePolicy {
                 return Err(reason);
             }
         };
-        if let Err(reason) = lease.verify(&governor_public_keys_locked(&state)) {
+        let current_committee = match state.committee() {
+            Ok(committee) => committee,
+            Err(error) => {
+                let reason = format!("invalid current governance committee: {error}");
+                self.record_partition_activity_locked(
+                    &mut state,
+                    request,
+                    false,
+                    reason.clone(),
+                    Some(lease.lease_id.clone()),
+                    now_ms,
+                );
+                self.persist_best_effort_locked(&mut state);
+                return Err(reason);
+            }
+        };
+        if let Err(reason) =
+            lease.verify_for_committee(&governor_public_keys_locked(&state), &current_committee)
+        {
             self.record_partition_activity_locked(
                 &mut state,
                 request,
@@ -2427,12 +2481,17 @@ impl GovernancePolicy {
     }
 
     fn ensure_contingency_leases_locked(&self, state: &mut GovernanceState, now_ms: i64) {
+        retain_current_committee_contingency_leases(state);
+        let current_committee = state.committee().ok();
         for action_kind in ResponseAction::governed_action_kinds() {
             let already_active = state.active_contingency_leases.iter().any(|lease| {
                 lease.action_kind == action_kind
                     && lease.scope.is_none()
                     && lease.expires_at_ms > now_ms
                     && lease.redeemed_scopes.len() < lease.blast_radius_cap
+                    && current_committee
+                        .as_ref()
+                        .is_some_and(|committee| lease.matches_committee(committee))
             });
             if already_active {
                 continue;
@@ -2849,11 +2908,14 @@ fn preview_matching_contingency_lease(
     request: &ActionRequest,
     now_ms: i64,
 ) -> Option<ContingencyLease> {
+    let current_committee = state.committee().ok()?;
     state
         .active_contingency_leases
         .iter()
         .find(|lease| {
-            lease.verify(&governor_public_keys_locked(state)).is_ok()
+            lease
+                .verify_for_committee(&governor_public_keys_locked(state), &current_committee)
+                .is_ok()
                 && lease.can_redeem(request, now_ms)
         })
         .cloned()
@@ -2962,6 +3024,16 @@ fn prune_expired_contingency_leases(state: &mut GovernanceState, now_ms: i64) {
     state
         .active_contingency_leases
         .retain(|lease| lease.expires_at_ms > now_ms);
+}
+
+fn retain_current_committee_contingency_leases(state: &mut GovernanceState) {
+    let Ok(committee) = state.committee() else {
+        state.active_contingency_leases.clear();
+        return;
+    };
+    state
+        .active_contingency_leases
+        .retain(|lease| lease.matches_committee(&committee));
 }
 
 fn now_ms() -> i64 {
@@ -3562,6 +3634,7 @@ mod tests {
             assert_eq!(before.total_governors, 1, "{label}");
             assert_eq!(before.healthy_governors, 0, "{label}");
             assert_eq!(before.quorum_threshold, 1, "{label}");
+            assert_eq!(before.active_contingency_leases, 12, "{label}");
             assert_eq!(
                 before.partition_state,
                 PartitionState::Partitioned,
@@ -3600,7 +3673,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_governor_aliases_and_non_governors_do_not_inflate_unhealthy_count() {
+    fn committee_expansion_invalidates_solo_lease_across_alias_health_and_restart() {
         let path = persistence_path("mixed-governor-health-aliases");
         let key = SigningKey::from_bytes(&[123; 32]);
         let governing_id = AgentId::new("tom", "primary");
@@ -3614,6 +3687,23 @@ mod tests {
         .unwrap();
         let base_ms = super::now_ms();
         policy.observe_health(&governing_id, &[], base_ms);
+        let staged_solo_lease = policy
+            .state
+            .lock()
+            .unwrap()
+            .active_contingency_leases
+            .iter()
+            .find(|lease| lease.action_kind == "block_egress")
+            .cloned()
+            .expect("solo healthy committee stages block-egress contingency authority");
+        assert_eq!(
+            staged_solo_lease
+                .governance_receipt
+                .payload
+                .committee_members
+                .len(),
+            1
+        );
         let peer_keys = [
             SigningKey::from_bytes(&[129; 32]),
             SigningKey::from_bytes(&[130; 32]),
@@ -3657,16 +3747,51 @@ mod tests {
         assert_eq!(before.healthy_governors, 2);
         assert_eq!(before.quorum_threshold, 3);
         assert_eq!(before.partition_state, PartitionState::Partitioned);
-        assert!(matches!(
-            policy.can_act(&request(ResponseAction::BlockEgress {
-                target: "mixed-aliases-before".to_string(),
-            })),
+        match policy.can_act(&request(ResponseAction::BlockEgress {
+            target: "mixed-aliases-before".to_string(),
+        })) {
+            GovernanceDecision::Veto { .. } => {}
             GovernanceDecision::Authorize {
-                contingency_lease: Some(_),
+                contingency_lease: Some(lease),
                 ..
-            }
-        ));
+            } => panic!(
+                "solo contingency lease authorized a four-member committee; receipt carried {} member(s)",
+                lease.governance_receipt.payload.committee_members.len()
+            ),
+            other => panic!("expected stale contingency authority to be vetoed, got {other:?}"),
+        }
+        assert_eq!(before.active_contingency_leases, 0);
+        let mut stale_external_request = request(ResponseAction::BlockEgress {
+            target: "mixed-aliases-external-before".to_string(),
+        });
+        stale_external_request.evidence = json!({"contingency_lease": staged_solo_lease.clone()});
+        let error = policy
+            .authorize_partition_request(&stale_external_request, base_ms + 2)
+            .expect_err("an external lease for the old solo committee must be refused");
+        assert!(error.contains("not current committee"), "{error}");
+        let persisted_before_restart = policy.status_report();
         drop(policy);
+
+        // Simulate a genuinely local-signed envelope produced by the previous
+        // implementation, where committee admission and the old solo leases
+        // were persisted together. Restart must not bless those leases merely
+        // because the outer state signature and persisted equality are valid.
+        let envelope = read_envelope(&path);
+        let mut stale_signed_payload: PersistedGovernanceState =
+            serde_json::from_str(&envelope.statement.payload_json).unwrap();
+        stale_signed_payload
+            .active_contingency_leases
+            .push(staged_solo_lease.clone());
+        let stale_signed_envelope = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            envelope.sequence(),
+            stale_signed_payload,
+            &key,
+        )
+        .unwrap();
+        write_envelope(&path, &stale_signed_envelope);
 
         let reloaded = GovernancePolicy::with_persistence(
             GovernancePolicyConfig::default(),
@@ -3675,17 +3800,45 @@ mod tests {
             key,
         )
         .unwrap();
-        assert_eq!(reloaded.status_report(), before);
+        assert_eq!(reloaded.status_report(), persisted_before_restart);
         assert!(matches!(
             reloaded.can_act(&request(ResponseAction::BlockEgress {
                 target: "mixed-aliases-after".to_string(),
             })),
-            GovernanceDecision::Authorize {
-                contingency_lease: Some(_),
-                ..
-            }
+            GovernanceDecision::Veto { .. }
         ));
+        let error = reloaded
+            .authorize_partition_request(&stale_external_request, base_ms + 3)
+            .expect_err("the old external lease must remain invalid after signed restart");
+        assert!(error.contains("not current committee"), "{error}");
         cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn idempotent_current_member_admission_preserves_current_committee_leases() {
+        let key = SigningKey::from_bytes(&[124; 32]);
+        let governing_id = AgentId::new("tom", "primary");
+        let policy = GovernancePolicy::new(GovernancePolicyConfig::default());
+        policy
+            .register_governor(governing_id.clone(), key.clone())
+            .unwrap();
+        policy.observe_health(&governing_id, &[], super::now_ms());
+        let before = policy
+            .state
+            .lock()
+            .unwrap()
+            .active_contingency_leases
+            .clone();
+        assert_eq!(before.len(), 12);
+
+        policy
+            .register_peer_governor(&key.verifying_key())
+            .expect("the local member is already part of the committee");
+
+        assert_eq!(
+            policy.state.lock().unwrap().active_contingency_leases,
+            before
+        );
     }
 
     #[test]
@@ -3727,14 +3880,12 @@ mod tests {
         assert_eq!(before.healthy_governors, 1);
         assert_eq!(before.quorum_threshold, 3);
         assert_eq!(before.partition_state, PartitionState::Partitioned);
+        assert_eq!(before.active_contingency_leases, 0);
         assert!(matches!(
             policy.can_act(&request(ResponseAction::BlockEgress {
                 target: "203.0.113.125".to_string(),
             })),
-            GovernanceDecision::Authorize {
-                contingency_lease: Some(_),
-                ..
-            }
+            GovernanceDecision::Veto { .. }
         ));
         drop(policy);
 
@@ -3750,10 +3901,7 @@ mod tests {
             reloaded.can_act(&request(ResponseAction::BlockEgress {
                 target: "203.0.113.126".to_string(),
             })),
-            GovernanceDecision::Authorize {
-                contingency_lease: Some(_),
-                ..
-            }
+            GovernanceDecision::Veto { .. }
         ));
         cleanup_persistence(&path);
     }
@@ -3765,6 +3913,9 @@ mod tests {
         let peer_policy = initialize_signed_policy(&peer_path, &peer_key);
         let peer = SigningKey::from_bytes(&[107; 32]);
         let peer_id = AgentId::from_verifying_key(&peer.verifying_key());
+        let peer_governing_id = AgentId::from_verifying_key(&peer_key.verifying_key());
+        peer_policy.observe_health(&peer_governing_id, &[], super::now_ms());
+        assert_eq!(peer_policy.status_report().active_contingency_leases, 12);
         let peer_checkpoint = GovernancePolicy::persistence_sequence_path(&peer_path);
         let blocker = block_atomic_write(&peer_checkpoint);
         peer_policy
@@ -3773,11 +3924,13 @@ mod tests {
         {
             let state = peer_policy.state.lock().unwrap();
             assert!(state.peer_governors.contains(&peer_id));
+            assert!(state.active_contingency_leases.is_empty());
             assert!(state.checkpoint_lagging.is_some());
         }
         let payload: PersistedGovernanceState =
             serde_json::from_str(&read_envelope(&peer_path).statement.payload_json).unwrap();
         assert!(payload.peer_governors.contains(&peer_id));
+        assert!(payload.active_contingency_leases.is_empty());
         fs::remove_dir(blocker).unwrap();
         assert!(matches!(
             peer_policy.can_act(&request(ResponseAction::BlockEgress {
@@ -3796,6 +3949,15 @@ mod tests {
         drop(peer_policy);
         let peer_reloaded = load_signed_policy(&peer_path, &peer_key).unwrap();
         assert_eq!(peer_reloaded.status_report().total_governors, 2);
+        assert_eq!(peer_reloaded.status_report().active_contingency_leases, 0);
+        let sequence_before_idempotent_readmission = read_envelope(&peer_path).sequence();
+        peer_reloaded
+            .register_peer_governor(&peer.verifying_key())
+            .expect("idempotent peer re-admission does not mutate governance state");
+        assert_eq!(
+            read_envelope(&peer_path).sequence(),
+            sequence_before_idempotent_readmission
+        );
         cleanup_persistence(&peer_path);
 
         let health_path = persistence_path("health-checkpoint-lag");
@@ -4251,6 +4413,15 @@ mod tests {
         let peer_path = persistence_path("peer-precommit-failure");
         let peer_key = SigningKey::from_bytes(&[114; 32]);
         let peer_policy = initialize_signed_policy(&peer_path, &peer_key);
+        let peer_governing_id = AgentId::from_verifying_key(&peer_key.verifying_key());
+        peer_policy.observe_health(&peer_governing_id, &[], super::now_ms());
+        let leases_before_failed_admission = peer_policy
+            .state
+            .lock()
+            .unwrap()
+            .active_contingency_leases
+            .clone();
+        assert_eq!(leases_before_failed_admission.len(), 12);
         let peer_sequence = read_envelope(&peer_path).sequence();
         let peer = SigningKey::from_bytes(&[115; 32]);
         let peer_id = AgentId::from_verifying_key(&peer.verifying_key());
@@ -4268,7 +4439,18 @@ mod tests {
                 .peer_governors
                 .contains(&peer_id)
         );
+        assert_eq!(
+            peer_policy.state.lock().unwrap().active_contingency_leases,
+            leases_before_failed_admission
+        );
         assert_eq!(read_envelope(&peer_path).sequence(), peer_sequence);
+        let persisted_after_failed_admission: PersistedGovernanceState =
+            serde_json::from_str(&read_envelope(&peer_path).statement.payload_json).unwrap();
+        assert!(persisted_after_failed_admission.peer_governors.is_empty());
+        assert_eq!(
+            persisted_after_failed_admission.active_contingency_leases,
+            leases_before_failed_admission
+        );
         fs::remove_dir(blocker).unwrap();
         cleanup_persistence(&peer_path);
 
@@ -5073,6 +5255,19 @@ mod tests {
             }
             other => panic!("expected contingency lease, got {other:?}"),
         };
+        let current_committee = policy.state.lock().unwrap().committee().unwrap();
+        assert_eq!(
+            lease
+                .governance_receipt
+                .payload
+                .committee_members
+                .as_slice(),
+            current_committee.members()
+        );
+        assert_eq!(
+            lease.governance_receipt.payload.committee_id,
+            current_committee.committee_id()
+        );
         assert!(
             lease.verify(&policy.governor_public_keys()).is_ok(),
             "lease should verify: {lease:?}"

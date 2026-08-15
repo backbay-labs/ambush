@@ -18,6 +18,13 @@ pub enum AgentIdentityError {
         source: std::io::Error,
     },
 
+    #[error("failed to durably sync agent key root parent `{path}`: {source}")]
+    SyncKeyRootParent {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("failed to read agent key `{path}`: {source}")]
     Read {
         path: PathBuf,
@@ -179,11 +186,34 @@ pub struct FileAgentKeyStore {
 
 impl FileAgentKeyStore {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, AgentIdentityError> {
+        Self::open_with_parent_sync(root, |parent| {
+            fs::File::open(parent).and_then(|directory| directory.sync_all())
+        })
+    }
+
+    fn open_with_parent_sync<ParentSync>(
+        root: impl AsRef<Path>,
+        sync_parent: ParentSync,
+    ) -> Result<Self, AgentIdentityError>
+    where
+        ParentSync: FnOnce(&Path) -> std::io::Result<()>,
+    {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root).map_err(|source| AgentIdentityError::CreateDir {
             path: root.clone(),
             source,
         })?;
+        if let Some(parent) = root.parent() {
+            let parent = if parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                parent
+            };
+            sync_parent(parent).map_err(|source| AgentIdentityError::SyncKeyRootParent {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
         Ok(Self { root })
     }
 
@@ -697,6 +727,39 @@ mod tests {
 
         assert_eq!(first.id, second.id);
         assert_eq!(first.signing_key.to_bytes(), second.signing_key.to_bytes());
+    }
+
+    #[test]
+    fn key_store_open_retries_parent_sync_before_creating_one_key() {
+        let parent = temp_root("open-parent-sync");
+        let root = parent.join("keys");
+        let Err(error) = FileAgentKeyStore::open_with_parent_sync(&root, |_| {
+            Err(std::io::Error::other(
+                "injected key-root parent sync failure",
+            ))
+        }) else {
+            panic!("an unsynced key root must not be returned for identity creation");
+        };
+        assert!(matches!(
+            error,
+            super::AgentIdentityError::SyncKeyRootParent { .. }
+        ));
+        assert!(root.is_dir(), "create_dir_all completed before sync failed");
+
+        let store = FileAgentKeyStore::open(&root).unwrap();
+        let (created, created_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        let (loaded, loaded_status) = FileAgentKeyStore::open(&root)
+            .unwrap()
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(created_status, AgentKeyLoadStatus::Created);
+        assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
+        assert_eq!(
+            created.signing_key.to_bytes(),
+            loaded.signing_key.to_bytes()
+        );
     }
 
     #[test]
