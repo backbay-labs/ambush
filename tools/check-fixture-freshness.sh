@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C
 
 # Fail when a committed detector experiment fixture differs from a regeneration.
 #
@@ -27,6 +28,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# shellcheck source=tools/fixture-inventory.sh
+source "$ROOT_DIR/tools/fixture-inventory.sh"
+
+bash "$ROOT_DIR/tools/test-fixture-inventory.sh"
+
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 
@@ -39,16 +45,15 @@ if ! git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   exit 1
 fi
 
+INVENTORY="$SCRATCH/fixtures.nul"
+fixture_inventory_write "$ROOT_DIR" "$INVENTORY"
+
 # `mapfile` is bash 4+; macOS ships 3.2 and this gate has to run locally too.
 committed=()
-while IFS= read -r fixture; do
-  [ -n "$fixture" ] || continue
+while IFS= read -r -d '' fixture; do
+  fixture_require_direct_path "$fixture"
   committed+=("$fixture")
-done < <(
-  git -C "$ROOT_DIR" ls-files -c -o --exclude-standard -- experiments \
-    | grep -E '\.(yaml|yml)$' \
-    | LC_ALL=C sort
-)
+done <"$INVENTORY"
 
 if [ "${#committed[@]}" -eq 0 ]; then
   echo "no experiments/*.yaml fixtures found; refusing to pass silently" >&2
@@ -56,22 +61,37 @@ if [ "${#committed[@]}" -eq 0 ]; then
 fi
 
 echo "checking ${#committed[@]} committed fixture(s):"
-printf '  %s\n' "${committed[@]}"
+for relative in "${committed[@]}"; do
+  echo "  $(fixture_display "$relative")"
+done
 
 # Runs the generator over the same set. A schema-rejecting fixture fails here.
 bash "$ROOT_DIR/tools/regen-kitten-fixtures.sh" "$SCRATCH"
 
 status=0
 for relative in "${committed[@]}"; do
-  name="$(basename "$relative")"
+  name="${relative#experiments/}"
   regenerated="$SCRATCH/$name"
   if [ ! -f "$regenerated" ]; then
-    echo "fixture not regenerated: $relative" >&2
+    echo "fixture not regenerated: $(fixture_display "$relative")" >&2
     status=1
     continue
   fi
-  if ! diff -u "$ROOT_DIR/$relative" "$regenerated"; then
-    echo "fixture out of date: $relative" >&2
+  diff_output="$SCRATCH/diff-output"
+  diff_error="$SCRATCH/diff-error"
+  set +e
+  diff -u \
+    -L "expected $(fixture_display "$relative")" \
+    -L "regenerated $(fixture_display "$relative")" \
+    "$ROOT_DIR/$relative" "$regenerated" >"$diff_output" 2>"$diff_error"
+  diff_status=$?
+  set -e
+  if [ "$diff_status" -eq 1 ]; then
+    cat "$diff_output"
+    echo "fixture out of date: $(fixture_display "$relative")" >&2
+    status=1
+  elif [ "$diff_status" -ne 0 ]; then
+    echo "fixture comparison failed for $(fixture_display "$relative"): $(fixture_display_stream <"$diff_error")" >&2
     status=1
   fi
 done
@@ -80,9 +100,17 @@ done
 # two enumerations disagree, and the gate is no longer checking what ships.
 for regenerated in "$SCRATCH"/*.yaml "$SCRATCH"/*.yml; do
   [ -e "$regenerated" ] || continue
-  name="$(basename "$regenerated")"
-  if ! printf '%s\n' "${committed[@]}" | grep -qxF "experiments/$name"; then
-    echo "regenerated fixture is not committed: experiments/$name" >&2
+  name="${regenerated##*/}"
+  candidate="experiments/$name"
+  found=0
+  for relative in "${committed[@]}"; do
+    if [ "$relative" = "$candidate" ]; then
+      found=1
+      break
+    fi
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "regenerated fixture is not committed: $(fixture_display "$candidate")" >&2
     status=1
   fi
 done
