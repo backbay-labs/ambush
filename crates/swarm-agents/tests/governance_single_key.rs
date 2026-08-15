@@ -271,6 +271,7 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
         policy.can_act(&block_egress()),
         GovernanceDecision::Veto { .. }
     ));
+    drop(policy);
 
     let reloaded = GovernancePolicy::with_persistence(
         GovernancePolicyConfig::default(),
@@ -291,8 +292,10 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
         "a reloaded policy must still know about its peer governor, got {decision:?}"
     );
 
+    drop(reloaded);
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(GovernancePolicy::persistence_sequence_path(&path));
+    let _ = std::fs::remove_file(GovernancePolicy::persistence_lock_path(&path));
 }
 
 /// Records everything a round publishes. Accepts any committee, which is

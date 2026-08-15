@@ -1,3 +1,6 @@
+{{- if and .Values.persistence.enabled (ne (int .Values.replicaCount) 1) -}}
+{{- fail "persistence.enabled=true requires replicaCount=1 because one governance authority stream cannot be shared by concurrent pods" -}}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,6 +9,8 @@ metadata:
     {{- include "swarm-team-six.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "swarm-team-six.selectorLabels" . | nindent 6 }}

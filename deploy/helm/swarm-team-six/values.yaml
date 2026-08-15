@@ -58,7 +58,7 @@ persistence:
   enabled: true
   mountPath: /var/lib/swarm
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteOncePod
   size: 10Gi
   storageClassName: ""
 

@@ -3,7 +3,7 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -436,6 +436,12 @@ struct GovernanceState {
     /// Transient marker: the state envelope committed but its signed high-water
     /// checkpoint did not. Never serialized into the state it describes.
     checkpoint_lagging: Option<GovernanceCheckpointLag>,
+    /// The exact signed envelope sequence this in-memory snapshot was loaded
+    /// from or last committed as. Never serialized into its own payload.
+    persistence_sequence: Option<u64>,
+    /// Digest of the exact verified signed statement at
+    /// `persistence_sequence`. Paired with the sequence for transaction CAS.
+    persistence_digest: Option<String>,
 }
 
 impl GovernanceState {
@@ -508,6 +514,8 @@ impl Default for GovernanceState {
             reconciliation_reports: Vec::new(),
             pending_events: VecDeque::new(),
             checkpoint_lagging: None,
+            persistence_sequence: None,
+            persistence_digest: None,
         }
     }
 }
@@ -527,11 +535,16 @@ impl Default for GovernancePolicyConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct GovernancePersistence {
     path: PathBuf,
     sequence_path: PathBuf,
+    _lock_path: PathBuf,
     expected_signer_agent_id: AgentId,
+    /// Exclusive OS advisory lock held for the full policy lifetime. The lock
+    /// file may remain after exit; ownership comes only from this live handle,
+    /// never from file existence.
+    _lock_file: fs::File,
 }
 
 #[derive(Debug)]
@@ -674,10 +687,35 @@ struct GovernanceSequenceCheckpoint {
 struct LoadedGovernanceState {
     payload: PersistedGovernanceState,
     sequence: u64,
+    digest: String,
+    checkpoint_sequence: u64,
+}
+
+#[derive(Debug)]
+struct GovernanceStateVersion {
+    sequence: u64,
+    digest: String,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum GovernancePersistenceError {
+    #[error("failed to open governance state lock `{path}`: {source}")]
+    OpenLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("governance state lock `{path}` is held by another process")]
+    StateLocked { path: PathBuf },
+
+    #[error("failed to acquire governance state lock `{path}`: {source}")]
+    LockState {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("governance state is missing at `{path}`; refusing implicit reinitialization")]
     MissingState { path: PathBuf },
 
@@ -728,6 +766,17 @@ pub enum GovernancePersistenceError {
     #[error("governance sequence checkpoint `{path}` is invalid: {reason}")]
     InvalidSequence { path: PathBuf, reason: String },
 
+    #[error(
+        "stale governance transaction for `{path}`: caller expected signed predecessor {expected_sequence}/{expected_digest}, durable predecessor is {observed_sequence}/{observed_digest}"
+    )]
+    StalePredecessor {
+        path: PathBuf,
+        expected_sequence: u64,
+        expected_digest: String,
+        observed_sequence: u64,
+        observed_digest: String,
+    },
+
     #[error("unsupported signed governance state schema version `{observed}`")]
     UnsupportedSchema { observed: u32 },
 
@@ -755,18 +804,78 @@ pub enum GovernancePersistenceError {
 }
 
 impl GovernancePersistence {
-    fn new(path: PathBuf, expected_signer_agent_id: AgentId) -> Self {
+    fn new(
+        path: PathBuf,
+        expected_signer_agent_id: AgentId,
+    ) -> Result<Self, GovernancePersistenceError> {
         let sequence_path = path.with_extension("sequence.json");
-        Self {
+        let lock_path = path.with_extension("lock");
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent).map_err(|source| GovernancePersistenceError::OpenLock {
+                path: lock_path.clone(),
+                source,
+            })?;
+        }
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|source| GovernancePersistenceError::OpenLock {
+                path: lock_path.clone(),
+                source,
+            })?;
+        match lock_file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(GovernancePersistenceError::StateLocked { path: lock_path });
+            }
+            Err(fs::TryLockError::Error(source)) => {
+                return Err(GovernancePersistenceError::LockState {
+                    path: lock_path,
+                    source,
+                });
+            }
+        }
+        Ok(Self {
             path,
             sequence_path,
+            _lock_path: lock_path,
             expected_signer_agent_id,
-        }
+            _lock_file: lock_file,
+        })
+    }
+
+    #[cfg(test)]
+    fn duplicate_locked_handle_for_stale_snapshot(&self) -> std::io::Result<Self> {
+        Ok(Self {
+            path: self.path.clone(),
+            sequence_path: self.sequence_path.clone(),
+            _lock_path: self._lock_path.clone(),
+            expected_signer_agent_id: self.expected_signer_agent_id.clone(),
+            _lock_file: self._lock_file.try_clone()?,
+        })
     }
 
     fn load(
         &self,
         local: &LocalGovernorKey,
+    ) -> Result<LoadedGovernanceState, GovernancePersistenceError> {
+        self.load_internal(local, true)
+    }
+
+    fn load_for_cas(
+        &self,
+        local: &LocalGovernorKey,
+    ) -> Result<LoadedGovernanceState, GovernancePersistenceError> {
+        self.load_internal(local, false)
+    }
+
+    fn load_internal(
+        &self,
+        local: &LocalGovernorKey,
+        repair_checkpoint: bool,
     ) -> Result<LoadedGovernanceState, GovernancePersistenceError> {
         if !self.path.exists() {
             return Err(GovernancePersistenceError::MissingState {
@@ -794,6 +903,7 @@ impl GovernancePersistence {
                 path: self.path.clone(),
                 source,
             })?;
+        let digest = signed_governance_envelope_digest(&envelope, &self.path)?;
 
         if !self.sequence_path.exists() {
             return Err(GovernancePersistenceError::MissingSequence {
@@ -837,7 +947,7 @@ impl GovernancePersistence {
                 observed: verified.schema_version,
             });
         }
-        if checkpoint.payload.accepted_sequence < verified.sequence {
+        if repair_checkpoint && checkpoint.payload.accepted_sequence < verified.sequence {
             // State is committed before its high-water checkpoint. A crash in
             // that narrow window leaves a fully signed newer envelope, which is
             // safe to accept and use to repair the lagging checkpoint.
@@ -846,18 +956,24 @@ impl GovernancePersistence {
         Ok(LoadedGovernanceState {
             payload: verified.payload,
             sequence: verified.sequence,
+            digest,
+            checkpoint_sequence: checkpoint.payload.accepted_sequence,
         })
     }
 
-    fn initialize(&self, state: &GovernanceState) -> Result<(), GovernancePersistenceError> {
+    fn initialize(
+        &self,
+        state: &GovernanceState,
+    ) -> Result<GovernanceStateVersion, GovernancePersistenceError> {
         if self.path.exists() || self.sequence_path.exists() {
             return Err(GovernancePersistenceError::AlreadyInitialized {
                 state_path: self.path.clone(),
                 sequence_path: self.sequence_path.clone(),
             });
         }
-        match self.write_state_and_checkpoint(state, 1)? {
-            GovernancePersistenceOutcome::Committed => Ok(()),
+        let (outcome, version) = self.write_state_and_checkpoint(state, 1)?;
+        match outcome {
+            GovernancePersistenceOutcome::Committed => Ok(version),
             GovernancePersistenceOutcome::StateCommittedCheckpointLagging { reason, .. } => {
                 let rollback = self.rollback_incomplete_initialization();
                 Err(GovernancePersistenceError::IncompleteInitialization {
@@ -875,12 +991,27 @@ impl GovernancePersistence {
     fn save(
         &self,
         state: &GovernanceState,
-    ) -> Result<GovernancePersistenceOutcome, GovernancePersistenceError> {
+        expected_sequence: u64,
+        expected_digest: &str,
+    ) -> Result<(GovernancePersistenceOutcome, GovernanceStateVersion), GovernancePersistenceError>
+    {
         let local = state
             .local_governor
             .as_ref()
             .ok_or(GovernancePersistenceError::MissingLocalSigner)?;
-        let loaded = self.load(local)?;
+        let loaded = self.load_for_cas(local)?;
+        if loaded.sequence != expected_sequence || loaded.digest != expected_digest {
+            return Err(GovernancePersistenceError::StalePredecessor {
+                path: self.path.clone(),
+                expected_sequence,
+                expected_digest: expected_digest.to_string(),
+                observed_sequence: loaded.sequence,
+                observed_digest: loaded.digest,
+            });
+        }
+        if loaded.checkpoint_sequence < loaded.sequence {
+            self.write_checkpoint(loaded.sequence, local)?;
+        }
         let next_sequence = loaded.sequence.checked_add(1).ok_or_else(|| {
             GovernancePersistenceError::InvalidSequence {
                 path: self.sequence_path.clone(),
@@ -894,7 +1025,8 @@ impl GovernancePersistence {
         &self,
         state: &GovernanceState,
         sequence: u64,
-    ) -> Result<GovernancePersistenceOutcome, GovernancePersistenceError> {
+    ) -> Result<(GovernancePersistenceOutcome, GovernanceStateVersion), GovernancePersistenceError>
+    {
         let local = state
             .local_governor
             .as_ref()
@@ -911,6 +1043,7 @@ impl GovernancePersistence {
         }
         let envelope =
             local.sign_persisted_state(sequence, PersistedGovernanceState::from_runtime(state))?;
+        let digest = signed_governance_envelope_digest(&envelope, &self.path)?;
         let bytes = serde_json::to_vec_pretty(&envelope).map_err(|source| {
             GovernancePersistenceError::ParseState {
                 path: self.path.clone(),
@@ -921,20 +1054,19 @@ impl GovernancePersistence {
             AtomicWriteOutcome::Synced => None,
             AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Some(error.to_string()),
         };
-        match self.write_checkpoint(sequence, local) {
-            Ok(()) => Ok(GovernancePersistenceOutcome::Committed),
-            Err(error) => Ok(
-                GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
-                    sequence,
-                    reason: match state_directory_sync_error {
-                        Some(state_error) => format!(
-                            "state rename committed but directory sync failed: {state_error}; checkpoint failed: {error}"
-                        ),
-                        None => error.to_string(),
-                    },
+        let outcome = match self.write_checkpoint(sequence, local) {
+            Ok(()) => GovernancePersistenceOutcome::Committed,
+            Err(error) => GovernancePersistenceOutcome::StateCommittedCheckpointLagging {
+                sequence,
+                reason: match state_directory_sync_error {
+                    Some(state_error) => format!(
+                        "state rename committed but directory sync failed: {state_error}; checkpoint failed: {error}"
+                    ),
+                    None => error.to_string(),
                 },
-            ),
-        }
+            },
+        };
+        Ok((outcome, GovernanceStateVersion { sequence, digest }))
     }
 
     fn repair_checkpoint(
@@ -948,6 +1080,7 @@ impl GovernancePersistence {
             .ok_or(GovernancePersistenceError::MissingLocalSigner)?;
         let loaded = self.load(local)?;
         if loaded.sequence != lag.sequence
+            || state.persistence_digest.as_deref() != Some(loaded.digest.as_str())
             || serde_json::to_value(&loaded.payload).map_err(|source| {
                 GovernancePersistenceError::ParseState {
                     path: self.path.clone(),
@@ -1016,6 +1149,19 @@ impl GovernancePersistence {
             AtomicWriteOutcome::RenamedDirectorySyncFailed(error) => Err(error),
         }
     }
+}
+
+fn signed_governance_envelope_digest(
+    envelope: &SignedStateEnvelope<PersistedGovernanceState>,
+    path: &Path,
+) -> Result<String, GovernancePersistenceError> {
+    let statement_bytes = serde_json::to_vec(&envelope.statement).map_err(|source| {
+        GovernancePersistenceError::ParseState {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    Ok(sha256_hex(&statement_bytes))
 }
 
 fn write_atomic_synced(
@@ -1197,7 +1343,16 @@ impl GovernancePolicy {
         let persistence = GovernancePersistence::new(
             path.as_ref().to_path_buf(),
             local_governor.consensus_agent_id().clone(),
-        );
+        )?;
+        Self::with_locked_persistence(config, persistence, governing_agent_id, local_governor)
+    }
+
+    fn with_locked_persistence(
+        config: GovernancePolicyConfig,
+        persistence: GovernancePersistence,
+        governing_agent_id: AgentId,
+        local_governor: LocalGovernorKey,
+    ) -> Result<Self, GovernancePersistenceError> {
         let loaded = persistence.load(&local_governor)?;
         let persisted = loaded.payload;
         let consensus_agent_id = local_governor.consensus_agent_id().clone();
@@ -1229,6 +1384,8 @@ impl GovernancePolicy {
             pending_human_authorizations: persisted.pending_human_authorizations,
             partition_activity: persisted.partition_activity,
             reconciliation_reports: persisted.reconciliation_reports,
+            persistence_sequence: Some(loaded.sequence),
+            persistence_digest: Some(loaded.digest),
             ..Default::default()
         };
         state.peer_governors.remove(&consensus_agent_id);
@@ -1259,19 +1416,21 @@ impl GovernancePolicy {
         let persistence = GovernancePersistence::new(
             path.as_ref().to_path_buf(),
             local_governor.consensus_agent_id().clone(),
-        );
+        )?;
         let mut display_governors = BTreeMap::new();
         display_governors.insert(
             governing_agent_id.clone(),
             local_governor.consensus_agent_id().clone(),
         );
-        let state = GovernanceState {
+        let mut state = GovernanceState {
             governing_agent_id: Some(governing_agent_id),
             display_governors,
             local_governor: Some(local_governor),
             ..GovernanceState::default()
         };
-        persistence.initialize(&state)?;
+        let version = persistence.initialize(&state)?;
+        state.persistence_sequence = Some(version.sequence);
+        state.persistence_digest = Some(version.digest);
         Ok(Self {
             state: Mutex::new(state),
             config,
@@ -1308,6 +1467,9 @@ impl GovernancePolicy {
         signing_key: SigningKey,
         suffix: &str,
     ) -> Result<Self, GovernancePersistenceError> {
+        let local_governor = LocalGovernorKey::new(signing_key);
+        let persistence =
+            GovernancePersistence::new(path.clone(), local_governor.consensus_agent_id().clone())?;
         let sequence_path = path.with_extension("sequence.json");
         let mut archived: Vec<(PathBuf, PathBuf)> = Vec::new();
         for existing in [&path, &sequence_path] {
@@ -1355,8 +1517,28 @@ impl GovernancePolicy {
                 ),
             });
         }
-        match Self::initialize_persistence(config, &path, governing_agent_id, signing_key) {
-            Ok(policy) => Ok(policy),
+        let mut display_governors = BTreeMap::new();
+        display_governors.insert(
+            governing_agent_id.clone(),
+            local_governor.consensus_agent_id().clone(),
+        );
+        let mut state = GovernanceState {
+            governing_agent_id: Some(governing_agent_id),
+            display_governors,
+            local_governor: Some(local_governor),
+            ..GovernanceState::default()
+        };
+        match persistence.initialize(&state) {
+            Ok(version) => {
+                state.persistence_sequence = Some(version.sequence);
+                state.persistence_digest = Some(version.digest);
+                Ok(Self {
+                    state: Mutex::new(state),
+                    config,
+                    persistence: Some(persistence),
+                    transport: Arc::new(SoloGovernorTransport::new()),
+                })
+            }
             Err(error) => {
                 let cleanup_error = remove_governance_stream_files(&path, &sequence_path).err();
                 let rollback_error = restore_governance_archives(&archived).err();
@@ -1381,6 +1563,10 @@ impl GovernancePolicy {
 
     pub fn persistence_sequence_path(path: impl AsRef<Path>) -> PathBuf {
         path.as_ref().with_extension("sequence.json")
+    }
+
+    pub fn persistence_lock_path(path: impl AsRef<Path>) -> PathBuf {
+        path.as_ref().with_extension("lock")
     }
 
     /// Install THE local governor signing key.
@@ -2449,6 +2635,10 @@ impl GovernancePolicy {
     }
 
     pub fn status_report(&self) -> GovernanceStatusReport {
+        self.status_report_at(now_ms())
+    }
+
+    fn status_report_at(&self, observed_at_ms: i64) -> GovernanceStatusReport {
         let state = self
             .state
             .lock()
@@ -2458,7 +2648,11 @@ impl GovernancePolicy {
             total_governors: state.display_governors.len().max(state.governor_count()),
             healthy_governors: state.last_healthy_governors,
             quorum_threshold: state.last_quorum_threshold,
-            active_contingency_leases: state.active_contingency_leases.len(),
+            active_contingency_leases: state
+                .active_contingency_leases
+                .iter()
+                .filter(|lease| lease.expires_at_ms > observed_at_ms)
+                .count(),
             unauthorized_partition_actions: state
                 .partition_activity
                 .iter()
@@ -2573,10 +2767,25 @@ impl GovernancePolicy {
             state.checkpoint_lagging = None;
             return Ok(GovernancePersistenceOutcome::Committed);
         };
-        let outcome = persistence.save(state).map_err(|error| error.to_string())?;
+        let expected_sequence = state.persistence_sequence.ok_or_else(|| {
+            "persisted governance state has no in-memory signed sequence anchor".to_string()
+        })?;
+        let expected_digest = state.persistence_digest.as_deref().ok_or_else(|| {
+            "persisted governance state has no in-memory signed digest anchor".to_string()
+        })?;
+        let next_sequence = expected_sequence
+            .checked_add(1)
+            .ok_or_else(|| "signed governance state sequence overflow".to_string())?;
+        let (outcome, version) = persistence
+            .save(state, expected_sequence, expected_digest)
+            .map_err(|error| error.to_string())?;
+        debug_assert_eq!(version.sequence, next_sequence);
+        state.persistence_sequence = Some(version.sequence);
+        state.persistence_digest = Some(version.digest);
         state.checkpoint_lagging = match &outcome {
             GovernancePersistenceOutcome::Committed => None,
             GovernancePersistenceOutcome::StateCommittedCheckpointLagging { sequence, reason } => {
+                debug_assert_eq!(*sequence, next_sequence);
                 Some(GovernanceCheckpointLag {
                     sequence: *sequence,
                     reason: reason.clone(),
@@ -3053,24 +3262,24 @@ fn now_ms() -> i64 {
 // `swarm_policy::governance::GovernanceAuthority`.
 impl swarm_policy::governance::sealed::SealedGovernanceAuthority for GovernancePolicy {}
 
-// All SEVEN methods below delegate to the inherent method of the same name. Inherent
+// All thirteen methods below delegate to the inherent method of the same name. Inherent
 // impls are probed before trait impls, so `GovernancePolicy::method(self, ..)`
 // resolves to the inherent one.
 //
 // A differing return type would make a mis-resolution a compile error, but that
-// covers only three of the seven: `attest_release`
+// covers only three of the thirteen: `attest_release`
 // (`Option<ConsensusGovernanceReceipt>` inherent, `Option<serde_json::Value>` here),
 // `authorize_partition_request`
-// (`Result<Option<ContingencyLease>, String>` inherent, `Result<bool, String>` here)
+// (`Result<Option<ContingencyLease>, String>` inherent,
+// `Result<Option<serde_json::Value>, String>` here)
 // and `drain_runtime_events` (`Vec<GovernanceRuntimeEvent>` inherent,
-// `Vec<GovernanceRuntimeEventRecord>` here). `is_partitioned`, `note_partition_veto`,
-// `status_report` and `governor_public_keys` have identical signatures on both sides,
-// so for those four a mis-resolution is a silent infinite recursion, not a
-// diagnostic.
+// `Vec<GovernanceRuntimeEventRecord>` here). The other ten methods have identical
+// signatures on both sides, so a mis-resolution is a silent infinite recursion,
+// not a diagnostic.
 //
-// The `deny` below covers all seven, which is why the guarantee is stated once here
+// The `deny` below covers all thirteen, which is why the guarantee is stated once here
 // instead of per-method. `unconditional_recursion` is warn-by-default, so without
-// the attribute these three were protected only by CI's `-D warnings` and not by a
+// the attribute those ten were protected only by CI's `-D warnings` and not by a
 // plain `cargo build`. Measured both ways by rewriting the `is_partitioned` body as
 // `<Self as GovernanceAuthority>::is_partitioned(self)`: with this attribute
 // `cargo build -p swarm-agents` exits 101 on `error: function cannot return without
@@ -3181,7 +3390,7 @@ impl GovernanceAuthority for GovernancePolicy {
             .collect()
     }
 
-    // One of the three whose inherent twin has the SAME return type, so the
+    // One of the ten whose inherent twin has the SAME return type, so the
     // `deny(unconditional_recursion)` above is what stands between a mis-resolution
     // here and a silent hang. There is a runtime backstop too, if the lint is ever
     // weakened: `healthz_includes_governance_partition_component` reaches this method
@@ -3190,7 +3399,7 @@ impl GovernanceAuthority for GovernancePolicy {
         GovernancePolicy::status_report(self)
     }
 
-    /// The SIXTH method, and the second whose inherent twin has a different return
+    /// One of the three methods whose inherent twin has a different return
     /// type (`Option<ConsensusGovernanceReceipt>` inherent, `Option<serde_json::Value>`
     /// here), so a mis-resolution here is a compile error rather than a hang. The
     /// `Value` is the serialized receipt; see the trait doc for why `swarm-policy`
@@ -3214,7 +3423,7 @@ impl GovernanceAuthority for GovernancePolicy {
         }
     }
 
-    /// The SEVENTH method (ADR 0011). Same return type as its inherent twin, so it
+    /// Same return type as its inherent twin, so it
     /// joins the group the `deny(unconditional_recursion)` above protects. There is a
     /// runtime backstop too: `swarm-runtime-http`'s
     /// `a_fully_re_attested_receipt_is_refused` reaches this method through a
@@ -3256,7 +3465,8 @@ mod tests {
         ConsumedGovernanceAuthorization, GOVERNANCE_CHECKPOINT_KIND, GOVERNANCE_STATE_KIND,
         GOVERNANCE_STATE_STREAM, GovernanceDecision, GovernancePersistenceError, GovernancePolicy,
         GovernancePolicyConfig, GovernanceRuntimeEvent, GovernanceSequenceCheckpoint,
-        PartitionState, PendingGovernanceAuthorization, PersistedGovernanceState, TomAgent,
+        LocalGovernorKey, PartitionState, PendingGovernanceAuthorization, PersistedGovernanceState,
+        TomAgent,
     };
     use ed25519_dalek::SigningKey;
     use serde_json::json;
@@ -3336,10 +3546,30 @@ mod tests {
         )
     }
 
+    fn duplicate_locked_policy_snapshot(
+        policy: &GovernancePolicy,
+        key: &SigningKey,
+    ) -> GovernancePolicy {
+        let duplicate_persistence = policy
+            .persistence
+            .as_ref()
+            .unwrap()
+            .duplicate_locked_handle_for_stale_snapshot()
+            .unwrap();
+        GovernancePolicy::with_locked_persistence(
+            GovernancePolicyConfig::default(),
+            duplicate_persistence,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            LocalGovernorKey::new(key.clone()),
+        )
+        .unwrap()
+    }
+
     fn cleanup_persistence(path: &Path) {
         let _ = fs::remove_file(path);
         let sequence_path = GovernancePolicy::persistence_sequence_path(path);
         let _ = fs::remove_file(&sequence_path);
+        let _ = fs::remove_file(GovernancePolicy::persistence_lock_path(path));
         for original in [path, sequence_path.as_path()] {
             let Some(parent) = original.parent() else {
                 continue;
@@ -3839,6 +4069,401 @@ mod tests {
             policy.state.lock().unwrap().active_contingency_leases,
             before
         );
+    }
+
+    #[test]
+    fn status_excludes_expired_same_committee_leases_before_and_after_restart() {
+        let path = persistence_path("expired-status-restart");
+        let key = SigningKey::from_bytes(&[125; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let config = GovernancePolicyConfig {
+            contingency_lease_ttl_ms: 10,
+            ..GovernancePolicyConfig::default()
+        };
+        let policy = GovernancePolicy::initialize_persistence(
+            config.clone(),
+            &path,
+            governing_id.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        policy.observe_health(&governing_id, &[], 1_000);
+        assert_eq!(
+            policy.state.lock().unwrap().active_contingency_leases.len(),
+            12,
+            "expired leases remain signed history until a governed mutation prunes them"
+        );
+        assert_eq!(policy.status_report_at(1_009).active_contingency_leases, 12);
+        assert_eq!(policy.status_report_at(1_010).active_contingency_leases, 0);
+        assert_eq!(policy.status_report().active_contingency_leases, 0);
+        assert_eq!(
+            policy.state.lock().unwrap().active_contingency_leases.len(),
+            12,
+            "a status read must not mutate signed governance state"
+        );
+        drop(policy);
+
+        let reloaded =
+            GovernancePolicy::with_persistence(config, &path, governing_id, key).unwrap();
+        assert_eq!(
+            reloaded
+                .state
+                .lock()
+                .unwrap()
+                .active_contingency_leases
+                .len(),
+            12,
+            "same-committee persisted leases survive load as signed history"
+        );
+        assert_eq!(
+            reloaded.status_report_at(1_009).active_contingency_leases,
+            12
+        );
+        assert_eq!(
+            reloaded.status_report_at(1_010).active_contingency_leases,
+            0
+        );
+        assert_eq!(reloaded.status_report().active_contingency_leases, 0);
+        drop(reloaded);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn second_persisted_policy_is_refused_while_first_holds_the_state_lock() {
+        let path = persistence_path("exclusive-state-lock");
+        let key = SigningKey::from_bytes(&[126; 32]);
+        let first = initialize_signed_policy(&path, &key);
+
+        let second = load_signed_policy(&path, &key);
+        let Err(error) = second else {
+            panic!("two independent policies opened the same signed authority stream");
+        };
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::StateLocked { path: ref lock_path }
+                if lock_path == &GovernancePolicy::persistence_lock_path(&path)
+        ));
+        let Err(error) = GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+        ) else {
+            panic!("initialization bypassed the live state lock");
+        };
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::StateLocked { .. }
+        ));
+        let Err(error) = GovernancePolicy::reinitialize_persistence(
+            GovernancePolicyConfig::default(),
+            &path,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            key.clone(),
+        ) else {
+            panic!("offline reinitialization bypassed the live state lock");
+        };
+        assert!(matches!(
+            error,
+            GovernancePersistenceError::StateLocked { .. }
+        ));
+
+        drop(first);
+        let second =
+            load_signed_policy(&path, &key).expect("dropping the owner releases its advisory lock");
+        drop(second);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn separate_process_cannot_open_a_live_governance_state_lock() {
+        const CHILD_PATH_ENV: &str = "SWARM_TEST_GOVERNANCE_LOCK_CHILD_PATH";
+        let key = SigningKey::from_bytes(&[128; 32]);
+        if let Some(path) = std::env::var_os(CHILD_PATH_ENV) {
+            let error = match load_signed_policy(Path::new(&path), &key) {
+                Ok(_) => panic!("child process opened the parent's authority stream"),
+                Err(error) => error,
+            };
+            assert!(matches!(
+                error,
+                GovernancePersistenceError::StateLocked { .. }
+            ));
+            return;
+        }
+
+        let path = persistence_path("exclusive-state-lock-process");
+        let first = initialize_signed_policy(&path, &key);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("tom_agent::tests::separate_process_cannot_open_a_live_governance_state_lock")
+            .arg("--nocapture")
+            .env(CHILD_PATH_ENV, &path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child lock assertion failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        drop(first);
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        drop(reloaded);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn sequence_cas_refuses_the_exact_stale_double_consume_snapshot() {
+        let path = persistence_path("stale-double-consume-cas");
+        let key = SigningKey::from_bytes(&[127; 32]);
+        let first = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.127".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = first.can_act(&governed_request) else {
+            panic!("precondition: first policy issues a pending authorization");
+        };
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        let sequence_before_consumption = read_envelope(&path).sequence();
+        let stale_second = duplicate_locked_policy_snapshot(&first, &key);
+
+        first
+            .verify_and_consume_action_authorization(
+                &governed_request,
+                &receipt_value,
+                receipt.payload.issued_at_ms + 1,
+            )
+            .expect("the first snapshot consumes and commits the authorization");
+        let committed_sequence = read_envelope(&path).sequence();
+        assert_eq!(committed_sequence, sequence_before_consumption + 1);
+
+        let error = stale_second
+            .verify_and_consume_action_authorization(
+                &governed_request,
+                &receipt_value,
+                receipt.payload.issued_at_ms + 1,
+            )
+            .expect_err("the stale snapshot must not borrow the durable next sequence");
+        assert!(error.contains("stale governance transaction"), "{error}");
+        assert_eq!(
+            read_envelope(&path).sequence(),
+            committed_sequence,
+            "the rejected stale snapshot must not create sequence four"
+        );
+        assert_eq!(
+            stale_second
+                .state
+                .lock()
+                .unwrap()
+                .pending_authorizations
+                .len(),
+            1,
+            "pre-commit CAS failure restores the stale caller's memory"
+        );
+
+        drop(first);
+        drop(stale_second);
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        assert!(
+            reloaded
+                .verify_and_consume_action_authorization(
+                    &governed_request,
+                    &receipt_value,
+                    receipt.payload.issued_at_ms + 2,
+                )
+                .is_err(),
+            "durable state records exactly one consumption"
+        );
+        drop(reloaded);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn sequence_cas_refuses_stale_human_consumption_and_restores_the_hold() {
+        let path = persistence_path("stale-human-consume-cas");
+        let key = SigningKey::from_bytes(&[129; 32]);
+        let first = initialize_signed_policy(&path, &key);
+        let governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.129".to_string(),
+        });
+        let GovernanceDecision::Authorize { receipt, .. } = first.can_act(&governed_request) else {
+            panic!("precondition: healthy governance issues an approval");
+        };
+        let receipt_value = serde_json::to_value(&receipt).unwrap();
+        let decision = swarm_policy::PolicyDecision::require_human_with_rule(
+            "stale-human-cas",
+            "human review required",
+        );
+        let hold = first
+            .begin_human_authorization_hold(
+                &governed_request,
+                &receipt_value,
+                &decision,
+                receipt.payload.issued_at_ms + 1,
+            )
+            .unwrap();
+        first
+            .bind_human_approval_set(&hold.hold_id, "approval-set:129", "digest:129")
+            .unwrap();
+        let stale_second = duplicate_locked_policy_snapshot(&first, &key);
+        let sequence_before_consumption = read_envelope(&path).sequence();
+
+        first
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                "approval-set:129",
+                "digest:129",
+                receipt.payload.issued_at_ms + 2,
+            )
+            .expect("the first snapshot commits human and governance consumption");
+        let committed_sequence = read_envelope(&path).sequence();
+        assert_eq!(committed_sequence, sequence_before_consumption + 1);
+        let error = stale_second
+            .verify_and_consume_human_authorization(
+                &hold.hold_id,
+                "approval-set:129",
+                "digest:129",
+                receipt.payload.issued_at_ms + 2,
+            )
+            .expect_err("a stale human hold must not authorize a second execution");
+        assert!(error.contains("stale governance transaction"), "{error}");
+        assert_eq!(read_envelope(&path).sequence(), committed_sequence);
+        let stale_state = stale_second.state.lock().unwrap();
+        assert_eq!(stale_state.pending_human_authorizations.len(), 1);
+        assert_eq!(stale_state.pending_authorizations.len(), 1);
+        assert!(stale_state.consumed_authorizations.is_empty());
+        drop(stale_state);
+
+        drop(first);
+        drop(stale_second);
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        assert!(
+            reloaded
+                .verify_and_consume_human_authorization(
+                    &hold.hold_id,
+                    "approval-set:129",
+                    "digest:129",
+                    receipt.payload.issued_at_ms + 3,
+                )
+                .is_err()
+        );
+        drop(reloaded);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn checkpoint_repair_does_not_let_a_stale_lease_snapshot_redeem_twice() {
+        let path = persistence_path("stale-lease-checkpoint-cas");
+        let key = SigningKey::from_bytes(&[130; 32]);
+        let governing_id = AgentId::from_verifying_key(&key.verifying_key());
+        let first = initialize_signed_policy(&path, &key);
+        let base_ms = super::now_ms();
+        first.observe_health(&governing_id, &[], base_ms);
+        first.observe_health(
+            &governing_id,
+            &[AgentHealthEntry {
+                id: governing_id.to_string(),
+                role: AgentRole::Tom,
+                health: AgentHealth::Failed,
+            }],
+            base_ms + 1,
+        );
+        let stale_second = duplicate_locked_policy_snapshot(&first, &key);
+        let mut governed_request = request(ResponseAction::BlockEgress {
+            target: "203.0.113.130".to_string(),
+        });
+        let GovernanceDecision::Authorize {
+            contingency_lease: Some(lease),
+            ..
+        } = first.can_act(&governed_request)
+        else {
+            panic!("precondition: partition preview returns a current-committee lease");
+        };
+        governed_request.evidence = json!({"contingency_lease": lease});
+        let committed_before = read_envelope(&path).sequence();
+        let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+        let blocker = block_atomic_write(&sequence_path);
+
+        let error = first
+            .authorize_partition_request(&governed_request, base_ms + 2)
+            .expect_err("checkpoint lag withholds execution after committing redemption");
+        assert!(error.contains("checkpoint persistence failed"), "{error}");
+        let committed_redemption = read_envelope(&path).sequence();
+        assert_eq!(committed_redemption, committed_before + 1);
+        assert_eq!(
+            checkpoint_sequence(&read_checkpoint(&path)),
+            committed_before
+        );
+        fs::remove_dir(blocker).unwrap();
+
+        let error = stale_second
+            .authorize_partition_request(&governed_request, base_ms + 3)
+            .expect_err("checkpoint repair must precede and preserve stale-snapshot CAS");
+        assert!(error.contains("stale governance transaction"), "{error}");
+        assert_eq!(read_envelope(&path).sequence(), committed_redemption);
+        assert_eq!(
+            checkpoint_sequence(&read_checkpoint(&path)),
+            committed_before,
+            "a stale caller must not write even a checkpoint repair before CAS"
+        );
+
+        drop(first);
+        drop(stale_second);
+        let reloaded = load_signed_policy(&path, &key).unwrap();
+        assert_eq!(
+            checkpoint_sequence(&read_checkpoint(&path)),
+            committed_redemption,
+            "startup repairs the signed checkpoint from the newer committed state"
+        );
+        assert!(
+            reloaded
+                .authorize_partition_request(&governed_request, base_ms + 4)
+                .is_err(),
+            "restart preserves the single committed redemption"
+        );
+        drop(reloaded);
+        cleanup_persistence(&path);
+    }
+
+    #[test]
+    fn cas_rejects_a_different_trusted_statement_at_the_expected_sequence() {
+        let path = persistence_path("same-sequence-digest-cas");
+        let key = SigningKey::from_bytes(&[131; 32]);
+        let policy = initialize_signed_policy(&path, &key);
+        let envelope = read_envelope(&path);
+        let sequence = envelope.sequence();
+        let mut replacement: PersistedGovernanceState =
+            serde_json::from_str(&envelope.statement.payload_json).unwrap();
+        replacement.receipt_counter = replacement.receipt_counter.saturating_add(1);
+        let replacement = SignedStateEnvelope::sign(
+            GOVERNANCE_STATE_KIND,
+            GOVERNANCE_STATE_STREAM,
+            AgentId::from_verifying_key(&key.verifying_key()),
+            sequence,
+            replacement,
+            &key,
+        )
+        .unwrap();
+        write_envelope(&path, &replacement);
+
+        let peer = SigningKey::from_bytes(&[132; 32]);
+        let error = policy
+            .register_peer_governor(&peer.verifying_key())
+            .expect_err("sequence equality alone must not pass transaction CAS");
+        assert!(error.contains("stale governance transaction"), "{error}");
+        let durable = read_envelope(&path);
+        assert_eq!(durable.statement, replacement.statement);
+        assert_eq!(durable.signature, replacement.signature);
+        assert!(
+            !policy
+                .state
+                .lock()
+                .unwrap()
+                .peer_governors
+                .contains(&AgentId::from_verifying_key(&peer.verifying_key()))
+        );
+        drop(policy);
+        cleanup_persistence(&path);
     }
 
     #[test]
@@ -4558,6 +5183,8 @@ mod tests {
         )
         .unwrap();
         write_envelope(&victim_path, &forged);
+        drop(victim);
+        drop(attacker);
 
         let error = load_signed_policy(&victim_path, &victim_key)
             .expect_err("an attacker-signed membership and lease set must fail startup");
@@ -4753,6 +5380,7 @@ mod tests {
             .unwrap();
         assert!(read_envelope(&path).sequence() > before_peer.sequence());
         write_envelope(&path, &before_peer);
+        drop(policy);
 
         assert!(matches!(
             load_signed_policy(&path, &key).unwrap_err(),

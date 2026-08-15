@@ -181,6 +181,17 @@ reporting that it was discarded. Initial creation has no older checkpoint to
 anchor recovery, so an incomplete first checkpoint rolls the new state file
 back and fails bootstrap.
 
+One persisted governance stream has exactly one live process owner. Startup,
+initialization, and explicit reinitialization acquire an exclusive OS advisory
+lock beside the stream and retain its file handle for the full policy lifetime;
+the existence of the lock file is not ownership and no stale-lockfile timeout is
+used. A second process receives a typed startup refusal. Every mutation also
+compares the caller's verified predecessor sequence and signed-statement digest
+with durable state under that lock before writing. This CAS is defense in depth
+against a stale in-process snapshot: it cannot borrow the latest sequence and
+overwrite newer authorization state. Writers outside this lock protocol are not
+a supported coordination model.
+
 ## Approval And Receipt Lineage
 
 The active receipt chain is:
@@ -263,9 +274,10 @@ Every runtime-owned agent identity follows the same admission path:
 
 - keys persist under `identity.agent_key_dir`
 - on the shipped Linux release path and macOS development path, a newly created
-  key root is synced through its parent and each new key is synced with the key
-  root before creation is reported; sync failure aborts startup and a retry
-  treats existing key bytes as loaded rather than creating another identity
+  key root is synced through every parent directory up to the filesystem root,
+  and each new key is synced with the key root before creation is reported;
+  sync failure aborts startup, every ancestor is retried on the next open, and
+  existing key bytes are loaded rather than creating another identity
 - stable identities are derived from the Ed25519 public key
 - registry snapshots and continuity proofs persist under
   `identity.registry_dir`
@@ -344,6 +356,9 @@ The active contract is intentionally narrow:
 - leases may be scoped to one host or other action scope
 - leases carry a blast-radius cap
 - leases expire after a bounded TTL
+- operator status counts a lease only before its exact expiry boundary; the
+  read does not mutate signed history, and later governed persistence performs
+  ordinary expiry pruning
 - each lease is bound to the exact canonical governor committee recorded in its
   signed receipt; admitting a new committee member atomically invalidates every
   lease staged by the prior committee
@@ -387,9 +402,42 @@ committee membership, not receipt-signing trust anchors. The shipped issuance
 path remains local-only. On load, a signed contingency lease whose receipt names
 a different canonical committee is discarded rather than migrated into the
 current committee's authority.
+The shipped Helm profile uses a single `Recreate` deployment and
+`ReadWriteOncePod` storage. Rendering fails when shared persistence is enabled
+with more than one replica; rolling pod overlap is not a supported authority
+topology.
 Rollback of only the envelope is detected against the checkpoint. Rolling back
 both local files together is outside the protection of this design and requires
 an external monotonic or independently authenticated anchor.
+
+## Pre-1.0 Rust API Migration
+
+The security boundary intentionally breaks several public Rust source APIs.
+There is no compatibility shim because each old shape omitted information now
+required to fail closed:
+
+- `GovernancePolicy::with_persistence(config, path) -> std::io::Result<_>` is
+  now `GovernancePolicy::with_persistence(config, path,
+  admitted_tom_agent_id, tom_signing_key) ->
+  Result<_, GovernancePersistenceError>`. Callers must load or create the stable
+  Tom/primary key, admit that externally derived identity through the registry,
+  and pass that exact identity and key. Legacy unsigned state must be explicitly
+  reinitialized offline; persisted envelope fields never supply the trust
+  anchor.
+- `ContingencyLease::verify()` is now
+  `verify(&trusted_governor_identities)`. Callers must pass identities from the
+  admitted authority, normally `GovernanceAuthority::governor_public_keys()`;
+  the signer embedded in the lease is not its own trust anchor.
+- `GovernanceDecision::Allow { receipt: Option<_>, ... }` is split into
+  `NotRequired` for actions outside receipt-backed governance and `Authorize {
+  receipt, contingency_lease }` for governed approval. Match both explicitly;
+  do not convert a missing receipt into authorization.
+- the sealed `GovernanceAuthority` gained one-shot approval/veto consumption
+  and the human hold, binding, lookup, and atomic human-consumption methods.
+  Runtime callers must retain the same authority object through issuance and
+  consumption. The trait remains sealed, so downstream crates should consume a
+  supplied `dyn GovernanceAuthority` rather than attempting an external
+  implementation.
 
 ## Ingest, Bridge, Demo, And Raw Runtime Boundaries
 

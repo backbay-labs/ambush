@@ -1604,6 +1604,53 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_refuses_a_second_daemon_for_the_live_governance_stream() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-governance-bootstrap-lock-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state_path = root.join("governance-partition-state.json");
+        let store = FileAgentKeyStore::open(root.join("keys")).unwrap();
+        let (identity, status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        let first = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &state_path,
+            &identity,
+            status,
+        )
+        .unwrap();
+
+        let error = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &state_path,
+            &identity,
+            AgentKeyLoadStatus::Loaded,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            swarm_agents::tom_agent::GovernancePersistenceError::StateLocked { .. }
+        ));
+
+        drop(first);
+        let second = governance_policy_for_bootstrap(
+            swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+            &state_path,
+            &identity,
+            AgentKeyLoadStatus::Loaded,
+        )
+        .unwrap();
+        drop(second);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn serve_approval_harness_configures_all_four_durable_stores() {
         let root = std::env::temp_dir().join(format!(
             "swarm-detect-approval-stores-{}-{}",

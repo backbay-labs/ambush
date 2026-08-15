@@ -193,24 +193,19 @@ impl FileAgentKeyStore {
 
     fn open_with_parent_sync<ParentSync>(
         root: impl AsRef<Path>,
-        sync_parent: ParentSync,
+        mut sync_parent: ParentSync,
     ) -> Result<Self, AgentIdentityError>
     where
-        ParentSync: FnOnce(&Path) -> std::io::Result<()>,
+        ParentSync: FnMut(&Path) -> std::io::Result<()>,
     {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root).map_err(|source| AgentIdentityError::CreateDir {
             path: root.clone(),
             source,
         })?;
-        if let Some(parent) = root.parent() {
-            let parent = if parent.as_os_str().is_empty() {
-                Path::new(".")
-            } else {
-                parent
-            };
-            sync_parent(parent).map_err(|source| AgentIdentityError::SyncKeyRootParent {
-                path: parent.to_path_buf(),
+        for parent in key_root_parent_chain(&root) {
+            sync_parent(&parent).map_err(|source| AgentIdentityError::SyncKeyRootParent {
+                path: parent,
                 source,
             })?;
         }
@@ -353,6 +348,20 @@ impl FileAgentKeyStore {
         }
         Ok(true)
     }
+}
+
+fn key_root_parent_chain(root: &Path) -> Vec<PathBuf> {
+    let mut parents = Vec::new();
+    let mut current = root.parent();
+    while let Some(parent) = current {
+        if parent.as_os_str().is_empty() {
+            parents.push(PathBuf::from("."));
+            break;
+        }
+        parents.push(parent.to_path_buf());
+        current = parent.parent();
+    }
+    parents
 }
 
 pub struct FileAgentIdentityRegistry {
@@ -699,7 +708,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use rand_core::OsRng;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use swarm_core::agent::AgentRole;
     use swarm_core::config::IdentityConfig;
 
@@ -760,6 +769,66 @@ mod tests {
             created.signing_key.to_bytes(),
             loaded.signing_key.to_bytes()
         );
+    }
+
+    #[test]
+    fn key_store_open_syncs_every_ancestor_of_a_nested_new_root() {
+        let anchor = temp_root("open-nested-parent-sync");
+        let first = anchor.join("first");
+        let second = first.join("second");
+        let root = second.join("keys");
+        let failed_attempt = std::cell::RefCell::new(Vec::new());
+
+        let error = match FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            failed_attempt.borrow_mut().push(parent.to_path_buf());
+            if parent == first {
+                Err(std::io::Error::other(
+                    "injected higher-ancestor sync failure",
+                ))
+            } else {
+                Ok(())
+            }
+        }) {
+            Ok(_) => panic!("a higher-ancestor sync failure must abort key-store open"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            super::AgentIdentityError::SyncKeyRootParent { ref path, .. } if path == &first
+        ));
+        assert_eq!(
+            failed_attempt.into_inner(),
+            vec![second.clone(), first.clone()]
+        );
+        assert!(root.is_dir(), "create_dir_all completed before sync failed");
+
+        let retry_attempt = std::cell::RefCell::new(Vec::new());
+        let store = FileAgentKeyStore::open_with_parent_sync(&root, |parent| {
+            retry_attempt.borrow_mut().push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        let retry_attempt = retry_attempt.into_inner();
+        let expected_retry = second
+            .ancestors()
+            .map(Path::to_path_buf)
+            .collect::<Vec<_>>();
+        assert_eq!(retry_attempt, expected_retry);
+        assert_eq!(
+            retry_attempt.get(..3),
+            Some([second, first, anchor].as_slice())
+        );
+
+        let (created, created_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        let (loaded, loaded_status) = FileAgentKeyStore::open(&root)
+            .unwrap()
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .unwrap();
+        assert_eq!(created_status, AgentKeyLoadStatus::Created);
+        assert_eq!(loaded_status, AgentKeyLoadStatus::Loaded);
+        assert_eq!(created.id, loaded.id);
     }
 
     #[test]
