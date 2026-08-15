@@ -137,7 +137,7 @@ See: `.planning/PROJECT.md` (updated 2026-08-15)
 Last Date: 2026-08-15 — resumed
 Stopped At: Finishing Phase 285 security integration and obtaining external acceptance for MAPPING-05 and FALSIFY-04; phase 285 remains in progress.
 Resume File: None — no `.continue-here` checkpoint exists.
-Incomplete plan: None — every PLAN has a matching SUMMARY.
+Incomplete plan: None — active `.planning/phases` contains 98 PLAN files and all 98 have matching SUMMARY files; queued future plan files are not execution checkpoints.
 Interrupted agent: None — `init resume` reports no interrupted GSD agent.
 
 ## Next Command

@@ -76,6 +76,18 @@
 
 ## History
 
+## v1.77 Integration Proof (Shipped: 2026-04-13)
+
+**Phases completed:** 4 phases, 4 plans, 0 tasks
+
+**Key accomplishments:**
+- The repo ships a resilient CrowdStrike RTR response adapter with OAuth2 service authentication, session management, host isolation, process kill, file quarantine, and repo-owned mock-server coverage.
+- The repo ships a resilient Splunk HEC delivery adapter with CIM-compliant field mapping, configurable batching, secret-resolved token authentication, delivery metrics, and repo-owned mock-endpoint coverage.
+- The Compose-backed integration proof executes the complete telemetry -> detection -> policy-gated response -> CrowdStrike RTR -> Splunk HEC path with observable response receipts and CIM-mapped delivery artifacts.
+- `bash tools/run-integration-proof.sh` validates the documented integration architecture, component health, metrics, and audit evidence without live vendor credentials.
+
+---
+
 ## v1.72 OpenAPI Spec And SOAR Bidirectional Sync (Shipped: 2026-04-13)
 
 **Phases completed:** 4 phases, 4 plans, 0 tasks
