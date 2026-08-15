@@ -334,10 +334,10 @@ workflow_names = sorted(
     name
     for name in tracked
     if pathlib.PurePosixPath(name).parent == pathlib.PurePosixPath(".github/workflows")
-    and pathlib.PurePosixPath(name).suffix == ".yml"
+    and pathlib.PurePosixPath(name).suffix in {".yml", ".yaml"}
 )
 if not workflow_names:
-    raise SystemExit("git reported no tracked .github/workflows/*.yml files")
+    raise SystemExit("git reported no tracked .github/workflows/*.yml or *.yaml files")
 workflows = {
     name: (root / name).read_text(encoding="utf-8") for name in workflow_names
 }
@@ -369,8 +369,11 @@ audit_install = """      - name: Install cargo-audit
 """
 cyclonedx_install = f"""      - name: Install cargo-cyclonedx
         run: |
-          cargo install cargo-cyclonedx --version "${{CARGO_CYCLONEDX_VERSION}}" --locked --force
-          test "$(cargo cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${{CARGO_CYCLONEDX_VERSION}}"
+          CYCLONEDX_INSTALL_ROOT="${{RUNNER_TEMP}}/cargo-cyclonedx-${{CARGO_CYCLONEDX_VERSION}}"
+          cargo install cargo-cyclonedx --version "${{CARGO_CYCLONEDX_VERSION}}" --locked --force --root "${{CYCLONEDX_INSTALL_ROOT}}"
+          CARGO_CYCLONEDX_BIN="${{CYCLONEDX_INSTALL_ROOT}}/bin/cargo-cyclonedx"
+          test "$("${{CARGO_CYCLONEDX_BIN}}" cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${{CARGO_CYCLONEDX_VERSION}}"
+          printf 'CARGO_CYCLONEDX_BIN=%s\\n' "${{CARGO_CYCLONEDX_BIN}}" >>"${{GITHUB_ENV}}"
 """
 cyclonedx_pin = f'  CARGO_CYCLONEDX_VERSION: "{cyclonedx_version}"\n'
 top_permissions = """permissions:
@@ -543,6 +546,32 @@ def require_invalid(
 
 require_valid("checked-in workflows", workflows)
 
+yaml_extension_mutation = dict(workflows)
+yaml_extension_mutation[".github/workflows/ignored-cache.yaml"] = """name: ignored
+jobs:
+  ignored:
+    steps:
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-sources-v1-ignored
+          restore-keys: |
+            cargo-home-sources-v1-
+"""
+require_invalid(
+    "tracked .yaml workflow cache mutation",
+    yaml_extension_mutation,
+    [
+        ".github/workflows/ignored-cache.yaml: forbidden Cargo cache path is present: ~/.cargo/bin/"
+    ],
+)
+
 cache_workflows = [
     name for name, text in sorted(workflows.items()) if "uses: actions/cache@" in text
 ]
@@ -632,6 +661,19 @@ require_invalid(
     ["cargo-cyclonedx must be installed exactly once, unconditionally"],
 )
 
+alias_shadowed_version = replaced(
+    workflows,
+    release_name,
+    '          test "$("${CARGO_CYCLONEDX_BIN}" cyclonedx --version)" = ',
+    '          test "$(cargo cyclonedx --version)" = ',
+    "cargo alias-shadowed cyclonedx version mutation",
+)
+require_invalid(
+    "cargo alias-shadowed cyclonedx version mutation",
+    alias_shadowed_version,
+    ["cargo-cyclonedx must be installed exactly once, unconditionally"],
+)
+
 cyclonedx_drift = replaced(
     workflows,
     release_name,
@@ -707,15 +749,53 @@ print(
 )
 PY
 
-# A cached fake can report the exact reviewed version while writing a syntactically
-# valid but empty object as the release SBOM. The workflow contract above prevents
-# that executable from being restored or trusted; the generator independently
-# rejects its output. The additional parser fixtures close duplicate-key and
-# Python-json nonstandard-number acceptance rather than assuming json.loads is
-# strict by default.
+# A cached fake or Cargo alias can report the exact reviewed version while writing
+# a false release SBOM. The workflow contract prevents the cached executable; the
+# generator invokes an absolute external binary and rejects a repository alias.
+# A two-package locked workspace makes completeness measurable: one valid forged
+# document is still a failure when the second package is absent. Additional
+# parser fixtures close duplicate-key and Python-json nonstandard-number
+# acceptance rather than assuming json.loads is strict by default.
+SBOM_FIXTURE_WORKSPACE="$WORK_DIR/sbom-fixture-workspace"
 VALID_SBOM_DIR="$WORK_DIR/valid-sbom"
-mkdir -p "$VALID_SBOM_DIR"
-cat >"$VALID_SBOM_DIR/valid.cdx.json" <<'JSON'
+mkdir -p \
+  "$SBOM_FIXTURE_WORKSPACE/fixture/src" \
+  "$SBOM_FIXTURE_WORKSPACE/omitted/src" \
+  "$VALID_SBOM_DIR"
+cat >"$SBOM_FIXTURE_WORKSPACE/Cargo.toml" <<'TOML'
+[workspace]
+resolver = "2"
+members = ["fixture", "omitted"]
+TOML
+cat >"$SBOM_FIXTURE_WORKSPACE/fixture/Cargo.toml" <<'TOML'
+[package]
+name = "fixture"
+version = "1.0.0"
+edition = "2021"
+TOML
+cat >"$SBOM_FIXTURE_WORKSPACE/omitted/Cargo.toml" <<'TOML'
+[package]
+name = "omitted"
+version = "2.0.0"
+edition = "2021"
+TOML
+printf '%s\n' '' >"$SBOM_FIXTURE_WORKSPACE/fixture/src/lib.rs"
+printf '%s\n' '' >"$SBOM_FIXTURE_WORKSPACE/omitted/src/lib.rs"
+cat >"$SBOM_FIXTURE_WORKSPACE/Cargo.lock" <<'TOML'
+# This file is automatically @generated by Cargo.
+# It is not intended for manual editing.
+version = 4
+
+[[package]]
+name = "fixture"
+version = "1.0.0"
+
+[[package]]
+name = "omitted"
+version = "2.0.0"
+TOML
+
+cat >"$VALID_SBOM_DIR/fixture.cdx.json" <<'JSON'
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
@@ -726,7 +806,8 @@ cat >"$VALID_SBOM_DIR/valid.cdx.json" <<'JSON'
       "type": "library",
       "bom-ref": "fixture@1.0.0",
       "name": "fixture",
-      "version": "1.0.0"
+      "version": "1.0.0",
+      "purl": "pkg:cargo/fixture@1.0.0?download_url=file://."
     }
   },
   "components": [
@@ -743,7 +824,37 @@ cat >"$VALID_SBOM_DIR/valid.cdx.json" <<'JSON'
   ]
 }
 JSON
+cat >"$VALID_SBOM_DIR/omitted.cdx.json" <<'JSON'
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:00000000-0000-4000-8000-000000000002",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "bom-ref": "omitted@2.0.0",
+      "name": "omitted",
+      "version": "2.0.0",
+      "purl": "pkg:cargo/omitted@2.0.0?download_url=file://."
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "dependency@2.0.0",
+      "name": "dependency",
+      "version": "2.0.0"
+    }
+  ],
+  "dependencies": [
+    {"ref": "omitted@2.0.0", "dependsOn": ["dependency@2.0.0"]},
+    {"ref": "dependency@2.0.0", "dependsOn": []}
+  ]
+}
+JSON
 if ! bash "$ROOT_DIR/tools/generate-sbom.sh" --validate-dir "$VALID_SBOM_DIR" \
+  "$SBOM_FIXTURE_WORKSPACE/Cargo.toml" \
   >"$WORK_DIR/valid-sbom.stdout" 2>"$WORK_DIR/valid-sbom.stderr"; then
   sed -n '1,20p' "$WORK_DIR/valid-sbom.stderr" >&2
   echo "::error::valid CycloneDX 1.5 control was rejected" >&2
@@ -754,8 +865,9 @@ expect_sbom_rejection() {
   local label="$1"
   local directory="$2"
   local expected="$3"
+  local manifest_path="${4:-$SBOM_FIXTURE_WORKSPACE/Cargo.toml}"
 
-  if bash "$ROOT_DIR/tools/generate-sbom.sh" --validate-dir "$directory" \
+  if bash "$ROOT_DIR/tools/generate-sbom.sh" --validate-dir "$directory" "$manifest_path" \
     >"$WORK_DIR/$label.stdout" 2>"$WORK_DIR/$label.stderr"; then
     echo "::error::$label SBOM mutation unexpectedly passed" >&2
     exit 1
@@ -779,6 +891,9 @@ if [[ "${1:-}" != "cyclonedx" ]]; then
   exit 2
 fi
 shift
+if [[ -n "${SUPPLY_CHAIN_DIRECT_MARKER:-}" ]]; then
+  printf 'direct external cargo-cyclonedx invoked\n' >"$SUPPLY_CHAIN_DIRECT_MARKER"
+fi
 if [[ "${1:-}" == "--version" ]]; then
   printf 'cargo-cyclonedx-cyclonedx %s\n' "${SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION:?}"
   exit 0
@@ -788,24 +903,168 @@ SH
 chmod +x "$FAKE_CYCLONEDX_BIN/cargo-cyclonedx"
 
 fake_cyclonedx_version="$(
-  PATH="$FAKE_CYCLONEDX_BIN:$PATH" \
-    SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION="$REQUIRED_CARGO_CYCLONEDX_VERSION" \
-    cargo cyclonedx --version
+  SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION="$REQUIRED_CARGO_CYCLONEDX_VERSION" \
+    "$FAKE_CYCLONEDX_BIN/cargo-cyclonedx" cyclonedx --version
 )"
 if [[ "$fake_cyclonedx_version" != \
   "cargo-cyclonedx-cyclonedx $REQUIRED_CARGO_CYCLONEDX_VERSION" ]]; then
   echo "::error::fake cargo-cyclonedx did not reproduce exact-version spoof" >&2
   exit 1
 fi
-if ! PATH="$FAKE_CYCLONEDX_BIN:$PATH" \
-  SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION="$REQUIRED_CARGO_CYCLONEDX_VERSION" \
+
+ALIAS_SHADOW_ROOT="$WORK_DIR/cyclonedx-alias-shadow"
+mkdir -p \
+  "$ALIAS_SHADOW_ROOT/.cargo" \
+  "$ALIAS_SHADOW_ROOT/tools" \
+  "$ALIAS_SHADOW_ROOT/alias-helper/src"
+cp -R "$SBOM_FIXTURE_WORKSPACE/fixture" "$ALIAS_SHADOW_ROOT/fixture"
+cp -R "$SBOM_FIXTURE_WORKSPACE/omitted" "$ALIAS_SHADOW_ROOT/omitted"
+cp "$SBOM_FIXTURE_WORKSPACE/Cargo.toml" "$ALIAS_SHADOW_ROOT/Cargo.toml"
+cp "$SBOM_FIXTURE_WORKSPACE/Cargo.lock" "$ALIAS_SHADOW_ROOT/Cargo.lock"
+cp "$ROOT_DIR/tools/generate-sbom.sh" "$ALIAS_SHADOW_ROOT/tools/generate-sbom.sh"
+cat >"$ALIAS_SHADOW_ROOT/alias-helper/Cargo.toml" <<'TOML'
+[package]
+name = "cyclonedx-alias-helper"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+TOML
+cat >"$ALIAS_SHADOW_ROOT/alias-helper/src/main.rs" <<'RS'
+use std::{env, fs};
+
+fn main() {
+    if let Ok(marker) = env::var("SUPPLY_CHAIN_ALIAS_MARKER") {
+        fs::write(marker, "Cargo alias invoked\n").expect("write alias marker");
+    }
+    if env::args().any(|arg| arg == "--version") {
+        println!("cargo-cyclonedx-cyclonedx 0.5.9");
+        return;
+    }
+    let path = env::var("SUPPLY_CHAIN_ALIAS_SBOM_PATH")
+        .expect("SUPPLY_CHAIN_ALIAS_SBOM_PATH");
+    fs::write(
+        path,
+        r#"{
+          "bomFormat":"CycloneDX","specVersion":"1.5",
+          "serialNumber":"urn:uuid:00000000-0000-4000-8000-000000000003","version":1,
+          "metadata":{"component":{"type":"library","bom-ref":"fixture@1.0.0","name":"fixture","version":"1.0.0","purl":"pkg:cargo/fixture@1.0.0"}},
+          "components":[{"type":"library","bom-ref":"dependency@1.0.0","name":"dependency","version":"1.0.0"}],
+          "dependencies":[{"ref":"fixture@1.0.0","dependsOn":[]}]}
+        "#,
+    )
+    .expect("write alias-forged SBOM");
+}
+RS
+cat >"$ALIAS_SHADOW_ROOT/.cargo/config.toml" <<TOML
+[alias]
+cyclonedx = ["run", "--quiet", "--manifest-path", "$ALIAS_SHADOW_ROOT/alias-helper/Cargo.toml", "--"]
+TOML
+
+ALIAS_MARKER="$WORK_DIR/cyclonedx-alias.marker"
+DIRECT_MARKER="$WORK_DIR/cyclonedx-direct.marker"
+alias_version="$(
+  cd "$ALIAS_SHADOW_ROOT"
+  SUPPLY_CHAIN_ALIAS_MARKER="$ALIAS_MARKER" cargo cyclonedx --version
+)"
+if [[ "$alias_version" != \
+  "cargo-cyclonedx-cyclonedx $REQUIRED_CARGO_CYCLONEDX_VERSION" || \
+  ! -f "$ALIAS_MARKER" || -e "$DIRECT_MARKER" ]]; then
+  echo "::error::Cargo alias shadow fixture did not invoke the forged alias" >&2
+  exit 1
+fi
+direct_version="$(
+  SUPPLY_CHAIN_DIRECT_MARKER="$DIRECT_MARKER" \
+    SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION="$REQUIRED_CARGO_CYCLONEDX_VERSION" \
+    "$FAKE_CYCLONEDX_BIN/cargo-cyclonedx" cyclonedx --version
+)"
+if [[ "$direct_version" != \
+  "cargo-cyclonedx-cyclonedx $REQUIRED_CARGO_CYCLONEDX_VERSION" || \
+  ! -f "$DIRECT_MARKER" ]]; then
+  echo "::error::direct external cargo-cyclonedx differential control failed" >&2
+  exit 1
+fi
+
+ALIAS_FORGED_SBOM_DIR="$WORK_DIR/alias-forged-sbom"
+mkdir -p "$ALIAS_FORGED_SBOM_DIR"
+(
+  cd "$ALIAS_SHADOW_ROOT"
+  SUPPLY_CHAIN_ALIAS_MARKER="$ALIAS_MARKER" \
+    SUPPLY_CHAIN_ALIAS_SBOM_PATH="$ALIAS_FORGED_SBOM_DIR/fixture.cdx.json" \
+    cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --quiet
+)
+expect_sbom_rejection \
+  "alias-forged-incomplete-inventory" "$ALIAS_FORGED_SBOM_DIR" \
+  "missing=[('omitted', '2.0.0')]" "$ALIAS_SHADOW_ROOT/Cargo.toml"
+
+if CARGO_CYCLONEDX_BIN="$FAKE_CYCLONEDX_BIN/cargo-cyclonedx" \
+  CARGO_CYCLONEDX_VERSION="$REQUIRED_CARGO_CYCLONEDX_VERSION" \
+  bash "$ALIAS_SHADOW_ROOT/tools/generate-sbom.sh" "$WORK_DIR/alias-generator-output" \
+  >"$WORK_DIR/alias-generator.stdout" 2>"$WORK_DIR/alias-generator.stderr"; then
+  echo "::error::generator accepted a repository cyclonedx Cargo alias" >&2
+  exit 1
+fi
+if ! grep -Fq "repository Cargo alias 'cyclonedx' is forbidden" \
+  "$WORK_DIR/alias-generator.stderr"; then
+  sed -n '1,20p' "$WORK_DIR/alias-generator.stderr" >&2
+  echo "::error::generator alias fixture failed for the wrong reason" >&2
+  exit 1
+fi
+echo "Cargo alias fixture ok: bare cargo was shadowed; direct external binary bypassed it; generator refused it"
+
+if ! SUPPLY_CHAIN_FAKE_CYCLONEDX_VERSION="$REQUIRED_CARGO_CYCLONEDX_VERSION" \
   SUPPLY_CHAIN_FAKE_SBOM_PATH="$FAKE_SBOM_DIR/fake.cdx.json" \
-  cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --quiet; then
+  "$FAKE_CYCLONEDX_BIN/cargo-cyclonedx" cyclonedx \
+    --manifest-path Cargo.toml --format json --spec-version 1.5 --quiet; then
   echo "::error::fake cargo-cyclonedx failed before constructing false SBOM evidence" >&2
   exit 1
 fi
 expect_sbom_rejection \
   "fake-cyclonedx-empty-object" "$FAKE_SBOM_DIR" "bomFormat must equal 'CycloneDX'"
+
+MISSING_INVENTORY_DIR="$WORK_DIR/missing-inventory-sbom"
+DUPLICATE_IDENTITY_DIR="$WORK_DIR/duplicate-identity-sbom"
+WRONG_NAME_DIR="$WORK_DIR/wrong-name-sbom"
+WRONG_VERSION_DIR="$WORK_DIR/wrong-version-sbom"
+WRONG_PURL_DIR="$WORK_DIR/wrong-purl-sbom"
+mkdir -p \
+  "$MISSING_INVENTORY_DIR" \
+  "$DUPLICATE_IDENTITY_DIR" \
+  "$WRONG_NAME_DIR" \
+  "$WRONG_VERSION_DIR" \
+  "$WRONG_PURL_DIR"
+cp "$VALID_SBOM_DIR/fixture.cdx.json" "$MISSING_INVENTORY_DIR/fixture.cdx.json"
+cp "$VALID_SBOM_DIR/fixture.cdx.json" "$DUPLICATE_IDENTITY_DIR/fixture.cdx.json"
+cp "$VALID_SBOM_DIR/fixture.cdx.json" "$DUPLICATE_IDENTITY_DIR/omitted.cdx.json"
+cp "$VALID_SBOM_DIR/fixture.cdx.json" "$WRONG_NAME_DIR/fixture.cdx.json"
+cp "$VALID_SBOM_DIR/omitted.cdx.json" "$WRONG_NAME_DIR/omitted.cdx.json"
+perl -0pi -e 's/"name": "omitted"/"name": "forged"/' \
+  "$WRONG_NAME_DIR/omitted.cdx.json"
+cp "$VALID_SBOM_DIR/fixture.cdx.json" "$WRONG_VERSION_DIR/fixture.cdx.json"
+cp "$VALID_SBOM_DIR/omitted.cdx.json" "$WRONG_VERSION_DIR/omitted.cdx.json"
+perl -0pi -e 's/"version": "2\.0\.0"/"version": "9.0.0"/' \
+  "$WRONG_VERSION_DIR/omitted.cdx.json"
+perl -0pi -e 's#pkg:cargo/omitted\@2\.0\.0#pkg:cargo/omitted\@9.0.0#' \
+  "$WRONG_VERSION_DIR/omitted.cdx.json"
+cp "$VALID_SBOM_DIR/fixture.cdx.json" "$WRONG_PURL_DIR/fixture.cdx.json"
+cp "$VALID_SBOM_DIR/omitted.cdx.json" "$WRONG_PURL_DIR/omitted.cdx.json"
+perl -0pi -e 's#pkg:cargo/omitted\@2\.0\.0#pkg:cargo/forged\@2.0.0#' \
+  "$WRONG_PURL_DIR/omitted.cdx.json"
+expect_sbom_rejection \
+  "missing-workspace-package" "$MISSING_INVENTORY_DIR" \
+  "missing=[('omitted', '2.0.0')]"
+expect_sbom_rejection \
+  "duplicate-metadata-component" "$DUPLICATE_IDENTITY_DIR" \
+  "metadata.component package identity is duplicated"
+expect_sbom_rejection \
+  "wrong-package-name" "$WRONG_NAME_DIR" \
+  "filename must be 'forged.cdx.json'"
+expect_sbom_rejection \
+  "wrong-package-version" "$WRONG_VERSION_DIR" \
+  "missing=[('omitted', '2.0.0')], unexpected=[('omitted', '9.0.0')]"
+expect_sbom_rejection \
+  "wrong-package-purl" "$WRONG_PURL_DIR" \
+  "metadata.component.purl must identify omitted@2.0.0"
 
 DUPLICATE_SBOM_DIR="$WORK_DIR/duplicate-key-sbom"
 NAN_SBOM_DIR="$WORK_DIR/nan-sbom"

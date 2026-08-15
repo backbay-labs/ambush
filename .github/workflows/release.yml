@@ -62,8 +62,11 @@ jobs:
 
       - name: Install cargo-cyclonedx
         run: |
-          cargo install cargo-cyclonedx --version "${CARGO_CYCLONEDX_VERSION}" --locked --force
-          test "$(cargo cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${CARGO_CYCLONEDX_VERSION}"
+          CYCLONEDX_INSTALL_ROOT="${RUNNER_TEMP}/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}"
+          cargo install cargo-cyclonedx --version "${CARGO_CYCLONEDX_VERSION}" --locked --force --root "${CYCLONEDX_INSTALL_ROOT}"
+          CARGO_CYCLONEDX_BIN="${CYCLONEDX_INSTALL_ROOT}/bin/cargo-cyclonedx"
+          test "$("${CARGO_CYCLONEDX_BIN}" cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${CARGO_CYCLONEDX_VERSION}"
+          printf 'CARGO_CYCLONEDX_BIN=%s\n' "${CARGO_CYCLONEDX_BIN}" >>"${GITHUB_ENV}"
 
       - name: Generate workspace SBOM
         run: bash tools/generate-sbom.sh artifacts/sbom
