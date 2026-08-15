@@ -1253,18 +1253,40 @@ impl GovernancePersistence {
         ensure_lock_identity_supported()?;
         let sequence_path = path.with_extension("sequence.json");
         let lock_path = path.with_extension("lock");
-        if open_mode == GovernanceLockOpenMode::Initialize
-            && let Some(parent) = lock_path.parent()
-        {
+        let anchors_absent = if open_mode == GovernanceLockOpenMode::Initialize {
+            let state_anchor_absent = match fs::symlink_metadata(&path) {
+                Ok(_) => false,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(source) => {
+                    return Err(GovernancePersistenceError::ReadState {
+                        path: path.clone(),
+                        source,
+                    });
+                }
+            };
+            let checkpoint_anchor_absent = match fs::symlink_metadata(&sequence_path) {
+                Ok(_) => false,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(source) => {
+                    return Err(GovernancePersistenceError::ReadSequence {
+                        path: sequence_path.clone(),
+                        source,
+                    });
+                }
+            };
+            state_anchor_absent && checkpoint_anchor_absent
+        } else {
+            false
+        };
+        let initialize_empty_stream =
+            open_mode == GovernanceLockOpenMode::Initialize && anchors_absent;
+        if initialize_empty_stream && let Some(parent) = lock_path.parent() {
             fs::create_dir_all(parent).map_err(|source| GovernancePersistenceError::OpenLock {
                 path: lock_path.clone(),
                 source,
             })?;
         }
-        preflight_governance_lock_path(
-            &lock_path,
-            open_mode == GovernanceLockOpenMode::Initialize,
-        )?;
+        preflight_governance_lock_path(&lock_path, initialize_empty_stream)?;
         let mut existing_options = OpenOptions::new();
         existing_options.read(true).write(true).truncate(false);
         #[cfg(unix)]
@@ -1274,7 +1296,7 @@ impl GovernancePersistence {
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
-        let (mut lock_file, created) = if open_mode == GovernanceLockOpenMode::Initialize {
+        let (mut lock_file, created) = if initialize_empty_stream {
             let mut create_options = OpenOptions::new();
             create_options
                 .read(true)
@@ -1341,27 +1363,6 @@ impl GovernancePersistence {
                     source,
                 })?;
         let lock_identity = governance_lock_identity(&lock_path, &lock_metadata)?;
-        let state_anchor_absent = match fs::symlink_metadata(&path) {
-            Ok(_) => false,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-            Err(source) => {
-                return Err(GovernancePersistenceError::ReadState {
-                    path: path.clone(),
-                    source,
-                });
-            }
-        };
-        let checkpoint_anchor_absent = match fs::symlink_metadata(&sequence_path) {
-            Ok(_) => false,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-            Err(source) => {
-                return Err(GovernancePersistenceError::ReadSequence {
-                    path: sequence_path.clone(),
-                    source,
-                });
-            }
-        };
-        let anchors_absent = state_anchor_absent && checkpoint_anchor_absent;
         let lock_record = if created {
             let record = new_governance_lock_record();
             write_governance_lock_record(&lock_path, &mut lock_file, &record, true)?;
@@ -5120,6 +5121,85 @@ mod tests {
                 "{label} must leave the missing lock absent for operator recovery"
             );
             cleanup_persistence(&path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initialization_never_creates_a_missing_lock_beside_any_anchor_entry() {
+        use std::os::unix::fs::symlink;
+
+        let key = SigningKey::from_bytes(&[148; 32]);
+        for (label, keep_state, keep_checkpoint) in [
+            ("both-real", true, true),
+            ("state-real", true, false),
+            ("checkpoint-real", false, true),
+        ] {
+            let path = persistence_path(&format!("initialize-missing-lock-{label}"));
+            let policy = initialize_signed_policy(&path, &key);
+            drop(policy);
+            let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+            let lock_path = GovernancePolicy::persistence_lock_path(&path);
+            fs::remove_file(&lock_path).unwrap();
+            if !keep_state {
+                fs::remove_file(&path).unwrap();
+            }
+            if !keep_checkpoint {
+                fs::remove_file(&sequence_path).unwrap();
+            }
+            let state_before = keep_state.then(|| fs::read(&path).unwrap());
+            let sequence_before = keep_checkpoint.then(|| fs::read(&sequence_path).unwrap());
+
+            let error = GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key.clone(),
+            )
+            .expect_err("Initialize must not replace a missing permanent lock beside any anchor");
+            assert!(matches!(
+                error,
+                GovernancePersistenceError::MissingLock { .. }
+            ));
+            assert!(!lock_path.exists(), "Initialize left a new lock residue");
+            assert_eq!(state_before, keep_state.then(|| fs::read(&path).unwrap()));
+            assert_eq!(
+                sequence_before,
+                keep_checkpoint.then(|| fs::read(&sequence_path).unwrap())
+            );
+            cleanup_persistence(&path);
+        }
+
+        for (label, symlink_state) in [("state-symlink", true), ("checkpoint-symlink", false)] {
+            let path = persistence_path(&format!("initialize-missing-lock-{label}"));
+            let sequence_path = GovernancePolicy::persistence_sequence_path(&path);
+            let lock_path = GovernancePolicy::persistence_lock_path(&path);
+            let target = path.with_extension(format!("{label}-target"));
+            fs::write(&target, b"anchor-path-entry").unwrap();
+            let anchor_path = if symlink_state { &path } else { &sequence_path };
+            symlink(&target, anchor_path).unwrap();
+
+            let error = GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                &path,
+                AgentId::from_verifying_key(&key.verifying_key()),
+                key.clone(),
+            )
+            .expect_err("a symlinked anchor entry must prevent implicit lock creation");
+            assert!(matches!(
+                error,
+                GovernancePersistenceError::MissingLock { .. }
+            ));
+            assert!(!lock_path.exists(), "Initialize left a new lock residue");
+            assert!(
+                fs::symlink_metadata(anchor_path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read(&target).unwrap(), b"anchor-path-entry");
+            cleanup_persistence(&path);
+            fs::remove_file(target).unwrap();
         }
     }
 
