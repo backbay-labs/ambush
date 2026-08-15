@@ -6,8 +6,7 @@
 mod negative_protocol;
 
 use negative_protocol::{
-    MutationRole, RegisteredNegativeCase, assert_registered_negative_case,
-    execute_registered_negative_case_sync,
+    MutationRole, RegisteredNegativeCase, execute_registered_negative_case_sync,
 };
 use std::sync::{Arc, Mutex};
 
@@ -70,9 +69,13 @@ impl ContractState {
     }
 }
 
+fn contract_real(state: &ContractState, probe: &u8) -> ContractOutcome {
+    state.real(probe)
+}
+
 macro_rules! run_contract_case {
     ($case:ident, $state:expr) => {{
-        assert_registered_negative_case! {
+        negative_protocol::assert_registered_negative_case! {
             case: $case,
             mutation: ContractMutation,
             control: ContractMutation::None,
@@ -80,7 +83,11 @@ macro_rules! run_contract_case {
             state: { state: ContractState = $state },
             probe: u8 = 7,
             outcome: ContractOutcome,
-            real: |state, probe| state.real(probe),
+            real_probe: probe,
+            production: contract_real,
+            arguments: (&*state, probe),
+            call: sync,
+            normalize: |production_result| production_result,
             mirror: |state, probe, mutation| state.mirror(probe, mutation),
             denied: |outcome| outcome == &ContractOutcome::Denied,
             permitted: |outcome| outcome == &ContractOutcome::Permitted,

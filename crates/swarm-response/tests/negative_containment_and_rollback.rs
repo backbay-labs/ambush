@@ -10,7 +10,6 @@
 #[path = "../../../tests/negative_protocol.rs"]
 mod negative_protocol;
 
-use negative_protocol::{assert_registered_async_negative_case, assert_registered_negative_case};
 use serde_json::json;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -100,7 +99,7 @@ fn mirrored_ttl(ttl_ms: i64, mutation: TtlMutation) -> Result<i64, ContainmentLe
 
 #[test]
 fn broken_ttl_check_permits_a_zero_lifetime() {
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_TTL_STRICTLY_POSITIVE,
         mutation: TtlMutation,
         control: TtlMutation::None,
@@ -108,7 +107,11 @@ fn broken_ttl_check_permits_a_zero_lifetime() {
         state: {},
         probe: i64 = 0,
         outcome: Result<i64, String>,
-        real: |_state, probe| swarm_response::containment::ContainmentTtl::from_config_ms(*probe).map(ContainmentTtl::get).map_err(|error| error.to_string()),
+        real_probe: probe,
+        production: swarm_response::containment::ContainmentTtl::from_config_ms,
+        arguments: (*probe),
+        call: sync,
+        normalize: |production_result| production_result.map(ContainmentTtl::get).map_err(|error| error.to_string()),
         mirror: |_state, probe, mutation| mirrored_ttl(*probe, mutation).map_err(|error| error.to_string()),
         denied: |result| result.is_err(),
         permitted: |result| result == &Ok(0),
@@ -161,7 +164,7 @@ fn broken_open_permits_the_unbounded_lease_the_real_constructor_refuses() {
     let issued_at_ms = i64::MAX;
     let ttl = ContainmentTtl::from_config_ms(900_000).unwrap();
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_LEASE_BOUNDED,
         mutation: OpenMutation,
         control: OpenMutation::None,
@@ -169,7 +172,9 @@ fn broken_open_permits_the_unbounded_lease_the_real_constructor_refuses() {
         state: { ttl: ContainmentTtl = ttl },
         probe: i64 = issued_at_ms,
         outcome: Result<i64, String>,
-        real: |_state, probe| swarm_response::containment::ContainmentLease::open(
+        real_probe: probe,
+        production: swarm_response::containment::ContainmentLease::open,
+        arguments: (
             "containment:saturating",
             quarantine_action(),
             "resp:saturating",
@@ -177,7 +182,9 @@ fn broken_open_permits_the_unbounded_lease_the_real_constructor_refuses() {
             &preview(&[ResponseRollbackStepKind::ReleaseQuarantinedFile]),
             *probe,
             *ttl,
-        ).map(|lease| lease.expires_at_ms()).map_err(|error| error.to_string()),
+        ),
+        call: sync,
+        normalize: |production_result| production_result.map(|lease| lease.expires_at_ms()).map_err(|error| error.to_string()),
         mirror: |_state, probe, mutation| mirrored_open_expiry("containment:saturating", *probe, *ttl, mutation).map_err(|error| error.to_string()),
         denied: |result| result.is_err(),
         permitted: |result| result == &Ok(i64::MAX),
@@ -247,7 +254,7 @@ fn mirrored_stored_lease_accepts(
 fn broken_schema_check_loads_a_lease_from_an_unknown_wire_version() {
     let mut wire = serde_json::to_value(lease(1_000, 900_000)).unwrap();
     wire["schema_version"] = json!(99);
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_STORED_LEASE_SCHEMA_KNOWN,
         mutation: StoredLeaseMutation,
         control: StoredLeaseMutation::None,
@@ -255,7 +262,11 @@ fn broken_schema_check_loads_a_lease_from_an_unknown_wire_version() {
         state: {},
         probe: serde_json::Value = wire,
         outcome: Result<i64, String>,
-        real: |_state, probe| serde_json::from_value::<ContainmentLease>(probe.clone()).map(|lease| lease.expires_at_ms()).map_err(|error| error.to_string()),
+        real_probe: probe,
+        production: serde_json::from_value::<ContainmentLease>,
+        arguments: (probe.clone()),
+        call: sync,
+        normalize: |production_result| production_result.map(|lease| lease.expires_at_ms()).map_err(|error| error.to_string()),
         mirror: |_state, probe, mutation| mirrored_stored_lease_accepts(probe, mutation),
         denied: |result| result.is_err(),
         permitted: |result| result == &Ok(901_000),
@@ -271,7 +282,7 @@ fn broken_stored_lease_bound_accepts_the_already_expired_record_the_real_one_rej
     wire["expires_at_ms"] = json!(900);
     assert_eq!(wire["issued_at_ms"], json!(1_000));
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_STORED_LEASE_BOUNDED,
         mutation: StoredLeaseMutation,
         control: StoredLeaseMutation::None,
@@ -279,7 +290,11 @@ fn broken_stored_lease_bound_accepts_the_already_expired_record_the_real_one_rej
         state: {},
         probe: serde_json::Value = wire,
         outcome: Result<i64, String>,
-        real: |_state, probe| serde_json::from_value::<ContainmentLease>(probe.clone()).map(|lease| lease.expires_at_ms()).map_err(|error| error.to_string()),
+        real_probe: probe,
+        production: serde_json::from_value::<ContainmentLease>,
+        arguments: (probe.clone()),
+        call: sync,
+        normalize: |production_result| production_result.map(|lease| lease.expires_at_ms()).map_err(|error| error.to_string()),
         mirror: |_state, probe, mutation| mirrored_stored_lease_accepts(probe, mutation),
         denied: |result| result.as_ref().is_err_and(|error| error.contains("must be bounded")),
         permitted: |result| result == &Ok(900),
@@ -350,22 +365,25 @@ fn unique_store_path(label: &str) -> PathBuf {
 
 #[test]
 fn broken_memory_duplicate_guard_accepts_a_second_open_for_one_lease() {
-    assert_registered_negative_case! {
+    let store = MemoryContainmentLeaseStore::new();
+    let probe = lease(1_000, 900_000);
+    store.open_lease(&probe).unwrap();
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_MEMORY_DUPLICATE_LEASE_REFUSED,
         mutation: StoreMutation,
         control: StoreMutation::None,
         broken: StoreMutation::SkipMemoryDuplicateOpen,
-        state: {},
-        probe: ContainmentLease = lease(1_000, 900_000),
+        state: { store: MemoryContainmentLeaseStore = store },
+        probe: ContainmentLease = probe,
         outcome: Result<(), &'static str>,
-        real: |_state, probe| {
-            let store = MemoryContainmentLeaseStore::new();
-            swarm_response::containment::MemoryContainmentLeaseStore::open_lease(&store, probe).unwrap();
-            swarm_response::containment::MemoryContainmentLeaseStore::open_lease(&store, probe).map_err(|error| match error {
+        real_probe: probe,
+        production: swarm_response::containment::MemoryContainmentLeaseStore::open_lease,
+        arguments: (&*store, probe),
+        call: sync,
+        normalize: |production_result| production_result.map_err(|error| match error {
                 ContainmentStoreError::AlreadyOpen { .. } => "already open",
                 _ => "unexpected",
-            })
-        },
+            }),
         mirror: |_state, _probe, mutation| mirrored_store_transition(false, true, false, mutation),
         denied: |result| result == &Err("already open"),
         permitted: |result| result == &Ok(()),
@@ -374,7 +392,7 @@ fn broken_memory_duplicate_guard_accepts_a_second_open_for_one_lease() {
 
 #[test]
 fn broken_memory_not_open_guard_closes_an_unknown_lease() {
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_MEMORY_CLOSE_UNKNOWN_LEASE_REFUSED,
         mutation: StoreMutation,
         control: StoreMutation::None,
@@ -382,7 +400,11 @@ fn broken_memory_not_open_guard_closes_an_unknown_lease() {
         state: {},
         probe: ContainmentLease = lease(1_000, 900_000),
         outcome: Result<(), &'static str>,
-        real: |_state, probe| swarm_response::containment::MemoryContainmentLeaseStore::close(&MemoryContainmentLeaseStore::new(), &rollback_receipt_for(probe)).map_err(|error| match error {
+        real_probe: probe,
+        production: swarm_response::containment::MemoryContainmentLeaseStore::close,
+        arguments: (&MemoryContainmentLeaseStore::new(), &rollback_receipt_for(probe)),
+        call: sync,
+        normalize: |production_result| production_result.map_err(|error| match error {
             ContainmentStoreError::NotOpen { .. } => "not open",
             _ => "unexpected",
         }),
@@ -394,55 +416,58 @@ fn broken_memory_not_open_guard_closes_an_unknown_lease() {
 
 #[test]
 fn broken_file_duplicate_guard_accepts_a_second_open_for_one_lease() {
-    assert_registered_negative_case! {
+    let path = unique_store_path("duplicate");
+    let store = FileContainmentLeaseStore::open(&path);
+    let probe = lease(1_000, 900_000);
+    store.open_lease(&probe).unwrap();
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_FILE_DUPLICATE_LEASE_REFUSED,
         mutation: StoreMutation,
         control: StoreMutation::None,
         broken: StoreMutation::SkipFileDuplicateOpen,
-        state: {},
-        probe: ContainmentLease = lease(1_000, 900_000),
+        state: { store: FileContainmentLeaseStore = store },
+        probe: ContainmentLease = probe,
         outcome: Result<(), &'static str>,
-        real: |_state, probe| {
-            let path = unique_store_path("duplicate");
-            let store = FileContainmentLeaseStore::open(&path);
-            swarm_response::containment::FileContainmentLeaseStore::open_lease(&store, probe).unwrap();
-            let result = swarm_response::containment::FileContainmentLeaseStore::open_lease(&store, probe).map_err(|error| match error {
+        real_probe: probe,
+        production: swarm_response::containment::FileContainmentLeaseStore::open_lease,
+        arguments: (&*store, probe),
+        call: sync,
+        normalize: |production_result| production_result.map_err(|error| match error {
                 ContainmentStoreError::AlreadyOpen { .. } => "already open",
                 _ => "unexpected",
-            });
-            std::fs::remove_file(path).unwrap();
-            result
-        },
+            }),
         mirror: |_state, _probe, mutation| mirrored_store_transition(true, true, false, mutation),
         denied: |result| result == &Err("already open"),
         permitted: |result| result == &Ok(()),
     }
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
 fn broken_file_not_open_guard_closes_an_unknown_lease() {
-    assert_registered_negative_case! {
+    let path = unique_store_path("not-open");
+    let store = FileContainmentLeaseStore::open(&path);
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_FILE_CLOSE_UNKNOWN_LEASE_REFUSED,
         mutation: StoreMutation,
         control: StoreMutation::None,
         broken: StoreMutation::SkipFileNotOpenClose,
-        state: {},
+        state: { store: FileContainmentLeaseStore = store },
         probe: ContainmentLease = lease(1_000, 900_000),
         outcome: Result<(), &'static str>,
-        real: |_state, probe| {
-            let path = unique_store_path("not-open");
-            let store = FileContainmentLeaseStore::open(&path);
-            let result = swarm_response::containment::FileContainmentLeaseStore::close(&store, &rollback_receipt_for(probe)).map_err(|error| match error {
+        real_probe: probe,
+        production: swarm_response::containment::FileContainmentLeaseStore::close,
+        arguments: (&*store, &rollback_receipt_for(probe)),
+        call: sync,
+        normalize: |production_result| production_result.map_err(|error| match error {
                 ContainmentStoreError::NotOpen { .. } => "not open",
                 _ => "unexpected",
-            });
-            assert!(!path.exists());
-            result
-        },
+            }),
         mirror: |_state, _probe, mutation| mirrored_store_transition(true, false, true, mutation),
         denied: |result| result == &Err("not open"),
         permitted: |result| result == &Ok(()),
     }
+    assert!(!path.exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +516,7 @@ fn mirrored_derive_status(
 fn broken_empty_step_status_reports_success_without_any_inverse() {
     let lease = lease(1_000, 900_000);
     let steps = Vec::new();
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_EMPTY_ROLLBACK_NOT_SUCCESS,
         mutation: DeriveStatusMutation,
         control: DeriveStatusMutation::None,
@@ -499,7 +524,11 @@ fn broken_empty_step_status_reports_success_without_any_inverse() {
         state: { lease: ContainmentLease = lease },
         probe: Vec<RollbackStepOutcome> = steps,
         outcome: ResponseStatus,
-        real: |_state, probe| swarm_response::rollback::RollbackReceipt::from_steps(lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()).status,
+        real_probe: probe,
+        production: swarm_response::rollback::RollbackReceipt::from_steps,
+        arguments: (lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()),
+        call: sync,
+        normalize: |production_result| production_result.status,
         mirror: |_state, probe, mutation| mirrored_derive_status(probe, ExecutionMode::Enforced, mutation),
         denied: |status| status == &ResponseStatus::Failed,
         permitted: |status| status == &ResponseStatus::Executed,
@@ -514,7 +543,7 @@ fn broken_partial_status_reports_success_with_an_unsupported_inverse() {
         status: RollbackStepStatus::Unsupported,
         detail: "no adapter inverse".to_string(),
     }];
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_PARTIAL_ROLLBACK_NOT_SUCCESS,
         mutation: DeriveStatusMutation,
         control: DeriveStatusMutation::None,
@@ -522,7 +551,11 @@ fn broken_partial_status_reports_success_with_an_unsupported_inverse() {
         state: { lease: ContainmentLease = lease },
         probe: Vec<RollbackStepOutcome> = steps,
         outcome: ResponseStatus,
-        real: |_state, probe| swarm_response::rollback::RollbackReceipt::from_steps(lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()).status,
+        real_probe: probe,
+        production: swarm_response::rollback::RollbackReceipt::from_steps,
+        arguments: (lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()),
+        call: sync,
+        normalize: |production_result| production_result.status,
         mirror: |_state, probe, mutation| mirrored_derive_status(probe, ExecutionMode::Enforced, mutation),
         denied: |status| status == &ResponseStatus::Failed,
         permitted: |status| status == &ResponseStatus::Executed,
@@ -572,7 +605,7 @@ fn broken_irreversible_inverse_invents_a_fresh_session_as_a_reversal() {
         session_id: "session-1".to_string(),
     };
     let step = ResponseRollbackStepKind::ReauthenticateUserSession;
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_IRREVERSIBLE_INVERSE_REFUSED,
         mutation: InverseMutation,
         control: InverseMutation::None,
@@ -580,7 +613,11 @@ fn broken_irreversible_inverse_invents_a_fresh_session_as_a_reversal() {
         state: {},
         probe: (ResponseAction, ResponseRollbackStepKind) = (action, step),
         outcome: Result<&'static str, &'static str>,
-        real: |_state, probe| swarm_response::rollback::resolve_inverse(&probe.0, probe.1).map(|_| "mapped").map_err(|gap| if format!("{gap:?}").contains("Irreversible") { "irreversible" } else { "unexpected" }),
+        real_probe: probe,
+        production: swarm_response::rollback::resolve_inverse,
+        arguments: (&probe.0, probe.1),
+        call: sync,
+        normalize: |production_result| production_result.map(|_| "mapped").map_err(|gap| if format!("{gap:?}").contains("Irreversible") { "irreversible" } else { "unexpected" }),
         mirror: |_state, probe, mutation| mirrored_inverse(&probe.0, probe.1, mutation),
         denied: |result| result == &Err("irreversible"),
         permitted: |result| result == &Ok("reauthenticate_user_session"),
@@ -591,7 +628,7 @@ fn broken_irreversible_inverse_invents_a_fresh_session_as_a_reversal() {
 fn broken_unmapped_inverse_fabricates_an_operation_for_a_mismatched_step() {
     let action = quarantine_action();
     let step = ResponseRollbackStepKind::ResumeProcess;
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_UNMAPPED_INVERSE_REFUSED,
         mutation: InverseMutation,
         control: InverseMutation::None,
@@ -599,7 +636,11 @@ fn broken_unmapped_inverse_fabricates_an_operation_for_a_mismatched_step() {
         state: {},
         probe: (ResponseAction, ResponseRollbackStepKind) = (action, step),
         outcome: Result<&'static str, &'static str>,
-        real: |_state, probe| swarm_response::rollback::resolve_inverse(&probe.0, probe.1).map(|_| "mapped").map_err(|_| "unmapped"),
+        real_probe: probe,
+        production: swarm_response::rollback::resolve_inverse,
+        arguments: (&probe.0, probe.1),
+        call: sync,
+        normalize: |production_result| production_result.map(|_| "mapped").map_err(|_| "unmapped"),
         mirror: |_state, probe, mutation| mirrored_inverse(&probe.0, probe.1, mutation),
         denied: |result| result == &Err("unmapped"),
         permitted: |result| result == &Ok("invented_inverse"),
@@ -638,7 +679,7 @@ async fn broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan() {
         ContainmentTtl::from_config_ms(900_000).unwrap(),
     )
     .unwrap();
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RESPONSE_ROLLBACK_REQUIRES_STEPS,
         mutation: RequireStepsMutation,
         control: RequireStepsMutation::None,
@@ -646,7 +687,11 @@ async fn broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan() {
         state: {},
         probe: ContainmentLease = empty,
         outcome: Result<(), &'static str>,
-        real: |_state, probe| swarm_response::rollback::SandboxRollbackExecutor::rollback(&SandboxRollbackExecutor, probe, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000).await.map(|_| ()).map_err(|_| "no rollback steps"),
+        real_probe: probe,
+        production: swarm_response::rollback::SandboxRollbackExecutor::rollback,
+        arguments: (&SandboxRollbackExecutor, probe, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000),
+        call: awaited,
+        normalize: |production_result| production_result.map(|_| ()).map_err(|_| "no rollback steps"),
         mirror: |_state, probe, mutation| mirrored_require_steps(probe, mutation),
         denied: |result| result == &Err("no rollback steps"),
         permitted: |result| result == &Ok(()),
@@ -665,7 +710,7 @@ fn broken_mode_gate_reports_an_enforced_simulation_as_the_success_the_real_one_r
     // ENFORCED: this is every TTL expiry on a crowdstrike_rtr, webhook or
     // sandbox deployment, because all three resolve to
     // `SandboxRollbackExecutor`. The host is still quarantined.
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_ENFORCED_SIMULATION_NOT_SUCCESS,
         mutation: DeriveStatusMutation,
         control: DeriveStatusMutation::None,
@@ -673,7 +718,11 @@ fn broken_mode_gate_reports_an_enforced_simulation_as_the_success_the_real_one_r
         state: { lease: ContainmentLease = lease },
         probe: Vec<RollbackStepOutcome> = steps,
         outcome: ResponseStatus,
-        real: |_state, probe| swarm_response::rollback::RollbackReceipt::from_steps(lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()).status,
+        real_probe: probe,
+        production: swarm_response::rollback::RollbackReceipt::from_steps,
+        arguments: (lease, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000, probe.clone()),
+        call: sync,
+        normalize: |production_result| production_result.status,
         mirror: |_state, probe, mutation| mirrored_derive_status(probe, ExecutionMode::Enforced, mutation),
         denied: |status| status == &ResponseStatus::Failed && !status.indicates_success(),
         permitted: |status| status == &ResponseStatus::Simulated && status.indicates_success(),
@@ -731,7 +780,7 @@ fn mirrored_sandbox_rollback(
 
 #[tokio::test]
 async fn broken_sandbox_executor_claims_the_reversal_the_real_one_refuses_to_claim() {
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RESPONSE_SANDBOX_NEVER_REVERSES,
         mutation: SandboxMutation,
         control: SandboxMutation::None,
@@ -739,8 +788,12 @@ async fn broken_sandbox_executor_claims_the_reversal_the_real_one_refuses_to_cla
         state: {},
         probe: ContainmentLease = lease(1_000, 900_000),
         outcome: (ResponseStatus, RollbackStepStatus),
-        real: |_state, probe| {
-            let receipt = swarm_response::rollback::SandboxRollbackExecutor::rollback(&SandboxRollbackExecutor, probe, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000).await.expect("receipt");
+        real_probe: probe,
+        production: swarm_response::rollback::SandboxRollbackExecutor::rollback,
+        arguments: (&SandboxRollbackExecutor, probe, RollbackTrigger::Expiry, ExecutionMode::Enforced, 2_000),
+        call: awaited,
+        normalize: |production_result| {
+            let receipt = production_result.expect("receipt");
             (receipt.status, receipt.steps[0].status)
         },
         mirror: |_state, probe, mutation| {

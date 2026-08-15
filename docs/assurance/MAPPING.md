@@ -22,10 +22,13 @@ and a mirror with one registry-bound guard removed; it asserts real equals the
 control denial and the broken operation permits. A separate compiled contract
 proves one call per role plus those assertion semantics, and the gate mutates the
 actual shared protocol to prove no-op, omitted/swapped-role, and removed or
-inverted-assertion variants fail. The gate also requires an exact fully-qualified
-public production-entry call inside every named real adapter, with indirect
-entry-to-private-guard reachability recorded explicitly. This is structural
-binding, not runtime instrumentation, and it does not mechanically prove
+inverted-assertion variants fail. The shared macro owns the exact public
+production-entry invocation. A Rust-syntax checker pins its function path,
+argument and result-projection AST, call mode, and direct call-site shape to a
+checker-owned baseline; it also rejects alternate imports, aliases, re-exports,
+and shadow definitions of the reserved protocol module or macros. Indirect
+entry-to-private-guard reachability is either checked as a concrete call edge or
+identified as a narrow reviewed boundary. This does not mechanically prove
 handwritten-mirror fidelity beyond the registered probe. The reproduced
 neutralization output is stored with the row in
 [`negative-registry.toml`](negative-registry.toml); no claim is made that old

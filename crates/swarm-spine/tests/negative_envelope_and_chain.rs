@@ -25,7 +25,6 @@
 #[path = "../../../tests/negative_protocol.rs"]
 mod negative_protocol;
 
-use negative_protocol::assert_registered_negative_case;
 use serde_json::{Value, json};
 use swarm_crypto::hashing::sha256_hex as sha256_hex_prefixed;
 use swarm_crypto::{Keypair, PublicKey, Signature};
@@ -165,7 +164,7 @@ fn broken_hash_field_requirement_admits_an_envelope_with_no_claimed_identity() {
     let keypair = signing_keypair(7);
     let mut missing = envelope(&keypair, 1, None);
     missing.as_object_mut().unwrap().remove("envelope_hash");
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_ENVELOPE_HASH_FIELD_REQUIRED,
         mutation: EnvelopeMutation,
         control: EnvelopeMutation::None,
@@ -173,7 +172,11 @@ fn broken_hash_field_requirement_admits_an_envelope_with_no_claimed_identity() {
         state: {},
         probe: Value = missing,
         outcome: bool,
-        real: |_state, probe| swarm_spine::envelope::verify_envelope(probe).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::envelope::verify_envelope,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.unwrap_or(false),
         mirror: |_state, probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
         denied: |value| !value,
         permitted: |value| *value,
@@ -203,7 +206,7 @@ fn broken_hash_binding_admits_the_forged_envelope_id_the_real_verifier_refuses()
     assert_ne!(forged_hash, genuine_hash);
     forged["envelope_hash"] = json!(forged_hash);
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_ENVELOPE_HASH_BOUND,
         mutation: EnvelopeMutation,
         control: EnvelopeMutation::None,
@@ -211,7 +214,11 @@ fn broken_hash_binding_admits_the_forged_envelope_id_the_real_verifier_refuses()
         state: {},
         probe: Value = forged,
         outcome: bool,
-        real: |_state, probe| swarm_spine::envelope::verify_envelope(probe).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::envelope::verify_envelope,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.unwrap_or(false),
         mirror: |_state, probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
         denied: |value| !value,
         permitted: |value| *value,
@@ -237,7 +244,7 @@ fn broken_issuer_field_requirement_accepts_an_envelope_with_no_issuer() {
     let keypair = signing_keypair(7);
     let mut missing = envelope(&keypair, 1, None);
     missing.as_object_mut().unwrap().remove("issuer");
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_ENVELOPE_ISSUER_FIELD_REQUIRED,
         mutation: EnvelopeMutation,
         control: EnvelopeMutation::None,
@@ -245,7 +252,11 @@ fn broken_issuer_field_requirement_accepts_an_envelope_with_no_issuer() {
         state: {},
         probe: Value = missing,
         outcome: bool,
-        real: |_state, probe| swarm_spine::envelope::verify_envelope(probe).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::envelope::verify_envelope,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.unwrap_or(false),
         mirror: |_state, probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
         denied: |value| !value,
         permitted: |value| *value,
@@ -257,7 +268,7 @@ fn broken_signature_field_requirement_accepts_an_unsigned_envelope() {
     let keypair = signing_keypair(7);
     let mut missing = envelope(&keypair, 1, None);
     missing.as_object_mut().unwrap().remove("signature");
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_ENVELOPE_SIGNATURE_FIELD_REQUIRED,
         mutation: EnvelopeMutation,
         control: EnvelopeMutation::None,
@@ -265,7 +276,11 @@ fn broken_signature_field_requirement_accepts_an_unsigned_envelope() {
         state: {},
         probe: Value = missing,
         outcome: bool,
-        real: |_state, probe| swarm_spine::envelope::verify_envelope(probe).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::envelope::verify_envelope,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.unwrap_or(false),
         mirror: |_state, probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
         denied: |value| !value,
         permitted: |value| *value,
@@ -277,7 +292,7 @@ fn broken_issuer_key_validation_accepts_malformed_key_material() {
     let keypair = signing_keypair(7);
     let mut malformed = envelope(&keypair, 1, None);
     malformed["issuer"] = json!("swarm:ed25519:not-a-key");
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_ENVELOPE_ISSUER_KEY_VALID,
         mutation: EnvelopeMutation,
         control: EnvelopeMutation::None,
@@ -285,7 +300,11 @@ fn broken_issuer_key_validation_accepts_malformed_key_material() {
         state: {},
         probe: Value = malformed,
         outcome: bool,
-        real: |_state, probe| swarm_spine::envelope::verify_envelope(probe).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::envelope::verify_envelope,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.unwrap_or(false),
         mirror: |_state, probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
         denied: |value| !value,
         permitted: |value| *value,
@@ -297,7 +316,7 @@ fn broken_signature_decoding_accepts_malformed_signature_material() {
     let keypair = signing_keypair(7);
     let mut malformed = envelope(&keypair, 1, None);
     malformed["signature"] = json!("not-a-signature");
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_ENVELOPE_SIGNATURE_WELL_FORMED,
         mutation: EnvelopeMutation,
         control: EnvelopeMutation::None,
@@ -305,7 +324,11 @@ fn broken_signature_decoding_accepts_malformed_signature_material() {
         state: {},
         probe: Value = malformed,
         outcome: bool,
-        real: |_state, probe| swarm_spine::envelope::verify_envelope(probe).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::envelope::verify_envelope,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.unwrap_or(false),
         mirror: |_state, probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
         denied: |value| !value,
         permitted: |value| *value,
@@ -336,7 +359,7 @@ fn broken_signature_check_admits_the_reattributed_envelope_the_real_verifier_ref
     let recomputed = sha256_hex_prefixed(&envelope_signing_bytes(&unsigned).unwrap());
     forged["envelope_hash"] = json!(recomputed);
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_ENVELOPE_SIGNATURE_VALID,
         mutation: EnvelopeMutation,
         control: EnvelopeMutation::None,
@@ -344,7 +367,11 @@ fn broken_signature_check_admits_the_reattributed_envelope_the_real_verifier_ref
         state: {},
         probe: Value = forged,
         outcome: bool,
-        real: |_state, probe| swarm_spine::envelope::verify_envelope(probe).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::envelope::verify_envelope,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.unwrap_or(false),
         mirror: |_state, probe, mutation| admitted(&mirrored_verify_envelope(probe, mutation)),
         denied: |value| !value,
         permitted: |value| *value,
@@ -511,7 +538,7 @@ fn broken_previous_hash_field_requirement_admits_an_ambiguous_first_link() {
         .as_object_mut()
         .unwrap()
         .remove("prev_envelope_hash");
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_PREV_FIELD_REQUIRED,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -519,7 +546,11 @@ fn broken_previous_hash_field_requirement_admits_an_ambiguous_first_link() {
         state: {},
         probe: ChainProbe = ChainProbe { envelope: missing, head: None },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -539,7 +570,7 @@ fn broken_head_overflow_guard_wraps_the_chain_back_to_zero() {
         envelope_hash: "0x".to_string() + &"aa".repeat(32),
     };
     let wrapped = envelope(&keypair, 0, Some(head.envelope_hash.clone()));
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_HEAD_NOT_OVERFLOWED,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -547,7 +578,11 @@ fn broken_head_overflow_guard_wraps_the_chain_back_to_zero() {
         state: {},
         probe: ChainProbe = ChainProbe { envelope: wrapped, head: Some(head) },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -577,7 +612,7 @@ fn broken_chain_issuer_requirement_accepts_a_continuation_with_no_issuer() {
     let head = head_of(&first);
     let mut missing = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
     missing.as_object_mut().unwrap().remove("issuer");
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_ISSUER_FIELD_REQUIRED,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -585,7 +620,11 @@ fn broken_chain_issuer_requirement_accepts_a_continuation_with_no_issuer() {
         state: {},
         probe: ChainProbe = ChainProbe { envelope: missing, head: Some(head) },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -599,7 +638,7 @@ fn broken_chain_sequence_requirement_accepts_a_continuation_with_no_sequence() {
     let head = head_of(&first);
     let mut missing = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
     missing.as_object_mut().unwrap().remove("seq");
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_SEQ_FIELD_REQUIRED,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -607,7 +646,11 @@ fn broken_chain_sequence_requirement_accepts_a_continuation_with_no_sequence() {
         state: {},
         probe: ChainProbe = ChainProbe { envelope: missing, head: Some(head) },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -621,7 +664,7 @@ fn broken_predecessor_type_guard_accepts_a_non_string_chain_reference() {
     let head = head_of(&first);
     let mut wrong_type = envelope(&keypair, 2, Some(head.envelope_hash.clone()));
     wrong_type["prev_envelope_hash"] = json!(7);
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_PREV_TYPE_VALID,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -629,7 +672,11 @@ fn broken_predecessor_type_guard_accepts_a_non_string_chain_reference() {
         state: {},
         probe: ChainProbe = ChainProbe { envelope: wrong_type, head: Some(head) },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -652,7 +699,7 @@ fn broken_prev_hash_binding_admits_the_forked_link_the_real_verifier_rejects() {
     let forked = envelope(&keypair, 2, Some("0x".to_string() + &"cd".repeat(32)));
     assert!(verify_envelope(&forked).expect("the fork is correctly signed"));
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_PREV_HASH_BOUND,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -660,7 +707,11 @@ fn broken_prev_hash_binding_admits_the_forked_link_the_real_verifier_rejects() {
         state: {},
         probe: ChainProbe = ChainProbe { envelope: forked, head: Some(head.clone()) },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -692,7 +743,7 @@ fn broken_sequence_binding_admits_the_replayed_envelope_the_real_verifier_reject
     // its previous hash names the old head, so the prev-hash guard still refuses
     // it after the sequence guard is removed.
     let wrong_sequence = envelope(&keypair, 2, Some(head_at_two.envelope_hash.clone()));
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_SEQ_MONOTONIC,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -700,7 +751,11 @@ fn broken_sequence_binding_admits_the_replayed_envelope_the_real_verifier_reject
         state: {},
         probe: ChainProbe = ChainProbe { envelope: wrong_sequence, head: Some(head_at_two) },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -724,7 +779,7 @@ fn broken_issuer_binding_admits_the_cross_issuer_splice_the_real_verifier_reject
     let theirs_second = envelope(&theirs, 2, Some(head.envelope_hash.clone()));
     assert!(verify_envelope(&theirs_second).expect("their envelope is correctly signed"));
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_ISSUER_BOUND,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -732,7 +787,11 @@ fn broken_issuer_binding_admits_the_cross_issuer_splice_the_real_verifier_reject
         state: {},
         probe: ChainProbe = ChainProbe { envelope: theirs_second, head: Some(head) },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -753,7 +812,7 @@ fn broken_first_sequence_guard_admits_the_truncated_history_the_real_verifier_re
     let truncated = envelope(&keypair, 99, None);
     assert!(verify_envelope(&truncated).expect("the envelope is correctly signed"));
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_FIRST_SEQ,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -761,7 +820,11 @@ fn broken_first_sequence_guard_admits_the_truncated_history_the_real_verifier_re
         state: {},
         probe: ChainProbe = ChainProbe { envelope: truncated, head: None },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -785,7 +848,7 @@ fn broken_first_previous_hash_guard_admits_a_new_chain_linked_to_hidden_history(
     let linked_first = envelope(&keypair, 1, Some("0x".to_string() + &"ef".repeat(32)));
     assert!(verify_envelope(&linked_first).expect("the envelope is correctly signed"));
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: SPINE_CHAIN_FIRST_PREV_NULL,
         mutation: ChainMutation,
         control: ChainMutation::None,
@@ -793,7 +856,11 @@ fn broken_first_previous_hash_guard_admits_a_new_chain_linked_to_hidden_history(
         state: {},
         probe: ChainProbe = ChainProbe { envelope: linked_first, head: None },
         outcome: bool,
-        real: |_state, probe| swarm_spine::chain::verify_chain_link(&probe.envelope, probe.head.as_ref()).map(|verdict| verdict.is_valid()).unwrap_or(false),
+        real_probe: probe,
+        production: swarm_spine::chain::verify_chain_link,
+        arguments: (&probe.envelope, probe.head.as_ref()),
+        call: sync,
+        normalize: |production_result| production_result.map(|verdict| verdict.is_valid()).unwrap_or(false),
         mirror: |_state, probe, mutation| mirrored_chain_admitted(probe, mutation),
         denied: |value| !value,
         permitted: |value| *value,

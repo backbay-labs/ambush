@@ -20,7 +20,6 @@
 mod negative_protocol;
 
 use async_trait::async_trait;
-use negative_protocol::{assert_registered_async_negative_case, assert_registered_negative_case};
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -370,7 +369,7 @@ async fn broken_policy_error_fallback_executes_when_evaluation_failed() {
     let gate = FailingGate(GateFailure::Evaluate);
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_POLICY_ERROR_BLOCKS_EXECUTION,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -378,14 +377,15 @@ async fn broken_policy_error_fallback_executes_when_evaluation_failed() {
         state: {
             gate: FailingGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe,
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() });
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
@@ -401,7 +401,7 @@ async fn broken_lease_issue_error_fallback_executes_without_a_real_lease() {
     let gate = FailingGate(GateFailure::IssueLease);
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_LEASE_ISSUE_ERROR_BLOCKS_EXECUTION,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -409,14 +409,15 @@ async fn broken_lease_issue_error_fallback_executes_without_a_real_lease() {
         state: {
             gate: FailingGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe,
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() });
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
@@ -435,7 +436,7 @@ async fn broken_adapter_error_conversion_returns_false_success() {
     };
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_ADAPTER_ERROR_NOT_SUCCESS,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -443,14 +444,15 @@ async fn broken_adapter_error_conversion_returns_false_success() {
         state: {
             gate: FixedVerdictGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe,
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), FixedOutcomeExecutor { calls: calls.clone(), outcome: Err("offline") });
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), FixedOutcomeExecutor { calls: calls.clone(), outcome: Err("offline") })), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let executor = FixedOutcomeExecutor { calls: calls.clone(), outcome: Err("offline") };
@@ -470,7 +472,7 @@ async fn broken_failed_receipt_check_returns_a_failure_as_success() {
     };
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_FAILED_RECEIPT_NOT_SUCCESS,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -478,14 +480,15 @@ async fn broken_failed_receipt_check_returns_a_failure_as_success() {
         state: {
             gate: FixedVerdictGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe,
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), FixedOutcomeExecutor { calls: calls.clone(), outcome: Ok(ResponseStatus::Failed) });
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), FixedOutcomeExecutor { calls: calls.clone(), outcome: Ok(ResponseStatus::Failed) })), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let executor = FixedOutcomeExecutor { calls: calls.clone(), outcome: Ok(ResponseStatus::Failed) };
@@ -554,7 +557,7 @@ async fn broken_guard_rejection_reaches_the_executor() {
     };
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_GUARD_REJECTION_BLOCKS_EXECUTION,
         mutation: GuardMutation,
         control: GuardMutation::None,
@@ -562,15 +565,16 @@ async fn broken_guard_rejection_reaches_the_executor() {
         state: {
             gate: FixedVerdictGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe,
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })
-                .with_guard_pipeline(GuardPipeline::new(vec![Box::new(RejectingGuard)]));
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })
+                .with_guard_pipeline(GuardPipeline::new(vec![Box::new(RejectingGuard)]))), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let result = mirrored_guard_authorize(gate, &RecordingExecutor { calls: calls.clone() }, probe, context, mutation).await;
@@ -636,7 +640,7 @@ async fn broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls() {
     let probe = block_egress(Severity::High);
     let context = context(1_700_000_000_000);
 
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_DENY_BLOCKS_EXECUTION,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -644,14 +648,15 @@ async fn broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls() {
         state: {
             gate: FixedVerdictGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe,
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() });
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
@@ -675,7 +680,7 @@ async fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds
     let probe = block_egress(Severity::Critical);
     let context = context(1_700_000_000_000);
 
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_HUMAN_GATE_BLOCKS_LIVE,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -683,14 +688,15 @@ async fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds
         state: {
             gate: FixedVerdictGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe.clone(),
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() });
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
@@ -735,7 +741,7 @@ async fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtim
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
 
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_EXPIRED_LEASE_REFUSED,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -743,14 +749,15 @@ async fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtim
         state: {
             gate: FixedVerdictGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe.clone(),
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() });
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
@@ -794,7 +801,7 @@ async fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses
     let probe = quarantine_file(Severity::High);
     let context = context(1_700_000_000_000);
 
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_CONTAINMENT_NEEDS_STORE,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -802,14 +809,15 @@ async fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses
         state: {
             gate: FixedVerdictGate = gate.clone(),
             context: ApprovalContext = context.clone(),
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe.clone(),
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() });
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, None, probe, context, mutation).await;
@@ -863,7 +871,7 @@ async fn broken_preview_error_guard_dispatches_a_containment_with_no_inverse_pla
     let store = Arc::new(MemoryContainmentLeaseStore::new());
     let ttl = ContainmentTtl::from_config_ms(900_000).unwrap();
 
-    assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_CONTAINMENT_PREVIEW_REQUIRED,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -873,15 +881,16 @@ async fn broken_preview_error_guard_dispatches_a_containment_with_no_inverse_pla
             context: ApprovalContext = context,
             store: Arc<MemoryContainmentLeaseStore> = store,
             ttl: ContainmentTtl = ttl,
+            calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0)),
         },
         probe: ActionRequest = probe,
         outcome: (RuntimeProtocolResult, usize),
-        real: |_state, probe| {
-            let calls = Arc::new(AtomicUsize::new(0));
-            let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })
-                .with_containment_store(store.clone(), *ttl);
-            runtime_protocol_outcome(swarm_runtime::SwarmRuntime::authorize_and_execute(&runtime, probe, context).await, &calls)
-        },
+        real_probe: probe,
+        production: swarm_runtime::SwarmRuntime::authorize_and_execute,
+        arguments: (&(SwarmRuntime::new(RuntimeMode::LiveResponse, gate.clone(), RecordingExecutor { calls: calls.clone() })
+                .with_containment_store(store.clone(), *ttl)), probe, context),
+        call: awaited,
+        normalize: |production_result| runtime_protocol_outcome(production_result, calls),
         mirror: |_state, probe, mutation| {
             let calls = Arc::new(AtomicUsize::new(0));
             let result = mirrored_authorize_and_execute(RuntimeMode::LiveResponse, gate, &RecordingExecutor { calls: calls.clone() }, Some((store.as_ref(), *ttl)), probe, context, mutation).await;
@@ -996,7 +1005,7 @@ fn mirrored_verify_release_attestation(
 #[test]
 fn broken_attestation_requirement_accepts_an_unattested_release() {
     let receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_RELEASE_ATTESTATION_REQUIRED,
         mutation: ReleaseAttestationMutation,
         control: ReleaseAttestationMutation::None,
@@ -1004,7 +1013,11 @@ fn broken_attestation_requirement_accepts_an_unattested_release() {
         state: {},
         probe: RollbackReceipt = receipt,
         outcome: bool,
-        real: |_state, probe| swarm_runtime::containment::verify_release_attestation(probe).is_ok(),
+        real_probe: probe,
+        production: swarm_runtime::containment::verify_release_attestation,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.is_ok(),
         mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
@@ -1015,7 +1028,7 @@ fn broken_attestation_requirement_accepts_an_unattested_release() {
 fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
     let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
     receipt.governance_attestation = Some(json!({"broken": true}));
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_RELEASE_ATTESTATION_WELL_FORMED,
         mutation: ReleaseAttestationMutation,
         control: ReleaseAttestationMutation::None,
@@ -1023,7 +1036,11 @@ fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
         state: {},
         probe: RollbackReceipt = receipt,
         outcome: bool,
-        real: |_state, probe| swarm_runtime::containment::verify_release_attestation(probe).is_ok(),
+        real_probe: probe,
+        production: swarm_runtime::containment::verify_release_attestation,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.is_ok(),
         mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
@@ -1038,7 +1055,7 @@ fn broken_release_signature_guard_accepts_a_bad_governor_signature() {
     let impostor = Ed25519Signer::from_secret_material("negative-registry-impostor");
     attestation.signature = impostor.sign(&canonical_json_bytes(&attestation.payload).unwrap());
     receipt.governance_attestation = Some(serde_json::to_value(attestation).unwrap());
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_RELEASE_SIGNATURE_VALID,
         mutation: ReleaseAttestationMutation,
         control: ReleaseAttestationMutation::None,
@@ -1046,7 +1063,11 @@ fn broken_release_signature_guard_accepts_a_bad_governor_signature() {
         state: {},
         probe: RollbackReceipt = receipt,
         outcome: bool,
-        real: |_state, probe| swarm_runtime::containment::verify_release_attestation(probe).is_ok(),
+        real_probe: probe,
+        production: swarm_runtime::containment::verify_release_attestation,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.is_ok(),
         mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
@@ -1068,7 +1089,7 @@ fn broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuse
     rewritten.steps[0].status = RollbackStepStatus::Reversed;
     assert!(rewritten.fully_reversed());
 
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_RELEASE_SUBJECT_BOUND,
         mutation: ReleaseAttestationMutation,
         control: ReleaseAttestationMutation::None,
@@ -1076,7 +1097,11 @@ fn broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuse
         state: {},
         probe: RollbackReceipt = rewritten,
         outcome: bool,
-        real: |_state, probe| swarm_runtime::containment::verify_release_attestation(probe).is_ok(),
+        real_probe: probe,
+        production: swarm_runtime::containment::verify_release_attestation,
+        arguments: (probe),
+        call: sync,
+        normalize: |production_result| production_result.is_ok(),
         mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
@@ -1200,18 +1225,22 @@ async fn mirrored_release_lease(
 #[tokio::test]
 async fn broken_failed_step_check_abandons_the_still_contained_host_the_real_release_retains() {
     let lease = containment_lease();
-    assert_registered_async_negative_case! {
+    let store = MemoryContainmentLeaseStore::new();
+    store.open_lease(&lease).unwrap();
+    negative_protocol::assert_registered_async_negative_case! {
         case: RUNTIME_FAILED_ROLLBACK_KEEPS_LEASE,
         mutation: ReleaseLeaseMutation,
         control: ReleaseLeaseMutation::None,
         broken: ReleaseLeaseMutation::SkipFailedStepRetention,
-        state: {},
+        state: { store: MemoryContainmentLeaseStore = store },
         probe: ContainmentLease = lease.clone(),
         outcome: (RollbackStepStatus, usize, usize),
-        real: |_state, probe| {
-            let store = MemoryContainmentLeaseStore::new();
-            store.open_lease(probe).unwrap();
-            let receipt = swarm_runtime::containment::release_lease(&store, &FailingRollbackExecutor, ExecutionMode::Enforced, probe.lease_id(), RollbackTrigger::Expiry, 6_000, None).await.expect("receipt");
+        real_probe: probe,
+        production: swarm_runtime::containment::release_lease,
+        arguments: (&*store, &FailingRollbackExecutor, ExecutionMode::Enforced, probe.lease_id(), RollbackTrigger::Expiry, 6_000, None),
+        call: awaited,
+        normalize: |production_result| {
+            let receipt = production_result.expect("receipt");
             (receipt.steps[0].status, store.open_leases().unwrap().len(), store.closed_receipts().unwrap().len())
         },
         mirror: |_state, probe, mutation| {

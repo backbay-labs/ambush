@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # Phase-285 negative-registry gate. Each test must invoke the repository's
-# shared typed protocol, which owns real/mirror(None)/mirror(Broken) execution
-# over one typed probe. A separate compiled contract and mutations of the
-# actual protocol source prove the role/count/assertion contract. Cargo
-# discovery and execution are checked separately. This proves the registered
-# operations. Entry binding is structural (an exact fully-qualified call in the
-# named real adapter), not runtime instrumentation of the production function;
-# mirror fidelity beyond the registered probe is reviewed, not mechanical.
+# shared typed protocol, which owns an exact production call plus
+# mirror(None)/mirror(Broken) execution over one typed probe. A focused syn
+# checker binds the direct macro invocation, production path, arguments and
+# result projection to a checker-owned baseline; Cargo discovery and execution
+# independently prove the registered tests run. Mirror fidelity beyond the
+# registered probe remains a reviewed limitation.
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+
+AST_TARGET_DIR="$ROOT_DIR/target/assurance-tools"
+cargo build --quiet \
+  --manifest-path "$ROOT_DIR/tools/negative-registry-ast/Cargo.toml" \
+  --target-dir "$AST_TARGET_DIR"
+export NEGATIVE_REGISTRY_AST="$AST_TARGET_DIR/debug/negative-registry-ast"
 
 python3 - "$ROOT_DIR" <<'PY'
 from __future__ import annotations
@@ -18,6 +23,7 @@ from __future__ import annotations
 import pathlib
 import re
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,6 +43,7 @@ from assurance_source import (  # noqa: E402
 
 MAPPING_REL = "docs/assurance/MAPPING.md"
 REGISTRY_REL = "docs/assurance/negative-registry.toml"
+UNIVERSE_REL = "docs/assurance/universe.toml"
 TEST_FILE = re.compile(r"^crates/[^/]+/tests/negative_[A-Za-z0-9_]+\.rs$")
 PROTOCOL_REL = "tests/negative_protocol.rs"
 CONTRACT_REL = "crates/swarm-policy/tests/negative_protocol_contract.rs"
@@ -80,85 +87,6 @@ def entries(root, report):
     return registry_document(root, report).get("entry", [])
 
 
-def protocol_metadata(clean, test):
-    body = clean[test.body_start:test.body_end + 1]
-    starts = list(re.finditer(
-        r"\b(?P<macro>assert_registered_(?:async_)?negative_case)\s*!\s*\{",
-        body,
-    ))
-    if len(starts) != 1:
-        return f"found {len(starts)} typed protocol invocations; expected one"
-    opening = body.find("{", starts[0].start())
-    closing = matching_brace(body, opening)
-    if closing is None:
-        return "typed protocol invocation has no closing brace"
-    invocation = body[opening + 1:closing]
-    labels = []
-    depths = {"(": 0, "[": 0, "{": 0}
-    closing = {")": "(", "]": "[", "}": "{"}
-    for match in re.finditer(r"[(){}\[\]]|[A-Za-z_][A-Za-z0-9_]*\s*:", invocation):
-        token = match.group(0)
-        if token in depths:
-            depths[token] += 1
-        elif token in closing:
-            opener = closing[token]
-            depths[opener] = max(0, depths[opener] - 1)
-        elif not any(depths.values()) and not invocation[match.end():].startswith(":"):
-            labels.append((token.rstrip().removesuffix(":"), match.start(), match.end()))
-    expected = [
-        "case", "mutation", "control", "broken", "state", "probe", "outcome",
-        "real", "mirror", "denied", "permitted",
-    ]
-    if [label for label, _, _ in labels] != expected:
-        return f"typed protocol fields are not the exact ordered inventory {expected}"
-    values = {}
-    for index, (label, _start, end) in enumerate(labels):
-        value_end = labels[index + 1][1] if index + 1 < len(labels) else len(invocation)
-        values[label] = invocation[end:value_end].strip().rstrip(",").rstrip()
-    exact = {
-        "case": r"[A-Z][A-Z0-9_]*",
-        "mutation": r"[A-Za-z_][A-Za-z0-9_]*",
-        "control": r"[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*",
-        "broken": r"[A-Za-z_][A-Za-z0-9_]*::[A-Za-z_][A-Za-z0-9_]*",
-    }
-    for label, pattern in exact.items():
-        if re.fullmatch(pattern, values[label]) is None:
-            return f"typed protocol `{label}` metadata is not exact"
-    real = re.fullmatch(
-        r"\|\s*(?P<state>[A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
-        r"(?P<probe>[A-Za-z_][A-Za-z0-9_]*)\s*\|\s*(?P<body>[\s\S]+)",
-        values["real"],
-    )
-    mirror = re.fullmatch(
-        r"\|\s*(?P<state>[A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
-        r"(?P<probe>[A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
-        r"(?P<mutation>[A-Za-z_][A-Za-z0-9_]*)\s*\|\s*(?P<body>[\s\S]+)",
-        values["mirror"],
-    )
-    if real is None or mirror is None:
-        return "typed protocol real/mirror operations are not typed adapter expressions"
-    return {
-        "macro": starts[0].group("macro"),
-        "case": values["case"],
-        "mutation": values["mutation"],
-        "control": values["control"],
-        "broken": values["broken"],
-        "real_body": real.group("body"),
-        "mirror_body": mirror.group("body"),
-    }
-
-
-def qualified_call_used(clean_expression, path):
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+", path):
-        return False
-    qualified = r"\b" + r"\s*::\s*".join(re.escape(part) for part in path.split("::"))
-    return re.search(qualified + r"(?:\s*::\s*<[^>{};]+>)?\s*\(", clean_expression) is not None
-
-
-def real_adapter_uses_mirror(clean_expression):
-    return re.search(r"\b(?:mirrored(?:_[A-Za-z0-9_]*)?|mirror)\s*\(", clean_expression) is not None
-
-
 def listed_tests(output):
     tests = set()
     for line in output.splitlines():
@@ -181,30 +109,113 @@ def run_summary(output):
     return {key: int(value) for key, value in matches[0].groupdict().items()}
 
 
-def shared_protocol_imported(raw, clean, macro_name):
-    declarations = []
-    pattern = re.compile(
-        r"(?P<attrs>(?:#\s*\[[^\]]*\]\s*)*)"
-        r"mod\s+negative_protocol\s*;"
-    )
-    for match in pattern.finditer(clean):
-        if clean.count("{", 0, match.start()) != clean.count("}", 0, match.start()):
+def run_ast_checks(root, registered, report):
+    lines = []
+    binding_rows = []
+    for entry in registered:
+        relative = str(entry.get("test_file", ""))
+        path = root / relative
+        if not path.is_file():
             continue
-        raw_attrs = raw[match.start("attrs"):match.end("attrs")]
-        paths = re.findall(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]', raw_attrs)
-        declarations.append(paths)
-    imports = []
-    for match in re.finditer(r"\buse\s+negative_protocol\s*::(?P<body>[^;]+);", clean):
-        if clean.count("{", 0, match.start()) == clean.count("}", 0, match.start()):
-            imports.extend(re.findall(r"\bassert_registered_(?:async_)?negative_case\b", match.group("body")))
-    return declarations == [["../../../tests/negative_protocol.rs"]] and imports.count(macro_name) == 1
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        clean, _ = sanitize_rust(raw)
+        test = test_function(clean, str(entry.get("test_fn", "")))
+        if test is None:
+            continue
+        declaration = clean[test.declaration_start:test.body_start]
+        macro_path = (
+            "negative_protocol::assert_registered_async_negative_case"
+            if re.search(r"\basync\s+fn\b", declaration)
+            else "negative_protocol::assert_registered_negative_case"
+        )
+        edge_validation = str(entry.get("edge_validation", ""))
+        edge_source = edge_entry_type = edge_entry_fn = edge_guard_type = edge_guard_fn = "-"
+        if edge_validation == "mechanical":
+            resolved = resolve_function(root, str(entry.get("production_entry", "")))
+            if isinstance(resolved, str):
+                report.violation("ast-edge-entry", f"entry `{entry.get('invariant', '')}`: {resolved}")
+                continue
+            edge_path, edge_span = resolved
+            edge_source = str(edge_path.relative_to(root))
+            edge_entry_type = edge_span.type_name or "-"
+            edge_entry_fn = edge_span.name
+            guard_parts = str(entry.get("production_fn", "")).split("::")
+            edge_guard_fn = guard_parts[-1]
+            edge_guard_type = guard_parts[-2] if len(guard_parts) >= 2 and guard_parts[-2][:1].isupper() else "-"
+        fields = [
+            str(entry.get("invariant", "")),
+            relative,
+            str(entry.get("test_fn", "")),
+            str(entry.get("case_type", "")),
+            str(entry.get("real_adapter", "")),
+            str(entry.get("production_fn", "")),
+            str(entry.get("production_entry", "")),
+            str(entry.get("broken_variant", "")),
+            macro_path,
+            edge_validation,
+            edge_source,
+            edge_entry_type,
+            edge_entry_fn,
+            edge_guard_type,
+            edge_guard_fn,
+        ]
+        if any("\t" in field or "\n" in field for field in fields):
+            report.violation("ast-contract-field", f"entry `{fields[0]}` has a non-scalar AST contract field")
+            continue
+        lines.append("\t".join(fields))
+        binding_rows.append("|".join([
+            str(entry.get("invariant", "")),
+            str(entry.get("case_type", "")),
+            str(entry.get("real_adapter", "")),
+            str(entry.get("production_fn", "")),
+            str(entry.get("production_entry", "")),
+            str(entry.get("broken_variant", "")),
+            macro_path,
+            edge_validation,
+        ]))
+    if root.resolve() == REPO_ROOT.resolve():
+        try:
+            universe = tomllib.loads((root / UNIVERSE_REL).read_text())
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            report.violation("universe-binding-read", str(error))
+            universe = {}
+        required = universe.get("required_bindings", [])
+        if universe.get("schema_version") != 2:
+            report.violation("universe-binding-schema", "universe must use schema_version = 2")
+        if universe.get("binding_count") != len(binding_rows):
+            report.violation("universe-binding-count", f"binding_count is not {len(binding_rows)}")
+        if not isinstance(required, list) or len(required) != len(set(required)) or set(required) != set(binding_rows):
+            report.violation("universe-binding-drift", "required_bindings is not the exact registry/source identity set")
+    with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as contract:
+        contract.write("\n".join(lines) + "\n")
+        contract_path = pathlib.Path(contract.name)
+    try:
+        mode = "--check" if root.resolve() == REPO_ROOT.resolve() else "--fixture"
+        result = subprocess.run(
+            [os.environ["NEGATIVE_REGISTRY_AST"], mode, str(contract_path)],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    finally:
+        contract_path.unlink(missing_ok=True)
+    if result.returncode:
+        parsed = False
+        for line in result.stderr.splitlines():
+            match = re.fullmatch(r"\[([a-z0-9-]+)\]\s+(.*)", line)
+            if match:
+                parsed = True
+                report.violation(match.group(1), match.group(2))
+        if not parsed:
+            report.violation("ast-check-failed", result.stderr[-4000:] or result.stdout[-4000:])
 
 
 def run_checks(root, minimum=12, execute_tests=False):
     report = Report(); mapped = rows(root, report)
     document = registry_document(root, report); registered = document.get("entry", [])
-    if document.get("schema_version") != 4:
-        report.violation("registry-schema-version", "negative registry must use schema_version = 4")
+    if document.get("schema_version") != 5:
+        report.violation("registry-schema-version", "negative registry must use schema_version = 5")
     if not mapped: report.violation("no-rows", "mapping parsed to zero rows")
     if not registered: report.violation("no-entries", "registry parsed to zero entries")
     row_by_name = {row["invariant"]: row for row in mapped}
@@ -228,6 +239,7 @@ def run_checks(root, minimum=12, execute_tests=False):
             if isinstance(resolved, str):
                 report.violation(f"entry-{label}-path-unresolvable", f"entry `{invariant}` {label}: {resolved}")
         reachability = entry.get("entry_reachability", "")
+        edge_validation = entry.get("edge_validation", "")
         reason = str(entry.get("reachability_reason", "")).strip()
         if reachability not in {"direct", "indirect"}:
             report.violation("entry-reachability-invalid", f"entry `{invariant}` reachability must be direct or indirect")
@@ -237,6 +249,13 @@ def run_checks(root, minimum=12, execute_tests=False):
             report.violation("entry-direct-path-drift", f"entry `{invariant}` says direct but production_fn != production_entry")
         if reachability == "indirect" and production == production_entry:
             report.violation("entry-indirect-path-vacuous", f"entry `{invariant}` says indirect but names the same internal and entry paths")
+        expected_edge = "direct" if reachability == "direct" else (
+            "reviewed-boundary" if production_entry == "serde_json::from_value" else "mechanical"
+        )
+        if edge_validation != expected_edge:
+            report.violation("entry-edge-validation-drift", f"entry `{invariant}` edge_validation `{edge_validation}` != `{expected_edge}`")
+        if edge_validation == "reviewed-boundary" and not str(entry.get("edge_review_reason", "")).strip():
+            report.violation("entry-edge-review-reason-empty", f"entry `{invariant}` reviewed boundary has no reason")
         for field in ("permits", "observed_when_neutralized"):
             if not str(entry.get(field, "")).strip():
                 report.violation(f"entry-empty-{field.replace('_', '-')}", f"entry `{invariant}` has empty {field}")
@@ -273,38 +292,21 @@ def run_checks(root, minimum=12, execute_tests=False):
         control_variant = f"{enum_name}::None"
         if not enum_variant_defined(clean, control_variant, (test.declaration_start, test.body_end + 1)):
             report.violation("entry-control-variant-undefined", f"entry `{invariant}` has no `{control_variant}` control")
-        if re.search(r"\bmacro_rules\s*!?\s*assert_registered_negative_case\b", clean):
-            report.violation("entry-protocol-shadowed", f"entry `{invariant}` test file locally redefines the shared protocol")
-        metadata = protocol_metadata(clean, test)
-        if isinstance(metadata, str):
-            report.violation("entry-protocol-missing", f"entry `{invariant}`: {metadata}")
-        else:
-            if not shared_protocol_imported(raw, clean, metadata["macro"]):
-                report.violation("entry-protocol-import-drift", f"entry `{invariant}` does not import `{metadata['macro']}` from the exact shared protocol path")
-            case_type = entry.get("case_type", "")
-            expected_case = invariant.replace("-", "_")
-            if case_type != expected_case or metadata["case"] != expected_case:
-                report.violation("entry-case-identity-drift", f"entry `{invariant}` case `{case_type}`, protocol `{metadata['case']}`, expected `{expected_case}`")
-            real_adapter = entry.get("real_adapter", "")
-            expected_adapter = f"{expected_case}::real"
-            if real_adapter != expected_adapter:
-                report.violation("entry-real-adapter-drift", f"entry `{invariant}` real_adapter `{real_adapter}` != `{expected_adapter}`")
-            if metadata["mutation"] != enum_name:
-                report.violation("entry-mutation-type-drift", f"entry `{invariant}` protocol mutation `{metadata['mutation']}` != `{enum_name}`")
-            if metadata["control"] != control_variant:
-                report.violation("entry-control-variant-drift", f"entry `{invariant}` protocol control `{metadata['control']}` != `{control_variant}`")
-            if metadata["broken"] != broken:
-                report.violation("entry-broken-variant-drift", f"entry `{invariant}` protocol broken `{metadata['broken']}` != `{broken}`")
-            if not qualified_call_used(metadata["real_body"], production_entry):
-                report.violation("entry-real-production-call-missing", f"entry `{invariant}` real adapter does not call exact production_entry `{production_entry}`")
-            if real_adapter_uses_mirror(metadata["real_body"]):
-                report.violation("entry-real-adapter-uses-mirror", f"entry `{invariant}` real adapter invokes mirror code")
+        case_type = entry.get("case_type", "")
+        expected_case = invariant.replace("-", "_")
+        if case_type != expected_case:
+            report.violation("entry-case-identity-drift", f"entry `{invariant}` case `{case_type}` != `{expected_case}`")
+        real_adapter = entry.get("real_adapter", "")
+        expected_adapter = f"{expected_case}::real"
+        if real_adapter != expected_adapter:
+            report.violation("entry-real-adapter-drift", f"entry `{invariant}` real_adapter `{real_adapter}` != `{expected_adapter}`")
 
     for invariant, count in seen.items():
         if count > 1: report.violation("entry-duplicate", f"entry `{invariant}` appears {count} times")
     for row in mapped:
         if row["invariant"] not in seen: report.violation("row-unregistered", f"row `{row['invariant']}` has no registry entry")
     if len(registered) < minimum: report.violation("coverage-entries", f"{len(registered)} entries < {minimum}")
+    run_ast_checks(root, registered, report)
     if execute_tests and not report.violations:
         targets = {}
         for entry in registered:
@@ -379,7 +381,6 @@ impl Gate { pub fn evaluate(&self) -> bool { false } }
 TEST = '''
 #[path = "../../../tests/negative_protocol.rs"]
 mod negative_protocol;
-use negative_protocol::assert_registered_negative_case;
 
 enum Mutation {
     None,
@@ -388,7 +389,7 @@ enum Mutation {
 fn mirrored(mutation: Mutation) -> bool { matches!(mutation, Mutation::RemoveGuard) }
 #[test]
 fn broken_gate() {
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: FIXTURE_ONE,
         mutation: Mutation,
         control: Mutation::None,
@@ -396,7 +397,11 @@ fn broken_gate() {
         state: {},
         probe: bool = true,
         outcome: bool,
-        real: |_state, _probe| fixture_crate::gate::Gate::evaluate(&Gate),
+        real_probe: probe,
+        production: fixture_crate::gate::Gate::evaluate,
+        arguments: (&Gate),
+        call: sync,
+        normalize: |production_result| production_result,
         mirror: |_state, _probe, mutation| mirrored(mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -404,7 +409,7 @@ fn broken_gate() {
 }
 '''
 REGISTRY = '''
-schema_version=4
+schema_version=5
 [[entry]]
 invariant="FIXTURE-ONE"
 case_type="FIXTURE_ONE"
@@ -412,6 +417,7 @@ real_adapter="FIXTURE_ONE::real"
 production_fn="fixture_crate::gate::Gate::evaluate"
 production_entry="fixture_crate::gate::Gate::evaluate"
 entry_reachability="direct"
+edge_validation="direct"
 reachability_reason="The named adapter calls the public production entry."
 test_file="crates/fixture-crate/tests/negative_gate.rs"
 test_fn="broken_gate"
@@ -443,15 +449,20 @@ CASES = {
     "string_only_production": "entry-production-entry-path-unresolvable",
     "comment_only_mutation_definition": "entry-broken-variant-undefined",
     "string_only_mutation_definition": "entry-broken-variant-undefined",
-    "comment_only_protocol": "entry-protocol-missing",
-    "string_only_protocol": "entry-protocol-missing",
-    "production_shaped_spoof": "entry-real-production-call-missing",
-    "protocol_import_spoof": "entry-protocol-import-drift",
-    "case_identity_drift": "entry-case-identity-drift",
+    "comment_only_protocol": "ast-source-parse",
+    "string_only_protocol": "ast-macro-path",
+    "production_shaped_spoof": "ast-source-binding",
+    "protocol_import_spoof": "ast-protocol-module",
+    "case_identity_drift": "ast-source-binding",
     "real_adapter_drift": "entry-real-adapter-drift",
-    "real_adapter_uses_mirror": "entry-real-adapter-uses-mirror",
-    "broken_variant_drift": "entry-broken-variant-drift",
-    "protocol_shadow": "entry-protocol-shadowed",
+    "real_adapter_uses_mirror": "ast-source-binding",
+    "broken_variant_drift": "ast-source-binding",
+    "protocol_shadow": "ast-reserved-binding",
+    "sync_alias_shadow": "ast-reserved-binding",
+    "async_alias_shadow": "ast-reserved-binding",
+    "dead_closure": "ast-macro-placement",
+    "if_false_wrapper": "ast-macro-placement",
+    "normalizer_constant": "ast-invocation-parse",
     "orphan": "entry-orphan",
     "unregistered": "row-unregistered",
     "ignored_test": "entry-test-ignored",
@@ -481,20 +492,13 @@ def mutate(root, case):
     elif case == "production_shaped_spoof": test.write_text('''
 #[path = "../../../tests/negative_protocol.rs"]
 mod negative_protocol;
-use negative_protocol::assert_registered_negative_case;
 enum Mutation { None, RemoveGuard }
 struct Mirror;
 impl Mirror { fn evaluate(&self) -> bool { true } }
 fn mirrored(mutation: Mutation) -> bool { matches!(mutation, Mutation::RemoveGuard) }
 #[test]
 fn broken_gate() {
-    let mirror = Gate;
-    let _ = mirror.evaluate();
-    std::hint::black_box(Mutation::None);
-    std::hint::black_box(Mutation::RemoveGuard);
-    assert!(!mirrored(Mutation::None));
-    assert!(true);
-    assert_registered_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: FIXTURE_ONE,
         mutation: Mutation,
         control: Mutation::None,
@@ -502,7 +506,11 @@ fn broken_gate() {
         state: {},
         probe: bool = true,
         outcome: bool,
-        real: |_state, _probe| Mirror.evaluate(),
+        real_probe: probe,
+        production: Mirror::evaluate,
+        arguments: (&Mirror),
+        call: sync,
+        normalize: |production_result| production_result,
         mirror: |_state, _probe, mutation| mirrored(mutation),
         denied: |value| !value,
         permitted: |value| *value,
@@ -512,11 +520,33 @@ fn broken_gate() {
     elif case == "protocol_import_spoof": test.write_text(test.read_text().replace('../../../tests/negative_protocol.rs', 'alternate_protocol.rs'))
     elif case == "case_identity_drift": test.write_text(test.read_text().replace("case: FIXTURE_ONE", "case: FIXTURE_GHOST"))
     elif case == "real_adapter_drift": registry.write_text(registry.read_text().replace('real_adapter="FIXTURE_ONE::real"', 'real_adapter="FIXTURE_ONE::mirror"'))
-    elif case == "real_adapter_uses_mirror": test.write_text(test.read_text().replace("fixture_crate::gate::Gate::evaluate(&Gate)", "mirrored(Mutation::None)"))
+    elif case == "real_adapter_uses_mirror": test.write_text(test.read_text().replace("production: fixture_crate::gate::Gate::evaluate", "production: mirrored"))
     elif case == "broken_variant_drift": test.write_text(test.read_text().replace("broken: Mutation::RemoveGuard", "broken: Mutation::None"))
     elif case == "protocol_shadow": test.write_text("macro_rules! assert_registered_negative_case { ($($t:tt)*) => {} }\n" + test.read_text())
+    elif case == "sync_alias_shadow": test.write_text(test.read_text().replace(
+        "mod negative_protocol;",
+        "mod negative_protocol;\nuse negative_protocol::assert_registered_negative_case as canonical_case;\nmacro_rules! assert_registered_negative_case { ($($tokens:tt)*) => {{ if false { canonical_case! { $($tokens)* } } }}; }",
+    ).replace("negative_protocol::assert_registered_negative_case!", "assert_registered_negative_case!"))
+    elif case == "async_alias_shadow": test.write_text(test.read_text().replace(
+        "mod negative_protocol;",
+        "mod negative_protocol;\nuse negative_protocol::assert_registered_async_negative_case as canonical_async;\nmacro_rules! assert_registered_async_negative_case { ($($tokens:tt)*) => {{ if false { canonical_async! { $($tokens)* } } }}; }",
+    ).replace("#[test]\nfn broken_gate()", "#[tokio::test]\nasync fn broken_gate()").replace(
+        "negative_protocol::assert_registered_negative_case!", "assert_registered_async_negative_case!"
+    ).replace("call: sync", "call: awaited"))
+    elif case == "dead_closure": test.write_text(test.read_text().replace(
+        "    negative_protocol::assert_registered_negative_case! {",
+        "    let _dead = || { negative_protocol::assert_registered_negative_case! {",
+    ).replace("    }\n}\n", "    } };\n}\n", 1))
+    elif case == "if_false_wrapper": test.write_text(test.read_text().replace(
+        "    negative_protocol::assert_registered_negative_case! {",
+        "    if false { negative_protocol::assert_registered_negative_case! {",
+    ).replace("    }\n}\n", "    } }\n}\n", 1))
+    elif case == "normalizer_constant": test.write_text(test.read_text().replace(
+        "normalize: |production_result| production_result",
+        "normalize: |_production_result| false",
+    ))
     elif case == "orphan": registry.write_text(registry.read_text().replace("FIXTURE-ONE", "FIXTURE-GHOST"))
-    elif case == "unregistered": registry.write_text("schema_version=4\n")
+    elif case == "unregistered": registry.write_text("schema_version=5\n")
     elif case == "ignored_test": test.write_text(test.read_text().replace("#[test]", "#[test]\n#[ignore]"))
     elif case == "cfg_disabled_test": test.write_text(test.read_text().replace("#[test]", "#[cfg(any())]\n#[test]"))
     elif case == "module_cfg_disabled_test": test.write_text("#[cfg(any())]\nmod disabled {\n" + test.read_text() + "\n}\n")
@@ -629,6 +659,202 @@ def protocol_mutation_self_test(base):
     return ok, len(mutations)
 
 
+def registered_source_mutation_self_test(base):
+    registered = entries(REPO_ROOT, Report())
+    targets = sorted({entry["test_file"] for entry in registered})
+    clean_root = base / "registered_source_clean"
+    for relative in targets:
+        destination = clean_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / relative, destination)
+
+    def contract_text(root, entry_overrides=None):
+        entry_overrides = entry_overrides or {}
+        lines = []
+        for original in registered:
+            entry = {**original, **entry_overrides.get(original["invariant"], {})}
+            relative = entry["test_file"]
+            raw = (root / relative).read_text()
+            clean, _ = sanitize_rust(raw)
+            test = test_function(clean, entry["test_fn"])
+            declaration = clean[test.declaration_start:test.body_start]
+            macro_path = (
+                "negative_protocol::assert_registered_async_negative_case"
+                if re.search(r"\basync\s+fn\b", declaration)
+                else "negative_protocol::assert_registered_negative_case"
+            )
+            edge = entry["edge_validation"]
+            extra = ["-"] * 5
+            if edge == "mechanical":
+                # Preserve the real edge metadata while mutating the registry-bound
+                # entry identity; the strict AST baseline must reject that drift.
+                resolved = resolve_function(REPO_ROOT, original["production_entry"])
+                if isinstance(resolved, str):
+                    raise AssertionError(resolved)
+                edge_path, edge_span = resolved
+                parts = entry["production_fn"].split("::")
+                extra = [
+                    str(edge_path.resolve()),
+                    edge_span.type_name or "-",
+                    edge_span.name,
+                    parts[-2] if parts[-2][:1].isupper() else "-",
+                    parts[-1],
+                ]
+            lines.append("\t".join([
+                entry["invariant"], relative, entry["test_fn"], entry["case_type"],
+                entry["real_adapter"], entry["production_fn"], entry["production_entry"],
+                entry["broken_variant"], macro_path, edge, *extra,
+            ]))
+        return "\n".join(lines) + "\n"
+
+    def run(root, overrides=None, binary=None):
+        contract = root / "contract.tsv"
+        contract.write_text(contract_text(root, overrides))
+        return subprocess.run(
+            [binary or os.environ["NEGATIVE_REGISTRY_AST"], "--check", str(contract)],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    clean = run(clean_root)
+    if clean.returncode:
+        print(f"registered source clean AST contract failed:\n{clean.stderr[-4000:]}", file=sys.stderr)
+        return False, 0
+
+    def wrap_first(source, keyword):
+        marker = "negative_protocol::assert_registered_negative_case!"
+        start = source.index(marker)
+        clean, _ = sanitize_rust(source)
+        opening = clean.index("{", start)
+        closing = matching_brace(clean, opening)
+        if closing is None:
+            raise AssertionError("registered macro has no closing brace")
+        prefix = "if false { " if keyword == "if-false" else "let _dead = || { "
+        suffix = " }" if keyword == "if-false" else " };"
+        return source[:start] + prefix + source[start:closing + 1] + suffix + source[closing + 1:]
+
+    def replace_after(source, marker, old, new):
+        start = source.index(marker)
+        replacement = source[start:].replace(old, new, 1)
+        return source[:start] + replacement
+
+    policy = "crates/swarm-policy/tests/negative_policy_gates.rs"
+    runtime = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
+    mutations = {
+        "dead_closure": (policy, lambda value: wrap_first(value, "dead"), "ast-macro-placement", None),
+        "if_false": (policy, lambda value: wrap_first(value, "if-false"), "ast-macro-placement", None),
+        "unreachable_return": (policy, lambda value: value.replace(
+            "    negative_protocol::assert_registered_negative_case! {",
+            "    return;\n    negative_protocol::assert_registered_negative_case! {",
+            1,
+        ), "ast-macro-placement", None),
+        "sync_alias_shadow": (policy, lambda value: value.replace(
+            "mod negative_protocol;",
+            "mod negative_protocol;\nuse negative_protocol::assert_registered_negative_case as canonical_case;\nmacro_rules! assert_registered_negative_case { ($($tokens:tt)*) => {{ if false { canonical_case! { $($tokens)* } } }}; }",
+            1,
+        ).replace("negative_protocol::assert_registered_negative_case!", "assert_registered_negative_case!", 1), "ast-reserved-binding", None),
+        "async_alias_shadow": (runtime, lambda value: value.replace(
+            "mod negative_protocol;",
+            "mod negative_protocol;\nuse negative_protocol::assert_registered_async_negative_case as canonical_async;\nmacro_rules! assert_registered_async_negative_case { ($($tokens:tt)*) => {{ if false { canonical_async! { $($tokens)* } } }}; }",
+            1,
+        ).replace("negative_protocol::assert_registered_async_negative_case!", "assert_registered_async_negative_case!", 1), "ast-reserved-binding", None),
+        "wrong_protocol_path": (policy, lambda value: value.replace(
+            '../../../tests/negative_protocol.rs', 'alternate_protocol.rs', 1
+        ), "ast-protocol-module", None),
+        "normalizer_constant": (policy, lambda value: value.replace(
+            "normalize: |production_result| outcome(&production_result)",
+            "normalize: |production_result| { let _ = production_result; false }",
+            1,
+        ), "ast-expected-binding-drift", None),
+        "normalizer_helper_constant": (policy, lambda value: value.replace(
+            "fn outcome(result: &Result<PolicyDecision, ApprovalError>) -> String {",
+            "fn outcome(result: &Result<PolicyDecision, ApprovalError>) -> String { let _ = result; return \"Deny/fabricated\".to_string();",
+            1,
+        ), "ast-normalizer-helper", None),
+        "renamed_mirror_entry": (
+            policy,
+            lambda value: replace_after(
+                value.replace("MirroredStaticGate", "RenamedStaticGate"),
+                "case: POLICY_NULL_EVIDENCE_REFUSED",
+                "production: swarm_policy::static_gate::StaticApprovalGate::evaluate",
+                "production: RenamedStaticGate::evaluate",
+            ),
+            "ast-expected-binding-drift",
+            None,
+        ),
+        "coordinated_indirect_entry_substitution": (
+            policy,
+            lambda value: replace_after(
+                value,
+                "case: POLICY_NULL_EVIDENCE_REFUSED",
+                "production: swarm_policy::static_gate::StaticApprovalGate::evaluate",
+                "production: MirroredStaticGate::evaluate",
+            ),
+            "ast-expected-binding-drift",
+            {"POLICY-NULL-EVIDENCE-REFUSED": {
+                "production_entry": "MirroredStaticGate::evaluate",
+            }},
+        ),
+    }
+    ok = True
+    for name, (relative, mutate_source, expected_code, overrides) in mutations.items():
+        root = base / f"registered_source_{name}"
+        shutil.copytree(clean_root, root)
+        path = root / relative
+        path.write_text(mutate_source(path.read_text()))
+        result = run(root, overrides)
+        codes = set(re.findall(r"\[([a-z0-9-]+)\]", result.stderr))
+        if result.returncode == 0 or expected_code not in codes:
+            ok = False
+            print(f"registered source mutation {name}: expected {expected_code}, got {sorted(codes)}\n{result.stderr[-2000:]}", file=sys.stderr)
+
+    coordinated = base / "coordinated_baseline_mutation"
+    shutil.copytree(clean_root, coordinated)
+    helper = coordinated / "tools/negative-registry-ast"
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        REPO_ROOT / "tools/negative-registry-ast",
+        helper,
+        ignore=shutil.ignore_patterns("target"),
+    )
+    policy_path = coordinated / policy
+    policy_path.write_text(replace_after(
+        policy_path.read_text(),
+        "case: POLICY_NULL_EVIDENCE_REFUSED",
+        "production: swarm_policy::static_gate::StaticApprovalGate::evaluate",
+        "production: MirroredStaticGate::evaluate",
+    ))
+    docs = coordinated / "docs/assurance"
+    docs.mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / REGISTRY_REL, docs / "negative-registry.toml")
+    shutil.copy2(REPO_ROOT / UNIVERSE_REL, docs / "universe.toml")
+    for path in (docs / "negative-registry.toml", docs / "universe.toml", helper / "src/expected-bindings.tsv"):
+        path.write_text(path.read_text().replace(
+            "swarm_policy::static_gate::StaticApprovalGate::evaluate",
+            "MirroredStaticGate::evaluate",
+            1,
+        ))
+    overrides = {"POLICY-NULL-EVIDENCE-REFUSED": {
+        "production_entry": "MirroredStaticGate::evaluate",
+    }}
+    contract = coordinated / "contract.tsv"
+    contract.write_text(contract_text(coordinated, overrides))
+    result = subprocess.run(
+        ["cargo", "run", "--quiet", "--manifest-path", str(helper / "Cargo.toml"),
+         "--target-dir", str(REPO_ROOT / "target/assurance-tools-selftest"), "--", "--check", str(contract)],
+        cwd=coordinated,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode == 0 or "[ast-expected-parse]" not in result.stderr:
+        ok = False
+        print(f"coordinated baseline mutation bypassed pinned digest:\n{result.stderr[-4000:]}", file=sys.stderr)
+    return ok, len(mutations) + 1
+
+
 def self_test():
     ok = True
     protocol_mutations = 0
@@ -649,8 +875,9 @@ def self_test():
             ok = False
             print("negative self-test stdout spoof was accepted as Cargo discovery/execution evidence", file=sys.stderr)
         protocol_ok, protocol_mutations = protocol_mutation_self_test(base)
-        ok = ok and protocol_ok
-    return ok, protocol_mutations
+        source_ok, source_mutations = registered_source_mutation_self_test(base)
+        ok = ok and protocol_ok and source_ok
+    return ok, protocol_mutations + source_mutations
 
 
 self_test_ok, protocol_mutations = self_test()
@@ -661,5 +888,5 @@ if report.violations:
     for code, message in report.violations: print(f"  [{code}] {message}", file=sys.stderr)
     raise SystemExit(1)
 registered = entries(REPO_ROOT, Report())
-print(f"check-negative-registry OK: {len(registered)} executable tests + {len(CONTRACT_TESTS)} protocol-contract tests; {len(CASES)+2+protocol_mutations} self-tests passed ({2} clean controls, {len(CASES)+protocol_mutations} adversarial)")
+print(f"check-negative-registry OK: {len(registered)} executable tests + {len(CONTRACT_TESTS)} protocol-contract tests; {len(CASES)+3+protocol_mutations} self-tests passed ({3} clean controls, {len(CASES)+protocol_mutations} adversarial)")
 PY

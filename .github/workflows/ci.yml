@@ -187,9 +187,9 @@ jobs:
       # expressions. The negative-registry gate binds each row to the shared
       # typed differential protocol, requires exact Cargo --list set equality,
       # and executes all four registered targets with exact passed/ignored
-      # summary counts. On a warm local worktree they were measured separately
-      # at 8.35s and 9.62s wall clock (2026-08-14); CI timing is cache- and
-      # machine-dependent.
+      # summary counts. Two quiet, isolated warm runs of the negative-registry
+      # gate took 54.46s and 58.88s wall clock on Darwin arm64 with rustc 1.97.1
+      # (2026-08-14); CI timing is cache- and machine-dependent.
       #
       # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
       # and refuse to scan it if a fixture misbehaves. These workflow steps are

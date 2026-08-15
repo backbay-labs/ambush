@@ -71,9 +71,11 @@ This is the substantive decision and the expensive one.
 on a row with no entry, an entry with no row, an entry naming a test file or test
 function that does not exist, a test function carrying no adjacent `#[test]` or
 `#[tokio::test]` attribute, an ignored or conditionally disabled test, or a body
-that does not invoke exactly one shared typed differential protocol. The
-protocol's named case type, exact real adapter, public production entry and
-`Mutation::None`/`Mutation::BrokenVariant` identities must match the registry.
+that does not invoke exactly one shared typed differential protocol. The shared
+macro owns the real production invocation. A focused `syn` checker requires the
+canonical fully-qualified macro path and pins the named case, production entry,
+argument/projection AST, call mode, and `Mutation::None`/
+`Mutation::BrokenVariant` identities to a checker-owned baseline.
 For guards reached through a public API, the registry separately names the
 internal `production_fn`, public `production_entry`, and an explicit indirect
 reachability reason. Comments, strings, locally shadowed macros,
@@ -94,12 +96,17 @@ crate, then applies thirteen source mutations: no-op and `if false` execution,
 each omitted operation, swapped mirror roles, and removed, inverted, or vacuous
 assertions. Every mutation must compile and fail the contract tests.
 
-Each registry entry also binds `CASE_TYPE::real` to the exact fully-qualified
-public production call written in that adapter. This is a structural source
-check; the compiled contract proves the adapter method is invoked once but does
-not runtime-instrument the production function called inside it. A public entry
-may reach a private mapped guard indirectly, which is recorded rather than
-misrepresented as a direct test call.
+The Rust-syntax checker rejects dead closures and branches around the invocation,
+renamed production methods, aliases, globs, re-exports, local shadows, and
+normalizers that ignore or replace the production result. Its immutable
+expected-binding file is itself authenticated by a digest embedded in checker
+code, so coordinated edits to test source, registry, universe, and the expected
+file fail. A public entry may reach a private mapped guard indirectly: twelve
+such edges are traversed mechanically from compiled source, while the two serde
+deserialization boundaries are explicitly identified for review rather than
+misrepresented as direct calls. The checker pins what production expression is
+executed, while the broader fidelity of each handwritten mirror remains a
+reviewed limitation.
 
 The shared typed protocol makes each test do three things over one probe input:
 

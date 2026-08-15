@@ -196,6 +196,9 @@ def run_checks(root, min_rows=12, min_crates=4, min_assumptions=8):
 
     required_invariants = universe.get("required_invariants", [])
     required_omissions = universe.get("required_omissions", [])
+    required_bindings = universe.get("required_bindings", [])
+    if universe.get("schema_version") != 2:
+        report.violation("universe-schema-version", "universe must use schema_version = 2")
     if not isinstance(required_invariants, list) or not required_invariants:
         report.violation("universe-invariants-empty", "universe has no required_invariants")
         required_invariants = []
@@ -218,6 +221,16 @@ def run_checks(root, min_rows=12, min_crates=4, min_assumptions=8):
         report.violation("universe-invariant-count", "invariant_count does not equal exact required set")
     if universe.get("omission_count") != len(required_omission_set):
         report.violation("universe-omission-count", "omission_count does not equal exact required set")
+    binding_ids = [str(binding).split("|", 1)[0] for binding in required_bindings] if isinstance(required_bindings, list) else []
+    if (
+        not isinstance(required_bindings, list)
+        or len(required_bindings) != len(set(required_bindings))
+        or len(binding_ids) != len(set(binding_ids))
+        or set(binding_ids) != required_invariant_set
+    ):
+        report.violation("universe-binding-drift", "required_bindings is not one exact identity per invariant")
+    if universe.get("binding_count") != len(required_bindings):
+        report.violation("universe-binding-count", "binding_count does not equal exact required binding set")
 
     surface_invariants: list[str] = []
     surface_omissions: list[str] = []
@@ -292,11 +305,13 @@ reason="not a verdict"
 clearing_condition="when it becomes one"
 '''
 UNIVERSE = '''
-schema_version=1
+schema_version=2
 invariant_count=1
 omission_count=1
+binding_count=1
 required_invariants=["FIXTURE-ONE"]
 required_omissions=["OMIT-X"]
+required_bindings=["FIXTURE-ONE|FIXTURE_ONE|FIXTURE_ONE::real|fixture_crate::gate::Gate::evaluate|fixture_crate::gate::Gate::evaluate|Mutation::RemoveGuard|negative_protocol::assert_registered_negative_case|direct"]
 [[surface]]
 id="fixture"
 production_prefixes=["fixture_crate::"]

@@ -6,10 +6,10 @@
 //! probe. It checks the mutation roles before executing and then checks the
 //! real/control denial and broken permission differential.
 //!
-//! This proves those registered operations and identities. It does not prove a
-//! handwritten adapter or mirror faithful beyond the registered probe. The
-//! registry gate separately binds every adapter's real operation to an explicit
-//! production entry call.
+//! The assertion macros own the production call itself. Call sites provide an
+//! exact function path and argument expressions, followed by a narrow inline
+//! projection of that call's result. The registry gate parses those invocations
+//! as Rust syntax and pins both the production path and projection AST.
 
 use core::fmt::Debug;
 use core::future::Future;
@@ -100,7 +100,11 @@ macro_rules! define_registered_negative_case {
         state: { $($state_name:ident : $state_ty:ty = $state:expr),* $(,)? },
         probe: $probe_ty:ty = $probe:expr,
         outcome: $outcome_ty:ty,
-        real: |$real_state:ident, $real_probe:ident| $real:expr,
+        real_probe: $real_probe:ident,
+        production: $production:path,
+        arguments: ($($production_arg:expr),* $(,)?),
+        call: $call:ident,
+        normalize: |$production_result:ident| $normalize:expr,
         mirror: |$mirror_state:ident, $mirror_probe:ident, $mirror_mutation:ident| $mirror:expr,
         denied: |$denied_outcome:ident| $denied:expr,
         permitted: |$permitted_outcome:ident| $permitted:expr $(,)?
@@ -131,10 +135,94 @@ macro_rules! define_registered_negative_case {
 
             #[allow(unused_variables)]
             async fn real(&mut self, probe: &Self::Probe) -> Self::Outcome {
-                let $real_state = self;
-                $(let $state_name = &mut $real_state.$state_name;)*
+                $(let $state_name = &mut self.$state_name;)*
                 let $real_probe = probe;
-                $real
+                let $production_result = $crate::negative_protocol::invoke_registered_production!(
+                    $call,
+                    $production,
+                    ($($production_arg),*)
+                );
+                $normalize
+            }
+
+            #[allow(unused_variables)]
+            async fn mirror(
+                &mut self,
+                probe: &Self::Probe,
+                mutation: Self::Mutation,
+            ) -> Self::Outcome {
+                let $mirror_state = self;
+                $(let $state_name = &mut $mirror_state.$state_name;)*
+                let $mirror_probe = probe;
+                let $mirror_mutation = mutation;
+                $mirror
+            }
+
+            fn denied(outcome: &Self::Outcome) -> bool {
+                let $denied_outcome = outcome;
+                $denied
+            }
+
+            fn permitted(outcome: &Self::Outcome) -> bool {
+                let $permitted_outcome = outcome;
+                $permitted
+            }
+        }
+
+        ($case { $($state_name: $state),* }, $probe)
+    }};
+    (
+        case: $case:ident,
+        mutation: $mutation_ty:ty,
+        control: $control:path,
+        broken: $broken:path,
+        state: { $($state_name:ident : $state_ty:ty = $state:expr),* $(,)? },
+        probe: $probe_ty:ty = $probe:expr,
+        outcome: $outcome_ty:ty,
+        real_probe: $real_probe:ident,
+        production_each: $production:path,
+        arguments_each: ($($production_arg:expr),* $(,)?),
+        items: $item:ident in $iter:expr,
+        normalize_each: |$production_result:ident, $normalize_item:ident| $normalize:expr,
+        mirror: |$mirror_state:ident, $mirror_probe:ident, $mirror_mutation:ident| $mirror:expr,
+        denied: |$denied_outcome:ident| $denied:expr,
+        permitted: |$permitted_outcome:ident| $permitted:expr $(,)?
+    ) => {{
+        #[allow(non_camel_case_types)]
+        struct $case {
+            $($state_name: $state_ty),*
+        }
+
+        impl $crate::negative_protocol::RegisteredNegativeCase for $case {
+            type Probe = $probe_ty;
+            type Outcome = $outcome_ty;
+            type Mutation = $mutation_ty;
+
+            const INVARIANT: &'static str = stringify!($case);
+            const CONTROL: Self::Mutation = $control;
+            const BROKEN: Self::Mutation = $broken;
+
+            fn mutation_role(mutation: Self::Mutation) -> $crate::negative_protocol::MutationRole {
+                if mutation == $control {
+                    $crate::negative_protocol::MutationRole::Control
+                } else if mutation == $broken {
+                    $crate::negative_protocol::MutationRole::Broken
+                } else {
+                    $crate::negative_protocol::MutationRole::Other
+                }
+            }
+
+            #[allow(unused_variables)]
+            async fn real(&mut self, probe: &Self::Probe) -> Self::Outcome {
+                $(let $state_name = &mut self.$state_name;)*
+                let $real_probe = probe;
+                let mut outcomes = Vec::new();
+                for $item in $iter {
+                    let $production_result = $production($($production_arg),*);
+                    let $normalize_item = $item;
+                    outcomes.push($normalize);
+                }
+                outcomes
             }
 
             #[allow(unused_variables)]
@@ -165,6 +253,15 @@ macro_rules! define_registered_negative_case {
     }};
 }
 
+macro_rules! invoke_registered_production {
+    (sync, $production:path, ($($argument:expr),* $(,)?)) => {
+        $production($($argument),*)
+    };
+    (awaited, $production:path, ($($argument:expr),* $(,)?)) => {
+        $production($($argument),*).await
+    };
+}
+
 macro_rules! assert_registered_negative_case {
     ($($tokens:tt)*) => {{
         let (case, probe) = $crate::negative_protocol::define_registered_negative_case! { $($tokens)* };
@@ -186,3 +283,4 @@ macro_rules! assert_registered_async_negative_case {
 pub(crate) use assert_registered_async_negative_case;
 pub(crate) use assert_registered_negative_case;
 pub(crate) use define_registered_negative_case;
+pub(crate) use invoke_registered_production;
