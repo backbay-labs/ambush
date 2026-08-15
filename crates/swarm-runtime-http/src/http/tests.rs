@@ -17,7 +17,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use swarm_agents::tom_agent::{GovernanceDecision, GovernancePolicy, GovernancePolicyConfig};
+use swarm_agents::tom_agent::{
+    GovernanceAuthority, GovernanceDecision, GovernancePolicy, GovernancePolicyConfig,
+};
 use swarm_core::agent::{
     AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
 };
@@ -3689,12 +3691,15 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
         )
         .unwrap(),
     );
+    let governance_authority = governance
+        .authority()
+        .expect("persisted governance should mint an authority");
     let runtime_events = RuntimeEventBroadcaster::new(32);
     let mut runtime_rx = runtime_events.subscribe();
     let state = IngestState::from_config(root.join("swarm.yaml"), config.clone())
         .unwrap()
         .with_approval_harness(harness.clone())
-        .with_governance_policy(Arc::clone(&governance))
+        .with_governance_authority(governance_authority.clone())
         .with_runtime_events(runtime_events.clone());
 
     let pounce_id = AgentId::new("pounce", "governed-resume-e2e");
@@ -3743,7 +3748,7 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
         Arc::new(ArcSwap::from_pointee(Vec::<AgentHealthEntry>::new())),
     )
     .with_request_response_router(state.current_request_response_router())
-    .with_governance_policy(Arc::clone(&governance))
+    .with_governance_authority(governance_authority)
     .with_runtime_events(runtime_events);
     dispatcher
         .register(Box::new(OneShotGovernedRequestAgent::new(
@@ -3891,6 +3896,9 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
     }
 
     runtime_server.abort();
+    let _ = runtime_server.await;
+    drop(dispatcher);
+    drop(governance);
     unsafe {
         std::env::remove_var(TOKEN_ENV);
         std::env::remove_var(EVIDENCE_KEY_ENV);
@@ -3901,7 +3909,7 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
 // --- QRT-04: operator-driven containment release ---------------------------
 //
 // These tests drive the routes in `super::containment` against a REAL
-// `swarm_agents::tom_agent::GovernancePolicy`, because the requirement's phrase
+// `swarm_governance::GovernancePolicy`, because the requirement's phrase
 // is "through the same governance signing path" and a fake signer would prove
 // nothing about that path. `swarm-runtime-http` is the lowest crate that can
 // name both the governance agent and the HTTP surface, which is why they live
@@ -3920,7 +3928,6 @@ mod qrt_04 {
     use ed25519_dalek::SigningKey;
     use std::collections::BTreeSet;
     use std::sync::Mutex;
-    use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
     use swarm_consensus::{
         ConsensusCommit, ConsensusCommittee, ConsensusGovernanceReceipt, ConsensusProposal,
         GovernanceReceiptDecision,
@@ -4045,17 +4052,30 @@ mod qrt_04 {
         lease
     }
 
-    fn governance_with_one_governor() -> Arc<GovernancePolicy> {
-        let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
-        // `register_governor` became fallible in BFT-03 -- it refuses a SECOND
-        // distinct signing key -- so the Result is handled rather than dropped.
-        policy
-            .register_governor(
+    struct GovernanceRoot(PathBuf);
+
+    impl Drop for GovernanceRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn governance_with_one_governor() -> (GovernanceAuthority, GovernanceRoot) {
+        let root = unique_temp_dir("qrt-04-governance");
+        let policy = Arc::new(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                root.join("governance.json"),
                 AgentId::new("tom", "primary"),
                 SigningKey::from_bytes(&[41; 32]),
             )
-            .expect("the first governor key must register");
-        policy
+            .expect("test governance should initialize signed persistence"),
+        );
+        let authority = policy
+            .authority()
+            .expect("persisted test governance should mint authority");
+        drop(policy);
+        (authority, GovernanceRoot(root))
     }
 
     fn attestation_of(receipt: &RollbackReceipt) -> ConsensusGovernanceReceipt {
@@ -4073,6 +4093,7 @@ mod qrt_04 {
         store: Arc<MemoryContainmentLeaseStore>,
         sweep: Arc<ContainmentSweep>,
         app: Router,
+        _governance_root: GovernanceRoot,
     }
 
     fn harness() -> Harness {
@@ -4081,6 +4102,7 @@ mod qrt_04 {
         }
         let world = Arc::new(World::default());
         let store = Arc::new(MemoryContainmentLeaseStore::new());
+        let (governance, governance_root) = governance_with_one_governor();
         let sweep = Arc::new(
             ContainmentSweep::new(
                 store.clone(),
@@ -4089,7 +4111,7 @@ mod qrt_04 {
                 }),
                 ExecutionMode::Enforced,
             )
-            .with_governance(governance_with_one_governor()),
+            .with_governance_authority(governance),
         );
         // ONE sweep object, and the router is handed the same `Arc` the TTL
         // task would get in `swarm_detect`. That sharing is the thing under
@@ -4106,6 +4128,7 @@ mod qrt_04 {
             store,
             sweep,
             app,
+            _governance_root: governance_root,
         }
     }
 

@@ -18,12 +18,13 @@ jobs:
   # custom shell makes /usr/bin/env the first child instead of a PATH-resolved
   # default Bash. This prevents earlier repository commands, caches,
   # GITHUB_ENV, or GITHUB_PATH from affecting either gate's bootstrap.
-  # Two warm local clean-launch runs of the 161-self-test registry gate took
-  # 89.73s and 78.19s wall clock (38.51/38.17s user, 16.18/15.26s sys) on
-  # Darwin 25.4.0 arm64 with rustc 1.97.1 on 2026-08-15. They are local
-  # observations, not a CI estimate; compiled actual-source mutations dominate.
+  # Two warm local clean-launch runs of the preceding 161-self-test registry gate
+  # took 89.73s and 78.19s wall clock (38.51/38.17s user, 16.18/15.26s sys) on
+  # Darwin 25.4.0 arm64 with rustc 1.97.1 on 2026-08-15. The current gate adds four
+  # lexical workflow-name mutations. These are local observations, not a CI
+  # estimate; compiled actual-source mutations dominate.
   mapping-contract:
-    name: mapping-contract
+    name: mapping-contract (${{ github.sha }})
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout the candidate without persisted credentials
@@ -36,7 +37,7 @@ jobs:
         run: tools/check-mapping.sh
 
   negative-registry-contract:
-    name: negative-registry-contract
+    name: negative-registry-contract (${{ github.sha }})
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout the candidate without persisted credentials
@@ -179,9 +180,10 @@ jobs:
       # to fail is the eleventh entry in .planning/STATE.md's defect catalogue.
       # Every invocation generates a real miniature cargo workspace, runs the
       # SAME rule engine with the SAME policy and baseline over it, proves the
-      # clean fixture exits 0, then breaks it nine ways and proves each break is
-      # caught with the right diagnostic. Four of the nine are cases cargo
-      # itself accepts (dev cycles, build cycles, transitive transport edges),
+      # clean fixture exits 0, then breaks it ten ways and proves each break is
+      # caught with the right diagnostic. Five of the ten are cases cargo
+      # itself accepts (dev/build cycles, a normal allow-list escape, and
+      # transitive transport edges),
       # so they are violations nothing else in this pipeline would reject.
       - name: Check the trusted-computing-base layering boundary
         run: bash tools/check-workspace-layering.sh
@@ -194,14 +196,15 @@ jobs:
       # This is the WEAKEST of the three mechanisms and its header says so. The
       # type (`LocalGovernorKey`, no `SigningKey` accessor) and the test
       # (`register_governor` returns Err on a second distinct key) are the
-      # guarantee; this is a lexical backstop over the three files that make up
-      # the governance signing path, and it enumerates four things it cannot
+      # guarantee; this is a lexical backstop over the three source paths that
+      # make up the governance signing path plus an opaque-handle inventory. It
+      # enumerates six things it cannot
       # see -- including two `GovernancePolicy` instances in one process, which
       # nothing here closes.
       #
       # It runs a FIXTURE on every invocation before it touches the real tree:
-      # six planted violations that must be caught and three controls that must
-      # not be, including a keyring inside `#[cfg(test)]` and one named only in
+      # eighteen planted violations that must be caught and four controls that
+      # must not be, including a keyring inside `#[cfg(test)]` and one named only in
       # a comment. Three identifier-grep sweeps in this repository's history
       # declared themselves complete and were wrong; a grep that has never been
       # observed to fail is not evidence. No toolchain needed beyond awk, so it

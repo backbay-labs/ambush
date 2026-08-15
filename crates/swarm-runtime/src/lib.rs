@@ -52,11 +52,10 @@
 //!
 //! `tom` did not have to wait for the group. It named nothing in this crate --
 //! `grep -oE '(crate|super)::[A-Za-z_:]+' src/tom_agent.rs` printed only its own
-//! file-local `super::now_ms` -- and its `GovernanceAuthority` and
-//! `SealedGovernanceAuthority` impls name `swarm-policy` directly, so the seal is
-//! satisfied from `swarm-agents` unchanged. `dispatcher.rs`'s one reference to it
-//! was `#[cfg(test)]` and now reaches `swarm_agents::tom_agent` through the
-//! dev-dependency edge this crate already carries.
+//! file-local `super::now_ms`. Governance later moved behind the concrete opaque
+//! `swarm-governance` authority handle; `swarm-agents::tom_agent` remains a
+//! compatibility re-export. `dispatcher.rs` consumes the concrete handle without a
+//! reverse dependency on the agent-role crate.
 //!
 //! IF THIS CHANGES: SPLIT-03 unblocks when SPLIT-04 moves `mutation/` to
 //! `swarm-evolution`, which puts `strategy()` and its 12 remaining callers on

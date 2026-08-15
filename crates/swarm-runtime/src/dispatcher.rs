@@ -21,8 +21,9 @@ use swarm_core::agent::{
     SwarmEvent, SwarmModeState,
 };
 use swarm_core::types::{AgentId, Severity, SwarmAction};
+use swarm_governance::GovernanceAuthority;
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
-use swarm_policy::governance::{GovernanceAuthority, GovernedHumanAuthorizationHold};
+use swarm_policy::governance::GovernedHumanAuthorizationHold;
 use swarm_policy::static_gate::scope_for_response_action;
 use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision, PolicyVerdict};
 use swarm_spine::AuditTrail;
@@ -452,7 +453,7 @@ pub trait RequestResponseRouter: Send + Sync {
 /// Dedicated human-resume dispatcher. It is the only path that composes a
 /// persisted human approval with a still-pending governance authorization.
 pub struct HumanApprovalResumeDispatcher {
-    governance: Arc<dyn GovernanceAuthority>,
+    governance: GovernanceAuthority,
     router: Arc<dyn RequestResponseRouter>,
     clock: Arc<dyn HumanResumeClock>,
 }
@@ -470,10 +471,7 @@ impl HumanResumeClock for HostHumanResumeClock {
 }
 
 impl HumanApprovalResumeDispatcher {
-    pub fn new(
-        governance: Arc<dyn GovernanceAuthority>,
-        router: Arc<dyn RequestResponseRouter>,
-    ) -> Self {
+    pub fn new(governance: GovernanceAuthority, router: Arc<dyn RequestResponseRouter>) -> Self {
         Self {
             governance,
             router,
@@ -481,9 +479,16 @@ impl HumanApprovalResumeDispatcher {
         }
     }
 
+    /// Process-local identity of the configured authority, for composition checks.
+    ///
+    /// This exposes no authority reference and cannot authorize an action.
+    pub fn governance_authority_identity(&self) -> swarm_governance::GovernanceAuthorityIdentity {
+        self.governance.identity()
+    }
+
     #[cfg(test)]
     fn with_clock(
-        governance: Arc<dyn GovernanceAuthority>,
+        governance: GovernanceAuthority,
         router: Arc<dyn RequestResponseRouter>,
         clock: Arc<dyn HumanResumeClock>,
     ) -> Self {
@@ -600,7 +605,7 @@ pub struct AgentDispatcher {
     request_response_router: Option<Arc<dyn RequestResponseRouter>>,
     strategy_proposal_router: Option<Arc<dyn StrategyProposalRouter>>,
     runtime_events: Option<RuntimeEventBroadcaster>,
-    governance_policy: Option<Arc<dyn GovernanceAuthority>>,
+    governance_authority: Option<GovernanceAuthority>,
 }
 
 pub type AgentRestartFactory = Arc<dyn Fn() -> Result<Box<dyn SwarmAgent>, String> + Send + Sync>;
@@ -627,7 +632,7 @@ impl AgentDispatcher {
             request_response_router: None,
             strategy_proposal_router: None,
             runtime_events: None,
-            governance_policy: None,
+            governance_authority: None,
         }
     }
 
@@ -659,16 +664,22 @@ impl AgentDispatcher {
         self
     }
 
-    /// Accepts any `Arc<impl GovernanceAuthority>` rather than `Arc<dyn ..>` so every
-    /// existing `Arc<GovernancePolicy>` call site is unchanged: `Arc::clone(&policy)`
-    /// infers `Arc<GovernancePolicy>` and an inference variable is not an unsizing
-    /// coercion site, so a `dyn` parameter would have forced a cast at each caller.
-    pub fn with_governance_policy(
-        mut self,
-        governance_policy: Arc<impl GovernanceAuthority + 'static>,
-    ) -> Self {
-        self.governance_policy = Some(governance_policy);
+    /// Install the concrete opaque authority minted by an authenticated persisted
+    /// governance policy. There is no generic backend installation surface.
+    pub fn with_governance_authority(mut self, governance_authority: GovernanceAuthority) -> Self {
+        self.governance_authority = Some(governance_authority);
         self
+    }
+
+    /// Process-local identity of the configured authority, for composition checks.
+    ///
+    /// This exposes no authority reference and cannot authorize an action.
+    pub fn governance_authority_identity(
+        &self,
+    ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
+        self.governance_authority
+            .as_ref()
+            .map(GovernanceAuthority::identity)
     }
 
     pub fn set_admitted_identities(
@@ -1044,7 +1055,7 @@ impl AgentDispatcher {
                                     );
                                     continue;
                                 }
-                                let Some(governance) = self.governance_policy.as_deref() else {
+                                let Some(governance) = self.governance_authority.as_ref() else {
                                     tracing::warn!(
                                         agent_id = %completed.agent_id,
                                         hunt_id = %permit.request.hunt_id.0,
@@ -1162,7 +1173,7 @@ impl AgentDispatcher {
                             Some(receipt) => Some(receipt),
                             None => match verify_and_consume_governance_receipt(
                                 &permit.request,
-                                self.governance_policy.as_deref(),
+                                self.governance_authority.as_ref(),
                                 GovernanceRouteDecision::Approve,
                                 unix_timestamp_millis(),
                             ) {
@@ -1267,11 +1278,11 @@ impl AgentDispatcher {
                             continue;
                         };
                         let verified_receipt = if self
-                            .governance_policy
+                            .governance_authority
                             .as_ref()
                             .is_some_and(|policy| policy.is_partitioned())
                         {
-                            if let Some(policy) = &self.governance_policy {
+                            if let Some(policy) = &self.governance_authority {
                                 policy.note_partition_veto(
                                     &request,
                                     &reason,
@@ -1282,7 +1293,7 @@ impl AgentDispatcher {
                         } else {
                             match verify_and_consume_governance_receipt(
                                 &request,
-                                self.governance_policy.as_deref(),
+                                self.governance_authority.as_ref(),
                                 GovernanceRouteDecision::Veto,
                                 unix_timestamp_millis(),
                             ) {
@@ -1655,14 +1666,14 @@ impl AgentDispatcher {
         &self,
         request: &ActionRequest,
     ) -> Result<Option<serde_json::Value>, String> {
-        let Some(governance_policy) = &self.governance_policy else {
+        let Some(governance_policy) = &self.governance_authority else {
             return Ok(None);
         };
         governance_policy.authorize_partition_request(request, unix_timestamp_millis())
     }
 
     fn publish_governance_events(&self) {
-        let Some(governance_policy) = &self.governance_policy else {
+        let Some(governance_policy) = &self.governance_authority else {
             return;
         };
         let events = governance_policy.drain_runtime_events();
@@ -1927,7 +1938,7 @@ enum GovernanceRouteDecision {
 /// checks the exact request subject and its durable one-time pending ledger.
 fn verify_and_consume_governance_receipt(
     request: &ActionRequest,
-    governance: Option<&dyn GovernanceAuthority>,
+    governance: Option<&GovernanceAuthority>,
     decision: GovernanceRouteDecision,
     now_ms: i64,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -2053,6 +2064,7 @@ mod tests {
     use async_trait::async_trait;
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
     use std::time::Duration;
@@ -2067,12 +2079,81 @@ mod tests {
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
     use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
     use swarm_crypto::Ed25519Signer;
+    use swarm_governance::GovernanceAuthority;
     use swarm_pheromone::{ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate};
     use swarm_policy::governance::GovernedHumanAuthorizationHold;
     use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision};
     use swarm_spine::{AuditResponseRecord, AuditTrail, PolicyRecord};
     use swarm_whisker::DetectionFinding;
     use tokio::sync::{mpsc, watch};
+
+    struct TestGovernance {
+        policy: Option<Arc<GovernancePolicy>>,
+        authority: Option<GovernanceAuthority>,
+        root: PathBuf,
+    }
+
+    impl TestGovernance {
+        fn new(label: &str, config: GovernancePolicyConfig, key_bytes: [u8; 32]) -> Self {
+            static TEST_GOVERNANCE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "swarm-dispatcher-{label}-{}-{}-{}",
+                std::process::id(),
+                super::now_ms(),
+                TEST_GOVERNANCE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            ));
+            let policy = Arc::new(
+                GovernancePolicy::initialize_persistence(
+                    config,
+                    root.join("governance.json"),
+                    AgentId::new("tom", label),
+                    SigningKey::from_bytes(&key_bytes),
+                )
+                .expect("test governance should initialize signed persistence"),
+            );
+            let authority = policy
+                .authority()
+                .expect("persisted test governance should mint authority");
+            Self {
+                policy: Some(policy),
+                authority: Some(authority),
+                root,
+            }
+        }
+
+        fn authority(&self) -> GovernanceAuthority {
+            self.authority
+                .as_ref()
+                .expect("test authority remains available")
+                .clone()
+        }
+
+        fn policy(&self) -> Arc<GovernancePolicy> {
+            Arc::clone(
+                self.policy
+                    .as_ref()
+                    .expect("test governance policy remains available"),
+            )
+        }
+    }
+
+    impl std::ops::Deref for TestGovernance {
+        type Target = GovernancePolicy;
+
+        fn deref(&self) -> &Self::Target {
+            self.policy
+                .as_deref()
+                .expect("test governance policy remains available")
+        }
+    }
+
+    impl Drop for TestGovernance {
+        fn drop(&mut self) {
+            drop(self.authority.take());
+            drop(self.policy.take());
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
 
     struct AdjustableHumanResumeClock {
         now_ms: AtomicI64,
@@ -2205,19 +2286,14 @@ mod tests {
     fn human_resume_clock_fixture(
         advance_past_freshness: bool,
     ) -> (
-        Arc<GovernancePolicy>,
+        TestGovernance,
         Arc<DelayedHumanResumeRouter>,
         Arc<AdjustableHumanResumeClock>,
         ApprovalReceiptPackReport,
         String,
     ) {
-        let governance = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
-        governance
-            .register_governor(
-                AgentId::new("tom", "resume-clock"),
-                SigningKey::from_bytes(&[91; 32]),
-            )
-            .unwrap();
+        let governance =
+            TestGovernance::new("resume-clock", GovernancePolicyConfig::default(), [91; 32]);
         let request = ActionRequest {
             hunt_id: HuntId("hunt-human-resume-clock".to_string()),
             requested_by: AgentId::new("pounce", "resume-clock"),
@@ -2313,8 +2389,11 @@ mod tests {
     #[tokio::test]
     async fn human_resume_rechecks_freshness_after_awaited_preflight_restore() {
         let (governance, router, clock, pack, set_id) = human_resume_clock_fixture(true);
-        let resume =
-            HumanApprovalResumeDispatcher::with_clock(governance.clone(), router.clone(), clock);
+        let resume = HumanApprovalResumeDispatcher::with_clock(
+            governance.authority(),
+            router.clone(),
+            clock,
+        );
 
         let error = resume
             .resume(pack)
@@ -2330,7 +2409,7 @@ mod tests {
             human_resume_clock_fixture(false);
         let expected_execution_now_ms = fresh_clock.now_ms();
         HumanApprovalResumeDispatcher::with_clock(
-            fresh_governance,
+            fresh_governance.authority(),
             fresh_router.clone(),
             fresh_clock,
         )
@@ -2517,16 +2596,14 @@ mod tests {
     async fn dispatcher_publishes_partition_state_transitions_to_runtime_events() {
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let health_state = empty_health_state();
-        let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
-            contingency_lease_ttl_ms: 60_000,
-            contingency_blast_radius_cap: 1,
-        }));
-        governance_policy
-            .register_governor(
-                AgentId::new("tom", "primary"),
-                SigningKey::from_bytes(&[31; 32]),
-            )
-            .expect("the policy holds no other governor key");
+        let governance_policy = TestGovernance::new(
+            "primary-transition",
+            GovernancePolicyConfig {
+                contingency_lease_ttl_ms: 60_000,
+                contingency_blast_radius_cap: 1,
+            },
+            [31; 32],
+        );
         governance_policy.observe_health(
             &AgentId::new("tom", "primary"),
             &[AgentHealthEntry {
@@ -2545,7 +2622,7 @@ mod tests {
             substrate(),
             health_state,
         )
-        .with_governance_policy(governance_policy)
+        .with_governance_authority(governance_policy.authority())
         .with_runtime_events(broadcaster);
 
         dispatcher.tick_once().await;
@@ -3204,7 +3281,11 @@ mod tests {
     async fn dispatcher_restarts_failed_agent_after_tom_failure_boundary() {
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         let health_state = empty_health_state();
-        let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
+        let governance_policy = TestGovernance::new(
+            "primary-restart",
+            GovernancePolicyConfig::default(),
+            [17; 32],
+        );
         let restart_builds = Arc::new(AtomicUsize::new(0));
         let restarted_agent_ticks = Arc::new(AtomicUsize::new(0));
         let healthy_peer_ticks = Arc::new(AtomicUsize::new(0));
@@ -3229,7 +3310,7 @@ mod tests {
             substrate(),
             Arc::clone(&health_state),
         )
-        .with_governance_policy(Arc::clone(&governance_policy));
+        .with_governance_authority(governance_policy.authority());
         dispatcher
             .register_restartable(initial_agent, Arc::clone(&restart_factory))
             .unwrap();
@@ -3239,7 +3320,7 @@ mod tests {
                     AgentId::new("tom", "primary"),
                     SigningKey::from_bytes(&[17; 32]),
                     1,
-                    Arc::clone(&governance_policy),
+                    governance_policy.policy(),
                 )
                 .expect("the fixture policy holds no other governor key"),
             ))

@@ -506,12 +506,12 @@ required to fail closed:
   `NotRequired` for actions outside receipt-backed governance and `Authorize {
   receipt, contingency_lease }` for governed approval. Match both explicitly;
   do not convert a missing receipt into authorization.
-- the sealed `GovernanceAuthority` gained one-shot approval/veto consumption
-  and the human hold, binding, lookup, and atomic human-consumption methods.
-  Runtime callers must retain the same authority object through issuance and
-  consumption. The trait remains sealed, so downstream crates should consume a
-  supplied `dyn GovernanceAuthority` rather than attempting an external
-  implementation.
+- the concrete `swarm_governance::GovernanceAuthority` handle exposes one-shot
+  approval/veto consumption and the human hold, binding, lookup, and atomic
+  human-consumption methods. Runtime callers must retain clones of the same
+  handle through issuance and consumption. Only an authenticated persisted
+  `GovernancePolicy` can mint it; there is no backend trait, generic installer,
+  `Deref`, or public constructor for downstream substitution.
 
 ## Ingest, Bridge, Demo, And Raw Runtime Boundaries
 

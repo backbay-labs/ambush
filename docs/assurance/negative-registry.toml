@@ -25,10 +25,14 @@
 # overrides. Inactive-target overrides are stripped. External
 # Cargo homes are ignored: every Cargo command uses a recreated config-free
 # gate-owned home, pinned cargo/rustc, and a
-# gate-owned isolated-Python rustc wrapper. Dedicated `mapping-contract` and
-# `negative-registry-contract` jobs
-# each start on a fresh Ubuntu runner with only a pinned credential-free
-# checkout before the gate. Their checked custom-shell templates start absolute
+# gate-owned isolated-Python rustc wrapper. Dedicated job IDs `mapping-contract`
+# and `negative-registry-contract`, with exact attempt-specific display names
+# `mapping-contract (${{ github.sha }})` and
+# `negative-registry-contract (${{ github.sha }})`, each start on a fresh Ubuntu
+# runner with only a pinned credential-free checkout before the gate. The
+# SHA-bearing names let an external App bind the observation to the candidate
+# merge commit; `workflow_run.head_sha` is only the pull-request head in the real
+# API. Their checked custom-shell templates start absolute
 # `env -i` directly before any Bash and launch absolute Bash themselves; that
 # fresh runner is the bootstrap trust root. Only inside it does the checker
 # select an absolute system-path Python. Completion-marker fixtures cover
@@ -827,7 +831,7 @@ production_fn = "swarm_runtime::containment::verify_release_attestation"
 production_entry = "swarm_runtime::containment::verify_release_attestation"
 entry_reachability = "direct"
 edge_validation = "direct"
-reachability_reason = "The named real adapter calls this production entry with the sealed GovernancePolicy trust anchor."
+reachability_reason = "The named real adapter calls this production entry with an opaque GovernanceAuthority minted by the persisted GovernancePolicy."
 test_file = "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs"
 test_fn = "broken_release_signer_trust_accepts_a_valid_foreign_attestation"
 broken_variant = "ReleaseAttestationMutation::SkipTrustedSigner"

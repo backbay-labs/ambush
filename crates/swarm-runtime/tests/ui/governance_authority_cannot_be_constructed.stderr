@@ -1,0 +1,5 @@
+error[E0451]: field `policy` of struct `GovernanceAuthority` is private
+ --> tests/ui/governance_authority_cannot_be_constructed.rs:6:41
+  |
+6 |     let _forged = GovernanceAuthority { policy };
+  |                                         ^^^^^^ private field

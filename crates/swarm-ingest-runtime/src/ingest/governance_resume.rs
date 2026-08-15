@@ -10,7 +10,6 @@ use axum::routing::post;
 use serde::{Deserialize, Serialize};
 use swarm_policy::governance::GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX;
 use swarm_runtime::approval::ApprovalError;
-use swarm_runtime::dispatcher::HumanApprovalResumeDispatcher;
 use swarm_runtime::runtime_events::{RuntimeEvent, now_ms};
 use swarm_spine::AuditTrail;
 
@@ -89,7 +88,7 @@ async fn governed_approval_resume_handler(
             "approval set is not a governed human authorization",
         ));
     }
-    let governance = state.governance_policy.clone().ok_or_else(|| {
+    let governance = state.governance_authority.as_ref().ok_or_else(|| {
         PlatformApiError::service_unavailable("governance authority is not configured")
     })?;
     let action_kind = governance
@@ -99,11 +98,13 @@ async fn governed_approval_resume_handler(
         .action
         .kind()
         .to_string();
-    let audit =
-        HumanApprovalResumeDispatcher::new(governance, state.current_request_response_router())
-            .resume(receipt_pack.report.clone())
-            .await
-            .map_err(|error| PlatformApiError::conflict(error.to_string()))?;
+    let resume_dispatcher = state.human_approval_resume_dispatcher().ok_or_else(|| {
+        PlatformApiError::service_unavailable("governance authority is not configured")
+    })?;
+    let audit = resume_dispatcher
+        .resume(receipt_pack.report.clone())
+        .await
+        .map_err(|error| PlatformApiError::conflict(error.to_string()))?;
     let (response_receipt_id, response_error) = response_receipt_details(&audit);
     state.publish_runtime_event(RuntimeEvent::ResponseExecution {
         emitted_at_ms: now_ms(),

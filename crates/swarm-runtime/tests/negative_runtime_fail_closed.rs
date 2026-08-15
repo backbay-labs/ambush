@@ -26,17 +26,17 @@ use ed25519_dalek::SigningKey;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 use swarm_consensus::{
     ConsensusCommit, ConsensusCommittee, ConsensusGovernanceReceipt, ConsensusProposal,
     GovernanceReceiptDecision,
 };
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
+use swarm_governance::{GovernanceAuthority, GovernancePolicy, GovernancePolicyConfig};
 use swarm_guard::{Guard, GuardAction, GuardContext, GuardPipeline, GuardResult};
 use swarm_policy::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
-    PolicyVerdict, governance::GovernanceAuthority,
+    PolicyVerdict,
 };
 use swarm_response::containment::{
     ContainmentLease, ContainmentLeaseStore, ContainmentTtl, MemoryContainmentLeaseStore,
@@ -1010,15 +1010,53 @@ fn sample_rollback_receipt(step_status: RollbackStepStatus) -> RollbackReceipt {
     }
 }
 
-fn governance_anchor() -> Arc<GovernancePolicy> {
-    let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
-    policy
-        .register_governor(
-            AgentId::new("tom", "negative-runtime"),
-            SigningKey::from_bytes(&[41; 32]),
+struct GovernanceAnchor {
+    authority: Option<GovernanceAuthority>,
+    root: std::path::PathBuf,
+}
+
+impl GovernanceAnchor {
+    fn authority(&self) -> &GovernanceAuthority {
+        self.authority
+            .as_ref()
+            .expect("governance fixture authority remains available")
+    }
+}
+
+impl Drop for GovernanceAnchor {
+    fn drop(&mut self) {
+        drop(self.authority.take());
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn governance_anchor() -> GovernanceAnchor {
+    let root = std::env::temp_dir().join(format!(
+        "swarm-negative-runtime-governance-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos()
+    ));
+    let signing_key = SigningKey::from_bytes(&[41; 32]);
+    let policy = Arc::new(
+        GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            root.join("governance.json"),
+            AgentId::from_verifying_key(&signing_key.verifying_key()),
+            signing_key,
         )
-        .expect("the first fixture governor key registers");
-    policy
+        .expect("the fixture governance state initializes with signed persistence"),
+    );
+    let authority = policy
+        .authority()
+        .expect("the persisted fixture policy mints an authenticated authority");
+    drop(policy);
+    GovernanceAnchor {
+        authority: Some(authority),
+        root,
+    }
 }
 
 fn release_subject_value(receipt: &RollbackReceipt) -> serde_json::Value {
@@ -1027,14 +1065,11 @@ fn release_subject_value(receipt: &RollbackReceipt) -> serde_json::Value {
     serde_json::to_value(subject).unwrap()
 }
 
-/// Use the real sealed governance authority's release-signing path.
-fn attest(receipt: &RollbackReceipt, governance: &GovernancePolicy) -> serde_json::Value {
-    serde_json::to_value(
-        governance
-            .attest_release(&release_subject_value(receipt), 2_000)
-            .expect("the registered fixture governor attests the release"),
-    )
-    .unwrap()
+/// Use the real governance policy's release-signing path.
+fn attest(receipt: &RollbackReceipt, governance: &GovernanceAuthority) -> serde_json::Value {
+    governance
+        .attest_release(&release_subject_value(receipt), 2_000)
+        .expect("the registered fixture governor attests the release")
 }
 
 /// Produce an internally valid, subject-bound attestation from a key that is
@@ -1088,7 +1123,7 @@ enum ReleaseAttestationMutation {
 /// selectively removable -- mutation M2 from ce1ddd1, made permanent as a test.
 fn mirrored_verify_release_attestation(
     receipt: &RollbackReceipt,
-    governance: &dyn GovernanceAuthority,
+    governance: &GovernanceAuthority,
     mutation: ReleaseAttestationMutation,
 ) -> Result<(), String> {
     let Some(raw) = receipt.governance_attestation.as_ref().cloned() else {
@@ -1132,7 +1167,8 @@ fn mirrored_verify_release_attestation(
 
 #[test]
 fn broken_attestation_requirement_accepts_an_unattested_release() {
-    let governance = governance_anchor();
+    let anchor = governance_anchor();
+    let governance = anchor.authority().clone();
     let receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
     negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_RELEASE_ATTESTATION_REQUIRED,
@@ -1140,16 +1176,16 @@ fn broken_attestation_requirement_accepts_an_unattested_release() {
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipAttestationRequired,
         state: {
-            governance: Arc<GovernancePolicy> = governance,
+            governance: GovernanceAuthority = governance,
         },
         probe: RollbackReceipt = receipt,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe, Some(governance.as_ref())),
+        arguments: (probe, Some(governance)),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }
@@ -1157,7 +1193,8 @@ fn broken_attestation_requirement_accepts_an_unattested_release() {
 
 #[test]
 fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
-    let governance = governance_anchor();
+    let anchor = governance_anchor();
+    let governance = anchor.authority().clone();
     let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
     receipt.governance_attestation = Some(json!({"broken": true}));
     negative_protocol::assert_registered_negative_case! {
@@ -1166,16 +1203,16 @@ fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipMalformedAttestation,
         state: {
-            governance: Arc<GovernancePolicy> = governance,
+            governance: GovernanceAuthority = governance,
         },
         probe: RollbackReceipt = receipt,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe, Some(governance.as_ref())),
+        arguments: (probe, Some(governance)),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }
@@ -1183,10 +1220,11 @@ fn broken_attestation_shape_guard_accepts_malformed_governance_json() {
 
 #[test]
 fn broken_release_signature_guard_accepts_a_bad_governor_signature() {
-    let governance = governance_anchor();
+    let anchor = governance_anchor();
+    let governance = anchor.authority().clone();
     let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
     let mut attestation: ConsensusGovernanceReceipt =
-        serde_json::from_value(attest(&receipt, governance.as_ref())).unwrap();
+        serde_json::from_value(attest(&receipt, &governance)).unwrap();
     let replacement = if attestation.signature.signature_hex.starts_with('0') {
         "1"
     } else {
@@ -1203,16 +1241,16 @@ fn broken_release_signature_guard_accepts_a_bad_governor_signature() {
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipSignatureValidation,
         state: {
-            governance: Arc<GovernancePolicy> = governance,
+            governance: GovernanceAuthority = governance,
         },
         probe: RollbackReceipt = receipt,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe, Some(governance.as_ref())),
+        arguments: (probe, Some(governance)),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }
@@ -1220,7 +1258,8 @@ fn broken_release_signature_guard_accepts_a_bad_governor_signature() {
 
 #[test]
 fn broken_release_signer_trust_accepts_a_valid_foreign_attestation() {
-    let governance = governance_anchor();
+    let anchor = governance_anchor();
+    let governance = anchor.authority().clone();
     let mut receipt = sample_rollback_receipt(RollbackStepStatus::Reversed);
     receipt.governance_attestation = Some(foreign_attest(&receipt));
     let attestation: ConsensusGovernanceReceipt = serde_json::from_value(
@@ -1247,16 +1286,16 @@ fn broken_release_signer_trust_accepts_a_valid_foreign_attestation() {
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipTrustedSigner,
         state: {
-            governance: Arc<GovernancePolicy> = governance,
+            governance: GovernanceAuthority = governance,
         },
         probe: RollbackReceipt = receipt,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe, Some(governance.as_ref())),
+        arguments: (probe, Some(governance)),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }
@@ -1264,12 +1303,13 @@ fn broken_release_signer_trust_accepts_a_valid_foreign_attestation() {
 
 #[test]
 fn broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuses() {
-    let governance = governance_anchor();
+    let anchor = governance_anchor();
+    let governance = anchor.authority().clone();
     // A release that did NOT land: the inverse failed and the host is still
     // contained. A governor attested that fact.
     let mut attested = sample_rollback_receipt(RollbackStepStatus::Failed);
-    attested.governance_attestation = Some(attest(&attested, governance.as_ref()));
-    verify_release_attestation(&attested, Some(governance.as_ref()))
+    attested.governance_attestation = Some(attest(&attested, &governance));
+    verify_release_attestation(&attested, Some(&governance))
         .expect("the genuine attestation verifies");
 
     // Now the stored artifact is rewritten to claim the host was restored. The
@@ -1285,16 +1325,16 @@ fn broken_subject_binding_accepts_the_rewritten_receipt_the_real_verifier_refuse
         control: ReleaseAttestationMutation::None,
         broken: ReleaseAttestationMutation::SkipSubjectBinding,
         state: {
-            governance: Arc<GovernancePolicy> = governance,
+            governance: GovernanceAuthority = governance,
         },
         probe: RollbackReceipt = rewritten,
         outcome: bool,
         real_probe: probe,
         production: crate::__phase285_swarm_runtime::containment::verify_release_attestation,
-        arguments: (probe, Some(governance.as_ref())),
+        arguments: (probe, Some(governance)),
         call: sync,
         normalize: |production_result| production_result.is_ok(),
-        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance.as_ref(), mutation).is_ok(),
+        mirror: |_state, probe, mutation| mirrored_verify_release_attestation(probe, governance, mutation).is_ok(),
         denied: |value| !value,
         permitted: |value| *value,
     }

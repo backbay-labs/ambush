@@ -68,10 +68,10 @@ invariants = [
 
 [[assumption]]
 id = "ASSUME-GOVERNANCE-TRUST-ANCHOR"
-owner = "swarm-agents"
-statement = "The GovernanceAuthority supplied to release verification is the process's authenticated, locally composed GovernancePolicy and its governor_public_keys are the admitted local trust set."
-holds_because = "The shipped composition shares one sealed GovernancePolicy across dispatch, ingest, containment, and release verification; external crates cannot forge an implementation."
-breaks_if = "A caller supplies a different authority instance, bypasses authenticated composition, or mutates the admitted governor set outside the signed persistence protocol."
+owner = "swarm-runtime-http"
+statement = "The shipped swarm-detect composition supplies every governance consumer and release verifier with clones of one opaque GovernanceAuthority minted from its authenticated persisted GovernancePolicy; public downstream composition is outside this shipped identity claim."
+holds_because = "GovernanceAuthority has a private Arc<GovernancePolicy>, no backend trait, Deref, generic installer, or public constructor; GovernancePolicy::authority rechecks signed persistence and local-governor anchors, and the shipped-builder identity test proves that dispatcher, ingest, containment, human resume, and release verification receive the same inner policy."
+breaks_if = "The shipped builder mints or installs a second authority, the handle becomes externally constructible or substitutable, minting stops authenticating persistence and the local governor, or the admitted governor set mutates outside the signed persistence protocol."
 invariants = [
   "RUNTIME-RELEASE-SIGNER-TRUSTED",
 ]

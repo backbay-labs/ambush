@@ -34,6 +34,7 @@ use swarm_core::config::{
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
 use swarm_crypto::{Ed25519Signer, canonical_json_bytes, sha256_hex};
+use swarm_governance::GovernanceAuthority;
 use swarm_guard::{
     Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
 };
@@ -896,15 +897,77 @@ fn attach_issued_receipt(
 /// `destructive_request_response_is_refused_when_the_signer_is_not_a_governor`.
 const SAMPLE_GOVERNOR_KEY_BYTES: [u8; 32] = [17; 32];
 
-fn sample_governance_policy() -> Arc<GovernancePolicy> {
-    let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
-    policy
-        .register_governor(
+struct TestGovernance {
+    policy: Option<Arc<GovernancePolicy>>,
+    authority: Option<GovernanceAuthority>,
+    root: PathBuf,
+}
+
+impl TestGovernance {
+    fn authority(&self) -> GovernanceAuthority {
+        self.authority
+            .as_ref()
+            .expect("test governance authority remains available")
+            .clone()
+    }
+}
+
+impl std::ops::Deref for TestGovernance {
+    type Target = GovernancePolicy;
+
+    fn deref(&self) -> &Self::Target {
+        self.policy
+            .as_deref()
+            .expect("test governance policy remains available")
+    }
+}
+
+impl Drop for TestGovernance {
+    fn drop(&mut self) {
+        drop(self.authority.take());
+        drop(self.policy.take());
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn sample_governance_with_config(
+    label: &str,
+    config: GovernancePolicyConfig,
+    key_bytes: [u8; 32],
+) -> TestGovernance {
+    let root = std::env::temp_dir().join(format!(
+        "swarm-dispatch-{label}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time should be after unix epoch")
+            .as_nanos()
+    ));
+    let policy = Arc::new(
+        GovernancePolicy::initialize_persistence(
+            config,
+            root.join("governance.json"),
             AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
+            SigningKey::from_bytes(&key_bytes),
         )
-        .expect("the policy holds no other governor key");
-    policy
+        .expect("test governance should initialize signed persistence"),
+    );
+    let authority = policy
+        .authority()
+        .expect("persisted test governance should mint authority");
+    TestGovernance {
+        policy: Some(policy),
+        authority: Some(authority),
+        root,
+    }
+}
+
+fn sample_governance_policy() -> TestGovernance {
+    sample_governance_with_config(
+        "healthy",
+        GovernancePolicyConfig::default(),
+        SAMPLE_GOVERNOR_KEY_BYTES,
+    )
 }
 
 fn sample_governance_receipt(
@@ -963,21 +1026,19 @@ fn sample_governance_receipt_signed_by(
     .unwrap()
 }
 
-fn sample_partition_governance_policy_with_ttl(ttl_ms: i64) -> Arc<GovernancePolicy> {
+fn sample_partition_governance_policy_with_ttl(ttl_ms: i64) -> TestGovernance {
     let base_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("current time should be after unix epoch")
         .as_millis() as i64;
-    let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
-        contingency_lease_ttl_ms: ttl_ms,
-        contingency_blast_radius_cap: 1,
-    }));
-    policy
-        .register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[23; 32]),
-        )
-        .expect("the policy holds no other governor key");
+    let policy = sample_governance_with_config(
+        "partitioned",
+        GovernancePolicyConfig {
+            contingency_lease_ttl_ms: ttl_ms,
+            contingency_blast_radius_cap: 1,
+        },
+        [23; 32],
+    );
     policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
     policy.observe_health(
         &AgentId::new("tom", "primary"),
@@ -991,7 +1052,7 @@ fn sample_partition_governance_policy_with_ttl(ttl_ms: i64) -> Arc<GovernancePol
     policy
 }
 
-fn sample_partition_governance_policy() -> Arc<GovernancePolicy> {
+fn sample_partition_governance_policy() -> TestGovernance {
     sample_partition_governance_policy_with_ttl(60_000)
 }
 
@@ -1421,7 +1482,7 @@ async fn destructive_request_response_persists_governance_receipt() -> Result<()
     // receipt. Without it the dispatcher has no trust anchor and refuses the
     // request outright (ADR 0011) -- which is asserted directly, alongside its
     // control, in the test below.
-    .with_governance_policy(governance);
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
 
     dispatcher.tick_once().await;
@@ -1488,7 +1549,7 @@ async fn governed_human_hold_keeps_governance_pending_and_executes_nothing()
         test_health_state(),
     )
     .with_request_response_router(router.clone())
-    .with_governance_policy(governance.clone());
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
 
     dispatcher.tick_once().await;
@@ -1563,7 +1624,7 @@ async fn governed_policy_deny_does_not_consume_governance_authorization()
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(governance.clone());
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
     dispatcher.tick_once().await;
 
@@ -1620,12 +1681,12 @@ async fn governed_human_resume_executes_once_without_re_evaluating_policy()
         test_health_state(),
     )
     .with_request_response_router(router.clone())
-    .with_governance_policy(governance.clone());
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
     dispatcher.tick_once().await;
 
     let pack = router.approve_pending_human_hold();
-    let resume = HumanApprovalResumeDispatcher::new(governance, router);
+    let resume = HumanApprovalResumeDispatcher::new(governance.authority(), router);
     let audit = resume.resume(pack.clone()).await?;
 
     assert_eq!(audit.hunt_id, "hunt-governed-human-resume");
@@ -1689,7 +1750,7 @@ async fn fresh_human_approval_cannot_resume_a_stale_governance_receipt()
         test_health_state(),
     )
     .with_request_response_router(router.clone())
-    .with_governance_policy(governance.clone());
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
     dispatcher.tick_once().await;
 
@@ -1770,7 +1831,7 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
         test_health_state(),
     )
     .with_request_response_router(router.clone())
-    .with_governance_policy(governance.clone());
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
     dispatcher.tick_once().await;
 
@@ -1783,7 +1844,7 @@ async fn invalid_human_approval_packs_do_not_consume_governance() -> Result<(), 
         .expect("dispatcher persisted a human approval set")
         .set_id;
     let denied = router.build_human_pack(&set_id, false, unix_now_ms());
-    let resume = HumanApprovalResumeDispatcher::new(governance.clone(), router.clone());
+    let resume = HumanApprovalResumeDispatcher::new(governance.authority(), router.clone());
     let denied_error = resume
         .resume(denied)
         .await
@@ -1900,13 +1961,13 @@ async fn failed_router_burns_owned_human_and_governance_admission() -> Result<()
         test_health_state(),
     )
     .with_request_response_router(router.clone())
-    .with_governance_policy(governance.clone());
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
     dispatcher.tick_once().await;
 
     let pack = router.approve_pending_human_hold();
     router.fail_routes_remaining.store(1, Ordering::SeqCst);
-    let resume = HumanApprovalResumeDispatcher::new(governance, router);
+    let resume = HumanApprovalResumeDispatcher::new(governance.authority(), router);
     let route_error = resume
         .resume(pack.clone())
         .await
@@ -1973,11 +2034,16 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
         test_health_state(),
     )
     .with_request_response_router(router.clone())
-    .with_governance_policy(governance);
+    .with_governance_authority(
+        governance
+            .authority()
+            .expect("persisted governance should mint an authority"),
+    );
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
     dispatcher.tick_once().await;
     let pack = router.approve_pending_human_hold();
     drop(dispatcher);
+    drop(governance);
 
     let reloaded = Arc::new(GovernancePolicy::with_persistence(
         GovernancePolicyConfig::default(),
@@ -1985,12 +2051,18 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
         AgentId::new("tom", "primary"),
         SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
     )?);
-    let resume = HumanApprovalResumeDispatcher::new(reloaded, router.clone());
+    let resume = HumanApprovalResumeDispatcher::new(
+        reloaded
+            .authority()
+            .expect("reloaded governance should mint an authority"),
+        router.clone(),
+    );
     resume.resume(pack.clone()).await?;
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
     drop(resume);
+    drop(reloaded);
 
     let consumed_reload = Arc::new(GovernancePolicy::with_persistence(
         GovernancePolicyConfig::default(),
@@ -1998,14 +2070,25 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
         AgentId::new("tom", "primary"),
         SigningKey::from_bytes(&SAMPLE_GOVERNOR_KEY_BYTES),
     )?);
-    let replay = HumanApprovalResumeDispatcher::new(consumed_reload, router)
-        .resume(pack)
-        .await
-        .expect_err("restart must preserve one-time consumption");
+    let replay = HumanApprovalResumeDispatcher::new(
+        consumed_reload
+            .authority()
+            .expect("consumed governance should mint an authority"),
+        router,
+    )
+    .resume(pack)
+    .await
+    .expect_err("restart must preserve one-time consumption");
     assert!(replay.to_string().contains("pending human authorization"));
     assert_eq!(evaluate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    drop(consumed_reload);
+    let _ = std::fs::remove_file(&persistence_path);
+    let _ = std::fs::remove_file(GovernancePolicy::persistence_sequence_path(
+        &persistence_path,
+    ));
+    let _ = std::fs::remove_file(GovernancePolicy::persistence_lock_path(&persistence_path));
     Ok(())
 }
 
@@ -2049,7 +2132,7 @@ async fn governed_dispatcher_admission_reaches_containment_lease_persistence()
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(governance);
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
 
     dispatcher.tick_once().await;
@@ -2121,7 +2204,7 @@ async fn destructive_request_response_refuses_an_issued_veto_receipt() -> Result
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(governance);
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![action])))?;
 
     dispatcher.tick_once().await;
@@ -2184,7 +2267,7 @@ async fn destructive_approval_cannot_change_target() -> Result<(), Box<dyn Error
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(governance);
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(
         pounce_id,
         vec![changed, replay],
@@ -2236,7 +2319,7 @@ async fn destructive_approval_routes_exactly_once() -> Result<(), Box<dyn Error>
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(governance);
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(
         pounce_id,
         vec![issued.clone(), issued],
@@ -2312,7 +2395,7 @@ async fn raw_live_runtime_refuses_governed_action_before_policy_or_executor()
 /// distinguish "refused" from "executed but unrecorded", which is the shape of
 /// defect this repository keeps finding.
 async fn run_one_destructive_request(
-    governance: Option<Arc<GovernancePolicy>>,
+    governance: Option<TestGovernance>,
     unissued_signing_key: Option<&SigningKey>,
     hunt_id: &str,
 ) -> Result<(usize, usize, usize), Box<dyn Error>> {
@@ -2338,7 +2421,7 @@ async fn run_one_destructive_request(
     )
     .with_request_response_router(router);
     if let Some(governance) = governance.as_ref() {
-        dispatcher = dispatcher.with_governance_policy(Arc::clone(governance));
+        dispatcher = dispatcher.with_governance_authority(governance.authority());
     }
 
     let action = ResponseAction::BlockEgress {
@@ -2482,7 +2565,7 @@ async fn partitioned_request_response_fails_closed_without_contingency_lease()
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(Arc::clone(&governance_policy));
+    .with_governance_authority(governance_policy.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(
         AgentId::new("pounce", "primary"),
         vec![sample_request_response_action(
@@ -2546,7 +2629,7 @@ async fn partitioned_request_response_redeems_contingency_lease() -> Result<(), 
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(Arc::clone(&governance_policy));
+    .with_governance_authority(governance_policy.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(
         AgentId::new("pounce", "primary"),
         vec![sample_partition_request_response_action(
@@ -2585,34 +2668,32 @@ async fn partitioned_request_response_rejects_expired_contingency_lease()
         .duration_since(UNIX_EPOCH)
         .expect("current time should be after unix epoch")
         .as_millis() as i64;
-    let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
-        // 1000ms, was 200ms. This test needs the lease to be ALIVE when `can_act`
-        // issues it and EXPIRED after the sleep, so two margins must hold at once:
-        //   setup_time < ttl        (or the lease is already dead at issue)
-        //   sleep       > ttl       (or it has not expired when re-checked)
-        // At 200/250 the second margin was 50ms and the first was whatever the
-        // machine took. On a shared CI runner the FIRST one broke: the lease expired
-        // during setup and `can_act` returned Veto("...without active contingency
-        // lease"), panicking at the `other =>` arm. Locally it passed 5/5 in 0.3s.
-        // 1000/2000 gives ~1000ms of slack on both sides for ~2s of wall clock.
-        //
-        // The real fix is not here. `GovernancePolicy::can_act` reads the clock
-        // itself (tom_agent.rs:508, `preview_matching_contingency_lease(.., now_ms())`)
-        // while the lease's expiry derives from the caller-supplied `base_ms`, so
-        // setup time is charged against the TTL and no test can advance time without
-        // sleeping. v1.81 phase 292's DCORE-02 requires precisely that seam --
-        // "can_act no longer calls now_ms() internally; the clock is caller-supplied"
-        // -- at which point this becomes two supplied timestamps and the race is gone
-        // rather than merely widened.
-        contingency_lease_ttl_ms: 1000,
-        contingency_blast_radius_cap: 1,
-    }));
-    governance_policy
-        .register_governor(
-            AgentId::new("tom", "primary"),
-            SigningKey::from_bytes(&[29; 32]),
-        )
-        .expect("the policy holds no other governor key");
+    let governance_policy = sample_governance_with_config(
+        "expired-partition",
+        GovernancePolicyConfig {
+            // 1000ms, was 200ms. This test needs the lease to be ALIVE when `can_act`
+            // issues it and EXPIRED after the sleep, so two margins must hold at once:
+            //   setup_time < ttl        (or the lease is already dead at issue)
+            //   sleep       > ttl       (or it has not expired when re-checked)
+            // At 200/250 the second margin was 50ms and the first was whatever the
+            // machine took. On a shared CI runner the FIRST one broke: the lease expired
+            // during setup and `can_act` returned Veto("...without active contingency
+            // lease"), panicking at the `other =>` arm. Locally it passed 5/5 in 0.3s.
+            // 1000/2000 gives ~1000ms of slack on both sides for ~2s of wall clock.
+            //
+            // The real fix is not here. `GovernancePolicy::can_act` reads the clock
+            // itself (tom_agent.rs:508, `preview_matching_contingency_lease(.., now_ms())`)
+            // while the lease's expiry derives from the caller-supplied `base_ms`, so
+            // setup time is charged against the TTL and no test can advance time without
+            // sleeping. v1.81 phase 292's DCORE-02 requires precisely that seam --
+            // "can_act no longer calls now_ms() internally; the clock is caller-supplied"
+            // -- at which point this becomes two supplied timestamps and the race is gone
+            // rather than merely widened.
+            contingency_lease_ttl_ms: 1000,
+            contingency_blast_radius_cap: 1,
+        },
+        [29; 32],
+    );
     governance_policy.observe_health(&AgentId::new("tom", "primary"), &[], base_ms);
     governance_policy.observe_health(
         &AgentId::new("tom", "primary"),
@@ -2658,7 +2739,7 @@ async fn partitioned_request_response_rejects_expired_contingency_lease()
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(Arc::clone(&governance_policy));
+    .with_governance_authority(governance_policy.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(
         AgentId::new("pounce", "primary"),
         vec![sample_partition_request_response_action(
@@ -3217,7 +3298,7 @@ async fn governance_veto_records_failure_receipt_without_execution() -> Result<(
         test_health_state(),
     )
     .with_request_response_router(router)
-    .with_governance_policy(governance);
+    .with_governance_authority(governance.authority());
     dispatcher.register(Box::new(OneShotRequestAgent::new(pounce_id, vec![veto])))?;
 
     dispatcher.tick_once().await;

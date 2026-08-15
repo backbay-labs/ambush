@@ -31,7 +31,7 @@ use tokio::time::MissedTickBehavior;
 
 use swarm_consensus::ConsensusGovernanceReceipt;
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
-use swarm_policy::governance::GovernanceAuthority;
+use swarm_governance::GovernanceAuthority;
 use swarm_response::containment::{
     ContainmentLease, ContainmentLeaseError, ContainmentLeaseStore, ContainmentStoreError,
     ContainmentTtl, FileContainmentLeaseStore, MemoryContainmentLeaseStore,
@@ -256,7 +256,7 @@ fn release_subject_id(receipt: &RollbackReceipt) -> Result<String, swarm_crypto:
 /// repository does not yet have.
 pub fn verify_release_attestation(
     receipt: &RollbackReceipt,
-    governance: Option<&dyn GovernanceAuthority>,
+    governance: Option<&GovernanceAuthority>,
 ) -> Result<ConsensusGovernanceReceipt, ReleaseAttestationError> {
     let rollback_id = receipt.rollback_id.clone();
     // INVARIANT: RUNTIME-RELEASE-ATTESTATION-REQUIRED
@@ -320,7 +320,7 @@ pub fn verify_release_attestation(
 /// pretending: the receipt goes to the store with `governance_attestation:
 /// None` and [`verify_release_attestation`] refuses it.
 fn attest_release_receipt(
-    governance: Option<&dyn GovernanceAuthority>,
+    governance: Option<&GovernanceAuthority>,
     receipt: &mut RollbackReceipt,
     now_ms: i64,
 ) {
@@ -406,7 +406,7 @@ pub async fn release_lease(
     lease_id: &str,
     trigger: RollbackTrigger,
     now_ms: i64,
-    governance: Option<&dyn GovernanceAuthority>,
+    governance: Option<&GovernanceAuthority>,
 ) -> Result<RollbackReceipt, ContainmentReleaseError> {
     let Some(lease) = store.get(lease_id)? else {
         return Err(ContainmentReleaseError::UnknownLease {
@@ -536,7 +536,7 @@ pub struct ContainmentSweep {
     store: Arc<dyn ContainmentLeaseStore>,
     executor: Arc<dyn RollbackExecutor>,
     mode: ExecutionMode,
-    governance: Option<Arc<dyn GovernanceAuthority>>,
+    governance: Option<GovernanceAuthority>,
 }
 
 impl std::fmt::Debug for ContainmentSweep {
@@ -572,7 +572,7 @@ impl ContainmentSweep {
     /// than a convention: [`Self::release`] and [`Self::sweep`] read the same
     /// field, so there is no call site at which one could be attested and the
     /// other not.
-    pub fn with_governance(mut self, governance: Arc<dyn GovernanceAuthority>) -> Self {
+    pub fn with_governance_authority(mut self, governance: GovernanceAuthority) -> Self {
         self.governance = Some(governance);
         self
     }
@@ -590,8 +590,18 @@ impl ContainmentSweep {
     /// for one chain is how a verifier ends up checking against a governor set the
     /// signer never belonged to and reporting the mismatch as tampering, or worse,
     /// the other way round.
-    pub fn governance(&self) -> Option<&dyn GovernanceAuthority> {
-        self.governance.as_deref()
+    pub fn governance(&self) -> Option<&GovernanceAuthority> {
+        self.governance.as_ref()
+    }
+
+    /// Process-local identity of the configured authority, for composition checks.
+    ///
+    /// Unlike [`Self::governance`], this is observational only and cannot be used to
+    /// invoke an authorization method.
+    pub fn governance_authority_identity(
+        &self,
+    ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
+        self.governance.as_ref().map(GovernanceAuthority::identity)
     }
 
     /// Release one named lease early. Same function the sweep uses.

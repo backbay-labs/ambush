@@ -1,0 +1,78 @@
+error[E0308]: mismatched types
+  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:12:60
+   |
+12 |     let _dispatcher = dispatcher.with_governance_authority(fake);
+   |                                  ------------------------- ^^^^ expected `GovernanceAuthority`, found `Fake`
+   |                                  |
+   |                                  arguments to this method are incorrect
+   |
+note: method defined here
+  --> src/dispatcher.rs
+   |
+   |     pub fn with_governance_authority(mut self, governance_authority: GovernanceAuthority) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:16:50
+   |
+16 |     let _state = state.with_governance_authority(fake);
+   |                        ------------------------- ^^^^ expected `GovernanceAuthority`, found `Fake`
+   |                        |
+   |                        arguments to this method are incorrect
+   |
+note: method defined here
+  --> $WORKSPACE/crates/swarm-ingest-runtime/src/ingest/mod.rs
+   |
+   |     pub fn with_governance_authority(mut self, governance_authority: GovernanceAuthority) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:20:50
+   |
+20 |     let _sweep = sweep.with_governance_authority(fake);
+   |                        ------------------------- ^^^^ expected `GovernanceAuthority`, found `Fake`
+   |                        |
+   |                        arguments to this method are incorrect
+   |
+note: method defined here
+  --> src/containment.rs
+   |
+   |     pub fn with_governance_authority(mut self, governance: GovernanceAuthority) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:24:54
+   |
+24 |     let _resume = HumanApprovalResumeDispatcher::new(fake, router);
+   |                   ---------------------------------- ^^^^ expected `GovernanceAuthority`, found `Fake`
+   |                   |
+   |                   arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> src/dispatcher.rs
+   |
+   |     pub fn new(governance: GovernanceAuthority, router: Arc<dyn RequestResponseRouter>) -> Self {
+   |            ^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:28:60
+   |
+28 |     let _result = verify_release_attestation(receipt, Some(fake));
+   |                                                       ---- ^^^^ expected `&GovernanceAuthority`, found `&Fake`
+   |                                                       |
+   |                                                       arguments to this enum variant are incorrect
+   |
+   = note: expected reference `&swarm_governance::GovernanceAuthority`
+              found reference `&Fake`
+help: the type constructed contains `&Fake` due to the type of the argument passed
+  --> tests/ui/fake_governance_authority_cannot_be_installed.rs:28:55
+   |
+28 |     let _result = verify_release_attestation(receipt, Some(fake));
+   |                                                       ^^^^^----^
+   |                                                            |
+   |                                                            this argument influences the type of `Some`
+note: tuple variant defined here
+  --> $RUST/core/src/option.rs
+   |
+   |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+   |     ^^^^

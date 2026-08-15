@@ -43,10 +43,15 @@ tables. Cargo metadata also binds the full local custom-build inventory; the one
 reviewed build-script manifest and source are digested and any added local
 custom-build target is refused. Every Cargo command uses a fresh config-free
 gate-owned `CARGO_HOME`, an exact pinned Cargo/rustc, a sanitized PATH, and no
-repository or ancestor Cargo config. Dedicated `mapping-contract` and
-`negative-registry-contract` jobs each
+repository or ancestor Cargo config. Dedicated job IDs `mapping-contract` and
+`negative-registry-contract`, with exact attempt-specific display names
+`mapping-contract (${{ github.sha }})` and
+`negative-registry-contract (${{ github.sha }})`, each
 use a fresh Ubuntu runner with only a pinned credential-free checkout before
-the gate. Their checked custom-shell templates start `/usr/bin/env -i`
+the gate. The SHA-bearing names let a provenance-distinct external App bind an
+observation to the candidate merge commit; GitHub's real `workflow_run.head_sha`
+is only the pull-request head and is not that merge identity. Their checked
+custom-shell templates start `/usr/bin/env -i`
 directly, with no default Bash, repository command, cache, `GITHUB_ENV`, or
 `GITHUB_PATH` writer before it, followed by absolute `/bin/bash`. Exact
 completion-marker fixtures cover hostile `SHELLOPTS`, `BASHOPTS`, imported Bash
@@ -146,7 +151,7 @@ row would make the blast-radius registry false.
 `verify_chain_link` remains a public tested primitive with no production caller
 on this branch. The approval ledger builds links but does not verify them; the
 map describes the primitive, not a runtime guarantee. Release verification is
-bound to the sealed governance authority's locally admitted governor keys; the
+bound to the opaque persisted-policy authority's locally admitted governor keys; the
 signature, subject, and signer-trust differentials are independent probes.
 
 The Phase-285 registry tests are single-process and intentionally cover only the

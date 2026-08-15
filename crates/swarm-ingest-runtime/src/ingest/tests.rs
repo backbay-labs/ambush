@@ -5505,16 +5505,22 @@ async fn healthz_includes_async_lane_component_when_enabled() {
 
 #[tokio::test]
 async fn healthz_includes_governance_partition_component() {
-    let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
-        contingency_lease_ttl_ms: 60_000,
-        contingency_blast_radius_cap: 1,
-    }));
-    governance_policy
-        .register_governor(
+    let governance_root = temp_dir("healthz-governance");
+    let governance_policy = Arc::new(
+        GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig {
+                contingency_lease_ttl_ms: 60_000,
+                contingency_blast_radius_cap: 1,
+            },
+            governance_root.join("governance.json"),
             AgentId::new("tom", "primary"),
             ed25519_dalek::SigningKey::from_bytes(&[29; 32]),
         )
-        .expect("the policy holds no other governor key");
+        .expect("test governance should initialize signed persistence"),
+    );
+    let governance_authority = governance_policy
+        .authority()
+        .expect("persisted test governance should mint authority");
     governance_policy.observe_health(
         &AgentId::new("tom", "primary"),
         &[AgentHealthEntry {
@@ -5525,7 +5531,8 @@ async fn healthz_includes_governance_partition_component() {
         1_700_000_000_000,
     );
 
-    let app = detect_http_router(test_ingest_state().with_governance_policy(governance_policy));
+    let app =
+        detect_http_router(test_ingest_state().with_governance_authority(governance_authority));
     let response = app
         .oneshot(
             Request::builder()
@@ -5546,6 +5553,8 @@ async fn healthz_includes_governance_partition_component() {
         json["components"]["governance"]["active_contingency_leases"],
         0
     );
+    drop(governance_policy);
+    let _ = fs::remove_dir_all(governance_root);
 }
 
 #[tokio::test]

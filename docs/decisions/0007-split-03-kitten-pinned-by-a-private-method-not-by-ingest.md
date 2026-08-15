@@ -35,8 +35,9 @@ super::now_ms
 it now reaches `swarm_agents::tom_agent` over the dev-dependency edge the root
 already carried.
 
-Both sealed boundaries survived the crossing untouched, because both impls name
-the defining crate rather than the composition root:
+At the time of the crossing, both then-existing sealed boundaries survived
+untouched because both impls named the defining crate rather than the
+composition root:
 
 ```
 $ grep -rn "SealedAgentTickError\|SealedGovernanceAuthority" crates --include='*.rs' \
@@ -46,8 +47,11 @@ crates/swarm-agents/src/tom_agent.rs:1285:impl swarm_policy::governance::sealed:
 crates/swarm-agents/src/stalker_agent.rs:53:impl swarm_core::agent::sealed::SealedAgentTickError for StalkerAgentTickError {}
 ```
 
-Three impls, same three as before the move, one of them now across the new crate
-line. `tom_agent` is `GovernanceAuthority`'s only implementor and it still is.
+Those were the same three impls as before that move. This is historical evidence,
+not the current authority boundary: ADR 0011's 2026-08-15 amendment removed the
+public governance trait and marker, moved the whole Tom/governance implementation
+to `swarm-governance`, and replaced injection with a concrete opaque handle minted
+only by an authenticated persisted `GovernancePolicy`.
 
 ### The other three are one indivisible commit
 

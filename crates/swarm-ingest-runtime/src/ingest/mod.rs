@@ -38,9 +38,10 @@ use swarm_core::config::{
 use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_core::pheromone::EscalationRecord;
 use swarm_core::types::AgentId;
+use swarm_governance::GovernanceAuthority;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
-use swarm_policy::governance::{GovernanceAuthority, GovernedHumanAuthorizationHold};
+use swarm_policy::governance::GovernedHumanAuthorizationHold;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_response::DispatchingExecutor;
 use swarm_runtime::approval::{
@@ -1450,7 +1451,7 @@ pub struct IngestState {
     demo_runs: Arc<Mutex<DemoRunRegistry>>,
     providence_adapter: Arc<ArcSwap<Option<Arc<ProvidenceIncidentAdapter>>>>,
     providence_task_started: Arc<AtomicBool>,
-    governance_policy: Option<Arc<dyn GovernanceAuthority>>,
+    governance_authority: Option<GovernanceAuthority>,
     startup_attestation: Option<Arc<StartupAttestationReport>>,
     anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
     runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
@@ -1536,7 +1537,7 @@ impl IngestState {
             demo_runs: Arc::new(Mutex::new(DemoRunRegistry::default())),
             providence_adapter: Arc::new(ArcSwap::from_pointee(providence_adapter)),
             providence_task_started: Arc::new(AtomicBool::new(false)),
-            governance_policy: None,
+            governance_authority: None,
             startup_attestation: None,
             anti_tamper_report: Arc::new(ArcSwap::from_pointee(AntiTamperReport::disabled())),
             runtime_degradation: Arc::new(ArcSwap::from_pointee(
@@ -1790,16 +1791,42 @@ impl IngestState {
 
     /// Install the governance authority whose quorum health `/healthz` reports.
     ///
-    /// Takes `Arc<impl GovernanceAuthority>` rather than `Arc<dyn ..>` for the same
-    /// reason `AgentDispatcher::with_governance_policy` does: every existing
-    /// `Arc<GovernancePolicy>` call site is unchanged, because an inference variable
-    /// is not an unsizing coercion site.
-    pub fn with_governance_policy(
-        mut self,
-        governance_policy: Arc<impl GovernanceAuthority + 'static>,
-    ) -> Self {
-        self.governance_policy = Some(governance_policy);
+    /// Install the concrete opaque authority minted by an authenticated persisted
+    /// governance policy. There is no generic backend installation surface.
+    pub fn with_governance_authority(mut self, governance_authority: GovernanceAuthority) -> Self {
+        self.governance_authority = Some(governance_authority);
         self
+    }
+
+    /// Process-local identity of the configured authority, for composition checks.
+    ///
+    /// This exposes no authority reference and cannot authorize an action.
+    pub fn governance_authority_identity(
+        &self,
+    ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
+        self.governance_authority
+            .as_ref()
+            .map(GovernanceAuthority::identity)
+    }
+
+    pub(crate) fn human_approval_resume_dispatcher(
+        &self,
+    ) -> Option<swarm_runtime::dispatcher::HumanApprovalResumeDispatcher> {
+        self.governance_authority.clone().map(|governance| {
+            swarm_runtime::dispatcher::HumanApprovalResumeDispatcher::new(
+                governance,
+                self.current_request_response_router(),
+            )
+        })
+    }
+
+    /// Process-local identity used by shipped composition tests to prove that
+    /// the real human-resume dispatcher receives the configured authority.
+    pub fn human_resume_governance_authority_identity(
+        &self,
+    ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
+        self.human_approval_resume_dispatcher()
+            .map(|dispatcher| dispatcher.governance_authority_identity())
     }
 
     pub fn with_startup_attestation(mut self, report: StartupAttestationReport) -> Self {
@@ -1925,7 +1952,7 @@ impl IngestState {
     }
 
     pub fn current_governance_status(&self) -> Option<Value> {
-        self.governance_policy.as_ref().map(|policy| {
+        self.governance_authority.as_ref().map(|policy| {
             let report = policy.status_report();
             json!({
                 "ready": true,

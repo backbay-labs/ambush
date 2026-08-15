@@ -19,6 +19,7 @@ futures-util.workspace = true
 hex.workspace = true
 swarm-core.workspace = true
 swarm-consensus.workspace = true
+swarm-governance.workspace = true
 swarm-ingest-json.workspace = true
 swarm-ingest-sentinel.workspace = true
 swarm-ingest-taxii.workspace = true

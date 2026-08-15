@@ -15,6 +15,12 @@ therefore means 'this attestation matches this body', NOT 'a governor we trust
 authorized this'" is no longer true of the shipped code. It is left in place
 unedited because it is the record of what shipped in phase 320.
 
+Amended again on 2026-08-15 by ADR 0011's capability-boundary amendment. The
+public governance backend trait and marker described below were forgeable and
+are removed. The same release-signing and trust-set methods are now inherent on
+the concrete opaque `swarm_governance::GovernanceAuthority` handle, minted only
+from an authenticated persisted `GovernancePolicy`.
+
 ## Context
 
 QRT-04 asks for three things at once:
@@ -64,11 +70,11 @@ holds the governance authority. That is `swarm_detect --serve`.
 ### Fact 2: signing the release needs the governance keyring, which only the governance agent has
 
 The signing path is the governor keyring plus the `previous_commit_hash` chain,
-both inside `GovernancePolicy`'s `Mutex<GovernanceState>` in `swarm-agents`.
-`swarm-agents` depends on `swarm-runtime`, so `swarm_runtime::containment` —
-where releasing happens — cannot name `GovernancePolicy`. The only handle the
-runtime has is `swarm_policy::governance::GovernanceAuthority`, and that trait
-did not carry a signing request.
+both inside `GovernancePolicy`'s `Mutex<GovernanceState>`. At the time this ADR
+shipped, the policy lived in `swarm-agents`, which depended on `swarm-runtime`,
+so `swarm_runtime::containment` could not name it. The only interface runtime
+had was the then-current policy trait, and it did not carry a signing request.
+The policy and concrete handle now live below runtime in `swarm-governance`.
 
 ## Decision
 
@@ -102,7 +108,8 @@ and the bearer token from the env of a configured principal that grants
 `maintenance`. They are the first `swarmctl` subcommands that talk to a running
 daemon rather than to repo-owned artifacts on disk.
 
-**`GovernanceAuthority` gains one method**, `attest_release`:
+**The then-current `GovernanceAuthority` trait gained one method**,
+`attest_release`; the method is now inherent on the concrete handle:
 
 ```rust
 fn attest_release(&self, subject: &serde_json::Value, now_ms: i64)
@@ -146,19 +153,19 @@ trust authorized this".
 
 This is pre-existing `verify()` semantics shared with the dispatcher's
 `missing_governance_receipt_reason`, not a regression introduced here. Closing
-it requires the governor public keys to be reachable from the runtime, and
-`GovernanceStatusReport` does not carry them — another sealed-trait widening,
-tracked as a follow-up.
+it required the governor public keys to be reachable from the runtime, and
+`GovernanceStatusReport` did not carry them. ADR 0011 added that surface and its
+2026-08-15 amendment moved it onto the concrete handle.
 
 Neither implies the other. Measured: with the second check disabled, a receipt
 whose `steps[0].status` had been rewritten from `Reversed` to `Failed`
 verified against a genuine, unmodified signature.
 
-## Why widening the sealed trait is acceptable here
+## Why the original trait widening was accepted, and what replaced it
 
-`GovernanceAuthority`'s doc comment sets the bar: widening beyond what a named
-consumer already called re-imports the coupling the trait exists to remove. The
-widening is taken deliberately and narrowed on three axes:
+The original trait's doc comment set the bar: widening beyond what a named
+consumer already called re-imported the coupling the trait existed to remove.
+The historical widening was narrowed on three axes:
 
 - **No new TCB dependency.** The method takes and returns
   `serde_json::Value`, not `swarm_consensus::ConsensusGovernanceReceipt`.
@@ -173,8 +180,10 @@ widening is taken deliberately and narrowed on three axes:
   `Ok(true)` is what lets a destructive action proceed during a partition. The
   worst `attest_release` can do is decline to attest. It cannot cause a
   containment and it cannot prevent one being undone.
-- **The seal still enumerates.** There is exactly one implementer,
-  `GovernancePolicy`, and `grep -rn SealedGovernanceAuthority` still finds it.
+- **Current replacement.** The public trait and marker did not form a cross-crate
+  seal and are gone. `ContainmentSweep` accepts only the concrete opaque handle;
+  external compile-fail fixtures pin implementation, construction, installation,
+  and removal of the original policy-trait path.
 
 ## Consequences
 

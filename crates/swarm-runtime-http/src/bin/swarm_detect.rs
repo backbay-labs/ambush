@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use swarm_agents::pounce_agent::PounceAgent;
 use swarm_agents::stalker_agent::StalkerAgent;
-use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig, TomAgent};
+use swarm_agents::tom_agent::{
+    GovernanceAuthority, GovernancePolicy, GovernancePolicyConfig, TomAgent,
+};
 use swarm_agents::weaver_agent::WeaverAgent;
 use swarm_agents::whisker_agent::WhiskerAgent;
 use swarm_core::agent::{AgentRole, SwarmAgent, SwarmModeState};
@@ -345,6 +347,36 @@ fn governance_policy_for_bootstrap(
             identity.id.clone(),
             identity.signing_key.clone(),
         ),
+    }
+}
+
+/// The shipped `swarm-detect` governance composition.
+///
+/// Every security-sensitive consumer receives a clone of one opaque authority
+/// minted by the authenticated persisted governance policy.
+#[derive(Clone)]
+struct ShippedGovernanceWiring {
+    authority: GovernanceAuthority,
+}
+
+impl ShippedGovernanceWiring {
+    fn new(authority: GovernanceAuthority) -> Self {
+        Self { authority }
+    }
+
+    fn configure_ingest(&self, state: IngestState) -> IngestState {
+        state.with_governance_authority(self.authority.clone())
+    }
+
+    fn configure_dispatcher(&self, dispatcher: AgentDispatcher) -> AgentDispatcher {
+        dispatcher.with_governance_authority(self.authority.clone())
+    }
+
+    fn configure_containment(
+        &self,
+        sweep: swarm_runtime::containment::ContainmentSweep,
+    ) -> swarm_runtime::containment::ContainmentSweep {
+        sweep.with_governance_authority(self.authority.clone())
     }
 }
 
@@ -856,6 +888,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &tom_identity,
             tom_key_status,
         )?);
+        let governance = ShippedGovernanceWiring::new(
+            governance_policy
+                .authority()
+                .map_err(std::io::Error::other)?,
+        );
         let ingest_identity =
             load_persisted_agent_identity(&identity_store, AgentRole::Whisker, "primary")?;
         let state = IngestState::from_config_with_signing_key(
@@ -865,29 +902,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?
         .with_startup_attestation(startup_attestation.clone())
         .with_anti_tamper_report(anti_tamper.clone());
-        let state = state
-            .with_telemetry_channel(telemetry_tx.clone())
-            .with_agent_health(Arc::clone(&agent_health))
-            .with_mode_state(Arc::clone(&mode_state))
-            .with_bridge_health(bridge_health)
-            .with_threat_intel_feed_health(threat_intel_feed_health)
-            .with_shutdown_channel(shutdown_tx.clone())
-            .with_runtime_events(runtime_events.clone())
-            .with_governance_policy(Arc::clone(&governance_policy))
-            .with_approval_harness(approval_harness);
+        let state = governance.configure_ingest(
+            state
+                .with_telemetry_channel(telemetry_tx.clone())
+                .with_agent_health(Arc::clone(&agent_health))
+                .with_mode_state(Arc::clone(&mode_state))
+                .with_bridge_health(bridge_health)
+                .with_threat_intel_feed_health(threat_intel_feed_health)
+                .with_shutdown_channel(shutdown_tx.clone())
+                .with_runtime_events(runtime_events.clone())
+                .with_approval_harness(approval_harness),
+        );
         let dispatcher_shutdown = shutdown_rx.clone();
         let monitor_shutdown = shutdown_rx.clone();
-        let mut dispatcher = AgentDispatcher::new(
-            AgentDispatcherConfig::default(),
-            dispatcher_shutdown,
-            state.current_substrate(),
-            Arc::clone(&agent_health),
-        )
-        .with_mode_state(Arc::clone(&mode_state))
-        .with_request_response_router(state.current_request_response_router())
-        .with_strategy_proposal_router(state.current_strategy_proposal_router())
-        .with_governance_policy(Arc::clone(&governance_policy))
-        .with_runtime_events(runtime_events.clone());
+        let mut dispatcher = governance.configure_dispatcher(
+            AgentDispatcher::new(
+                AgentDispatcherConfig::default(),
+                dispatcher_shutdown,
+                state.current_substrate(),
+                Arc::clone(&agent_health),
+            )
+            .with_mode_state(Arc::clone(&mode_state))
+            .with_request_response_router(state.current_request_response_router())
+            .with_strategy_proposal_router(state.current_strategy_proposal_router())
+            .with_runtime_events(runtime_events.clone()),
+        );
         let mut admitted_identities = Vec::new();
         if let Some(metrics) = state.current_prometheus_metrics() {
             dispatcher = dispatcher.with_metrics(metrics);
@@ -1139,18 +1178,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match swarm_runtime::containment::rollback_executor_from_config(
                         &state.current_response_adapter_config(),
                     ) {
-                        Ok(executor) => Some(Arc::new(
+                        Ok(executor) => Some(Arc::new(governance.configure_containment(
                             swarm_runtime::containment::ContainmentSweep::new(
                                 store,
                                 executor,
                                 state.current_execution_mode(),
-                            )
-                            // The same `GovernancePolicy` the dispatcher and the
-                            // ingest surface hold, so a release is co-signed on
-                            // the same receipt chain as the governance decision
-                            // that authorized the containment.
-                            .with_governance(Arc::clone(&governance_policy) as Arc<_>),
-                        )),
+                            ),
+                        ))),
                         Err(error) => {
                             // Loud, not fatal: the runtime still refuses containments
                             // it cannot lease, so nothing new gets contained. What is
@@ -1493,9 +1527,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        Cli, build_approval_harness, default_partition_governance_state_path,
-        governance_policy_for_bootstrap, register_optional_calico_agent,
-        register_optional_sphinx_agent, watch_paths_differ,
+        Cli, ShippedGovernanceWiring, build_approval_harness,
+        default_partition_governance_state_path, governance_policy_for_bootstrap,
+        register_optional_calico_agent, register_optional_sphinx_agent, watch_paths_differ,
     };
     use clap::Parser;
     use std::path::PathBuf;
@@ -1509,6 +1543,99 @@ mod tests {
     };
     use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
     use swarm_runtime::runtime_events::RuntimeEventBroadcaster;
+
+    #[test]
+    fn shipped_builder_shares_one_governance_policy_across_every_trust_consumer() {
+        use swarm_response::ExecutionMode;
+        use swarm_response::containment::MemoryContainmentLeaseStore;
+        use swarm_response::rollback::SandboxRollbackExecutor;
+        use swarm_runtime::containment::ContainmentSweep;
+
+        let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("rulesets/default.yaml");
+        let config =
+            swarm_runtime::config::load_config(&config_path).expect("default config should load");
+        let raw_state =
+            IngestState::from_config(config_path, config).expect("ingest state should build");
+        let substrate = raw_state.current_substrate();
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let health_state = Arc::new(arc_swap::ArcSwap::from_pointee(Vec::new()));
+        let raw_dispatcher = AgentDispatcher::new(
+            AgentDispatcherConfig::default(),
+            shutdown_rx,
+            substrate,
+            health_state,
+        );
+        let raw_sweep = ContainmentSweep::new(
+            Arc::new(MemoryContainmentLeaseStore::new()),
+            Arc::new(SandboxRollbackExecutor),
+            ExecutionMode::Enforced,
+        );
+        let root = std::env::temp_dir().join(format!(
+            "swarm-detect-shared-governance-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let store = FileAgentKeyStore::open(root.join("keys"))
+            .expect("temporary Tom identity store should open");
+        let (identity, key_status) = store
+            .load_or_create_with_status(AgentRole::Tom, "primary")
+            .expect("temporary Tom identity should load");
+        let policy = Arc::new(
+            governance_policy_for_bootstrap(
+                swarm_agents::tom_agent::GovernancePolicyConfig::default(),
+                &root.join("governance.json"),
+                &identity,
+                key_status,
+            )
+            .expect("persisted governance policy should initialize"),
+        );
+        let authority = policy
+            .authority()
+            .expect("persisted governance policy should mint authority");
+        let expected_identity = authority.identity();
+        let wiring = ShippedGovernanceWiring::new(authority.clone());
+
+        let state = wiring.configure_ingest(raw_state);
+        let dispatcher = wiring.configure_dispatcher(raw_dispatcher);
+        let sweep = wiring.configure_containment(raw_sweep);
+
+        assert_eq!(
+            state.governance_authority_identity(),
+            Some(expected_identity)
+        );
+        assert_eq!(
+            dispatcher.governance_authority_identity(),
+            Some(expected_identity)
+        );
+        assert_eq!(
+            sweep.governance_authority_identity(),
+            Some(expected_identity)
+        );
+        assert_eq!(
+            state.human_resume_governance_authority_identity(),
+            Some(expected_identity)
+        );
+        assert!(
+            sweep
+                .governance()
+                .expect("shipped release verifier has a trust anchor")
+                .same_policy(&authority),
+        );
+
+        drop(state);
+        drop(dispatcher);
+        drop(sweep);
+        drop(wiring);
+        drop(authority);
+        drop(policy);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn watch_paths_differ_detects_secret_dir_retargets() {

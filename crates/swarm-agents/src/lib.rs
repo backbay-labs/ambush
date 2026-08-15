@@ -37,22 +37,24 @@
 //!
 //! # Which roles live here
 //!
-//! Five of the eight roles are here: `pounce`, `stalker`, `tom`, `weaver`,
-//! `whisker`. Three are not -- `calico`, `kitten`, `sphinx` -- and they are a
-//! closed group, still pinned, that has to cross in one commit when it crosses.
+//! Four role implementations are here: `pounce`, `stalker`, `weaver`, and
+//! `whisker`. `tom_agent` remains as a compatibility re-export, while the Tom
+//! implementation and authenticated governance policy live in the lower
+//! `swarm-governance` crate. Three roles are still pinned in `swarm-runtime`:
+//! `calico`, `kitten`, and `sphinx`.
 //!
-//! `tom` came across on its own because it names nothing in the composition root:
+//! Tom originally came across on its own because it named nothing in the
+//! composition root:
 //!
 //! ```text
 //! $ grep -oE '(crate|super)::[A-Za-z_:]+' crates/swarm-runtime/src/tom_agent.rs | sort -u
 //! super::now_ms
 //! ```
 //!
-//! and `super::now_ms` is `tom_agent`'s own file-local helper, reached from its
-//! `#[cfg(test)]` module. Its two trait impls both name their traits through the
-//! defining crate rather than through the root -- `swarm_policy::governance::
-//! sealed::SealedGovernanceAuthority` and `GovernanceAuthority` -- so the seal is
-//! satisfied from here exactly as it was from there.
+//! That whole module has since moved below runtime into `swarm-governance`, where
+//! `GovernancePolicy` mints the concrete opaque `GovernanceAuthority` handle.
+//! This crate preserves `swarm_agents::tom_agent::*` as a source-compatible
+//! re-export; it no longer implements or defines the governance capability.
 //!
 //! The other three did not come. ADR 0004 costed their move at nine `pub(crate)`
 //! `calico_agent` items and said to wait for `ingest/`; `ingest/` left, and a

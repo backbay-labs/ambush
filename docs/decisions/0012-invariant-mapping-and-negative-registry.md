@@ -104,8 +104,9 @@ rustc/Cargo release and commit identities. Every Cargo command runs with a fresh
 config-free gate-owned `CARGO_HOME`; repository and ancestor Cargo configuration
 is refused, active-host compiler/wrapper/flags/linker/runner overrides are
 rejected, and inactive-target, Python, and loader channels are neutralized. The
-dedicated `mapping-contract` and `negative-registry-contract` jobs use separate
-fresh Ubuntu runners with only
+dedicated job IDs `mapping-contract` and `negative-registry-contract` use exact
+attempt-specific display names `mapping-contract (${{ github.sha }})` and
+`negative-registry-contract (${{ github.sha }})` on separate fresh Ubuntu runners with only
 a pinned credential-free checkout before each gate. The checked custom-shell
 template starts `/usr/bin/env -i` directly. There is no default Bash,
 repository-authored command, restored executable cache, `GITHUB_ENV`, or
@@ -116,6 +117,11 @@ files, and a PATH-shadowed Bash cannot skip that script and require its exact
 completion marker rather than exit zero. Linux cases separately reproduce the
 zero-exit suppression caused by inherited `LD_TRACE_LOADED_OBJECTS` and
 `LD_DEBUG` before `env -i` can run.
+The SHA-bearing job names are the candidate merge-commit binding available to a
+provenance-distinct external App. Live GitHub API evidence shows
+`workflow_run.head_sha` is the pull-request head, not the PR's synthetic merge commit,
+so the App must compare the observed attempt-specific name with the live
+`pull_request.merge_commit_sha`; the checker rejects removal or expression drift.
 Only inside that clean parent-created boundary does the checker select an
 absolute system-path Python interpreter. Directly invoking the script from a
 process that already carries shell-startup or loader injection is intentionally
@@ -246,7 +252,7 @@ It does NOT buy:
   crash-window recovery, and durable one-shot action and human authorization;
   those guards are outside this registry rather than silently claimed here.
 - **an externally mutable release signer.** Release verification is now bound
-  to the sealed governance authority's locally admitted governor keys, with
+  to the opaque persisted-policy authority's locally admitted governor keys, with
   independent signature, subject, and signer-trust differentials.
 
 ## Two findings the table surfaced

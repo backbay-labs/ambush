@@ -2,6 +2,8 @@
 # set/count equality with the map and omission registry and exact one-surface
 # assignment below. This checked-in ratchet exposes drift unless the checker is
 # also changed; it is not an external trust anchor.
+# The opaque governance-authority construction boundary is enforced by a separate
+# compile-fail and shipped-source inventory gate, not counted as a decision row.
 
 schema_version = 2
 invariant_count = 59

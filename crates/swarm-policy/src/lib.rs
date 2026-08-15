@@ -13,8 +13,8 @@
 //! - The deterministic authorization decision itself: [`static_gate`] and
 //!   [`configurable_gate`], including the fail-closed path for malformed,
 //!   expired or under-evidenced requests.
-//! - Who may act during a partition: the [`governance::GovernanceAuthority`]
-//!   trait the dispatcher authorizes through.
+//! - Governance request, hold, event, and health-report value types shared with
+//!   the concrete authority in `swarm-governance`.
 //!
 //! ## Does not own
 //!
@@ -22,6 +22,8 @@
 //!   `swarm-spine` records that it happened.
 //! - Detection, telemetry, the pheromone substrate, receipts, replay, the CLI,
 //!   or any HTTP surface.
+//! - The governance authority capability, signed governance persistence, or Tom
+//!   role implementation; those live in `swarm-governance`.
 //! - Transport. This crate is in the trusted computing base (ADR 0009) and must
 //!   never name `axum`, `clap`, `hyper` or `reqwest` in any dependency section,
 //!   in any dependency kind.

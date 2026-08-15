@@ -131,10 +131,10 @@ PRODUCTION_PACKAGES = {
 EXPECTED_CRATE_MANIFEST_DIGESTS = {
     "crates/swarm-policy/Cargo.toml": "29ef642b8ba57958db7b202ebedb237d8b5bab1cb17b88d9e0e7ce56f9604520",
     "crates/swarm-response/Cargo.toml": "55d970d2348d4366791f1cb2e46df04872e33892af451c3919f67c45dd736760",
-    "crates/swarm-runtime/Cargo.toml": "46910b606648f03bf3632ac41cc67bec57a5283eb73cf0ba1d5bec811bdf987d",
+    "crates/swarm-runtime/Cargo.toml": "9e71810643aef57970036390c66e2e973231cff2b0b3e10490b7fb810ca84b0a",
     "crates/swarm-spine/Cargo.toml": "fb26c630348a352a5d8655d44987ed6356fec65270f99919852b0c3fb3a93d04",
 }
-EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "9dd5c6c4e9ea75e522315ba62a02f8bbaeb6cf09067fe0ca67693b70a3785c2d"
+EXPECTED_ROOT_EXECUTION_MANIFEST_DIGEST = "5d426b63b3f2a34e0aecd2157a3e5f68afb780bd62446b5f528ee747c3c86903"
 ALLOWED_LOCAL_CUSTOM_BUILD = {
     "swarm-ingest-tetragon": {
         "manifest": "crates/swarm-ingest-tetragon/Cargo.toml",
@@ -324,10 +324,12 @@ WORKFLOW_GATE_JOBS = {
     "mapping-contract": (
         "tools/check-mapping.sh",
         "Check the invariant map against the source markers",
+        "mapping-contract (${{ github.sha }})",
     ),
     "negative-registry-contract": (
         "tools/check-negative-registry.sh",
         "Check every mapped invariant has a falsifying negative test",
+        "negative-registry-contract (${{ github.sha }})",
     ),
 }
 WORKFLOW_GLOBAL_ENVIRONMENT = (
@@ -366,14 +368,14 @@ def validate_workflow_bootstrap(root, report):
     ]
     if workflow_environments != [WORKFLOW_GLOBAL_ENVIRONMENT]:
         invalid.append(f"workflow-env={workflow_environments!r}")
-    for job, (command, step_name) in WORKFLOW_GATE_JOBS.items():
+    for job, (command, step_name, display_name) in WORKFLOW_GATE_JOBS.items():
         matches = list(re.finditer(
             rf"(?ms)^  {re.escape(job)}:\n.*?(?=^  [A-Za-z0-9_-]+:\n|\Z)",
             text,
         ))
         expected = (
             f"  {job}:\n"
-            f"    name: {job}\n"
+            f"    name: {display_name}\n"
             "    runs-on: ubuntu-24.04\n"
             "    steps:\n"
             "      - name: Checkout the candidate without persisted credentials\n"
@@ -2814,7 +2816,7 @@ def python_isolation_self_test(base):
     fake_python.write_text(
         "#!/bin/sh\n"
         f": > {json.dumps(str(marker))}\n"
-        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 161 self-tests passed (3 clean controls, 158 adversarial)'\n"
+        "echo 'check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; 165 self-tests passed (3 clean controls, 162 adversarial)'\n"
     )
     fake_python.chmod(0o755)
     hostile_path_environment = dict(os.environ)
@@ -2848,7 +2850,7 @@ def bootstrap_boundary_self_test(base):
     exact_gate = REPO_ROOT / "tools/check-negative-registry.sh"
     fake_result = (
         "check-negative-registry OK: 59 executable tests + 5 protocol-contract tests; "
-        "161 self-tests passed (3 clean controls, 158 adversarial)"
+        "165 self-tests passed (3 clean controls, 162 adversarial)"
     )
 
     def startup_payload(name):
@@ -3193,6 +3195,26 @@ def bootstrap_boundary_self_test(base):
             "    steps:\n      - name: Candidate-controlled PATH writer\n"
             "        run: echo attacker >> $GITHUB_PATH\n\n",
         ),
+        "mapping-display-name-removed": mutate_workflow_job(
+            "mapping-contract",
+            "    name: mapping-contract (${{ github.sha }})\n",
+            "",
+        ),
+        "mapping-display-name-expression-drift": mutate_workflow_job(
+            "mapping-contract",
+            "    name: mapping-contract (${{ github.sha }})",
+            "    name: mapping-contract (${{ github.event.pull_request.head.sha }})",
+        ),
+        "negative-display-name-removed": mutate_workflow_job(
+            "negative-registry-contract",
+            "    name: negative-registry-contract (${{ github.sha }})\n",
+            "",
+        ),
+        "negative-display-name-expression-drift": mutate_workflow_job(
+            "negative-registry-contract",
+            "    name: negative-registry-contract (${{ github.sha }})",
+            "    name: negative-registry-contract (${{ github.event.pull_request.head.sha }})",
+        ),
     }
     for name, mutation in workflow_mutations.items():
         workflow_path.write_text(mutation)
@@ -3201,7 +3223,7 @@ def bootstrap_boundary_self_test(base):
         if "dependency-bootstrap-workflow-drift" not in drift_report.codes():
             ok = False
             print(f"workflow bootstrap mutation {name} was not rejected", file=sys.stderr)
-    return ok, 17 + len(loader_noexec_attacks)
+    return ok, 21 + len(loader_noexec_attacks)
 
 
 def target_environment_scope_self_test():

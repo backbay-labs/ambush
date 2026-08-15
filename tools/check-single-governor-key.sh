@@ -10,7 +10,7 @@
 #   mechanisms; the other two are stronger and are named here so nobody mistakes
 #   this grep for the guarantee.
 #
-#   MECHANISM 1 -- THE TYPE (crates/swarm-agents/src/tom_agent.rs).
+#   MECHANISM 1 -- THE TYPE (crates/swarm-governance/src/lib.rs).
 #     `GovernanceState.local_governor: Option<LocalGovernorKey>` replaced
 #     `governors: BTreeMap<AgentId, SigningKey>`. `LocalGovernorKey` exposes no
 #     accessor returning a `SigningKey`, so nothing downstream can clone a key
@@ -27,11 +27,13 @@
 #     MISSES: a key acquired any other way.
 #
 #   MECHANISM 3 -- THIS SCRIPT.
-#     A lexical scan for a COLLECTION of `SigningKey` in the three files that
-#     make up the governance signing path.
+#     A lexical scan for a COLLECTION of `SigningKey` in the three source paths that
+#     make up the governance signing path, plus a production-source inventory
+#     requiring one concrete opaque `GovernanceAuthority` handle, its private
+#     policy field and authenticated mint, and no trait/backend/generic installer.
 #
 # WHAT THIS SCRIPT COVERS
-#   `crates/swarm-agents/src/tom_agent.rs`, `crates/swarm-consensus/src/` and
+#   `crates/swarm-governance/src/`, `crates/swarm-consensus/src/` and
 #   `crates/swarm-policy/src/`, outside `#[cfg(test)]` regions: no
 #   `BTreeMap<.., SigningKey>`, `HashMap<.., SigningKey>`, `Vec<SigningKey>`,
 #   `[SigningKey; N]` or `&[SigningKey]`.
@@ -51,6 +53,8 @@
 #      This is the largest hole and no mechanism here closes it; mechanism 1
 #      makes each instance single-key, not the process.
 #   5. Anything outside the three scanned paths.
+#   6. Semantic behavior inside an inherent authority method. Runtime negative
+#      differentials and governance persistence tests cover those decisions.
 #
 #   1-3 are lexical blind spots. 4 is architectural and is recorded in
 #   .planning/STATE.md as open.
@@ -70,7 +74,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 SCAN_PATHS=(
-  "crates/swarm-agents/src/tom_agent.rs"
+  "crates/swarm-governance/src"
   "crates/swarm-consensus/src"
   "crates/swarm-policy/src"
 )
@@ -129,6 +133,156 @@ scan_paths() {
   done
 }
 
+# Inventory the shipped opaque governance capability. This is a structural
+# backstop over production Rust source: external trybuild fixtures separately prove
+# that a downstream Fake cannot implement, construct, or install the handle.
+scan_governance_capability_inventory() {
+  local source_root="$1"
+  python3 - "$source_root" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
+
+def production_source(raw: str) -> str:
+    out = []
+    index = 0
+    block_depth = 0
+    in_string = False
+    escaped = False
+    while index < len(raw):
+        char = raw[index]
+        following = raw[index:index + 2]
+        if block_depth:
+            if following == "/*":
+                block_depth += 1
+                out.extend("  ")
+                index += 2
+            elif following == "*/":
+                block_depth -= 1
+                out.extend("  ")
+                index += 2
+            else:
+                out.append("\n" if char == "\n" else " ")
+                index += 1
+            continue
+        if in_string:
+            out.append("\n" if char == "\n" else " ")
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if following == "//":
+            newline = raw.find("\n", index + 2)
+            if newline == -1:
+                out.extend(" " * (len(raw) - index))
+                break
+            out.extend(" " * (newline - index))
+            out.append("\n")
+            index = newline + 1
+            continue
+        if following == "/*":
+            block_depth = 1
+            out.extend("  ")
+            index += 2
+            continue
+        if char == '"':
+            in_string = True
+            out.append(" ")
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+source_files = sorted((root / "crates").glob("*/src/**/*.rs"))
+if not source_files:
+    print("no shipped Rust source found for governance capability inventory", file=sys.stderr)
+    raise SystemExit(2)
+sources = {
+    path.relative_to(root): production_source(path.read_text(encoding="utf-8"))
+    for path in source_files
+}
+failed = False
+
+def reject(label: str, pattern: str) -> None:
+    global failed
+    matches = [path for path, source in sources.items() if re.search(pattern, source, re.DOTALL)]
+    if matches:
+        rendered = ", ".join(str(path) for path in matches)
+        print(f"governance capability inventory: {label}: {rendered}", file=sys.stderr)
+        failed = True
+
+declarations = [
+    path
+    for path, source in sources.items()
+    for _ in re.finditer(r"\bpub\s+struct\s+GovernanceAuthority\b", source)
+]
+if declarations != [canonical]:
+    rendered = ", ".join(str(path) for path in declarations) or "none"
+    print(
+        "governance capability inventory: expected exactly one public concrete "
+        f"GovernanceAuthority in {canonical}; found {rendered}",
+        file=sys.stderr,
+    )
+    failed = True
+
+canonical_source = sources.get(canonical, "")
+if not re.search(
+    r"\bpub\s+struct\s+GovernanceAuthority\s*\{\s*"
+    r"policy\s*:\s*Arc\s*<\s*GovernancePolicy\s*>\s*,?\s*\}",
+    canonical_source,
+    re.DOTALL,
+):
+    print(
+        "governance capability inventory: canonical handle must contain only the "
+        "private Arc<GovernancePolicy> field",
+        file=sys.stderr,
+    )
+    failed = True
+
+mint_pattern = (
+    r"\bpub\s+fn\s+authority\s*\(\s*self\s*:\s*&\s*Arc\s*<\s*Self\s*>\s*\)"
+    r"\s*->\s*Result\s*<\s*GovernanceAuthority\s*,\s*GovernanceAuthorityError\s*>"
+)
+if len(re.findall(mint_pattern, canonical_source, re.DOTALL)) != 1:
+    print(
+        "governance capability inventory: expected exactly one authenticated "
+        "GovernancePolicy::authority mint",
+        file=sys.stderr,
+    )
+    failed = True
+
+reject("backend trait is forbidden", r"\btrait\s+GovernanceAuthority\b")
+reject("legacy governance seal is forbidden", r"\bSealedGovernanceAuthority\b")
+reject("trait-object governance backend is forbidden", r"\bdyn\s+GovernanceAuthority\b")
+reject(
+    "GovernanceAuthority trait implementation is forbidden",
+    r"\bimpl\b(?:\s*<[^>{};]*>)?\s+(?:[A-Za-z_]\w*::)*GovernanceAuthority\s+for\b",
+)
+reject(
+    "GovernanceAuthority Deref/AsRef exposure is forbidden",
+    r"\bimpl\b(?:\s*<[^>{};]*>)?\s+(?:Deref|AsRef\s*<\s*GovernancePolicy\s*>)\s+for\s+GovernanceAuthority\b",
+)
+reject(
+    "generic governance installer is forbidden",
+    r"\bpub\s+fn\s+with_governance_authority\s*<|"
+    r"\bwith_governance_authority\s*\([^)]*(?:impl\s+Into|T\s*:\s*Into)\s*<\s*GovernanceAuthority",
+)
+reject(
+    "public raw-policy authority constructor is forbidden",
+    r"\bimpl\s+GovernanceAuthority\s*\{(?:(?!\n\s*impl\b).)*"
+    r"\bpub\s+fn\s+(?:new|from_policy|from_backend)\b",
+)
+raise SystemExit(1 if failed else 0)
+PY
+}
 # ---------------------------------------------------------------------------
 # THE FIXTURE. Runs on every invocation.
 # ---------------------------------------------------------------------------
@@ -218,6 +372,90 @@ expect_clean control "the single-key shape this phase ships"
 expect_clean test_region "a keyring inside a #[cfg(test)] region"
 expect_clean prose "a keyring named only in whole-line comments"
 
+CANONICAL_CAPABILITY='pub struct GovernancePolicy;
+pub struct GovernanceAuthority {
+    policy: Arc<GovernancePolicy>,
+}
+pub struct GovernanceAuthorityError;
+impl GovernancePolicy {
+    pub fn authority(self: &Arc<Self>) -> Result<GovernanceAuthority, GovernanceAuthorityError> {
+        todo!()
+    }
+}
+impl GovernanceAuthority {
+    pub fn same_policy(&self, other: &Self) -> bool { todo!() }
+}'
+
+plant_capability_fixture() {
+  local name="$1"
+  local canonical_body="$2"
+  local extra_body="${3:-}"
+  local root="$FIXTURE_DIR/capability-$name"
+  mkdir -p "$root/crates/swarm-governance/src" "$root/crates/other/src"
+  printf '%s\n' "$canonical_body" > "$root/crates/swarm-governance/src/lib.rs"
+  printf '%s\n' "$extra_body" > "$root/crates/other/src/lib.rs"
+}
+
+expect_capability_clean() {
+  local name="$1"
+  local description="$2"
+  if ! scan_governance_capability_inventory "$FIXTURE_DIR/capability-$name"; then
+    echo "FIXTURE FAILURE: the capability inventory rejected $description" >&2
+    fixture_failures=$((fixture_failures + 1))
+  fi
+}
+
+expect_capability_rejected() {
+  local name="$1"
+  local description="$2"
+  if scan_governance_capability_inventory "$FIXTURE_DIR/capability-$name" >/dev/null 2>&1; then
+    echo "FIXTURE FAILURE: the capability inventory accepted $description" >&2
+    fixture_failures=$((fixture_failures + 1))
+  fi
+}
+
+plant_capability_fixture control "$CANONICAL_CAPABILITY"
+plant_capability_fixture second_handle "$CANONICAL_CAPABILITY" \
+  'pub struct GovernanceAuthority { policy: Arc<GovernancePolicy> }'
+plant_capability_fixture backend_trait "$CANONICAL_CAPABILITY" \
+  'pub trait GovernanceAuthority {}'
+plant_capability_fixture legacy_seal "$CANONICAL_CAPABILITY" \
+  'pub trait SealedGovernanceAuthority {}'
+plant_capability_fixture trait_object "$CANONICAL_CAPABILITY" \
+  'fn install(authority: Box<dyn GovernanceAuthority>) {}'
+plant_capability_fixture trait_impl "$CANONICAL_CAPABILITY" \
+  'impl GovernanceAuthority for Fake {}'
+plant_capability_fixture generic_installer "$CANONICAL_CAPABILITY" \
+  'pub fn with_governance_authority<T: Into<GovernanceAuthority>>(authority: T) {}'
+plant_capability_fixture moved '' "$CANONICAL_CAPABILITY"
+plant_capability_fixture removed '' ''
+plant_capability_fixture public_field \
+  "${CANONICAL_CAPABILITY/policy: Arc/pub policy: Arc}"
+plant_capability_fixture public_constructor \
+  "$CANONICAL_CAPABILITY" \
+  'impl GovernanceAuthority {
+       pub fn from_policy(policy: Arc<GovernancePolicy>) -> Self { todo!() }
+   }'
+plant_capability_fixture deref "$CANONICAL_CAPABILITY" \
+  'impl Deref for GovernanceAuthority { type Target = GovernancePolicy; }'
+plant_capability_fixture missing_mint \
+  'pub struct GovernancePolicy;
+pub struct GovernanceAuthority { policy: Arc<GovernancePolicy> }'
+
+expect_capability_clean control "the canonical opaque authority and authenticated mint"
+expect_capability_rejected second_handle "a second shipped concrete handle"
+expect_capability_rejected backend_trait "a reintroduced public backend trait"
+expect_capability_rejected legacy_seal "a reintroduced legacy governance seal"
+expect_capability_rejected trait_object "a reintroduced trait-object backend"
+expect_capability_rejected trait_impl "a reintroduced GovernanceAuthority trait impl"
+expect_capability_rejected generic_installer "a generic authority installer"
+expect_capability_rejected moved "the canonical handle moved out of swarm-governance"
+expect_capability_rejected removed "the canonical handle was removed"
+expect_capability_rejected public_field "the handle's inner policy field became public"
+expect_capability_rejected public_constructor "a public raw-policy handle constructor"
+expect_capability_rejected deref "a Deref exposure of the inner policy"
+expect_capability_rejected missing_mint "the authenticated persisted-policy mint was removed"
+
 if [ "$fixture_failures" -ne 0 ]; then
   echo "" >&2
   echo "The fixture proves this scanner can fail. $fixture_failures of its cases" >&2
@@ -245,5 +483,8 @@ if [ -n "$violations" ]; then
   exit 1
 fi
 
-echo "single-governor-key gate: 9 fixture cases behaved as documented; no key" \
-     "collection on the governance signing path (${SCAN_PATHS[*]})"
+scan_governance_capability_inventory "$ROOT_DIR"
+
+echo "single-governor-key gate: 22 fixture cases behaved as documented; no key" \
+     "collection on the governance signing path; shipped governance authority" \
+     "is one opaque concrete handle with an authenticated mint (${SCAN_PATHS[*]})"

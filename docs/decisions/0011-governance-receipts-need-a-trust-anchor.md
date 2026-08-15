@@ -5,15 +5,15 @@
 Accepted on 2026-08-14. Task #27.
 
 Supersedes nothing. Closes the hole ADR 0010 named and left open under "There is
-a THIRD check that is absent". Extends ADR 0009 by adding one method to a trait
-in the trusted computing base; the allow-listed dependency set ADR 0009 states
-is unchanged and `tools/check-workspace-layering.sh` needed no new exemption.
+a THIRD check that is absent". It originally extended the policy trait by one
+method; the 2026-08-15 amendment below removes that trait and places the method
+on the concrete lower-level handle.
 
 Authorization follow-up, also 2026-08-14: the action-routing parts of this ADR
 are superseded by the request-bound, one-time admission contract in
 [`docs/CONSENSUS.md`](../CONSENSUS.md#request-binding-and-one-time-admission).
 The old `missing_governance_receipt_reason` and runtime-side receipt parser no
-longer exist. The dispatcher now asks the sealed authority to verify and durably
+longer exist. The dispatcher now asks the governance authority to verify and durably
 consume an exact `Approve` or `Veto`, then passes an opaque admission to the
 runtime. Contingency receipts are likewise anchored and redeemed once. The
 release-attestation trust-anchor decision in this ADR remains current.
@@ -26,6 +26,15 @@ atomically consumes governance, and moves one non-cloneable admission to one
 router call without a second mutable policy evaluation. Once consumed, a later
 routing or execution failure burns both approvals. Raw human-approved runtime
 entry points do not bypass this route.
+
+Capability-boundary amendment, 2026-08-15: the public backend trait and its public
+`#[doc(hidden)]` marker were forgeable by downstream crates and are removed. The
+current `swarm_governance::GovernanceAuthority` is a concrete opaque handle with a
+private `Arc<GovernancePolicy>`. Only an authenticated persisted policy can mint it;
+runtime, ingest, containment, human resume, and release verification accept that
+exact handle rather than a trait object or generic implementation. Historical trait
+widening language below describes the API that first shipped this decision, not the
+current capability boundary.
 
 ## Context
 
@@ -99,13 +108,14 @@ happens in `swarm-runtime`:
   counts rather than identities, so the existing read-only surface cannot answer
   it;
 - `swarm-policy` does not depend on `swarm-consensus` and must not start to (ADR
-  0009), so the trait cannot carry a `ConsensusGovernanceReceipt` in either
-  direction.
+  0009), so the original trait could not carry a
+  `ConsensusGovernanceReceipt` in either direction.
 
 ## Decision
 
-**`GovernanceAuthority` gains one method**, the third widening of the sealed
-trait:
+**The governance authority surface gains one method**, originally the third
+widening of the now-removed backend trait and currently an inherent method on the
+opaque handle:
 
 ```rust
 fn governor_public_keys(&self) -> BTreeSet<AgentId>;
@@ -152,27 +162,27 @@ to say so. It has a real cost, stated under Consequences.
 **Both authorization call sites take the anchor from the object that signs.**
 The release path passes `ContainmentSweep::governance()` — the one authority the
 sweep attests with — so anchor and signer come from the same object rather than
-from two configurations that could drift. The dispatcher passes its own
-`governance_policy`.
+from two configurations that could drift. The dispatcher passes its own concrete
+governance authority handle.
 
-## Why widening the sealed trait is acceptable here
+## Why this authority surface is acceptable here
 
-`GovernanceAuthority`'s doc sets the bar: widening beyond what a named consumer
-already called re-imports the coupling the trait exists to remove. Taken
-deliberately, and narrower than either previous widening:
+The original trait widening was deliberately narrow. The 2026-08-15 amendment
+preserves that surface on the concrete handle while removing substitutable
+implementations:
 
-- **No new TCB dependency.** `AgentId` comes from `swarm-core`, already the sole
-  allow-listed workspace dependency of `swarm-policy` (ADR 0009). No manifest
-  changed.
+- **The dependency is explicit.** The concrete policy and handle now live together
+  in `swarm-governance`; runtime consumers depend on that lower-level crate rather
+  than on an agent-role crate or forgeable policy trait.
 - **No verdict, and no argument.** `authorize_partition_request` returning
   `Ok(true)` lets a destructive action proceed. This method reports a set and
   takes nothing; every decision made from it is made by the caller, in the open.
-- **It can only narrow trust in the fail-closed direction.** An implementation
-  returning fewer keys refuses more; returning more keys means the governance
-  agent admitting governors, which is what registration already does. The one
-  implementer is the type that holds the signing key in the first place.
-- **The seal still enumerates.** There is exactly one implementer,
-  `GovernancePolicy`, and `grep -rn SealedGovernanceAuthority` still finds it.
+- **It reports only the wrapped policy's trust set.** Downstream code cannot
+  substitute a backend that returns attacker-selected keys.
+- **The current handle is not substitutable.** Only an authenticated persisted
+  `GovernancePolicy` can mint it. A source inventory gate rejects trait or generic
+  installer reintroduction, and compile-fail fixtures reject implementation,
+  construction, and fake-handle installation.
 
 ## Consequences
 

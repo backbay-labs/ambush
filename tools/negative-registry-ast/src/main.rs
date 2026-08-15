@@ -13,7 +13,7 @@ use syn::{
 };
 
 const EXPECTED: &str = include_str!("expected-bindings.tsv");
-const EXPECTED_SHA256: &str = "5cde557c71242ba4c99e673d968af665f8f831f09cc26fbdc4b280f3847af5e0";
+const EXPECTED_SHA256: &str = "996df668004609a39b0abb744997c613c437483370aadc0e9911340a01665e67";
 const PROTOCOL_SOURCE: &str = "tests/negative_protocol.rs";
 const PROTOCOL_SEMANTIC_SHA256: &str =
     "2913a5d3a7dc9020b5526f1b98120c7b5e474c2a6ba2d3c1a2d7a4828af0a121";
@@ -41,7 +41,7 @@ const REGISTERED_SOURCE_SEMANTIC_SHA256: [(&str, &str); 4] = [
     ),
     (
         "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs",
-        "27208472955bc23e7dba22d37defd6f6989a8ac0ce294eaf078b5af8c2cb5d36",
+        "7a4f49105a180f9fdbe732d0a9061b7d03fa818a62b7dfde21b2d74738a5e5e4",
     ),
     (
         "crates/swarm-spine/tests/negative_envelope_and_chain.rs",
