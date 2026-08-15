@@ -263,14 +263,6 @@ jobs:
           restore-keys: |
             cargo-home-${{ runner.os }}-
 
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -299,14 +291,6 @@ jobs:
           key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -421,14 +405,6 @@ jobs:
           restore-keys: |
             cargo-home-${{ runner.os }}-
 
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-z3-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-z3-${{ runner.os }}-
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -499,14 +475,6 @@ jobs:
           restore-keys: |
             cargo-home-${{ runner.os }}-
 
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -550,14 +518,6 @@ jobs:
           key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -620,14 +580,6 @@ jobs:
           restore-keys: |
             cargo-home-${{ runner.os }}-
 
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -654,14 +606,6 @@ jobs:
           key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
