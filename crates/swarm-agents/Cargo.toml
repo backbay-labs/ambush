@@ -15,6 +15,7 @@ serde_json.workspace = true
 swarm-consensus.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
+swarm-governance.workspace = true
 swarm-pheromone.workspace = true
 swarm-policy.workspace = true
 swarm-runtime.workspace = true
