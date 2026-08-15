@@ -32,9 +32,10 @@
 #     the exact normal reverse-dependency closure of `swarm-governance`. The
 #     authority inventory requires one concrete opaque `GovernanceAuthority`,
 #     its private policy field and authenticated mint; pins every closure
-#     manifest, lib/bin root, inherent method/impl, and private-field-owner
-#     source; rejects custom build targets; and requires the compiler to forbid
-#     unsafe code in every normal shipped target. Full closure production source
+#     manifest, lib/bin root, inherent method/impl, and exact Rust privacy closure
+#     rooted at every private-authority field owner; rejects custom build targets;
+#     and requires the compiler to forbid unsafe code in every normal shipped target.
+#     Full closure production source
 #     is also scanned for raw-memory primitives regardless of inferred type.
 #
 # WHAT THIS SCRIPT COVERS
@@ -44,10 +45,11 @@
 #   `[SigningKey; N]` or `&[SigningKey]`.
 #
 #   The signing-key collection scan is scoped to those three deliberately.
-#   Separately, the authority scan derives and pins all eight normal shipped
-#   reverse dependencies, every one of their lib/bin roots, and the complete
+#   Separately, locked Cargo metadata package IDs and dependency kinds derive and
+#   pin all eight normal shipped reverse dependencies, every one of their lib/bin roots, and the complete
 #   Rust source set in that closure. Raw source identity is reserved for the
-#   five modules that can directly read the private handle field.
+#   five field-owning modules and every production descendant that Rust privacy
+#   permits to read an ancestor-private handle field.
 #
 # WHAT THIS SCRIPT CANNOT SEE, AND THEREFORE DOES NOT CLAIM
 #   1. A fixed set of NAMED `SigningKey` struct fields
@@ -90,6 +92,11 @@ for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/pytho
 done
 if [[ -z "$SINGLE_GOVERNOR_PYTHON" ]]; then
   echo "check-single-governor-key requires Python >= 3.11 at a pinned system path" >&2
+  exit 1
+fi
+SINGLE_GOVERNOR_CARGO="$(command -v cargo || true)"
+if [[ -z "$SINGLE_GOVERNOR_CARGO" || ! -x "$SINGLE_GOVERNOR_CARGO" ]]; then
+  echo "check-single-governor-key requires Cargo on the trusted PATH" >&2
   exit 1
 fi
 
@@ -159,16 +166,47 @@ scan_paths() {
 scan_governance_capability_inventory() {
   local source_root="$1"
   local inventory_mode="${2:-fixture}"
-  "$SINGLE_GOVERNOR_PYTHON" -I - "$source_root" "$inventory_mode" <<'PY'
+  "$SINGLE_GOVERNOR_PYTHON" -I - \
+    "$source_root" "$inventory_mode" "$SINGLE_GOVERNOR_CARGO" <<'PY'
 import hashlib
+import json
 import pathlib
 import re
+import subprocess
 import sys
 import tomllib
 
 root = pathlib.Path(sys.argv[1])
-strict_digest = sys.argv[2] == "strict"
+inventory_mode = sys.argv[2]
+strict_digest = inventory_mode == "strict"
+privacy_only = inventory_mode == "privacy"
+cargo = pathlib.Path(sys.argv[3])
 canonical = pathlib.Path("crates/swarm-governance/src/lib.rs")
+EXPECTED_ROOT_MANIFEST_DIGEST = "187e7bd6b36943484258043d03bd2c4ec1c43744300534fddd02dae5a4627b8b"
+EXPECTED_ROOT_LOCK_DIGEST = "8afebe30e5aa8eeab54476b4607d568aa8ada2831475a028b427fe992283fe50"
+EXPECTED_WORKSPACE_PACKAGES = {
+    "swarm-agents",
+    "swarm-cli",
+    "swarm-consensus",
+    "swarm-core",
+    "swarm-crypto",
+    "swarm-evolution",
+    "swarm-governance",
+    "swarm-guard",
+    "swarm-ingest-json",
+    "swarm-ingest-runtime",
+    "swarm-ingest-sentinel",
+    "swarm-ingest-taxii",
+    "swarm-ingest-tetragon",
+    "swarm-pheromone",
+    "swarm-policy",
+    "swarm-response",
+    "swarm-runtime",
+    "swarm-runtime-http",
+    "swarm-runtime-workbench",
+    "swarm-spine",
+    "swarm-whisker",
+}
 EXPECTED_AUTHORITY_IMPL_DIGEST = "8da26c153a0436586d711477061eeeceee911e66752ac17952397b14631e57e5"
 EXPECTED_GOVERNANCE_SOURCE_DIGEST = "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896"
 EXPECTED_STRICT_AUTHORITY_IMPL_DIGESTS = {
@@ -239,7 +277,7 @@ EXPECTED_CLOSURE_MANIFEST_DIGESTS = {
     "swarm-runtime-workbench": "eab3a2b0578a2366e26604a69ca649ba03ce032d3fc45696876ae222573d24ce",
     "swarm-cli": "0593667747de0b4cd7792170f2c6bfa8fb0a5051767dca97ede20fad44a23dfe",
 }
-EXPECTED_FIELD_OWNER_SOURCE_DIGESTS = {
+EXPECTED_PRIVACY_SOURCE_DIGESTS = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"):
         "2beaf67e5b1180752255484c6e8ad456354ac8c59f572fb4392d579005f92896",
     pathlib.Path("crates/swarm-runtime/src/containment.rs"):
@@ -250,6 +288,41 @@ EXPECTED_FIELD_OWNER_SOURCE_DIGESTS = {
         "33a272f43e892f47816eb6fe183f41d9afda86b3093b5258da0c7c6e8a3c7c47",
     pathlib.Path("crates/swarm-runtime-http/src/bin/swarm_detect.rs"):
         "51f81097ef4e5ba17f9a3757e8e413118f36572f9c844fef20729d4532da9a10",
+    pathlib.Path("crates/swarm-ingest-runtime/src/ingest/demo.rs"):
+        "18ed6e3ee9ea5d49a237de45067cf555f6e620264d9fd46c812180d10e110b0b",
+    pathlib.Path("crates/swarm-ingest-runtime/src/ingest/governance_resume.rs"):
+        "492614aa84da4f8da399408bf99a64009d1d686c8f79b70b06579a39e19a9645",
+    pathlib.Path("crates/swarm-ingest-runtime/src/ingest/health.rs"):
+        "3b875c6701baec37cf71692c9937d2e1a08bd477391c7529b05fb5a4c8325acd",
+    pathlib.Path("crates/swarm-ingest-runtime/src/ingest/platform_api.rs"):
+        "6a47977b16fd895e5bea265ce18335f6f8b291db28b9ab758591cfd4d8e7bc14",
+    pathlib.Path("crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs"):
+        "ec8fb17c3226fadbe6120a381714f88eccdf5225aa62a471923fc21df92d7adc",
+    pathlib.Path("crates/swarm-ingest-runtime/src/ingest/soar_verdict_handlers.rs"):
+        "c0a9d45eaf9302b1617295dfd7257e0158e35f1d16cd7bb429d45df9228f83fb",
+}
+EXPECTED_PRIVACY_CLOSURES = {
+    pathlib.Path("crates/swarm-governance/src/lib.rs"): {
+        pathlib.Path("crates/swarm-governance/src/lib.rs"),
+    },
+    pathlib.Path("crates/swarm-runtime/src/containment.rs"): {
+        pathlib.Path("crates/swarm-runtime/src/containment.rs"),
+    },
+    pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"): {
+        pathlib.Path("crates/swarm-runtime/src/dispatcher.rs"),
+    },
+    pathlib.Path("crates/swarm-ingest-runtime/src/ingest/mod.rs"): {
+        pathlib.Path("crates/swarm-ingest-runtime/src/ingest/mod.rs"),
+        pathlib.Path("crates/swarm-ingest-runtime/src/ingest/demo.rs"),
+        pathlib.Path("crates/swarm-ingest-runtime/src/ingest/governance_resume.rs"),
+        pathlib.Path("crates/swarm-ingest-runtime/src/ingest/health.rs"),
+        pathlib.Path("crates/swarm-ingest-runtime/src/ingest/platform_api.rs"),
+        pathlib.Path("crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs"),
+        pathlib.Path("crates/swarm-ingest-runtime/src/ingest/soar_verdict_handlers.rs"),
+    },
+    pathlib.Path("crates/swarm-runtime-http/src/bin/swarm_detect.rs"): {
+        pathlib.Path("crates/swarm-runtime-http/src/bin/swarm_detect.rs"),
+    },
 }
 EXPECTED_CLOSURE_TARGET_ATTRIBUTES = {
     pathlib.Path("crates/swarm-governance/src/lib.rs"): "#![forbid(unsafe_code)]",
@@ -476,46 +549,209 @@ def public_function_headers(source: str):
         headers.append(canonical_tokens(source[match.start():end]))
     return headers
 
-def normal_dependency_names(document: dict) -> set[str]:
-    tables = [document.get("dependencies", {})]
-    for target in document.get("target", {}).values():
-        if isinstance(target, dict):
-            tables.append(target.get("dependencies", {}))
-    dependencies = set()
-    for table in tables:
-        if not isinstance(table, dict):
+def external_module_children(relative: pathlib.Path) -> set[pathlib.Path]:
+    source_path = root / relative
+    raw = source_path.read_text(encoding="utf-8")
+    source = without_cfg_test_modules(production_source(raw))
+    inline = re.search(
+        r"(?m)^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[A-Za-z_]\w*\s*\{",
+        source,
+    )
+    if inline:
+        line = source.count("\n", 0, inline.start()) + 1
+        raise ValueError(
+            f"{relative}:{line}: production inline modules are forbidden in a "
+            "private-authority field's privacy closure"
+        )
+    declaration = re.compile(
+        r"(?m)^(?P<attrs>(?:[ \t]*#\s*\[[^\]\n]*\][ \t]*\n)*)"
+        r"[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+"
+        r"(?P<name>[A-Za-z_]\w*)\s*;",
+    )
+    children = set()
+    if relative.name in {"lib.rs", "main.rs", "mod.rs"}:
+        default_base = relative.parent
+    else:
+        default_base = relative.parent / relative.stem
+    for match in declaration.finditer(source):
+        attrs = match.group("attrs")
+        if re.search(r"cfg\s*\([^)]*\btest\b", attrs):
             continue
-        for name, specification in table.items():
-            package = specification.get("package", name) if isinstance(specification, dict) else name
-            dependencies.add(package)
-    return dependencies
+        path_attributes = re.findall(r"path\s*=\s*\"([^\"]+)\"", attrs)
+        if len(path_attributes) > 1:
+            raise ValueError(f"{relative}: duplicate #[path] on module {match.group('name')}")
+        if path_attributes:
+            candidates = [relative.parent / path_attributes[0]]
+        else:
+            name = match.group("name")
+            candidates = [default_base / f"{name}.rs", default_base / name / "mod.rs"]
+        existing = [candidate for candidate in candidates if (root / candidate).is_file()]
+        if len(existing) != 1:
+            raise ValueError(
+                f"{relative}: module {match.group('name')} resolves to {existing}, expected one file"
+            )
+        children.add(existing[0])
+    return children
 
-def shipped_target_roots(crate_root: pathlib.Path, document: dict) -> set[pathlib.Path]:
-    targets = set()
-    library = document.get("lib")
-    implicit_library = crate_root / "src/lib.rs"
-    if isinstance(library, dict):
-        targets.add(crate_root / library.get("path", "src/lib.rs"))
-    elif implicit_library.is_file():
-        targets.add(implicit_library)
-    for binary in document.get("bin", []):
-        if isinstance(binary, dict) and "path" in binary:
-            targets.add(crate_root / binary["path"])
-    if document.get("package", {}).get("autobins", True):
-        main = crate_root / "src/main.rs"
-        if main.is_file():
-            targets.add(main)
-        binary_root = crate_root / "src/bin"
-        if binary_root.is_dir():
-            targets.update(binary_root.glob("*.rs"))
-            targets.update(binary_root.glob("*/main.rs"))
-    return {path.relative_to(root) for path in targets}
+def privacy_module_closure(owner: pathlib.Path) -> set[pathlib.Path]:
+    closure = set()
+    pending = [owner]
+    while pending:
+        relative = pending.pop()
+        if relative in closure:
+            continue
+        if not (root / relative).is_file():
+            raise ValueError(f"privacy-closure source is missing: {relative}")
+        closure.add(relative)
+        pending.extend(external_module_children(relative) - closure)
+    return closure
+
+def validate_privacy_inventory() -> None:
+    global failed
+    observed_privacy_sources = set()
+    for owner, expected_closure in EXPECTED_PRIVACY_CLOSURES.items():
+        try:
+            actual_closure = privacy_module_closure(owner)
+        except (OSError, ValueError) as error:
+            print(f"governance capability inventory: {error}", file=sys.stderr)
+            failed = True
+            continue
+        observed_privacy_sources.update(actual_closure)
+        if actual_closure != expected_closure:
+            print(
+                "governance capability inventory: private-authority privacy closure "
+                f"for {owner} drifted; found {sorted(map(str, actual_closure))}",
+                file=sys.stderr,
+            )
+            failed = True
+    if observed_privacy_sources != set(EXPECTED_PRIVACY_SOURCE_DIGESTS):
+        print(
+            "governance capability inventory: private-authority privacy source inventory "
+            f"drifted; found {sorted(map(str, observed_privacy_sources))}",
+            file=sys.stderr,
+        )
+        failed = True
+    for path, expected in EXPECTED_PRIVACY_SOURCE_DIGESTS.items():
+        source_path = root / path
+        actual = hashlib.sha256(source_path.read_bytes()).hexdigest() if source_path.is_file() else None
+        if actual != expected:
+            print(
+                f"governance capability inventory: private-authority privacy source {path} "
+                f"digest {actual} != pinned {expected}",
+                file=sys.stderr,
+            )
+            failed = True
+
+if privacy_only:
+    validate_privacy_inventory()
+    raise SystemExit(1 if failed else 0)
 
 authority_closure = set()
 if strict_digest:
+    for relative, expected in (
+        (pathlib.Path("Cargo.toml"), EXPECTED_ROOT_MANIFEST_DIGEST),
+        (pathlib.Path("Cargo.lock"), EXPECTED_ROOT_LOCK_DIGEST),
+    ):
+        path = root / relative
+        actual = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+        if actual != expected:
+            print(
+                f"governance capability inventory: root {relative} digest "
+                f"{actual} != pinned {expected}",
+                file=sys.stderr,
+            )
+            failed = True
+    try:
+        metadata_process = subprocess.run(
+            [str(cargo), "metadata", "--locked", "--format-version", "1"],
+            cwd=root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"governance capability inventory: Cargo metadata failed: {error}", file=sys.stderr)
+        raise SystemExit(2)
+    if metadata_process.returncode:
+        print(
+            "governance capability inventory: Cargo metadata failed under --locked: "
+            f"{metadata_process.stderr[-4000:]}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    try:
+        metadata = json.loads(metadata_process.stdout)
+    except json.JSONDecodeError as error:
+        print(f"governance capability inventory: invalid Cargo metadata: {error}", file=sys.stderr)
+        raise SystemExit(2)
+    packages_by_id = {
+        package["id"]: package
+        for package in metadata.get("packages", [])
+        if isinstance(package, dict) and isinstance(package.get("id"), str)
+    }
+    workspace_ids = set(metadata.get("workspace_members", []))
+    workspace_packages = {
+        packages_by_id[package_id]["name"]
+        for package_id in workspace_ids
+        if package_id in packages_by_id
+    }
+    if workspace_packages != EXPECTED_WORKSPACE_PACKAGES or len(workspace_ids) != len(workspace_packages):
+        print(
+            "governance capability inventory: resolved workspace package identity drifted; "
+            f"found {sorted(workspace_packages)}",
+            file=sys.stderr,
+        )
+        failed = True
+    resolved_nodes = {
+        node["id"]: node
+        for node in (metadata.get("resolve") or {}).get("nodes", [])
+        if isinstance(node, dict) and isinstance(node.get("id"), str)
+    }
+    governance_ids = {
+        package_id
+        for package_id in workspace_ids
+        if packages_by_id.get(package_id, {}).get("name") == "swarm-governance"
+    }
+    if len(governance_ids) != 1:
+        print(
+            "governance capability inventory: expected one resolved workspace "
+            f"swarm-governance package, found {sorted(governance_ids)}",
+            file=sys.stderr,
+        )
+        failed = True
+    resolved_closure_ids = set(governance_ids)
+    changed = True
+    while changed:
+        changed = False
+        for package_id in workspace_ids - resolved_closure_ids:
+            node = resolved_nodes.get(package_id, {})
+            normal_dependencies = {
+                dependency.get("pkg")
+                for dependency in node.get("deps", [])
+                if any(
+                    kind.get("kind") is None
+                    for kind in dependency.get("dep_kinds", [])
+                    if isinstance(kind, dict)
+                )
+            }
+            if normal_dependencies & resolved_closure_ids:
+                resolved_closure_ids.add(package_id)
+                changed = True
+    authority_closure = {
+        packages_by_id[package_id]["name"]
+        for package_id in resolved_closure_ids
+        if package_id in packages_by_id
+    }
+    if authority_closure != EXPECTED_AUTHORITY_REVERSE_CLOSURE:
+        print(
+            "governance capability inventory: resolved normal reverse dependency closure drifted; "
+            f"found {sorted(authority_closure)}",
+            file=sys.stderr,
+        )
+        failed = True
     manifests = {}
     crate_roots = {}
-    dependency_graph = {}
     for manifest in sorted((root / "crates").glob("*/Cargo.toml")):
         try:
             document = tomllib.loads(manifest.read_text(encoding="utf-8"))
@@ -528,22 +764,6 @@ if strict_digest:
             raise SystemExit(2)
         manifests[package] = (manifest, document)
         crate_roots[package] = manifest.parent
-        dependency_graph[package] = normal_dependency_names(document)
-    authority_closure = {"swarm-governance"}
-    changed = True
-    while changed:
-        changed = False
-        for package, dependencies in dependency_graph.items():
-            if package not in authority_closure and dependencies & authority_closure:
-                authority_closure.add(package)
-                changed = True
-    if authority_closure != EXPECTED_AUTHORITY_REVERSE_CLOSURE:
-        print(
-            "governance capability inventory: normal reverse dependency closure drifted; "
-            f"found {sorted(authority_closure)}",
-            file=sys.stderr,
-        )
-        failed = True
     observed_targets = set()
     for package in sorted(EXPECTED_AUTHORITY_REVERSE_CLOSURE):
         manifest_entry = manifests.get(package)
@@ -551,7 +771,7 @@ if strict_digest:
             print(f"governance capability inventory: closure package {package} is missing", file=sys.stderr)
             failed = True
             continue
-        manifest, document = manifest_entry
+        manifest, _document = manifest_entry
         actual_manifest_digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
         if actual_manifest_digest != EXPECTED_CLOSURE_MANIFEST_DIGESTS[package]:
             print(
@@ -568,7 +788,40 @@ if strict_digest:
                 file=sys.stderr,
             )
             failed = True
-        observed_targets.update(shipped_target_roots(crate_roots[package], document))
+        metadata_packages = [
+            candidate
+            for package_id, candidate in packages_by_id.items()
+            if package_id in workspace_ids and candidate.get("name") == package
+        ]
+        if len(metadata_packages) != 1:
+            print(
+                f"governance capability inventory: resolved closure package {package} "
+                f"has {len(metadata_packages)} workspace identities",
+                file=sys.stderr,
+            )
+            failed = True
+            continue
+        for target in metadata_packages[0].get("targets", []):
+            kinds = set(target.get("kind", []))
+            if "custom-build" in kinds:
+                print(
+                    "governance capability inventory: authority-closure packages may not "
+                    f"have a resolved custom-build target: {target.get('src_path')}",
+                    file=sys.stderr,
+                )
+                failed = True
+            if not ({"lib", "bin"} & kinds):
+                continue
+            try:
+                resolved_source = pathlib.Path(target["src_path"]).resolve().relative_to(root.resolve())
+            except (KeyError, ValueError):
+                print(
+                    f"governance capability inventory: resolved target escaped the workspace: {target}",
+                    file=sys.stderr,
+                )
+                failed = True
+                continue
+            observed_targets.add(resolved_source)
     if observed_targets != set(EXPECTED_CLOSURE_TARGET_ATTRIBUTES):
         print(
             "governance capability inventory: shipped authority-closure target roots drifted; "
@@ -585,16 +838,7 @@ if strict_digest:
                 file=sys.stderr,
             )
             failed = True
-    for path, expected in EXPECTED_FIELD_OWNER_SOURCE_DIGESTS.items():
-        source_path = root / path
-        actual = hashlib.sha256(source_path.read_bytes()).hexdigest() if source_path.is_file() else None
-        if actual != expected:
-            print(
-                f"governance capability inventory: private-handle field-owner source {path} "
-                f"digest {actual} != pinned {expected}",
-                file=sys.stderr,
-            )
-            failed = True
+    validate_privacy_inventory()
 
 source_files = sorted(
     path
@@ -1112,6 +1356,43 @@ expect_capability_rejected() {
   fi
 }
 
+plant_strict_privacy_fixture() {
+  local name="$1"
+  local fixture_root="$FIXTURE_DIR/privacy-$name"
+  local crate_dir
+  local crate_name
+  mkdir -p "$fixture_root"
+  cp "$ROOT_DIR/Cargo.toml" "$fixture_root/Cargo.toml"
+  cp "$ROOT_DIR/Cargo.lock" "$fixture_root/Cargo.lock"
+  for crate_dir in "$ROOT_DIR"/crates/*; do
+    [[ -d "$crate_dir" && -f "$crate_dir/Cargo.toml" ]] || continue
+    crate_name="${crate_dir##*/}"
+    mkdir -p "$fixture_root/crates/$crate_name"
+    cp -R "$crate_dir/." "$fixture_root/crates/$crate_name/"
+  done
+  printf '%s\n' "$fixture_root"
+}
+
+expect_strict_privacy_clean() {
+  local fixture_root="$1"
+  local description="$2"
+  fixture_clean_controls=$((fixture_clean_controls + 1))
+  if ! scan_governance_capability_inventory "$fixture_root" privacy; then
+    echo "FIXTURE FAILURE: the strict privacy inventory rejected $description" >&2
+    fixture_failures=$((fixture_failures + 1))
+  fi
+}
+
+expect_strict_privacy_rejected() {
+  local fixture_root="$1"
+  local description="$2"
+  fixture_adversarial_cases=$((fixture_adversarial_cases + 1))
+  if scan_governance_capability_inventory "$fixture_root" privacy >/dev/null 2>&1; then
+    echo "FIXTURE FAILURE: the strict privacy inventory accepted $description" >&2
+    fixture_failures=$((fixture_failures + 1))
+  fi
+}
+
 plant_capability_fixture control "$CANONICAL_CAPABILITY"
 plant_capability_fixture second_handle "$CANONICAL_CAPABILITY" \
   'pub struct GovernanceAuthority { policy: Arc<GovernancePolicy> }'
@@ -1409,6 +1690,186 @@ expect_capability_rejected erased_impl_any "an opaque impl Any authority getter"
 expect_capability_rejected trait_default_clone "a public trait default method cloning the authority"
 expect_capability_rejected extern_authority_clone "an extern Rust function cloning the authority"
 
+privacy_clean="$(plant_strict_privacy_fixture clean)"
+expect_strict_privacy_clean "$privacy_clean" "the exact derived private-field module closures"
+
+privacy_descendant="$(plant_strict_privacy_fixture descendant)"
+printf '%s\n' '
+fn x(state: &IngestState) -> Option<&dyn std::any::Any> {
+    state
+        .governance_authority
+        .as_ref()
+        .map(|value| value as &dyn std::any::Any)
+}
+
+impl IngestState {
+    pub fn erased(&self) -> Option<&dyn std::any::Any> { x(self) }
+}' >> "$privacy_descendant/crates/swarm-ingest-runtime/src/ingest/governance_resume.rs"
+expect_strict_privacy_rejected \
+  "$privacy_descendant" \
+  "the exact split-helper descendant Any leak"
+
+privacy_sibling="$(plant_strict_privacy_fixture sibling)"
+printf '%s\n' '
+fn y(state: &IngestState) -> Option<&dyn std::any::Any> {
+    state
+        .governance_authority
+        .as_ref()
+        .map(|value| value as &dyn std::any::Any)
+}
+
+impl IngestState {
+    pub fn erased_health(&self) -> Option<&dyn std::any::Any> { y(self) }
+}' >> "$privacy_sibling/crates/swarm-ingest-runtime/src/ingest/health.rs"
+expect_strict_privacy_rejected \
+  "$privacy_sibling" \
+  "a sibling descendant module leaking the parent-private authority"
+
+privacy_nested="$(plant_strict_privacy_fixture nested)"
+printf '%s\n' 'mod privacy_escape_nested;' \
+  >> "$privacy_nested/crates/swarm-ingest-runtime/src/ingest/governance_resume.rs"
+mkdir -p "$privacy_nested/crates/swarm-ingest-runtime/src/ingest/governance_resume"
+printf '%s\n' '
+use crate::ingest::IngestState;
+
+fn z(state: &IngestState) -> Option<&dyn std::any::Any> {
+    state
+        .governance_authority
+        .as_ref()
+        .map(|value| value as &dyn std::any::Any)
+}
+
+impl IngestState {
+    pub fn erased_nested(&self) -> Option<&dyn std::any::Any> { z(self) }
+}' > "$privacy_nested/crates/swarm-ingest-runtime/src/ingest/governance_resume/privacy_escape_nested.rs"
+expect_strict_privacy_rejected \
+  "$privacy_nested" \
+  "a newly declared nested descendant authority leak"
+
+privacy_redirect="$(plant_strict_privacy_fixture redirect)"
+cp \
+  "$privacy_redirect/crates/swarm-ingest-runtime/src/ingest/governance_resume.rs" \
+  "$privacy_redirect/crates/swarm-ingest-runtime/src/ingest/governance_resume_redirected.rs"
+awk '
+  /^mod governance_resume;$/ {
+    print "#[path = \"governance_resume_redirected.rs\"]"
+  }
+  { print }
+' "$privacy_redirect/crates/swarm-ingest-runtime/src/ingest/mod.rs" \
+  > "$privacy_redirect/crates/swarm-ingest-runtime/src/ingest/mod.rs.next"
+mv \
+  "$privacy_redirect/crates/swarm-ingest-runtime/src/ingest/mod.rs.next" \
+  "$privacy_redirect/crates/swarm-ingest-runtime/src/ingest/mod.rs"
+expect_strict_privacy_rejected \
+  "$privacy_redirect" \
+  "a redirected existing privacy descendant"
+
+metadata_alias="$(plant_strict_privacy_fixture metadata-alias)"
+"$SINGLE_GOVERNOR_PYTHON" -I - "$metadata_alias" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+manifest = root / "Cargo.toml"
+source = manifest.read_text()
+member_marker = '    "crates/swarm-crypto",\n]'
+dependency_marker = '# Internal crates\n'
+crate_root = root / "crates/swarm-closure-escape"
+already_installed = '    "crates/swarm-closure-escape",\n' in source
+if already_installed:
+    required = (
+        'gov-cap = { package = "swarm-governance"',
+        'rt-cap = { package = "swarm-runtime"',
+        'gov-cap.workspace = true',
+        'rt-cap.workspace = true',
+    )
+    crate_text = (crate_root / "Cargo.toml").read_text() if crate_root.is_dir() else ""
+    if not all(marker in source for marker in required[:2]) or not all(
+        marker in crate_text for marker in required[2:]
+    ):
+        raise SystemExit("metadata alias fixture found an incomplete preinstalled escape")
+else:
+    if source.count(member_marker) != 1 or source.count(dependency_marker) != 1:
+        raise SystemExit("metadata alias fixture lost its exact workspace markers")
+    manifest.write_text(
+        source
+        .replace(
+            member_marker,
+            '    "crates/swarm-crypto",\n    "crates/swarm-closure-escape",\n]',
+            1,
+        )
+        .replace(
+            dependency_marker,
+            dependency_marker
+            + 'gov-cap = { package = "swarm-governance", version = "0.1.0", '
+              'path = "crates/swarm-governance" }\n'
+            + 'rt-cap = { package = "swarm-runtime", version = "0.1.0", '
+              'path = "crates/swarm-runtime" }\n',
+            1,
+        )
+    )
+    (crate_root / "src").mkdir(parents=True)
+    (crate_root / "Cargo.toml").write_text('''
+[package]
+name = "swarm-closure-escape"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gov-cap.workspace = true
+rt-cap.workspace = true
+''')
+    (crate_root / "src/lib.rs").write_text('''
+use std::sync::Arc;
+
+use gov_cap::GovernancePolicy;
+use rt_cap::containment::ContainmentSweep;
+
+pub fn install(policy: Arc<GovernancePolicy>, sweep: ContainmentSweep) -> ContainmentSweep {
+    let value = unsafe { std::mem::transmute_copy(&policy) };
+    std::mem::forget(policy);
+    sweep.with_governance_authority(value)
+}
+''')
+    with (root / "Cargo.lock").open("a") as lock:
+        lock.write('''
+
+[[package]]
+name = "swarm-closure-escape"
+version = "0.1.0"
+dependencies = [
+ "swarm-governance",
+ "swarm-runtime",
+]
+''')
+PY
+fixture_clean_controls=$((fixture_clean_controls + 1))
+metadata_alias_validation=(check --locked --offline -p swarm-closure-escape)
+if [[ "${SWARM_NEGATIVE_REGISTRY_PROTECTED:-}" == "1" ]]; then
+  metadata_alias_validation=(metadata --locked --offline --format-version 1)
+fi
+if ! CARGO_TARGET_DIR="$ROOT_DIR/target/single-governor-metadata-fixture" \
+  "$SINGLE_GOVERNOR_CARGO" "${metadata_alias_validation[@]}" \
+  --manifest-path "$metadata_alias/Cargo.toml" \
+  >"$FIXTURE_DIR/metadata_alias.stdout" \
+  2>"$FIXTURE_DIR/metadata_alias.stderr"; then
+  echo "FIXTURE FAILURE: Cargo rejected the valid workspace-alias closure escape" >&2
+  sed -n '1,40p' "$FIXTURE_DIR/metadata_alias.stderr" >&2
+  fixture_failures=$((fixture_failures + 1))
+fi
+fixture_adversarial_cases=$((fixture_adversarial_cases + 1))
+if scan_governance_capability_inventory "$metadata_alias" strict \
+  >"$FIXTURE_DIR/metadata_alias_gate.stdout" \
+  2>"$FIXTURE_DIR/metadata_alias_gate.stderr"; then
+  echo "FIXTURE FAILURE: the resolved metadata inventory accepted a renamed workspace escape" >&2
+  fixture_failures=$((fixture_failures + 1))
+elif ! grep -q 'resolved normal reverse dependency closure drifted' \
+  "$FIXTURE_DIR/metadata_alias_gate.stderr"; then
+  echo "FIXTURE FAILURE: the alias escape failed without exercising the resolved closure" >&2
+  sed -n '1,40p' "$FIXTURE_DIR/metadata_alias_gate.stderr" >&2
+  fixture_failures=$((fixture_failures + 1))
+fi
+
 plant compiler_forbid_control '#![forbid(unsafe_code)]
 use std::sync::Arc;
 pub struct GovernancePolicy;
@@ -1504,6 +1965,90 @@ pub extern "Rust" fn release_authority_extern(
 ) -> Option<GovernanceAuthority> {
     sweep.governance.clone()
 }'
+plant compiler_privacy_descendant_control '#![forbid(unsafe_code)]
+use std::any::Any;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct GovernanceAuthority { policy: Arc<()> }
+
+pub mod ingest {
+    use super::GovernanceAuthority;
+
+    pub struct IngestState {
+        governance_authority: Option<GovernanceAuthority>,
+    }
+
+    mod governance_resume {
+        use super::IngestState;
+
+        fn x(state: &IngestState) -> Option<&dyn std::any::Any> {
+            state
+                .governance_authority
+                .as_ref()
+                .map(|value| value as &dyn std::any::Any)
+        }
+
+        impl IngestState {
+            pub fn erased(&self) -> Option<&dyn std::any::Any> { x(self) }
+        }
+    }
+
+    mod health {
+        use super::IngestState;
+
+        fn y(state: &IngestState) -> Option<&dyn std::any::Any> {
+            state
+                .governance_authority
+                .as_ref()
+                .map(|value| value as &dyn std::any::Any)
+        }
+
+        impl IngestState {
+            pub fn erased_health(&self) -> Option<&dyn std::any::Any> { y(self) }
+        }
+    }
+
+    mod branch {
+        mod nested {
+            use crate::ingest::IngestState;
+
+            fn z(state: &IngestState) -> Option<&dyn std::any::Any> {
+                state
+                    .governance_authority
+                    .as_ref()
+                    .map(|value| value as &dyn std::any::Any)
+            }
+
+            impl IngestState {
+                pub fn erased_nested(&self) -> Option<&dyn std::any::Any> { z(self) }
+            }
+        }
+    }
+}
+
+pub mod external {
+    use super::{Any, GovernanceAuthority};
+    use super::ingest::IngestState;
+
+    fn recover(value: Option<&dyn Any>) -> Option<GovernanceAuthority> {
+        value?.downcast_ref::<GovernanceAuthority>().cloned()
+    }
+
+    pub fn recover_all(
+        state: &IngestState,
+    ) -> (
+        Option<GovernanceAuthority>,
+        Option<GovernanceAuthority>,
+        Option<GovernanceAuthority>,
+    ) {
+        (
+            recover(state.erased()),
+            recover(state.erased_health()),
+            recover(state.erased_nested()),
+        )
+    }
+}'
 fixture_clean_controls=$((fixture_clean_controls + 1))
 if ! rustc --edition=2024 --crate-type=lib --emit=metadata \
   "$FIXTURE_DIR/compiler_forbid_control.rs" \
@@ -1572,6 +2117,16 @@ for control in safe_erasure trait_default extern; do
     fixture_failures=$((fixture_failures + 1))
   fi
 done
+fixture_clean_controls=$((fixture_clean_controls + 1))
+if ! rustc --edition=2024 --crate-type=lib --emit=metadata \
+  "$FIXTURE_DIR/compiler_privacy_descendant_control.rs" \
+  -o "$FIXTURE_DIR/compiler_privacy_descendant_control.rmeta" \
+  >"$FIXTURE_DIR/compiler_privacy_descendant_control.stdout" \
+  2>"$FIXTURE_DIR/compiler_privacy_descendant_control.stderr"; then
+  echo "FIXTURE FAILURE: rustc rejected descendant/sibling/nested private-field recovery" >&2
+  sed -n '1,20p' "$FIXTURE_DIR/compiler_privacy_descendant_control.stderr" >&2
+  fixture_failures=$((fixture_failures + 1))
+fi
 
 if [ "$fixture_failures" -ne 0 ]; then
   echo "" >&2
