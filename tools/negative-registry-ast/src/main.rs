@@ -13,17 +13,12 @@ use syn::{
 };
 
 const EXPECTED: &str = include_str!("expected-bindings.tsv");
-const EXPECTED_SHA256: &str = "141efc77272b0b617b3ebf482570896c07e716967afd4d70c2c413e8ffa802bd";
+const EXPECTED_SHA256: &str = "246d29b553e712336c93318ef5c0c45a0a88fa27ca5131f6fa6ac6dce562bff6";
 const PROTOCOL_SOURCE: &str = "tests/negative_protocol.rs";
 const PROTOCOL_SEMANTIC_SHA256: &str =
-    "eb6ab292e42dabe4472fdbf7ff498e07ea1a3d4617994b4098532633bd871d5f";
+    "2913a5d3a7dc9020b5526f1b98120c7b5e474c2a6ba2d3c1a2d7a4828af0a121";
 const SYNC_MACRO: &str = "negative_protocol::assert_registered_negative_case";
-const ASYNC_MACRO: &str = "negative_protocol::assert_registered_async_negative_case";
-const RESERVED: [&str; 3] = [
-    "negative_protocol",
-    "assert_registered_negative_case",
-    "assert_registered_async_negative_case",
-];
+const RESERVED: [&str; 2] = ["negative_protocol", "assert_registered_negative_case"];
 const CRATE_BINDINGS: [(&str, &str); 5] = [
     ("swarm_policy", "__phase285_swarm_policy"),
     ("swarm_response", "__phase285_swarm_response"),
@@ -42,11 +37,11 @@ const REGISTERED_SOURCE_SEMANTIC_SHA256: [(&str, &str); 4] = [
     ),
     (
         "crates/swarm-response/tests/negative_containment_and_rollback.rs",
-        "5e4e20340ba176ec3c9922b9836e2174c13d7dca24c1bdea62f3dfc43e8f62b3",
+        "31082b7801c5d5caed53294a5c6a396ea3270a4e3ea6cc7a1308ab66c133ddb4",
     ),
     (
         "crates/swarm-runtime/tests/negative_runtime_fail_closed.rs",
-        "b09826c35ff7cd6134c4b0b262b4aae307c658754f520949d08776a4c6b6e340",
+        "58f814c3763f0f8043b6ba1c2b385187cd6226909b0609347bf9416bee7446df",
     ),
     (
         "crates/swarm-spine/tests/negative_envelope_and_chain.rs",
@@ -416,9 +411,7 @@ struct MacroVisitor {
 impl<'ast> Visit<'ast> for MacroVisitor {
     fn visit_macro(&mut self, mac: &'ast Macro) {
         let path = path_string(&mac.path);
-        if path.ends_with("assert_registered_negative_case")
-            || path.ends_with("assert_registered_async_negative_case")
-        {
+        if path.ends_with("assert_registered_negative_case") {
             self.paths.push(path);
         }
         visit::visit_macro(self, mac);
@@ -833,13 +826,10 @@ fn parse_invocation(mac: &Macro, expected_macro: &str) -> Result<ParsedInvocatio
             return Err("probe/normalizer binding drifted".to_owned());
         }
         let call = value.call.to_string();
-        let expected_call = if expected_macro == ASYNC_MACRO {
-            "awaited"
-        } else {
-            "sync"
-        };
-        if call != expected_call {
-            return Err(format!("call kind `{call}` != `{expected_call}`"));
+        if !matches!(call.as_str(), "sync" | "awaited") {
+            return Err(format!(
+                "call kind `{call}` is neither `sync` nor `awaited`"
+            ));
         }
         let mirror_live = mirror_bindings_are_live(&value.mirror);
         let denied_live = predicate_binding_is_live(&value.denied);
@@ -864,11 +854,16 @@ fn direct_test_macro<'a>(
     function: &'a ItemFn,
     expected_path: &str,
 ) -> Result<&'a Macro, Violation> {
-    if !function.sig.inputs.is_empty() || !matches!(function.sig.output, syn::ReturnType::Default) {
+    let exact_builtin_test = function.attrs.len() == 1 && function.attrs[0].path().is_ident("test");
+    if !exact_builtin_test
+        || function.sig.asyncness.is_some()
+        || !function.sig.inputs.is_empty()
+        || !matches!(function.sig.output, syn::ReturnType::Default)
+    {
         return Err(Violation::new(
             "ast-macro-placement",
             format!(
-                "{} registered test must have no parameters or return type",
+                "{} must be one ordinary #[test] function with no async/proc-macro attribute, parameters, or return type",
                 function.sig.ident
             ),
         ));
@@ -962,28 +957,15 @@ impl<'ast> Visit<'ast> for EarlyExitVisitor {
     }
 }
 
-fn validate_normalizer_helpers() -> Vec<Violation> {
+fn validate_normalizer_helpers(sources: &BTreeMap<PathBuf, syn::File>) -> Vec<Violation> {
     let mut violations = Vec::new();
     for (path, function_name, expected_digest) in NORMALIZER_HELPERS {
-        let source = match fs::read_to_string(path) {
-            Ok(value) => value,
-            Err(error) => {
-                violations.push(Violation::new(
-                    "ast-normalizer-helper",
-                    format!("{path}: {error}"),
-                ));
-                continue;
-            }
-        };
-        let file = match syn::parse_file(&source) {
-            Ok(value) => value,
-            Err(error) => {
-                violations.push(Violation::new(
-                    "ast-normalizer-helper",
-                    format!("{path}: {error}"),
-                ));
-                continue;
-            }
+        let Some(file) = sources.get(Path::new(path)) else {
+            violations.push(Violation::new(
+                "ast-normalizer-helper",
+                format!("{path}: parsed source is unavailable"),
+            ));
+            continue;
         };
         let candidates = file
             .items
@@ -1046,7 +1028,43 @@ fn validate_protocol_semantics() -> Option<Violation> {
     }
 }
 
-fn validate_registered_source_semantics(rows: &[ContractRow]) -> Vec<Violation> {
+fn parse_registered_sources(
+    rows: &[ContractRow],
+) -> (BTreeMap<PathBuf, syn::File>, Vec<Violation>) {
+    let mut sources = BTreeMap::new();
+    let mut violations = Vec::new();
+    for path in rows
+        .iter()
+        .map(|row| row.file.clone())
+        .collect::<BTreeSet<_>>()
+    {
+        let source = match fs::read_to_string(&path) {
+            Ok(value) => value,
+            Err(error) => {
+                violations.push(Violation::new(
+                    "ast-source-read",
+                    format!("{}: {error}", path.display()),
+                ));
+                continue;
+            }
+        };
+        match syn::parse_file(&source) {
+            Ok(file) => {
+                sources.insert(path, file);
+            }
+            Err(error) => violations.push(Violation::new(
+                "ast-source-parse",
+                format!("{}: {error}", path.display()),
+            )),
+        }
+    }
+    (sources, violations)
+}
+
+fn validate_registered_source_semantics(
+    rows: &[ContractRow],
+    sources: &BTreeMap<PathBuf, syn::File>,
+) -> Vec<Violation> {
     let actual_paths = rows
         .iter()
         .map(|row| row.file.to_string_lossy().to_string())
@@ -1063,25 +1081,8 @@ fn validate_registered_source_semantics(rows: &[ContractRow]) -> Vec<Violation> 
         ));
     }
     for (path, expected_digest) in REGISTERED_SOURCE_SEMANTIC_SHA256 {
-        let source = match fs::read_to_string(path) {
-            Ok(value) => value,
-            Err(error) => {
-                violations.push(Violation::new(
-                    "ast-source-semantic-drift",
-                    format!("{path}: {error}"),
-                ));
-                continue;
-            }
-        };
-        let file = match syn::parse_file(&source) {
-            Ok(value) => value,
-            Err(error) => {
-                violations.push(Violation::new(
-                    "ast-source-semantic-drift",
-                    format!("{path}: {error}"),
-                ));
-                continue;
-            }
+        let Some(file) = sources.get(Path::new(path)) else {
+            continue;
         };
         let actual = digest(&canonical(&file));
         if actual != expected_digest {
@@ -1094,31 +1095,8 @@ fn validate_registered_source_semantics(rows: &[ContractRow]) -> Vec<Violation> 
     violations
 }
 
-fn validate_row(
-    row: &ContractRow,
-    strict: bool,
-    expected: &BTreeMap<String, ExpectedRow>,
-) -> Vec<Violation> {
-    let mut violations = Vec::new();
-    let source = match fs::read_to_string(&row.file) {
-        Ok(value) => value,
-        Err(error) => {
-            return vec![Violation::new(
-                "ast-source-read",
-                format!("{}: {error}", row.file.display()),
-            )];
-        }
-    };
-    let file = match syn::parse_file(&source) {
-        Ok(value) => value,
-        Err(error) => {
-            return vec![Violation::new(
-                "ast-source-parse",
-                format!("{}: {error}", row.file.display()),
-            )];
-        }
-    };
-    violations.extend(validate_crate_bindings(&file, &row.file, strict));
+fn validate_source_file(path: &Path, file: &syn::File, strict: bool) -> Vec<Violation> {
+    let mut violations = validate_crate_bindings(file, path, strict);
     let modules = file
         .items
         .iter()
@@ -1132,18 +1110,28 @@ fn validate_row(
             "ast-protocol-module",
             format!(
                 "{} lacks the exact canonical protocol module",
-                row.file.display()
+                path.display()
             ),
         ));
     }
     let mut reserved = ReservedVisitor::default();
-    reserved.visit_file(&file);
+    reserved.visit_file(file);
     for problem in reserved.problems {
         violations.push(Violation::new(
             "ast-reserved-binding",
-            format!("{}: {problem}", row.file.display()),
+            format!("{}: {problem}", path.display()),
         ));
     }
+    violations
+}
+
+fn validate_row(
+    row: &ContractRow,
+    file: &syn::File,
+    strict: bool,
+    expected: &BTreeMap<String, ExpectedRow>,
+) -> Vec<Violation> {
+    let mut violations = Vec::new();
     let tests = file
         .items
         .iter()
@@ -1250,9 +1238,7 @@ fn validate_row(
     violations
 }
 
-fn emitted_row(row: &ContractRow) -> Result<String, String> {
-    let source = fs::read_to_string(&row.file).map_err(|error| error.to_string())?;
-    let file = syn::parse_file(&source).map_err(|error| error.to_string())?;
+fn emitted_row(row: &ContractRow, file: &syn::File) -> Result<String, String> {
     let function = file
         .items
         .iter()
@@ -1293,9 +1279,16 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let (sources, source_violations) = parse_registered_sources(&rows);
+    if !source_violations.is_empty() {
+        for violation in source_violations {
+            eprintln!("[{}] {}", violation.code, violation.message);
+        }
+        std::process::exit(1);
+    }
     if arguments[0] == "--emit" {
         for row in &rows {
-            match emitted_row(row) {
+            match emitted_row(row, &sources[&row.file]) {
                 Ok(value) => println!("{value}"),
                 Err(error) => {
                     eprintln!("[ast-emit] {}: {error}", row.invariant);
@@ -1326,14 +1319,17 @@ fn main() {
                 format!("actual {:?} != checker baseline {:?}", actual, wanted),
             ));
         }
-        violations.extend(validate_normalizer_helpers());
-        violations.extend(validate_registered_source_semantics(&rows));
+        violations.extend(validate_normalizer_helpers(&sources));
+        violations.extend(validate_registered_source_semantics(&rows, &sources));
         if let Some(protocol) = validate_protocol_semantics() {
             violations.push(protocol);
         }
     }
+    for (path, file) in &sources {
+        violations.extend(validate_source_file(path, file, strict));
+    }
     for row in &rows {
-        violations.extend(validate_row(row, strict, &expected));
+        violations.extend(validate_row(row, &sources[&row.file], strict, &expected));
     }
     if violations.is_empty() {
         println!("negative-registry-ast OK: {} source contracts", rows.len());

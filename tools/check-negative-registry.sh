@@ -5,8 +5,12 @@
 # are forced through checker-pinned, crate-root `extern crate` aliases so a
 # local module cannot shadow an external crate. A focused syn checker binds the
 # entire registered source files and shared protocol AST to local digests,
-# including imports and helper/wrapper bodies; Cargo discovery and execution
-# independently prove the registered tests run. Those
+# including imports and helper/wrapper bodies. Registered cases use only the
+# compiler's built-in #[test] attribute, and a wrapper sentinel surrounds the
+# shared synchronous driver. The gate binds the relevant Cargo manifests and
+# lock resolution, compiles with --locked, then invokes each emitted test binary
+# directly so Cargo runner configuration cannot fabricate discovery/execution
+# output. Those
 # co-located digests are tamper-evident against uncoordinated edits, not an
 # external trust anchor. Mirror fidelity beyond the registered probe remains a
 # reviewed limitation.
@@ -16,7 +20,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 AST_TARGET_DIR="$ROOT_DIR/target/assurance-tools"
-cargo build --quiet \
+cargo build --quiet --locked \
   --manifest-path "$ROOT_DIR/tools/negative-registry-ast/Cargo.toml" \
   --target-dir "$AST_TARGET_DIR"
 export NEGATIVE_REGISTRY_AST="$AST_TARGET_DIR/debug/negative-registry-ast"
@@ -27,6 +31,7 @@ from __future__ import annotations
 import pathlib
 import re
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -59,6 +64,24 @@ CONTRACT_TESTS = {
     "protocol_rejects_permitting_real",
     "protocol_rejects_real_control_mismatch",
     "protocol_rejects_swapped_none_and_broken_roles",
+}
+CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+PINNED_RESOLUTION = {
+    "async-trait": ("0.1.89", CRATES_IO_SOURCE, "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"),
+    "proc-macro2": ("1.0.106", CRATES_IO_SOURCE, "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"),
+    "quote": ("1.0.45", CRATES_IO_SOURCE, "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"),
+    "serde": ("1.0.228", CRATES_IO_SOURCE, "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"),
+    "serde_derive": ("1.0.228", CRATES_IO_SOURCE, "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"),
+    "serde_json": ("1.0.149", CRATES_IO_SOURCE, "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"),
+    "syn": ("2.0.117", CRATES_IO_SOURCE, "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"),
+    "tokio": ("1.52.3", CRATES_IO_SOURCE, "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"),
+    "tokio-macros": ("2.7.0", CRATES_IO_SOURCE, "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"),
+}
+PRODUCTION_PACKAGES = {
+    "swarm-policy": ("crates/swarm-policy/Cargo.toml", "swarm_policy"),
+    "swarm-response": ("crates/swarm-response/Cargo.toml", "swarm_response"),
+    "swarm-runtime": ("crates/swarm-runtime/Cargo.toml", "swarm_runtime"),
+    "swarm-spine": ("crates/swarm-spine/Cargo.toml", "swarm_spine"),
 }
 ROW = re.compile(
     r"^\|\s*`(?P<invariant>[A-Z0-9][A-Z0-9-]*)`\s*"
@@ -113,25 +136,201 @@ def run_summary(output):
     return {key: int(value) for key, value in matches[0].groupdict().items()}
 
 
-def run_ast_checks(root, registered, report):
+def parse_toml(path, report, code):
+    try:
+        return tomllib.loads(path.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        report.violation(code, f"{path}: {error}")
+        return {}
+
+
+def validate_dependency_manifests(root, report):
+    root_manifest = parse_toml(root / "Cargo.toml", report, "dependency-manifest-read")
+    if "patch" in root_manifest or "replace" in root_manifest:
+        report.violation("dependency-manifest-substitution", "root Cargo.toml may not define [patch] or [replace]")
+    workspace = root_manifest.get("workspace", {})
+    dependencies = workspace.get("dependencies", {}) if isinstance(workspace, dict) else {}
+    expected_workspace = {
+        "async-trait": "0.1",
+        "serde": {"version": "1", "features": ["derive"]},
+        "serde_json": "1",
+        "tokio": {"version": "1", "features": ["full"]},
+    }
+    for name, expected in expected_workspace.items():
+        if dependencies.get(name) != expected:
+            report.violation(
+                "dependency-manifest-identity",
+                f"workspace dependency `{name}` is {dependencies.get(name)!r}, expected {expected!r}",
+            )
+
+    required_by_crate = {
+        "swarm-policy": {"dependencies": {"serde", "serde_json"}, "dev-dependencies": {"serde_json"}},
+        "swarm-response": {"dependencies": {"async-trait", "serde", "serde_json", "tokio"}},
+        "swarm-runtime": {"dependencies": {"async-trait", "serde", "serde_json", "tokio"}},
+        "swarm-spine": {"dependencies": {"serde", "serde_json", "tokio"}},
+    }
+    for package, sections in required_by_crate.items():
+        relative, _ = PRODUCTION_PACKAGES[package]
+        document = parse_toml(root / relative, report, "dependency-manifest-read")
+        if "patch" in document or "replace" in document:
+            report.violation("dependency-manifest-substitution", f"{relative} may not define [patch] or [replace]")
+        if document.get("package", {}).get("name") != package:
+            report.violation("dependency-manifest-identity", f"{relative} package name is not `{package}`")
+        for section, names in sections.items():
+            values = document.get(section, {})
+            for name in names:
+                if values.get(name) != {"workspace": True}:
+                    report.violation(
+                        "dependency-manifest-identity",
+                        f"{relative} {section}.{name} is {values.get(name)!r}, expected workspace = true",
+                    )
+
+
+def validate_cargo_execution_boundary(root, report, *, check_environment=True):
+    for relative in (".cargo/config", ".cargo/config.toml"):
+        if (root / relative).exists():
+            report.violation("dependency-cargo-config", f"repository-local {relative} may alter compiler or runner identity")
+    if check_environment:
+        forbidden = {
+            "RUSTC_WRAPPER",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "CARGO_BUILD_RUSTC_WRAPPER",
+        }
+        configured = sorted(
+            name for name, value in os.environ.items()
+            if value and (name in forbidden or re.fullmatch(r"CARGO_TARGET_[A-Z0-9_]+_RUNNER", name))
+        )
+        if configured:
+            report.violation("dependency-execution-environment", f"compiler/runner override environment is set: {configured}")
+
+
+def validate_resolution_identity(root, report, expected=PINNED_RESOLUTION, *, production_packages=True):
+    lock = parse_toml(root / "Cargo.lock", report, "dependency-lock-read")
+    packages = lock.get("package", [])
+    for name, identity in expected.items():
+        matching = [package for package in packages if package.get("name") == name]
+        actual = [(item.get("version"), item.get("source"), item.get("checksum")) for item in matching]
+        if actual != [identity]:
+            report.violation("dependency-lock-identity", f"Cargo.lock `{name}` identity is {actual!r}, expected {[identity]!r}")
+
+    metadata_result = subprocess.run(
+        ["cargo", "metadata", "--locked", "--format-version", "1"],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if metadata_result.returncode:
+        report.violation("dependency-metadata-failed", metadata_result.stderr[-4000:])
+        return
+    try:
+        metadata = json.loads(metadata_result.stdout)
+    except json.JSONDecodeError as error:
+        report.violation("dependency-metadata-invalid", str(error))
+        return
+    resolved_ids = {node.get("id") for node in metadata.get("resolve", {}).get("nodes", [])}
+    metadata_packages = metadata.get("packages", [])
+    for name, (version, source, _checksum) in expected.items():
+        matching = [
+            package for package in metadata_packages
+            if package.get("name") == name and package.get("version") == version
+        ]
+        identities = [(package.get("version"), package.get("source")) for package in matching]
+        if identities != [(version, source)] or matching[0].get("id") not in resolved_ids:
+            report.violation(
+                "dependency-metadata-identity",
+                f"resolved `{name}` identity is {identities!r}, expected {[(version, source)]!r}",
+            )
+    if production_packages:
+        for name, (relative, lib_name) in PRODUCTION_PACKAGES.items():
+            expected_manifest = str((root / relative).resolve())
+            matching = [package for package in metadata_packages if package.get("name") == name]
+            actual = [
+                (package.get("version"), package.get("source"), package.get("manifest_path"))
+                for package in matching
+            ]
+            if actual != [("0.1.0", None, expected_manifest)] or matching[0].get("id") not in resolved_ids:
+                report.violation(
+                    "dependency-production-package-identity",
+                    f"resolved `{name}` identity is {actual!r}",
+                )
+                continue
+            libraries = [
+                target.get("name") for target in matching[0].get("targets", [])
+                if "lib" in target.get("kind", [])
+            ]
+            if libraries != [lib_name]:
+                report.violation(
+                    "dependency-production-target-identity",
+                    f"resolved `{name}` library targets are {libraries!r}, expected {[lib_name]!r}",
+                )
+
+
+def validate_execution_dependencies(root, report):
+    validate_dependency_manifests(root, report)
+    validate_cargo_execution_boundary(root, report)
+    validate_resolution_identity(root, report)
+
+
+def compiled_test_binary(root, crate, target, report, code):
+    result = subprocess.run(
+        [
+            "cargo", "test", "--locked", "-p", crate, "--test", target,
+            "--no-run", "--message-format=json",
+        ],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode:
+        report.violation(code, f"{crate}/{target} compilation failed:\n{result.stderr[-4000:]}")
+        return None
+    executables = []
+    for line in result.stdout.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        target_data = message.get("target", {})
+        if (
+            message.get("reason") == "compiler-artifact"
+            and target_data.get("name") == target
+            and "test" in target_data.get("kind", [])
+            and message.get("profile", {}).get("test") is True
+            and message.get("executable")
+        ):
+            executables.append(pathlib.Path(message["executable"]))
+    unique = sorted(set(executables))
+    if len(unique) != 1 or not unique[0].is_file():
+        report.violation(code, f"{crate}/{target} emitted test binaries are {unique!r}, expected one existing artifact")
+        return None
+    return unique[0]
+
+
+def registered_source_cache(root, registered):
+    cached = {}
+    for relative in sorted({str(entry.get("test_file", "")) for entry in registered}):
+        path = root / relative
+        if path.is_file():
+            raw = path.read_text(encoding="utf-8", errors="replace")
+            cached[relative] = (raw, sanitize_rust(raw)[0])
+    return cached
+
+
+def run_ast_checks(root, registered, report, source_cache):
     lines = []
     binding_rows = []
     for entry in registered:
         relative = str(entry.get("test_file", ""))
-        path = root / relative
-        if not path.is_file():
+        cached = source_cache.get(relative)
+        if cached is None:
             continue
-        raw = path.read_text(encoding="utf-8", errors="replace")
-        clean, _ = sanitize_rust(raw)
+        _raw, clean = cached
         test = test_function(clean, str(entry.get("test_fn", "")))
         if test is None:
             continue
-        declaration = clean[test.declaration_start:test.body_start]
-        macro_path = (
-            "negative_protocol::assert_registered_async_negative_case"
-            if re.search(r"\basync\s+fn\b", declaration)
-            else "negative_protocol::assert_registered_negative_case"
-        )
+        macro_path = "negative_protocol::assert_registered_negative_case"
         edge_validation = str(entry.get("edge_validation", ""))
         fields = [
             str(entry.get("invariant", "")),
@@ -200,6 +399,9 @@ def run_ast_checks(root, registered, report):
 def run_checks(root, minimum=12, execute_tests=False):
     report = Report(); mapped = rows(root, report)
     document = registry_document(root, report); registered = document.get("entry", [])
+    source_cache = registered_source_cache(root, registered)
+    if execute_tests and root.resolve() == REPO_ROOT.resolve():
+        validate_execution_dependencies(root, report)
     if document.get("schema_version") != 5:
         report.violation("registry-schema-version", "negative registry must use schema_version = 5")
     if not mapped: report.violation("no-rows", "mapping parsed to zero rows")
@@ -252,8 +454,7 @@ def run_checks(root, minimum=12, execute_tests=False):
         path = root / relative
         if not path.is_file():
             report.violation("entry-test-file-absent", f"entry `{invariant}` test file missing"); continue
-        raw = path.read_text(encoding="utf-8", errors="replace")
-        clean, _ = sanitize_rust(raw)
+        _raw, clean = source_cache[relative]
         test_name = entry.get("test_fn", "")
         # Distinguish absent declarations from real functions Cargo will not run.
         from assurance_source import find_function
@@ -262,8 +463,13 @@ def run_checks(root, minimum=12, execute_tests=False):
         if declared is None:
             report.violation("entry-test-fn-absent", f"entry `{invariant}` test `{test_name}` has no executable function body"); continue
         if test is None:
-            report.violation("entry-test-fn-not-a-test", f"entry `{invariant}` `{test_name}` lacks adjacent #[test] or #[tokio::test]"); continue
+            report.violation("entry-test-fn-not-a-test", f"entry `{invariant}` `{test_name}` lacks adjacent built-in #[test]"); continue
         attributes = function_attributes(clean, test)
+        if attributes != {"test"}:
+            report.violation(
+                "entry-test-attribute-not-builtin",
+                f"entry `{invariant}` test `{test_name}` attributes are {attributes!r}, expected only built-in #[test]",
+            )
         if any(attribute.startswith("ignore") for attribute in attributes):
             report.violation("entry-test-ignored", f"entry `{invariant}` test `{test_name}` is #[ignore]")
         if function_has_conditional_owner(clean, test):
@@ -292,7 +498,7 @@ def run_checks(root, minimum=12, execute_tests=False):
     for row in mapped:
         if row["invariant"] not in seen: report.violation("row-unregistered", f"row `{row['invariant']}` has no registry entry")
     if len(registered) < minimum: report.violation("coverage-entries", f"{len(registered)} entries < {minimum}")
-    run_ast_checks(root, registered, report)
+    run_ast_checks(root, registered, report, source_cache)
     if execute_tests and not report.violations:
         targets = {}
         for entry in registered:
@@ -302,9 +508,13 @@ def run_checks(root, minimum=12, execute_tests=False):
             target = pathlib.PurePosixPath(parts[-1]).stem
             targets.setdefault((crate, target), set()).add(entry["test_fn"])
         for (crate, target), names in sorted(targets.items()):
+            executable = compiled_test_binary(
+                root, crate, target, report, "entry-test-compile-failed"
+            )
+            if executable is None:
+                continue
             discovery = subprocess.run(
-                ["cargo", "test", "-p", crate, "--test", target, "--", "--list"],
-                cwd=root,
+                [str(executable), "--list"],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -317,8 +527,7 @@ def run_checks(root, minimum=12, execute_tests=False):
                 report.violation("entry-test-list-drift", f"{crate}/{target} discovered {sorted(discovered)}, registry requires {sorted(names)}")
                 continue
             result = subprocess.run(
-                ["cargo", "test", "-p", crate, "--test", target],
-                cwd=root,
+                [str(executable)],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -329,29 +538,33 @@ def run_checks(root, minimum=12, execute_tests=False):
             summary = run_summary(result.stdout)
             if summary is None or summary != {"passed": len(names), "failed": 0, "ignored": 0, "measured": 0, "filtered": 0}:
                 report.violation("entry-test-target-summary", f"{crate}/{target} did not prove exact {len(names)} passed, 0 failed/ignored/measured/filtered: {summary}")
-        discovery = subprocess.run(
-            ["cargo", "test", "-p", CONTRACT_CRATE, "--test", CONTRACT_TARGET, "--", "--list"],
-            cwd=root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        executable = compiled_test_binary(
+            root, CONTRACT_CRATE, CONTRACT_TARGET, report, "protocol-contract-compile-failed"
         )
-        if discovery.returncode:
-            report.violation("protocol-contract-list-failed", f"protocol contract discovery failed:\n{discovery.stderr[-4000:]}")
-        elif listed_tests(discovery.stdout) != CONTRACT_TESTS:
-            report.violation("protocol-contract-list-drift", f"protocol contract discovered {sorted(listed_tests(discovery.stdout))}, expected {sorted(CONTRACT_TESTS)}")
+        if executable is None:
+            pass
         else:
-            result = subprocess.run(
-                ["cargo", "test", "-p", CONTRACT_CRATE, "--test", CONTRACT_TARGET],
-                cwd=root,
+            discovery = subprocess.run(
+                [str(executable), "--list"],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            summary = run_summary(result.stdout)
-            expected = {"passed": len(CONTRACT_TESTS), "failed": 0, "ignored": 0, "measured": 0, "filtered": 0}
-            if result.returncode or summary != expected:
-                report.violation("protocol-contract-execution-failed", f"protocol contract did not prove exact {expected}: {summary}\n{(result.stdout + result.stderr)[-4000:]}")
+            if discovery.returncode:
+                report.violation("protocol-contract-list-failed", f"protocol contract discovery failed:\n{discovery.stderr[-4000:]}")
+            elif listed_tests(discovery.stdout) != CONTRACT_TESTS:
+                report.violation("protocol-contract-list-drift", f"protocol contract discovered {sorted(listed_tests(discovery.stdout))}, expected {sorted(CONTRACT_TESTS)}")
+            else:
+                result = subprocess.run(
+                    [str(executable)],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                summary = run_summary(result.stdout)
+                expected = {"passed": len(CONTRACT_TESTS), "failed": 0, "ignored": 0, "measured": 0, "filtered": 0}
+                if result.returncode or summary != expected:
+                    report.violation("protocol-contract-execution-failed", f"protocol contract did not prove exact {expected}: {summary}\n{(result.stdout + result.stderr)[-4000:]}")
     return report
 
 
@@ -447,7 +660,7 @@ CASES = {
     "broken_variant_drift": "ast-source-binding",
     "protocol_shadow": "ast-reserved-binding",
     "sync_alias_shadow": "ast-reserved-binding",
-    "async_alias_shadow": "ast-reserved-binding",
+    "proc_macro_test_attribute": "entry-test-attribute-not-builtin",
     "dead_closure": "ast-macro-placement",
     "if_false_wrapper": "ast-macro-placement",
     "normalizer_constant": "ast-invocation-parse",
@@ -532,12 +745,9 @@ fn broken_gate() {
         "mod negative_protocol;",
         "mod negative_protocol;\nuse negative_protocol::assert_registered_negative_case as canonical_case;\nmacro_rules! assert_registered_negative_case { ($($tokens:tt)*) => {{ if false { canonical_case! { $($tokens)* } } }}; }",
     ).replace("negative_protocol::assert_registered_negative_case!", "assert_registered_negative_case!"))
-    elif case == "async_alias_shadow": test.write_text(test.read_text().replace(
-        "mod negative_protocol;",
-        "mod negative_protocol;\nuse negative_protocol::assert_registered_async_negative_case as canonical_async;\nmacro_rules! assert_registered_async_negative_case { ($($tokens:tt)*) => {{ if false { canonical_async! { $($tokens)* } } }}; }",
-    ).replace("#[test]\nfn broken_gate()", "#[tokio::test]\nasync fn broken_gate()").replace(
-        "negative_protocol::assert_registered_negative_case!", "assert_registered_async_negative_case!"
-    ).replace("call: sync", "call: awaited"))
+    elif case == "proc_macro_test_attribute": test.write_text(test.read_text().replace(
+        "#[test]\nfn broken_gate()", "#[tokio::test]\nasync fn broken_gate()"
+    ))
     elif case == "dead_closure": test.write_text(test.read_text().replace(
         "    negative_protocol::assert_registered_negative_case! {",
         "    let _dead = || { negative_protocol::assert_registered_negative_case! {",
@@ -574,8 +784,19 @@ def protocol_mutation_self_test(base):
     protocol = (REPO_ROOT / PROTOCOL_REL).read_text()
     (tests / "negative_protocol_contract.rs").write_text(contract)
 
-    command = ["cargo", "test", "--test", CONTRACT_TARGET]
     environment = {**os.environ, "CARGO_TARGET_DIR": str(root / "target")}
+    generated = subprocess.run(
+        ["cargo", "generate-lockfile"],
+        cwd=root,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if generated.returncode:
+        print(f"protocol self-test lock generation failed:\n{generated.stderr[-4000:]}", file=sys.stderr)
+        return False, 0
+    command = ["cargo", "test", "--locked", "--test", CONTRACT_TARGET]
 
     def run(source, contract_source=contract):
         protocol_path.write_text(source)
@@ -597,9 +818,12 @@ def protocol_mutation_self_test(base):
         print(f"actual protocol clean contract failed:\n{(clean.stdout + clean.stderr)[-4000:]}", file=sys.stderr)
         return False, 0
 
-    sync_body = '''        let (case, probe) = $crate::negative_protocol::define_registered_negative_case! { $($tokens)* };
+    sync_body = '''        let synchronous_wrapper =
+            $crate::negative_protocol::SynchronousTestSentinel::enter();
+        let (case, probe) = $crate::negative_protocol::define_registered_negative_case! { $($tokens)* };
         let _completed_case =
-            $crate::negative_protocol::execute_registered_negative_case_sync(case, probe);'''
+            $crate::negative_protocol::execute_registered_negative_case_sync(case, probe);
+        synchronous_wrapper.complete();'''
     no_op = '''        let (_case, _probe) = $crate::negative_protocol::define_registered_negative_case! { $($tokens)* };'''
     if_false = '''        let (case, probe) = $crate::negative_protocol::define_registered_negative_case! { $($tokens)* };
         if false {
@@ -733,12 +957,7 @@ def registered_source_mutation_self_test(base):
             raw = (root / relative).read_text()
             clean, _ = sanitize_rust(raw)
             test = test_function(clean, entry["test_fn"])
-            declaration = clean[test.declaration_start:test.body_start]
-            macro_path = (
-                "negative_protocol::assert_registered_async_negative_case"
-                if re.search(r"\basync\s+fn\b", declaration)
-                else "negative_protocol::assert_registered_negative_case"
-            )
+            macro_path = "negative_protocol::assert_registered_negative_case"
             edge = entry["edge_validation"]
             lines.append("\t".join([
                 entry["invariant"], relative, entry["test_fn"], entry["case_type"],
@@ -776,7 +995,7 @@ def registered_source_mutation_self_test(base):
         return source[:start] + prefix + source[start:closing + 1] + suffix + source[closing + 1:]
 
     def wrap_first_async(source):
-        marker = "negative_protocol::assert_registered_async_negative_case!"
+        marker = "negative_protocol::assert_registered_negative_case!"
         start = source.index(marker)
         clean, _ = sanitize_rust(source)
         opening = clean.index("{", start)
@@ -787,7 +1006,7 @@ def registered_source_mutation_self_test(base):
             source[:start]
             + "async { "
             + source[start:closing + 1]
-            + " }.await;"
+            + " };"
             + source[closing + 1:]
         )
 
@@ -1015,11 +1234,11 @@ fn fabricated_policy_result() -> bool {
             "mod negative_protocol;\nuse negative_protocol::assert_registered_negative_case as canonical_case;\nmacro_rules! assert_registered_negative_case { ($($tokens:tt)*) => {{ if false { canonical_case! { $($tokens)* } } }}; }",
             1,
         ).replace("negative_protocol::assert_registered_negative_case!", "assert_registered_negative_case!", 1), "ast-reserved-binding", None),
-        "async_alias_shadow": (runtime, lambda value: value.replace(
-            "mod negative_protocol;",
-            "mod negative_protocol;\nuse negative_protocol::assert_registered_async_negative_case as canonical_async;\nmacro_rules! assert_registered_async_negative_case { ($($tokens:tt)*) => {{ if false { canonical_async! { $($tokens)* } } }}; }",
+        "proc_macro_test_attribute": (runtime, lambda value: value.replace(
+            "#[test]\nfn broken_policy_error_fallback_executes_when_evaluation_failed()",
+            "#[tokio::test]\nasync fn broken_policy_error_fallback_executes_when_evaluation_failed()",
             1,
-        ).replace("negative_protocol::assert_registered_async_negative_case!", "assert_registered_async_negative_case!", 1), "ast-reserved-binding", None),
+        ), "ast-macro-placement", None),
         "reviewer_policy_local_crate_shadow": (
             policy,
             reviewer_policy_shadow,
@@ -1297,7 +1516,7 @@ fn fabricated_policy_result() -> bool {
     contract = coordinated / "contract.tsv"
     contract.write_text(contract_text(coordinated))
     cargo_command = [
-        "cargo", "run", "--quiet", "--manifest-path", str(helper / "Cargo.toml"),
+        "cargo", "run", "--quiet", "--locked", "--manifest-path", str(helper / "Cargo.toml"),
         "--target-dir", str(REPO_ROOT / "target/assurance-tools-selftest"), "--",
     ]
     emitted = subprocess.run(
@@ -1328,6 +1547,200 @@ fn fabricated_policy_result() -> bool {
     return ok, len(mutations) + 1
 
 
+def dependency_execution_self_test(base):
+    ok = True
+    target_dir = REPO_ROOT / "target/assurance-dependency-selftest"
+
+    fake_root = base / "fake_tokio_macros"
+    fake_macro = fake_root / "fake-tokio-macros"
+    victim = fake_root / "victim"
+    (fake_macro / "src").mkdir(parents=True)
+    (victim / "tests").mkdir(parents=True)
+    (fake_root / "Cargo.toml").write_text('''
+[workspace]
+members = ["fake-tokio-macros", "victim"]
+resolver = "2"
+
+[patch.crates-io]
+tokio-macros = { path = "fake-tokio-macros" }
+''')
+    (fake_macro / "Cargo.toml").write_text('''
+[package]
+name = "tokio-macros"
+version = "2.7.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+''')
+    (fake_macro / "src/lib.rs").write_text(r'''
+extern crate proc_macro;
+use proc_macro::TokenStream;
+
+fn erase_test_body(item: TokenStream) -> TokenStream {
+    let source = item.to_string();
+    let name = source
+        .split_whitespace()
+        .skip_while(|token| *token != "fn")
+        .nth(1)
+        .and_then(|token| token.split('(').next())
+        .expect("test function name");
+    format!("#[test] fn {name}() {{}}").parse().expect("empty test")
+}
+
+#[proc_macro_attribute]
+pub fn test(_attribute: TokenStream, item: TokenStream) -> TokenStream {
+    erase_test_body(item)
+}
+
+#[proc_macro_attribute]
+pub fn main(_attribute: TokenStream, item: TokenStream) -> TokenStream {
+    erase_test_body(item)
+}
+
+#[proc_macro_attribute]
+pub fn test_rt(_attribute: TokenStream, item: TokenStream) -> TokenStream {
+    erase_test_body(item)
+}
+
+#[proc_macro_attribute]
+pub fn main_rt(_attribute: TokenStream, item: TokenStream) -> TokenStream {
+    erase_test_body(item)
+}
+
+#[proc_macro_attribute]
+pub fn test_fail(_attribute: TokenStream, item: TokenStream) -> TokenStream {
+    erase_test_body(item)
+}
+
+#[proc_macro_attribute]
+pub fn main_fail(_attribute: TokenStream, item: TokenStream) -> TokenStream {
+    erase_test_body(item)
+}
+
+#[proc_macro]
+pub fn select_priv_declare_output_enum(input: TokenStream) -> TokenStream {
+    input
+}
+
+#[proc_macro]
+pub fn select_priv_clean_pattern(input: TokenStream) -> TokenStream {
+    input
+}
+''')
+    (victim / "Cargo.toml").write_text('''
+[package]
+name = "victim"
+version = "0.0.0"
+edition = "2021"
+
+[dev-dependencies]
+tokio = { version = "=1.52.3", features = ["macros", "rt"] }
+''')
+    (victim / "tests/registered.rs").write_text('''
+#[tokio::test]
+async fn erased_async_body() {
+    panic!("the registered body must execute");
+}
+''')
+    environment = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
+    lock = subprocess.run(
+        ["cargo", "generate-lockfile"], cwd=fake_root, env=environment,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    bypass = subprocess.run(
+        ["cargo", "test", "--locked", "-p", "victim", "--test", "registered"],
+        cwd=fake_root, env=environment, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) if lock.returncode == 0 else lock
+    if bypass.returncode or run_summary(bypass.stdout) != {
+        "passed": 1, "failed": 0, "ignored": 0, "measured": 0, "filtered": 0,
+    }:
+        ok = False
+        print(f"fake tokio-macros red fixture did not erase the async body:\n{(bypass.stdout + bypass.stderr)[-4000:]}", file=sys.stderr)
+    resolution_report = Report()
+    validate_resolution_identity(
+        fake_root,
+        resolution_report,
+        {"tokio-macros": PINNED_RESOLUTION["tokio-macros"]},
+        production_packages=False,
+    )
+    if "dependency-lock-identity" not in resolution_report.codes():
+        ok = False
+        print(f"fake tokio-macros resolution was not rejected: {resolution_report.violations}", file=sys.stderr)
+
+    runner_root = base / "cargo_runner_spoof"
+    runner_victim = runner_root / "victim"
+    (runner_victim / "tests").mkdir(parents=True)
+    (runner_root / ".cargo").mkdir()
+    (runner_root / "Cargo.toml").write_text('''
+[workspace]
+members = ["victim"]
+resolver = "2"
+''')
+    (runner_victim / "Cargo.toml").write_text('''
+[package]
+name = "victim"
+version = "0.0.0"
+edition = "2021"
+''')
+    (runner_victim / "tests/registered.rs").write_text('''
+#[test]
+fn body_must_run() {
+    panic!("the runner must not replace this binary");
+}
+''')
+    runner = runner_root / "fake_runner.py"
+    runner.write_text('''
+import sys
+if "--list" in sys.argv:
+    print("body_must_run: test")
+else:
+    print("running 1 test")
+    print("test body_must_run ... ok")
+    print()
+    print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;")
+''')
+    (runner_root / ".cargo/config.toml").write_text(
+        "[target.'cfg(all())']\nrunner = [\"python3\", " + json.dumps(str(runner)) + "]\n"
+    )
+    runner_environment = {**os.environ, "CARGO_TARGET_DIR": str(target_dir)}
+    lock = subprocess.run(
+        ["cargo", "generate-lockfile"], cwd=runner_root, env=runner_environment,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    spoof = subprocess.run(
+        ["cargo", "test", "--locked", "-p", "victim", "--test", "registered"],
+        cwd=runner_root, env=runner_environment, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) if lock.returncode == 0 else lock
+    if spoof.returncode or run_summary(spoof.stdout) != {
+        "passed": 1, "failed": 0, "ignored": 0, "measured": 0, "filtered": 0,
+    }:
+        ok = False
+        print(f"Cargo runner red fixture did not fabricate a passing summary:\n{(spoof.stdout + spoof.stderr)[-4000:]}", file=sys.stderr)
+    config_report = Report()
+    validate_cargo_execution_boundary(runner_root, config_report, check_environment=False)
+    if "dependency-cargo-config" not in config_report.codes():
+        ok = False
+        print(f"Cargo runner config was not rejected: {config_report.violations}", file=sys.stderr)
+    direct_report = Report()
+    executable = compiled_test_binary(
+        runner_root, "victim", "registered", direct_report, "runner-fixture-compile"
+    )
+    direct = subprocess.run(
+        [str(executable)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) if executable is not None else None
+    if direct_report.violations or direct is None or direct.returncode == 0:
+        ok = False
+        print(
+            f"direct test-binary execution did not defeat the runner spoof: "
+            f"{direct_report.violations} {'' if direct is None else (direct.stdout + direct.stderr)[-4000:]}",
+            file=sys.stderr,
+        )
+    return ok, 2
+
+
 def self_test():
     ok = True
     protocol_mutations = 0
@@ -1349,8 +1762,9 @@ def self_test():
             print("negative self-test stdout spoof was accepted as Cargo discovery/execution evidence", file=sys.stderr)
         protocol_ok, protocol_mutations = protocol_mutation_self_test(base)
         source_ok, source_mutations = registered_source_mutation_self_test(base)
-        ok = ok and protocol_ok and source_ok
-    return ok, protocol_mutations + source_mutations
+        dependency_ok, dependency_mutations = dependency_execution_self_test(base)
+        ok = ok and protocol_ok and source_ok and dependency_ok
+    return ok, protocol_mutations + source_mutations + dependency_mutations
 
 
 self_test_ok, protocol_mutations = self_test()

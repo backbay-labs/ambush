@@ -17,7 +17,36 @@
 use core::fmt::Debug;
 use core::future::Future;
 use core::pin::Pin;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
+
+static SYNCHRONOUS_WRAPPER_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+static SYNCHRONOUS_WRAPPER_COMPLETIONS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct SynchronousTestSentinel {
+    entry: usize,
+}
+
+impl SynchronousTestSentinel {
+    pub(crate) fn enter() -> Self {
+        Self {
+            entry: SYNCHRONOUS_WRAPPER_ENTRIES.fetch_add(1, Ordering::SeqCst),
+        }
+    }
+
+    pub(crate) fn complete(self) {
+        let completed = SYNCHRONOUS_WRAPPER_COMPLETIONS.fetch_add(1, Ordering::SeqCst) + 1;
+        let entered = SYNCHRONOUS_WRAPPER_ENTRIES.load(Ordering::SeqCst);
+        assert!(
+            self.entry < entered,
+            "synchronous wrapper entry was not recorded"
+        );
+        assert!(
+            completed <= entered,
+            "synchronous wrapper completed without a recorded entry"
+        );
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MutationRole {
@@ -75,7 +104,7 @@ where
     case
 }
 
-fn block_on_ready<F: Future>(future: F) -> F::Output {
+pub(crate) fn block_on_ready<F: Future>(future: F) -> F::Output {
     // Synchronous registered cases must complete on the first poll; a pending
     // future is a protocol misuse and panics below.
     let mut context = Context::from_waker(Waker::noop());
@@ -267,23 +296,14 @@ macro_rules! invoke_registered_production {
 
 macro_rules! assert_registered_negative_case {
     ($($tokens:tt)*) => {{
+        let synchronous_wrapper =
+            $crate::negative_protocol::SynchronousTestSentinel::enter();
         let (case, probe) = $crate::negative_protocol::define_registered_negative_case! { $($tokens)* };
         let _completed_case =
             $crate::negative_protocol::execute_registered_negative_case_sync(case, probe);
+        synchronous_wrapper.complete();
     }};
 }
-
-#[allow(unused_macros)]
-macro_rules! assert_registered_async_negative_case {
-    ($($tokens:tt)*) => {{
-        let (case, probe) = $crate::negative_protocol::define_registered_negative_case! { $($tokens)* };
-        let _completed_case =
-            $crate::negative_protocol::execute_registered_negative_case(case, probe).await;
-    }};
-}
-
-#[allow(unused_imports)]
-pub(crate) use assert_registered_async_negative_case;
 pub(crate) use assert_registered_negative_case;
 pub(crate) use define_registered_negative_case;
 pub(crate) use invoke_registered_production;

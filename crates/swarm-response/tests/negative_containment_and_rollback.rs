@@ -670,8 +670,8 @@ fn mirrored_require_steps(
     Ok(())
 }
 
-#[tokio::test]
-async fn broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan() {
+#[test]
+fn broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan() {
     let empty = ContainmentLease::open(
         "containment:empty-plan",
         quarantine_action(),
@@ -682,7 +682,7 @@ async fn broken_required_steps_guard_runs_a_rollback_with_no_inverse_plan() {
         ContainmentTtl::from_config_ms(900_000).unwrap(),
     )
     .unwrap();
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_ROLLBACK_REQUIRES_STEPS,
         mutation: RequireStepsMutation,
         control: RequireStepsMutation::None,
@@ -781,9 +781,9 @@ fn mirrored_sandbox_rollback(
     RollbackReceipt::from_steps(lease, trigger, mode, completed_at_ms, steps)
 }
 
-#[tokio::test]
-async fn broken_sandbox_executor_claims_the_reversal_the_real_one_refuses_to_claim() {
-    negative_protocol::assert_registered_async_negative_case! {
+#[test]
+fn broken_sandbox_executor_claims_the_reversal_the_real_one_refuses_to_claim() {
+    negative_protocol::assert_registered_negative_case! {
         case: RESPONSE_SANDBOX_NEVER_REVERSES,
         mutation: SandboxMutation,
         control: SandboxMutation::None,

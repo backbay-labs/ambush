@@ -74,22 +74,27 @@ This is the substantive decision and the expensive one.
 `docs/assurance/negative-registry.toml` maps each row to a
 `crates/*/tests/negative_*.rs` test, and `tools/check-negative-registry.sh` fails
 on a row with no entry, an entry with no row, an entry naming a test file or test
-function that does not exist, a test function carrying no adjacent `#[test]` or
-`#[tokio::test]` attribute, an ignored or conditionally disabled test, or a body
-that does not invoke exactly one shared typed differential protocol. The shared
-macro owns the real production invocation. A focused `syn` checker requires the
-canonical fully-qualified macro path and locally digests the complete registered
-test function: case identity, setup, mutation roles, production path and
-arguments, result normalization, mirror operations, and denial/permission
-predicates. Mapped markers and adapters name the same public production entry;
+function that does not exist, a test function carrying anything other than the
+compiler's built-in `#[test]` attribute, an ignored or conditionally disabled
+test, or a body that does not invoke exactly one shared typed differential
+protocol. The shared macro owns the real production invocation and a
+source-digested entry/completion sentinel around its synchronous future driver.
+A focused `syn` checker requires the canonical fully-qualified macro path,
+parses each distinct registered source once, and locally digests the complete
+source file: imports and crate bindings, case identity, setup, mutation roles,
+production path and arguments, result normalization, mirror operations, and
+denial/permission predicates. Mapped markers and adapters name the same public production entry;
 the only indirect entries are two Serde conversions explicitly classified as
 reviewed boundaries. Comments, strings, locally shadowed macros,
 decorative tokens, nonexistent modules/types, and production-shaped
 `.evaluate`/`black_box`/unrelated-assertion spoofs are adversarial self-test
-cases. For each of the four targets, Cargo `--list` discovery must equal the
-registry's exact test-name set. A separate whole-target execution must succeed
-with the exact registered passed count and zero failed or ignored; test-owned
-stdout is never accepted as per-name execution evidence.
+cases. The gate binds relevant workspace/crate manifest fields and the exact
+Cargo.lock/metadata identities of the runtime, serialization, and proc-macro
+dependencies, then compiles every target with `--locked`. It invokes each emitted
+test binary directly for exact `--list` set equality and exact passed counts with
+zero failed or ignored, so a Cargo runner cannot fabricate execution evidence.
+An executable fixture also proves a local fake `tokio-macros` can erase an async
+test body and that the dependency boundary rejects the substituted resolution.
 
 The protocol itself has a separate compiled five-test contract target. Its
 success case uses typed counters and role capture to prove exactly one real,

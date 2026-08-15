@@ -13,6 +13,13 @@
 # including imports, helpers, setup, mirror roles, and denial/permission
 # predicates. This detects uncoordinated drift, but the
 # checker and its baselines are co-located and do not authenticate one another.
+# Every registered wrapper uses the compiler's built-in `#[test]` attribute;
+# the shared synchronous driver places an entry/completion sentinel outside the
+# polled future. The gate binds the relevant workspace/crate manifest fields and
+# exact Cargo.lock/metadata identities (including the proc-macro packages),
+# rejects repository-local Cargo configuration and runner/compiler-wrapper
+# environment overrides, compiles with `--locked`, and invokes each emitted
+# test binary directly rather than trusting Cargo-runner output.
 # This does not prove a handwritten mirror faithful beyond the registered probe;
 # that broader fidelity remains a review duty.
 

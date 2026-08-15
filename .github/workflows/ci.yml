@@ -185,12 +185,16 @@ jobs:
       # The mapping gate gets the compiled Rust source inventory from Cargo's
       # rustc dep-info, then lexically binds source markers to executable guard
       # expressions. The negative-registry gate binds each row to the shared
-      # typed differential protocol, requires exact Cargo --list set equality,
-      # and executes all four registered targets with exact passed/ignored
-      # summary counts. Two quiet, isolated warm runs of the negative-registry
-      # gate took 177.15s and 192.11s wall clock on Darwin arm64 with rustc
-      # 1.97.1 (2026-08-14). The actual-source mutation crates dominate this
-      # cost; CI timing remains cache- and machine-dependent.
+      # typed differential protocol and a built-in #[test] wrapper, validates
+      # the relevant manifest plus locked Cargo resolution, and directly runs
+      # each emitted test binary for exact inventory and passed/ignored counts.
+      # Direct artifact execution prevents a Cargo runner from fabricating
+      # libtest output. Two sequential warm runs of the 105-self-test gate took
+      # 140.73s and 161.14s wall clock (116.02/119.36s user, 7.68/7.67s sys) on
+      # Darwin 26.4 arm64 with rustc 1.97.1 (2026-08-15). No other cargo/rustc
+      # process was active, but host load was 44-83, so these are deliberately
+      # not described as quiet or as a CI estimate. Compiled actual-source
+      # mutations dominate; timing remains cache- and machine-dependent.
       #
       # BOTH SCRIPTS RUN ADVERSARIAL FIXTURES BEFORE THEY TOUCH THE REAL TREE,
       # and refuse to scan it if a fixture misbehaves. These workflow steps are

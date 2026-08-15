@@ -31,9 +31,14 @@ normalization, and denial/permission predicates; it also rejects alternate
 imports, aliases, re-exports, and shadow definitions of the reserved protocol
 module, macros, or production-crate bindings. Mapped markers and real adapters
 name the same public entry, except for two Serde conversion boundaries
-explicitly identified for review. The local digests detect uncoordinated drift but are co-located with
-the checker: they do not provide external provenance and cannot resist a
-coherent edit of all local inputs. This also does not mechanically prove
+explicitly identified for review. Registered wrappers use only built-in
+`#[test]`; a source-digested entry/completion sentinel surrounds the synchronous
+driver. The gate validates the relevant manifest fields and exact
+Cargo.lock/metadata identities, compiles with `--locked`, and invokes emitted
+test binaries directly so a Cargo runner cannot forge discovery or pass counts.
+The local digests detect uncoordinated drift but are co-located with the checker:
+they do not provide external provenance and cannot resist a coherent edit of
+all local inputs. This also does not mechanically prove
 handwritten-mirror fidelity beyond the registered probe. The reproduced
 neutralization output is stored with the row in
 [`negative-registry.toml`](negative-registry.toml); no claim is made that old

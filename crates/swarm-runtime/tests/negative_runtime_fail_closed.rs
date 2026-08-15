@@ -366,12 +366,12 @@ fn runtime_protocol_outcome(
     (result, calls.load(Ordering::SeqCst))
 }
 
-#[tokio::test]
-async fn broken_policy_error_fallback_executes_when_evaluation_failed() {
+#[test]
+fn broken_policy_error_fallback_executes_when_evaluation_failed() {
     let gate = FailingGate(GateFailure::Evaluate);
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_POLICY_ERROR_BLOCKS_EXECUTION,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -398,12 +398,12 @@ async fn broken_policy_error_fallback_executes_when_evaluation_failed() {
     }
 }
 
-#[tokio::test]
-async fn broken_lease_issue_error_fallback_executes_without_a_real_lease() {
+#[test]
+fn broken_lease_issue_error_fallback_executes_without_a_real_lease() {
     let gate = FailingGate(GateFailure::IssueLease);
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_LEASE_ISSUE_ERROR_BLOCKS_EXECUTION,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -430,15 +430,15 @@ async fn broken_lease_issue_error_fallback_executes_without_a_real_lease() {
     }
 }
 
-#[tokio::test]
-async fn broken_adapter_error_conversion_returns_false_success() {
+#[test]
+fn broken_adapter_error_conversion_returns_false_success() {
     let gate = FixedVerdictGate {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
     };
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_ADAPTER_ERROR_NOT_SUCCESS,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -466,15 +466,15 @@ async fn broken_adapter_error_conversion_returns_false_success() {
     }
 }
 
-#[tokio::test]
-async fn broken_failed_receipt_check_returns_a_failure_as_success() {
+#[test]
+fn broken_failed_receipt_check_returns_a_failure_as_success() {
     let gate = FixedVerdictGate {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
     };
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_FAILED_RECEIPT_NOT_SUCCESS,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -551,15 +551,15 @@ async fn mirrored_guard_authorize(
         .map_err(Into::into)
 }
 
-#[tokio::test]
-async fn broken_guard_rejection_reaches_the_executor() {
+#[test]
+fn broken_guard_rejection_reaches_the_executor() {
     let gate = FixedVerdictGate {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
     };
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_GUARD_REJECTION_BLOCKS_EXECUTION,
         mutation: GuardMutation,
         control: GuardMutation::None,
@@ -633,8 +633,8 @@ impl ApprovalGate for FixedVerdictGate {
 // RUNTIME-DENY-BLOCKS-EXECUTION
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls() {
+#[test]
+fn broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls() {
     let gate = FixedVerdictGate {
         verdict: PolicyVerdict::Deny,
         lease_ttl_ms: 60_000,
@@ -642,7 +642,7 @@ async fn broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls() {
     let probe = block_egress(Severity::High);
     let context = context(1_700_000_000_000);
 
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_DENY_BLOCKS_EXECUTION,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -673,8 +673,8 @@ async fn broken_deny_arm_reaches_the_executor_the_real_runtime_never_calls() {
 // RUNTIME-HUMAN-GATE-BLOCKS-LIVE
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds() {
+#[test]
+fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds() {
     let gate = FixedVerdictGate {
         verdict: PolicyVerdict::RequireHuman,
         lease_ttl_ms: 60_000,
@@ -682,7 +682,7 @@ async fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds
     let probe = block_egress(Severity::Critical);
     let context = context(1_700_000_000_000);
 
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_HUMAN_GATE_BLOCKS_LIVE,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -719,7 +719,8 @@ async fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds
             calls: detect_calls.clone(),
         },
     );
-    let detect = detect_runtime.authorize_and_execute(&probe, &context).await;
+    let detect =
+        negative_protocol::block_on_ready(detect_runtime.authorize_and_execute(&probe, &context));
     assert_eq!(
         detect.expect("DetectOnly proceeds to a dry run").mode,
         ExecutionMode::DryRun
@@ -731,8 +732,8 @@ async fn broken_human_gate_arm_executes_in_live_mode_what_the_real_runtime_holds
 // RUNTIME-EXPIRED-LEASE-REFUSED
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtime_refuses() {
+#[test]
+fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtime_refuses() {
     // A gate that mints a lease which expired one millisecond before the
     // request is evaluated. `ensure_active_lease` is the only thing between it
     // and the adapter.
@@ -743,7 +744,7 @@ async fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtim
     let probe = block_egress(Severity::Medium);
     let context = context(1_700_000_000_000);
 
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_EXPIRED_LEASE_REFUSED,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -783,9 +784,7 @@ async fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtim
             calls: live_calls.clone(),
         },
     );
-    live_runtime
-        .authorize_and_execute(&probe, &context)
-        .await
+    negative_protocol::block_on_ready(live_runtime.authorize_and_execute(&probe, &context))
         .expect("a live lease executes");
     assert_eq!(live_calls.load(Ordering::SeqCst), 1);
 }
@@ -794,8 +793,8 @@ async fn broken_lease_expiry_check_executes_under_the_dead_lease_the_real_runtim
 // RUNTIME-CONTAINMENT-NEEDS-STORE
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses_to_touch() {
+#[test]
+fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses_to_touch() {
     let gate = FixedVerdictGate {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
@@ -803,7 +802,7 @@ async fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses
     let probe = quarantine_file(Severity::High);
     let context = context(1_700_000_000_000);
 
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_CONTAINMENT_NEEDS_STORE,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -844,9 +843,7 @@ async fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses
         store.clone(),
         ContainmentTtl::from_config_ms(60_000).unwrap(),
     );
-    bounded
-        .authorize_and_execute(&probe, &context)
-        .await
+    negative_protocol::block_on_ready(bounded.authorize_and_execute(&probe, &context))
         .expect("a bounded containment executes");
     assert_eq!(bounded_calls.load(Ordering::SeqCst), 1);
     assert_eq!(store.open_leases().unwrap().len(), 1);
@@ -856,8 +853,8 @@ async fn broken_containment_store_check_contains_a_host_the_real_runtime_refuses
 // RUNTIME-CONTAINMENT-PREVIEW-REQUIRED
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn broken_preview_error_guard_dispatches_a_containment_with_no_inverse_plan() {
+#[test]
+fn broken_preview_error_guard_dispatches_a_containment_with_no_inverse_plan() {
     let gate = FixedVerdictGate {
         verdict: PolicyVerdict::Allow,
         lease_ttl_ms: 60_000,
@@ -873,7 +870,7 @@ async fn broken_preview_error_guard_dispatches_a_containment_with_no_inverse_pla
     let store = Arc::new(MemoryContainmentLeaseStore::new());
     let ttl = ContainmentTtl::from_config_ms(900_000).unwrap();
 
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_CONTAINMENT_PREVIEW_REQUIRED,
         mutation: RuntimeMutation,
         control: RuntimeMutation::None,
@@ -1224,12 +1221,12 @@ async fn mirrored_release_lease(
     Ok(receipt)
 }
 
-#[tokio::test]
-async fn broken_failed_step_check_abandons_the_still_contained_host_the_real_release_retains() {
+#[test]
+fn broken_failed_step_check_abandons_the_still_contained_host_the_real_release_retains() {
     let lease = containment_lease();
     let store = MemoryContainmentLeaseStore::new();
     store.open_lease(&lease).unwrap();
-    negative_protocol::assert_registered_async_negative_case! {
+    negative_protocol::assert_registered_negative_case! {
         case: RUNTIME_FAILED_ROLLBACK_KEEPS_LEASE,
         mutation: ReleaseLeaseMutation,
         control: ReleaseLeaseMutation::None,
@@ -1286,7 +1283,7 @@ async fn broken_failed_step_check_abandons_the_still_contained_host_the_real_rel
 
     let ok_store = MemoryContainmentLeaseStore::new();
     ok_store.open_lease(&lease).unwrap();
-    let reversed = release_lease(
+    let reversed = negative_protocol::block_on_ready(release_lease(
         &ok_store,
         &ReversingExecutor,
         ExecutionMode::Enforced,
@@ -1294,8 +1291,7 @@ async fn broken_failed_step_check_abandons_the_still_contained_host_the_real_rel
         RollbackTrigger::Expiry,
         6_000,
         None,
-    )
-    .await
+    ))
     .expect("a landed rollback");
     assert!(reversed.fully_reversed());
     assert_eq!(ok_store.open_leases().unwrap().len(), 0);
