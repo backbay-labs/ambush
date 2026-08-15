@@ -18,10 +18,10 @@ jobs:
   # custom shell makes /usr/bin/env the first child instead of a PATH-resolved
   # default Bash. This prevents earlier repository commands, caches,
   # GITHUB_ENV, or GITHUB_PATH from affecting either gate's bootstrap.
-  # Two warm local clean-launch runs of the preceding 161-self-test registry gate
+  # Two warm local clean-launch runs of the preceding 179-self-test registry gate
   # took 89.73s and 78.19s wall clock (38.51/38.17s user, 16.18/15.26s sys) on
   # Darwin 25.4.0 arm64 with rustc 1.97.1 on 2026-08-15. The current gate adds four
-  # lexical workflow-name mutations and thirteen governance-assurance mutations; it
+  # lexical workflow-name mutations and fourteen governance-assurance mutations; it
   # also executes the exact 94-case single-governor gate inside the protected
   # contract. These are local observations, not a CI estimate; compiled
   # actual-source mutations dominate.
@@ -61,16 +61,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -97,16 +94,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -225,16 +219,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -252,16 +243,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -281,16 +269,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -394,16 +379,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -437,16 +419,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -464,16 +443,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -508,16 +484,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -569,16 +542,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -596,16 +566,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -636,32 +603,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-
+            cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
         run: |
-          if [ "$(cargo-deny --version 2>/dev/null || true)" != "cargo-deny ${CARGO_DENY_VERSION}" ]; then
-            cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked --force
-          fi
+          cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked --force
           cargo-deny --version
 
       - name: Install cargo-audit
         run: |
-          if [ "$(cargo-audit --version 2>/dev/null || true)" != "cargo-audit ${CARGO_AUDIT_VERSION}" ]; then
-            cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked --force
-          fi
+          cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked --force
           cargo-audit --version
 
       - name: Run supply-chain checks

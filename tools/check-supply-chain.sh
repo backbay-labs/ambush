@@ -110,6 +110,20 @@
 #   pinned to the measured 0.22.0 contract whose lack of a locked mode requires
 #   the byte-snapshot guard below. A missing or mismatched tool fails immediately.
 #
+# WHY THE CARGO CACHE EXCLUDES INSTALLED EXECUTABLES
+#   A version string is not executable provenance. GitHub Actions cache entries
+#   are reachable from other runs in the same repository scope, so restoring
+#   ~/.cargo/bin could put an attacker-controlled cargo-deny or cargo-audit ahead
+#   of the toolchain. A planted executable can print the pinned version and then
+#   false-green the scan. Cargo's .crates.toml and .crates2.json install records
+#   are excluded with the binaries; every cache retains only downloaded registry
+#   and git sources. Every key and restore prefix uses the rotated
+#   cargo-home-sources-v1 namespace, because changing only `path:` would not stop
+#   a legacy cache archive from extracting the paths it recorded when created.
+#   CI then rebuilds both exact scanner versions unconditionally with
+#   `cargo install --locked --force`, and this gate checks that entire workflow
+#   contract plus mutations that try to restore each bypass.
+#
 # WHY `-D advisory-not-detected`, `-D unmatched-skip`, AND `-D unnecessary-skip`
 #   All three are warnings by default, and a warning does not change the exit code:
 #   with an ignore entry added for a real advisory against a crate this workspace
@@ -293,6 +307,186 @@ if ! validate_tool_version_contract; then
   exit 1
 fi
 echo "supply-chain tools ok: cargo-deny $REQUIRED_CARGO_DENY_VERSION, cargo-audit $REQUIRED_CARGO_AUDIT_VERSION"
+
+# Keep executable provenance separate from downloaded-source reuse. This parser
+# intentionally validates every actions/cache block in the workflow, not merely
+# the supply job: a poisoned cargo executable restored by any lane is still a
+# poisoned executable. The mutations make the negative contract executable.
+python3 - "$ROOT_DIR/.github/workflows/ci.yml" <<'PY'
+import pathlib
+import re
+import sys
+
+workflow_path = pathlib.Path(sys.argv[1])
+workflow = workflow_path.read_text(encoding="utf-8")
+
+allowed_paths = [
+    "~/.cargo/registry/index/",
+    "~/.cargo/registry/cache/",
+    "~/.cargo/git/db/",
+    "~/.cargo/git/checkouts/",
+]
+forbidden_paths = [
+    "~/.cargo/bin/",
+    "~/.cargo/.crates.toml",
+    "~/.cargo/.crates2.json",
+]
+namespace = "cargo-home-sources-v1-"
+
+deny_install = """      - name: Install cargo-deny
+        run: |
+          cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked --force
+          cargo-deny --version
+"""
+audit_install = """      - name: Install cargo-audit
+        run: |
+          cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked --force
+          cargo-audit --version
+"""
+
+
+def workflow_contract_problems(text: str) -> list[str]:
+    problems: list[str] = []
+
+    for forbidden in forbidden_paths:
+        if forbidden in text:
+            problems.append(f"forbidden Cargo cache path is present: {forbidden}")
+
+    action_count = len(re.findall(r"uses: actions/cache@", text))
+    blocks = re.findall(
+        r"(?ms)^      - name: Cache cargo home\n.*?(?=^      - name:|\Z)",
+        text,
+    )
+    if not blocks:
+        problems.append("workflow contains no Cargo source cache blocks")
+    if action_count != len(blocks):
+        problems.append(
+            "every actions/cache use must be a validated Cache cargo home block "
+            f"(actions={action_count}, validated={len(blocks)})"
+        )
+
+    for index, block in enumerate(blocks, start=1):
+        path_match = re.search(
+            r"(?m)^          path: \|\n"
+            r"(?P<paths>(?:            \S.*\n)+)"
+            r"^          key: ",
+            block,
+        )
+        if path_match is None:
+            problems.append(f"Cargo cache block {index} has no parseable path list")
+        else:
+            paths = [line.strip() for line in path_match.group("paths").splitlines()]
+            if paths != allowed_paths:
+                problems.append(
+                    f"Cargo cache block {index} paths are not the exact source-only set: {paths!r}"
+                )
+
+        key_match = re.search(r"(?m)^          key: (.+)$", block)
+        if key_match is None or not key_match.group(1).startswith(namespace):
+            actual = key_match.group(1) if key_match else "<missing>"
+            problems.append(
+                f"Cargo cache block {index} key is outside {namespace!r}: {actual}"
+            )
+
+        restore_match = re.search(
+            r"(?m)^          restore-keys: \|\n(?P<keys>(?:            \S.*\n)+)",
+            block,
+        )
+        if restore_match is None:
+            problems.append(f"Cargo cache block {index} has no parseable restore prefix")
+        else:
+            restore_keys = [
+                line.strip() for line in restore_match.group("keys").splitlines()
+            ]
+            if not restore_keys or any(
+                not key.startswith(namespace) for key in restore_keys
+            ):
+                problems.append(
+                    f"Cargo cache block {index} has legacy restore prefix: {restore_keys!r}"
+                )
+
+    supply_match = re.search(
+        r"(?ms)^  supply-chain:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        text,
+    )
+    if supply_match is None:
+        problems.append("workflow has no parseable supply-chain job")
+        supply_job = ""
+    else:
+        supply_job = supply_match.group("body")
+
+    if supply_job.count(deny_install) != 1:
+        problems.append(
+            "cargo-deny must be installed exactly once, unconditionally, with --locked --force"
+        )
+    if supply_job.count(audit_install) != 1:
+        problems.append(
+            "cargo-audit must be installed exactly once, unconditionally, with --locked --force"
+        )
+
+    return problems
+
+
+def require_valid(label: str, text: str) -> None:
+    problems = workflow_contract_problems(text)
+    if problems:
+        raise SystemExit(f"{label} unexpectedly failed: {'; '.join(problems)}")
+
+
+def require_invalid(label: str, text: str, expected: str) -> None:
+    problems = workflow_contract_problems(text)
+    matching = [problem for problem in problems if expected in problem]
+    if not matching:
+        rendered = "; ".join(problems) if problems else "no problems"
+        raise SystemExit(f"{label} unexpectedly passed or failed vacuously: {rendered}")
+    print(f"workflow mutation refused: {label}: {matching[0]}")
+
+
+require_valid("checked-in workflow", workflow)
+
+for forbidden in forbidden_paths:
+    mutated = workflow.replace(
+        "            ~/.cargo/registry/index/\n",
+        f"            {forbidden}\n            ~/.cargo/registry/index/\n",
+        1,
+    )
+    if mutated == workflow:
+        raise SystemExit(f"could not construct forbidden-path mutation for {forbidden}")
+    require_invalid(
+        f"forbidden-path mutation {forbidden}",
+        mutated,
+        f"forbidden Cargo cache path is present: {forbidden}",
+    )
+
+legacy_key = workflow.replace(namespace, "cargo-home-", 1)
+if legacy_key == workflow:
+    raise SystemExit("could not construct legacy cache-key mutation")
+require_invalid("legacy cache-key mutation", legacy_key, "key is outside")
+
+restore_marker = f"            {namespace}"
+legacy_restore = workflow.replace(restore_marker, "            cargo-home-", 1)
+if legacy_restore == workflow:
+    raise SystemExit("could not construct legacy restore-prefix mutation")
+require_invalid("legacy restore-prefix mutation", legacy_restore, "legacy restore prefix")
+
+conditional_install = workflow.replace(
+    "      - name: Install cargo-deny\n        run: |\n",
+    "      - name: Install cargo-deny\n        if: success()\n        run: |\n",
+    1,
+)
+if conditional_install == workflow:
+    raise SystemExit("could not construct conditional scanner-install mutation")
+require_invalid(
+    "conditional scanner-install mutation",
+    conditional_install,
+    "cargo-deny must be installed exactly once, unconditionally",
+)
+
+print(
+    "workflow cache fixtures ok: source-only rotated caches and unconditional "
+    "scanner installs enforced"
+)
+PY
 
 ASSURANCE_HELPER_DIR="$ROOT_DIR/tools/negative-registry-ast"
 ASSURANCE_HELPER_MANIFEST="$ASSURANCE_HELPER_DIR/Cargo.toml"
